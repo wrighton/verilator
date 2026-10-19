@@ -1669,7 +1669,14 @@ class ParamProcessor final {
                         V3Const::constifyParamsEdit(cloneVarp);
                         if (AstConst* const widthedp = VN_CAST(cloneVarp->valuep(), Const)) {
                             // Stamp the port's type so equal values hash the same.
-                            if (cloneVarp->dtypep()) widthedp->dtypep(cloneVarp->dtypep());
+                            if (AstNodeDType* const dtypep = cloneVarp->dtypep()) {
+                                widthedp->dtypep(dtypep);
+                                // Also its signedness, and drop the unsized fill of a
+                                // '0/'1 literal, so that only the value names it
+                                V3Number num{widthedp, widthedp->width(), widthedp->num()};
+                                num.isSigned(dtypep->isSigned());
+                                widthedp->num() = num;
+                            }
                             widthedp->unlinkFrBack();
                             normedNamep = widthedp;
                         }
