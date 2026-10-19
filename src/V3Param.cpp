@@ -1626,7 +1626,14 @@ class ParamProcessor final {
             cleanTwoStateParamValue(cloneVarp);
             if (AstConst* const widthedp = VN_CAST(cloneVarp->valuep(), Const)) {
                 // Stamp the port's type so equal values hash the same.
-                if (cloneVarp->dtypep()) widthedp->dtypep(cloneVarp->dtypep());
+                if (AstNodeDType* const dtypep = cloneVarp->dtypep()) {
+                    widthedp->dtypep(dtypep);
+                    // Also its signedness, and drop the unsized fill of a
+                    // '0/'1 literal, so that only the value names it
+                    V3Number num{widthedp, widthedp->width(), widthedp->num()};
+                    num.isSigned(dtypep->isSigned());
+                    widthedp->num() = num;
+                }
                 widthedp->unlinkFrBack();
                 resultp = widthedp;
             }
@@ -1707,9 +1714,10 @@ class ParamProcessor final {
                 AstConst* defaultp = nullptr;
                 if (exprp && !exprp->num().isDouble() && !exprp->num().isString()) {
                     normedNamep = newWidthedParamValue(modvarp, exprp, paramsp, srcModp);
-                    // A default not yet folded, e.g. naming a package parameter, is evaluated
-                    // for this cell, so a pin of the same value keeps the default specialization
-                    if (normedNamep && !origp && modvarp->valuep() && defaultEvaluable(modvarp)) {
+                    // The default is widthed the same way, also one not yet folded, e.g. naming
+                    // a package parameter, so a pin of the same value keeps the default
+                    // specialization however either is written
+                    if (normedNamep && modvarp->valuep() && defaultEvaluable(modvarp)) {
                         defaultp
                             = newWidthedParamValue(modvarp, modvarp->valuep(), paramsp, srcModp);
                     }
