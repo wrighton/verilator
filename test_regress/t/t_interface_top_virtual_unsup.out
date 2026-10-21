@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_interface_top_virtual_unsup.v:30:9: Unsupported: Interfaced port on top level module
+   30 |     ifc bus,
+      |         ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_interface_top_virtual_unsup.v:31:13: Unsupported: Interfaced port on top level module
+   31 |     ifc.mon mon_bus,
+      |             ^~~~~~~
+%Error-UNSUPPORTED: t/t_interface_top_virtual_unsup.v:32:10: Unsupported: Interfaced port on top level module
+   32 |     ifc2 bus2
+      |          ^~~~
+%Error: Exiting due to
