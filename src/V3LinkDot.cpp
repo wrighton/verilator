@@ -654,10 +654,13 @@ public:
                 // use default params, but this port should point to a
                 // specialized clone based on the pin connection).
                 const bool isDead = ifacerefp->ifaceViaCellp()->dead();
-                if (isDead && forPrimary() && !varp->isIfaceParent()
+                // A port not under a cell is of a top module, with no pin to repair from.
+                // Its interface is usually dead, but not if also used as a virtual interface.
+                if (varp->pinNum() && !VN_IS(varSymp->parentp()->nodep(), Cell) && forPrimary()
                     && !v3Global.opt.topIfacesSupported()) {
                     varp->v3warn(E_UNSUPPORTED,
                                  "Unsupported: Interfaced port on top level module");
+                    continue;
                 }
                 // Attempt repair: trace through parent cell's pin to find
                 // the correct live interface for this port variable
