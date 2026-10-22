@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_stream_dyn_unsup.v:14:20: Unsupported: Streaming concatenation with multiple operands, of which one is dynamically sized: 'byte$[]'
+                                                : ... note: In instance 't'
+   14 |     que = {>>{hdr, dyn}};
+      |                    ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_stream_dyn_unsup.v:15:16: Unsupported: Streaming concatenation with multiple operands, of which one is dynamically sized: 'byte$[$]'
+                                                : ... note: In instance 't'
+   15 |     que = {<<8{que, hdr}};
+      |                ^~~
+%Error-UNSUPPORTED: t/t_stream_dyn_unsup.v:16:14: Unsupported: Streaming concatenation with multiple operands, of which one is dynamically sized: 'byte$[]'
+                                                : ... note: In instance 't'
+   16 |     {>>{hdr, dyn}} = que;
+      |              ^~~
+%Error: Exiting due to

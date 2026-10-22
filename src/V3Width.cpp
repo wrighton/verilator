@@ -814,8 +814,16 @@ class WidthVisitor final : public VNVisitor {
                 iterateCheckIntegralSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
 
                 if (m_streamConcat) {
-                    packIfUnpacked(nodep->lhsp());
-                    packIfUnpacked(nodep->rhsp());
+                    for (AstNodeExpr* const opp : {nodep->lhsp(), nodep->rhsp()}) {
+                        const AstNodeDType* const opDTypep = opp->dtypep()->skipRefp();
+                        if (opDTypep->isDynamicallySized()) {
+                            opp->v3warn(E_UNSUPPORTED,
+                                        "Unsupported: Streaming concatenation with multiple "
+                                        "operands, of which one is dynamically sized: "
+                                            << opDTypep->prettyDTypeNameQ());
+                        }
+                        packIfUnpacked(opp);
+                    }
                 }
                 nodep->dtypeSetBitOrLogicUnsized(
                     nodep->lhsp()->width() + nodep->rhsp()->width(),
