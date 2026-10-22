@@ -399,6 +399,7 @@ class WidthVisitor final : public VNVisitor {
     const bool m_paramsOnly;  // Computing parameter value; limit operation
     const bool m_doGenerate;  // Do errors later inside generate statement
     bool m_streamConcat = false;  // True if visiting arguments of stream concatenation
+    bool m_castStreamOperand = false;  // Under a stream that an AstCast casts, see castError
     // Function whose port default or static initial value is visited, evaluated outside it
     const AstNodeFTask* m_valueOutsideFTaskp = nullptr;
     bool m_inParamOverride = false;  // True if visiting the value of a parameter override pin
@@ -439,6 +440,19 @@ class WidthVisitor final : public VNVisitor {
 
     StreamUse currentStreamUse() const { return m_vup ? m_vup->streamUse() : STREAM_USE_NONE; }
 
+    // Report a dynamically sized operand of a stream with several operands
+    static void warnDynamicStreamOperand(const AstNodeExpr* nodep) {
+        // Also an unpacked array of dynamically sized arrays
+        const AstNodeDType* elemDTypep = nodep->dtypep()->skipRefp();
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(elemDTypep, UnpackArrayDType)) {
+            elemDTypep = adtypep->subDTypep()->skipRefp();
+        }
+        if (elemDTypep->isDynamicallySized()) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: streaming concatenation with multiple "
+                                         "operands, of which one is dynamically sized: "
+                                             << nodep->dtypep()->prettyDTypeNameQ() << ".");
+        }
+    }
     static void packIfUnpacked(AstNodeExpr* const nodep) {
         AstUnpackArrayDType* const unpackDTypep = VN_CAST(nodep->dtypep(), UnpackArrayDType);
         // Not an array of unpacked structs, which only packStreamOperand packs, e.g. in a cast,
@@ -984,6 +998,11 @@ class WidthVisitor final : public VNVisitor {
                 iterateCheckIntegralSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
 
                 if (m_streamConcat) {
+                    // castError reports such an operand of a cast stream
+                    if (!m_castStreamOperand) {
+                        warnDynamicStreamOperand(nodep->lhsp());
+                        warnDynamicStreamOperand(nodep->rhsp());
+                    }
                     packIfUnpacked(nodep->lhsp());
                     packIfUnpacked(nodep->rhsp());
                 }
@@ -1301,6 +1320,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstNodeStream* nodep) override {
         const bool nested = m_streamConcat;  // In the concatenation of another stream
         VL_RESTORER(m_streamConcat);
+        VL_RESTORER(m_castStreamOperand);
+        if (!nested) m_castStreamOperand = VN_IS(nodep->backp(), Cast);
         // UINFOTREE(1, nodep, "stream-in vup" << m_vup, "stream-in ");
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
