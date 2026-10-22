@@ -1,0 +1,68 @@
+%Error: t/t_timing_comb_bad.v:36:5: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   36 |     #1 b1 = a;   
+      |     ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_timing_comb_bad.v:39:5: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   39 |     @(a);   
+      |     ^
+%Error: t/t_timing_comb_bad.v:43:5: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   43 |     wait (a);   
+      |     ^~~~
+%Error: t/t_timing_comb_bad.v:47:5: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   47 |     fork   
+      |     ^~~~
+%Error: t/t_timing_comb_bad.v:52:5: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   52 |     fork   
+      |     ^~~~
+%Error: t/t_timing_comb_bad.v:57:8: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   57 |     b6 = #1 a;   
+      |        ^
+%Error: t/t_timing_comb_bad.v:60:9: Blocking timing controls and fork-join are not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   60 |     b14 = @(a) a;   
+      |         ^
+%Error: t/t_timing_comb_bad.v:63:5: Calling a task that blocks is not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+   63 |     t_delay();   
+      |     ^~~~~~~
+        t/t_timing_comb_bad.v:11:8: ... Location of blocking task
+   11 |   task t_delay();
+      |        ^~~~~~~
+%Error: t/t_timing_comb_bad.v:64:5: Calling a task that blocks is not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+   64 |     t_calls_delay();   
+      |     ^~~~~~~~~~~~~
+        t/t_timing_comb_bad.v:14:8: ... Location of blocking task
+   14 |   task t_calls_delay();
+      |        ^~~~~~~~~~~~~
+%Error: t/t_timing_comb_bad.v:65:5: Calling a task that blocks is not legal under always_comb (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+   65 |     t_join();   
+      |     ^~~~~~
+        t/t_timing_comb_bad.v:26:8: ... Location of blocking task
+   26 |   task t_join();
+      |        ^~~~~~
+%Error: t/t_timing_comb_bad.v:69:5: Blocking timing controls and fork-join are not legal under always_latch (IEEE 1800-2023 9.2.2.2.2)
+                                  : ... note: In instance 't'
+                                  : ... Suggest use a normal 'always'
+   69 |     #1 b8 = a;   
+      |     ^
+%Error-UNSUPPORTED: t/t_timing_comb_bad.v:75:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                              : ... note: In instance 't'
+   75 |     assert property (a ##1 a);
+      |     ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
