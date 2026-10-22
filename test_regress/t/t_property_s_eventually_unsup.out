@@ -1,10 +1,22 @@
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:18:58: Unsupported: 's_eventually' in complex property expression
+                                                           : ... note: In instance 't'
+   18 |   assert property (@(posedge clk) cyc[0] ##1 cyc[1] |-> (s_eventually cyc[2]) or cyc[3]);
+      |                                                          ^~~~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:19:36: Unsupported: 's_eventually' in complex property expression
+                                                           : ... note: In instance 't'
+   19 |   assert property (@(posedge clk) (s_eventually cyc[2]) and cyc[0] ##1 cyc[1]);
+      |                                    ^~~~~~~~~~~~
 %Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:14:35: Unsupported: cycle delay in s_eventually
                                                            : ... note: In instance 't'
    14 |   assert property (@(posedge clk) s_eventually ##1 1);
       |                                   ^~~~~~~~~~~~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:15:35: Unsupported: cycle delay in s_eventually
                                                            : ... note: In instance 't'
    15 |   assert property (@(negedge clk) s_eventually ##1 1);
       |                                   ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:20:57: Unsupported: cycle delay in s_eventually
+                                                           : ... note: In instance 't'
+   20 |   assert property (@(posedge clk) cyc[0] ##1 cyc[1] |-> s_eventually (cyc[2] ##1 cyc[3]));
+      |                                                         ^~~~~~~~~~~~
 %Error: Exiting due to

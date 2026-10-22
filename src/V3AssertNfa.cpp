@@ -1453,6 +1453,29 @@ class SvaNfaBuilder final {
         return {waitCp, acceptCondp, {}};
     }
 
+    // s_eventually p per IEEE 1800-2023 16.12.13, built as the equivalent `1 s_until p`
+    BuildResult buildSEventually(AstSEventually* nodep, SvaStateVertex* entryVtxp,
+                                 bool isTopLevelStep) {
+        // Leave a sequence operand to V3AssertPre, which reports it
+        if (nodep->exprp()->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); })) {
+            return {entryVtxp, nodep, {}};
+        }
+        if (!isTopLevelStep) {
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: 's_eventually' in complex property expression");
+            return BuildResult::failWithError();
+        }
+        // buildUntil only uses clones of the operands, so build from a temporary
+        FileLine* const flp = nodep->fileline();
+        AstUntil* const untilp = new AstUntil{flp, new AstConst{flp, AstConst::BitTrue{}},
+                                              nodep->exprp()->cloneTreePure(false),
+                                              /*strong=*/true, /*overlapping=*/false};
+        untilp->dtypeSetBit();
+        const BuildResult result = buildUntil(untilp, entryVtxp, isTopLevelStep);
+        VL_DO_DANGLING(untilp->deleteTree(), untilp);
+        return result;
+    }
+
     // IEEE 1800-2023 16.12.14 property abort operators. Sync and async share
     // the same NFA encoding: AstSampled already gives matured values at every
     // maturing clocking event, and async firing "between clocks" is not
@@ -1698,6 +1721,9 @@ public:
         }
         if (AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return buildUntil(untilp, entryVtxp, isTopLevelStep);
+        }
+        if (AstSEventually* const evp = VN_CAST(nodep, SEventually)) {
+            return buildSEventually(evp, entryVtxp, isTopLevelStep);
         }
         // Boolean leaf (including LogAnd): return as finalCond
         return {entryVtxp, nodep, {}};
