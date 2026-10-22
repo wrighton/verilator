@@ -2609,6 +2609,10 @@ class LinkDotParamVisitor final : public VNVisitor {
         // Ports not needed any more
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
     }
+    void visit(AstAlias* nodep) override {  // ParamVisitor::
+        // Undeclared alias operands are implicit nets (IEEE 1800-2023 10.11)
+        pinImplicitExprRecurse(nodep->itemsp());
+    }
     void visit(AstAssignW* nodep) override {  // ParamVisitor::
         // Deal with implicit definitions
         // We used to nodep->allowImplicit() here, but it turns out
