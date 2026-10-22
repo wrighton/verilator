@@ -1305,6 +1305,16 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
+    static AstStrengthSpec* highzStrengthSpecp(AstNodeAssign* nodep) {
+        // Strength specification with highz0 or highz1, if any
+        AstAssignW* const assignWp = VN_CAST(nodep, AssignW);
+        AstStrengthSpec* const specp = assignWp ? assignWp->strengthSpecp() : nullptr;
+        if (specp
+            && (specp->strength0() == VStrength::HIGHZ || specp->strength1() == VStrength::HIGHZ))
+            return specp;
+        return nullptr;
+    }
+
     uint8_t getStrength(const AstAssignW* const nodep, bool value) {
         if (AstStrengthSpec* const strengthSpec = nodep->strengthSpecp()) {
             return value ? strengthSpec->strength1() : strengthSpec->strength0();
@@ -1772,6 +1782,8 @@ class TristateVisitor final : public TristateBaseVisitor {
             VL_RESTORER(m_logicp);
             m_logicp = nodep;
             nodep->user2Or(U2_GRAPHING);
+            // A highz0/highz1 strength drives z in place of that value
+            if (highzStrengthSpecp(nodep)) m_tgraph.setTristate(nodep);
             iterateAndNextNull(nodep->rhsp());
             m_alhs = true;
             iterateAndNextNull(nodep->lhsp());
@@ -1784,6 +1796,16 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
             nodep->user2Or(U2_NONGRAPH);
             iterateAndNextNull(nodep->rhsp());
+            if (AstStrengthSpec* const specp = highzStrengthSpecp(nodep)) {
+                // Drive only bits whose value is not highz strength (IEEE 1800-2023 28.3.2)
+                FileLine* const fl = nodep->fileline();
+                AstNodeExpr* enp = nodep->rhsp()->cloneTreePure(false);
+                if (specp->strength1() == VStrength::HIGHZ) enp = new AstNot{fl, enp};
+                if (AstNodeExpr* const rhsEnp = VN_AS(nodep->rhsp()->user1p(), NodeExpr)) {
+                    enp = new AstAnd{fl, rhsEnp, enp};
+                }
+                nodep->rhsp()->user1p(enp);
+            }
             UINFO(9, dbgState() << nodep);
             UINFOTREE(9, nodep, "", "assign");
             if (m_procedurep) {
@@ -1831,7 +1853,10 @@ class TristateVisitor final : public TristateBaseVisitor {
             m_alhs = true;  // And user1p() will indicate tristate equation, if any
             if (AstAssignW* const assignWp = VN_CAST(nodep, AssignW)) {
                 if (AstStrengthSpec* const specp = assignWp->strengthSpecp()) {
-                    if (specp->strength0() != specp->strength1()) {
+                    if (highzStrengthSpecp(assignWp)) {
+                        // Only drives the value whose strength is not highz
+                        m_currentStrength = std::max(specp->strength0(), specp->strength1());
+                    } else if (specp->strength0() != specp->strength1()) {
                         // Unequal strengths are not a problem if the assignment is the only
                         // assignment to its variable. Unfortunately, m_assigns map stores only
                         // assignments to var. Selects are not inserted, so they may be handled

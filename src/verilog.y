@@ -5890,10 +5890,10 @@ driveStrengthE<strengthSpecp>:
 driveStrength<strengthSpecp>:
                 yP_PAR__STRENGTH strength0 ',' strength1 ')' { $$ = new AstStrengthSpec{$1, $2, $4}; }
         |       yP_PAR__STRENGTH strength1 ',' strength0 ')' { $$ = new AstStrengthSpec{$1, $4, $2}; }
-        |       yP_PAR__STRENGTH strength0 ',' yHIGHZ1 ')' { $$ = nullptr; BBUNSUP($<fl>4, "Unsupported: highz strength"); }
-        |       yP_PAR__STRENGTH strength1 ',' yHIGHZ0 ')' { $$ = nullptr; BBUNSUP($<fl>4, "Unsupported: highz strength"); }
-        |       yP_PAR__STRENGTH yHIGHZ0 ',' strength1 ')' { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: highz strength"); }
-        |       yP_PAR__STRENGTH yHIGHZ1 ',' strength0 ')' { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: highz strength"); }
+        |       yP_PAR__STRENGTH strength0 ',' yHIGHZ1 ')' { $$ = new AstStrengthSpec{$1, $2, VStrength::HIGHZ}; }
+        |       yP_PAR__STRENGTH strength1 ',' yHIGHZ0 ')' { $$ = new AstStrengthSpec{$1, VStrength::HIGHZ, $2}; }
+        |       yP_PAR__STRENGTH yHIGHZ0 ',' strength1 ')' { $$ = new AstStrengthSpec{$1, VStrength::HIGHZ, $4}; }
+        |       yP_PAR__STRENGTH yHIGHZ1 ',' strength0 ')' { $$ = new AstStrengthSpec{$1, $4, VStrength::HIGHZ}; }
         ;
 
 pulldown_strengthE<nodep>:  // IEEE: [ pulldown_strength ]
