@@ -2916,6 +2916,8 @@ class AssertNfaVisitor final : public VNVisitor {
     AstDefaultDisable* m_defaultDisablep = nullptr;  // Default disable iff
     SvaNfaLowering* m_loweringp = nullptr;  // NFA-to-hardware lowering engine
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
+    // Clock of the enclosing always, for a procedural assertion (IEEE 1800-2023 16.14.6)
+    AstSenTree* m_alwaysSenTreep = nullptr;
     V3UniqueNames m_propVarNames{"__Vpropvar"};  // Property-local variable names
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
@@ -3481,9 +3483,11 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!propp->disablep() && m_defaultDisablep && !isSeqEvent) {
             propp->disablep(m_defaultDisablep->condp()->cloneTreePure(true));
         }
-        if (!propp->sensesp()) return;
-        AstSenTree* senTreep
-            = new AstSenTree{propp->fileline(), propp->sensesp()->cloneTree(true)};
+        AstSenItem* const sensesp = propp->sensesp()   ? propp->sensesp()
+                                    : m_alwaysSenTreep ? m_alwaysSenTreep->sensesp()
+                                                       : nullptr;
+        if (!sensesp) return;
+        AstSenTree* senTreep = new AstSenTree{propp->fileline(), sensesp->cloneTree(true)};
         AstNodeExpr* const disableExprp = propp->disablep();
 
         // NFA lowering clones repeated operands and may hoist them into an
@@ -3586,6 +3590,11 @@ class AssertNfaVisitor final : public VNVisitor {
         m_defaultDisablep = nodep->defaultDisablep();
         SvaNfaLowering lowering{nodep};
         m_loweringp = &lowering;
+        iterateChildren(nodep);
+    }
+    void visit(AstAlways* nodep) override {
+        VL_RESTORER(m_alwaysSenTreep);
+        m_alwaysSenTreep = nodep->sentreep();
         iterateChildren(nodep);
     }
     void visit(AstClocking* nodep) override {
