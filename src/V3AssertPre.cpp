@@ -980,9 +980,8 @@ private:
     }
     void visit(AstPast* nodep) override {
         checkSamplingFuncDType(nodep, nodep->exprp());
-        if (nodep->sentreep()) return;  // Already processed
-        iterateChildren(nodep);
-        nodep->sentreep(newSenTree(nodep));
+        iterateAndNextNull(nodep->exprp());
+        if (!nodep->sentreep()) nodep->sentreep(newSenTree(nodep));
     }
     void visit(AstSConsRep* nodep) override {
         // IEEE 1800-2023 16.9.2 -- Lower standalone exact [*N] (N >= 2) via saturating counter.

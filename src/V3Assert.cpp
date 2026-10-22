@@ -1173,7 +1173,31 @@ class AssertVisitor final : public VNVisitor {
     }
 
     //========== Past
+    static bool isObservedEventClock(const AstSenTree* sentreep) {
+        // Compiler-made events, of clocking blocks and sequences, fire in the Observed region
+        for (const AstSenItem* itemp = sentreep->sensesp(); itemp;
+             itemp = VN_AS(itemp->nextp(), SenItem)) {
+            const AstNodeVarRef* const refp = itemp->varrefp();
+            if (refp && refp->varp()->varType() == VVarType::MODULETEMP
+                && refp->varp()->dtypep()->basicp()->isEvent()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void visit(AstPast* nodep) override {
+        // When clocked in the Observed region, the history of a nested sampled value function
+        // would already be updated in the time step
+        if (isObservedEventClock(nodep->sentreep())
+            && nodep->exprp()->exists([](const AstPast*) { return true; })) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sampled value function clocked by a"
+                                         " clocking block or sequence event, of an expression"
+                                         " with a nested sampled value function");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         if (!nodep->propertyTiming()) {
             nodep->initp(nodep->exprp()->cloneTreePure(false));
             { DefaultSampledValueVisitor{nodep->initp()}; }
