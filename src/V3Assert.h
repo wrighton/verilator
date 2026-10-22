@@ -37,11 +37,16 @@ public:
     // elaboration-time constants (IEEE 1800-2023 16.7). If not, report it on errp, and replace
     // them with constants, so later steps do not fail after the error.
     static void checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) VL_MT_DISABLED;
+    // Fold and check the counts of a repetition (IEEE 1800-2023 16.9.2), reporting errors on errp
+    static void checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) VL_MT_DISABLED;
+    static void checkSvaRepetition(AstSGotoRep* nodep, AstNode* errp) VL_MT_DISABLED;
+    static void checkSvaRepetition(AstSNonConsRep* nodep, AstNode* errp) VL_MT_DISABLED;
+    // Fold and check the tick count of a $past (IEEE 1800-2023 16.9.3), reporting errors on errp
+    static void checkSvaPastTicks(AstPast* nodep, AstNode* errp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
-    // Check the cycle delays of a sequence or property instance, after its formal arguments are
-    // replaced with the actual arguments (IEEE 1800-2023 16.8), reporting errors on instp
-    static void checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Check the constants of a sequence or property instance, reporting errors on instp
+    static void checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
 };
 
 class V3Assert final {

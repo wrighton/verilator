@@ -3019,7 +3019,7 @@ class AssertNfaVisitor final : public VNVisitor {
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
-        V3AssertCommon::checkSvaInstanceDelays(propSpecp, funcrefp);
+        V3AssertCommon::checkSvaInstanceConstants(propSpecp, funcrefp);
 
         // Merge disable iff (IEEE 1800-2023 16.12.1)
         if (outerSpecp->disablep() && propSpecp->disablep()) {
@@ -3066,7 +3066,7 @@ class AssertNfaVisitor final : public VNVisitor {
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
-        V3AssertCommon::checkSvaInstanceDelays(clonedp, funcrefp);
+        V3AssertCommon::checkSvaInstanceConstants(clonedp, funcrefp);
         funcrefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
         // Clear referenced flag so V3AssertPre cleanup does not emit

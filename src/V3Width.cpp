@@ -1731,20 +1731,10 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->ticksp()) {
                 iterateCheckSizedSelf(nodep, "Ticks", nodep->ticksp(), SELF, BOTH,
                                       /* deferUntyped */ true);
-                V3Const::constifyParamsEdit(nodep->ticksp());  // ticksp may change
-                const AstConst* const constp = VN_CAST(nodep->ticksp(), Const);
-                if (!constp) {
-                    nodep->v3error("$past tick value must be constant (IEEE 1800-2023 16.9.3)");
-                    nodep->ticksp()->unlinkFrBack()->deleteTree();
-                } else if (constp->toSInt() < 1) {
-                    constp->v3error("$past tick value must be >= 1 (IEEE 1800-2023 16.9.3)");
-                    nodep->ticksp()->unlinkFrBack()->deleteTree();
-                } else if (V3AssertCommon::checkSvaValueLimit(nodep, constp, "$past tick value")) {
-                    if (constp->toSInt() > 10) {
-                        constp->v3warn(TICKCOUNT, "$past tick value of "
-                                                      << constp->toSInt()
-                                                      << " may have a large performance cost");
-                    }
+                // A formal argument of a sequence or property is checked when that is
+                // instanced, with the actual argument (IEEE 1800-2023 16.8)
+                if (!V3AssertCommon::refsSvaFormal(nodep->ticksp())) {
+                    V3AssertCommon::checkSvaPastTicks(nodep, nodep);
                 }
             }
             userIterate(nodep->sentreep(), nullptr);
@@ -1756,31 +1746,9 @@ class WidthVisitor final : public VNVisitor {
         if (m_vup->prelim()) {
             userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
             userIterateAndNext(nodep->countp(), WidthVP{SELF, BOTH}.p());
-            V3Const::constifyParamsEdit(nodep->countp());
-            const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
-            if (!minConstp) {
-                nodep->v3error("Consecutive repetition count must be constant expression"
-                               " (IEEE 1800-2023 16.9.2)");
-            } else if (minConstp->toSInt() < 0) {
-                nodep->v3error("Consecutive repetition count must be non-negative"
-                               " (IEEE 1800-2023 16.9.2)");
-            } else if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1) {
-                nodep->v3warn(E_UNSUPPORTED, "Unsupported: [*0] consecutive repetition");
-            }
-            if (nodep->maxCountp()) {
-                userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
-                V3Const::constifyParamsEdit(nodep->maxCountp());
-                const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
-                if (!maxConstp) {
-                    nodep->v3error("Consecutive repetition max count must be constant"
-                                   " expression (IEEE 1800-2023 16.9.2)");
-                } else if (minConstp && maxConstp->toSInt() < minConstp->toSInt()) {
-                    nodep->v3error("Consecutive repetition max count must be >= min count"
-                                   " (IEEE 1800-2023 16.9.2)");
-                } else if (maxConstp->toSInt() < 1) {
-                    nodep->v3warn(E_UNSUPPORTED, "Unsupported: [*N:0] consecutive repetition"
-                                                 " with zero max count");
-                }
+            userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            if (!svaCountsRefFormal(nodep->countp(), nodep->maxCountp())) {
+                V3AssertCommon::checkSvaRepetition(nodep, nodep);
             }
             nodep->dtypeSetBit();
         }
@@ -2012,10 +1980,9 @@ class WidthVisitor final : public VNVisitor {
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
             userIterateAndNext(nodep->countp(), WidthVP{SELF, BOTH}.p());
-            if (nodep->maxCountp()) {
-                widthCheckGotoRepRange(nodep, "Goto");
-            } else {
-                widthCheckRepCount(nodep);
+            userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            if (!svaCountsRefFormal(nodep->countp(), nodep->maxCountp())) {
+                V3AssertCommon::checkSvaRepetition(nodep, nodep);
             }
             nodep->dtypeSetBit();
         }
@@ -2025,66 +1992,19 @@ class WidthVisitor final : public VNVisitor {
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
             userIterateAndNext(nodep->countp(), WidthVP{SELF, BOTH}.p());
-            if (nodep->maxCountp()) {
-                widthCheckGotoRepRange(nodep, "Nonconsecutive");
-            } else {
-                widthCheckRepCount(nodep);
+            userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            if (!svaCountsRefFormal(nodep->countp(), nodep->maxCountp())) {
+                V3AssertCommon::checkSvaRepetition(nodep, nodep);
             }
             nodep->dtypeSetBit();
         }
     }
-    template <typename T_Rep>
-    void widthCheckRepCount(T_Rep* nodep) {
-        V3Const::constifyParamsNoWarnEdit(nodep->countp());
-        const AstConst* const constp = VN_CAST(nodep->countp(), Const);
-        if (!constp) {
-            nodep->v3error("Repetition count is not an elaboration-time constant"
-                           " (IEEE 1800-2023 16.9.2)");
-        } else if (constp->dtypep()->isSigned() && constp->num().isNegative()) {
-            nodep->v3error("Repetition count must be non-negative"
-                           " (IEEE 1800-2023 16.9.2)");
-        } else if (constp->num().mostSetBitP1() > 31) {
-            nodep->v3warn(
-                E_UNSUPPORTED,
-                "Unsupported: SVA repetition count exceeds implementation limit of 2147483647");
-        } else if (constp->isZero()) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: zero repetition count"
-                                         " (IEEE 1800-2023 16.9.2)");
-        }
-    }
-    // IEEE 1800-2023 16.9.2 range-form bound validation for goto/nonconsec.
-    // Parent accessors are re-fetched after constifyParamsEdit because that
-    // call can replace the node in-tree (Lesson: AstSConsRep visitor pattern).
-    // Templated to cover AstSGotoRep and AstSNonConsRep uniformly.
-    template <typename T_Rep>
-    void widthCheckGotoRepRange(T_Rep* nodep, const char* kind) {
-        userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
-        V3Const::constifyParamsEdit(nodep->countp());
-        V3Const::constifyParamsEdit(nodep->maxCountp());
-        const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
-        const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
-        if (!minConstp || !maxConstp) {
-            nodep->v3error(std::string{kind}
-                           + " repetition range bounds must be constant expressions"
-                             " (IEEE 1800-2023 16.9.2)");
-            return;
-        }
-        if (minConstp->toSInt() < 0) {
-            nodep->v3error(std::string{kind}
-                           + " repetition range min count must be non-negative"
-                             " (IEEE 1800-2023 16.9.2)");
-            return;
-        }
-        if (maxConstp->toSInt() < minConstp->toSInt()) {
-            nodep->v3error(std::string{kind}
-                           + " repetition range max count must be >= min count"
-                             " (IEEE 1800-2023 16.9.2)");
-            return;
-        }
-        if (minConstp->isZero()) {
-            nodep->v3warn(E_UNSUPPORTED, std::string{"Unsupported: zero min count in "} + kind
-                                             + " repetition range (IEEE 1800-2023 16.9.2)");
-        }
+    // True if a count references a formal argument of a sequence or property
+    static bool svaCountsRefFormal(const AstNodeExpr* countp, const AstNodeExpr* maxCountp) {
+        // Such a count is checked when the sequence or property is instanced, with the actual
+        // argument (IEEE 1800-2023 16.8).
+        return V3AssertCommon::refsSvaFormal(countp)
+               || (maxCountp && V3AssertCommon::refsSvaFormal(maxCountp));
     }
     void visit(AstSThroughout* nodep) override {
         m_hasSExpr = true;
