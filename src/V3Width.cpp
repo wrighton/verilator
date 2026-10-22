@@ -3677,12 +3677,33 @@ class WidthVisitor final : public VNVisitor {
                                               << " (IEEE 1800-2023 6.20.6)");
         }
         if (nodep->varp()->isClassMember() && !nodep->varp()->isFuncLocal()
-            && !nodep->varp()->lifetime().isStatic() && m_ftaskp && m_ftaskp->isStatic()) {
-            nodep->v3error("Cannot access non-static member variable "
-                           << nodep->prettyNameQ() << " from a static method "
-                           << m_ftaskp->prettyNameQ() << " without object (IEEE 1800-2023 8.10)");
+            && !nodep->varp()->lifetime().isStatic()) {
+            if (m_ftaskp && m_ftaskp->isStatic()) {
+                nodep->v3error("Cannot access non-static member variable "
+                               << nodep->prettyNameQ() << " from a static method "
+                               << m_ftaskp->prettyNameQ()
+                               << " without object (IEEE 1800-2023 8.10)");
+            } else if (!VN_IS(m_procedurep, InitialAutomatic) && !m_attrp
+                       && !implicitThisAccessible(m_containingClassFinder.find(nodep->varp()))) {
+                nodep->v3error("Cannot access non-static member variable "
+                               << nodep->prettyNameQ() << " without object (IEEE 1800-2023 8.10)");
+            }
         }
         nodep->didWidth(true);
+    }
+
+    // True if the current context may reference non-static members of memberClassp
+    bool implicitThisAccessible(const AstClass* memberClassp) {
+        // That is without an object, in a non-static method of that class or of a class extended
+        // from it (IEEE 1800-2023 8.10, 8.23).
+        // References outside any function or process, e.g. in type(), and those in covergroups,
+        // which V3Covergroup checks, are not restricted here.
+        AstNode* const contextp = m_ftaskp ? static_cast<AstNode*>(m_ftaskp) : m_procedurep;
+        if (!contextp) return true;
+        const AstClass* const classp = m_containingClassFinder.find(contextp);
+        if (classp && classp->isCovergroup()) return true;
+        return m_ftaskp && m_ftaskp->classMethod()
+               && AstClass::isClassExtendedFrom(classp, memberClassp);
     }
 
     void visit(AstEnumDType* nodep) override {

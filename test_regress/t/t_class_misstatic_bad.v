@@ -16,6 +16,13 @@ class Cls;
   endfunction
   static function void isst();
   endfunction
+  int m_var;
+  int m_init = m_var;
+  class Nested;
+    function int get_outer();
+      return m_var;  // <--- bad static ref
+    endfunction
+  endclass
 endclass
 
 class Bar;
@@ -23,6 +30,7 @@ class Bar;
     Cls::nonstatic();  // <--- bad static ref
     Cls::nonstatic_retcls();  // <--- bad static ref
     Cls::isst();
+    $display(Cls::m_var);  // <--- bad static ref
   endfunction
 endclass
 
@@ -44,6 +52,7 @@ module t;
   function void nonclassfunc();
     Cls::nonstatic();  // <--- bad static ref
     Cls::isst();
+    $display(Cls::m_var);  // <--- bad static ref
   endfunction
   initial begin
     automatic Bar obj = new();
@@ -51,6 +60,8 @@ module t;
     Cls::nonstatic();  // <--- bad static ref
     Cls::isst();
     Extends::isst();
+    $display(Cls::m_var);  // <--- bad static ref
+    $display($bits(Cls::m_var));
     $stop;
   end
 endmodule
