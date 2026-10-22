@@ -1,27 +1,26 @@
 // DESCRIPTION: Verilator: Verilog Test module
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
-// SPDX-FileCopyrightText: 2020 Wilson Snyder
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-module t (  /*AUTOARG*/
-    // Outputs
-    o,
-    // Inputs
-    i
+module t (
+    input i,
+    output o,
+    output p
 );
-
-  input i;
-  output o;
   sub sub (
-      i,
-      o
+      .i(i),
+      .o(o),
+      .p(p)
   );
 endmodule
 
 module sub (
     input i,
-    output o
+    output o,
+    output p
 );
-  assign o = (i === 1'bz) ? 1'b0 : i;
+  assign o = i;
+  assign p = o === 1'bz;
 endmodule
