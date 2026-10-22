@@ -1,0 +1,30 @@
+%Error: t/t_dpi_result_unpack_bad.v:18:36: DPI function may not return type 'struct t.struct_t' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   18 |   import "DPI-C" function struct_t i_struct();
+      |                                    ^~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_dpi_result_unpack_bad.v:19:35: DPI function may not return type 'union t.union_t' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   19 |   import "DPI-C" function union_t i_union();
+      |                                   ^~~~~~~
+%Error: t/t_dpi_result_unpack_bad.v:20:35: DPI function may not return type 'int$[0:1]' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   20 |   import "DPI-C" function array_t i_array();
+      |                                   ^~~~~~~
+%Error: t/t_dpi_result_unpack_bad.v:21:35: DPI function may not return type 'int$[$]' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   21 |   import "DPI-C" function queue_t i_queue();
+      |                                   ^~~~~~~
+%Error: t/t_dpi_result_unpack_bad.v:22:35: DPI function may not return type 'int$[int]' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   22 |   import "DPI-C" function assoc_t i_assoc();
+      |                                   ^~~~~~~
+%Error: t/t_dpi_result_unpack_bad.v:23:31: DPI function may not return type 'class Cls' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   23 |   import "DPI-C" function Cls i_class();
+      |                               ^~~~~~~
+%Error: t/t_dpi_result_unpack_bad.v:26:21: DPI function may not return type 'struct t.struct_t' (IEEE 1800-2023 35.5.5)
+                                         : ... note: In instance 't'
+   26 |   function struct_t e_struct();
+      |                     ^~~~~~~~
+%Error: Exiting due to

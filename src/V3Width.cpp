@@ -7927,6 +7927,14 @@ class WidthVisitor final : public VNVisitor {
 
         nodep->didWidth(true);
         nodep->doingWidth(false);
+        if ((nodep->dpiImport() || nodep->dpiExport()) && nodep->fvarp()) {
+            const AstNodeDType* const dtypep = nodep->fvarp()->dtypep()->skipRefp();
+            if (!VN_IS(dtypep, BasicDType) && !dtypep->isIntegralOrPacked()) {
+                nodep->fvarp()->v3error("DPI function may not return type "
+                                        << dtypep->prettyDTypeNameQ()
+                                        << " (IEEE 1800-2023 35.5.5)");
+            }
+        }
         if (nodep->dpiImport() && !nodep->dpiOpenParent() && markHasOpenArray(nodep)) {
             nodep->dpiOpenParentInc();  // Mark so V3Task will wait for a child to build calling
                                         // func
