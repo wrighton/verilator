@@ -126,8 +126,8 @@ bool CfgGraph::containsLoop() const {
         const CfgBlock& current = static_cast<const CfgBlock&>(vtx);
         for (const V3GraphEdge& edge : current.outEdges()) {
             const CfgBlock& successor = *static_cast<const CfgBlock*>(edge.top());
-            // IDs are the reverse post-order numbering, so easy to check for a back-edge
-            if (successor.id() < current.id()) return true;
+            // IDs are in reverse post-order, so easy to check for a back-edge or self-loop
+            if (successor.id() <= current.id()) return true;
         }
     }
     return false;
