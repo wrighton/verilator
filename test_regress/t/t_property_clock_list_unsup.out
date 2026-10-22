@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_property_clock_list_unsup.v:13:38: Unsupported: property clocking event with several event expressions (IEEE 1800-2023 16.14)
+   13 |   assert property (@((posedge clk or negedge clk)) a);
+      |                                      ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_clock_list_unsup.v:14:36: Unsupported: property clocking event with several event expressions (IEEE 1800-2023 16.14)
+   14 |   assert property (@((posedge clk, negedge clk)) disable iff (b) a);
+      |                                    ^~~~~~~
+%Error-UNSUPPORTED: t/t_property_clock_list_unsup.v:15:54: Unsupported: property clocking event with several event expressions (IEEE 1800-2023 16.14)
+   15 |   assert property (disable iff (b) @((posedge clk or posedge b)) a);
+      |                                                      ^~~~~~~
+%Error: Exiting due to

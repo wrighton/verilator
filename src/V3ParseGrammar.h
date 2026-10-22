@@ -184,6 +184,16 @@ public:
                                                << name << "'");
         }
     }
+    // Keep the first item of a property clocking event, reporting any others as unsupported
+    AstSenItem* singleSenItem(AstSenItem* itemp) {
+        if (AstNode* const restp = itemp->nextp()) {
+            restp->v3warn(E_UNSUPPORTED,
+                          "Unsupported: property clocking event with several event expressions"
+                          " (IEEE 1800-2023 16.14)");
+            VL_DO_DANGLING(restp->unlinkFrBackWithNext()->deleteTree(), restp);
+        }
+        return itemp;
+    }
     void setDType(AstNodeDType* dtypep) {
         if (m_varDTypep) {
             UASSERT_OBJ(!m_varDTypep->backp(), m_varDTypep, "Should not link directly");
