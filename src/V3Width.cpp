@@ -374,6 +374,13 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_map<const AstClass*, std::unordered_map<string, AstNodeFuncCovItem*>>
         m_coverItems;  // Coverpoints and crosses of each covergroup, by name
     V3TaskConnectState m_taskConnectState;  // State to cache V3Task::taskConnects
+    // Property whose untyped formal arguments must be typed with the actual arguments, see
+    // needsTypedFormals; false while computing
+    std::map<const AstNodeSchema*, bool> m_needsTypedFormals;
+    // Copies of such a property with typed formal arguments, by actual argument types
+    using TypedFormalCopy = std::pair<std::vector<AstNodeDType*>, AstNodeSchema*>;
+    std::map<const AstNodeSchema*, std::vector<TypedFormalCopy>> m_typedFormalCopies;
+    std::vector<AstNodeSchema*> m_untypedFormalDecls;  // Such declarations, deleted at the end
     WidthVP* m_vup = nullptr;  // Current node state
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
@@ -8576,6 +8583,7 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstProperty* nodep) override {
         if (nodep->didWidth()) return;
+        if (skipUntypedFormalDecl(nodep)) return;
         if (nodep->doingWidth()) {
             UINFO(5, "Recursive property call: " << nodep);
             nodep->v3warn(E_UNSUPPORTED,
@@ -8615,6 +8623,7 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstSchemaRef* nodep) override {
         if (nodep->didWidth()) return;
+        if (needsTypedFormals(nodep->schemap())) typeUntypedFormals(nodep);
         userIterate(nodep->schemap(), nullptr);
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
@@ -8704,6 +8713,79 @@ class WidthVisitor final : public VNVisitor {
             }
         }
     }
+    static bool isUntypedFormal(const AstVar* varp) {
+        const AstBasicDType* const basicp = VN_CAST(varp->subDTypep(), BasicDType);
+        return basicp && basicp->untyped();
+    }
+    static bool refsUntypedFormal(const AstNode* nodep) {
+        return nodep->exists([](const AstVarRef* refp) { return isUntypedFormal(refp->varp()); });
+    }
+    // True if a property selects from or takes an edge of an untyped formal argument
+    bool needsTypedFormals(const AstNodeSchema* taskp) {
+        // Also through another property. Such a formal can only be typed with the actual argument
+        // (IEEE 1800-2023 16.8, 16.12).
+        if (!VN_IS(taskp, Property)) return false;
+        const auto pair = m_needsTypedFormals.emplace(taskp, false);
+        if (!pair.second) return pair.first->second;
+        const bool needs = taskp->exists([&](const AstNode* np) {
+            if (const AstNodePreSel* const selp = VN_CAST(np, NodePreSel)) {
+                return refsUntypedFormal(selp->fromp());
+            }
+            if (VN_IS(np, SenItem)) return refsUntypedFormal(np);
+            if (const AstSchemaRef* const refp = VN_CAST(np, SchemaRef)) {
+                return refsUntypedFormal(refp) && needsTypedFormals(refp->schemap());
+            }
+            return false;
+        });
+        m_needsTypedFormals[taskp] = needs;
+        return needs;
+    }
+    // Such a declaration is only widthed through its copies, see typeUntypedFormals
+    bool skipUntypedFormalDecl(AstNodeSchema* nodep) {
+        if (!needsTypedFormals(nodep)) return false;
+        m_untypedFormalDecls.push_back(nodep);
+        nodep->didWidth(true);
+        return true;
+    }
+    static bool sameDTypes(const std::vector<AstNodeDType*>& aps,
+                           const std::vector<AstNodeDType*>& bps) {
+        // Exact, as a select depends on the range direction and offset of its operand
+        for (size_t i = 0; i < aps.size(); ++i) {
+            if (!aps[i]->skipRefp()->sameTree(bps[i]->skipRefp())) return false;
+        }
+        return true;
+    }
+    // Retarget a property instance to a copy typed by the actual arguments
+    void typeUntypedFormals(AstSchemaRef* nodep) {
+        // The copy's untyped formal arguments have the types of the actual arguments.
+        AstNodeSchema* const origp = nodep->schemap();
+        std::vector<AstVar*> portps;  // Untyped formal arguments
+        std::vector<AstNodeDType*> dtypeps;  // Their actual argument types
+        for (const auto& tconnect : V3Task::taskConnects(nodep)) {
+            if (!isUntypedFormal(tconnect.first)) continue;
+            userIterateAndNext(tconnect.second->exprp(), WidthVP{SELF, BOTH}.p());
+            portps.push_back(tconnect.first);
+            dtypeps.push_back(tconnect.second->exprp()->dtypep()->skipRefp());
+        }
+        std::vector<TypedFormalCopy>& copies = m_typedFormalCopies[origp];
+        for (size_t i = 0; i < copies.size(); ++i) {
+            if (sameDTypes(dtypeps, copies[i].first)) {
+                nodep->schemap(copies[i].second);
+                return;
+            }
+        }
+        AstNodeSchema* const copyp = origp->cloneTree(false);
+        copyp->didWidth(false);  // As skipUntypedFormalDecl may have set it on the original
+        for (size_t i = 0; i < portps.size(); ++i) {
+            AstVar* const varp = portps[i]->clonep();
+            pushDeletep(varp->childDTypep()->unlinkFrBack());
+            varp->dtypep(dtypeps[i]);
+        }
+        origp->addNextHere(copyp);
+        copies.emplace_back(dtypeps, copyp);
+        nodep->schemap(copyp);
+    }
+
     void processFTaskRefArgs(AstNodeFTaskRef* nodep) {
         VL_RESTORER(m_underCast);
         m_underCast = false;  // Arguments are checked independently of a cast of the result.
@@ -12101,7 +12183,11 @@ public:
             }
         }
     }
-    ~WidthVisitor() override = default;
+    ~WidthVisitor() override {
+        for (AstNodeSchema* const declp : m_untypedFormalDecls) {
+            VL_DO_DANGLING(pushDeletep(declp->unlinkFrBack()), declp);
+        }
+    }
 };
 
 //######################################################################

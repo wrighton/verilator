@@ -2632,6 +2632,7 @@ public:
     const std::string& dotted() const { return m_dotted; }
     void dotted(const std::string& name) { m_dotted = name; }
     AstNodeSchema* schemap() const VL_MT_STABLE { return m_schemap; }
+    void schemap(AstNodeSchema* nodep) { m_schemap = nodep; }
     AstNodeModule* classOrPackagep() const VL_MT_STABLE { return m_classOrPackagep; }
     bool isPure() override { return false; }  // Unknown until substituted
     std::string emitVerilog() final override { V3ERROR_NA_RETURN(""); }
