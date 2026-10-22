@@ -194,10 +194,65 @@ module t;
     `checkh(rbits, 64'hefbeaddefecadefa);
   endtask
 
+  task test4;
+    // Packed streams into dynamically sized arrays
+    logic [7:0] a;
+    logic [15:0] b;
+    logic [39:0] w40;
+    logic [79:0] w80;
+    byte dyn8[];
+    byte q8[$];
+    logic [11:0] dyn12[];
+    logic [69:0] q70[$];
+
+    a = 8'($urandom);
+    b = 16'($urandom);
+    w40 = {8'($urandom), 32'($urandom)};
+    w80 = {16'($urandom), 32'($urandom), 32'($urandom)};
+
+    dyn8 = {>>{a, b}};
+    `checkh(dyn8.size(), 3);
+    `checkh(dyn8[0], a);
+    `checkh(dyn8[1], b[15:8]);
+    `checkh(dyn8[2], b[7:0]);
+    dyn8 = {<<8{a, b}};
+    `checkh(dyn8.size(), 3);
+    `checkh(dyn8[0], b[7:0]);
+    `checkh(dyn8[1], b[15:8]);
+    `checkh(dyn8[2], a);
+    dyn8 = {>>{8'h12, 16'h3456}};
+    `checkp(dyn8, "'{'h12, 'h34, 'h56}");
+
+    q8 = {>>{b}};
+    `checkh(q8.size(), 2);
+    `checkh(q8[0], b[15:8]);
+    `checkh(q8[1], b[7:0]);
+    q8 = {<<8{w40}};
+    `checkh(q8.size(), 5);
+    `checkh(q8[0], w40[7:0]);
+    `checkh(q8[4], w40[39:32]);
+    q8 = {>>{w80}};
+    `checkh(q8.size(), 10);
+    `checkh(q8[0], w80[79:72]);
+    `checkh(q8[9], w80[7:0]);
+
+    // Zero extended to a whole number of elements
+    dyn12 = {>>{w40}};
+    `checkh(dyn12.size(), 4);
+    `checkh(dyn12[0], {8'h0, w40[39:36]});
+    `checkh(dyn12[1], w40[35:24]);
+    `checkh(dyn12[3], w40[11:0]);
+    q70 = {>>{w80}};
+    `checkh(q70.size(), 2);
+    `checkh(q70[0], {60'h0, w80[79:70]});
+    `checkh(q70[1], w80[69:0]);
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
+    test4();
     $write("*-* All Finished *-*\n");
     $finish;
   end
