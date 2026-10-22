@@ -2001,6 +2001,7 @@ class AstParseRef final : public AstNodeExpr {
     // @astgen op2 := ftaskrefp : Optional[AstNodeFTaskRef]
 
     string m_name;  // Name of the variable/function/task
+    bool m_keyword = false;  // Is 'this' or 'super' keyword, not an (escaped) identifier
 
 public:
     AstParseRef(FileLine* fl, const string& name, AstNodeExpr* lhsp = nullptr,
@@ -2011,16 +2012,30 @@ public:
         this->ftaskrefp(ftaskrefp);
     }
     ASTGEN_MEMBERS_AstParseRef;
+    static AstParseRef* newThis(FileLine* fl) { return newKeyword(fl, "this"); }
+    static AstParseRef* newSuper(FileLine* fl) { return newKeyword(fl, "super"); }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     void name(const string& name) override { m_name = name; }
-    bool sameNode(const AstNode* samep) const override {
+    bool keyword() const { return m_keyword; }
+    bool isThis() const { return m_keyword && m_name == "this"; }
+    bool isSuper() const { return m_keyword && m_name == "super"; }
+    bool sameNode(const AstNode* samep) const override {  // LCOV_EXCL_START
         const AstParseRef* const asamep = VN_DBG_AS(samep, ParseRef);
-        return m_name == asamep->m_name;
-    }
+        return m_name == asamep->m_name && m_keyword == asamep->m_keyword;
+    }  // LCOV_EXCL_STOP
 
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { V3ERROR_NA_RETURN(true); }
+
+private:
+    static AstParseRef* newKeyword(FileLine* fl, const string& name) {
+        AstParseRef* const newp = new AstParseRef{fl, name};
+        newp->m_keyword = true;
+        return newp;
+    }
 };
 class AstPast final : public AstNodeExpr {
     // Verilog $past

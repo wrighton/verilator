@@ -3556,6 +3556,14 @@ string AstParamTypeDType::prettyDTypeName(bool full) const {
     if (!skipRefToEnumOrNullp()) return prettyName();
     return subDTypep()->prettyDTypeName(full);
 }
+void AstParseRef::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (keyword()) str << " [KEYWORD]";
+}
+void AstParseRef::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, keyword);
+    dumpJsonGen(str);
+}
 void AstParseTypeDType::dump(std::ostream& str) const {
     Super::dump(str);
     if (fwdType() != VFwdType::NONE) str << " [" << fwdType().ascii() << "]";

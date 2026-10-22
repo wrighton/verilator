@@ -5354,7 +5354,7 @@ exprScope<nodeExprp>:               // scope and variable for use to inside an e
         //                      // IEEE: [ implicit_class_handle . | class_scope | package_scope ] hierarchical_identifier select
         //                      // Or method_call_body without parenthesis
         //                      // See also varRefClassBit, which is the non-expr version of most of this
-                yTHIS                                   { $$ = new AstParseRef{$<fl>1, "this"}; }
+                yTHIS                                   { $$ = AstParseRef::newThis($<fl>1); }
         |       yD_ROOT                                 { $$ = new AstParseRef{$<fl>1, "$root"}; }
         |       idArrayed                               { $$ = $1; }
         |       packageClassScope idArrayed             { $$ = AstDot::newIfPkg($2->fileline(), $1, $2); }
@@ -5362,15 +5362,15 @@ exprScope<nodeExprp>:               // scope and variable for use to inside an e
         //                      // expr below must be a "yTHIS"
         |       ~l~expr '.' ySUPER
                         { AstParseRef* const anodep = VN_CAST($1, ParseRef);
-                          if (anodep && anodep->name() == "this") {
-                              $$ = new AstParseRef{$<fl>1, "super"};
+                          if (anodep && anodep->isThis()) {
+                              $$ = AstParseRef::newSuper($<fl>1);
                               $1->deleteTree();
                           } else {
                               $$ = $1;  $$->v3error("Syntax error: 'super' must be first name component, or after 'this.'");
                           }
                         }
         //                      // Part of implicit_class_handle
-        |       ySUPER                                  { $$ = new AstParseRef{$<fl>1, "super"}; }
+        |       ySUPER                                  { $$ = AstParseRef::newSuper($<fl>1); }
         ;
 
 fexprScope<nodeExprp>:              // exprScope, For use as first part of statement (disambiguates <=)
@@ -6174,11 +6174,11 @@ idClass<nodeExprp>:             // Misc Ref to dotted, and/or arrayed, and/or bi
                 idDotted                                { $$ = $1; }
         //                      // IEEE: [ implicit_class_handle . | package_scope ] hierarchical_variable_identifier select
         |       yTHIS '.' idDotted
-                        { $$ = new AstDot{$2, false, new AstParseRef{$<fl>1, "this"}, $3}; }
+                        { $$ = new AstDot{$2, false, AstParseRef::newThis($<fl>1), $3}; }
         |       ySUPER '.' idDotted
-                        { $$ = new AstDot{$2, false, new AstParseRef{$<fl>1, "super"}, $3}; }
+                        { $$ = new AstDot{$2, false, AstParseRef::newSuper($<fl>1), $3}; }
         |       yTHIS '.' ySUPER '.' idDotted
-                        { $$ = new AstDot{$4, false, new AstParseRef{$<fl>3, "super"}, $5}; }
+                        { $$ = new AstDot{$4, false, AstParseRef::newSuper($<fl>3), $5}; }
         //                      // Expanded: package_scope idDottedSel
         |       packageClassScope idDotted              { $$ = new AstDot{$<fl>2, true, $1, $2}; }
         ;
@@ -6187,11 +6187,11 @@ idClassSel<nodeExprp>:          // Misc Ref to dotted, and/or arrayed, and/or bi
                 idDottedSel                             { $$ = $1; }
         //                      // IEEE: [ implicit_class_handle . | package_scope ] hierarchical_variable_identifier select
         |       yTHIS '.' idDottedSel
-                        { $$ = new AstDot{$2, false, new AstParseRef{$<fl>1, "this"}, $3}; }
+                        { $$ = new AstDot{$2, false, AstParseRef::newThis($<fl>1), $3}; }
         |       ySUPER '.' idDottedSel
-                        { $$ = new AstDot{$2, false, new AstParseRef{$<fl>1, "super"}, $3}; }
+                        { $$ = new AstDot{$2, false, AstParseRef::newSuper($<fl>1), $3}; }
         |       yTHIS '.' ySUPER '.' idDottedSel
-                        { $$ = new AstDot{$4, false, new AstParseRef{$<fl>3, "super"}, $5}; }
+                        { $$ = new AstDot{$4, false, AstParseRef::newSuper($<fl>3), $5}; }
         //                      // Expanded: package_scope idDottedSel
         |       packageClassScope idDottedSel           { $$ = new AstDot{$<fl>2, true, $1, $2}; }
         ;
@@ -6200,11 +6200,11 @@ idClassSelForeach<foreachHeaderp>:
                 idDottedForeach                         { $$ = $1; }
         //                      // IEEE: [ implicit_class_handle . | package_scope ] hierarchical_variable_identifier select
         |       yTHIS '.' idDottedForeach
-                        { $3->fromp(new AstDot{$2, false, new AstParseRef{$<fl>1, "this"}, $3->fromp()->unlinkFrBack()}); $$ = $3; }
+                        { $3->fromp(new AstDot{$2, false, AstParseRef::newThis($<fl>1), $3->fromp()->unlinkFrBack()}); $$ = $3; }
         |       ySUPER '.' idDottedForeach
-                        { $3->fromp(new AstDot{$2, false, new AstParseRef{$<fl>1, "super"}, $3->fromp()->unlinkFrBack()}); $$ = $3; }
+                        { $3->fromp(new AstDot{$2, false, AstParseRef::newSuper($<fl>1), $3->fromp()->unlinkFrBack()}); $$ = $3; }
         |       yTHIS '.' ySUPER '.' idDottedForeach
-                        { $5->fromp(new AstDot{$4, false, new AstParseRef{$<fl>3, "super"}, $5->fromp()->unlinkFrBack()}); $$ = $5; }
+                        { $5->fromp(new AstDot{$4, false, AstParseRef::newSuper($<fl>3), $5->fromp()->unlinkFrBack()}); $$ = $5; }
         //                      // Expanded: package_scope idForeach
         |       packageClassScope idDottedForeach
                        { $2->fromp(new AstDot{$<fl>2, true, $1, $2->fromp()->unlinkFrBack()}); $$ = $2; }
