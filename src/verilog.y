@@ -56,6 +56,12 @@ static void DELAY_LIST(AstNode* listp, AstDelay* delayp) {
         assignp->timingControlp(delayp->backp() ? delayp->cloneTree(false) : delayp);
     }
 }
+// Reject a delay on a pull source; parsed only to give a clearer error than a syntax error
+static void PULL_NO_DELAY(AstDelay* delayp) {
+    if (!delayp) return;
+    delayp->v3error("Delay not allowed on pullup/pulldown sources (IEEE 1800-2023 28.10)");
+    VL_DO_DANGLING(delayp->deleteTree(), delayp);
+}
 // Apply a strength to all continuous assignments under listp
 static void STRENGTH_LIST(AstNode* listp, AstStrengthSpec* specp) {
     if (!specp) return;
@@ -5636,8 +5642,8 @@ gateDecl<nodep>:
         |       yNOR    driveStrengthE delay_controlE gateNorList ';'     { $$ = $4; STRENGTH_LIST($4, $2); DELAY_LIST($4, $3); }
         |       yXOR    driveStrengthE delay_controlE gateXorList ';'     { $$ = $4; STRENGTH_LIST($4, $2); DELAY_LIST($4, $3); }
         |       yXNOR   driveStrengthE delay_controlE gateXnorList ';'    { $$ = $4; STRENGTH_LIST($4, $2); DELAY_LIST($4, $3); }
-        |       yPULLDOWN pulldown_strengthE delay_controlE gatePulldownList ';'   { $$ = $4; DELAY_LIST($4, $3); }
-        |       yPULLUP   pullup_strengthE   delay_controlE gatePullupList ';'     { $$ = $4; DELAY_LIST($4, $3); }
+        |       yPULLDOWN pulldown_strengthE delay_controlE gatePulldownList ';'   { $$ = $4; PULL_NO_DELAY($3); }
+        |       yPULLUP   pullup_strengthE   delay_controlE gatePullupList ';'     { $$ = $4; PULL_NO_DELAY($3); }
         |       yNMOS     delay_controlE gateBufif1List ';'     { $$ = $3; DELAY_LIST($3, $2); }
         |       yPMOS     delay_controlE gateBufif0List ';'     { $$ = $3; DELAY_LIST($3, $2); }
         //

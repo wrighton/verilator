@@ -1,0 +1,8 @@
+%Error: t/t_tri_pull_delay_bad.v:12:10: Delay not allowed on pullup/pulldown sources (IEEE 1800-2023 28.10)
+   12 |   pullup #1 (a);
+      |          ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_tri_pull_delay_bad.v:13:12: Delay not allowed on pullup/pulldown sources (IEEE 1800-2023 28.10)
+   13 |   pulldown #(1, 2) (b);
+      |            ^
+%Error: Exiting due to
