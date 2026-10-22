@@ -308,6 +308,7 @@ class WidthVisitor final : public VNVisitor {
     ContainingClassFinder m_containingClassFinder;  // Finds the class containing a node
     std::unordered_set<AstVar*> m_aliasedVars;  // Variables referenced in alias
     std::unordered_set<const AstVar*> m_curModVars;  // Variables declared in current module
+    std::unordered_set<const AstVar*> m_foreachVars;  // Loop variables of enclosing foreaches
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -3675,6 +3676,15 @@ class WidthVisitor final : public VNVisitor {
             nodep->v3warn(E_CONSTWRITTEN, "Writing to 'const' data-typed variable "
                                               << nodep->prettyNameQ()
                                               << " (IEEE 1800-2023 6.20.6)");
+        } else if (nodep->access().isWriteOrRW()
+                   && m_foreachVars.count(nodep->varp())
+                   // Under a member select, only a struct loop variable is itself written; a
+                   // class or virtual interface handle refers to some other object
+                   && (!m_underMemberSel
+                       || VN_IS(nodep->varp()->dtypep()->skipRefp(), NodeUOrStructDType))) {
+            nodep->v3error("Writing to foreach loop variable " << nodep->prettyNameQ()
+                                                               << ", which is read-only"
+                                                                  " (IEEE 1800-2023 12.7.3)");
         }
         if (nodep->varp()->isClassMember() && !nodep->varp()->isFuncLocal()
             && !nodep->varp()->lifetime().isStatic() && m_ftaskp && m_ftaskp->isStatic()) {
@@ -7026,6 +7036,10 @@ class WidthVisitor final : public VNVisitor {
         }
         // The parser validates we don't have "foreach (array[,,,])"
         AstNode* const bodyp = nodep->bodyp();
+        VL_RESTORER_COPY(m_foreachVars);
+        for (AstNode* argsp = headerp->elementsp(); argsp; argsp = argsp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(argsp, Var)) m_foreachVars.insert(varp);
+        }
         userIterateAndNext(bodyp, nullptr);
         if (AstForeach* const loopp = VN_CAST(nodep, Foreach)) {
             VL_DO_DANGLING2(V3Begin::convertToWhile(loopp), loopp, nodep);
