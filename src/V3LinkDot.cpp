@@ -65,6 +65,7 @@
 
 #include "V3LinkDot.h"
 
+#include "V3Assert.h"
 #include "V3Global.h"
 #include "V3Graph.h"
 #include "V3LinkDotIfaceCapture.h"
@@ -74,6 +75,7 @@
 #include "V3Stats.h"
 #include "V3String.h"
 #include "V3SymTable.h"
+#include "V3UniqueNames.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -3321,6 +3323,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
     AstGenBlock* m_genBlockp = nullptr;  // Current generate block
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
+    // Per sequence in the current module, the event fired at its end points, see
+    // replaceSequenceTriggered
+    std::map<const AstSequence*, AstVar*> m_seqTriggeredEvents;
+    V3UniqueNames m_seqTriggeredNames{"__Vtriggered"};  // Names of those events
     int m_modportNum = 0;  // Uniqueify modport numbers
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
@@ -4107,11 +4113,42 @@ class LinkDotResolveVisitor final : public VNVisitor {
         iterateChildrenBackwardsConst(nodep);
     }
     void visit(AstTypeTable*) override {}
+    // True if nodep is declared directly in the current module or in a package
+    bool isModuleScope(AstNode* nodep) const {
+        const AstNode* const parentp = LinkDotState::getNodeSym(nodep)->parentp()->nodep();
+        return parentp == m_modp || VN_IS(parentp, Package);
+    }
+    // Replace sequence method 'triggered' nodep with an event's state, returning the event
+    AstVar* replaceSequenceTriggered(AstParseRef* nodep, AstSchemaRef* schemaRefp) {
+        // The method's value is the triggered state of the event (IEEE 1800-2023 16.13.6),
+        // fired at each end point of the sequence instance, as for a sequence event control.
+        // The instance moves to module scope, so cannot reference e.g. a property's formal,
+        // an automatic variable, a generate block's variable or genvar, or another instance.
+        if (!isModuleScope(schemaRefp->schemap())
+            || schemaRefp->exists([this](const AstVarRef* refp) {
+                   return refp->varp()->isGenVar() || !isModuleScope(refp->varp());
+               })) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence method 'triggered' on a sequence"
+                                         " instance referencing a non-module-scope declaration");
+            VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
+        }
+        AstVar* const eventp = V3AssertCommon::newSequenceEvent(
+            nodep->fileline(), m_modp, m_seqTriggeredNames.get(nodep), schemaRefp);
+        replaceWithTriggered(nodep, eventp);
+        return eventp;
+    }
+    void replaceWithTriggered(AstParseRef* nodep, AstVar* eventp) {
+        FileLine* const flp = nodep->fileline();
+        nodep->replaceWith(
+            new AstMethodCall{flp, new AstVarRef{flp, eventp, VAccess::READ}, "triggered"});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstNodeModule* nodep) override {
         if (nodep->dead()) return;
         LINKDOT_VISIT_START();
         UINFO(8, indent() << "visit " << nodep);
         VL_RESTORER(m_genericIfaceModule);
+        VL_RESTORER_CLEAR(m_seqTriggeredEvents);
         if (const AstModule* const modp = VN_CAST(nodep, Module)) {
             m_genericIfaceModule = modp->hasGenericIface();
         }
@@ -4565,6 +4602,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
+        } else if (m_ds.m_dotPos == DP_MEMBER && nodep->name() == "triggered"
+                   && VN_IS(m_ds.m_dotp->lhsp(), SchemaRef)
+                   && VN_IS(VN_AS(m_ds.m_dotp->lhsp(), SchemaRef)->schemap(), Sequence)) {
+            // A sequence instance with arguments
+            replaceSequenceTriggered(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
         } else if (m_ds.m_dotPos == DP_MEMBER) {
             // Found a Var, everything following is membership.  {scope}.{var}.HERE {member}
             if (m_ds.m_dotErr) {
@@ -4636,6 +4678,20 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else {
                 UINFO(1, "ds=" << m_ds.ascii());
                 nodep->v3fatalSrc("Unhandled DotPosition");
+            }
+            if (m_ds.m_dotPos == DP_FINAL && nodep->name() == "triggered") {
+                if (AstSequence* const seqp = VN_CAST(m_ds.m_dotSymp->nodep(), Sequence)) {
+                    // A sequence without arguments, whose instances share the event
+                    AstVar*& eventpr = m_seqTriggeredEvents[seqp];
+                    if (eventpr) {
+                        replaceWithTriggered(nodep, eventpr);
+                    } else {
+                        AstSchemaRef* const schemaRefp = new AstSchemaRef{
+                            nodep->fileline(), seqp, m_ds.m_dotSymp->classOrPackagep(), nullptr};
+                        eventpr = replaceSequenceTriggered(nodep, schemaRefp);
+                    }
+                    return;
+                }
             }
             // Lookup
             VSymEnt* foundp;
@@ -4803,8 +4859,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                                           << cellp->modp()->prettyNameQ());
                     }
                 }
-            } else if (allowScope && !allowFTask && VN_IS(foundp->nodep(), NodeFTask)) {
+            } else if (allowScope && !allowFTask
+                       && (VN_IS(foundp->nodep(), NodeFTask)
+                           || VN_IS(foundp->nodep(), NodeSchema))) {
                 // Function/task used as scope for static variable access (IEEE std 1800-2017 6.21)
+                // Also a sequence or property, as the scope of its items and methods
                 // Don't set m_dotText so the static variable resolves as a VarRef rather than
                 // VarXRef. This is so that V3Begin won't move it out of the function/task's scope.
                 ok = true;
