@@ -301,6 +301,49 @@ class AssertElabVisitor final : public VNVisitor {
             V3AssertCommon::reducePlainAlways(propSpecp);
         }
     }
+    // True if an actual argument of schemaRefp contains a property instance
+    static bool hasPropertyArg(const AstSchemaRef* schemaRefp) {
+        // Such an instance would be substituted for an untyped formal, which V3Width typed as a
+        // boolean.
+        return schemaRefp->argsp()
+               && schemaRefp->argsp()->existsAndNext(
+                   [](const AstSchemaRef* refp) { return VN_IS(refp->schemap(), Property); });
+    }
+    // True if nodep is within an operand of a sequence operator or an implication antecedent
+    static bool isUnderSequenceOperator(const AstNode* nodep) {
+        for (const AstNode *belowp = nodep, *abovep = nodep->aboveLoopp(); VN_IS(abovep, NodeExpr);
+             belowp = abovep, abovep = abovep->aboveLoopp()) {
+            if (VN_IS(abovep, SExpr) || VN_IS(abovep, SConsRep) || VN_IS(abovep, SGotoRep)
+                || VN_IS(abovep, SNonConsRep) || VN_IS(abovep, SIntersect)
+                || VN_IS(abovep, SWithin) || VN_IS(abovep, SThroughout)) {
+                return true;
+            }
+            const AstImplication* const implp = VN_CAST(abovep, Implication);
+            if (implp && implp->lhsp() == belowp) return true;
+        }
+        return false;
+    }
+    // True if the multi-cycle body specp of a nested property instance can replace it, as the
+    // NFA lowers it like the equivalent inline property (IEEE 1800-2023 16.12.1). A body with a
+    // strength is not a plain operand, and a property instance is not a sequence operand
+    // (IEEE 1800-2023 A.2.10). Nor is a body with a match item, as its local variables would only
+    // be lowered at the top level of the property.
+    static bool isInlinableMultiCycle(const AstSchemaRef* schemaRefp, const AstPropSpec* specp) {
+        return specp->propStrength() == VPropStrength::DEFAULT && !hasPropertyArg(schemaRefp)
+               && !isUnderSequenceOperator(schemaRefp)
+               && !specp->exists([](const AstExprStmt*) { return true; })
+               && !isAlwaysOverPropertyOps(specp);
+    }
+    // True if a property body is an 'always' of a property, only supported as a whole property
+    static bool isAlwaysOverPropertyOps(const AstPropSpec* specp) {
+        // As V3Width reports for the same property written out (IEEE 1800-2023 16.12.11)
+        const AstPropAlways* const alwaysp = VN_CAST(specp->propp(), PropAlways);
+        return alwaysp && alwaysp->propp()->exists([](const AstNode* np) {
+            const AstNodeExpr* const exprp = VN_CAST(np, NodeExpr);
+            return (exprp && exprp->isMultiCycleSva()) || VN_IS(np, Implication)
+                   || VN_IS(np, Until) || VN_IS(np, PropSpec);
+        });
+    }
     void inlineNestedProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
         AstPropSpec* const specp = cloneProperty(schemaRefp, propp);
         AstNode* replp = nullptr;
@@ -311,7 +354,8 @@ class AssertElabVisitor final : public VNVisitor {
             schemaRefp->v3warn(E_UNSUPPORTED,
                                "Unsupported: clock event in a nested property instance");
         } else if (specp->propp()->exists(
-                       [](const AstNodeExpr* np) { return np->isMultiCycleSva(); })) {
+                       [](const AstNodeExpr* np) { return np->isMultiCycleSva(); })
+                   && !isInlinableMultiCycle(schemaRefp, specp)) {
             schemaRefp->v3warn(E_UNSUPPORTED,
                                "Unsupported: multi-cycle body in a nested property instance");
         } else {

@@ -9,9 +9,6 @@ module t (
 );
   logic a, b, d;
 
-  property p_alw;
-    always a;
-  endproperty
   property p_impl;
     always (a |-> b);
   endproperty
@@ -25,12 +22,8 @@ module t (
     always (a ##1 b);
   endproperty
 
-  // The body 'always p' is not reduced to p under another property operator, where a multi-cycle
-  // body is unsupported
-  assert property (@(posedge clk) not p_alw);
-  assert property (@(posedge clk) d |-> p_alw);
-  assert property (@(posedge clk) d |=> p_alw);
-  assert property (@(posedge clk) if (d) p_alw);
+  // The body 'always p' is not reduced to p under another property operator, where it is
+  // unsupported when p is itself temporal
   assert property (@(posedge clk) d |-> p_impl);
   assert property (@(posedge clk) d |-> p_wrap_impl);
   assert property (@(posedge clk) d |-> p_until);

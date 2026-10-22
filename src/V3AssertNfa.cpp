@@ -3320,6 +3320,18 @@ class AssertNfaVisitor final : public VNVisitor {
         return nullptr;
     }
 
+    // True if V3AssertPre lowers a chain of property instances with one fail per attempt: one
+    // with a goto or nonconsecutive repetition, and without a ranged cycle delay, which
+    // V3AssertPre does not lower
+    static bool isPreChain(const AstPropSpec* specp) {
+        bool repetition = false;
+        const bool rangeDelay = specp->exists([&](const AstNode* np) {
+            if (VN_IS(np, SGotoRep) || VN_IS(np, SNonConsRep)) repetition = true;
+            const AstDelay* const delayp = VN_CAST(np, Delay);
+            return delayp && delayp->isRangeDelay();
+        });
+        return repetition && !rangeDelay;
+    }
     // Reject unsupported shapes.
     // Returns the PropSpec to lower, or nullptr when fully handled here.
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
@@ -3335,7 +3347,7 @@ class AssertNfaVisitor final : public VNVisitor {
             // Leave a chain of property instances to V3AssertPre: the NFA lowering
             // reports one fail for attempts failing in the same cycle, e.g. after a goto
             // repetition antecedent, but each attempt fails (IEEE 1800-2023 16.14.1).
-            if (specp->fromInstanceChain()) return nullptr;
+            if (specp->fromInstanceChain() && isPreChain(specp)) return nullptr;
             if (hoistClockedSeq(specp)) return nullptr;
         }
 

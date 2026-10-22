@@ -22,6 +22,9 @@ module t (
   // Attempts of 'always a', 'always b' and 'disable iff (c) always a' started since their previous
   // failure, and their failures
   int live_a = 0, live_b = 0, live_dis = 0, exp_a = 0, exp_b = 0, exp_dis = 0;
+  // Attempts of 'c |-> always a', 'c |=> always a' and 'c |-> always b' pending since their
+  // previous failure, and the ticks they fail on
+  int live_ia = 0, live_na = 0, live_ib = 0, ticks_ia = 0, ticks_na = 0, ticks_ib = 0;
 
   always @(posedge clk) begin
     ++live_a;
@@ -33,6 +36,21 @@ module t (
     if (!b) begin
       exp_b += live_b;
       live_b = 0;
+    end
+    if (c) ++live_ia;
+    if (!a && live_ia != 0) begin
+      ++ticks_ia;
+      live_ia = 0;
+    end
+    if (!a && live_na != 0) begin
+      ++ticks_na;
+      live_na = 0;
+    end
+    if (c) ++live_na;
+    if (c) ++live_ib;
+    if (!b && live_ib != 0) begin
+      ++ticks_ib;
+      live_ib = 0;
     end
     if (c) begin
       live_dis = 0;
@@ -96,6 +114,21 @@ module t (
   else fails_wrap2++;
   assert property (@(posedge clk) p_range)
   else fails_range++;
+  // Under another property operator the body keeps its 'always', and the instance fails as the
+  // property written out does: once on each tick its attempts fail, not once per attempt, which
+  // is a limit of the written-out property
+  int fails_nest_impl = 0, fails_nest_next = 0, fails_nest_if = 0, fails_nest_arg = 0;
+  int fails_nest_wrap = 0;
+  assert property (@(posedge clk) c |-> p_alw)
+  else fails_nest_impl++;
+  assert property (@(posedge clk) c |=> p_alw)
+  else fails_nest_next++;
+  assert property (@(posedge clk) if (c) p_alw)
+  else fails_nest_if++;
+  assert property (@(posedge clk) c |-> p_arg(b))
+  else fails_nest_arg++;
+  assert property (@(posedge clk) c |-> p_wrap)
+  else fails_nest_wrap++;
   // A bound that is a parameter is only constant after widthing
   localparam int ZERO = 0;
   assert property (@(posedge clk) always [ZERO:$] a)
@@ -113,6 +146,16 @@ module t (
   else ref_fails_disable++;
   assert property (@(posedge clk) always [1:$] a)
   else ref_fails_range++;
+  int ref_fails_nest_impl = 0, ref_fails_nest_next = 0, ref_fails_nest_if = 0;
+  int ref_fails_nest_arg = 0;
+  assert property (@(posedge clk) c |-> always a)
+  else ref_fails_nest_impl++;
+  assert property (@(posedge clk) c |=> always a)
+  else ref_fails_nest_next++;
+  assert property (@(posedge clk) if (c) always a)
+  else ref_fails_nest_if++;
+  assert property (@(posedge clk) c |-> always b)
+  else ref_fails_nest_arg++;
 
   // Counts read in final (Postponed) to avoid same-timestep races.
   final begin
@@ -125,6 +168,15 @@ module t (
     `checkd(fails_wrap2, exp_a);
     `checkd(fails_range, ref_fails_range);
     `checkd(fails_param, exp_a);
+    `checkd(fails_nest_impl, ref_fails_nest_impl);
+    `checkd(fails_nest_next, ref_fails_nest_next);
+    `checkd(fails_nest_if, ref_fails_nest_if);
+    `checkd(fails_nest_arg, ref_fails_nest_arg);
+    `checkd(fails_nest_wrap, ref_fails_nest_impl);
+    `checkd(ref_fails_nest_impl, ticks_ia);
+    `checkd(ref_fails_nest_next, ticks_na);
+    `checkd(ref_fails_nest_if, ticks_ia);
+    `checkd(ref_fails_nest_arg, ticks_ib);
     `checkd(ref_fails_range, 16);
     `checkd(ref_fails_alw, 17);
     `checkd(ref_fails_arg, 19);

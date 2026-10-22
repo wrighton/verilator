@@ -1,34 +1,18 @@
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:30:39: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:27:41: Unsupported: multi-cycle body in a nested property instance
                                                            : ... note: In instance 't'
-   30 |   assert property (@(posedge clk) not p_alw);
-      |                                       ^~~~~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:31:41: Unsupported: multi-cycle body in a nested property instance
-                                                           : ... note: In instance 't'
-   31 |   assert property (@(posedge clk) d |-> p_alw);
-      |                                         ^~~~~
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:32:41: Unsupported: multi-cycle body in a nested property instance
-                                                           : ... note: In instance 't'
-   32 |   assert property (@(posedge clk) d |=> p_alw);
-      |                                         ^~~~~
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:33:42: Unsupported: multi-cycle body in a nested property instance
-                                                           : ... note: In instance 't'
-   33 |   assert property (@(posedge clk) if (d) p_alw);
-      |                                          ^~~~~
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:34:41: Unsupported: multi-cycle body in a nested property instance
-                                                           : ... note: In instance 't'
-   34 |   assert property (@(posedge clk) d |-> p_impl);
+   27 |   assert property (@(posedge clk) d |-> p_impl);
       |                                         ^~~~~~
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:35:41: Unsupported: multi-cycle body in a nested property instance
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:28:41: Unsupported: multi-cycle body in a nested property instance
                                                            : ... note: In instance 't'
-   35 |   assert property (@(posedge clk) d |-> p_wrap_impl);
+   28 |   assert property (@(posedge clk) d |-> p_wrap_impl);
       |                                         ^~~~~~~~~~~
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:36:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:29:41: Unsupported: multi-cycle body in a nested property instance
                                                            : ... note: In instance 't'
-   36 |   assert property (@(posedge clk) d |-> p_until);
+   29 |   assert property (@(posedge clk) d |-> p_until);
       |                                         ^~~~~~~
-%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:37:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:30:41: Unsupported: multi-cycle body in a nested property instance
                                                            : ... note: In instance 't'
-   37 |   assert property (@(posedge clk) d |-> p_seq);
+   30 |   assert property (@(posedge clk) d |-> p_seq);
       |                                         ^~~~~
 %Error: Exiting due to

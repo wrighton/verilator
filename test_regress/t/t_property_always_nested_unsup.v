@@ -10,6 +10,10 @@ module t (
 
   logic a, b, abrt;
 
+  property p_alw;
+    always a;
+  endproperty
+
   // An unbounded always is supported as a whole property or consequent only
   assert property (@(posedge clk) (always a) and b);
   assert property (@(posedge clk) (always a) or b);
@@ -17,5 +21,8 @@ module t (
   assert property (@(posedge clk) sync_reject_on (abrt) (a and always [1:$] b));
   assert property (@(posedge clk) not always a);
   assert property (@(posedge clk) a |-> not always b);
+  // Likewise through a named property instance
+  assert property (@(posedge clk) not p_alw);
+  assert property (@(posedge clk) p_alw and b);
 
 endmodule
