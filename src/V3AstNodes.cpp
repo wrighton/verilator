@@ -4077,6 +4077,14 @@ void AstSampled::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, internal);
     dumpJsonGen(str);
 }
+void AstSchemaRef::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (dotted() != "") str << " .=" << dotted();
+}
+void AstSchemaRef::dumpJson(std::ostream& str) const {
+    dumpJsonStrFunc(str, dotted);
+    dumpJsonGen(str);
+}
 std::string AstSchemaRef::name() const { return schemap()->name(); }
 AstActive* AstScope::comboActivep(bool create) {
     // Use an existing one, but not the active of an AlwaysPostponed, which must stay alone
