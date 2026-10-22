@@ -6807,12 +6807,16 @@ pexpr<nodeExprp>:  // IEEE: property_expr  (The name pexpr is important as regex
                         { $$ = new AstImplication{$2, $1, $3, true, true}; }
         |       ~o~pexpr/*sexpr*/ yP_POUNDEQPD pexpr
                         { $$ = new AstImplication{$2, $1, $3, false, true}; }
+        //                      // IEEE 1800-2023 16.12.10: nexttime p is 1'b1 |=> p, s_nexttime p is
+        //                      // 1'b1 #=# p, and nexttime[N] p is ##N 1'b1 |-> p
         |       yNEXTTIME pexpr
-                        { $$ = $2; BBUNSUP($1, "Unsupported: nexttime (in property expression)"); }
+                        { $$ = new AstImplication{$1, new AstConst{$1, AstConst::BitTrue{}}, $2, false}; }
         |       yS_NEXTTIME pexpr
-                        { $$ = $2; BBUNSUP($1, "Unsupported: s_nexttime (in property expression)"); }
+                        { $$ = new AstImplication{$1, new AstConst{$1, AstConst::BitTrue{}}, $2, false, true}; }
         |       yNEXTTIME '[' constExpr ']' pexpr %prec yNEXTTIME
-                        { $$ = $5; BBUNSUP($1, "Unsupported: nexttime[] (in property expression)"); DEL($3); }
+                        { $$ = new AstImplication{$1, new AstSExpr{$1, new AstDelay{$1, $3, true},
+                                                                   new AstConst{$1, AstConst::BitTrue{}}},
+                                                  $5, true}; }
         |       yS_NEXTTIME '[' constExpr ']' pexpr %prec yS_NEXTTIME
                         { $$ = $5; BBUNSUP($1, "Unsupported: s_nexttime[] (in property expression)"); DEL($3); }
         |       yALWAYS pexpr  %prec prALWAYS

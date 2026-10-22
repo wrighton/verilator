@@ -44,36 +44,8 @@ module t (
     a #=# b;
   endproperty
 
-  property p_nexttime;
-    nexttime a;
-  endproperty
-
-  property p_nexttime2;
-    nexttime [2] a;
-  endproperty
-
-  property p_snexttime;
-    s_nexttime a;
-  endproperty
-
   property p_snexttime2;
     s_nexttime [2] a;
-  endproperty
-
-  property p_nexttime_always;
-    nexttime always a;
-  endproperty
-
-  property p_nexttime_always2;
-    nexttime [2] always a;
-  endproperty
-
-  property p_nexttime_eventually2;
-    nexttime [2] always a;
-  endproperty
-
-  property p_nexttime_seventually;
-    nexttime s_eventually a;
   endproperty
 
   property p_nexttime_seventually2;
