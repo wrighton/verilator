@@ -49,6 +49,19 @@ module mod4 (
   assign i.out = i.in1 ^ i.in2;
 endmodule
 
+// Multiple instances of the interface, including interface array elements
+interface my_if5;
+  logic [6:0] d;
+  logic [6:0] q;
+  modport mp(input .ali(d), output .alo(q));
+endinterface
+
+module mod5 (
+    my_if5.mp i
+);
+  assign i.alo = i.ali + 7'h1;
+endmodule
+
 module top ();
   my_if #(.WIDTH(8)) myIf ();
   assign myIf.sig_a = 8'h42, myIf.sig_c = 8'hAB;
@@ -60,13 +73,34 @@ module top ();
   mod3 mod3i (myIf.mp3);
   mod4 mod4i (myIf.mp4);
 
+  my_if5 if5a ();
+  my_if5 if5b ();
+  my_if5 if5arr[3:1] ();
+  mod5 mod5a (.i(if5a));
+  mod5 mod5b (.i(if5b));
+  mod5 mod5arr3 (.i(if5arr[3]));
+  mod5 mod5arr1 (.i(if5arr[1]));
+  initial begin
+    for (int n = 0; n < 4; ++n) begin
+      if5a.d = 7'(n * 3 + 1);
+      if5b.d = 7'(n * 5 + 2);
+      if5arr[3].d = 7'(n * 7 + 3);
+      if5arr[1].d = 7'(n * 11 + 4);
+      #1;
+      `checkh(if5a.q, 7'(n * 3 + 2));
+      `checkh(if5b.q, 7'(n * 5 + 3));
+      `checkh(if5arr[3].q, 7'(n * 7 + 4));
+      `checkh(if5arr[1].q, 7'(n * 11 + 5));
+    end
+  end
+
   initial begin
     #1;
     `checkh(myIf.sig_b, 8'h42);  // mp1: b = a
     `checkh(myIf.sig_d, 8'hAB);  // mp2: b = a
     `checkh(myIf.sig_f, 8'hCD);  // mp3: f = sig_e
     `checkh(myIf.m3, 8'hFF);  // mp4: out = in1 ^ in2
-    #1;
+    #10;
     $write("*-* All Finished *-*\n");
     $finish;
   end

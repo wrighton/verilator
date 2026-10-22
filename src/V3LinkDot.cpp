@@ -2978,7 +2978,9 @@ public:
 class LinkDotIfaceVisitor final : public VNVisitor {
     // STATE
     LinkDotState* const m_statep;  // State to pass between visitors, including symbol table
-    VSymEnt* m_curSymp;  // Symbol Entry for current table, where to lookup/insert
+    VSymEnt* m_curSymp = nullptr;  // Symbol Entry for current table, where to lookup/insert
+    // AstModportVarRefs to delete once all interface instances are processed
+    std::vector<AstModportVarRef*> m_doneModportVarRefps;
 
     // VISITORS
     void visit(AstModport* nodep) override {  // IfaceVisitor::
@@ -3081,13 +3083,10 @@ class LinkDotIfaceVisitor final : public VNVisitor {
             // Simple variable reference: modport mp(input .a(sig_a))
             symp = m_curSymp->findIdFallback(refp->name());
         } else if (AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
-            // Already resolved VarRef (can happen if iterateChildren resolved it)
-            if (refp->varScopep()) {
-                // During scope creation, VarRef may have VarScope already linked
-                symp = m_statep->getNodeSym(refp->varScopep());
-            } else if (refp->varp()) {
-                symp = m_curSymp->findIdFallback(refp->varp()->name());
-            }
+            // Already resolved VarRef (can happen if iterateChildren resolved it).
+            // Look up by name, as during scope creation its varScopep() may be
+            // that of another instance of the interface.
+            symp = m_curSymp->findIdFallback(refp->varp()->name());
         } else if (AstVarXRef* const refp = VN_CAST(exprp, VarXRef)) {
             // Resolved VarXRef (dotted reference resolved by earlier pass)
             if (refp->varp()) {
@@ -3107,10 +3106,7 @@ class LinkDotIfaceVisitor final : public VNVisitor {
                 VSymEnt* okSymp = nullptr;
                 symp = m_statep->findDotted(fl, m_curSymp, fullPath, baddot, okSymp, true);
                 // Handle nested interface path when findDotted had partial match
-                if (okSymp && !baddot.empty()) {
-                    VSymEnt* const resolved = resolveNestedInterfacePath(fl, okSymp, baddot);
-                    if (resolved) symp = resolved;
-                }
+                if (!symp) symp = resolveNestedInterfacePath(fl, okSymp, baddot);
             }
         } else if (AstDot* const dotp = VN_CAST(exprp, Dot)) {
             // Dotted path: modport mp(input .a(inner.sig))
@@ -3192,11 +3188,11 @@ class LinkDotIfaceVisitor final : public VNVisitor {
         } else {
             nodep->v3error("Modport item is not a variable: " << nodep->prettyNameQ());
         }
-        if (m_statep->forScopeCreation()) {
-            // Done with AstModportVarRef.
+        if (m_statep->forScopeCreation() && !nodep->user3SetOnce()) {
+            // Done with AstModportVarRef, but each instance of the interface needs to resolve
+            // modport expressions in its own scope, so delete it only after all instances.
             // Delete to prevent problems if we dead-delete pointed to variable
-            nodep->unlinkFrBack();
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            m_doneModportVarRefps.push_back(nodep);
         }
     }
     void visit(AstModportClockingRef* nodep) override {  // IfaceVisitor::
@@ -3220,23 +3216,27 @@ class LinkDotIfaceVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    LinkDotIfaceVisitor(AstIface* nodep, VSymEnt* curSymp, LinkDotState* statep)
-        : m_statep{statep}
-        , m_curSymp{curSymp} {
+    explicit LinkDotIfaceVisitor(LinkDotState* statep)
+        : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
+    }
+    ~LinkDotIfaceVisitor() override {
+        for (AstModportVarRef* nodep : m_doneModportVarRefps) {
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        }
+    }
+    void iterateIface(AstIface* nodep, VSymEnt* curSymp) {
+        m_curSymp = curSymp;
         iterate(nodep);
     }
-    ~LinkDotIfaceVisitor() override = default;
 };
 
 void LinkDotState::computeIfaceModSyms() {
     //  AstScope::user3()  // bool. Already iterated by a LinkDotIfaceVisitor
+    //  AstModportVarRef::user3()  // bool. Already queued for deletion
     const VNUser3InUse user3InUse;
-    for (const auto& itr : m_ifaceModSyms) {
-        AstIface* const nodep = itr.first;
-        VSymEnt* const symp = itr.second;
-        LinkDotIfaceVisitor{nodep, symp, this};
-    }
+    LinkDotIfaceVisitor visitor{this};
+    for (const auto& itr : m_ifaceModSyms) visitor.iterateIface(itr.first, itr.second);
     m_ifaceModSyms.clear();
 }
 
@@ -3414,10 +3414,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (!dtypep) dtypep = dotVarp->subDTypep();
         if (!dtypep) return nullptr;
         const AstIfaceRefDType* const ifaceRefp = VN_CAST(dtypep, IfaceRefDType);
-        if (!ifaceRefp || !ifaceRefp->modportp() || !ifaceRefp->ifaceViaCellp()) return nullptr;
+        if (!ifaceRefp || !ifaceRefp->modportp()) return nullptr;
 
-        // Get the interface cell's symbol table
-        VSymEnt* const ifaceCellSymp = m_statep->getNodeSym(ifaceRefp->ifaceViaCellp());
+        // The interface port has the symbols of the connected interface cell imported.
+        // (The dtype's ifaceViaCellp() is not necessarily the connected cell, as several
+        // instances may share the dtype.)
+        VSymEnt* const ifaceCellSymp = dotSymp;
 
         // Look up modport by name in interface cell
         VSymEnt* const modportSymp = ifaceCellSymp->findIdFallback(ifaceRefp->modportp()->name());
