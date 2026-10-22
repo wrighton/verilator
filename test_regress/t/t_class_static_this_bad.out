@@ -1,0 +1,18 @@
+%Error: t/t_class_static_this_bad.v:13:37: Cannot access non-static member variable 'x' from a static variable initializer without object (IEEE 1800-2023 8.10)
+                                         : ... note: In instance 't'
+   13 |   static int bad_this_member = this.x;   
+      |                                     ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_class_static_this_bad.v:14:25: Cannot use 'this' in a static variable initializer (IEEE 1800-2023 8.10-8.11)
+                                         : ... note: In instance 't'
+   14 |   static Cls bad_this = this;   
+      |                         ^~~~
+%Error: t/t_class_static_this_bad.v:15:27: Cannot access non-static member variable 'x' from a static variable initializer without object (IEEE 1800-2023 8.10)
+                                         : ... note: In instance 't'
+   15 |   static int bad_member = x;   
+      |                           ^
+%Error: t/t_class_static_this_bad.v:19:22: Cannot access non-static member variable 'x' from a static variable initializer without object (IEEE 1800-2023 8.10)
+                                         : ... note: In instance 't'
+   19 |   int bad_mod = Cls::x;   
+      |                      ^
+%Error: Exiting due to
