@@ -1456,12 +1456,13 @@ List Of Warnings
 
    Warns that the specified signal has multiple drivers.
 
-   One case is when a variable written in an ``always_comb`` or
-   ``always_ff`` block is also written by another process. IEEE 1800
-   requires variables written in these specialized always blocks to be
-   written only by that process. A ``force`` or ``release`` of such a
-   variable is not reported, as it overrides rather than drives the
-   variable, nor is a ``$readmemb`` or ``$readmemh`` load of a memory.
+   One case is when a variable written in an ``always_comb``,
+   ``always_latch``, or ``always_ff`` block is also written by another
+   process. IEEE 1800 requires variables written in these specialized
+   always blocks to be written only by that process. A ``force`` or
+   ``release`` of such a variable is not reported, as it overrides rather
+   than drives the variable, nor is a ``$readmemb`` or ``$readmemh`` load of
+   a memory.
    An unpacked array element written with a non-constant index counts as a
    write of the whole array (its longest static prefix), so conflicts with
    any other write of the array; elements written with constant indices are
