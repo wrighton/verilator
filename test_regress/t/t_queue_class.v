@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2019 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t;
   class Cls;
     int que[$];
@@ -36,6 +41,40 @@ module t;
       '0: $stop;
       '1: $stop;
     endcase
+  end
+
+  // Queue methods on an element of an associative array class member
+  typedef struct {int q[$];} rec_t;
+  typedef int q_t[$];
+  class Store;
+    rec_t byId[int];
+    q_t qs[string];
+    rec_t wild[*];
+  endclass
+  class Outer;
+    Store st;
+  endclass
+
+  initial begin
+    Store s;
+    Outer o;
+    s = new;
+    o = new;
+    o.st = new;
+    s.byId[3].q.push_back(4);
+    s.byId[3].q.push_front(5);
+    s.byId[3].q.insert(1, 6);
+    s.byId[3].q.sort();
+    `checkd(s.byId[3].q.size(), 3);
+    `checkd(s.byId[3].q[0], 4);
+    `checkd(s.byId[3].q[2], 6);
+    s.qs["a"].push_back(7);
+    `checkd(s.qs["a"][0], 7);
+    s.wild[5].q.push_back(8);
+    `checkd(s.wild[5].q[0], 8);
+    o.st.byId[1].q.push_back(9);
+    `checkd(o.st.byId[1].q[0], 9);
+    `checkd(s.byId.size(), 1);
 
     $write("*-* All Finished *-*\n");
     $finish;
