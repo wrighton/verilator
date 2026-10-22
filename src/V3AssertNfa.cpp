@@ -1634,6 +1634,13 @@ public:
         VL_RESTORER(m_wantBoolLeaf);
         const bool wantBoolLeaf = m_wantBoolLeaf;
         m_wantBoolLeaf = false;
+        // Each repetition would need its own copy of the local variables (IEEE 1800-2023 16.10)
+        if ((VN_IS(nodep, SConsRep) || VN_IS(nodep, SGotoRep) || VN_IS(nodep, SNonConsRep))
+            && nodep->exists([](const AstExprStmt*) { return true; })) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence match item in repetition"
+                                         " (IEEE 1800-2023 16.10)");
+            return BuildResult::failWithError();
+        }
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             return buildSExpr(sexprp, entryVtxp, isTopLevelStep);
         }
