@@ -2922,6 +2922,7 @@ class AssertNfaVisitor final : public VNVisitor {
     AstDefaultDisable* m_defaultDisablep = nullptr;  // Default disable iff
     SvaNfaLowering* m_loweringp = nullptr;  // NFA-to-hardware lowering engine
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
+    AstAlways* m_alwaysp = nullptr;  // Enclosing always, for a procedural assertion
     V3UniqueNames m_propVarNames{"__Vpropvar"};  // Property-local variable names
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
@@ -3458,6 +3459,26 @@ class AssertNfaVisitor final : public VNVisitor {
         return propp;
     }
 
+    // Clock inferred from an always procedure with one event (IEEE 1800-2023 16.14.6)
+    static AstSenItem* inferredClock(const AstAlways* alwaysp) {
+        // An edge event none of whose variables is used in the procedure body
+        AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
+        if (!itemp || !itemp->edgeType().anEdge()) return nullptr;
+        const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
+            return alwaysp->stmtsp()->existsAndNext(
+                [&](const AstVarRef* refp) { return refp->varp() == clkRefp->varp(); });
+        });
+        return usedInBody ? nullptr : itemp;
+    }
+    // True if a statement in an always procedure is under a condition or loop
+    static bool isUnderProceduralCondition(const AstNode* nodep) {
+        for (const AstNode* abovep = nodep->aboveLoopp(); !VN_IS(abovep, Always);
+             abovep = abovep->aboveLoopp()) {
+            if (!VN_IS(abovep, Begin)) return true;
+        }
+        return false;
+    }
+
     void processAssertion(AstNodeCoverOrAssert* assertp) {
         if (assertp->immediate()) return;
 
@@ -3500,9 +3521,36 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!propp->disablep() && m_defaultDisablep && !isSeqEvent) {
             propp->disablep(m_defaultDisablep->condp()->cloneTreePure(true));
         }
-        if (!propp->sensesp()) return;
-        AstSenTree* senTreep
-            = new AstSenTree{propp->fileline(), propp->sensesp()->cloneTree(true)};
+        AstSenItem* sensesp = propp->sensesp();
+        if (!sensesp && m_alwaysp && !isSeqEvent) {
+            // The NFA starts an attempt on every clock, not only when the procedure reaches the
+            // assertion, and the assertion reports each time the procedure runs
+            if (isUnderProceduralCondition(assertp)) {
+                assertp->v3warn(E_UNSUPPORTED,
+                                "Unsupported: multi-cycle procedural concurrent assertion"
+                                " under a condition or loop (IEEE 1800-2023 16.14.6)");
+                replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+                return;
+            }
+            if (m_alwaysp->sentreep() && m_alwaysp->sentreep()->sensesp()->nextp()) {
+                assertp->v3warn(E_UNSUPPORTED,
+                                "Unsupported: multi-cycle procedural concurrent assertion in an"
+                                " always procedure with several events (IEEE 1800-2023 16.14.6)");
+                replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+                return;
+            }
+            sensesp = inferredClock(m_alwaysp);
+            if (!sensesp) {
+                assertp->v3error("Concurrent assertion has no clock (IEEE 1800-2023 16.16)\n"
+                                 << assertp->warnMore()
+                                 << "... Suggest provide a clocking event, a default clocking,"
+                                    " or a clocked always procedure (IEEE 1800-2023 16.14.6)");
+                replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+                return;
+            }
+        }
+        if (!sensesp) return;
+        AstSenTree* senTreep = new AstSenTree{propp->fileline(), sensesp->cloneTree(true)};
         AstNodeExpr* const disableExprp = propp->disablep();
 
         // NFA lowering clones repeated operands and may hoist them into an
@@ -3583,6 +3631,11 @@ class AssertNfaVisitor final : public VNVisitor {
         m_defaultDisablep = nodep->defaultDisablep();
         SvaNfaLowering lowering{nodep};
         m_loweringp = &lowering;
+        iterateChildren(nodep);
+    }
+    void visit(AstAlways* nodep) override {
+        VL_RESTORER(m_alwaysp);
+        m_alwaysp = nodep;
         iterateChildren(nodep);
     }
     void visit(AstClocking* nodep) override {
