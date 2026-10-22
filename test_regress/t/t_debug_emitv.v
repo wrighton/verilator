@@ -517,6 +517,7 @@ module t (/*AUTOARG*/
   assert_chain: assert property (p_chain);
 
   assert property (@(clk) not ##1 in);
+  cover property (@(posedge clk) not strong (in ##1 sum[0]));
 
   initial begin
     assert_simple_immediate_else: assert(0) else $display("fail");
