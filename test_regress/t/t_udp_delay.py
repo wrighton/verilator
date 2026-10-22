@@ -11,6 +11,6 @@ import vltest_bootstrap
 
 test.scenarios('linter')
 
-test.compile()
+test.compile(verilator_flags2=['--timing'])
 
 test.passes()

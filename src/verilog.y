@@ -3386,7 +3386,6 @@ instParamItem<pinp>:            // IEEE: named_parameter_assignment + empty
                         { $$ = new AstPin{$<fl>2, PINNUMINC(), *$2,
                                           new AstParseRef{$<fl>2, *$2, nullptr, nullptr}};
                           $$->svDotName(true); $$->svImplicit(true); }
-        //                      // mintypmax is expanded here, as it might be a UDP or gate primitive
         //                      // data_type for 'parameter type' hookups
         |       '.' idAny '(' exprOrDataType ')'
                         { $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, $4};
@@ -3395,19 +3394,21 @@ instParamItem<pinp>:            // IEEE: named_parameter_assignment + empty
         //UNSUP          { MINTYPMAXDLYUNSUP($4); DEL($4);
         //UNSUP            $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, $6};
         //UNSUP            $$->svDotName(true); }
-        //UNSUP | '.' idAny '(' exprOrDataType/*expr*/ ':' expr ':' expr ')'
-        //UNSUP          { MINTYPMAXDLYUNSUP($4); DEL($4); DEL($8);
-        //UNSUP            $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, $6};
-        //UNSUP            $$->svDotName(true); }
+        //                      // IEEE: mintypmax_expression, expanded here as it might be a UDP delay2
+        |       '.' idAny '(' expr ':' expr ':' expr ')'
+                        { $$ = new AstPin{$<fl>2, PINNUMINC(), *$2, $6};
+                          $$->svDotName(true);
+                          MINTYPMAXDLYUNSUP($6); DEL($4); DEL($8); }
         //                      // data_type for 'parameter type' hookups
         |       exprOrDataType
                         { $$ = new AstPin{FILELINE_OR_CRE($1), PINNUMINC(), "", $1}; }
         //UNSUP | exprOrDataType/*expr*/ ':' expr
         //UNSUP          { MINTYPMAXDLYUNSUP($1); DEL($1);
         //UNSUP            $$ = new AstPin{FILELINE_OR_CRE($3), PINNUMINC(), "", $3}; }
-        //UNSUP | exprOrDataType/*expr*/ ':' expr ':' expr
-        //UNSUP          { MINTYPMAXDLYUNSUP($1); DEL($1); DEL($5);
-        //UNSUP            $$ = new AstPin{FILELINE_OR_CRE($3), PINNUMINC(), "", $3}; }
+        //                      // IEEE: mintypmax_expression, expanded here as it might be a UDP delay2
+        |       expr ':' expr ':' expr
+                        { $$ = new AstPin{$3->fileline(), PINNUMINC(), "", $3};
+                          MINTYPMAXDLYUNSUP($3); DEL($1); DEL($5); }
         ;
 
 instPinItemE<pinp>:             // IEEE: named_port_connection + empty
