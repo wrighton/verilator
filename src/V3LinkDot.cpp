@@ -4860,6 +4860,20 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 } else if (allowVar) {
+                    // Items of an automatic task or function cannot be referenced hierarchically
+                    // from outside of it
+                    const AstNodeFTask* const ftaskp = VN_CAST(m_ds.m_dotSymp->nodep(), NodeFTask);
+                    if (!first && ftaskp && ftaskp != m_ftaskp && varp->lifetime().isAutomatic()) {
+                        if (varp->isIO() && !ftaskp->lifetime().isAutomatic()) {
+                            // Static task/function ports are static, though V3LinkParse marks
+                            // them automatic when not needed after the call
+                            varp->lifetime(VLifetime::STATIC_IMPLICIT);
+                        } else {
+                            nodep->v3error("Automatic variable cannot be referenced"
+                                           " hierarchically (IEEE 1800-2023 13.3.1, 13.4.2): "
+                                           << varp->prettyNameQ());
+                        }
+                    }
                     AstNode* newp;
                     if (m_ds.m_dotText != "") {
                         AstVarXRef* const refp
