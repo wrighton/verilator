@@ -395,7 +395,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh191, SUB_B, 2'h1);
+                               32'sh196, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -1774,6 +1774,7 @@ class ClsParamExt extends ClsParam__Tz7d09f080_P2;
         new();
     endfunction
 endclass
+process __VprocessQueue_named__0[$];
 package __Vconstpool;
     const string CONSARRAY_0[1:0] = '{0:"ZERO", 1:"ONE"};
 endpackage
@@ -2066,4 +2067,15 @@ package Pkg;
         BAR = 32'h1,
         BAZ = 32'h2
     } enum_t;
+    task disable_named;
+        begin : named
+            fork
+            begin
+                __VprocessQueue_named__0.push_back(
+                                                   self());
+            end
+            join
+        end
+        killQueue(__VprocessQueue_named__0);
+    endtask
 endpackage

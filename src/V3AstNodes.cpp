@@ -1935,10 +1935,12 @@ void AstFork::dump(std::ostream& str) const {
     Super::dump(str);
     str << " [" << joinType() << "]";
     if (immediateStart()) str << " [IMMEDIATE]";
+    if (disableWrap()) str << " [DISABLEWRAP]";
 }
 void AstFork::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "joinType", joinType().ascii());
     dumpJsonBoolFuncIf(str, immediateStart);
+    dumpJsonBoolFuncIf(str, disableWrap);
     dumpJsonGen(str);
 }
 void AstForkItem::dump(std::ostream& str) const {
