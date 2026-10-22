@@ -289,6 +289,21 @@ module t (
   end
   `signal(CONDITONAL_I, conditional_i);
 
+  // Unreachable loop after jumps on all paths
+  logic [3:0] dead_loop;
+  always_comb begin
+    dead_loop = 4'd0;
+    for (int i = 0; i < 2; ++i) begin
+      if (rand_a[i]) begin
+        dead_loop = dead_loop + 4'd1;
+        continue;
+      end
+      else break;
+      while (dead_loop < rand_b[3:0]) dead_loop = dead_loop + 4'd1;
+    end
+  end
+  `signal(DEAD_LOOP, dead_loop);
+
   logic [2:0] conditional_j;
   always_comb begin  // Even more dumbass trailing ones count
     do begin
