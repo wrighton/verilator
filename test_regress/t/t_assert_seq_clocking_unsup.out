@@ -7,18 +7,26 @@
                                                         : ... note: In instance 't'
    19 |     @(posedge clk) b;
       |     ^
-%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:28:36: Unsupported: multiclocked sequence or property
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:23:5: Unsupported: clocking event inside sequence expression
+                                                        : ... note: In instance 't'
+   23 |     @(posedge clk) b;
+      |     ^
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:33:36: Unsupported: multiclocked sequence or property
                                                          : ... note: In instance 't'
-   28 |     @(posedge clk) disable iff (a) @(posedge clk2) not b;
+   33 |     @(posedge clk) disable iff (a) @(posedge clk2) not b;
       |                                    ^
-%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:32:50: Unsupported: multiclocked sequence or property
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:37:50: Unsupported: multiclocked sequence or property
                                                          : ... note: In instance 't'
-   32 |   cover property (@(posedge clk) disable iff (a) @(posedge clk2) strong(b));
+   37 |   cover property (@(posedge clk) disable iff (a) @(posedge clk2) strong(b));
       |                                                  ^
-%Error: t/t_assert_seq_clocking_unsup.v:24:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:51:5: Unsupported: clocking event inside sequence expression
+                                                        : ... note: In instance 't.u_sub'
+   51 |     @(posedge clk) a;
+      |     ^
+%Error: t/t_assert_seq_clocking_unsup.v:28:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                             : ... note: In instance 't'
                                             : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
-   24 |   assert property (s_nest ##1 a);
+   28 |   assert property (s_nest ##1 a);
       |   ^~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: Exiting due to

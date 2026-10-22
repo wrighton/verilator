@@ -18,10 +18,15 @@ module t (
   sequence s_nest;
     @(posedge clk) b;
   endsequence
+
+  sequence s_nest2;
+    @(posedge clk) b;
+  endsequence
   // verilog_format: on
 
   assert property (@(posedge clk2) s_multi);
   assert property (s_nest ##1 a);
+  assert property (@(posedge clk2) a ##1 s_nest2);
 
   // Clocking event both before and after disable iff
   property p_double_clock;
@@ -31,4 +36,20 @@ module t (
   assert property (p_double_clock);
   cover property (@(posedge clk) disable iff (a) @(posedge clk2) strong(b));
 
+  sub u_sub (.clk(clk));
+endmodule
+
+// A sequence clock that is one of several clocking events of the default clocking
+module sub (
+  input clk
+);
+  logic a;
+  default clocking @(posedge clk or negedge clk);
+  endclocking
+  // verilog_format: off
+  sequence s_pos;
+    @(posedge clk) a;
+  endsequence
+  // verilog_format: on
+  assert property (a ##1 s_pos);
 endmodule
