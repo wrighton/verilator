@@ -56,6 +56,13 @@ static void DELAY_LIST(AstNode* listp, AstDelay* delayp) {
         assignp->timingControlp(delayp->backp() ? delayp->cloneTree(false) : delayp);
     }
 }
+// Check the strength of a pull source. Pulls are modeled as the weakest driver of their net,
+// which is only correct for weak or pull strength. Only the strength of the pulled value is
+// passed in, as the other is ignored (IEEE 1800-2023 28.10).
+static void PULL_STRENGTH(FileLine* fl, VStrength strength, const char* gatenamep) {
+    if (strength > VStrength::PULL)
+        BBUNSUP(fl, "Unsupported: " << gatenamep << " strength stronger than pull");
+}
 // Apply a strength to all continuous assignments under listp
 static void STRENGTH_LIST(AstNode* listp, AstStrengthSpec* specp) {
     if (!specp) return;
@@ -5902,9 +5909,9 @@ pulldown_strengthE<nodep>:  // IEEE: [ pulldown_strength ]
         ;
 
 pulldown_strength<nodep>:  // IEEE: pulldown_strength
-                yP_PAR__STRENGTH strength0 ',' strength1 ')'  { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: pulldown strength"); }
-        |       yP_PAR__STRENGTH strength1 ',' strength0 ')'  { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: pulldown strength"); }
-        |       yP_PAR__STRENGTH strength0 ')'                { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: pulldown strength"); }
+                yP_PAR__STRENGTH strength0 ',' strength1 ')'  { $$ = nullptr; PULL_STRENGTH($<fl>2, $2, "pulldown"); }
+        |       yP_PAR__STRENGTH strength1 ',' strength0 ')'  { $$ = nullptr; PULL_STRENGTH($<fl>4, $4, "pulldown"); }
+        |       yP_PAR__STRENGTH strength0 ')'                { $$ = nullptr; PULL_STRENGTH($<fl>2, $2, "pulldown"); }
         ;
 
 pullup_strengthE<nodep>:  // IEEE: [ pullup_strength ]
@@ -5913,9 +5920,9 @@ pullup_strengthE<nodep>:  // IEEE: [ pullup_strength ]
         ;
 
 pullup_strength<nodep>:  // IEEE: pullup_strength
-                yP_PAR__STRENGTH strength0 ',' strength1 ')'  { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: pullup strength"); }
-        |       yP_PAR__STRENGTH strength1 ',' strength0 ')'  { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: pullup strength"); }
-        |       yP_PAR__STRENGTH strength1 ')'                { $$ = nullptr; BBUNSUP($<fl>2, "Unsupported: pullup strength"); }
+                yP_PAR__STRENGTH strength0 ',' strength1 ')'  { $$ = nullptr; PULL_STRENGTH($<fl>4, $4, "pullup"); }
+        |       yP_PAR__STRENGTH strength1 ',' strength0 ')'  { $$ = nullptr; PULL_STRENGTH($<fl>2, $2, "pullup"); }
+        |       yP_PAR__STRENGTH strength1 ')'                { $$ = nullptr; PULL_STRENGTH($<fl>2, $2, "pullup"); }
         ;
 
 //************************************************
