@@ -22,6 +22,10 @@ function int get_val_set_5(ref int x);
   return y;
 endfunction
 
+function int get_val(const ref int x);
+  return x;
+endfunction
+
 class Cls;
   function int get_val_set_2(ref int x);
     automatic int y = x;
@@ -88,6 +92,16 @@ module t;
     b = cls.get_val_set_2(st.arr[1][2][0].x);
     `checkh(st.arr[1][2][0].x, 2);
     `checkh(b, 5);
+
+    // Elements by a variable index, which may exceed the array
+    for (int i = 0; i < 1; ++i) `checkh(get_val(arr[i]), 2);
+    begin
+      int arr3[3];
+      for (int i = 0; i < 3; ++i) begin
+        arr3[i] = i + 10;
+        `checkh(get_val(arr3[i]), i + 10);
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

@@ -34,6 +34,7 @@
 
 #include "V3Const.h"
 #include "V3Stats.h"
+#include "V3Task.h"
 #include "V3UniqueNames.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -46,8 +47,10 @@ class UnknownVisitor final : public VNVisitor {
     //  AstSel::user()          -> bool.  Set true if already processed
     //  AstArraySel::user()     -> bool.  Set true if already processed
     //  AstNode::user2p()       -> AstIf* Inserted if assignment for conditional
+    //  AstArraySel::user3()    -> bool.  Set true if passed by reference
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
+    const VNUser3InUse m_inuser3;
     static const std::string s_xrandPrefix;
 
     // STATE - across all visitors
@@ -443,15 +446,27 @@ class UnknownVisitor final : public VNVisitor {
     // visit(AstSliceSel) not needed as its bounds are constant and checked
     // in V3Width.
 
+    void visit(AstNodeFTaskRef* nodep) override {
+        // An element passed by reference is an lvalue, even to a 'const ref' argument, which
+        // only reads it (IEEE 1800-2023 13.5.2).  Selects below it keep their form as reads.
+        for (const auto& tconnect :
+             V3Task::taskConnects(nodep, nodep->taskp()->stmtsp(), nullptr, false)) {
+            if (!tconnect.first->isRef() && !tconnect.first->isConstRef()) continue;
+            if (AstArraySel* const selp = VN_CAST(tconnect.second->exprp(), ArraySel)) {
+                selp->user3(true);
+            }
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstArraySel* nodep) override {
         iterateChildren(nodep);
         if (!nodep->user1SetOnce()) {
             UINFOTREE(9, nodep, "", "in");
             // Guard against reading/writing past end of arrays
             AstNode* const basefromp = nodep->fromp()->baseFromp(true);
-            bool lvalue = false;
+            bool lvalue = nodep->user3();
             if (const AstNodeVarRef* const varrefp = VN_CAST(basefromp, NodeVarRef)) {
-                lvalue = varrefp->access().isWriteOrRW();
+                lvalue = lvalue || varrefp->access().isWriteOrRW();
             } else if (VN_IS(basefromp, Const)) {
                 // If it's a PARAMETER[bit], then basefromp may be a constant instead of a varrefp
             } else {
