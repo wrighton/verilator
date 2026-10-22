@@ -5640,12 +5640,12 @@ gateDecl<nodep>:
         |       yPULLUP   pullup_strengthE   delay_controlE gatePullupList ';'     { $$ = $4; DELAY_LIST($4, $3); }
         |       yNMOS     delay_controlE gateBufif1List ';'     { $$ = $3; DELAY_LIST($3, $2); }
         |       yPMOS     delay_controlE gateBufif0List ';'     { $$ = $3; DELAY_LIST($3, $2); }
+        |       yCMOS     delay_controlE gateCmosList ';'       { $$ = $3; DELAY_LIST($3, $2); }
         //
         |       yTRAN delay_controlE gateUnsupList ';'          { $$ = $3; GATEUNSUP($3, "tran"); }
         |       yRCMOS delay_controlE gateUnsupList ';'         { $$ = $3; GATEUNSUP($3, "rcmos"); }
-        |       yCMOS delay_controlE gateUnsupList ';'          { $$ = $3; GATEUNSUP($3, "cmos"); }
-        |       yRNMOS delay_controlE gateUnsupList ';'         { $$ = $3; GATEUNSUP($3, "rmos"); }
-        |       yRPMOS delay_controlE gateUnsupList ';'         { $$ = $3; GATEUNSUP($3, "pmos"); }
+        |       yRNMOS delay_controlE gateUnsupList ';'         { $$ = $3; GATEUNSUP($3, "rnmos"); }
+        |       yRPMOS delay_controlE gateUnsupList ';'         { $$ = $3; GATEUNSUP($3, "rpmos"); }
         |       yRTRAN delay_controlE gateUnsupList ';'         { $$ = $3; GATEUNSUP($3, "rtran"); }
         |       yRTRANIF0 delay_controlE gateUnsupList ';'      { $$ = $3; GATEUNSUP($3, "rtranif0"); }
         |       yRTRANIF1 delay_controlE gateUnsupList ';'      { $$ = $3; GATEUNSUP($3, "rtranif1"); }
@@ -5660,6 +5660,10 @@ gateBufList<nodep>:
 gateBufif0List<nodep>:
                 gateBufif0                              { $$ = $1; }
         |       gateBufif0List ',' gateBufif0           { $$ = $1->addNext($3); }
+        ;
+gateCmosList<nodep>:
+                gateCmos                                { $$ = $1; }
+        |       gateCmosList ',' gateCmos               { $$ = $1->addNext($3); }
         ;
 gateBufif1List<nodep>:
                 gateBufif1                              { $$ = $1; }
@@ -5764,6 +5768,19 @@ gateBufif1<nodep>:
                           AstNodeExpr* const rhsp = new AstBufIf1{$<fl>1, $6, $4};
                           AstAssignW* const ap = new AstAssignW{$<fl>1, $2, rhsp};
                           $$->addNext(new AstAlways{ap});
+                          DEL($1); }
+        ;
+gateCmos<nodep>:  // IEEE 1800-2023 28.9: Equivalent to nmos plus pmos with shared terminals
+                gateFront variable_lvalue ',' gatePinExpr ',' gatePinExpr ',' gatePinExpr ')'
+                        { $$ = new AstImplicit{$<fl>1, $6->cloneTree(false)};
+                          $<implicitp>$->addExprsp($8->cloneTree(false));
+                          $<implicitp>$->addExprsp($4->cloneTree(false));
+                          AstNodeExpr* const nrhsp = new AstBufIf1{$<fl>1, $6, $4->cloneTree(false)};
+                          AstAssignW* const nap = new AstAssignW{$<fl>1, $2->cloneTree(false), nrhsp};
+                          $$->addNext(new AstAlways{nap});
+                          AstNodeExpr* const prhsp = new AstBufIf1{$<fl>1, new AstNot{$<fl>1, $8}, $4};
+                          AstAssignW* const pap = new AstAssignW{$<fl>1, $2, prhsp};
+                          $$->addNext(new AstAlways{pap});
                           DEL($1); }
         ;
 gateNotif0<nodep>:

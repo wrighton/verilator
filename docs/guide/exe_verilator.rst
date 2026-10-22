@@ -148,8 +148,8 @@ Summary:
 .. option:: --bbox-unsup
 
    Black box some unsupported language features, currently UDP tables, the
-   cmos and tran gate primitives, deassign statements, and mixed edge
-   errors. This may enable linting of the rest of the design even when
+   resistive switch and tran gate primitives, deassign statements, and mixed
+   edge errors. This may enable linting of the rest of the design even when
    unsupported constructs are present.
 
    Using this argument will likely cause incorrect simulation.
