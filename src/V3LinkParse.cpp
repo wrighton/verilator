@@ -403,6 +403,10 @@ class LinkParseVisitor final : public VNVisitor {
         // Lifetime is of variables (IEEE 1800-2023 6.21). Parameters and genvars are constants,
         // so static, also in classes and automatic functions.
         if (nodep->isParam() || nodep->isGenVar()) nodep->lifetime(VLifetime::STATIC_IMPLICIT);
+        if (m_ftaskp && m_ftaskp->dpiImport() && (nodep->isRef() || nodep->isConstRef())) {
+            nodep->v3error("DPI import argument cannot be 'ref' (IEEE 1800-2023 35.5.4): "
+                           << nodep->prettyNameQ());
+        }
         // IEEE 1800-2023 6.21: for loop variables are automatic. verilog.y is
         // responsible for marking those.
         if (nodep->valuep() && nodep->lifetime().isNone() && m_lifetime.isStatic()
