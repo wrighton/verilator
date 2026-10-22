@@ -12,6 +12,15 @@
 %Error: t/t_interface_modport_expr_bad.v:12:22: Modport item not found: 'in'
    12 |   modport mp2(input .in(~a));
       |                      ^~
+%Error: t/t_interface_modport_expr_bad.v:23:22: Can't find modport expression target: 'ip.nonexist'
+   23 |   modport mp3(input .in(ip.nonexist));
+      |                      ^~
+%Error: t/t_interface_modport_expr_bad.v:23:22: Modport item not found: 'in'
+   23 |   modport mp3(input .in(ip.nonexist));
+      |                      ^~
+%Error: t/t_interface_modport_expr_bad.v:23:28: Can't find definition of 'nonexist' in dotted variable/method: 'ip.nonexist'
+   23 |   modport mp3(input .in(ip.nonexist));
+      |                            ^~~~~~~~
 %Error: t/t_interface_modport_expr_bad.v:10:25: Can't find definition of scope/variable: 'nonexist'
    10 |   modport mp1(input .in(nonexist.sig));
       |                         ^~~~~~~~

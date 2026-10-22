@@ -12,6 +12,19 @@ interface iface;
   modport mp2(input .in(~a));
 endinterface
 
+interface iface_inner;
+  logic v;
+endinterface
+
+interface iface_port (
+    iface_inner ip
+);
+  // Dotted path through interface port to non-existent signal
+  modport mp3(input .in(ip.nonexist));
+endinterface
+
 module t;
   iface intf ();
+  iface_inner inner ();
+  iface_port intf_port (inner);
 endmodule
