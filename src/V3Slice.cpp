@@ -69,7 +69,7 @@ class SliceVisitor final : public VNVisitor {
         const AstUnpackArrayDType* const arrayp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (!arrayp) {  // V3Width should have complained, but...
-            if (!m_assignError) {
+            if (!m_assignError && !nodep->fileline()->erroringOn()) {
                 nodep->v3error(
                     nodep->prettyTypeNameQ()
                     << " is not an unpacked array, but is in an unpacked array context");
