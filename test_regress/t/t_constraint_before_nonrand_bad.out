@@ -1,0 +1,18 @@
+%Error: t/t_constraint_before_nonrand_bad.v:22:27: Non-random variable 'a' not allowed in 'solve before' (IEEE 1800-2023 18.5.9)
+                                                 : ... note: In instance 't'
+   22 |   constraint c_lhs {solve a before b;}   
+      |                           ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_constraint_before_nonrand_bad.v:23:39: Non-random variable 'd' not allowed in 'solve before' (IEEE 1800-2023 18.5.9)
+                                                 : ... note: In instance 't'
+   23 |   constraint c_rhs {solve b before c, d;}   
+      |                                       ^
+%Error: t/t_constraint_before_nonrand_bad.v:24:30: Non-random variable 'arr' not allowed in 'solve before' (IEEE 1800-2023 18.5.9)
+                                                 : ... note: In instance 't'
+   24 |   constraint c_arr {solve arr[1] before b;}   
+      |                              ^
+%Error: t/t_constraint_before_nonrand_bad.v:25:32: Non-random variable 'y' not allowed in 'solve before' (IEEE 1800-2023 18.5.9)
+                                                 : ... note: In instance 't'
+   25 |   constraint c_member {solve s.y before c;}   
+      |                                ^
+%Error: Exiting due to
