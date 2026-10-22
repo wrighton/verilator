@@ -1461,6 +1461,8 @@ class WidthVisitor final : public VNVisitor {
             }
             iterateCheckTyped(nodep, "Associative select", nodep->bitp(), adtypep->keyDTypep(),
                               BOTH);
+            checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8)", nodep->bitp(),
+                             adtypep->keyDTypep());
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }
@@ -4937,7 +4939,7 @@ class WidthVisitor final : public VNVisitor {
                    || nodep->name() == "prev") {
             methodOkArguments(nodep, 1, 1);
             iterateCheckTyped(nodep, "argument", methodArg(nodep, 0), adtypep->keyDTypep(), BOTH);
-            AstNodeExpr* const index_exprp = methodCallAssocIndexExpr(nodep, adtypep);
+            AstNodeExpr* const index_exprp = methodCallAssocIndexExpr(nodep, adtypep, true);
             methodCallLValueRecurse(nodep, index_exprp, VAccess::READWRITE);
             newp
                 = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
@@ -5042,11 +5044,15 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         }
     }
-    AstNodeExpr* methodCallAssocIndexExpr(AstMethodCall* nodep, AstAssocArrayDType* adtypep) {
+    // isOutputArg: the method writes the index into the argument, so check that direction
+    AstNodeExpr* methodCallAssocIndexExpr(AstMethodCall* nodep, AstAssocArrayDType* adtypep,
+                                          bool isOutputArg = false) {
         AstNode* const index_exprp = nodep->argsp()->exprp();
         iterateCheck(nodep, "index", index_exprp, CONTEXT_DET, FINAL, adtypep->keyDTypep(),
                      EXTEND_EXP);
         VL_DANGLING(index_exprp);  // May have been edited
+        checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8)",
+                         nodep->argsp()->exprp(), adtypep->keyDTypep(), isOutputArg);
         return nodep->argsp()->exprp();
     }
     AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep,
