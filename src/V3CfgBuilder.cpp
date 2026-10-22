@@ -42,7 +42,21 @@ class CfgBuilder final : public VNVisitorConst {
     // Continuation block for given Loop
     std::unordered_map<AstLoop*, CfgBlock*> m_loopContp;
 
+    // Flags in V3GraphVertex::user() used to find unreachable blocks and infinite loops
+    static constexpr uint32_t REACHABLE_FROM_ENTER = 1;
+    static constexpr uint32_t REACHES_EXIT = 2;
+
     // METHODS
+
+    // Set 'flag' in all blocks reachable from 'vtxp' in the given direction
+    template <GraphWay::en N_Way>
+    static void markReachable(V3GraphVertex* vtxp, uint32_t flag) {
+        if (vtxp->user() & flag) return;
+        vtxp->user(vtxp->user() | flag);
+        for (V3GraphEdge& edge : vtxp->edges<N_Way>()) {
+            markReachable<N_Way>(edge.furtherp<N_Way>(), flag);
+        }
+    }
 
     // Add the given statement to the current CfgBlock
     void addStmt(AstNodeStmt* nodep) { m_currBBp->m_stmtps.emplace_back(nodep); }
@@ -207,25 +221,30 @@ class CfgBuilder final : public VNVisitorConst {
         if (!m_cfgp) return;
         // The final block is the exit block
         m_cfgp->m_exitp = m_currBBp;
-        // Some blocks might not have predecessors if they are unreachable, remove them
-        {
-            std::vector<V3GraphVertex*> unreachableps;
-            for (V3GraphVertex* const vtxp : m_cfgp->vertices().unlinkable()) {
-                if (vtxp == m_cfgp->m_enterp) continue;
-                if (vtxp == m_cfgp->m_exitp) continue;
-                UASSERT_OBJ(!vtxp->outEmpty(), vtxp, "Block with no successor other than exit");
-                if (vtxp->inEmpty()) unreachableps.emplace_back(vtxp);
+        // Mark blocks reachable from the enter block, and blocks the exit block is reachable from
+        m_cfgp->userClearVertices();
+        markReachable<GraphWay::FORWARD>(m_cfgp->m_enterp, REACHABLE_FROM_ENTER);
+        markReachable<GraphWay::REVERSE>(m_cfgp->m_exitp, REACHES_EXIT);
+        // Blocks after jumps might be unreachable, remove them. Their predecessors are also
+        // unreachable, so the removed edges are exactly the successor edges of these blocks.
+        std::vector<V3GraphVertex*> unreachableps;
+        bool infiniteLoop = false;
+        for (V3GraphVertex& vtx : m_cfgp->vertices()) {
+            if (!(vtx.user() & REACHABLE_FROM_ENTER)) {
+                unreachableps.emplace_back(&vtx);
+                m_cfgp->m_nEdges -= vtx.outEdges().size();
+            } else if (!(vtx.user() & REACHES_EXIT)) {
+                infiniteLoop = true;
             }
-            while (!unreachableps.empty()) {
-                V3GraphVertex* const vtxp = unreachableps.back();
-                unreachableps.pop_back();
-                for (const V3GraphEdge& edge : vtxp->outEdges()) {
-                    --m_cfgp->m_nEdges;
-                    if (edge.top()->inSize1()) unreachableps.emplace_back(edge.top());
-                }
-                --m_cfgp->m_nBlocks;
-                VL_DO_DANGLING(vtxp->unlinkDelete(m_cfgp.get()), vtxp);
-            }
+        }
+        // A reachable block that cannot reach the exit is in an infinite loop, give up
+        if (infiniteLoop) {
+            m_cfgp.reset();
+            return;
+        }
+        m_cfgp->m_nBlocks -= unreachableps.size();
+        for (V3GraphVertex* const vtxp : unreachableps) {
+            VL_DO_DANGLING(vtxp->unlinkDelete(m_cfgp.get()), vtxp);
         }
         // Dump the initial graph
         if (dumpGraphLevel() >= 9) {
