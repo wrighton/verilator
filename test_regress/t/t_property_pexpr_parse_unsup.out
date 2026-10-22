@@ -1,38 +1,14 @@
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:48:5: Unsupported: nexttime (in property expression)
-   48 |     nexttime a;
-      |     ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:48:5: Unsupported: s_nexttime[] (in property expression)
+   48 |     s_nexttime [2] a;
+      |     ^~~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:52:5: Unsupported: nexttime[] (in property expression)
-   52 |     nexttime [2] a;
-      |     ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:56:5: Unsupported: s_nexttime (in property expression)
-   56 |     s_nexttime a;
-      |     ^~~~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:60:5: Unsupported: s_nexttime[] (in property expression)
-   60 |     s_nexttime [2] a;
-      |     ^~~~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:64:5: Unsupported: nexttime (in property expression)
-   64 |     nexttime always a;
-      |     ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:68:5: Unsupported: nexttime[] (in property expression)
-   68 |     nexttime [2] always a;
-      |     ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:72:5: Unsupported: nexttime[] (in property expression)
-   72 |     nexttime [2] always a;
-      |     ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:76:5: Unsupported: nexttime (in property expression)
-   76 |     nexttime s_eventually a;
-      |     ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:80:14: Unsupported: s_eventually[] (in property expression)
-   80 |     nexttime s_eventually [2:$] always a;
+%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:52:14: Unsupported: s_eventually[] (in property expression)
+   52 |     nexttime s_eventually [2:$] always a;
       |              ^~~~~~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:80:5: Unsupported: nexttime (in property expression)
-   80 |     nexttime s_eventually [2:$] always a;
-      |     ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:99:26: Unsupported: property argument data type
-   99 |   property p_arg_propery(property inprop);
+%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:71:26: Unsupported: property argument data type
+   71 |   property p_arg_propery(property inprop);
       |                          ^~~~~~~~
-%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:102:26: Unsupported: sequence argument data type
-  102 |   property p_arg_seqence(sequence inseq);
+%Error-UNSUPPORTED: t/t_property_pexpr_unsup.v:74:26: Unsupported: sequence argument data type
+   74 |   property p_arg_seqence(sequence inseq);
       |                          ^~~~~~~~
 %Error: Exiting due to
