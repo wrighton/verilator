@@ -119,7 +119,9 @@ class LinkResolveVisitor final : public VNVisitor {
                         if (refp->varp() == nodep->varp()) ok = true;
                     });
             }
-            if (nodep->varp()->isGenVar() && !ok) {
+            // A hierarchical reference is to a loop block instance's implicit localparam, else
+            // V3LinkDot reported it
+            if (nodep->varp()->isGenVar() && !ok && !VN_IS(nodep, VarXRef)) {
                 nodep->v3error("Genvar "
                                << nodep->prettyNameQ()
                                << " used outside generate for loop (IEEE 1800-2023 27.4)");
