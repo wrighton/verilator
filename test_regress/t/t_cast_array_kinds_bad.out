@@ -1,0 +1,6 @@
+%Error: t/t_cast_array_kinds_bad.v:14:11: Neither 'int$[0:2]' or 'int$[$]' is castable to the other one
+                                        : ... note: In instance 't'
+   14 |     r = c ? f : q;   
+      |           ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
