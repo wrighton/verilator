@@ -7,4 +7,20 @@
                                       : ... note: In instance 't'
    20 |   always @ (posedge ebad) $stop;
       |                     ^~~~
+%Error: t/t_lint_edge_real_bad.v:26:21: Edge event control not legal on non-integral type (IEEE 1800-2023 9.4.2)
+                                      : ... note: In instance 't'
+   26 |   always @ (posedge cbad) $stop;
+      |                     ^~~~
+%Error: t/t_lint_edge_real_bad.v:27:21: Edge event control not legal on non-integral type (IEEE 1800-2023 9.4.2)
+                                      : ... note: In instance 't'
+   27 |   always @ (negedge cbad) $stop;
+      |                     ^~~~
+%Error: t/t_lint_edge_real_bad.v:28:18: Edge event control not legal on non-integral type (IEEE 1800-2023 9.4.2)
+                                      : ... note: In instance 't'
+   28 |   always @ (edge cbad) $stop;
+      |                  ^~~~
+%Error: t/t_lint_edge_real_bad.v:31:21: Edge event control not legal on non-integral type (IEEE 1800-2023 9.4.2)
+                                      : ... note: In instance 't'
+   31 |   always @ (posedge uabad) $stop;
+      |                     ^~~~~
 %Error: Exiting due to
