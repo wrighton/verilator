@@ -2657,9 +2657,9 @@ class LinkDotParamVisitor final : public VNVisitor {
             // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1). Not
             // if the path, e.g. from $root, only comes back into the scope from above it, as it
             // then names one instance.
-            const bool below
-                = symp
-                  && belowDepth >= static_cast<size_t>(std::count(path.begin(), path.end(), '.'));
+            const bool below = symp
+                               && belowDepth >= static_cast<size_t>(
+                                      std::count(cellPath.begin(), cellPath.end(), '.'));
             AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                       << "  <= " << exprp);
@@ -3696,7 +3696,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         auto& defParamPins = m_usedDefParamPins[refp];
         const auto defParamIt = defParamPins.find(nodep->paramPath());
         if (defParamIt != defParamPins.end()) {
-            duplicatePinError(nodep, defParamIt->second, whatp);
+            // IEEE 1800-2023 23.10.1: Last defparam in source text wins
+            AstPin* const prevp = defParamIt->second;
+            defParamIt->second = nodep;
+            if (pair.first->second == prevp) pair.first->second = nodep;
+            VL_DO_DANGLING(pushDeletep(prevp->unlinkFrBack()), prevp);
             return;
         }
         defParamPins.emplace(nodep->paramPath(), nodep);
