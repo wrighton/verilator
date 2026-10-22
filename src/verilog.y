@@ -6644,6 +6644,8 @@ sequence_declaration<nodeFTaskp>:  // ==IEEE: sequence_declaration
                           $$->addStmtsp($2);
                           $$->addStmtsp($4);
                           GRAMMARP->endLabel($<fl>6, $$, $6);
+                          GRAMMARP->m_insideProperty = false;
+                          GRAMMARP->m_typedPropertyPort = false;
                           // Sequence declarations are allowed; they are inlined by V3AssertPre.
                           // Sequences in unsupported contexts are reported by assertPreAll
                           // after inlining.
@@ -6652,7 +6654,8 @@ sequence_declaration<nodeFTaskp>:  // ==IEEE: sequence_declaration
 
 sequence_declarationFront<nodeFTaskp>:  // IEEE: part of sequence_declaration
                 ySEQUENCE idAny/*new_sequence*/
-                        { $$ = new AstSequence{$<fl>2, *$2, nullptr}; }
+                        { $$ = new AstSequence{$<fl>2, *$2, nullptr};
+                          GRAMMARP->m_insideProperty = true; }
         ;
 
 sequence_port_listE<nodep>:  // IEEE: [ ( [ sequence_port_list ] ) ]
