@@ -43,6 +43,38 @@ module t (
   assert property (@(posedge clk) a |-> seq_sum(1'b1, b, 1))
   else fails++;
 
+  // Likewise for formal arguments used as repetition counts and $past tick counts
+  // (IEEE 1800-2023 16.9.2, 16.9.3)
+  property prop_rep(untyped cnt);
+    @(posedge clk) a |-> b [* cnt];
+  endproperty
+  property prop_rep_min(untyped cnt);
+    @(posedge clk) a |-> b [* cnt: 3];
+  endproperty
+  property prop_rep_max(untyped cnt);
+    @(posedge clk) a |-> b [* 1: cnt];
+  endproperty
+  property prop_goto(untyped cnt);
+    @(posedge clk) a [-> cnt] |-> b;
+  endproperty
+  property prop_past(untyped cnt);
+    @(posedge clk) a |-> $past(b, cnt);
+  endproperty
+  assert property (prop_rep(n))
+  else fails++;
+  assert property (prop_goto(n))
+  else fails++;
+  assert property (prop_past(n))
+  else fails++;
+  assert property (prop_rep(-1))
+  else fails++;
+  assert property (prop_past(0))
+  else fails++;
+  assert property (prop_rep_min(n))
+  else fails++;
+  assert property (prop_rep_max(n))
+  else fails++;
+
   // As 'a' is never set, none would fail
   final `checkd(fails, 0)
 
