@@ -1,0 +1,11 @@
+%Error: t/t_modport_export_undef_bad.v:15:18: Module connected to modport 'provider' does not define exported task/function 'send' (IEEE 1800-2023 25.7)
+   15 |     ifc.provider p
+      |                  ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_modport_export_undef_bad.v:15:18: Module connected to modport 'provider' does not define exported task/function 'get' (IEEE 1800-2023 25.7)
+   15 |     ifc.provider p
+      |                  ^
+%Error: t/t_modport_export_undef_bad.v:21:18: Module connected to modport 'provider' does not define exported task/function 'get' (IEEE 1800-2023 25.7)
+   21 |     ifc.provider p
+      |                  ^
+%Error: Exiting due to

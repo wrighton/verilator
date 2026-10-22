@@ -77,6 +77,8 @@ class LinkParseVisitor final : public VNVisitor {
     bool m_hasTimingControl = false;  // If current task has timing control
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
+    // Out-of-block interface method definitions in current module, as <port, task> names
+    std::set<std::pair<std::string, std::string>> m_ifaceMethodDefs;
 
     // STATE - Statistic tracking
     VDouble0 m_statModules;  // Number of modules seen
@@ -242,9 +244,38 @@ class LinkParseVisitor final : public VNVisitor {
         return addsp;
     }
 
+    void checkModportExports(const AstNodeModule* nodep) {
+        // IEEE 1800-2023 25.7: A module connected to a modport with an exported
+        // task/function must define it
+        for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            const AstVar* const varp = VN_CAST(stmtp, Var);
+            if (!varp || !varp->isIfaceRef()) continue;
+            const AstIfaceRefDType* const refp = VN_CAST(varp->childDTypep(), IfaceRefDType);
+            if (!refp || refp->modportName().empty()) continue;
+            for (const AstNode* itemp = refp->ifacep()->stmtsp(); itemp; itemp = itemp->nextp()) {
+                const AstModport* const modportp = VN_CAST(itemp, Modport);
+                if (!modportp || modportp->name() != refp->modportName()) continue;
+                for (const AstNode* mpItemp = modportp->varsp(); mpItemp;
+                     mpItemp = mpItemp->nextp()) {
+                    const AstModportFTaskRef* const ftaskRefp = VN_CAST(mpItemp, ModportFTaskRef);
+                    if (ftaskRefp && ftaskRefp->isExport()
+                        && !m_ifaceMethodDefs.count({varp->name(), ftaskRefp->name()})) {
+                        varp->v3error("Module connected to modport "
+                                      << modportp->prettyNameQ()
+                                      << " does not define exported task/function "
+                                      << ftaskRefp->prettyNameQ() << " (IEEE 1800-2023 25.7)");
+                    }
+                }
+            }
+        }
+    }
+
     // VISITORS
     void visit(AstNodeFTask* nodep) override {
         if (nodep->user1SetOnce()) return;  // Process only once.
+        if (!nodep->ifacePortName().empty()) {
+            m_ifaceMethodDefs.emplace(nodep->ifacePortName(), nodep->name());
+        }
         // Mark class methods
         if (VN_IS(m_modp, Class)) nodep->classMethod(true);
 
@@ -834,6 +865,7 @@ class LinkParseVisitor final : public VNVisitor {
         VL_RESTORER(m_randSequenceNum);
         VL_RESTORER(m_valueModp);
         VL_RESTORER_CLEAR(m_implTypedef);
+        VL_RESTORER_CLEAR(m_ifaceMethodDefs);
 
         // Module: Create sim table for entire module and iterate
         cleanFileline(nodep);
@@ -865,6 +897,7 @@ class LinkParseVisitor final : public VNVisitor {
         collectPorts(nodep->stmtsp());
 
         iterateChildren(nodep);
+        checkModportExports(nodep);
         if (AstModule* const modp = VN_CAST(nodep, Module)) {
             modp->hasGenericIface(m_moduleWithGenericIface);
         }
