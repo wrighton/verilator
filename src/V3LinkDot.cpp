@@ -1158,6 +1158,11 @@ class LinkDotFindVisitor final : public VNVisitor {
     std::vector<AstIface*> m_virtIfaces;  // interfaces used as virtual,
                                           // needed for handleUnvisitedVirtIfaces()
     std::vector<const AstNode*> m_exportps;  // Exports in the current package, done at its end
+    // Out-of-block interface method definitions in current module, as <port, task> names
+    std::set<std::pair<std::string, std::string>> m_ifaceMethodDefs;
+    // Errors on modules' interface ports for exported tasks/functions not defined, to report
+    std::multimap<const AstNodeModule*, std::pair<const AstVar*, std::string>> m_missingExports;
+    bool m_inGenerate = false;  // Under a generate if, case or loop, so maybe not elaborated
 
     // METHODS
     void doExports() {
@@ -1387,10 +1392,16 @@ class LinkDotFindVisitor final : public VNVisitor {
             m_modArgNum = 0;
             // m_modSymp/m_curSymp for non-packages set by AstCell above this module
             // Iterate
+            VL_RESTORER_CLEAR(m_ifaceMethodDefs);
             nodep->user2(true);
             iterateChildren(nodep);
             if (pkgp) doExports();
             nodep->user2(false);
+            if (m_statep->forPrimary()) {
+                // Out-of-block definitions are moved on the first visit, so check only then
+                if (!nodep->user4()) checkModportExports(nodep);
+                if (!m_inGenerate) reportMissingExports(nodep);
+            }
             nodep->user4(true);
             // Interfaces need another pass when signals are resolved. When creating
             // scopes this is done from the AstScopes in LinkDotScopeVisitor instead, as
@@ -1541,6 +1552,12 @@ class LinkDotFindVisitor final : public VNVisitor {
         nodep->user1p(m_curSymp);
         iterateChildren(nodep);
     }
+    void visit(AstNodeGen* nodep) override {  // FindVisitor::
+        // Generate if, case and loop; a generate block has its own visit
+        VL_RESTORER(m_inGenerate);
+        m_inGenerate = true;
+        iterateChildren(nodep);
+    }
     void visit(AstGenBlock* nodep) override {  // FindVisitor::
         UINFO(5, "   " << nodep);
         if (nodep->name() == "" && nodep->unnamed()) {
@@ -1617,6 +1634,52 @@ class LinkDotFindVisitor final : public VNVisitor {
                 iterateChildren(nodep);
             }
         }
+    }
+    // Check the module defines the tasks/functions exported by its interface ports' modports
+    void checkModportExports(const AstNodeModule* nodep) {
+        // IEEE 1800-2023 25.7: Only for ports declared with an interface and modport. Not for a
+        // port used in a connection to an instance, as a module below may define the
+        // task/function.
+        for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            const AstVar* const varp = VN_CAST(stmtp, Var);
+            if (!varp || !varp->isIfaceRef()) continue;
+            const AstIfaceRefDType* const refp = VN_CAST(varp->childDTypep(), IfaceRefDType);
+            if (!refp || refp->modportName().empty()) continue;
+            if (nodep->exists([&](const AstPin* pinp) {
+                    return pinp->exists(
+                        [&](const AstParseRef* prefp) { return prefp->name() == varp->name(); });
+                })) {
+                continue;
+            }
+            for (const AstNode* itemp = refp->ifacep()->stmtsp(); itemp; itemp = itemp->nextp()) {
+                const AstModport* const modportp = VN_CAST(itemp, Modport);
+                if (!modportp || modportp->name() != refp->modportName()) continue;
+                for (const AstNode* mpItemp = modportp->varsp(); mpItemp;
+                     mpItemp = mpItemp->nextp()) {
+                    const AstModportFTaskRef* const ftaskRefp = VN_CAST(mpItemp, ModportFTaskRef);
+                    if (ftaskRefp && ftaskRefp->isExport()
+                        && !m_ifaceMethodDefs.count({varp->name(), ftaskRefp->name()})) {
+                        m_missingExports.emplace(
+                            nodep, std::make_pair(varp, "Module connected to modport "
+                                                            + modportp->prettyNameQ()
+                                                            + " does not define exported "
+                                                              "task/function "
+                                                            + ftaskRefp->prettyNameQ()
+                                                            + " (IEEE 1800-2023 25.7)"));
+                    }
+                }
+            }
+        }
+    }
+    // Report the errors found by checkModportExports for a module
+    void reportMissingExports(const AstNodeModule* nodep) {
+        // Only once the module is instantiated outside generate constructs, as an elaboration
+        // error, but before elaboration
+        const auto range = m_missingExports.equal_range(nodep);
+        for (auto it = range.first; it != range.second; ++it) {
+            it->second.first->v3error(it->second.second);
+        }
+        m_missingExports.erase(range.first, range.second);
     }
     // Handle out-of-block interface method definition (IEEE 1800-2023 25.7)
     // Move task body from module into the interface's prototype task,
@@ -1736,6 +1799,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         if (nodep->name() == "new") m_explicitNew = true;
         // Handle out-of-block interface method definition (IEEE 25.8)
         if (!nodep->ifacePortName().empty() && m_statep->forPrimary()) {
+            m_ifaceMethodDefs.emplace(nodep->ifacePortName(), nodep->name());
             moveIfaceExportBody(nodep);
             return;  // Task has been deleted
         }
