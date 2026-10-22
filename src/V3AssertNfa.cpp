@@ -3596,6 +3596,24 @@ class AssertNfaVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
             return nullptr;
         }
+        // Match items in a repetition update the attempt's local variables at each iteration,
+        // the value flowing into the next one (IEEE 1800-2023 16.10), which is not modeled.
+        // Checked before the match items are lowered, which would report it less precisely.
+        const AstNodeExpr* itemRepp = nullptr;
+        propp->exists([&](const AstNodeExpr* repp) {
+            if (!VN_IS(repp, SConsRep) && !VN_IS(repp, SGotoRep) && !VN_IS(repp, SNonConsRep)) {
+                return false;
+            }
+            if (!hasMatchItem(repp)) return false;
+            itemRepp = repp;
+            return true;
+        });
+        if (itemRepp) {
+            itemRepp->v3warn(E_UNSUPPORTED, "Unsupported: sequence match item in repetition"
+                                            " (IEEE 1800-2023 16.10)");
+            VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
+            return nullptr;
+        }
         if (isBareTopLevelUntil(propp)) return nullptr;
         return propp;
     }
