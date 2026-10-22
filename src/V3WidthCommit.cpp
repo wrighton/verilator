@@ -101,6 +101,7 @@ class WidthCommitVisitor final : public VNVisitor {
     VMemberMap m_memberMap;  // Member names cached for fast lookup
     bool m_taskRefWarn = true;  // Allow task reference warnings, false under fork..join_none
     const AstAlways* m_alwaysCombp = nullptr;  // Current always_comb or always_latch
+    bool m_inFinal = false;  // Under final procedure
     std::unordered_map<const AstNodeFTask*, bool> m_taskBlocks;  // If calling task may block
     bool m_underSel = false;  // Under a MemberRef handle or what a Sel reads, unless m_contReads
     bool m_underAlwaysEdged = false;  // Under always with sequential SenTree
@@ -131,6 +132,11 @@ private:
             nodep->v3error("Blocking timing controls and fork-join are not legal under "
                            << m_alwaysCombp->keyword().ascii() << " (IEEE 1800-2023 9.2.2.2.2)\n"
                            << nodep->warnMore() << "... Suggest use a normal 'always'");
+        }
+        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl()
+            && !(forkp && forkp->disableWrap())) {
+            nodep->v3error("Timing controls and fork-join are not legal in final blocks"
+                           " (IEEE 1800-2023 9.2.3)");
         }
     }
     AstNodeDType* editOneDType(AstNodeDType* nodep) {
@@ -335,6 +341,12 @@ private:
     void visit(AstNodeCoverOrAssert* nodep) override {
         VL_RESTORER(m_alwaysCombp);
         m_alwaysCombp = nullptr;  // Property delays are not procedural timing controls
+        iterateChildren(nodep);
+        editDType(nodep);
+    }
+    void visit(AstFinal* nodep) override {
+        VL_RESTORER(m_inFinal);
+        m_inFinal = true;
         iterateChildren(nodep);
         editDType(nodep);
     }
@@ -604,10 +616,13 @@ private:
                               << nodep->taskp()->prettyName() << "' a function void\n"
                               << nodep->taskp()->warnContextSecondary());
         }
-        if (m_alwaysCombp && m_taskRefWarn && VN_IS(nodep->taskp(), Task)
+        if ((m_alwaysCombp || m_inFinal) && m_taskRefWarn && VN_IS(nodep->taskp(), Task)
             && WidthTaskBlocksVisitor::blocks(m_taskBlocks, nodep->taskp())) {
-            nodep->v3error("Calling a task that blocks is not legal under "
-                           << m_alwaysCombp->keyword().ascii() << " (IEEE 1800-2023 9.2.2.2.2)\n"
+            const std::string where = m_inFinal ? "in final blocks (IEEE 1800-2023 9.2.3)"
+                                                : "under "s + m_alwaysCombp->keyword().ascii()
+                                                      + " (IEEE 1800-2023 9.2.2.2.2)";
+            nodep->v3error("Calling a task that blocks is not legal "
+                           << where << "\n"
                            << nodep->warnContextPrimary() << "\n"
                            << nodep->taskp()->warnOther() << "... Location of blocking task\n"
                            << nodep->taskp()->warnContextSecondary());
