@@ -6701,14 +6701,14 @@ sequence_declarationBody<nodep>:  // IEEE: part of sequence_declaration
 property_spec<propSpecp>:               // IEEE: property_spec
         //UNSUP: This rule has been super-specialized to what is supported now
         //UNSUP remove below
-                '@' '(' senitem ')' yDISABLE yIFF '(' expr ')' property_exprSpec
-                        { $$ = $10; $$->fileline($1); $$->sensesp($3); $$->disablep($8); }
-        |       '@' '(' senitem ')' property_exprSpec
-                        { $$ = $5; $$->fileline($1); $$->sensesp($3); }
+                '@' '(' event_expression ')' yDISABLE yIFF '(' expr ')' property_exprSpec
+                        { $$ = $10; $$->fileline($1); $$->addSensesp($3); $$->disablep($8); }
+        |       '@' '(' event_expression ')' property_exprSpec
+                        { $$ = $5; $$->fileline($1); $$->addSensesp($3); }
         |       '@' senitemVar property_exprSpec
-                        { $$ = $3; $$->fileline($1); $$->sensesp($2); }
-        |       yDISABLE yIFF '(' expr ')' '@' '(' senitem ')' property_exprSpec
-                        { $$ = $10; $$->fileline($1); $$->sensesp($8); $$->disablep($4); }
+                        { $$ = $3; $$->fileline($1); $$->addSensesp($2); }
+        |       yDISABLE yIFF '(' expr ')' '@' '(' event_expression ')' property_exprSpec
+                        { $$ = $10; $$->fileline($1); $$->addSensesp($8); $$->disablep($4); }
         //UNSUP remove above
         |       yDISABLE yIFF '(' expr ')' property_exprSpec
                         { $$ = $6; $$->fileline($4->fileline()); $$->disablep($4); }

@@ -2268,12 +2268,12 @@ class AstSClocked final : public AstNodeExpr {
     // Sequence expression with an explicit leading clocking event
     // IEEE 1800-2023 16.7: sequence_expr ::= clocking_event sequence_expr
     // The clocking event is hoisted to the enclosing assertion clock by V3AssertNfa.
-    // @astgen op1 := sensesp : AstSenItem
+    // @astgen op1 := sensesp : List[AstSenItem]
     // @astgen op2 := exprp : AstNodeExpr
 public:
     AstSClocked(FileLine* fl, AstSenItem* sensesp, AstNodeExpr* exprp)
         : ASTGEN_SUPER_SClocked(fl) {
-        this->sensesp(sensesp);
+        addSensesp(sensesp);
         this->exprp(exprp);
     }
     ASTGEN_MEMBERS_AstSClocked;
