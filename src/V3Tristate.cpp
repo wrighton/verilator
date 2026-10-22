@@ -2117,16 +2117,17 @@ class TristateVisitor final : public TristateBaseVisitor {
                                            // tristates to inputs, which do not want
                                            // to have this.
                                            && !nodep->modVarp()->declDirection().isWritable());
+            AstVar* inVarp = nullptr;  // Tristate variable connected to an input port
             if (!nodep->exprp()) {  // No-connect; covert to empty connection
                 UINFO(5, "Unconnected pin terminate " << nodep);
                 AstVar* const ucVarp = getCreateUnconnVarp(nodep, nodep->modVarp()->dtypep());
+                // We converted, so use declaration output state
+                const bool isInput = !nodep->modVarp()->declDirection().isWritable();
                 nodep->exprp(new AstVarRef{nodep->fileline(), ucVarp,
-                                           // We converted, so use declaration output state
-                                           nodep->modVarp()->declDirection().isWritable()
-                                               ? VAccess::WRITE
-                                               : VAccess::READ});
+                                           isInput ? VAccess::READ : VAccess::WRITE});
                 m_tgraph.setTristate(ucVarp);
                 // We don't need a driver on the wire; the lack of one will default to tristate
+                if (isInput) inVarp = ucVarp;
             } else if (inDeclProcessing) {  // Not an input that was a converted tristate
                 // Input only may have driver in underneath module which would stomp
                 // the input value.  So make a temporary connection.
@@ -2134,16 +2135,24 @@ class TristateVisitor final : public TristateBaseVisitor {
                     = V3Inst::pinReconnectSimple(nodep, m_cellp, true, true);
                 UINFO(5, "Input pin buffering: " << reAssignp);
                 m_tgraph.setTristate(reAssignp->lhsp());
+                inVarp = VN_AS(reAssignp->lhsp(), VarRef)->varp();
             }
 
             // pinReconnectSimple needs to presume input or output behavior; we need both
             // Therefore, create the enable, output and separate input pin,
             // then pinReconnectSimple all
             // Create the output enable pin, connect to new signal
-            AstVar* const enVarp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
-                                              nodep->name() + "__en" + cvtToStr(m_unique++),
-                                              VFlagBitPacked{}, enModVarp->width()};
-            if (inDeclProcessing) {  // __en(from-resolver-const) or __en(from-resolver-wire)
+            AstVar* const outModVarp = m_varAux(nodep->modVarp()).outVarp;
+            // Below the top, an input that is only read below (e.g. compared with z) takes the
+            // enable of its connection. At the top the enable is driven externally.
+            const bool inOnly = inVarp && !outModVarp && !m_modp->isTop();
+            AstVar* const enVarp = inOnly
+                                       ? getCreateEnVarp(inVarp, false)
+                                       : new AstVar{nodep->fileline(), VVarType::MODULETEMP,
+                                                    nodep->name() + "__en" + cvtToStr(m_unique++),
+                                                    VFlagBitPacked{}, enModVarp->width()};
+            const bool enIsInput = inDeclProcessing || inOnly;
+            if (enIsInput) {  // __en(from-resolver-const) or __en(from-resolver-wire)
                 enModVarp->varType2In();
             } else {
                 enModVarp->varType2Out();
@@ -2153,21 +2162,20 @@ class TristateVisitor final : public TristateBaseVisitor {
                 = new AstPin{nodep->fileline(), nodep->pinNum(),
                              enModVarp->name(),  // should be {var}"__en"
                              new AstVarRef{nodep->fileline(), enVarp,
-                                           inDeclProcessing ? VAccess::READ : VAccess::WRITE}};
+                                           enIsInput ? VAccess::READ : VAccess::WRITE}};
             enpinp->modVarp(enModVarp);
             UINFO(9, "       newpin " << enpinp);
             enpinp->user2Or(U2_BOTH);  // don't iterate the pin later
             nodep->addNextHere(enpinp);
-            m_modp->addStmtsp(enVarp);
+            if (!inOnly) m_modp->addStmtsp(enVarp);
             UINFOTREE(9, enpinp, "", "pin-ena");
 
             // Create new output pin
             const AstAssignW* outAssignp = nullptr;  // If reconnected, the related assignment
             AstPin* outpinp = nullptr;
-            AstVar* const outModVarp = m_varAux(nodep->modVarp()).outVarp;
             if (!outModVarp) {
                 // At top, no need for __out as might be input only. Otherwise resolvable.
-                if (!m_modp->isTop()) {
+                if (!m_modp->isTop() && !inOnly) {
                     nodep->v3warn(E_UNSUPPORTED, "Unsupported: tristate in top-level IO: "
                                                      << nodep->prettyNameQ());
                 }
