@@ -1947,6 +1947,16 @@ class TristateVisitor final : public TristateBaseVisitor {
             return;
         }
     }
+    void visitEqNeq(AstNodeBiop* nodep) {
+        // IEEE 1800-2023 11.4.5: z bits in an operand of == or != act as x bits, so leave
+        // a constant operand unconverted; V3Unknown handles its z bits as x bits.
+        // Constification always moves const to LHS
+        if (!VN_IS(nodep->lhsp(), Const)) iterateAndNextNull(nodep->lhsp());
+        iterateAndNextNull(nodep->rhsp());
+        checkUnhandled(nodep);
+    }
+    void visit(AstEq* nodep) override { visitEqNeq(nodep); }
+    void visit(AstNeq* nodep) override { visitEqNeq(nodep); }
     void visit(AstEqCase* nodep) override { visitCaseEq(nodep, false); }
     void visit(AstNeqCase* nodep) override { visitCaseEq(nodep, true); }
     void visit(AstEqWild* nodep) override { visitEqNeqWild(nodep); }
