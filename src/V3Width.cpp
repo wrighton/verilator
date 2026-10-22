@@ -3926,6 +3926,28 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstConstraintBefore* nodep) override {
         userIterateAndNext(nodep->lhssp(), WidthVP{SELF, BOTH}.p());
         userIterateAndNext(nodep->rhssp(), WidthVP{SELF, BOTH}.p());
+        // Not checked in 'randomize() with', where arguments can make other variables random
+        if (!m_constraintp) return;
+        checkSolveBeforeRand(nodep->lhssp());
+        checkSolveBeforeRand(nodep->rhssp());
+    }
+    // Report each variable in a solve before list that is not declared rand
+    void checkSolveBeforeRand(const AstNode* const itemsp) {
+        for (const AstNode* itemp = itemsp; itemp; itemp = itemp->nextp()) {
+            const AstNode* basep = itemp;
+            while (const AstNodeSel* const selp = VN_CAST(basep, NodeSel)) basep = selp->fromp();
+            const AstVar* varp = nullptr;
+            if (const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef)) {
+                varp = refp->varp();
+            } else if (const AstMemberRef* const memberRefp = VN_CAST(basep, MemberRef)) {
+                varp = memberRefp->varp();
+            }
+            if (varp && !varp->isRand()) {
+                itemp->v3error("Non-random variable " << varp->prettyNameQ()
+                                                      << " not allowed in 'solve before'"
+                                                         " (IEEE 1800-2023 18.5.9)");
+            }
+        }
     }
     void visit(AstConstraintExpr* nodep) override {
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
