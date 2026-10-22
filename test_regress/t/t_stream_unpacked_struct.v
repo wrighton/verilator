@@ -366,6 +366,31 @@ module t;
     `checkh(issue_4521_union.words[1], 16'h5678);
     `checkh(issue_4521_union.words[0], 16'h9abc);
 
+    begin
+      // Unpacked struct operands in streams with several operands
+      logic [31:0] multi_bits;
+      logic [31:0] multi_exp_bits;
+      logic [87:0] multi_array_bits;
+      multi_bits = {>>{narrow_bits, simple}};
+      `checkh(multi_bits, {narrow_bits, 20'h12abc});
+      multi_bits = {<<4{simple, narrow_bits}};
+      multi_exp_bits = {<<4{20'h12abc, narrow_bits}};
+      `checkh(multi_bits, multi_exp_bits);
+      multi_array_bits = {>>{simple_array, narrow_bits, nested}};
+      `checkh(multi_array_bits, {40'h12abc34def, narrow_bits, 36'h12abc3456});
+      {>>{simple_out, narrow_bits}} = 32'h13579bdf;
+      `checkh(simple_out.a, 8'h13);
+      `checkh(simple_out.b, 4'h5);
+      `checkh(simple_out.p, 8'h79);
+      `checkh(narrow_bits, 12'hbdf);
+      {>>{narrow_bits, simple_array_out}} = 52'h123_45678_9abcd;
+      `checkh(narrow_bits, 12'h123);
+      `checkh(simple_array_out[0].a, 8'h45);
+      `checkh(simple_array_out[0].p, 8'h78);
+      `checkh(simple_array_out[1].a, 8'h9a);
+      `checkh(simple_array_out[1].p, 8'hcd);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
