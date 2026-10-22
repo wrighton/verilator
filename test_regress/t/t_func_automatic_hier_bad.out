@@ -1,0 +1,20 @@
+%Error: t/t_func_automatic_hier_bad.v:30:17: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 23.6): 'av'
+   30 |   assign w = at.av;   
+      |                 ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_func_automatic_hier_bad.v:33:24: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 23.6): 'av'
+   33 |     $display("%0d", at.av);   
+      |                        ^~
+%Error: t/t_func_automatic_hier_bad.v:34:24: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 23.6): 'ai'
+   34 |     $display("%0d", at.ai);   
+      |                        ^~
+%Error: t/t_func_automatic_hier_bad.v:36:24: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 23.6): 'fv'
+   36 |     $display("%0d", af.fv);   
+      |                        ^~
+%Error: t/t_func_automatic_hier_bad.v:37:24: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 23.6): 'fi'
+   37 |     $display("%0d", af.fi);   
+      |                        ^~
+%Error: t/t_func_automatic_hier_bad.v:38:24: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 23.6): 'sav'
+   38 |     $display("%0d", st.sav);   
+      |                        ^~~
+%Error: Exiting due to
