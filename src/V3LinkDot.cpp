@@ -3272,6 +3272,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
+    // Per sequence in the current module, the event fired at its end points, see
+    // replaceSequenceTriggered
+    std::map<const AstSequence*, AstVar*> m_seqTriggeredEvents;
+    int m_seqTriggeredNum = 0;  // Uniqueify names of those events in the current module
     int m_modportNum = 0;  // Uniqueify modport numbers
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
@@ -4080,11 +4084,56 @@ class LinkDotResolveVisitor final : public VNVisitor {
         iterateChildrenBackwardsConst(nodep);
     }
     void visit(AstTypeTable*) override {}
+    // True if nodep is declared directly in a module, so visible throughout it
+    static bool isModuleScope(AstNode* nodep) {
+        return VN_IS(LinkDotState::getNodeSym(nodep)->parentp()->nodep(), NodeModule);
+    }
+    // Replace sequence method 'triggered' nodep with an event's state, returning the event
+    AstVar* replaceSequenceTriggered(AstParseRef* nodep, AstFuncRef* funcrefp) {
+        // The method's value is the triggered state of the event (IEEE 1800-2023 16.13.6).
+        // The event is fired at each end point of the sequence instance, as for a sequence event
+        // control (9.4.2.4).
+        FileLine* const flp = nodep->fileline();
+        AstVar* const eventp
+            = new AstVar{flp, VVarType::MODULETEMP, "__Vtriggered" + cvtToStr(m_seqTriggeredNum++),
+                         VFlagChildDType{}, new AstBasicDType{flp, VBasicDTypeKwd::EVENT}};
+        eventp->lifetime(VLifetime::STATIC_EXPLICIT);
+        m_modp->addStmtsp(eventp);
+        v3Global.setHasEvents();
+        // The instance moves to module scope, so cannot reference e.g. a property's formal,
+        // an automatic variable or a generate block's variable or genvar.
+        if (!isModuleScope(funcrefp->taskp()) || funcrefp->exists([](const AstVarRef* refp) {
+                return refp->varp()->isGenVar() || !isModuleScope(refp->varp());
+            })) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence method 'triggered' on a sequence"
+                                         " instance referencing a non-module-scope declaration");
+            VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
+        } else {
+            AstCover* const coverp = new AstCover{
+                flp, new AstPropSpec{flp, nullptr, nullptr, funcrefp},
+                new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false},
+                VAssertType::CONCURRENT};
+            coverp->isCoverSeq(true);
+            coverp->isSeqEvent(true);
+            m_modp->addStmtsp(coverp);
+        }
+        replaceWithTriggered(nodep, eventp);
+        return eventp;
+    }
+    void replaceWithTriggered(AstParseRef* nodep, AstVar* eventp) {
+        FileLine* const flp = nodep->fileline();
+        nodep->replaceWith(
+            new AstMethodCall{flp, new AstVarRef{flp, eventp, VAccess::READ}, "triggered"});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstNodeModule* nodep) override {
         if (nodep->dead()) return;
         LINKDOT_VISIT_START();
         UINFO(8, indent() << "visit " << nodep);
         VL_RESTORER(m_genericIfaceModule);
+        VL_RESTORER_CLEAR(m_seqTriggeredEvents);
+        VL_RESTORER(m_seqTriggeredNum);
+        m_seqTriggeredNum = 0;
         if (const AstModule* const modp = VN_CAST(nodep, Module)) {
             m_genericIfaceModule = modp->hasGenericIface();
         }
@@ -4535,6 +4584,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
+        } else if (m_ds.m_dotPos == DP_MEMBER && nodep->name() == "triggered"
+                   && VN_IS(m_ds.m_dotp->lhsp(), FuncRef)
+                   && VN_IS(VN_AS(m_ds.m_dotp->lhsp(), FuncRef)->taskp(), Sequence)) {
+            // A sequence instance with arguments
+            replaceSequenceTriggered(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), FuncRef));
         } else if (m_ds.m_dotPos == DP_MEMBER) {
             // Found a Var, everything following is membership.  {scope}.{var}.HERE {member}
             if (m_ds.m_dotErr) {
@@ -4606,6 +4660,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else {
                 UINFO(1, "ds=" << m_ds.ascii());
                 nodep->v3fatalSrc("Unhandled DotPosition");
+            }
+            if (m_ds.m_dotPos == DP_FINAL && nodep->name() == "triggered") {
+                if (AstSequence* const seqp = VN_CAST(m_ds.m_dotSymp->nodep(), Sequence)) {
+                    // A sequence without arguments, whose instances share the event
+                    AstVar*& eventpr = m_seqTriggeredEvents[seqp];
+                    if (eventpr) {
+                        replaceWithTriggered(nodep, eventpr);
+                    } else {
+                        AstFuncRef* const funcrefp
+                            = new AstFuncRef{nodep->fileline(), seqp->name()};
+                        funcrefp->taskp(seqp);
+                        funcrefp->user3(true);  // Linked
+                        eventpr = replaceSequenceTriggered(nodep, funcrefp);
+                    }
+                    return;
+                }
             }
             // Lookup
             VSymEnt* foundp;

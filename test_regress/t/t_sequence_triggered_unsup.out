@@ -1,0 +1,20 @@
+%Error-UNSUPPORTED: t/t_sequence_triggered_unsup.v:22:34: Unsupported: sequence method 'triggered' on a sequence instance referencing a non-module-scope declaration
+   22 |     @(posedge clk) 1'b1 |-> s(y).triggered;
+      |                                  ^~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_sequence_triggered_unsup.v:28:25: Unsupported: sequence method 'triggered' on a sequence instance referencing a non-module-scope declaration
+   28 |     @(posedge clk) s(z).triggered ##1 a;
+      |                         ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_sequence_triggered_unsup.v:34:16: Unsupported: sequence method 'triggered' on a sequence instance referencing a non-module-scope declaration
+   34 |     wait (s(v).triggered);
+      |                ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_sequence_triggered_unsup.v:42:36: Unsupported: sequence method 'triggered' on a sequence instance referencing a non-module-scope declaration
+   42 |     always @(posedge clk) if (s(v).triggered) $display("v");
+      |                                    ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_sequence_triggered_unsup.v:44:39: Unsupported: sequence method 'triggered' on a sequence instance referencing a non-module-scope declaration
+   44 |     always @(posedge clk) if (s(d[i]).triggered) $display("d");
+      |                                       ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_sequence_triggered_unsup.v:49:37: Unsupported: sequence method 'triggered' on a sequence instance referencing a non-module-scope declaration
+   49 |     always @(posedge clk) if (s_gen.triggered) $display("s_gen");
+      |                                     ^~~~~~~~~
+%Error: Exiting due to
