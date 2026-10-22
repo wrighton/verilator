@@ -2,4 +2,7 @@
     8 |   // verilator_no_inline_module
       |   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                      ... For error description see https://verilator.org/warn/BADVLTPRAGMA?v=latest
+%Error-BADVLTPRAGMA: t/t_pp_underline_bad.v:16:3: Extra underscore in meta-comment, ignoring comment; use /*synopsys {...}*/ not /*synopsys_{...}*/
+   16 |   // synopsys_parallel_case
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~~
 %Error: Exiting due to
