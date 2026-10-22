@@ -11458,7 +11458,23 @@ public:
                 const int queueElementSize = streamp->lhsp()->dtypep()->subDTypep()->width();
                 UASSERT_OBJ(queueElementSize <= lwidth, nodep, "LHS < RHS");
             }
-            if (VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
+            const bool packedToDynamic = (VN_IS(lhsDTypeSkippedRefp, DynArrayDType)
+                                          || VN_IS(lhsDTypeSkippedRefp, QueueDType))
+                                         && !VN_IS(streamp->dtypep(), StreamDType);
+            if (packedToDynamic) {
+                // Zero extend the streamed value on the left to a whole number of elements,
+                // matching how a dynamically sized array is streamed out
+                AstNodeExpr* const srcp = streamp->lhsp();
+                const int elemWidth = lhsDTypeSkippedRefp->subDTypep()->width();
+                const int padWidth = (elemWidth - srcp->width() % elemWidth) % elemWidth;
+                if (padWidth) {
+                    FileLine* const flp = srcp->fileline();
+                    streamp->lhsp(new AstConcat{
+                        flp, new AstConst{flp, AstConst::WidthedValue{}, padWidth, 0},
+                        srcp->unlinkFrBack()});
+                }
+            }
+            if (packedToDynamic || VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
                 || lowerAsFixedAggregate(lhsDTypeSkippedRefp)) {
                 streamp->unlinkFrBack();
                 nodep->rhsp(

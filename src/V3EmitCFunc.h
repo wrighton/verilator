@@ -1749,8 +1749,11 @@ public:
         //an error
         bool backpIsParent = (nodep->backp()->op1p() == nodep || nodep->backp()->op2p() == nodep);
         UASSERT(backpIsParent, "can not find return type for streamR");
-        if (const AstQueueDType* const qdtp
-            = VN_CAST(nodep->backp()->dtypep()->skipRefp(), QueueDType)) {
+        const AstQueueDType* const qdtp
+            = VN_IS(nodep->backp(), NodeAssign)
+                  ? VN_CAST(nodep->backp()->dtypep()->skipRefp(), QueueDType)
+                  : nullptr;
+        if (qdtp) {
             if (nodep->lhsp()->isWide()) {
                 emitOpName(nodep,
                            "VL_STREAMR_%nq%lq%rq(%lw," + std::to_string(qdtp->subDTypep()->width())
