@@ -28,6 +28,10 @@ class V3AssertCommon final {
 public:
     static void collectDefaultDisable(AstNetlist* nodep) VL_MT_DISABLED;
     static void lowerSequenceEvents(AstNetlist* nodep) VL_MT_DISABLED;
+    // Add an event to modp, fired at each end point of sequence instance schemaRefp, unless
+    // nullptr
+    static AstVar* newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
+                                    AstSchemaRef* schemaRefp) VL_MT_DISABLED;
     static string assertCtlGetCall(const char* query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;
     // Check an SVA value is within the implementation limit, else report it on nodep
