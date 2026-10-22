@@ -343,6 +343,8 @@ class ParamProcessor final {
     std::map<AstNodeModule*, DefaultValueMap> m_defaultParameterValues;
     // Module -> a defparam in it or below it, or nullptr (see nestedDefparamp)
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
+    // Instance name -> original name of its module, for instances deparameterized so far
+    std::unordered_map<string, string> m_instanceOrigNames;
     VNDeleter m_deleter;  // Used to delay deletion of nodes
     // Class default type paramater dependencies
     std::vector<std::pair<AstParamTypeDType*, int>> m_classTypeParams;
@@ -686,35 +688,9 @@ class ParamProcessor final {
             }
         }
     }
-    static bool hasDescendantDefparams(const AstNodeModule* modp,
-                                       std::set<const AstNodeModule*>& visited) {
-        if (!visited.insert(modp).second) return false;
-        for (AstNode* const stmtp : modp->stmtspList()) {
-            AstCell* const cellp = VN_CAST(stmtp, Cell);
-            if (!cellp) continue;
-            for (AstPin* const pinp : cellp->paramspList()) {
-                if (!pinp->paramPath().empty()) {
-                    visited.erase(modp);
-                    return true;
-                }
-            }
-            if (AstNodeModule* const childModp = cellp->modp()) {
-                if (hasDescendantDefparams(childModp, visited)) {
-                    visited.erase(modp);
-                    return true;
-                }
-            }
-        }
-        visited.erase(modp);
-        return false;
-    }
-    static bool hasDescendantDefparams(const AstNodeModule* modp) {
-        std::set<const AstNodeModule*> visited;
-        return hasDescendantDefparams(modp, visited);
-    }
-    // Return a defparam in the module or below it. Unlike hasDescendantDefparams, also look
-    // inside generate constructs. Memoized, so each module is searched once.
+    // Return a defparam in the module or below it, also inside generate constructs
     const AstPin* nestedDefparamp(const AstNodeModule* modp) {
+        // Memoized, so each module is searched once
         const auto pair = m_nestedDefparamps.emplace(modp, nullptr);
         if (!pair.second) return pair.first->second;  // Searched, or being searched
         const AstPin* foundp = nullptr;
@@ -728,6 +704,37 @@ class ParamProcessor final {
         });
         pair.first->second = foundp;
         return foundp;
+    }
+    // Return a hierarchical name without generate loop indices
+    static string withoutIndices(const string& name) {
+        string result;
+        bool inIndex = false;
+        for (const char c : name) {
+            if (c == '[') {
+                inIndex = true;
+            } else if (c == ']') {
+                inIndex = false;
+            } else if (!inIndex) {
+                result += c;
+            }
+        }
+        return result;
+    }
+    // Return if a defparam path, from the module it starts in, names the instance
+    bool defParamNames(const string& path, const string& instanceName) const {
+        // After the module come the generate blocks the defparam is in, without loop indices,
+        // so a defparam in a generate loop applies in each iteration
+        const size_t dotPos = path.find('.');
+        const string anchor = path.substr(0, dotPos);
+        const string relPath = path.substr(dotPos + 1);
+        if (!VString::endsWith(withoutIndices(instanceName), "." + relPath)) return false;
+        string scope = instanceName;
+        for (size_t n = std::count(relPath.begin(), relPath.end(), '.') + 1; n; --n) {
+            scope.erase(scope.rfind('.'));
+        }
+        // Instances above are deparameterized first; the top's name is its module's
+        const auto it = m_instanceOrigNames.find(scope);
+        return (it != m_instanceOrigNames.end() ? it->second : scope) == anchor;
     }
     // Check if parameter setting during instantiation is simple enough for hierarchical Verilation
     void checkSupportedParam(AstNodeModule* modp, AstPin* pinp) const {
@@ -2173,7 +2180,7 @@ class ParamProcessor final {
                 }
             }
         }
-        if (!any_overrides && VN_IS(nodep, Cell) && hasDescendantDefparams(srcModp)) {
+        if (VN_IS(nodep, Cell) && nestedDefparamp(srcModp)) {
             longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
             any_overrides = true;
         }
@@ -2591,11 +2598,10 @@ public:
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
-            // A defparam path from $root names one instance, any other is matched as a suffix
-            const string rootedName = "$root." + instanceName;
+            m_instanceOrigNames[instanceName] = srcModp->origName();
             for (AstPin* const pinp : cellp->paramspList()) {
-                if (!pinp->paramPath().empty() && rootedName != pinp->paramPath()
-                    && !VString::endsWith(rootedName, "." + pinp->paramPath())) {
+                if (!pinp->paramPath().empty()
+                    && !defParamNames(pinp->paramPath(), instanceName)) {
                     VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
                 }
             }
@@ -3911,7 +3917,8 @@ class ParamVisitor final : public VNVisitor {
             VL_DO_DANGLING(m_unroller.unroll(forp, beginName), forp);
         } else {
             VL_RESTORER_COPY(m_generateHierName);
-            m_generateHierName += "." + nodep->prettyName();
+            // An unnamed block that is not a generate scope has no name
+            if (!nodep->name().empty()) m_generateHierName += "." + nodep->prettyName();
             iterateChildren(nodep);
         }
     }

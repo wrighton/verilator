@@ -1783,7 +1783,7 @@ class AstPin final : public AstNode {
     // @astgen ptr := m_modPTypep : Optional[AstParamTypeDType]  // Param type connects to on sub
     int m_pinNum;  // Pin number
     string m_name;  // Pin name, or "" for number based interconnect
-    string m_paramPath;  // Original defparam cell path, if this pin came from a defparam
+    string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit

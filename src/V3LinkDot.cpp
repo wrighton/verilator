@@ -2524,6 +2524,11 @@ class LinkDotParamVisitor final : public VNVisitor {
     // STATE
     LinkDotState* const m_statep;  // State to pass between visitors, including symbol table
     AstNodeModule* m_modp = nullptr;  // Current module
+    // Defparam pins made, by cell, parameter and recorded path, with the symbol of the instance
+    // the path resolved to
+    std::map<std::tuple<const AstCell*, std::string, const AstVar*, std::string>,
+             std::pair<AstPin*, const VSymEnt*>>
+        m_defParamPins;
 
     void pinImplicitExprRecurse(AstNode* nodep) {
         // Under a pin, Check interconnect expression for a pin reference or a concat.
@@ -2575,6 +2580,35 @@ class LinkDotParamVisitor final : public VNVisitor {
             && !nodep->svImplicit()) {  // SV 19.11.3: .name pins don't allow implicit decls
             pinImplicitExprRecurse(nodep->exprp());
         }
+    }
+    // Return a defparam path prefixed with the module and generate blocks it is in
+    string defParamAnchoredPath(AstDefParam* nodep, const string& path) {
+        // V3Param matches it against instances of that module, so the same path written in
+        // different scopes names different instances
+        const string firstName = path.substr(0, path.find('.'));
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        VSymEnt* const defSymp = m_statep->getNodeSym(nodep);
+        const VSymEnt* symp
+            = m_statep->findDotted(nodep->fileline(), defSymp, firstName, baddot, okSymp, true);
+        // $root.top.x is top.x, as a top module has no other instance
+        if (VN_IS(symp->nodep(), Netlist)) return path.substr(firstName.size() + 1);
+        // Already anchored if it starts with the name of a module containing the defparam;
+        // found by module name if the instance found is above and of a module of that name
+        const AstCell* const firstCellp = VN_CAST(symp->nodep(), Cell);
+        if (VN_IS(symp->nodep(), NodeModule)
+            || (firstCellp && firstCellp->modp()->origName() == firstName
+                && isAboveSym(symp, defSymp))) {
+            return path;
+        }
+        string anchoredPath = path;
+        for (symp = symp->parentp(); VN_IS(symp->nodep(), GenBlock); symp = symp->parentp()) {
+            anchoredPath = symp->nodep()->prettyName() + "." + anchoredPath;
+        }
+        // A module's symbols are under its instance's, but the top module's are not
+        const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
+        return (cellp ? cellp->modp() : VN_AS(symp->nodep(), NodeModule))->origName() + "."
+               + anchoredPath;
     }
     // Return if a symbol is the given symbol or one of its parents
     static bool isAboveSym(const VSymEnt* symp, const VSymEnt* belowSymp) {
@@ -2642,17 +2676,31 @@ class LinkDotParamVisitor final : public VNVisitor {
                               << varPathQ
                               << " in the instance containing the defparam or above it");
         } else {
-            AstNodeExpr* const exprp = nodep->rhsp()->unlinkFrBack();
-            UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
-                                      << "  <= " << exprp);
-            // Don't need to check the name of the defparam exists.  V3Param does.
-            AstPin* const pinp = new AstPin{nodep->fileline(),
-                                            -1,  // Pin# not relevant
-                                            name, exprp};
-            pinp->param(true);
-            pinp->paramPath(cellPath);
-            pinp->modVarp(scopedVarp);
-            cellp->addParamsp(pinp);
+            const string anchoredPath = defParamAnchoredPath(nodep, cellPath);
+            auto& prevr = m_defParamPins[std::make_tuple(cellp, name, scopedVarp, anchoredPath)];
+            if (prevr.first && prevr.second != cellSymp) {
+                // The same instance through generate blocks of the same name, e.g. one in each
+                // branch of a generate if, of which only one is elaborated
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: defparam to the same parameter as a"
+                                             " defparam in another generate block of the same"
+                                             " name");
+            } else {
+                // IEEE 1800-2023 23.10.1: Last defparam in source text wins
+                if (prevr.first)
+                    VL_DO_DANGLING(prevr.first->unlinkFrBack()->deleteTree(), prevr.first);
+                AstNodeExpr* const exprp = nodep->rhsp()->unlinkFrBack();
+                UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
+                                          << "  <= " << exprp);
+                // Don't need to check the name of the defparam exists.  V3Param does.
+                AstPin* const pinp = new AstPin{nodep->fileline(),
+                                                -1,  // Pin# not relevant
+                                                name, exprp};
+                pinp->param(true);
+                pinp->paramPath(anchoredPath);
+                pinp->modVarp(scopedVarp);
+                cellp->addParamsp(pinp);
+                prevr = std::make_pair(pinp, cellSymp);
+            }
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
     }
