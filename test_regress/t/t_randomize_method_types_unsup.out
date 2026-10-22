@@ -8,4 +8,8 @@
    15 |   rand Cls cls;
       |            ^~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:34:14: Unsupported: random member variable with the type of the containing class
+                                                            : ... note: In instance 't'
+   34 |   rand SList next;
+      |              ^~~~
 %Error: Exiting due to
