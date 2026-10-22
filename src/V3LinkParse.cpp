@@ -1061,8 +1061,8 @@ class LinkParseVisitor final : public VNVisitor {
     void visit(AstDot* nodep) override {
         cleanFileline(nodep);
         iterateChildren(nodep);
-        if (VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "super"
-            && VN_IS(nodep->rhsp(), New)) {
+        const AstParseRef* const lhsRefp = VN_CAST(nodep->lhsp(), ParseRef);
+        if (lhsRefp && lhsRefp->isSuper() && VN_IS(nodep->rhsp(), New)) {
             // Look for other statements until hit function start
             AstNode* scanp = nodep;
             // Skip over the New's statement
@@ -1265,7 +1265,7 @@ class LinkParseVisitor final : public VNVisitor {
             if (readOnlyRefs && origVarp->isRef()) paramp->direction(VDirection::CONSTREF);
             funcp->addDeclsp(paramp);
             AstNodeExpr* const lhsp = new AstDot{
-                origVarp->fileline(), false, new AstParseRef{origVarp->fileline(), "this"},
+                origVarp->fileline(), false, AstParseRef::newThis(origVarp->fileline()),
                 new AstParseRef{origVarp->fileline(), origVarp->name()}};
             AstNodeExpr* const rhsp = new AstParseRef{paramp->fileline(), paramp->name()};
             copiesp = AstNode::addNext(copiesp, new AstAssign{origVarp->fileline(), lhsp, rhsp});
