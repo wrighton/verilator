@@ -2101,7 +2101,10 @@ class ConstraintExprVisitor final : public VNVisitor {
         } else if (thenp) {
             newp = new AstLogIf{fl, nodep->condp()->unlinkFrBack(), thenp};
         } else if (elsep) {
-            newp = new AstLogIf{fl, new AstNot{fl, nodep->condp()->unlinkFrBack()}, elsep};
+            AstNodeExpr* const condp = nodep->condp()->unlinkFrBack();
+            AstNot* const notp = new AstNot{fl, condp};
+            notp->user1(condp->user1());  // Solve the negated condition if it is rand-dependent
+            newp = new AstLogIf{fl, notp, elsep};
         }
         if (newp) {
             newp->dtypeSetBit();  // Result is boolean (prevents bare-var != 0 wrapping)
@@ -3674,7 +3677,6 @@ class SolverSmtLowering final : public V3SolverLowering {
         for (AstNodeConstraintItem* const itemp : VNList<AstNodeConstraintItem>{constrItemsp}) {
             // dist can appear inside an if/else or foreach constraint.
             if (AstConstraintIf* const cifp = VN_CAST(itemp, ConstraintIf)) {
-                UASSERT_OBJ(cifp->thensp(), cifp, "constraint if without a then body");
                 lowerDistConstraints(taskp, cifp->thensp(), randModeVarp, foreachp);
                 if (cifp->elsesp()) {
                     lowerDistConstraints(taskp, cifp->elsesp(), randModeVarp, foreachp);
@@ -3682,7 +3684,6 @@ class SolverSmtLowering final : public V3SolverLowering {
                 continue;
             }
             if (AstConstraintForeach* const cfep = VN_CAST(itemp, ConstraintForeach)) {
-                UASSERT_OBJ(cfep->bodyp(), cfep, "constraint foreach without a body");
                 lowerDistConstraints(taskp, cfep->bodyp(), randModeVarp, cfep);
                 continue;
             }
