@@ -1,0 +1,8 @@
+%Error: t/t_genfor_param_hier_bad.v:17:29: Genvar 'k' used outside generate for loop (IEEE 1800-2023 27.4)
+   17 |   initial $display("%0d", g.k);   
+      |                             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_genfor_param_hier_bad.v:18:29: Genvar 'k' used outside generate for loop (IEEE 1800-2023 27.4)
+   18 |   initial $display("%0d", u.k);   
+      |                             ^
+%Error: Exiting due to
