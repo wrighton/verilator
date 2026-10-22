@@ -700,6 +700,30 @@ class TristateVisitor final : public TristateBaseVisitor {
                                                   enRhsp, m_currentStrength, m_currentDelayp});
     }
 
+    AstDelay* newEnableDelay(AstDelay* delayp, AstNodeExpr* datap) {
+        // Return the delay for the enable of a driver with data 'datap' and delay 'delayp'
+        AstDelay* const newp = delayp->cloneTree(false);
+        if (!newp->fallDelay()) return newp;
+        // IEEE 1800-2023 28.16: Enabling the driver takes the fall delay if it drives 0, else
+        // the rise delay. Disabling it takes the lesser delay. Disabling makes the enable 0, so
+        // selects the fall delay of the enable assignment, which is set to the lesser delay.
+        FileLine* const fl = delayp->fileline();
+        AstNodeExpr* risep = newp->lhsp()->unlinkFrBack();
+        AstNodeExpr* fallp = newp->fallDelay()->unlinkFrBack();
+        if (!risep->isDouble() && fallp->isDouble()) risep = new AstIToRD{fl, risep};
+        if (risep->isDouble() && !fallp->isDouble()) fallp = new AstIToRD{fl, fallp};
+        AstNodeExpr* const riseGtp
+            = risep->isDouble()
+                  ? static_cast<AstNodeExpr*>(
+                        new AstGtD{fl, risep->cloneTreePure(false), fallp->cloneTreePure(false)})
+                  : new AstGt{fl, risep->cloneTreePure(false), fallp->cloneTreePure(false)};
+        newp->fallDelay(
+            new AstCond{fl, riseGtp, fallp->cloneTreePure(false), risep->cloneTreePure(false)});
+        AstNodeExpr* const zerop = new AstConst{fl, AstConst::WidthedValue{}, datap->width(), 0};
+        newp->lhsp(
+            new AstCond{fl, new AstEq{fl, zerop, datap->cloneTreePure(false)}, fallp, risep});
+        return newp;
+    }
     AstNodeExpr* newEnableDeposit(AstSel* selp, AstNodeExpr* enp) {
         // Form a "deposit" instruction for given enable, using existing select as a template.
         // Would be nicer if we made this a new AST type
@@ -965,7 +989,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                         refp->fileline(),
                         new AstVarRef{refp->fileline(), newEnLhsp, VAccess::WRITE}, getEnp(refp)};
                     if (refStrengthp->m_delayp) {
-                        enLhspAssignp->timingControlp(refStrengthp->m_delayp->cloneTree(false));
+                        enLhspAssignp->timingControlp(newEnableDelay(
+                            refStrengthp->m_delayp, refStrengthp->m_assignp->rhsp()));
                     }
                     UINFO(9, "       newenlhspAssignp " << enLhspAssignp);
                     nodep->addStmtsp(new AstAlways{enLhspAssignp});
@@ -1763,8 +1788,6 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (AstAssignW* assignWp = VN_CAST(nodep, AssignW)) {
                 if (assignWp->getLhsNetDelay()) return;
                 if (assignWp->timingControlp() && !m_currentDelayp) return;
-                // Separate data and enable assignments cannot preserve distinct rise/fall delays.
-                if (m_currentDelayp && m_currentDelayp->fallDelay()) return;
                 if (!assignWp->timingControlp()) addToAssignmentList(assignWp);
             }
 

@@ -62,6 +62,57 @@ module t;
     `checkh(out_bufif1, 1'bz);
   end
 
+  // Tristate drivers with distinct rise and fall delays (IEEE 1800-2023 28.16)
+  logic rf_data = 0;
+  logic rf_enable = 0;
+  wire rf_bufif1;
+  wire rf_bufif1_rfall;
+  wire rf_bufif1_rrise;
+  wire rf_notif1;
+  wire rf_assign;
+  bufif1 #(3, 7) u_rf_bufif1 (rf_bufif1, rf_data, rf_enable);
+  bufif1 #(3, 7.0) u_rf_bufif1_rfall (rf_bufif1_rfall, rf_data, rf_enable);
+  bufif1 #(3.0, 7) u_rf_bufif1_rrise (rf_bufif1_rrise, rf_data, rf_enable);
+  notif1 #(3, 7) u_rf_notif1 (rf_notif1, rf_data, rf_enable);
+  assign #(7, 3) rf_assign = rf_enable ? rf_data : 1'bz;
+
+  // verilog_format: off
+`define check_rf(exp_bufif1, exp_notif1, exp_assign) do begin `checkh(rf_bufif1, exp_bufif1); `checkh(rf_bufif1_rfall, exp_bufif1); `checkh(rf_bufif1_rrise, exp_bufif1); `checkh(rf_notif1, exp_notif1); `checkh(rf_assign, exp_assign); end while(0)
+  // verilog_format: on
+
+  initial begin
+    #4;
+    `check_rf(1'bz, 1'bz, 1'bz);
+    // Enabling to drive 0 takes the fall delay, to drive 1 the rise delay
+    rf_enable = 1'b1;
+    #2;
+    `check_rf(1'bz, 1'bz, 1'bz);
+    #2;
+    `check_rf(1'bz, 1'b1, 1'b0);
+    #4;
+    `check_rf(1'b0, 1'b1, 1'b0);
+    rf_data = 1'b1;
+    #2;
+    `check_rf(1'b0, 1'b1, 1'b0);
+    #2;
+    `check_rf(1'b1, 1'b1, 1'b0);
+    #4;
+    `check_rf(1'b1, 1'b0, 1'b1);
+    // Disabling takes the smaller delay
+    rf_enable = 1'b0;
+    #2;
+    `check_rf(1'b1, 1'b0, 1'b1);
+    #2;
+    `check_rf(1'bz, 1'bz, 1'bz);
+    rf_enable = 1'b1;
+    #2;
+    `check_rf(1'bz, 1'bz, 1'bz);
+    #2;
+    `check_rf(1'b1, 1'bz, 1'bz);
+    #4;
+    `check_rf(1'b1, 1'b0, 1'b1);
+  end
+
   initial begin
     #4;
     `check_scalar(1'b0);
