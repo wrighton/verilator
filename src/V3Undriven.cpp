@@ -395,6 +395,9 @@ class UndrivenVisitor final : public VNVisitorConst {
     const AstNodeFTask* m_taskp = nullptr;  // Current task
     const AstAlways* m_alwaysp = nullptr;  // Current always of either type
     const AstAlways* m_alwaysCombp = nullptr;  // Current always if combo, otherwise nullptr
+    // Current always if always_comb or always_latch, which have the same driver rules
+    // (IEEE 1800-2023 9.2.2.3), otherwise nullptr
+    const AstAlways* m_alwaysCombLatchp = nullptr;
     const AstAlways* m_alwaysFFp = nullptr;  // Current always if ff, otherwise nullptr
     const AstAlways* m_alwaysPlainp = nullptr;  // Current always if plain (not comb/ff/latch)
     const AstClocking* m_clockingp = nullptr;  // Current clocking block, otherwise nullptr
@@ -454,7 +457,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                && m_clockingp != entryp->getClockingp();
     }
     bool otherDrivesClocking(const UndrivenVarEntry* entryp) const {
-        return !m_clockingp && !m_alwaysCombp && !m_alwaysFFp && !m_inInitialStatic
+        return !m_clockingp && !m_alwaysCombLatchp && !m_alwaysFFp && !m_inInitialStatic
                && entryp->isDrivenClockingWhole();
     }
     // A continuous assignment contending with a clocking block 'output' is an
@@ -636,28 +639,31 @@ class UndrivenVisitor final : public VNVisitorConst {
                     = nodep->varp()->hasUserInit() && otherWritep == entryp->initStaticp();
                 if (multidrivenCommon
                     && !nodep->varp()->fileline()->warnIsOff(V3ErrorCode::MULTIDRIVEN)) {
-                    if (m_alwaysCombp
+                    if (m_alwaysCombLatchp
                         && (!entryp->isDrivenAlwaysCombWhole()
-                            || (m_alwaysCombp != entryp->getAlwCombp()
-                                && m_alwaysCombp->fileline()
+                            || (m_alwaysCombLatchp != entryp->getAlwCombp()
+                                && m_alwaysCombLatchp->fileline()
                                        != entryp->getAlwCombp()->fileline()))) {
-                        nodep->v3warn(
-                            MULTIDRIVEN,
-                            "Variable written to in always_comb also written by other process"
-                                << " (IEEE 1800-2023 9.2.2.2): " << nodep->prettyNameQ() << '\n'
-                                << nodep->warnOther() << '\n'
-                                << nodep->warnContextPrimary() << '\n'
-                                << otherWritep->warnOther() << "... Location of other write\n"
-                                << otherWritep->warnContextSecondary());
-                    }
-                    if (!m_alwaysCombp && entryp->isDrivenAlwaysCombWhole()) {
-                        nodep->v3warn(MULTIDRIVEN, "Variable also written to in always_comb"
+                        nodep->v3warn(MULTIDRIVEN, "Variable written to in "
+                                                       << m_alwaysCombLatchp->keyword().ascii()
+                                                       << " also written by other process"
                                                        << " (IEEE 1800-2023 9.2.2.2): "
                                                        << nodep->prettyNameQ() << '\n'
                                                        << nodep->warnOther() << '\n'
                                                        << nodep->warnContextPrimary() << '\n'
                                                        << otherWritep->warnOther()
-                                                       << "... Location of always_comb write\n"
+                                                       << "... Location of other write\n"
+                                                       << otherWritep->warnContextSecondary());
+                    }
+                    if (!m_alwaysCombLatchp && entryp->isDrivenAlwaysCombWhole()) {
+                        const char* const kwdp = entryp->getAlwCombp()->keyword().ascii();
+                        nodep->v3warn(MULTIDRIVEN, "Variable also written to in "
+                                                       << kwdp << " (IEEE 1800-2023 9.2.2.2): "
+                                                       << nodep->prettyNameQ() << '\n'
+                                                       << nodep->warnOther() << '\n'
+                                                       << nodep->warnContextPrimary() << '\n'
+                                                       << otherWritep->warnOther()
+                                                       << "... Location of " << kwdp << " write\n"
                                                        << otherWritep->warnContextSecondary());
                     }
                     if (m_alwaysFFp && !otherWriteIsStaticInit
@@ -722,11 +728,11 @@ class UndrivenVisitor final : public VNVisitorConst {
                     // Else don't count default initialization as a driver to a net/variable
                     entryp->drivenWhole(nodep, ftaskDef);
                 }
-                if (m_alwaysCombp && entryp->isDrivenAlwaysCombWhole()
-                    && m_alwaysCombp != entryp->getAlwCombp()
-                    && m_alwaysCombp->fileline() == entryp->getAlwCombp()->fileline())
+                if (m_alwaysCombLatchp && entryp->isDrivenAlwaysCombWhole()
+                    && m_alwaysCombLatchp != entryp->getAlwCombp()
+                    && m_alwaysCombLatchp->fileline() == entryp->getAlwCombp()->fileline())
                     entryp->underGenerate();
-                if (m_alwaysCombp) entryp->drivenAlwaysCombWhole(m_alwaysCombp);
+                if (m_alwaysCombLatchp) entryp->drivenAlwaysCombWhole(m_alwaysCombLatchp);
                 if (m_alwaysFFp) entryp->drivenAlwaysFFWhole(m_alwaysFFp, nodep->varp());
                 if (m_alwaysPlainp) entryp->drivenAlwaysPlainWhole(m_alwaysPlainp);
                 if (m_clockingp) entryp->drivenClockingWhole(m_clockingp);
@@ -820,6 +826,7 @@ class UndrivenVisitor final : public VNVisitorConst {
     void visit(AstAlways* nodep) override {
         VL_RESTORER(m_alwaysp);
         VL_RESTORER(m_alwaysCombp);
+        VL_RESTORER(m_alwaysCombLatchp);
         VL_RESTORER(m_alwaysFFp);
         VL_RESTORER(m_alwaysPlainp);
         AstNode::user2ClearTree();
@@ -830,6 +837,10 @@ class UndrivenVisitor final : public VNVisitorConst {
         } else {
             m_alwaysCombp = nullptr;
         }
+        m_alwaysCombLatchp = nodep->keyword() == VAlwaysKwd::ALWAYS_COMB
+                                     || nodep->keyword() == VAlwaysKwd::ALWAYS_LATCH
+                                 ? nodep
+                                 : nullptr;
         m_alwaysFFp = nodep->keyword() == VAlwaysKwd::ALWAYS_FF ? nodep : nullptr;
         m_alwaysPlainp = nodep->keyword() == VAlwaysKwd::ALWAYS ? nodep : nullptr;
         iterateChildrenConst(nodep);
@@ -866,7 +877,7 @@ class UndrivenVisitor final : public VNVisitorConst {
             for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
                 UndrivenVarEntry* const entryp = getEntryp(varp, usr);
                 entryp->drivenViaCall(nodep);
-                if (m_alwaysCombp) entryp->drivenAlwaysCombWhole(m_alwaysCombp);
+                if (m_alwaysCombLatchp) entryp->drivenAlwaysCombWhole(m_alwaysCombLatchp);
                 if (m_alwaysFFp) entryp->drivenAlwaysFFWhole(m_alwaysFFp, varp);
             }
         }

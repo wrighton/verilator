@@ -1,0 +1,43 @@
+%Warning-MULTIDRIVEN: t/t_lint_always_latch_multidriven_bad.v:19:24: Variable written to in always_latch also written by other process (IEEE 1800-2023 9.2.2.2): 'out1'
+                                                                   : ... note: In instance 't'
+                      t/t_lint_always_latch_multidriven_bad.v:19:24: 
+   19 |   always_latch if (!e) out1 = d;   
+      |                        ^~~~
+                      t/t_lint_always_latch_multidriven_bad.v:18:23: ... Location of other write
+   18 |   always_latch if (e) out1 = d;
+      |                       ^~~~
+                      ... For warning description see https://verilator.org/warn/MULTIDRIVEN?v=latest
+                      ... Use "/* verilator lint_off MULTIDRIVEN */" and lint_on around source to disable this message.
+%Warning-MULTIDRIVEN: t/t_lint_always_latch_multidriven_bad.v:22:10: Variable also written to in always_latch (IEEE 1800-2023 9.2.2.2): 'out2'
+                                                                   : ... note: In instance 't'
+                      t/t_lint_always_latch_multidriven_bad.v:22:10: 
+   22 |   assign out2 = d;   
+      |          ^~~~
+                      t/t_lint_always_latch_multidriven_bad.v:21:23: ... Location of always_latch write
+   21 |   always_latch if (e) out2 = d;
+      |                       ^~~~
+%Warning-MULTIDRIVEN: t/t_lint_always_latch_multidriven_bad.v:25:23: Variable written to in always_latch also written by other process (IEEE 1800-2023 9.2.2.2): 'out3'
+                                                                   : ... note: In instance 't'
+                      t/t_lint_always_latch_multidriven_bad.v:25:23: 
+   25 |   always_latch if (e) out3 = d;   
+      |                       ^~~~
+                      t/t_lint_always_latch_multidriven_bad.v:24:10: ... Location of other write
+   24 |   assign out3 = d;
+      |          ^~~~
+%Warning-MULTIDRIVEN: t/t_lint_always_latch_multidriven_bad.v:28:23: Variable written to in always_latch also written by other process (IEEE 1800-2023 9.2.2.2): 'out4'
+                                                                   : ... note: In instance 't'
+                      t/t_lint_always_latch_multidriven_bad.v:28:23: 
+   28 |   always_latch if (e) out4 = d;   
+      |                       ^~~~
+                      t/t_lint_always_latch_multidriven_bad.v:27:15: ... Location of other write
+   27 |   always_comb out4 = d;
+      |               ^~~~
+%Warning-MULTIDRIVEN: t/t_lint_always_latch_multidriven_bad.v:39:24: Variable written to in always_latch also written by other process (IEEE 1800-2023 9.2.2.2): 'out5'
+                                                                   : ... note: In instance 't'
+                      t/t_lint_always_latch_multidriven_bad.v:39:24: 
+   39 |   always_latch if (!e) out5 = d;   
+      |                        ^~~~
+                      t/t_lint_always_latch_multidriven_bad.v:35:7: ... Location of other write
+   35 |       out5 = 1'b0;
+      |       ^~~~
+%Error: Exiting due to
