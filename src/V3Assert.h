@@ -46,6 +46,9 @@ public:
     static void checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
+    // Relink a body inlined at instp to the instancing scope, returning the possibly replaced body
+    static AstNode* relinkSvaInstanceBody(AstNode* bodyp,
+                                          const AstSchemaRef* instp) VL_MT_DISABLED;
 };
 
 class V3Assert final {
