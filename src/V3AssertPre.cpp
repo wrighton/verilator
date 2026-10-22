@@ -254,7 +254,7 @@ private:
 
     static void checkSamplingFuncDType(AstNodeExpr* nodep, const AstNode* exprp) {
         const AstNodeDType* const dtypep = exprp->dtypep()->skipRefp();
-        if (!dtypep->isIntegralOrPacked()) {
+        if (!dtypep->isIntegralOrPacked() && !dtypep->isDouble()) {
             nodep->v3error("Expected numeric type, but got a " << dtypep->prettyDTypeNameQ()
                                                                << " data type");
         }
@@ -1191,7 +1191,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstEq{fl, pastp, exprp->cloneTreePure(false)};
+        exprp = AstEq::newTyped(fl, pastp, exprp->cloneTreePure(false));
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -1202,10 +1202,9 @@ private:
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
-        if (exprp->width() > 1) exprp = new AstSel{fl, exprp, 0, 1};
         AstNodeExpr* const futurep = new AstFuture{fl, exprp, newSenTree(nodep)};
         futurep->dtypeFrom(exprp);
-        exprp = new AstEq{fl, exprp->cloneTreePure(false), futurep};
+        exprp = AstEq::newTyped(fl, exprp->cloneTreePure(false), futurep);
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);

@@ -1849,8 +1849,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstFuture* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateCheckSampledSelf(nodep, nodep->exprp());
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeFrom(nodep->exprp());
         }
@@ -1858,8 +1857,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstPast* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateCheckSampledSelf(nodep, nodep->exprp());
             nodep->dtypeFrom(nodep->exprp());
             if (nodep->ticksp()) {
                 iterateCheckSizedSelf(nodep, "Ticks", nodep->ticksp(), SELF, BOTH,
@@ -2013,8 +2011,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstSampled* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateCheckSampledSelf(nodep, nodep->exprp());
             nodep->dtypeFrom(nodep->exprp());
         }
     }
@@ -2071,8 +2068,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstStable* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateCheckSampledSelf(nodep, nodep->exprp());
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeSetBit();
         }
@@ -2080,8 +2076,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstSteady* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateCheckSampledSelf(nodep, nodep->exprp());
             nodep->dtypeSetBit();
         }
     }
@@ -10634,6 +10629,17 @@ class WidthVisitor final : public VNVisitor {
                              << checkDtp->prettyDTypeNameQ() << " (IEEE 1800-2023 11.3)");
         }
         (void)underp;  // cppcheck
+    }
+    void iterateCheckSampledSelf(AstNode* parentp, AstNode* underp) {
+        // Check the expression of a sampled value function that only stores and compares
+        // values ($past, $sampled, $stable, $future_gclk, $steady_gclk), so may also be real
+        // (IEEE 1800-2023 16.9.3, 16.9.4)
+        underp = userIterateSubtreeReturnEdits(underp, WidthVP{SELF, PRELIM}.p());
+        if (underp->dtypep()->skipRefp()->isDouble()) {
+            iterateCheck(parentp, "LHS", underp, SELF, FINAL, underp->dtypep(), EXTEND_EXP);
+        } else {
+            iterateCheckSizedSelf(parentp, "LHS", underp, SELF, FINAL, /* deferUntyped */ true);
+        }
     }
     void iterateCheckAssign(AstNode* parentp, const char* side, AstNode* rhsp, Stage stage,
                             AstNodeDType* lhsDTypep, VAccess rhsAccess = VAccess::READ) {
