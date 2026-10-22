@@ -312,7 +312,9 @@ drivers.
 
 Tristate drivers are not supported inside functions and tasks; an inout
 there will be considered a two-state variable that is read and written
-instead of a four-state variable.
+instead of a four-state variable. Likewise, a z procedurally assigned to
+an element of an unpacked array, queue, or structure, or to a member of a
+class object, is stored as a two-state value, the same as an x.
 
 
 Gate Primitives
