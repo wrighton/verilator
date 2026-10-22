@@ -4213,9 +4213,28 @@ class WidthVisitor final : public VNVisitor {
                 nodep->v3error("Cannot access non-static member variable "
                                << nodep->prettyNameQ() << " from " << context
                                << " without object (IEEE 1800-2023 8.10)");
+            } else if (!VN_IS(m_procedurep, InitialAutomatic) && !m_attrp
+                       && !implicitThisAccessible(nodep,
+                                                  m_containingClassFinder.find(nodep->varp()))) {
+                nodep->v3error("Cannot access non-static member variable "
+                               << nodep->prettyNameQ() << " without object (IEEE 1800-2023 8.10)");
             }
         }
         nodep->didWidth(true);
+    }
+
+    // True if refp may reference non-static members of memberClassp without an object
+    bool implicitThisAccessible(AstNode* refp, const AstClass* memberClassp) {
+        // That is in a non-static method of that class or of a class extended from it
+        // (IEEE 1800-2023 8.10, 8.23).
+        // References in a class outside any method, e.g. in constraints, and those in
+        // covergroups, which V3Covergroup checks, are not restricted here.
+        AstNode* const contextp = m_ftaskp ? static_cast<AstNode*>(m_ftaskp) : m_procedurep;
+        if (!contextp) return m_containingClassFinder.find(refp);
+        const AstClass* const classp = m_containingClassFinder.find(contextp);
+        if (classp && classp->isCovergroup()) return true;
+        return m_ftaskp && m_ftaskp->classMethod()
+               && AstClass::isClassExtendedFrom(classp, memberClassp);
     }
 
     void visit(AstEnumDType* nodep) override {
