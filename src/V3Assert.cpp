@@ -99,6 +99,25 @@ void V3AssertCommon::collectDefaultDisable(AstNetlist* nodep) {
     { DefaultDisablePropagateVisitor{nodep}; }
 }
 
+AstVar* V3AssertCommon::newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
+                                         AstSchemaRef* schemaRefp) {
+    // The event is fired by an internal cover sequence (IEEE 1800-2023 9.4.2.4)
+    AstVar* const eventp
+        = new AstVar{flp, VVarType::MODULETEMP, name, modp->findBasicDType(VBasicDTypeKwd::EVENT)};
+    eventp->lifetime(VLifetime::STATIC_EXPLICIT);
+    modp->addStmtsp(eventp);
+    v3Global.setHasEvents();
+    if (!schemaRefp) return eventp;
+    AstFireEvent* const firep
+        = new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false};
+    AstCover* const coverp = new AstCover{flp, new AstPropSpec{flp, nullptr, nullptr, schemaRefp},
+                                          firep, VAssertType::CONCURRENT};
+    coverp->isCoverSeq(true);
+    coverp->isSeqEvent(true);
+    modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
+    return eventp;
+}
+
 string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
                                         VAssertDirectiveType directiveType) {
     // Template arguments let the runtime build the type/directive mask at C++ compile time.
