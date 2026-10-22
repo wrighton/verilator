@@ -102,6 +102,7 @@ class WidthCommitVisitor final : public VNVisitor {
     bool m_taskRefWarn = true;  // Allow task reference warnings, false under fork..join_none
     const AstAlways* m_alwaysCombp = nullptr;  // Current always_comb or always_latch
     bool m_inFinal = false;  // Under final procedure
+    const AstAlways* m_alwaysFfp = nullptr;  // Current always_ff
     std::unordered_map<const AstNodeFTask*, bool> m_taskBlocks;  // If calling task may block
     bool m_underSel = false;  // Under a MemberRef handle or what a Sel reads, unless m_contReads
     bool m_underAlwaysEdged = false;  // Under always with sequential SenTree
@@ -137,6 +138,18 @@ private:
             && !(forkp && forkp->disableWrap())) {
             nodep->v3error("Timing controls and fork-join are not legal in final blocks"
                            " (IEEE 1800-2023 9.2.3)");
+        }
+        if (m_alwaysFfp && m_taskRefWarn) {
+            if (VN_IS(nodep, Delay) || VN_IS(nodep, Wait)
+                || (VN_IS(nodep, Assign) && nodep->isTimingControl())) {
+                nodep->v3error("Blocking timing controls are not legal under always_ff"
+                               " (IEEE 1800-2023 9.2.2.4)\n"
+                               << nodep->warnMore() << "... Suggest use a normal 'always'");
+            } else if (VN_IS(nodep, EventControl) && m_alwaysFfp->sentreep()) {
+                nodep->v3error("Only one event control is legal under always_ff"
+                               " (IEEE 1800-2023 9.2.2.4)\n"
+                               << nodep->warnMore() << "... Suggest use a normal 'always'");
+            }
         }
     }
     AstNodeDType* editOneDType(AstNodeDType* nodep) {
@@ -334,6 +347,8 @@ private:
                                 || nodep->keyword() == VAlwaysKwd::ALWAYS_LATCH
                             ? nodep
                             : nullptr;
+        VL_RESTORER(m_alwaysFfp);
+        m_alwaysFfp = nodep->keyword() == VAlwaysKwd::ALWAYS_FF ? nodep : nullptr;
         // Iterate will delete ComboStar sentrees, so after above
         iterateChildren(nodep);
         editDType(nodep);
@@ -341,6 +356,8 @@ private:
     void visit(AstNodeCoverOrAssert* nodep) override {
         VL_RESTORER(m_alwaysCombp);
         m_alwaysCombp = nullptr;  // Property delays are not procedural timing controls
+        VL_RESTORER(m_alwaysFfp);
+        m_alwaysFfp = nullptr;  // Property delays are not procedural timing controls
         iterateChildren(nodep);
         editDType(nodep);
     }
@@ -527,6 +544,8 @@ private:
         {
             VL_RESTORER(m_alwaysCombp);
             m_alwaysCombp = nullptr;  // Report the assignment instead of its timing control
+            VL_RESTORER(m_alwaysFfp);
+            m_alwaysFfp = nullptr;  // Report the assignment instead of its timing control
             iterateAndNextNull(nodep->timingControlp());
         }
         editDType(nodep);
@@ -565,6 +584,8 @@ private:
         {
             VL_RESTORER(m_alwaysCombp);
             m_alwaysCombp = nullptr;  // Timing control of a non-blocking assignment is legal
+            VL_RESTORER(m_alwaysFfp);
+            m_alwaysFfp = nullptr;  // Timing control of a non-blocking assignment is legal
             iterateAndNextNull(nodep->timingControlp());
         }
         iterateAndNextNull(nodep->rhsp());
