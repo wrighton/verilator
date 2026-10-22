@@ -221,6 +221,13 @@ module t;
     i = qe.product with (item + 1);
     `checkh(i, 32'h0);
 
+    begin
+      // Extension, IEEE 1800-2023 7.12.3 only defines reduction of integral elements
+      real rq[$];
+      rq = '{1.5, 2.25};
+      `checkh(rq.sum == 3.75, 1'b1);
+    end
+
     q = '{32'b1100, 32'b1010};
     i = q.and;
     `checkh(i, 32'b1000);

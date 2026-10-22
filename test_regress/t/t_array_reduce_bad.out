@@ -1,0 +1,26 @@
+%Error: t/t_array_reduce_bad.v:23:17: Array reduction method 'sum' without a 'with' clause requires an integral element type, but has data type 'class Cls' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   23 |     $display(ua.sum());
+      |                 ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_array_reduce_bad.v:24:17: Array reduction method 'product' without a 'with' clause requires an integral element type, but has data type 'class Cls' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   24 |     $display(da.product());
+      |                 ^~~~~~~
+%Error: t/t_array_reduce_bad.v:25:17: Array reduction method 'and' without a 'with' clause requires an integral element type, but has data type 'class Cls' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   25 |     $display(qa.and());
+      |                 ^~~
+%Error: t/t_array_reduce_bad.v:26:17: Array reduction method 'or' without a 'with' clause requires an integral element type, but has data type 'class Cls' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   26 |     $display(aa.or());
+      |                 ^~
+%Error: t/t_array_reduce_bad.v:27:17: Array reduction method 'xor' without a 'with' clause requires an integral element type, but has data type 'class Cls' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   27 |     $display(wa.xor());
+      |                 ^~~
+%Error: t/t_array_reduce_bad.v:28:17: Array reduction method 'sum' without a 'with' clause requires an integral element type, but has data type 'struct t.us_t' (IEEE 1800-2023 7.12.3)
+                                    : ... note: In instance 't'
+   28 |     $display(sa.sum());
+      |                 ^~~
+%Error: Exiting due to
