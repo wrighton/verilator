@@ -1020,12 +1020,20 @@ class ParamProcessor final {
         } else {
             newModp = srcModp->cloneTree(false);
         }
-        // AstPin normally retains links to external module formals across cloning. For a cloned
-        // interface, relink pins whose formals were cloned with the interface while clonep() is
-        // still valid, so nested parameterized classes use the cloned interface parameters.
-        if (AstIface* const newIfacep = VN_CAST(newModp, Iface)) {
-            newIfacep->foreach([](AstPin* pinp) { pinp->cloneRelinkGen(); });
+        // AstPin retains links to formals across cloning, as pins of self references (recursive
+        // modules and classes) keep linking to the source module. Pins of references to nested
+        // classes, which cloning linked to the cloned nested classes, must instead link to the
+        // cloned formals; relink them while clonep() is still valid.
+        std::unordered_set<const AstNode*> newStmtps;
+        for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            newStmtps.insert(stmtp);
         }
+        newModp->foreach([&](AstPin* pinp) {
+            const AstNode* const formalp
+                = pinp->modVarp() ? static_cast<AstNode*>(pinp->modVarp()) : pinp->modPTypep();
+            UASSERT_OBJ(formalp, pinp, "Pin not linked");
+            if (!newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
+        });
 
         // Mark the source module as a parameterized template now that a specialized
         // clone exists.  This suppresses width/type errors on the unresolved template
