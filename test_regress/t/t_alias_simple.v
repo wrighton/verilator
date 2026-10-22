@@ -22,6 +22,11 @@ module t (  /*AUTOARG*/
   assign x[15:0] = cyc[15:0];
   assign y[31:16] = cyc[31:16];
 
+  // verilator lint_off IMPLICIT
+  alias c = d;  // Undeclared operands are implicit nets (IEEE 1800-2023 10.11)
+  assign c = ~cyc[0];
+  // verilator lint_on IMPLICIT
+
   sub s (cyc);
 
   always @(posedge clk) begin
@@ -31,6 +36,8 @@ module t (  /*AUTOARG*/
 
     if (x != cyc) $stop;
     if (y != cyc) $stop;
+
+    if (d != ~cyc[0]) $stop;
 
     if (s.a != cyc) $stop;
     if (s.b != cyc) $stop;
