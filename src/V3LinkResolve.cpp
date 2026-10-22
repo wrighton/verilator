@@ -22,6 +22,7 @@
 //          File operations
 //              Convert normal var to FILE* type
 //          SenItems: Convert pos/negedge of non-simple signals to temporaries
+//      Check package items do not reference the design hierarchy
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -501,6 +502,51 @@ public:
 };
 
 //######################################################################
+// LinkPackageRefVisitor
+//      Check that package items do not reference the design hierarchy
+//      (IEEE 1800-2023 26.2). References from packages to compilation-unit
+//      ($unit) items are intentionally allowed as an extension.
+
+class LinkPackageRefVisitor final : public VNVisitorConst {
+    // NODE STATE
+    //  AstNode::user1()  -> bool. True if under a design element (module, interface, etc.)
+    const VNUser1InUse m_inuser1;
+
+    // METHODS
+    static void checkTarget(const AstNode* nodep, const AstNode* targetp) {
+        if (targetp && targetp->user1()) {
+            nodep->v3error("Package item cannot hierarchically reference design item "
+                           << targetp->prettyNameQ() << " (IEEE 1800-2023 26.2)");
+        }
+    }
+
+    // VISITORS
+    void visit(AstNodeFTaskRef* nodep) override {
+        checkTarget(nodep, nodep->taskp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        checkTarget(nodep, nodep->varp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit LinkPackageRefVisitor(AstNetlist* rootp) {
+        // First mark everything in design elements, then check references from packages
+        for (AstNode* modp = rootp->modulesp(); modp; modp = modp->nextp()) {
+            if (!VN_IS(modp, Package)) modp->foreach([](AstNode* nodep) { nodep->user1(true); });
+        }
+        for (AstNode* modp = rootp->modulesp(); modp; modp = modp->nextp()) {
+            const AstPackage* const pkgp = VN_CAST(modp, Package);
+            if (pkgp && !pkgp->isDollarUnit()) iterateConst(modp);
+        }
+    }
+    ~LinkPackageRefVisitor() override = default;
+};
+
+//######################################################################
 // V3LinkResolve class functions
 
 void V3LinkResolve::linkResolve(AstNetlist* rootp) {
@@ -508,6 +554,7 @@ void V3LinkResolve::linkResolve(AstNetlist* rootp) {
     {
         const LinkResolveVisitor visitor{rootp};
         LinkBotupVisitor{rootp};
+        LinkPackageRefVisitor{rootp};
     }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("linkresolve", 0, dumpTreeEitherLevel() >= 6);
 }

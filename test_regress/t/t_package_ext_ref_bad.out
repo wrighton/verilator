@@ -1,0 +1,14 @@
+%Error: t/t_package_ext_ref_bad.v:15:7: Package item cannot hierarchically reference design item 'task_in_t' (IEEE 1800-2023 26.2)
+   15 |     t.task_in_t();
+      |       ^~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_package_ext_ref_bad.v:16:14: Package item cannot hierarchically reference design item 'v' (IEEE 1800-2023 26.2)
+   16 |     return t.v + t.sub.w + $root.t.v;
+      |              ^
+%Error: t/t_package_ext_ref_bad.v:16:24: Package item cannot hierarchically reference design item 'w' (IEEE 1800-2023 26.2)
+   16 |     return t.v + t.sub.w + $root.t.v;
+      |                        ^
+%Error: t/t_package_ext_ref_bad.v:16:36: Package item cannot hierarchically reference design item 'v' (IEEE 1800-2023 26.2)
+   16 |     return t.v + t.sub.w + $root.t.v;
+      |                                    ^
+%Error: Exiting due to
