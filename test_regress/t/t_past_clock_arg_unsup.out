@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_past_clock_arg_unsup.v:19:9: Unsupported: sampled value function clocked by a clocking block or sequence event, of an expression with a nested sampled value function
+                                                   : ... note: In instance 't'
+   19 |     if ($past_gclk($rose(d))) $stop;   
+      |         ^~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_past_clock_arg_unsup.v:20:9: Unsupported: sampled value function clocked by a clocking block or sequence event, of an expression with a nested sampled value function
+                                                   : ... note: In instance 't'
+   20 |     if ($past($rose(d), 1, , @(cb))) $stop;   
+      |         ^~~~~
+%Error-UNSUPPORTED: t/t_past_clock_arg_unsup.v:21:9: Unsupported: sampled value function clocked by a clocking block or sequence event, of an expression with a nested sampled value function
+                                                   : ... note: In instance 't'
+   21 |     if ($rose($past(d), @($global_clock))) $stop;   
+      |         ^~~~~
+%Error-UNSUPPORTED: t/t_past_clock_arg_unsup.v:22:9: Unsupported: sampled value function clocked by a clocking block or sequence event, of an expression with a nested sampled value function
+                                                   : ... note: In instance 't'
+   22 |     if ($stable_gclk($past(d))) $stop;   
+      |         ^~~~~~~~~~~~
+%Error: Exiting due to
