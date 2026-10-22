@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_property_iff_unsup.v:16:45: Unsupported: property 'iff' with a cycle delay in an operand (IEEE 1800-2023 16.12.8)
+                                                  : ... note: In instance 't'
+   16 |   assert property (@(posedge clk) (a ##1 b) iff c);
+      |                                             ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_iff_unsup.v:17:37: Unsupported: property 'iff' with a cycle delay in an operand (IEEE 1800-2023 16.12.8)
+                                                  : ... note: In instance 't'
+   17 |   assert property (@(posedge clk) c iff s_ab);
+      |                                     ^~~
+%Error-UNSUPPORTED: t/t_property_iff_unsup.v:18:52: Unsupported: property 'iff' with a cycle delay in an operand (IEEE 1800-2023 16.12.8)
+                                                  : ... note: In instance 't'
+   18 |   assert property (@(posedge clk) a |-> ((b ##1 c) iff d));
+      |                                                    ^~~
+%Error: Exiting due to

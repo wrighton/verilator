@@ -3436,6 +3436,17 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
         if (isBareTopLevelUntil(propp)) return nullptr;
+        // An 'iff' is a Boolean equivalence (AstLogEq), which cannot hold a cycle delay
+        const AstLogEq* iffp = nullptr;
+        propp->foreach([&](const AstLogEq* eqp) {
+            if (eqp->exists([](const AstSExpr*) { return true; })) iffp = eqp;
+        });
+        if (iffp) {
+            iffp->v3warn(E_UNSUPPORTED, "Unsupported: property 'iff' with a cycle delay in an"
+                                        " operand (IEEE 1800-2023 16.12.8)");
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return nullptr;
+        }
         return propp;
     }
 
