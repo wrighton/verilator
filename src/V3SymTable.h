@@ -301,19 +301,25 @@ public:
             if (!symp->exported()) symp->exported(true);
         }
     }
-    void importFromIface(VSymGraph* graphp, const VSymEnt* srcp, bool onlyUnmodportable = false) {
+    void importFromIface(VSymGraph* graphp, const VSymEnt* srcp, bool onlyUnmodportable = false,
+                         const VSymEnt* rootp = nullptr) {
         // Import interface tokens from source symbol table into this symbol table, recursively
         UINFO(9, "     importIf  se" << cvtToHex(this) << " from se" << cvtToHex(srcp));
+        // The import destination may be inside the source, e.g. a virtual interface variable
+        // declared within its own interface; do not import it into itself, which would recurse
+        // forever on the symbols being created.
+        if (!rootp) rootp = this;
         for (IdNameMap::const_iterator it = srcp->m_idNameMap.begin();
              it != srcp->m_idNameMap.end(); ++it) {
             const string& name = it->first;
             VSymEnt* const subSrcp = it->second;
+            if (subSrcp == rootp) continue;
             const AstVar* const varp = VN_CAST(subSrcp->nodep(), Var);
             if (!onlyUnmodportable || (varp && varp->isParam())) {
                 VSymEnt* const subSymp = new VSymEnt{graphp, subSrcp};
                 reinsert(name, subSymp);
                 // And recurse to create children
-                subSymp->importFromIface(graphp, subSrcp);
+                subSymp->importFromIface(graphp, subSrcp, false, rootp);
             }
         }
     }
