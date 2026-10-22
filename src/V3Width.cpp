@@ -331,6 +331,15 @@ class WidthVisitor final : public VNVisitor {
 
     StreamUse currentStreamUse() const { return m_vup ? m_vup->streamUse() : STREAM_USE_NONE; }
 
+    // Describe the current context if it has no class object, else return empty
+    string staticContext() const {
+        // A static method, or a static variable initializer, including of a static class property.
+        if (m_ftaskp) {
+            return m_ftaskp->isStatic() ? "a static method " + m_ftaskp->prettyNameQ() : "";
+        }
+        return VN_IS(m_procedurep, InitialStatic) ? "a static variable initializer" : "";
+    }
+
     static void packIfUnpacked(AstNodeExpr* const nodep) {
         if (AstUnpackArrayDType* const unpackDTypep = VN_CAST(nodep->dtypep(), UnpackArrayDType)) {
             const int elementsNum = unpackDTypep->arrayUnpackedElements();
@@ -3677,10 +3686,13 @@ class WidthVisitor final : public VNVisitor {
                                               << " (IEEE 1800-2023 6.20.6)");
         }
         if (nodep->varp()->isClassMember() && !nodep->varp()->isFuncLocal()
-            && !nodep->varp()->lifetime().isStatic() && m_ftaskp && m_ftaskp->isStatic()) {
-            nodep->v3error("Cannot access non-static member variable "
-                           << nodep->prettyNameQ() << " from a static method "
-                           << m_ftaskp->prettyNameQ() << " without object (IEEE 1800-2023 8.10)");
+            && !nodep->varp()->lifetime().isStatic()) {
+            const string context = staticContext();
+            if (!context.empty()) {
+                nodep->v3error("Cannot access non-static member variable "
+                               << nodep->prettyNameQ() << " from " << context
+                               << " without object (IEEE 1800-2023 8.10)");
+            }
         }
         nodep->didWidth(true);
     }
@@ -4137,9 +4149,9 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstThisRef* nodep) override {
         if (nodep->didWidthAndSet()) return;
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->childDTypep()));
-        if (m_ftaskp && m_ftaskp->isStatic()) {
-            nodep->v3error("Cannot use 'this' in a static method "
-                           << m_ftaskp->prettyNameQ() << " (IEEE 1800-2023 8.10-8.11)");
+        const string context = staticContext();
+        if (!context.empty()) {
+            nodep->v3error("Cannot use 'this' in " << context << " (IEEE 1800-2023 8.10-8.11)");
         }
     }
     void visit(AstClassRefDType* nodep) override {
