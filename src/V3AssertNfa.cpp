@@ -2967,7 +2967,9 @@ class AssertNfaVisitor final : public VNVisitor {
             const AstProperty* keyp;
             ~Guard() { setr.erase(keyp); }
         } guard{m_inliningProps, propyp};
-        AstPropSpec* const propSpecp = propyp->specp()->cloneTree(false);
+        AstPropSpec* const propSpecp = VN_AS(
+            V3AssertCommon::relinkSvaInstanceBody(propyp->specp()->cloneTree(false), schemaRefp),
+            PropSpec);
 
         const V3TaskConnects tconnects = V3Task::taskConnects(schemaRefp);
         std::unordered_map<const AstVar*, AstNodeExpr*> portMap;
@@ -3021,7 +3023,9 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     void inlineSequenceRef(AstSchemaRef* schemaRefp, AstSequence* seqp) {
-        AstNodeExpr* const clonedp = seqp->exprp()->cloneTree(false);
+        AstNodeExpr* const clonedp = VN_AS(
+            V3AssertCommon::relinkSvaInstanceBody(seqp->exprp()->cloneTree(false), schemaRefp),
+            NodeExpr);
 
         const V3TaskConnects tconnects = V3Task::taskConnects(schemaRefp);
         std::unordered_map<const AstVar*, AstNodeExpr*> portMap;

@@ -289,7 +289,9 @@ private:
         // IEEE 1800-2023 16.7 (sequence declarations), 16.8 (sequence instances)
         // Inline the sequence body at the call site, replacing the reference
         // Clone the body expression since the sequence may be referenced multiple times
-        AstNodeExpr* clonedp = seqp->exprp()->cloneTree(false);
+        AstNodeExpr* clonedp = VN_AS(
+            V3AssertCommon::relinkSvaInstanceBody(seqp->exprp()->cloneTree(false), schemaRefp),
+            NodeExpr);
         // Build substitution map, then do a single traversal to replace all formals
         // (textual substitution per IEEE 16.8.2).
         const V3TaskConnects tconnects = V3Task::taskConnects(schemaRefp);
@@ -326,7 +328,9 @@ private:
         propExprp = substitutePropertyCall(propExprp);
         // Clone subtree after substitution. It is needed, because property might be called
         // multiple times with different arguments.
-        propExprp = propExprp->cloneTree(false);
+        propExprp = VN_AS(
+            V3AssertCommon::relinkSvaInstanceBody(propExprp->cloneTree(false), schemaRefp),
+            PropSpec);
         // Build substitution maps for formal arguments and property-local
         // variables, then perform a single foreach to apply all replacements.
         // Map port vars to their actual argument expressions

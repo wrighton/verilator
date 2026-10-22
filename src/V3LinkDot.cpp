@@ -5779,8 +5779,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 AstArg* const argsp = nodep->argsp();
                 if (argsp) argsp->unlinkFrBackWithNext();
-                nodep->replaceWith(new AstSchemaRef{nodep->fileline(), schemap,
-                                                    foundp->classOrPackagep(), argsp});
+                AstSchemaRef* const newp = new AstSchemaRef{nodep->fileline(), schemap,
+                                                            foundp->classOrPackagep(), argsp};
+                newp->dotted(nodep->dotted());
+                nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
             } else {
                 // Note ParseRef has similar error handling/message output

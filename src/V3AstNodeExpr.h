@@ -2612,6 +2612,7 @@ class AstSchemaRef final : public AstNodeExpr {
     //
     // @astgen ptr := m_schemap : AstNodeSchema  // The definition referenced
     // @astgen ptr := m_classOrPackagep : Optional[AstNodeModule]  // Package of the definition
+    std::string m_dotted;  // Hierarchical path of the reference, as in AstNodeFTaskRef
 public:
     AstSchemaRef(FileLine* fl, AstNodeSchema* schemap, AstNodeModule* classOrPackagep,
                  AstArg* argsp)
@@ -2622,9 +2623,14 @@ public:
     }
     ASTGEN_MEMBERS_AstSchemaRef;
     std::string name() const override VL_MT_STABLE;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode* samep) const override {
-        return schemap() == VN_DBG_AS(samep, SchemaRef)->schemap();
+        const AstSchemaRef* const asamep = VN_DBG_AS(samep, SchemaRef);
+        return schemap() == asamep->schemap() && dotted() == asamep->dotted();
     }
+    const std::string& dotted() const { return m_dotted; }
+    void dotted(const std::string& name) { m_dotted = name; }
     AstNodeSchema* schemap() const VL_MT_STABLE { return m_schemap; }
     AstNodeModule* classOrPackagep() const VL_MT_STABLE { return m_classOrPackagep; }
     bool isPure() override { return false; }  // Unknown until substituted
