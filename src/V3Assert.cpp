@@ -346,6 +346,43 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         constp->dtypeFrom(nodep);
         return constp;
     }
+    static bool hasDefaultValue(const AstVar* varp) {
+        return !varp->isParam()
+               && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
+    }
+    static AstNodeExpr* selectFromp(AstNode* nodep) {
+        if (AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) return selp->fromp();
+        if (AstSel* const selp = VN_CAST(nodep, Sel)) return selp->fromp();
+        if (AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        return nullptr;
+    }
+    void visitSelect(AstNodeExpr* nodep) {
+        // A selection from a variable with its default value, or with an unknown index, has
+        // the default value of the selected type (IEEE 1800-2023 7.4.6, 11.5.1). Replace the
+        // whole selection: the variable may be unpacked, and a constant unknown index would
+        // be rejected later.
+        AstNodeExpr* basep = selectFromp(nodep);
+        while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        bool isDefault = refp && hasDefaultValue(refp->varp());
+        if (!isDefault) {
+            AstNodeExpr* selp = nodep;
+            for (; selectFromp(selp); selp = selectFromp(selp)) {
+                // The index of an AstNodeSel or AstSel; an AstStructSel has none
+                AstNodeBiop* const biopp = VN_CAST(selp, NodeBiop);
+                if (!biopp) continue;
+                iterate(biopp->rhsp());
+                const AstConst* const constp
+                    = VN_CAST(V3Const::constifyEdit(biopp->rhsp()), Const);
+                if (constp && constp->num().isAnyXZ()) isDefault = true;
+            }
+            iterate(selp);
+        }
+        if (isDefault) {
+            nodep->replaceWith(newTypeDefault(nodep));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
+    }
 
     // VISITORS
     void visit(AstCMethodHard* nodep) override {
@@ -356,19 +393,11 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             iterateChildren(nodep);
         }
     }
+    void visit(AstNodeSel* nodep) override { visitSelect(nodep); }
+    void visit(AstSel* nodep) override { visitSelect(nodep); }
+    void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
-        AstVar* const varp = nodep->varp();
-        if (varp->isParam()
-            || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
-            return;
-        }
-        nodep->replaceWith(newTypeDefault(nodep));
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
-    }
-    void visit(AstArraySel* nodep) override {
-        iterateChildren(nodep);
-        // The default of an element of an array replaced by its default above
-        if (!VN_IS(nodep->fromp(), Const)) return;
+        if (!hasDefaultValue(nodep->varp())) return;
         nodep->replaceWith(newTypeDefault(nodep));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
