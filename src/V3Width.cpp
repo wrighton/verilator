@@ -436,6 +436,19 @@ class WidthVisitor final : public VNVisitor {
 
     StreamUse currentStreamUse() const { return m_vup ? m_vup->streamUse() : STREAM_USE_NONE; }
 
+    // Report a dynamically sized operand of a stream with several operands
+    static void warnDynamicStreamOperand(const AstNodeExpr* nodep) {
+        // Also an unpacked array of dynamically sized arrays
+        const AstNodeDType* elemDTypep = nodep->dtypep()->skipRefp();
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(elemDTypep, UnpackArrayDType)) {
+            elemDTypep = adtypep->subDTypep()->skipRefp();
+        }
+        if (elemDTypep->isDynamicallySized()) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Streaming concatenation with multiple "
+                                         "operands, of which one is dynamically sized: "
+                                             << nodep->dtypep()->prettyDTypeNameQ());
+        }
+    }
     static void packIfUnpacked(AstNodeExpr* const nodep) {
         AstUnpackArrayDType* const unpackDTypep = VN_CAST(nodep->dtypep(), UnpackArrayDType);
         // Not an array of unpacked structs, which only packStreamOperand packs, e.g. in a cast,
@@ -907,6 +920,8 @@ class WidthVisitor final : public VNVisitor {
                 iterateCheckIntegralSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
 
                 if (m_streamConcat) {
+                    warnDynamicStreamOperand(nodep->lhsp());
+                    warnDynamicStreamOperand(nodep->rhsp());
                     packIfUnpacked(nodep->lhsp());
                     packIfUnpacked(nodep->rhsp());
                 }
