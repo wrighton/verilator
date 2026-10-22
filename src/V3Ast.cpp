@@ -1752,6 +1752,14 @@ static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDTyp
     } else if (VN_IS(toDtp, QueueDType)
                && (VN_IS(fromDtp, BasicDType) || VN_IS(fromDtp, StreamDType))) {
         return VCastable::COMPATIBLE;
+    } else if ((VN_IS(toDtp, DynArrayDType) || VN_IS(toDtp, QueueDType))
+               && (VN_IS(fromDtp, DynArrayDType) || VN_IS(fromDtp, QueueDType)
+                   || VN_IS(fromDtp, UnpackArrayDType))) {
+        // Assignment compatible if the element types are equivalent (IEEE 1800-2023 7.6)
+        if (computeCastableImp(toDtp->subDTypep(), fromDtp->subDTypep(), nullptr, false)
+                .isSameish()) {
+            return VCastable::COMPATIBLE;
+        }
     } else if (VN_IS(toDtp, ClassRefDType) && VN_IS(fromConstp, Const)) {
         if (fromConstp->isNull()) return VCastable::COMPATIBLE;
     } else if (VN_IS(toDtp, ClassRefDType) && VN_IS(fromDtp, ClassRefDType)) {

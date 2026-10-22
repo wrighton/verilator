@@ -3311,6 +3311,10 @@ class WidthVisitor final : public VNVisitor {
                     // Can just remove cast, but need extend placeholder
                     // so we can avoid warning message
                 }
+            } else if (VN_IS(fromDtp, UnpackArrayDType)) {
+                // To a dynamic array or queue
+                newp = new AstCvtUnpackToQueue{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
+                                               toDtp};
             } else if (VN_IS(toDtp, QueueDType)) {
                 if (VN_IS(fromDtp, BasicDType)) {
                     newp = new AstCvtPackedToArray{nodep->fileline(),
@@ -3333,6 +3337,8 @@ class WidthVisitor final : public VNVisitor {
                                                   dstElementBits,
                                                   srcElementBits};
                 }
+            } else if (VN_IS(toDtp, DynArrayDType)) {
+                // Same representation as a queue, can just remove cast
             } else if (VN_IS(toDtp, ClassRefDType)) {
                 // Can just remove cast
             } else {
@@ -8984,6 +8990,9 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // Elements are compared by their left-to-right order, as when assigned (7.4.6)
                 convertUnpackedOrder(nodep->rhsp(), nodep->lhsp()->dtypep());
+                // Complete operands, e.g. a cast to an aggregate type
+                userIterateAndNext(nodep->lhsp(), WidthVP{SELF, FINAL}.p());
+                userIterateAndNext(nodep->rhsp(), WidthVP{SELF, FINAL}.p());
             } else if (nodep->lhsp()->isDouble() || nodep->rhsp()->isDouble()) {
                 if (cmpType == ComparisonType::WILD) {
                     nodep->v3error("Real is illegal operand to ?== operator");
