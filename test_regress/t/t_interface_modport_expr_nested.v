@@ -111,15 +111,22 @@ module top;
   level4_if lev4 ();
 
   app_consumer m_app (.i_app_regs(app_regs));
+  // Second instance of the same interfaces
+  app_reg_if app_regs2 ();
+  app_consumer m_app2 (.i_app_regs(app_regs2));
   deep_consumer m_deep (.port(outer));
   deep4_consumer m_deep4 (.port(lev4));
 
   initial begin
     app_regs.base.wr = 8'hAB;
     app_regs.example.wr = 16'hCDEF;
+    app_regs2.base.wr = 8'h12;
+    app_regs2.example.wr = 16'h3456;
     #1;
     `checkh(app_regs.base.rd, 8'hAC);
     `checkh(app_regs.example.rd, 16'hCDF0);
+    `checkh(app_regs2.base.rd, 8'h13);
+    `checkh(app_regs2.example.rd, 16'h3457);
     // Verify 3-level deep nesting
     `checkh(outer.middle.inner.data, 8'hDE);
     `checkh(m_deep.deep_in_val, 8'hDE);
