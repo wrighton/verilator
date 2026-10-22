@@ -3251,6 +3251,8 @@ defparam_assignment<nodep>:     // ==IEEE: defparam_assignment
 
 defparamIdRangeList<nodeExprp>:  // IEEE: part of defparam_assignment
                 defparamIdRangeExpr                     { $$ = $1; }
+        |       yD_ROOT '.' defparamIdRangeExpr
+                        { $$ = new AstDot{$2, false, new AstParseRef{$<fl>1, "$root"}, $3}; }
         |       defparamIdRangeList '.' defparamIdRangeExpr
                         { $$ = new AstDot{$2, false, $1, $3}; }
         ;

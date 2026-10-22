@@ -2571,7 +2571,8 @@ class LinkDotParamVisitor final : public VNVisitor {
                                             -1,  // Pin# not relevant
                                             nodep->name(), exprp};
             pinp->param(true);
-            pinp->paramPath(path);
+            // V3Param matches the path against instance names, which start at the top module
+            pinp->paramPath(VString::startsWith(path, "$root.") ? path.substr(6) : path);
             cellp->addParamsp(pinp);
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
