@@ -1,4 +1,4 @@
-%Error-UNSUPPORTED: t/t_pp_defnettype_bad.v:7:1: Unsupported: `default_nettype of other than none or wire: '`default_nettype bad'
+%Error-UNSUPPORTED: t/t_pp_defnettype_bad.v:7:1: Unsupported: `default_nettype of other than none, tri or wire: '`default_nettype bad'
     7 | `default_nettype bad_none_such
       | ^~~~~~~~~~~~~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
