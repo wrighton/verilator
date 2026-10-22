@@ -435,6 +435,49 @@ V3AssertCommon::newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* mod
     return localVarMap;
 }
 
+AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstSchemaRef* instp) {
+    // A sequence or property may be instanced by a hierarchical name (IEEE 1800-2023 16.8,
+    // 16.12). Its inlined body then refers to the declaring scope through the same path.
+    const string dotted = instp->dotted();
+    if (dotted.empty()) return bodyp;
+    // Formal arguments and local variables, which are substituted by the caller
+    std::unordered_set<const AstVar*> ownVarps;
+    for (const AstNode* const declp : instp->schemap()->declspList()) {
+        if (const AstVar* const varp = VN_CAST(declp, Var)) ownVarps.insert(varp);
+    }
+    // A hierarchical reference is downward if it starts at a scope in the declaring module.
+    // Others are upward or absolute, so resolve the same from the instance.
+    std::unordered_set<string> scopeNames;
+    const AstNode* modp = instp->schemap();
+    while (!VN_IS(modp, NodeModule)) modp = modp->backp();
+    modp->foreach([&](const AstNode* nodep) {
+        if (VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, GenBlock)
+            || (VN_IS(nodep, Var) && VN_AS(nodep, Var)->isIfaceRef())) {
+            scopeNames.insert(nodep->name());
+        }
+    });
+    const auto relinkDotted = [&](const string& refDotted) {
+        if (refDotted.empty()) return dotted;
+        if (!scopeNames.count(refDotted.substr(0, refDotted.find('.')))) return refDotted;
+        return dotted + "." + refDotted;
+    };
+    bodyp->foreach([&](AstVarXRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
+    bodyp->foreach([&](AstNodeFTaskRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
+    bodyp->foreach([&](AstSchemaRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
+    bodyp->foreach([&](AstVarRef* refp) {
+        if (refp->classOrPackagep() || ownVarps.count(refp->varp())) return;
+        AstVarXRef* const xrefp
+            = new AstVarXRef{refp->fileline(), refp->varp(), dotted, refp->access()};
+        if (refp == bodyp) {
+            bodyp = xrefp;
+        } else {
+            refp->replaceWith(xrefp);
+        }
+        VL_DO_DANGLING(refp->deleteTree(), refp);
+    });
+    return bodyp;
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
