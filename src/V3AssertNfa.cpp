@@ -3020,6 +3020,16 @@ class AssertNfaVisitor final : public VNVisitor {
                 replaceBodyOnBuildError(specp->fileline(), specp, true);
                 return true;
             }
+            for (const AstSenItem* sp = clockedp->sensesp(); sp;
+                 sp = VN_CAST(sp->nextp(), SenItem)) {
+                if (!sp->edgeType().anEdge()) {
+                    clockedp->v3warn(E_UNSUPPORTED,
+                                     "Unsupported: non-edge clocking event on a sequence; "
+                                     "use an edge such as @(posedge clk)");
+                    replaceBodyOnBuildError(specp->fileline(), specp, true);
+                    return true;
+                }
+            }
             specp->addSensesp(clockedp->sensesp()->unlinkFrBackWithNext());
             AstNodeExpr* const bodyp = clockedp->exprp()->unlinkFrBack();
             clockedp->replaceWith(bodyp);

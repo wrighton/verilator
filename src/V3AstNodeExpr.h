@@ -2352,9 +2352,7 @@ public:
 class AstSClocked final : public AstNodeExpr {
     // Sequence or property expression with an explicit leading clocking event
     // IEEE 1800-2023 16.7: sequence_expr ::= clocking_event sequence_expr
-    // IEEE 1800-2023 A.2.10: property_expr ::= clocking_event property_expr
-    // The clocking event is hoisted to the enclosing assertion clock by V3LinkParse and
-    // V3AssertNfa.
+    // The clocking event is hoisted to the enclosing assertion clock by V3AssertNfa.
     // @astgen op1 := sensesp : List[AstSenItem]
     // @astgen op2 := exprp : AstNodeExpr
 public:

@@ -1206,7 +1206,7 @@ private:
             // Goto rep: check consequent once at match endpoint
             if (!isOverlapped) {
                 beginp->addStmtsp(new AstEventControl{
-                    flp, new AstSenTree{flp, sensesp->cloneTree(false)}, nullptr});
+                    flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});
             }
             beginp->addStmtsp(new AstIf{flp, rhsp, new AstPExprClause{flp, true},
                                         new AstPExprClause{flp, false}});
