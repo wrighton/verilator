@@ -292,9 +292,19 @@ class AssertElabVisitor final : public VNVisitor {
     }
     void inlineSequence(AstSchemaRef* schemaRefp, AstSequence* seqp) {
         // Clone the body expression since the sequence may be referenced multiple times
-        AstNodeExpr* const clonedp = VN_AS(
+        AstNodeExpr* clonedp = VN_AS(
             V3AssertCommon::relinkSvaInstanceBody(seqp->exprp()->cloneTree(false), schemaRefp),
             NodeExpr);
+        // A body that is only a formal argument is replaced as a whole, as the root of the
+        // clone cannot be replaced in place
+        if (const AstVarRef* const refp = VN_CAST(clonedp, VarRef)) {
+            for (const auto& tconnect : V3Task::taskConnects(schemaRefp)) {
+                if (tconnect.first != refp->varp()) continue;
+                VL_DO_DANGLING(clonedp->deleteTree(), clonedp);
+                clonedp = tconnect.second->exprp()->cloneTree(false);
+                break;
+            }
+        }
         coverageOff(clonedp);
         substituteArgs(clonedp, schemaRefp, promoteLocalVars(seqp));
         schemaRefp->replaceWith(clonedp);
