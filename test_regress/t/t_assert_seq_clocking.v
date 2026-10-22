@@ -32,6 +32,21 @@ module t (
   endsequence
   // verilog_format: on
 
+  // A sequence with the same clock as the assertion using it (IEEE 1800-2023 16.13.1)
+  int fails_same = 0, ref_fails_same = 0;
+  assert property (@(posedge clk) s_multi |-> a)
+  else fails_same++;
+  assert property (@(posedge clk) a ##1 b |-> a)
+  else ref_fails_same++;
+  int fails_top = 0;
+  assert property (@(posedge clk) s_multi)
+  else fails_top++;
+  int fails_inner = 0, ref_fails_inner = 0;
+  assert property (@(posedge clk) b |-> ##1 s_single)
+  else fails_inner++;
+  assert property (@(posedge clk) b |-> ##1 a)
+  else ref_fails_inner++;
+
   ap_single: assert property (s_single) else fails_single = fails_single + 1;
   ap_multi: assert property (s_multi) else fails_multi = fails_multi + 1;
 
@@ -47,6 +62,11 @@ module t (
   final begin
     `checkd(fails_single, 17);  // Other sims: 0
     `checkd(fails_multi, 17);  // Other sims: 0
+    `checkd(fails_same, ref_fails_same);
+    `checkd(fails_inner, ref_fails_inner);
+    `checkd(fails_top, fails_multi);
+    `checkd(ref_fails_same, 11);
+    `checkd(ref_fails_inner, 11);
     $write("*-* All Finished *-*\n");
   end
 endmodule

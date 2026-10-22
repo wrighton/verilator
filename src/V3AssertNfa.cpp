@@ -3188,9 +3188,19 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // Hoist a leading clocking event (IEEE 1800-2023 16.7):
+    static void unwrapClockedSeq(AstSClocked* clockedp) {
+        clockedp->replaceWith(clockedp->exprp()->unlinkFrBack());
+        VL_DO_DANGLING(clockedp->deleteTree(), clockedp);
+    }
     bool hoistClockedSeq(AstPropSpec* specp) {
         while (AstSClocked* const clockedp = VN_CAST(specp->propp(), SClocked)) {
             if (specp->sensesp()) {
+                // The same clock as the property's is a singly clocked property
+                // (IEEE 1800-2023 16.13.1)
+                if (specp->sensesp()->sameTree(clockedp->sensesp())) {
+                    unwrapClockedSeq(clockedp);
+                    continue;
+                }
                 clockedp->v3warn(E_UNSUPPORTED, "Unsupported: multiclocked sequence or property");
                 replaceBodyOnBuildError(specp->fileline(), specp, true);
                 return true;
@@ -3210,17 +3220,24 @@ class AssertNfaVisitor final : public VNVisitor {
             clockedp->replaceWith(bodyp);
             VL_DO_DANGLING(pushDeletep(clockedp), clockedp);
         }
-        // A clocking event anywhere else in the sequence is not supported.
-        const AstSClocked* nestedp = nullptr;
-        specp->propp()->foreach([&](const AstSClocked* p) {
-            if (!nestedp) nestedp = p;
-        });
-        if (nestedp) {
-            nestedp->v3warn(E_UNSUPPORTED,
-                            "Unsupported: clocking event inside sequence expression");
-            replaceBodyOnBuildError(specp->fileline(), specp, true);
-            return true;
+        // A clocking event elsewhere in the sequence is supported if it is the property's clock,
+        // or else the default clocking's single clocking event (IEEE 1800-2023 16.13.1). The
+        // clocking event of an AstPropSpec or AstSClocked is a single item.
+        const AstSenItem* const clockp = specp->sensesp() ? specp->sensesp()
+                                         : m_defaultClockingp
+                                             ? m_defaultClockingp->sentreep()->sensesp()
+                                             : nullptr;
+        std::vector<AstSClocked*> nestedps;
+        specp->propp()->foreach([&](AstSClocked* p) { nestedps.push_back(p); });
+        for (AstSClocked* const nestedp : nestedps) {
+            if (!clockp || clockp->nextp() || !clockp->sameTree(nestedp->sensesp())) {
+                nestedp->v3warn(E_UNSUPPORTED,
+                                "Unsupported: clocking event inside sequence expression");
+                replaceBodyOnBuildError(specp->fileline(), specp, true);
+                return true;
+            }
         }
+        for (AstSClocked* const nestedp : nestedps) unwrapClockedSeq(nestedp);
         return false;
     }
 

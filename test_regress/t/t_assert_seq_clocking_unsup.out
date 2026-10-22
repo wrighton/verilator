@@ -15,6 +15,10 @@
                                                         : ... note: In instance 't'
    27 |     @clk a
       |     ^
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:49:5: Unsupported: clocking event inside sequence expression
+                                                        : ... note: In instance 't.u_sub'
+   49 |     @(posedge clk) a;
+      |     ^
 %Error: t/t_assert_seq_clocking_unsup.v:32:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                             : ... note: In instance 't'
                                             : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context

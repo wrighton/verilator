@@ -63,6 +63,25 @@ module nodef (
     else fail <= fail + 1;
 endmodule
 
+// A sequence with the default clocking's clock is singly clocked (IEEE 1800-2023 16.13.1)
+module dseq (
+  input clk,
+  input a, b, c, d
+);
+  default clocking @(posedge clk); endclocking
+  // verilog_format: off  // verible does not support clocking events inside sequence declarations
+  sequence s_cd;
+    @(posedge clk) c ##1 d;
+  endsequence
+  // verilog_format: on
+  int fail = 0;
+  int ref_fail = 0;
+  assert property (a |=> s_cd)
+    else fail <= fail + 1;
+  assert property (a |=> c ##1 d)
+    else ref_fail <= ref_fail + 1;
+endmodule
+
 module t (
   input clk
 );
@@ -112,6 +131,7 @@ module t (
                            .a(a), .b(b), .c(c), .d(d));
   dgate        u_dgate    (.clk(clk), .rst(rst), .a(a), .b(b), .c(c), .d(d));
   nodef        u_nodef    (.clk(clk), .a(a), .b(b), .c(c), .d(d));
+  dseq         u_dseq     (.clk(clk), .a(a), .b(b), .c(c), .d(d));
 
   always_ff @(posedge clk) begin
     cyc <= cyc + 1;
@@ -131,6 +151,8 @@ module t (
       `checkd(u_dgate.explicit_dis_fail,   39);
       `checkd(u_nodef.fail,                39);
       `checkd(g.gen_fail,                  35);
+      `checkd(u_dseq.fail,                 u_dseq.ref_fail);
+      `checkd(u_dseq.ref_fail,             31);
       $write("*-* All Finished *-*\n");
       $finish;
     end
