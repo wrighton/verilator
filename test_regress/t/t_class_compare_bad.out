@@ -1,0 +1,32 @@
+%Error: t/t_class_compare_bad.v:24:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'bit[31:0]'
+   24 |     if (c == 5) $stop;   
+      |           ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_class_compare_bad.v:25:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'bit[31:0]'
+                                     : ... Right-hand data type: 'class Cls'
+   25 |     if (0 != c) $stop;   
+      |           ^~
+%Error: t/t_class_compare_bad.v:26:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls' (2-state)
+                                     : ... Right-hand data type: 'logic[7:0]' (4-state)
+   26 |     if (c !== v) $stop;   
+      |           ^~~
+%Error: t/t_class_compare_bad.v:27:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'chandle'
+   27 |     if (c == h) $stop;   
+      |           ^~
+%Error: t/t_class_compare_bad.v:28:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'class Cls'
+   28 |     if (c < d) $stop;   
+      |           ^
+%Error: Exiting due to
