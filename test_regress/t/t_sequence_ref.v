@@ -99,6 +99,33 @@ module t (
   assert property (prop_delay(DLY + 1))
   else prop_other_fails++;
 
+  // Sequence whose body is only a formal argument, or only a variable: alone, in a sequence,
+  // and in a property instanced in an implication. Each fails once, except the sequence.
+  int formal_fails = 0;
+  int formal_seq_fails = 0;
+  int formal_prop_fails = 0;
+  int var_prop_fails = 0;
+  sequence seq_formal(logic sig);
+    sig;
+  endsequence
+  sequence seq_var;
+    e;
+  endsequence
+  property prop_formal;
+    seq_formal(e);
+  endproperty
+  property prop_var;
+    seq_var;
+  endproperty
+  assert property (@(posedge clk) seq_formal(!e))
+  else formal_fails++;
+  assert property (@(posedge clk) d |-> seq_formal(1'b1) ##DLY seq_var)
+  else formal_seq_fails++;
+  assert property (@(posedge clk) d |-> prop_formal)
+  else formal_prop_fails++;
+  assert property (@(posedge clk) d |-> prop_var)
+  else var_prop_fails++;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     d <= (cyc == 2);
@@ -129,6 +156,10 @@ module t (
       `checkd(range_other_fails, 1)
       `checkd(upto_other_fails, 1)
       `checkd(prop_other_fails, 1)
+      `checkd(formal_fails, 1)
+      `checkd(formal_seq_fails, 0)
+      `checkd(formal_prop_fails, 1)
+      `checkd(var_prop_fails, 1)
       $write("*-* All Finished *-*\n");
       $finish;
     end

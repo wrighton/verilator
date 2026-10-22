@@ -3049,12 +3049,20 @@ class AssertNfaVisitor final : public VNVisitor {
     void inlineSequenceRef(AstFuncRef* funcrefp, AstSequence* seqp) {
         AstNodeExpr* const bodyExprp = getSequenceBodyExprp(seqp);
         UASSERT_OBJ(bodyExprp, funcrefp, "Sequence has no body expression");
-        AstNodeExpr* const clonedp = bodyExprp->cloneTree(false);
+        AstNodeExpr* clonedp = bodyExprp->cloneTree(false);
 
         const V3TaskConnects tconnects = V3Task::taskConnects(funcrefp, seqp->stmtsp());
         std::unordered_map<const AstVar*, AstNodeExpr*> portMap;
         for (const auto& tconnect : tconnects) {
             portMap[tconnect.first] = tconnect.second->exprp();
+        }
+        // A body that is only a formal argument is replaced as a whole
+        if (const AstVarRef* const refp = VN_CAST(clonedp, VarRef)) {
+            const auto it = portMap.find(refp->varp());
+            if (it != portMap.end()) {
+                VL_DO_DANGLING(clonedp->deleteTree(), clonedp);
+                clonedp = it->second->cloneTree(false);
+            }
         }
         clonedp->foreach([&](AstVarRef* refp) {
             const auto it = portMap.find(refp->varp());

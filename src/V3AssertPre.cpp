@@ -315,6 +315,14 @@ private:
         for (const auto& tconnect : tconnects) {
             portMap[tconnect.first] = tconnect.second->exprp();
         }
+        // A body that is only a formal argument is replaced as a whole
+        if (const AstVarRef* const refp = VN_CAST(clonedp, VarRef)) {
+            const auto it = portMap.find(refp->varp());
+            if (it != portMap.end()) {
+                VL_DO_DANGLING(clonedp->deleteTree(), clonedp);
+                clonedp = it->second->cloneTree(false);
+            }
+        }
         clonedp->foreach([&](AstVarRef* refp) {
             const auto it = portMap.find(refp->varp());
             if (it != portMap.end()) {
