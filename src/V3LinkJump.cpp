@@ -60,6 +60,7 @@ class LinkJumpVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstNode* m_loopp = nullptr;  // Current loop
+    AstNode* m_forkLoopp = nullptr;  // Loop enclosing the current fork
     AstRandSequence* m_randsequencep = nullptr;  // Current randsequence
     bool m_loopInc = false;  // In loop increment
     bool m_inFork = false;  // Under fork
@@ -427,7 +428,9 @@ class LinkJumpVisitor final : public VNVisitor {
         UINFO(8, "  " << nodep);
         VL_RESTORER(m_unrollFull);
         VL_RESTORER(m_inFork);
+        VL_RESTORER(m_forkLoopp);
         m_inFork = true;
+        m_forkLoopp = m_loopp;
         // Mark all upper blocks, can stop once see one set to avoid O(n^2)
         for (AstNode* const blockp : vlstd::reverse_view(m_blockStack)) {
             if (blockp->user3SetOnce()) break;
@@ -555,6 +558,9 @@ class LinkJumpVisitor final : public VNVisitor {
             return;
         } else if (!m_loopp) {
             nodep->v3error("break isn't underneath a loop");
+        } else if (m_loopp == m_forkLoopp) {
+            nodep->v3error("break cannot be used inside fork to control a loop outside the fork"
+                           " (IEEE 1800-2023 12.8)");
         } else {
             // Jump to the end of the loop
             AstJumpBlock* const blockp = getJumpBlock(m_loopp, false);
@@ -567,6 +573,9 @@ class LinkJumpVisitor final : public VNVisitor {
         iterateChildren(nodep);
         if (!m_loopp) {
             nodep->v3error("continue isn't underneath a loop");
+        } else if (m_loopp == m_forkLoopp) {
+            nodep->v3error("continue cannot be used inside fork to control a loop outside the"
+                           " fork (IEEE 1800-2023 12.8)");
         } else {
             // Jump to the end of this iteration
             // If a "for" loop then need to still do the post-loop increment
