@@ -1,0 +1,17 @@
+%Error-UNSUPPORTED: t/t_tri_eqcase_op_unsup.v:14:17: Unsupported tristate construct: REPLICATE in function getEnExprBasedOnOriginalp
+   14 |   assign b = ({a, a} === 2'bzz);
+      |                 ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_tri_eqcase_op_unsup.v:35:15: Unsupported tristate construct: REDXOR in function getEnExprBasedOnOriginalp
+   35 |   assign b = (^w === 1'bz);
+      |               ^
+%Error-UNSUPPORTED: t/t_tri_eqcase_op_unsup.v:44:24: Unsupported tristate construct: REPLICATE in function getEnExprBasedOnOriginalp
+   44 |   assign e = ({undriven, undriven} === 2'bzz);
+      |                        ^
+%Error-UNSUPPORTED: t/t_tri_eqcase_op_unsup.v:47:19: Unsupported tristate construct: CONCAT in function getEnExprBasedOnOriginalp
+   47 |   assign f = ({u.v, u.v} === 2'bzz);
+      |                   ^
+%Error-UNSUPPORTED: t/t_tri_eqcase_op_unsup.v:55:18: Unsupported tristate construct: REPLICATE in function getEnExprBasedOnOriginalp
+   55 |   assign g = ({cw, cw} === 2'bzz);
+      |                  ^
+%Error: Exiting due to
