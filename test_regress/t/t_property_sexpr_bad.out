@@ -3,4 +3,12 @@
    18 |   assert property (@(posedge clk) ##1 not val);
       |                                       ^~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_sexpr_bad.v:21:47: Unexpected 's_eventually' in sequence expression context (IEEE 1800-2023 16.12.13)
+                                      : ... note: In instance 't'
+   21 |   assert property (@(posedge clk) val |-> ##1 s_eventually val);
+      |                                               ^~~~~~~~~~~~
+%Error: t/t_property_sexpr_bad.v:22:36: Unexpected 's_eventually' in sequence expression context (IEEE 1800-2023 16.12.13)
+                                      : ... note: In instance 't'
+   22 |   assert property (@(posedge clk) (s_eventually val) ##1 val);
+      |                                    ^~~~~~~~~~~~
 %Error: Exiting due to

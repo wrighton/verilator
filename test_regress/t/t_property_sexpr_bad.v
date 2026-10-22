@@ -16,4 +16,8 @@ module t (
   end
 
   assert property (@(posedge clk) ##1 not val);
+
+  // s_eventually is a property operator, not a sequence operand
+  assert property (@(posedge clk) val |-> ##1 s_eventually val);
+  assert property (@(posedge clk) (s_eventually val) ##1 val);
 endmodule
