@@ -2606,13 +2606,19 @@ class LinkDotParamVisitor final : public VNVisitor {
         } else {
             // Path from the defparam's scope, if the instance is under it
             string belowPath;
+            size_t belowDepth = 0;
             const VSymEnt* symp = foundp;
-            for (; symp && symp != scopeSymp; symp = symp->parentp()) {
+            for (; symp && symp != scopeSymp; symp = symp->parentp(), ++belowDepth) {
                 belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
             }
             // If under it, V3Param passes the value down from each instance of this module, so
-            // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
-            AstNodeExpr* const exprp = symp ? nullptr : nodep->rhsp()->unlinkFrBack();
+            // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1). Not
+            // if the path, e.g. from $root, only comes back into the scope from above it, as it
+            // then names one instance.
+            const bool below
+                = symp
+                  && belowDepth >= static_cast<size_t>(std::count(path.begin(), path.end(), '.'));
+            AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                       << "  <= " << exprp);
             // Don't need to check the name of the defparam exists.  V3Param does.
@@ -2620,7 +2626,8 @@ class LinkDotParamVisitor final : public VNVisitor {
                                             -1,  // Pin# not relevant
                                             name, exprp};
             pinp->param(true);
-            pinp->paramPath(path);
+            // V3Param matches the path against instance names, which start at the top module
+            pinp->paramPath(VString::startsWith(path, "$root.") ? path.substr(6) : path);
             cellp->addParamsp(pinp);
             if (!exprp) {
                 pushDeletep(nodep->pathp()->unlinkFrBack());
