@@ -3478,20 +3478,36 @@ event_control<senTreep>:        // ==IEEE: event_control
 
 event_expression<senItemp>:     // IEEE: event_expression - split over several
         //UNSUP                 // Below are all removed
-                senitem                                 { $$ = $1; }
-        |       event_expression yOR senitem            { $$ = addNextNull($1, $3); }
-        |       event_expression ',' senitem            { $$ = addNextNull($1, $3); } /* Verilog 2001 */
+                senitemExpr                             { $$ = $1; }
+        |       event_expressionNotExpr                 { $$ = $1; }
         //UNSUP                 // Above are all removed, replace with:
         //UNSUP ev_expr                                 { $$ = $1; }
         //UNSUP event_expression ',' ev_expr %prec yOR  { $$ = addNextNull($1, $3); }
         ;
 
+event_expressionNotExpr<senItemp>:  // IEEE: event_expression, except a lone expression
+                senitemNotExpr                          { $$ = $1; }
+        |       event_expression yOR senitem            { $$ = addNextNull($1, $3); }
+        |       event_expression ',' senitem            { $$ = addNextNull($1, $3); } /* Verilog 2001 */
+        ;
+
 senitem<senItemp>:              // IEEE: part of event_expression, non-'OR' ',' terms
-                senitemEdge                             { $$ = $1; }
-        |       expr
+                senitemExpr                             { $$ = $1; }
+        |       senitemNotExpr                          { $$ = $1; }
+        ;
+
+senitemExpr<senItemp>:          // IEEE: part of event_expression
+                expr
                         { $$ = new AstSenItem{$<fl>1, VEdgeType::ET_CHANGED, $1}; }
+        ;
+
+senitemNotExpr<senItemp>:       // IEEE: part of event_expression
+                senitemEdge                             { $$ = $1; }
         |       expr yIFF expr
                         { $$ = new AstSenItem{$<fl>1, VEdgeType::ET_CHANGED, $1, $3}; }
+        //                      // IEEE: '(' event_expression ')'
+        //                      // A parenthesized lone expression is parsed as an expr
+        |       '(' event_expressionNotExpr ')'         { $$ = $2; }
         ;
 
 senitemVar<senItemp>:
