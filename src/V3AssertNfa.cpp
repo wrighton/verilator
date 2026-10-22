@@ -3455,6 +3455,26 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
         if (isBareTopLevelUntil(propp)) return nullptr;
+        // An 'iff' is a Boolean equivalence (AstLogEq), which cannot hold a multi-cycle operand.
+        // A followed-by operand is reported more specifically by V3AssertPre.
+        const AstLogEq* iffp = nullptr;
+        propp->foreach([&](const AstLogEq* eqp) {
+            const bool multiCycle = eqp->exists([eqp](const AstNodeExpr* np) {
+                if (!np->isMultiCycleSva()) return false;
+                for (const AstNode* abovep = np; abovep != eqp; abovep = abovep->aboveLoopp()) {
+                    const AstImplication* const implp = VN_CAST(abovep, Implication);
+                    if (implp && implp->isFollowedBy()) return false;
+                }
+                return true;
+            });
+            if (multiCycle) iffp = eqp;
+        });
+        if (iffp) {
+            iffp->v3warn(E_UNSUPPORTED, "Unsupported: property 'iff' with a multi-cycle operand"
+                                        " (IEEE 1800-2023 16.12.8)");
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return nullptr;
+        }
         return propp;
     }
 
