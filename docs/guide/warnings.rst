@@ -1949,7 +1949,9 @@ List Of Warnings
 .. option:: PROTOTYPEMIS
 
    Error that a function prototype does not match in some respects the
-   out-of-block declaration of that function. IEEE requires this error.
+   out-of-block declaration of that function, or that a virtual method
+   override does not match the method it overrides (including implementations
+   of pure virtual and interface class methods). IEEE requires this error.
 
    The typical solution is to fix the prototype to match the declaration
    exactly, including in number of arguments, name of arguments, argument

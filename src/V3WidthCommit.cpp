@@ -237,6 +237,98 @@ private:
         }
     }
 
+    static std::vector<const AstVar*> ftaskPorts(const AstNodeFTask* nodep) {
+        std::vector<const AstVar*> ports;
+        for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            const AstVar* const portp = VN_CAST(stmtp, Var);
+            if (portp && portp->isIO()) ports.push_back(portp);
+        }
+        return ports;
+    }
+    // Declared by the user, not created internally (e.g. randomize, interface forwarders)
+    static bool isUserMethod(const AstNodeFTask* nodep) {
+        return nodep->verilogTask() || nodep->verilogFunction();
+    }
+    static void overrideMismatch(const AstNode* errp, const AstNodeFTask* nodep,
+                                 const AstNodeFTask* basep, const std::string& what) {
+        errp->v3warn(PROTOTYPEMIS,
+                     "Virtual method override "
+                         << nodep->prettyNameQ() << ' ' << what << " (IEEE 1800-2023 8.20)\n"
+                         << errp->warnContextPrimary() << '\n'
+                         << basep->warnOther() << "... Location of overridden method\n"
+                         << basep->warnContextSecondary());
+    }
+    // Check virtual method override 'nodep' has the signature of 'basep' it overrides
+    static void overrideSigCheck(const AstNodeFTask* nodep, const AstNodeFTask* basep) {
+        // Report only the first mismatch (IEEE 1800-2023 8.20).
+        if (nodep->verilogTask() != basep->verilogTask()) {
+            overrideMismatch(nodep, nodep, basep,
+                             nodep->verilogTask()
+                                 ? "is a task but overridden method is a function"
+                                 : "is a function but overridden method is a task");
+            return;
+        }
+        const AstNode* const fvarp = nodep->fvarp();
+        const AstNode* const baseFvarp = basep->fvarp();
+        // Class return types are not compared, as a derived class return type is also legal
+        if (!fvarp != !baseFvarp
+            || (fvarp && !fvarp->dtypep()->similarDType(baseFvarp->dtypep())
+                && !(VN_IS(fvarp->dtypep()->skipRefp(), ClassRefDType)
+                     && VN_IS(baseFvarp->dtypep()->skipRefp(), ClassRefDType)))) {
+            overrideMismatch(
+                nodep, nodep, basep,
+                "return data type " + (fvarp ? fvarp->dtypep()->prettyDTypeNameQ() : "'void'"s)
+                    + " does not match overridden method's return data type "
+                    + (baseFvarp ? baseFvarp->dtypep()->prettyDTypeNameQ() : "'void'"s));
+            return;
+        }
+        const std::vector<const AstVar*> ports = ftaskPorts(nodep);
+        const std::vector<const AstVar*> basePorts = ftaskPorts(basep);
+        if (ports.size() != basePorts.size()) {
+            overrideMismatch(nodep, nodep, basep,
+                             "has " + std::to_string(ports.size())
+                                 + " argument(s) but overridden method has "
+                                 + std::to_string(basePorts.size()));
+            return;
+        }
+        for (size_t i = 0; i < ports.size(); ++i) {
+            const AstVar* const portp = ports[i];
+            const AstVar* const basePortp = basePorts[i];
+            if (portp->direction() != basePortp->direction()) {
+                overrideMismatch(portp, nodep, basep,
+                                 "argument " + portp->prettyNameQ() + " direction '"
+                                     + portp->direction().verilogKwd()
+                                     + "' does not match overridden method's direction '"
+                                     + basePortp->direction().verilogKwd() + "'");
+                return;
+            }
+            if (!portp->dtypep()->similarDType(basePortp->dtypep())) {
+                overrideMismatch(portp, nodep, basep,
+                                 "argument " + portp->prettyNameQ() + " data type "
+                                     + portp->dtypep()->prettyDTypeNameQ()
+                                     + " does not match overridden method's data type "
+                                     + basePortp->dtypep()->prettyDTypeNameQ());
+                return;
+            }
+        }
+    }
+    // Check user method 'nodep' against the methods of its name 'classp' inherits
+    void overrideCheck(const AstNodeFTask* nodep, const AstClass* classp) {
+        // The nearest user method of the name in each class extended or implemented, if virtual
+        // (after virtualRecurse).
+        for (const AstClassExtends* extendsp = classp->extendsp(); extendsp;
+             extendsp = VN_AS(extendsp->nextp(), ClassExtends)) {
+            const AstClass* const eclassp = extendsp->classp();
+            const AstNodeFTask* const basep
+                = VN_CAST(m_memberMap.findMember(eclassp, nodep->name()), NodeFTask);
+            if (basep && isUserMethod(basep)) {
+                if (basep->isVirtual()) overrideSigCheck(nodep, basep);
+            } else {
+                overrideCheck(nodep, eclassp);
+            }
+        }
+    }
+
     // VISITORS
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
@@ -392,6 +484,7 @@ private:
         if (const AstClass* const classp = VN_CAST(m_modp, Class)) {
             bool isVirtual = false;
             virtualRecurse(nodep, classp, isVirtual /*ref*/);
+            if (isUserMethod(nodep)) overrideCheck(nodep, classp);
         }
         if (nodep->isStatic() && nodep->isVirtual())  // After propagated isVirtual
             nodep->v3error("Static methods cannot be virtual");

@@ -1,0 +1,86 @@
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:46:37: Virtual method override 'f_type' argument 'a' data type 'byte' does not match overridden method's data type 'int' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   46 |   virtual function void f_type(byte a);   
+      |                                     ^
+                     t/t_class_virtual_sig_bad.v:10:25: ... Location of overridden method
+   10 |   virtual function void f_type(int a);
+      |                         ^~~~~~
+                     ... For error description see https://verilator.org/warn/PROTOTYPEMIS?v=latest
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:48:25: Virtual method override 'f_count' has 2 argument(s) but overridden method has 1 (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   48 |   virtual function void f_count(int a, int b);   
+      |                         ^~~~~~~
+                     t/t_class_virtual_sig_bad.v:12:25: ... Location of overridden method
+   12 |   virtual function void f_count(int a);
+      |                         ^~~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:50:42: Virtual method override 'f_dir' argument 'a' direction 'output' does not match overridden method's direction 'input' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   50 |   virtual function void f_dir(output int a);   
+      |                                          ^
+                     t/t_class_virtual_sig_bad.v:14:25: ... Location of overridden method
+   14 |   virtual function void f_dir(input int a);
+      |                         ^~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:52:25: Virtual method override 'f_ret' return data type 'byte' does not match overridden method's return data type 'int' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   52 |   virtual function byte f_ret();   
+      |                         ^~~~~
+                     t/t_class_virtual_sig_bad.v:16:24: ... Location of overridden method
+   16 |   virtual function int f_ret();
+      |                        ^~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:55:25: Virtual method override 'f_void' return data type 'void' does not match overridden method's return data type 'int' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   55 |   virtual function void f_void();   
+      |                         ^~~~~~
+                     t/t_class_virtual_sig_bad.v:19:24: ... Location of overridden method
+   19 |   virtual function int f_void();
+      |                        ^~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:57:16: Virtual method override 'f_task' is a task but overridden method is a function (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   57 |   virtual task f_task();   
+      |                ^~~~~~
+                     t/t_class_virtual_sig_bad.v:22:25: ... Location of overridden method
+   22 |   virtual function void f_task();
+      |                         ^~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:59:25: Virtual method override 't_func' is a function but overridden method is a task (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   59 |   virtual function void t_func();   
+      |                         ^~~~~~
+                     t/t_class_virtual_sig_bad.v:24:16: ... Location of overridden method
+   24 |   virtual task t_func();
+      |                ^~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:61:24: Virtual method override 'f_class_ret' return data type 'class Cls' does not match overridden method's return data type 'int' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   61 |   virtual function Cls f_class_ret();   
+      |                        ^~~~~~~~~~~
+                     t/t_class_virtual_sig_bad.v:26:24: ... Location of overridden method
+   26 |   virtual function int f_class_ret();
+      |                        ^~~~~~~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:64:24: Virtual method override 'f_nonvoid' return data type 'int' does not match overridden method's return data type 'void' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   64 |   virtual function int f_nonvoid();   
+      |                        ^~~~~~~~~
+                     t/t_class_virtual_sig_bad.v:29:25: ... Location of overridden method
+   29 |   virtual function void f_nonvoid();
+      |                         ^~~~~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:67:28: Virtual method override 'f_deep' argument 'a' data type 'bit' does not match overridden method's data type 'int' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   67 |   function void f_deep(bit a);   
+      |                            ^
+                     t/t_class_virtual_sig_bad.v:31:25: ... Location of overridden method
+   31 |   virtual function void f_deep(int a);
+      |                         ^~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:84:39: Virtual method override 'f_pure' argument 'a' data type 'string' does not match overridden method's data type 'int' (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   84 |   virtual function void f_pure(string a);   
+      |                                       ^
+                     t/t_class_virtual_sig_bad.v:80:30: ... Location of overridden method
+   80 |   pure virtual function void f_pure(int a);
+      |                              ^~~~~~
+%Error-PROTOTYPEMIS: t/t_class_virtual_sig_bad.v:93:24: Virtual method override 'f_ifc' has 2 argument(s) but overridden method has 1 (IEEE 1800-2023 8.20)
+                                                      : ... note: In instance 't'
+   93 |   virtual function int f_ifc(int a, int b);   
+      |                        ^~~~~
+                     t/t_class_virtual_sig_bad.v:89:29: ... Location of overridden method
+   89 |   pure virtual function int f_ifc(int a);
+      |                             ^~~~~
+%Error: Exiting due to
