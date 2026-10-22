@@ -2034,6 +2034,27 @@ class ParamProcessor final {
         }
     }
 
+    // True if modp is the mailbox class of the std package
+    bool isStdMailbox(const AstNodeModule* modp) {
+        const AstPackage* const stdp = v3Global.rootp()->stdPackagep();
+        return stdp && m_memberMap.findMember(stdp, "mailbox") == modp;
+    }
+    // Report a typeless mailbox, then give it a type
+    void typelessMailboxCheck(const AstNode* nodep, AstPin* paramsp) {
+        // Its type parameter has no value. Giving it a type avoids further errors on the mailbox
+        // class.
+        for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
+            AstNode* const exprp = pinp->exprp();
+            if (exprp && !VN_IS(exprp, VoidDType)) continue;
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: typeless mailbox (IEEE 1800-2023 15.4)\n"
+                                             << nodep->warnMore()
+                                             << "... Suggest a parameterized mailbox, e.g. "
+                                                "'mailbox #(int)'");
+            if (exprp) VL_DO_DANGLING(m_deleter.pushDeletep(exprp->unlinkFrBack()), exprp);
+            pinp->exprp(new AstBasicDType{nodep->fileline(), VBasicDTypeKwd::INT});
+        }
+    }
+
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides) {
         // Returns new or reused module
@@ -2041,6 +2062,7 @@ class ParamProcessor final {
         // Must be a separate loop, as constant conversion may have changed some pointers.
         string longname = srcModp->name() + "_";
         if (debug() >= 9 && paramsp) paramsp->dumpTreeAndNext(cout, "-  cellparams: ");
+        if (isStdMailbox(srcModp)) typelessMailboxCheck(nodep, paramsp);
 
         if (srcModp->hierBlock()) {
             longname = parameterizedHierBlockName(srcModp, paramsp);

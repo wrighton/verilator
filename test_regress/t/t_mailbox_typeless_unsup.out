@@ -1,0 +1,17 @@
+%Error-UNSUPPORTED: t/t_mailbox_typeless_unsup.v:8:3: Unsupported: typeless mailbox (IEEE 1800-2023 15.4)
+                                                    : ... note: In instance 't'
+                                                    : ... Suggest a parameterized mailbox, e.g. 'mailbox #(int)'
+    8 |   mailbox m1;
+      |   ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_mailbox_typeless_unsup.v:9:8: Unsupported: typeless mailbox (IEEE 1800-2023 15.4)
+                                                    : ... note: In instance 't'
+                                                    : ... Suggest a parameterized mailbox, e.g. 'mailbox #(int)'
+    9 |   std::mailbox m2;
+      |        ^~~~~~~
+%Error-UNSUPPORTED: t/t_mailbox_typeless_unsup.v:10:3: Unsupported: typeless mailbox (IEEE 1800-2023 15.4)
+                                                     : ... note: In instance 't'
+                                                     : ... Suggest a parameterized mailbox, e.g. 'mailbox #(int)'
+   10 |   mailbox #() m3;
+      |   ^~~~~~~
+%Error: Exiting due to
