@@ -29,6 +29,9 @@ module t;
   defparam f0.child.N = 2;
   nested n0 ();
   generated g0 ();
+  // Nor a defparam to a parameter in a named block
+  scoped c0 ();
+  defparam c0.blk.P = 2;
 endmodule
 
 module typed #(
@@ -95,4 +98,14 @@ endmodule
 module leaf #(
     parameter int N = 7
 );
+endmodule
+
+module scoped;
+  /*verilator hier_block*/
+  initial begin : blk
+    parameter P = 1;
+    parameter Q = 1;
+    int v;
+    v = P + Q;
+  end
 endmodule

@@ -2600,39 +2600,62 @@ class LinkDotParamVisitor final : public VNVisitor {
         VSymEnt* const scopeSymp = m_statep->getNodeSym(nodep);
         VSymEnt* const foundp
             = m_statep->findDotted(nodep->fileline(), scopeSymp, path, baddot, okSymp, true);
-        AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
+        // A parameter in a named block, task or function (IEEE 1800-2023 23.10.2) is set
+        // through the instance containing that scope; walk up one path component per scope.
+        // Also walk generate blocks, to report that parameters under them are localparams.
+        VSymEnt* cellSymp = foundp;
+        string cellPath = path;
+        while (cellSymp && cellPath.find('.') != string::npos
+               && (VN_IS(cellSymp->nodep(), NodeBlock) || VN_IS(cellSymp->nodep(), NodeFTask)
+                   || VN_IS(cellSymp->nodep(), GenBlock))) {
+            cellPath.erase(cellPath.rfind('.'));
+            cellSymp = cellSymp->parentp();
+        }
+        AstCell* const cellp = cellSymp ? VN_CAST(cellSymp->nodep(), Cell) : nullptr;
+        const VSymEnt* const varSymp = cellSymp != foundp ? foundp->findIdFlat(name) : nullptr;
+        AstVar* const scopedVarp = varSymp ? VN_CAST(varSymp->nodep(), Var) : nullptr;
         if (!cellp) {
             nodep->v3error("In defparam, instance " << path << " never declared");
+        } else if (cellSymp != foundp && !(scopedVarp && scopedVarp->isGParam())) {
+            // E.g. a localparam, as is any parameter in a generate block (IEEE 1800-2023 6.20.4)
+            nodep->v3error("In defparam, " << AstNode::prettyNameQ(path + "." + name)
+                                           << " is not a parameter (IEEE 1800-2023 23.10.1)");
         } else {
             // Path from the defparam's scope, if the instance is under it
             string belowPath;
             size_t belowDepth = 0;
-            const VSymEnt* symp = foundp;
+            const VSymEnt* symp = cellSymp;
             for (; symp && symp != scopeSymp; symp = symp->parentp(), ++belowDepth) {
                 belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
             }
+            // Path of a named block, task or function in the instance; in the pin's name, so
+            // V3Param keys the value apart from a parameter of the same name in another scope
+            const string scopePath = cellSymp != foundp ? path.substr(cellPath.size() + 1) : "";
             // If under it, V3Param passes the value down from each instance of this module, so
             // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1). Not
             // if the path, e.g. from $root, only comes back into the scope from above it, as it
             // then names one instance.
-            const bool below
-                = symp
-                  && belowDepth >= static_cast<size_t>(std::count(path.begin(), path.end(), '.'));
+            const bool below = symp
+                               && belowDepth >= static_cast<size_t>(
+                                      std::count(cellPath.begin(), cellPath.end(), '.'));
             AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                       << "  <= " << exprp);
             // Don't need to check the name of the defparam exists.  V3Param does.
             AstPin* const pinp = new AstPin{nodep->fileline(),
                                             -1,  // Pin# not relevant
-                                            name, exprp};
+                                            VString::dot(scopePath, ".", name), exprp};
             pinp->param(true);
             // V3Param matches the path against instance names, which start at the top module
-            pinp->paramPath(VString::startsWith(path, "$root.") ? path.substr(6) : path);
+            pinp->paramPath(VString::startsWith(cellPath, "$root.") ? cellPath.substr(6)
+                                                                    : cellPath);
+            pinp->modVarp(scopedVarp);
             cellp->addParamsp(pinp);
             if (!exprp) {
                 pushDeletep(nodep->pathp()->unlinkFrBack());
-                targetp->replaceWith(
-                    new AstVarXRef{targetp->fileline(), name, belowPath, VAccess::WRITE});
+                targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
+                                                    VString::dot(belowPath, ".", scopePath),
+                                                    VAccess::WRITE});
                 VL_DO_DANGLING(pushDeletep(targetp), targetp);
                 return;
             }
