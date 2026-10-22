@@ -2465,6 +2465,10 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
                                << portp->prettyNameQ() << " in function call to "
                                << calleep->prettyTypeNameQ());
                 newvaluep = new AstConst{nodep->fileline(), AstConst::Unsized32{}, 0};
+            } else if (VN_IS(calleep, Property) || VN_IS(calleep, Sequence)) {
+                // Substituted textually, so resolved in the declaration scope
+                // (IEEE 1800-2023 16.8)
+                newvaluep = VN_AS(portp->valuep(), NodeExpr);
             } else if (AstFuncRef* const funcRefp = VN_CAST(portp->valuep(), FuncRef)) {
                 const AstNodeFTask* const funcp = funcRefp->taskp();
                 if (funcp->classMethod() && funcp->isStatic()) newvaluep = funcRefp;
