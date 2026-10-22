@@ -77,6 +77,7 @@ class LinkParseVisitor final : public VNVisitor {
     bool m_hasTimingControl = false;  // If current task has timing control
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
+    std::set<std::string> m_genblkDeclNames;  // Names declared in current generate scope
 
     // STATE - Statistic tracking
     VDouble0 m_statModules;  // Number of modules seen
@@ -140,6 +141,36 @@ class LinkParseVisitor final : public VNVisitor {
                 && !nodep->nextp()  // No other statements under upper genif else/case item
                 && (VN_IS(nodep->itemsp(), GenIf))  // Begin has if underneath
                 && !nodep->itemsp()->nextp());  // Has only one item
+    }
+    bool implicitlyNamed(AstGenBlock* nodep) {  // Unnamed block that gets a 'genblk<n>' name
+        const AstNode* const backp = nodep->backp();
+        return nodep->genforp()
+               || ((VN_IS(backp, GenCaseItem) || VN_IS(backp, GenIf)) && !nestedIfBegin(nodep));
+    }
+    void collectGenblkDeclNames(AstNode* nodep) {
+        // Collect names declared in the current generate scope, which an implicit
+        // generate block name must not conflict with (IEEE 1800-2023 27.6)
+        for (; nodep; nodep = nodep->nextp()) {
+            if (AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
+                if (!blockp->unnamed()) {
+                    m_genblkDeclNames.emplace(blockp->name());
+                } else if (!implicitlyNamed(blockp)) {  // Not a new scope
+                    collectGenblkDeclNames(blockp->itemsp());
+                }
+            } else if (const AstGenIf* const ifp = VN_CAST(nodep, GenIf)) {
+                collectGenblkDeclNames(ifp->thensp());
+                collectGenblkDeclNames(ifp->elsesp());
+            } else if (const AstGenCase* const casep = VN_CAST(nodep, GenCase)) {
+                for (AstNode* itemp = casep->itemsp(); itemp; itemp = itemp->nextp()) {
+                    collectGenblkDeclNames(VN_AS(itemp, GenCaseItem)->itemsp());
+                }
+            } else if (const AstNodeProcedure* const procp = VN_CAST(nodep, NodeProcedure)) {
+                collectGenblkDeclNames(procp->stmtsp());  // Named blocks
+            } else if (VN_IS(nodep, Var) || VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock)
+                       || VN_IS(nodep, NodeFTask) || VN_IS(nodep, Typedef)) {
+                m_genblkDeclNames.emplace(nodep->name());
+            }
+        }
     }
 
     void checkIndent(AstNode* nodep, AstNode* childp) {
@@ -863,6 +894,8 @@ class LinkParseVisitor final : public VNVisitor {
 
         VL_RESTORER_COPY(m_portDups);
         collectPorts(nodep->stmtsp());
+        VL_RESTORER_CLEAR(m_genblkDeclNames);
+        collectGenblkDeclNames(nodep->stmtsp());
 
         iterateChildren(nodep);
         if (AstModule* const modp = VN_CAST(nodep, Module)) {
@@ -891,21 +924,14 @@ class LinkParseVisitor final : public VNVisitor {
         cleanFileline(nodep);
         VL_RESTORER(m_beginDepth);
         ++m_beginDepth;
-        const AstNode* const backp = nodep->backp();
-        // IEEE says directly nested item is not a new block
-        // The genblk name will get attached to the if true/false LOWER begin block(s)
-        const bool nestedIf = nestedIfBegin(nodep);
         // It's not FOR(BEGIN(...)) but we earlier changed it to BEGIN(FOR(...))
-        int assignGenBlkNum = -1;
-        if (nodep->genforp()) {
-            ++m_genblkNum;
-            if (nodep->name() == "") assignGenBlkNum = m_genblkNum;
-        } else if (nodep->name() == "" && (VN_IS(backp, GenCaseItem) || VN_IS(backp, GenIf))
-                   && !nestedIf) {
-            assignGenBlkNum = m_genblkAbove;
-        }
-        if (assignGenBlkNum != -1) {
-            nodep->name("genblk" + cvtToStr(assignGenBlkNum));
+        if (nodep->genforp()) ++m_genblkNum;
+        if (implicitlyNamed(nodep) && nodep->name() == "") {
+            const string num = cvtToStr(nodep->genforp() ? m_genblkNum : m_genblkAbove);
+            // IEEE 1800-2023 27.6: Add leading zeros until no conflict with a declared name
+            string zeros;
+            while (m_genblkDeclNames.count("genblk" + zeros + num)) zeros += '0';
+            nodep->name("genblk" + zeros + num);
             if (nodep->itemsp()) {
                 nodep->v3warn(GENUNNAMED,
                               "Unnamed generate block "
@@ -918,8 +944,12 @@ class LinkParseVisitor final : public VNVisitor {
         if (nodep->name() != "") {
             VL_RESTORER(m_genblkAbove);
             VL_RESTORER(m_genblkNum);
+            VL_RESTORER_CLEAR(m_genblkDeclNames);
             m_genblkAbove = 0;
             m_genblkNum = 0;
+            collectGenblkDeclNames(nodep->itemsp());
+            if (nodep->genforp())
+                collectGenblkDeclNames(VN_AS(nodep->genforp(), GenFor)->itemsp());
             iterateChildren(nodep);
         } else {
             iterateChildren(nodep);
