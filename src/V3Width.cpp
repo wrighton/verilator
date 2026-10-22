@@ -1750,6 +1750,18 @@ class WidthVisitor final : public VNVisitor {
             userIterate(nodep->sentreep(), nullptr);
         }
     }
+    void visit(AstSStrength* nodep) override {
+        assertAtExpr(nodep);
+        iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
+        // A weak sequence, or one matching on its first tick, is just the sequence; a strong
+        // multi-cycle one depends on the directive, see V3AssertNfa
+        if (nodep->strength() == VPropStrength::WEAK || !nodep->exprp()->isMultiCycleSva()) {
+            nodep->replaceWith(nodep->exprp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        nodep->dtypeSetBit();
+    }
     void visit(AstSConsRep* nodep) override {
         // IEEE 1800-2023 16.9.2 -- consecutive repetition [*N], [*N:M], [*N:$], [+], [*]
         assertAtExpr(nodep);
@@ -6778,6 +6790,12 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_hasSExpr);
         assertAtExpr(nodep);
         if (m_vup->prelim()) {  // First stage evaluation
+            if (AstSStrength* const strengthp = VN_CAST(nodep->propp(), SStrength)) {
+                // Strength of the whole property
+                nodep->propStrength(strengthp->strength());
+                strengthp->replaceWith(strengthp->exprp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(strengthp), strengthp);
+            }
             // Only bare strong until uses V3AssertPre's timing-based lowering. Embedded forms
             // are lowered without timing by V3AssertNfa.
             AstNode* propp = nodep->propp();

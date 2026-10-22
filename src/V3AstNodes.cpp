@@ -3785,6 +3785,14 @@ void AstSFormatF::dumpJson(std::ostream& str) const {
     if (missingArgChar() != 'd')
         dumpJsonStr(str, "missingArgChar", std::to_string(missingArgChar()));
 }
+void AstSStrength::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " [" << VString::upcase(strength().ascii()) << "]";
+}
+void AstSStrength::dumpJson(std::ostream& str) const {
+    dumpJsonStr(str, "strength", strength().ascii());
+    dumpJsonGen(str);
+}
 void AstSampleQueueDType::dumpSmall(std::ostream& str) const {
     Super::dumpSmall(str);
     str << "[*]";

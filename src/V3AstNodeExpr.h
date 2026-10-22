@@ -2578,6 +2578,30 @@ public:
     void timeunit(const VTimescale& flag) { m_timeunit = flag; }
     bool isSystemFunc() const override { return true; }
 };
+class AstSStrength final : public AstNodeExpr {
+    // strong(sequence_expr) or weak(sequence_expr) as a property (IEEE 1800-2023 16.12.2).
+    // Moved to the AstPropSpec when the whole property, else lowered by V3Width/V3AssertNfa.
+    // @astgen op1 := exprp : AstNodeExpr
+    const VPropStrength m_strength;  // WEAK or STRONG
+public:
+    AstSStrength(FileLine* fl, AstNodeExpr* exprp, VPropStrength strength)
+        : ASTGEN_SUPER_SStrength(fl)
+        , m_strength{strength} {
+        this->exprp(exprp);
+    }
+    ASTGEN_MEMBERS_AstSStrength;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    // LCOV_EXCL_START // Lowered before any pass compares nodes
+    bool sameNode(const AstNode* samep) const override {
+        return m_strength == VN_DBG_AS(samep, SStrength)->m_strength;
+    }
+    // LCOV_EXCL_STOP
+    string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { V3ERROR_NA_RETURN(false); }
+    VPropStrength strength() const { return m_strength; }
+};
 class AstSampled final : public AstNodeExpr {
     // Verilog $sampled
     // @astgen op1 := exprp : AstNode<AstNodeExpr|AstPropSpec>

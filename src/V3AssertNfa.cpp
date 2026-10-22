@@ -3418,6 +3418,20 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         AstPropSpec* const propp = VN_AS(assertp->propp(), PropSpec);
+        // A strong multi-cycle sequence inside the property is supported only in a cover,
+        // where strength makes no difference, as for a strong property below
+        std::vector<AstSStrength*> strongps;
+        propp->foreach([&](AstSStrength* strongp) { strongps.push_back(strongp); });
+        if (!strongps.empty() && !VN_IS(assertp, Cover)) {
+            strongps.front()->v3warn(E_UNSUPPORTED, "Unsupported: strong sequence in "
+                                                        + assertp->verilogKwd() + ".");
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return nullptr;
+        }
+        for (AstSStrength* const strongp : strongps) {
+            strongp->replaceWith(strongp->exprp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(strongp), strongp);
+        }
         if (!VN_IS(assertp, Cover)
             && effectiveAssertPropStrength(propp) == VPropStrength::STRONG) {
             propp->v3warn(E_UNSUPPORTED,

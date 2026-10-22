@@ -3,4 +3,12 @@
    12 |   assume property (@(posedge clk) strong (a ##1 a));
       |                    ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_prop_strong_unsup.v:15:41: Unsupported: strong sequence in assert.
+                                                 : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) a |-> strong (##[1:$] a));
+      |                                         ^~~~~~
+%Error-UNSUPPORTED: t/t_prop_strong_unsup.v:16:39: Unsupported: strong sequence in assume.
+                                                 : ... note: In instance 't'
+   16 |   assume property (@(posedge clk) not strong (a ##1 a));
+      |                                       ^~~~~~
 %Error: Exiting due to

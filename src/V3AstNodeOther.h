@@ -1863,6 +1863,7 @@ public:
         return true;
     }  // Used under Cover, which expects a bool child
     VPropStrength propStrength() const { return m_propStrength; }
+    void propStrength(VPropStrength flag) { m_propStrength = flag; }
 };
 class AstPull final : public AstNode {
     // @astgen op1 := lhsp : AstNodeExpr

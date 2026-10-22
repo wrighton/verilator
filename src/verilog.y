@@ -6718,10 +6718,6 @@ property_spec<propSpecp>:               // IEEE: property_spec
 property_exprSpec<propSpecp>:  // A property expression plus explicit weak/strong strength
                 pexpr
                         { $$ = new AstPropSpec{$1->fileline(), nullptr, nullptr, $1}; }
-        |       ySTRONG '(' sexpr ')'
-                        { $$ = new AstPropSpec{$1, nullptr, nullptr, $3, VPropStrength::STRONG}; }
-        |       yWEAK '(' sexpr ')'
-                        { $$ = new AstPropSpec{$1, nullptr, nullptr, $3, VPropStrength::WEAK}; }
         ;
 
 property_exprCaseIf<nodeExprp>:  // IEEE: part of property_expr for if/case
@@ -6788,6 +6784,10 @@ pexpr<nodeExprp>:  // IEEE: property_expr  (The name pexpr is important as regex
         //
                 yNOT pexpr
                         { $$ = new AstLogNot{$1, $2, /*fromProperty=*/true}; }
+        |       ySTRONG '(' sexpr ')'
+                        { $$ = new AstSStrength{$1, $3, VPropStrength::STRONG}; }
+        |       yWEAK '(' sexpr ')'
+                        { $$ = new AstSStrength{$1, $3, VPropStrength::WEAK}; }
         //                      // IEEE: pexpr yOR pexpr
         //                      // IEEE: pexpr yAND pexpr
         //                      // Under ~p~sexpr and/or ~p~sexpr
