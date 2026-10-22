@@ -224,7 +224,9 @@ class AssertElabVisitor final : public VNVisitor {
     }
     // Clone the body of a property instance, with the actual arguments substituted
     AstPropSpec* cloneProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
-        AstPropSpec* const specp = propp->specp()->cloneTree(false);
+        AstPropSpec* const specp = VN_AS(
+            V3AssertCommon::relinkSvaInstanceBody(propp->specp()->cloneTree(false), schemaRefp),
+            PropSpec);
         coverageOff(specp);
         substituteArgs(specp, schemaRefp, promoteLocalVars(propp));
         ++m_statPropInlined;
@@ -330,7 +332,9 @@ class AssertElabVisitor final : public VNVisitor {
     }
     void inlineSequence(AstSchemaRef* schemaRefp, AstSequence* seqp) {
         // Clone the body expression since the sequence may be referenced multiple times
-        AstNodeExpr* const clonedp = seqp->exprp()->cloneTree(false);
+        AstNodeExpr* const clonedp = VN_AS(
+            V3AssertCommon::relinkSvaInstanceBody(seqp->exprp()->cloneTree(false), schemaRefp),
+            NodeExpr);
         coverageOff(clonedp);
         substituteArgs(clonedp, schemaRefp, promoteLocalVars(seqp));
         schemaRefp->replaceWith(clonedp);
