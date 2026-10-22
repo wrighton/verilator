@@ -2368,6 +2368,10 @@ V3TaskConnects V3Task::taskConnects(AstNodeFTaskRef* nodep, AstNode* taskStmtsp,
                 if (funcp->classMethod() && funcp->isStatic()) newvaluep = funcRefp;
             } else if (AstConst* const constp = VN_CAST(portp->valuep(), Const)) {
                 newvaluep = constp;
+            } else if (VN_IS(nodep->taskp(), Property) || VN_IS(nodep->taskp(), Sequence)) {
+                // Substituted textually, so resolved in the declaration scope
+                // (IEEE 1800-2023 16.8)
+                newvaluep = VN_AS(portp->valuep(), NodeExpr);
             }
 
             if (!newvaluep) {
