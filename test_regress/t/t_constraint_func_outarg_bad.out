@@ -1,0 +1,22 @@
+%Error: t/t_constraint_func_outarg_bad.v:39:42: Function 'f_ref' called in constraint has output or ref argument 'o' (IEEE 1800-2023 18.5.11)
+                                              : ... note: In instance 't'
+   39 |     void'(obj.randomize() with {a == obj.f_ref(obj.t);});   
+      |                                          ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_constraint_func_outarg_bad.v:40:44: Function 'f_out' called in constraint has output or ref argument 'o' (IEEE 1800-2023 18.5.11)
+                                              : ... note: In instance 't'
+   40 |     void'(std::randomize(x) with {x == obj.f_out(obj.t);});   
+      |                                            ^~~~~
+%Error: t/t_constraint_func_outarg_bad.v:27:26: Function 'f_out' called in constraint has output or ref argument 'o' (IEEE 1800-2023 18.5.11)
+                                              : ... note: In instance 't'
+   27 |   constraint c_out {a == f_out(t);}   
+      |                          ^~~~~
+%Error: t/t_constraint_func_outarg_bad.v:28:28: Function 'f_inout' called in constraint has output or ref argument 'o' (IEEE 1800-2023 18.5.11)
+                                              : ... note: In instance 't'
+   28 |   constraint c_inout {b == f_inout(t);}   
+      |                            ^~~~~~~
+%Error: t/t_constraint_func_outarg_bad.v:29:26: Function 'f_ref' called in constraint has output or ref argument 'o' (IEEE 1800-2023 18.5.11)
+                                              : ... note: In instance 't'
+   29 |   constraint c_ref {c == f_ref(t);}   
+      |                          ^~~~~
+%Error: Exiting due to
