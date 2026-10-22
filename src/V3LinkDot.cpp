@@ -4834,8 +4834,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         if (m_ds.m_unresolvedCell && m_ds.m_unlinkedScopep) {
                             const string dotted = refp->dotted();
                             const size_t pos = dotted.find("__BRA__??__KET__");
-                            // Arrays of interfaces all have the same parameters
-                            if (pos != string::npos && varp->isParam()
+                            // Arrays of interfaces all have the same parameters, unlike
+                            // generate loop blocks
+                            if (pos != string::npos && varp->isParam() && !m_ds.m_genBlk
                                 && VN_IS(m_ds.m_unlinkedScopep, CellArrayRef)) {
                                 refp->dotted(dotted.substr(0, pos));
                                 newp = refp;
@@ -5325,6 +5326,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                    << nodep->warnContextPrimary()
                                    << okSymp->cellErrorScopes(nodep));
                     return;
+                }
+                // Only a loop generate block instance has a localparam for its genvar
+                if (varp->isGenVar()) {
+                    nodep->v3error("Genvar " << nodep->prettyNameQ()
+                                             << " used outside generate for loop"
+                                                " (IEEE 1800-2023 27.4)");
                 }
             } else {
                 VSymEnt* const foundp
