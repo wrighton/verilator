@@ -1490,7 +1490,8 @@ port<nodep>:                    // ==IEEE: port
                           BBUNSUP($<fl>2, "Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)"); }
         //                      // IEEE: part of (non-ansi) port_reference
         |       '{' port_expressionList '}'
-                        { $$ = $2; }
+                        { $$ = $2;
+                          BBUNSUP($<fl>1, "Unsupported: non-ANSI port concatenation (IEEE 1800-2023 23.2.2.1)"); }
         ;
 
 portDirNetE:                    // IEEE: part of port, optional net type and/or direction

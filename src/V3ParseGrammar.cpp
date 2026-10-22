@@ -197,7 +197,11 @@ AstVar* V3ParseGrammar::createVariable(FileLine* fileline, const string& name,
     if (GRAMMARP->m_varIO == VDirection::NONE  // In non-ANSI port list
         && GRAMMARP->m_varDecl == VVarType::PORT) {
         // Just a port list with variable name (not v2k format); AstPort already created
-        if (arrayp) VL_DO_DANGLING(arrayp->deleteTree(), arrayp);
+        if (arrayp) {
+            arrayp->v3warn(E_UNSUPPORTED, "Unsupported: non-ANSI port reference with select"
+                                          " (IEEE 1800-2023 23.2.2.1)");
+            VL_DO_DANGLING(arrayp->deleteTree(), arrayp);
+        }
         if (attrsp) {
             // TODO: Merge attributes across list? Or warn attribute is ignored
             VL_DO_DANGLING(attrsp->deleteTree(), attrsp);
