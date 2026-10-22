@@ -1,14 +1,46 @@
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:26:41: Unsupported: clock event in a nested property instance
-                                                              : ... note: In instance 't'
-   26 |   assert property (@(posedge clk) a |-> q_clk);
-      |                                         ^~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:33:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   33 |   assert property (@(posedge clk) a |-> q_arg(q_ovl));
+      |   ^~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:27:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:35:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   35 |   assert property (@(posedge clk) q_ovl ##1 a);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:36:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   36 |   assert property (@(posedge clk) a ##1 q_ovl);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:37:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   37 |   assert property (@(posedge clk) q_ovl [*2]);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:38:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   38 |   assert property (@(posedge clk) q_ovl [->2]);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:39:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   39 |   assert property (@(posedge clk) q_ovl [=2]);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:40:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   40 |   assert property (@(posedge clk) q_ovl intersect (a ##1 b));
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:41:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   41 |   assert property (@(posedge clk) q_ovl within (a ##1 b));
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:42:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   42 |   assert property (@(posedge clk) a throughout q_ovl);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:30:41: Unsupported: clock event in a nested property instance
                                                               : ... note: In instance 't'
-   27 |   assert property (@(posedge clk) a |-> q_seq);
+   30 |   assert property (@(posedge clk) a |-> q_clk);
       |                                         ^~~~~
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:28:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:31:41: Unsupported: multi-cycle body in a nested property instance
                                                               : ... note: In instance 't'
-   28 |   assert property (@(posedge clk) a |-> q_rep);
-      |                                         ^~~~~
+   31 |   assert property (@(posedge clk) a |-> q_strong);
+      |                                         ^~~~~~~~
 %Error: Exiting due to
