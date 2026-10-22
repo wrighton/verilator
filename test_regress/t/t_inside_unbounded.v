@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2026 Wei-Lun Chiu
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t;
   initial begin
     int value;
@@ -66,6 +71,27 @@ module t;
     value = -1;
     if (!(++value inside {[0 : $]})) $stop;  // value becomes 0
     if (value != 0) $stop;
+
+    // Narrow operands: '$' is the lowest or highest value of the operand's type
+    begin
+      logic [6:0] u;
+      logic signed [6:0] s;
+      int r;
+      for (int i = 0; i < 128; ++i) begin
+        u = 7'(get_runtime_value(i));
+        s = 7'(get_runtime_value(i));
+        `checkd(u inside {[7'd100 : $]}, u >= 100);
+        `checkd(u inside {[$ : 7'd10]}, u <= 10);
+        `checkd(s inside {[-7'sd3 : $]}, s >= -3);
+        `checkd(s inside {[$ : -7'sd3]}, s <= -3);
+        case (u) inside
+          [7'd100 : $]: r = 1;
+          [$ : 7'd10]: r = 2;
+          default: r = 0;
+        endcase
+        `checkd(r, u >= 100 ? 1 : u <= 10 ? 2 : 0);
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

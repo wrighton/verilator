@@ -4041,13 +4041,20 @@ class WidthVisitor final : public VNVisitor {
                 const bool waiveRhs = expWidth == 32
                                       && !(expDTypep->isSigned() && nodep->rhsp()->isSigned())
                                       && expWidth >= nodep->rhsp()->widthMin();
-                iterateCheck(nodep, "Range LHS", nodep->lhsp(), CONTEXT_DET, FINAL, expDTypep,
-                             EXTEND_EXP, !waiveLhs);
-                iterateCheck(nodep, "Range RHS", nodep->rhsp(), CONTEXT_DET, FINAL, expDTypep,
-                             EXTEND_EXP, !waiveRhs);
+                // A '$' bound is left for newAndFromInside to remove
+                if (!VN_IS(nodep->lhsp(), Unbounded)) {
+                    iterateCheck(nodep, "Range LHS", nodep->lhsp(), CONTEXT_DET, FINAL, expDTypep,
+                                 EXTEND_EXP, !waiveLhs);
+                }
+                if (!VN_IS(nodep->rhsp(), Unbounded)) {
+                    iterateCheck(nodep, "Range RHS", nodep->rhsp(), CONTEXT_DET, FINAL, expDTypep,
+                                 EXTEND_EXP, !waiveRhs);
+                }
             }
         }
-        nodep->dtypeFrom(nodep->lhsp());
+        // IEEE 1800-2023 11.4.13: '$' is the extreme value of the left-hand expression's
+        // type, so it does not contribute a width; take it from the other bound
+        nodep->dtypeFrom(VN_IS(nodep->lhsp(), Unbounded) ? nodep->rhsp() : nodep->lhsp());
     }
 
     void visit(AstIfaceRefDType* nodep) override {
