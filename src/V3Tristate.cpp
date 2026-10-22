@@ -314,6 +314,10 @@ public:
         const TristateVertex* const vertexp = reinterpret_cast<TristateVertex*>(nodep->user4p());
         return vertexp && vertexp->isTristate();
     }
+    bool isDriven(const AstNode* nodep) {
+        const TristateVertex* const vertexp = reinterpret_cast<TristateVertex*>(nodep->user4p());
+        return vertexp && !vertexp->inEmpty();
+    }
     bool feedsTri(const AstNode* nodep) {
         const TristateVertex* const vertexp = reinterpret_cast<TristateVertex*>(nodep->user4p());
         return vertexp && vertexp->feedsTri();
@@ -603,6 +607,14 @@ class TristateVisitor final : public TristateBaseVisitor {
         numz0.opNot(numz);  // Z->0, else 1
         return new AstConst{fl, numz0};
     }
+    // True if the variable read by refp may be z
+    bool mayBeZ(const AstNodeVarRef* refp) {
+        // A port or a cross-hierarchy reference may carry a z from another module, which this
+        // module's graph does not show, and an undriven net is z.
+        const AstVar* const varp = refp->varp();
+        return VN_IS(refp, VarXRef) || varp->isIO() || m_tgraph.isTristate(varp)
+               || (varp->isNet() && !m_tgraph.isDriven(varp));
+    }
     AstNodeExpr* getEnExprBasedOnOriginalp(AstNodeExpr* const nodep) {
         if (AstVarRef* const varrefp = VN_CAST(nodep, VarRef)) {
             return new AstVarRef{varrefp->fileline(), getCreateEnVarp(varrefp->varp(), false),
@@ -634,10 +646,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             enSelp->fromp(enFromp);
             return enSelp;
         } else {
-            nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported tristate construct: " << nodep->prettyTypeName()
-                                                             << " in function " << __func__);
-            return nullptr;
+            // Other expressions can only be z through a variable they read that may be z, e.g.
+            // '^a' or '{a, a}' with a driven, non-tristate 'a' is never z, so is fully enabled.
+            if (nodep->exists([this](const AstNodeVarRef* refp) { return mayBeZ(refp); })) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported tristate construct: " << nodep->prettyTypeName()
+                                                                 << " in function " << __func__);
+            }
+            return newAllZerosOrOnes(nodep, true);
         }
     }
     AstVar* getCreateOutVarp(AstVar* invarp, bool isTop) {
