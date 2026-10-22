@@ -153,13 +153,33 @@ class AssertElabVisitor final : public VNVisitor {
     void coverageOff(AstNode* nodep) {
         nodep->foreach([&](AstNode* np) { np->fileline(noCoverFileLine(np->fileline())); });
     }
-    // Check the cycle delays of a sequence or property instance, after its formal arguments are
-    // replaced with the actual arguments (IEEE 1800-2023 16.8), reporting errors on instp
-    static void checkInstanceDelays(AstNode* nodep, AstNode* instp) {
-        // Collect first, as checking edits the delays
+    // Check the cycle delays, repetition counts and $past tick counts of a sequence or property
+    // instance, after its formal arguments are replaced with the actual arguments
+    // (IEEE 1800-2023 16.8), reporting errors on instp
+    static void checkInstanceConstants(AstNode* nodep, AstNode* instp) {
+        // Collect first, as checking edits them
         std::vector<AstDelay*> delayps;
         nodep->foreach([&](AstDelay* delayp) { delayps.push_back(delayp); });
         for (AstDelay* const delayp : delayps) V3AssertCommon::checkSvaCycleDelay(delayp, instp);
+        std::vector<AstNodeExpr*> exprps;
+        nodep->foreach([&](AstNodeExpr* exprp) {
+            const AstPast* const pastp = VN_CAST(exprp, Past);
+            if (VN_IS(exprp, SConsRep) || VN_IS(exprp, SGotoRep) || VN_IS(exprp, SNonConsRep)
+                || (pastp && pastp->ticksp())) {
+                exprps.push_back(exprp);
+            }
+        });
+        for (AstNodeExpr* const exprp : exprps) {
+            if (AstSConsRep* const repp = VN_CAST(exprp, SConsRep)) {
+                V3AssertCommon::checkSvaRepetition(repp, instp);
+            } else if (AstSGotoRep* const repp = VN_CAST(exprp, SGotoRep)) {
+                V3AssertCommon::checkSvaRepetition(repp, instp);
+            } else if (AstSNonConsRep* const repp = VN_CAST(exprp, SNonConsRep)) {
+                V3AssertCommon::checkSvaRepetition(repp, instp);
+            } else {
+                V3AssertCommon::checkSvaPastTicks(VN_AS(exprp, Past), instp);
+            }
+        }
     }
     // Replace formal argument references under bodyp with the actual arguments of schemaRefp,
     // and retarget property-local variable references per localVarMap
@@ -185,8 +205,8 @@ class AssertElabVisitor final : public VNVisitor {
             const auto localIt = localVarMap.find(refp->varp());
             if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });  // LCOV_EXCL_LINE -- gcov attributes lambda's implicit return to `})`
-        // Cycle delays with a formal argument are checked once it is substituted
-        checkInstanceDelays(bodyp, schemaRefp);
+        // Constants with a formal argument are checked once it is substituted
+        checkInstanceConstants(bodyp, schemaRefp);
     }
     // Promote the local variables of an instance of a property or sequence to module-level
     // temps, returning each declared variable's temp (IEEE 1800-2023 16.10)

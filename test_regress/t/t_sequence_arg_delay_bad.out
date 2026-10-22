@@ -19,4 +19,43 @@
                                           : ... note: In instance 't'
    43 |   assert property (@(posedge clk) a |-> seq_sum(1'b1, b, 1))
       |                                         ^~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:63:29: Expecting expression to be constant, but variable isn't const: 'n'
+   63 |   assert property (prop_rep(n))
+      |                             ^
+%Error: t/t_sequence_arg_delay_bad.v:63:20: Consecutive repetition count must be constant expression (IEEE 1800-2023 16.9.2)
+                                          : ... note: In instance 't'
+   63 |   assert property (prop_rep(n))
+      |                    ^~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:65:20: Repetition count is not an elaboration-time constant (IEEE 1800-2023 16.9.2)
+                                          : ... note: In instance 't'
+   65 |   assert property (prop_goto(n))
+      |                    ^~~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:67:30: Expecting expression to be constant, but variable isn't const: 'n'
+   67 |   assert property (prop_past(n))
+      |                              ^
+%Error: t/t_sequence_arg_delay_bad.v:67:20: $past tick value must be constant (IEEE 1800-2023 16.9.3)
+                                          : ... note: In instance 't'
+   67 |   assert property (prop_past(n))
+      |                    ^~~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:69:20: Consecutive repetition count must be non-negative (IEEE 1800-2023 16.9.2)
+                                          : ... note: In instance 't'
+   69 |   assert property (prop_rep(-1))
+      |                    ^~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:71:30: $past tick value must be >= 1 (IEEE 1800-2023 16.9.3)
+   71 |   assert property (prop_past(0))
+      |                              ^
+%Error: t/t_sequence_arg_delay_bad.v:73:33: Expecting expression to be constant, but variable isn't const: 'n'
+   73 |   assert property (prop_rep_min(n))
+      |                                 ^
+%Error: t/t_sequence_arg_delay_bad.v:73:20: Consecutive repetition count must be constant expression (IEEE 1800-2023 16.9.2)
+                                          : ... note: In instance 't'
+   73 |   assert property (prop_rep_min(n))
+      |                    ^~~~~~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:75:33: Expecting expression to be constant, but variable isn't const: 'n'
+   75 |   assert property (prop_rep_max(n))
+      |                                 ^
+%Error: t/t_sequence_arg_delay_bad.v:75:20: Consecutive repetition max count must be constant expression (IEEE 1800-2023 16.9.2)
+                                          : ... note: In instance 't'
+   75 |   assert property (prop_rep_max(n))
+      |                    ^~~~~~~~~~~~
 %Error: Exiting due to
