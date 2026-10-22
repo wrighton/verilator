@@ -1614,8 +1614,8 @@ class TaskVisitor final : public VNVisitor {
             UASSERT_OBJ(portp, nodep, "function without function output variable");
             UASSERT_OBJ(portp->isFuncReturn(), nodep, "Not marked as function return var");
             if (nodep->dpiImport() || nodep->dpiExport()) {
-                AstBasicDType* const bdtypep = portp->dtypep()->basicp();
-                if (!bdtypep) {
+                const AstNodeDType* const dtypep = portp->dtypep()->skipRefp();
+                if (!VN_IS(dtypep, BasicDType) && !dtypep->isIntegralOrPacked()) {
                     portp->v3error("DPI function may not return type "
                                    << portp->dtypep()->prettyDTypeNameQ(true)
                                    << " (IEEE 1800-2023 35.5.5)");
