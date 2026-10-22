@@ -3179,8 +3179,17 @@ class LinkDotIfaceVisitor final : public VNVisitor {
                 }
 
                 if (!symp || !baddot.empty()) {
-                    fl->v3error("Can't find modport expression target: "
-                                << AstNode::prettyNameQ(dottedPath));
+                    const AstVar* const varp = VN_CAST(okSymp->nodep(), Var);
+                    // Typedefs are not yet resolved, so only a basic type is known to have no
+                    // members
+                    if (varp && !varp->isIfaceRef() && !VN_IS(varp->subDTypep(), BasicDType)) {
+                        // Prefix is a variable, so the rest selects a struct/union member
+                        fl->v3warn(E_UNSUPPORTED, "Unsupported: Modport expression with member "
+                                                  "select (IEEE 1800-2023 25.5.4)");
+                    } else {
+                        fl->v3error("Can't find modport expression target: "
+                                    << AstNode::prettyNameQ(dottedPath));
+                    }
                     symp = nullptr;
                 }
             }
