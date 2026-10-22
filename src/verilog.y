@@ -6647,7 +6647,8 @@ property_port_itemAssignment<varp>:  // IEEE: part of property_port_item/sequenc
                         { VARDECL(VAR);
                           $$ = VARDONEA($<fl>1, *$1, $2, nullptr);
                           $$->valuep($4);
-                          BBUNSUP($3, "Unsupported: property variable default value"); }
+                          if ($4->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); }))
+                              BBUNSUP($3, "Unsupported: sequence expression as formal argument default"); }
         ;
 
 property_port_itemDirE:

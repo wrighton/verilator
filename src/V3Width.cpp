@@ -4120,15 +4120,22 @@ class WidthVisitor final : public VNVisitor {
                            << badDtp->warnContextSecondary());
         }
         if (nodep->valuep() && !didchk) {
-            // UINFOTREE(1, nodep, "", "final");
             // A default of a port is evaluated where called (IEEE 1800-2023 13.5.3), a static
             // value before running
             VL_RESTORER(m_valueOutsideFTaskp);
             m_valueOutsideFTaskp
                 = nodep->isIO() || nodep->lifetime().isStatic() ? m_ftaskp : nullptr;
-            // AstPattern requires assignments to pass datatype on PRELIM
-            userIterateAndNext(nodep->valuep(), WidthVP{nodep->dtypep(), PRELIM}.p());
-            iterateCheckAssign(nodep, "Initial value", nodep->valuep(), FINAL, nodep->dtypep());
+            if (nodep->basicp() && nodep->basicp()->untyped()) {
+                // Default of an untyped sequence or property formal argument, which keeps its
+                // self-determined type (IEEE 1800-2023 16.8)
+                iterateCheckSelf(nodep, "Initial value", nodep->valuep(), SELF, BOTH);
+            } else {
+                // UINFOTREE(1, nodep, "", "final");
+                // AstPattern requires assignments to pass datatype on PRELIM
+                userIterateAndNext(nodep->valuep(), WidthVP{nodep->dtypep(), PRELIM}.p());
+                iterateCheckAssign(nodep, "Initial value", nodep->valuep(), FINAL,
+                                   nodep->dtypep());
+            }
         }
         userIterateAndNext(nodep->delayp(), WidthVP{nodep->dtypep(), PRELIM}.p());
         UINFO(4, "varWidthed " << nodep);
