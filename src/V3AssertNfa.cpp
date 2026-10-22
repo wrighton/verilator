@@ -2982,7 +2982,9 @@ class AssertNfaVisitor final : public VNVisitor {
         } guard{m_inliningProps, propyp};
         AstPropSpec* propSpecp = getPropertySpecp(propyp);
         UASSERT_OBJ(propSpecp, funcrefp, "Property has no body PropSpec");
-        propSpecp = propSpecp->cloneTree(false);
+        propSpecp
+            = VN_AS(V3AssertCommon::relinkSvaInstanceBody(propSpecp->cloneTree(false), funcrefp),
+                    PropSpec);
 
         const V3TaskConnects tconnects = V3Task::taskConnects(funcrefp, propyp->stmtsp());
         std::unordered_map<const AstVar*, AstNodeExpr*> portMap;
@@ -3049,7 +3051,9 @@ class AssertNfaVisitor final : public VNVisitor {
     void inlineSequenceRef(AstFuncRef* funcrefp, AstSequence* seqp) {
         AstNodeExpr* const bodyExprp = getSequenceBodyExprp(seqp);
         UASSERT_OBJ(bodyExprp, funcrefp, "Sequence has no body expression");
-        AstNodeExpr* const clonedp = bodyExprp->cloneTree(false);
+        AstNodeExpr* const clonedp
+            = VN_AS(V3AssertCommon::relinkSvaInstanceBody(bodyExprp->cloneTree(false), funcrefp),
+                    NodeExpr);
 
         const V3TaskConnects tconnects = V3Task::taskConnects(funcrefp, seqp->stmtsp());
         std::unordered_map<const AstVar*, AstNodeExpr*> portMap;

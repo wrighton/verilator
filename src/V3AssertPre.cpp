@@ -307,7 +307,9 @@ private:
         AstNodeExpr* bodyExprp = getSequenceBodyExprp(seqp);
         UASSERT_OBJ(bodyExprp, funcrefp, "Sequence has no body expression");
         // Clone the body expression since the sequence may be referenced multiple times
-        AstNodeExpr* clonedp = bodyExprp->cloneTree(false);
+        AstNodeExpr* clonedp
+            = VN_AS(V3AssertCommon::relinkSvaInstanceBody(bodyExprp->cloneTree(false), funcrefp),
+                    NodeExpr);
         // Build substitution map, then do a single traversal to replace all formals
         // (textual substitution per IEEE 16.8.2).
         const V3TaskConnects tconnects = V3Task::taskConnects(funcrefp, seqp->stmtsp());
@@ -339,7 +341,9 @@ private:
         propExprp = substitutePropertyCall(propExprp);
         // Clone subtree after substitution. It is needed, because property might be called
         // multiple times with different arguments.
-        propExprp = propExprp->cloneTree(false);
+        propExprp
+            = VN_AS(V3AssertCommon::relinkSvaInstanceBody(propExprp->cloneTree(false), funcrefp),
+                    PropSpec);
         // Build substitution maps for formal arguments and property-local
         // variables, then perform a single foreach to apply all replacements.
         // Map port vars to their actual argument expressions

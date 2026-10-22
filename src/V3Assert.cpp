@@ -244,6 +244,30 @@ void V3AssertCommon::checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) {
     for (AstDelay* const delayp : delayps) checkSvaCycleDelay(delayp, instp);
 }
 
+AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstNodeFTaskRef* instp) {
+    // A sequence or property may be instanced by a hierarchical name (IEEE 1800-2023 16.8,
+    // 16.12). Its inlined body then refers to the declaring scope through the same path.
+    const string dotted = instp->dotted();
+    if (dotted.empty()) return bodyp;
+    bodyp->foreach([&](AstVarXRef* refp) { refp->dotted(dotted + "." + refp->dotted()); });
+    bodyp->foreach([&](AstNodeFTaskRef* refp) {
+        refp->dotted(refp->dotted().empty() ? dotted : dotted + "." + refp->dotted());
+    });
+    bodyp->foreach([&](AstVarRef* refp) {
+        // Formal arguments and local variables are substituted by the caller
+        if (refp->classOrPackagep() || refp->varp()->aboveLoopp() == instp->taskp()) return;
+        AstVarXRef* const xrefp
+            = new AstVarXRef{refp->fileline(), refp->varp(), dotted, refp->access()};
+        if (refp == bodyp) {
+            bodyp = xrefp;
+        } else {
+            refp->replaceWith(xrefp);
+        }
+        VL_DO_DANGLING(refp->deleteTree(), refp);
+    });
+    return bodyp;
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
