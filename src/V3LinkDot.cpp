@@ -3307,6 +3307,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         bool m_unresolvedCell;  // Unresolved cell, needs help from V3Param
         bool m_unresolvedClass;  // Unresolved class reference, needs help from V3Param
         bool m_unresolvedGenericIface;  // Unresolved generic interface, needs help from V3Param
+        bool m_unresolvedRecursive;  // Into recursive instance not yet created, needs V3Param
         bool m_genBlk;  // Contains gen block reference
         AstNode* m_unlinkedScopep;  // Unresolved scope, needs corresponding VarXRef
         AstDisable* m_disablep;  // Disable statement under which the reference is
@@ -3324,6 +3325,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             m_unresolvedCell = false;
             m_unresolvedClass = unresolvedClass;
             m_unresolvedGenericIface = false;
+            m_unresolvedRecursive = false;
             m_genBlk = false;
             m_unlinkedScopep = nullptr;
             m_disablep = nullptr;
@@ -3581,6 +3583,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
         AstVar* const eventp = clockingp->ensureEventp(true);
         if (!eventp->user1p()) eventp->user1p(new VSymEnt{m_statep->symsp(), eventp});
         return reinterpret_cast<VSymEnt*>(eventp->user1p());
+    }
+    static bool inRecursiveClone(const VSymEnt* symp) {
+        // True if symp is in an instance of a recursive module's clone, under which
+        // the recursive instances are only created by V3Param
+        for (; symp; symp = symp->parentp()) {
+            if (const AstCell* const cellp = VN_CAST(symp->nodep(), Cell)) {
+                return cellp->modp()->recursiveClone();
+            }
+        }
+        return false;
     }
     VSymEnt* findInlinedDotsSym(AstNode* nodep, const string& inlinedDots) {
         // Return scope that applies for searching, given renaming due to module inlining.
@@ -4690,6 +4702,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 UINFO(9, indent() << "found=se" << cvtToHex(foundp) << "  exp=" << expectWhat
                                   << "  n=" << foundp->nodep());
             }
+            // Rest of a path into a recursive instance not yet created, see below
+            if (m_ds.m_unresolvedRecursive) foundp = nullptr;
             // What fell out?
             bool ok = false;
             // Special case: waiting on clocking event
@@ -5070,6 +5084,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_unresolvedClass = true;
                     // If the symbol was a scope name, it would be resolved.
                     m_ds.m_dotPos = DP_MEMBER;
+                } else if (m_ds.m_unresolvedRecursive
+                           || (m_statep->forPrimary() && m_ds.m_dotp && !foundp
+                               && inRecursiveClone(m_ds.m_dotSymp))) {
+                    // Path into an instance of a recursive module not yet created, resolve
+                    // the VarXRef after V3Param
+                    UINFO(9, indent() << "deferring until post-V3Param: " << nodep);
+                    m_ds.m_unresolvedRecursive = true;
+                    if (m_ds.m_dotPos == DP_FINAL) {
+                        AstVarXRef* const refp = new AstVarXRef{nodep->fileline(), nodep->name(),
+                                                                m_ds.m_dotText, VAccess::READ};
+                        refp->user3(true);  // Don't resolve now
+                        nodep->replaceWith(refp);
+                        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    } else {
+                        m_ds.m_dotText = VString::dot(m_ds.m_dotText, ".", nodep->name());
+                    }
                 } else {
                     // Cells/interfaces can't be implicit
                     const bool checkImplicit
@@ -5550,6 +5580,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             m_ds.m_dotPos = DP_MEMBER;
         } else if (m_ds.m_dotp && m_ds.m_dotPos == DP_FINAL) {
             nodep->dotted(m_ds.m_dotText);  // Maybe ""
+            if (m_ds.m_unresolvedRecursive) return;  // Link after V3Param
             // Only flag FTaskRefs under generate-if/case blocks that may be
             // pruned.  GenFor and plain begin-blocks won't be pruned by V3Param.
             // A generate-case block's parent is the GenCaseItem, not the GenCase.
