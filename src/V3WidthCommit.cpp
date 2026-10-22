@@ -42,6 +42,43 @@ struct PairHash final {
 };
 
 //######################################################################
+// Determine if calling a task may block the caller, as the task contains a blocking timing
+// control outside a fork..join_none, or calls a task that does
+
+class WidthTaskBlocksVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_map<const AstNodeFTask*, bool>& m_cache;  // Result per task
+    bool m_found = false;  // Found a statement that blocks
+
+    // VISITORS
+    void visit(AstFork* nodep) override {
+        if (!nodep->joinType().joinNone()) iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (VN_IS(nodep->taskp(), Task) && blocks(m_cache, nodep->taskp())) m_found = true;
+    }
+    void visit(AstAssignDly*) override {}  // Non-blocking, even with a timing control
+    void visit(AstNode* nodep) override {
+        if (nodep->isTimingControl()) m_found = true;
+        iterateChildrenConst(nodep);
+    }
+
+    // CONSTRUCTORS
+    explicit WidthTaskBlocksVisitor(std::unordered_map<const AstNodeFTask*, bool>& cache)
+        : m_cache{cache} {}
+
+public:
+    static bool blocks(std::unordered_map<const AstNodeFTask*, bool>& cache, AstNodeFTask* taskp) {
+        // Insert false first, so recursive calls terminate
+        if (!cache.emplace(taskp, false).second) return cache[taskp];
+        WidthTaskBlocksVisitor visitor{cache};
+        visitor.iterateChildrenConst(taskp);
+        cache[taskp] = visitor.m_found;
+        return visitor.m_found;
+    }
+};
+
+//######################################################################
 // Now that all widthing is complete,
 // Copy all width() to widthMin().  V3Const expects this
 
@@ -61,7 +98,9 @@ class WidthCommitVisitor final : public VNVisitor {
     bool m_contReads = false;  // Check read continuous automatic variables
     bool m_dynsizedelem = false;  // Writing dynamically-sized array element, not the array itself
     VMemberMap m_memberMap;  // Member names cached for fast lookup
-    bool m_taskRefWarn = true;  // Allow task reference warnings
+    bool m_taskRefWarn = true;  // Allow task reference warnings, false under fork..join_none
+    bool m_inFinal = false;  // Under final procedure
+    std::unordered_map<const AstNodeFTask*, bool> m_taskBlocks;  // If calling task may block
     bool m_underSel = false;  // Under AstMemberSel or AstSel
     bool m_underAlwaysEdged = false;  // Under always with sequential SenTree
     std::vector<AstNew*> m_virtualNewsp;  // Instantiations of virtual classes
@@ -84,6 +123,10 @@ private:
                     << nodep->warnMore() << "... Suggest make caller 'function "
                     << m_ftaskp->prettyName() << "' a task\n"
                     << m_ftaskp->warnContextSecondary());
+        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl()) {
+            nodep->v3error("Timing controls and fork-join are not legal in final blocks"
+                           " (IEEE 1800-2023 9.2.3)");
+        }
     }
     AstNodeDType* editOneDType(AstNodeDType* nodep) {
         // See if the dtype/refDType can be converted to a standard one
@@ -278,6 +321,12 @@ private:
         m_underAlwaysEdged
             = nodep->sentreep() && nodep->sentreep()->sensesp() && nodep->sentreep()->hasEdge();
         // Iterate will delete ComboStar sentrees, so after above
+        iterateChildren(nodep);
+        editDType(nodep);
+    }
+    void visit(AstFinal* nodep) override {
+        VL_RESTORER(m_inFinal);
+        m_inFinal = true;
         iterateChildren(nodep);
         editDType(nodep);
     }
@@ -525,6 +574,14 @@ private:
                               << nodep->warnMore() << "... Or, suggest make called 'task "
                               << nodep->taskp()->prettyName() << "' a function void\n"
                               << nodep->taskp()->warnContextSecondary());
+        }
+        if (m_inFinal && m_taskRefWarn && VN_IS(nodep->taskp(), Task)
+            && WidthTaskBlocksVisitor::blocks(m_taskBlocks, nodep->taskp())) {
+            nodep->v3error("Calling a task that blocks is not legal in final blocks"
+                           " (IEEE 1800-2023 9.2.3)\n"
+                           << nodep->warnContextPrimary() << "\n"
+                           << nodep->taskp()->warnOther() << "... Location of blocking task\n"
+                           << nodep->taskp()->warnContextSecondary());
         }
         if (nodep->taskp()) nodep->taskp()->user2(1);
         if (AstNew* const newp = VN_CAST(nodep, New)) {
