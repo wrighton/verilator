@@ -24,12 +24,10 @@ module t (
     if ($past(d, TICKS)) $stop;
   end
 
-  real reals[2];
   string strings[2];
   typedef struct {int a;} unpacked_t;
   unpacked_t structs[2];
   always @(posedge clk) begin
-    if ($stable(reals)) $stop;
     if ($changed(strings)) $stop;
     if ($stable(structs)) $stop;
   end

@@ -97,6 +97,8 @@ public:
 void V3AssertCommon::checkSampledDType(AstNode* nodep, const AstNodeDType* dtypep,
                                        bool allowUnpacked) {
     dtypep = dtypep->skipRefp();
+    // A real value is stored and compared as real (IEEE 1800-2023 16.9.3)
+    if (dtypep->isDouble()) return;
     if (allowUnpacked) {
         while (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
             dtypep = arrayp->subDTypep()->skipRefp();

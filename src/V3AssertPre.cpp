@@ -1056,7 +1056,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstEq{fl, pastp, newSampledClone(exprp)};
+        exprp = AstEq::newTyped(fl, pastp, newSampledClone(exprp));
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -1069,7 +1069,7 @@ private:
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
         AstNodeExpr* const futurep = new AstFuture{fl, exprp, newSenTree(nodep)};
         futurep->dtypeFrom(exprp);
-        exprp = new AstEq{fl, exprp->cloneTreePure(false), futurep};
+        exprp = AstEq::newTyped(fl, exprp->cloneTreePure(false), futurep);
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
