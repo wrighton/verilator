@@ -2277,6 +2277,29 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->seedp()) iterateCheckSigned32(nodep, "seed", nodep->seedp(), BOTH);
         }
     }
+    void visit(AstSEventually* nodep) override {
+        // IEEE 1800-2023 A.2.10: a property operator is not a sequence operand, but the
+        // parser accepts a property expression for some sequence operands
+        if (m_underSExpr) {
+            nodep->v3error("Unexpected 's_eventually' in sequence expression context"
+                           " (IEEE 1800-2023 16.12.13)");
+            AstConst* const newp = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
+            newp->dtypeSetBit();
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        if (v3Global.opt.timing().isSetFalse() || !v3Global.opt.timing().isSetTrue()) {
+            nodep->v3warn(E_NOTIMING, "s_eventually requires --timing");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::WidthedValue{}, 1, 0});
+            VL_DO_DANGLING(nodep->deleteTree(), nodep);
+            return;
+        }
+        if (m_vup->prelim()) {
+            iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
+            nodep->dtypeSetBit();
+        }
+    }
     void visit(AstSGotoRep* nodep) override {
         VL_RESTORER(m_underSExpr);
         m_underSExpr = true;
