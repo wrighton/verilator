@@ -77,6 +77,17 @@ class Caller;
     return other.randomize() with { x == local::this.lim; };
   endfunction
 endclass
+// local::\this is a caller member named this, not local::this
+class EscCaller;
+  Other \this ;
+  function new;
+    \this = new;
+    \this .lim = 9;
+  endfunction
+  function int rand_esc(Other other);
+    return other.randomize() with { x == local::\this .lim; };
+  endfunction
+endclass
 
 module t;
   initial begin
@@ -135,6 +146,11 @@ module t;
       `checkd(o.x, i * 10 + 3);
       `checkd(c.rand_param(po), 1);
       `checkd(po.x, i * 10 + 3);
+    end
+    begin
+      automatic EscCaller ec = new;
+      `checkd(ec.rand_esc(o), 1);
+      `checkd(o.x, 9);
     end
     $write("*-* All Finished *-*\n");
     $finish;
