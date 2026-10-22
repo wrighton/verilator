@@ -6701,6 +6701,9 @@ sequence_declaration<sequencep>:  // ==IEEE: sequence_declaration
                           $$->addDeclsp($2);
                           $$->exprp($4);
                           GRAMMARP->endLabel($<fl>6, $$, $6);
+                          GRAMMARP->m_insideProperty = false;
+                          // Sequence declarations are inlined by V3AssertElab. Sequences in
+                          // unsupported contexts are reported by assertPreAll after inlining.
                         }
         |       sequence_declarationFront sequence_port_listE ';' assertion_variable_declarationList
         /*cont*/    sequence_declarationBodyExpr yENDSEQUENCE endLabelE
@@ -6708,12 +6711,14 @@ sequence_declaration<sequencep>:  // ==IEEE: sequence_declaration
                           $$->addDeclsp($2);
                           $$->addDeclsp($4);
                           $$->exprp($5);
-                          GRAMMARP->endLabel($<fl>7, $$, $7); }
+                          GRAMMARP->endLabel($<fl>7, $$, $7);
+                          GRAMMARP->m_insideProperty = false; }
         ;
 
 sequence_declarationFront<sequencep>:  // IEEE: part of sequence_declaration
                 ySEQUENCE idAny/*new_sequence*/
-                        { $$ = new AstSequence{$<fl>2, *$2}; }
+                        { $$ = new AstSequence{$<fl>2, *$2};
+                          GRAMMARP->m_insideProperty = true; }
         ;
 
 sequence_port_listE<nodep>:  // IEEE: [ ( [ sequence_port_list ] ) ]

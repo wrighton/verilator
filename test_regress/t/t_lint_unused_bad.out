@@ -154,8 +154,4 @@
                                                   : ... note: In instance 't.sub'
   228 |   logic arg_unused = 0;
       |         ^~~~~~~~~~
-%Warning-UNUSEDSIGNAL: t/t_lint_unused_bad.v:229:31: Signal is not used: 'y'
-                                                   : ... note: In instance 't.sub'
-  229 |   sequence s_unused_formal(x, y);
-      |                               ^
 %Error: Exiting due to
