@@ -361,6 +361,14 @@ class LinkParseVisitor final : public VNVisitor {
             refp->name(AstClass::embeddedCovergroupTypeName(refp->name()));
         }
         if (nodep->valuep()) nodep->hasUserInit(true);
+        if (classp && !m_ftaskp && nodep->isConst() && nodep->lifetime().isStaticExplicit()
+            && !nodep->valuep()) {
+            nodep->v3error("Static constant class property requires an initial value"
+                           " (IEEE 1800-2023 8.19): "
+                           << nodep->prettyNameQ() << '\n'
+                           << nodep->warnMore()
+                           << "... Instance constants, without initial value, cannot be static");
+        }
         // IEEE 1800-2023 6.21: for loop variables are automatic. verilog.y is
         // responsible for marking those.
         if (nodep->valuep() && nodep->lifetime().isNone() && m_lifetime.isStatic()
