@@ -309,16 +309,20 @@ private:
                 clonedp = it->second->cloneTree(false);
             }
         }
+        std::vector<AstNodeExpr*> actualps;
         clonedp->foreach([&](AstVarRef* refp) {
             const auto portIt = portMap.find(refp->varp());
             if (portIt != portMap.end()) {
-                refp->replaceWith(portIt->second->cloneTree(false));
+                AstNodeExpr* const actualp = portIt->second->cloneTree(false);
+                refp->replaceWith(actualp);
                 VL_DO_DANGLING(pushDeletep(refp), refp);
+                actualps.push_back(actualp);
                 return;
             }
             const auto localIt = localVarMap.find(refp->varp());
             if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });
+        V3AssertCommon::removeActualReductions(actualps);
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
