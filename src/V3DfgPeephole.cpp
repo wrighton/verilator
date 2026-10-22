@@ -477,6 +477,25 @@ class V3DfgPeephole final : public DfgVisitor {
         return false;
     }
 
+    // True if 'ap' is 'yp', or an operand of 'yp' if 'yp' is an Or, so 'ap | yp' equals 'yp'
+    static bool isOrAbsorbed(const DfgVertex* ap, const DfgVertex* yp) {
+        if (isSame(ap, yp)) return true;
+        const DfgOr* const orp = yp->cast<DfgOr>();
+        return orp && (isSame(ap, orp->lhsp()) || isSame(ap, orp->rhsp()));
+    }
+
+    // If 'vtxp' is '~a & b' or 'b & ~a' with 'isOrAbsorbed(a, yp)', return 'b', otherwise nullptr
+    static DfgVertex* redundantAndNotOperand(const DfgVertex* vtxp, const DfgVertex* yp) {
+        // If so, 'vtxp | yp' equals 'b | yp'.
+        const DfgAnd* const andp = vtxp->cast<DfgAnd>();
+        if (!andp) return nullptr;
+        const DfgNot* const lNotp = andp->lhsp()->cast<DfgNot>();
+        if (lNotp && isOrAbsorbed(lNotp->srcp(), yp)) return andp->rhsp();
+        const DfgNot* const rNotp = andp->rhsp()->cast<DfgNot>();
+        if (rNotp && isOrAbsorbed(rNotp->srcp(), yp)) return andp->lhsp();
+        return nullptr;
+    }
+
     static bool areAdjacent(uint32_t& lsb, const DfgSel* lSelp, const DfgSel* rSelp) {
         if (!isSame(lSelp->srcp(), rSelp->srcp())) return false;
         if (lSelp->lsb() + lSelp->width() == rSelp->lsb()) {
@@ -1990,6 +2009,25 @@ class V3DfgPeephole final : public DfgVisitor {
                         replace(makeOnes(flp, vtxp->width()));
                         return;
                     }
+                }
+            }
+        }
+
+        {
+            // A | (~A & B) is A | B, and (A | C) | (~A & B) is (A | C) | B. This also removes
+            // the second dependency on 'A', which otherwise makes chains like
+            // 'o1 = o0 | (~o0 & b1); o2 = o1 | (~o1 & b2); ...' (e.g. from a priority encoder
+            // loop) a DAG with exponentially many paths.
+            DfgVertex* yp = lhsp;
+            DfgVertex* bp = redundantAndNotOperand(rhsp, lhsp);
+            if (!bp) {
+                yp = rhsp;
+                bp = redundantAndNotOperand(lhsp, rhsp);
+            }
+            if (bp) {
+                APPLYING(REPLACE_OR_WITH_AND_OF_NOT) {
+                    replace(make<DfgOr>(vtxp, yp, bp));
+                    return;
                 }
             }
         }
