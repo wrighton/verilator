@@ -392,12 +392,8 @@ public:
 
 // Prepare one default sampled expression.
 class DefaultSampledValueVisitor final : public VNVisitor {
-    // STATE
-    bool m_defaulted = false;  // A reference below was replaced by its default
-
     // METHODS
-    AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
-        m_defaulted = true;
+    static AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
         AstNodeDType* const skipDtp = dtypep->skipRefp();
         if (AstUnpackArrayDType* const arrayp = VN_CAST(skipDtp, UnpackArrayDType)) {
             return new AstConsArray{flp, arrayp, newTypeDefault(flp, arrayp->subDTypep())};
@@ -417,21 +413,41 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         constp->dtypep(dtypep);
         return constp;
     }
-
+    static bool hasDefaultValue(const AstVar* varp) {
+        return !varp->isParam()
+               && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
+    }
+    static AstNodeExpr* selectFromp(AstNode* nodep) {
+        if (AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) return selp->fromp();
+        if (AstSel* const selp = VN_CAST(nodep, Sel)) return selp->fromp();
+        if (AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        return nullptr;
+    }
     void visitSelect(AstNodeExpr* nodep) {
-        // A select of a replaced value or index is itself the default of its type
-        bool setDefaulted;
-        {
-            VL_RESTORER(m_defaulted);
-            m_defaulted = false;
-            iterateChildren(nodep);
-            setDefaulted = m_defaulted;
+        // A selection from a variable with its default value, or with an unknown index, has
+        // the default value of the selected type (IEEE 1800-2023 7.4.6, 11.5.1). Replace the
+        // whole selection: the variable may be unpacked, and a constant unknown index would
+        // be rejected later.
+        AstNodeExpr* basep = selectFromp(nodep);
+        while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        bool isDefault = refp && hasDefaultValue(refp->varp());
+        if (!isDefault) {
+            AstNodeExpr* selp = nodep;
+            for (; selectFromp(selp); selp = selectFromp(selp)) {
+                // The index of an AstNodeSel or AstSel; an AstStructSel has none
+                AstNodeBiop* const biopp = VN_CAST(selp, NodeBiop);
+                if (!biopp) continue;
+                iterate(biopp->rhsp());
+                const AstConst* const constp
+                    = VN_CAST(V3Const::constifyEdit(biopp->rhsp()), Const);
+                if (constp && constp->num().isAnyXZ()) isDefault = true;
+            }
+            iterate(selp);
         }
-        if (setDefaulted) {
-            m_defaulted = true;  // Propagate up that replacement was made
+        if (isDefault) {
             nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
         }
     }
 
@@ -444,17 +460,14 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             iterateChildren(nodep);
         }
     }
+    void visit(AstNodeSel* nodep) override { visitSelect(nodep); }
+    void visit(AstSel* nodep) override { visitSelect(nodep); }
+    void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
-        AstVar* const varp = nodep->varp();
-        if (varp->isParam()
-            || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
-            return;
-        }
+        if (!hasDefaultValue(nodep->varp())) return;
         nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstArraySel* nodep) override { visitSelect(nodep); }
-    void visit(AstSel* nodep) override { visitSelect(nodep); }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
