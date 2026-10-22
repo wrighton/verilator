@@ -4442,6 +4442,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 iterateChildren(nodep);
             }
         }
+        if (m_statep->forPrimary()) {
+            // A hierarchical interface actual must not resolve through a generate block or an
+            // arrayed instance; their indices are placeholders in the scope until V3Param
+            const AstNode* exprp = nodep->exprp();
+            if (const AstUnlinkedRef* const unlinkedp = VN_CAST(exprp, UnlinkedRef)) {
+                exprp = unlinkedp->refp();
+            }
+            const AstVarXRef* const xrefp = VN_CAST(exprp, VarXRef);
+            if (xrefp && xrefp->varp()->isIfaceRef()
+                && (xrefp->containsGenBlock()
+                    || xrefp->dotted().find("__BRA__??__KET__") != string::npos)) {
+                nodep->v3error("Illegal port connection "
+                               << nodep->prettyNameQ()
+                               << ", hierarchical reference to an interface resolves through an "
+                                  "arrayed instance or a generate block (IEEE 1800-2023 25.3)");
+            }
+        }
         if (!nodep->modVarp()) {
             UASSERT_OBJ(m_pinSymp, nodep, "Pin not under instance?");
             VSymEnt* const foundp = m_pinSymp->findIdFlat(nodep->name());
@@ -5043,7 +5060,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         UINFO(9, indent() << " cell -> iface varref " << foundp->nodep());
                         AstNodeExpr* newp;
                         if (m_ds.m_dotText != "") {
-                            newp = newIfaceXRef(nodep->fileline(), ifaceRefVarp, m_ds.m_dotText);
+                            AstVarXRef* const xrefp = new AstVarXRef{
+                                nodep->fileline(), ifaceRefVarp, m_ds.m_dotText, VAccess::READ};
+                            xrefp->containsGenBlock(m_ds.m_genBlk);
+                            newp = xrefp;
                             if (m_ds.m_unresolvedCell && m_ds.m_unlinkedScopep) {
                                 newp = new AstUnlinkedRef{nodep->fileline(), newp, newp->name(),
                                                           m_ds.m_unlinkedScopep->unlinkFrBack()};
@@ -5233,7 +5253,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (cellScope.empty()) {
                         newp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                     } else {
-                        newp = newIfaceXRef(nodep->fileline(), ifaceRefVarp, cellScope);
+                        AstVarXRef* const xrefp
+                            = new AstVarXRef{nodep->fileline(), ifaceRefVarp, cellScope,
+                                             VAccess::READ};
+                        xrefp->containsGenBlock(m_ds.m_genBlk);
+                        newp = xrefp;
                     }
 
                     AstCellArrayRef* const cellarrayrefp
