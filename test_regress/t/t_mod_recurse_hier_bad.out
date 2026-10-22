@@ -1,0 +1,25 @@
+%Error: t/t_mod_recurse_hier_bad.v:28:48: Can't find definition of 'nonexist' in dotted signal: 'r.g_node.u.g_node.u.g_node.nonexist'
+                                        : ... note: In instance 't'
+   28 |     $display("%0d", r.g_node.u.g_node.u.g_node.nonexist);   
+      |                                                ^~~~~~~~
+        ... Known scopes under 'nonexist': <no instances found>
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_mod_recurse_hier_bad.v:29:57: Can't find definition of 'g_node'
+                                        : ... note: In instance 't'
+   29 |     $display("%0d", r.g_node.u.g_node.u.g_node.u.g_node.d);   
+      |                                                         ^
+%Error: t/t_mod_recurse_hier_bad.v:30:50: Can't find definition of 'g_nonode'
+                                        : ... note: In instance 't'
+   30 |     $display("%0d", r.g_node.u.g_node.u.g_nonode.depth);   
+      |                                                  ^~~~~
+%Error: t/t_mod_recurse_hier_bad.v:31:32: Can't find definition of 'notask' in dotted task/function: 'r.g_node.u.g_node.u.g_node.notask'
+                                        : ... note: In instance 't'
+   31 |     r.g_node.u.g_node.u.g_node.notask();   
+      |                                ^~~~~~
+        ... Known scopes under 'notask': <no instances found>
+%Error: t/t_mod_recurse_hier_bad.v:32:48: Can't find definition of 'nofunc' in dotted task/function: 'r.g_node.u.g_node.u.g_node.nofunc'
+                                        : ... note: In instance 't'
+   32 |     $display("%0d", r.g_node.u.g_node.u.g_node.nofunc(1));   
+      |                                                ^~~~~~
+        ... Known scopes under 'nofunc': <no instances found>
+%Error: Exiting due to
