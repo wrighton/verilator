@@ -6840,9 +6840,10 @@ class WidthVisitor final : public VNVisitor {
 
     // Return the value of a pattern default for elements of the given type, or nullptr if no
     // default. For aggregate elements, it applies to their elements (IEEE 1800-2023 10.9.1).
-    AstNodeExpr* patternDefaultValuep(AstPatternItem* defaultp, AstNodeDType* elemDTypep) {
+    AstNodeExpr* patternDefaultValuep(AstPatternItem* defaultp, AstNodeDType* elemDTypep,
+                                      const DTypeMap& dtypemap = DTypeMap{}) {
         if (!defaultp) return nullptr;
-        AstPatternItem* const elemDefaultp = defaultPatp_forDType(defaultp, elemDTypep);
+        AstPatternItem* const elemDefaultp = defaultPatp_forDType(defaultp, elemDTypep, dtypemap);
         AstNodeExpr* const valuep = patternMemberValueIterate(elemDefaultp, elemDTypep);
         VL_DO_DANGLING(pushDeletep(elemDefaultp), elemDefaultp);
         return valuep;
@@ -6852,6 +6853,15 @@ class WidthVisitor final : public VNVisitor {
                                                         const AstNodeDType* elemDtp) {
         const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
         return arrayp && arrayp->subDTypep()->similarDType(elemDtp) ? arrayp : nullptr;
+    }
+    // Return the value of an array element not given by an index key, or nullptr
+    AstNodeExpr* patternUnkeyedValuep(const DTypeMap& dtypemap, AstPatternItem* defaultp,
+                                      AstNodeDType* elemDTypep) {
+        // The value is from a data type key of the element type, else from the default (IEEE
+        // 1800-2023 10.9.1).
+        const auto it = dtypemap.find(elemDTypep->prettyDTypeName(true));
+        if (it != dtypemap.end()) return patternDefaultValuep(it->second, elemDTypep);
+        return patternDefaultValuep(defaultp, elemDTypep, dtypemap);
     }
     // An unpacked array concatenation, with each item an element, or an array of the elements
     // spliced in (IEEE 1800-2023 10.10)
@@ -6901,7 +6911,8 @@ class WidthVisitor final : public VNVisitor {
             return;
         }
         const VNumRange range = arrayDtp->declRange();
-        PatVecMap patmap = patVectorMap(nodep, range);
+        DTypeMap dtypemap;
+        PatVecMap patmap = patVectorMap(nodep, range, dtypemap);
         UINFO(9, "ent " << range.left() << " to " << range.right());
         AstNode* newp = nullptr;
         bool missed = false;  // Some element missed, so not a complete value
@@ -6910,9 +6921,8 @@ class WidthVisitor final : public VNVisitor {
             AstNodeExpr* valuep = nullptr;
             const auto it = patmap.find(ent);
             if (it == patmap.end()) {
-                if (defaultp) {
-                    valuep = patternDefaultValuep(defaultp, arrayDtp->subDTypep());
-                } else {
+                valuep = patternUnkeyedValuep(dtypemap, defaultp, arrayDtp->subDTypep());
+                if (!valuep) {
                     nodep->v3error("Assignment pattern missed initializing elements: " << ent);
                     missed = true;
                 }
@@ -7299,22 +7309,24 @@ class WidthVisitor final : public VNVisitor {
     void patternBasic(AstPattern* nodep, AstNodeDType* vdtypep, AstPatternItem* defaultp) {
         const AstBasicDType* bdtypep = VN_AS(vdtypep, BasicDType);
         const VNumRange range = bdtypep->declRange();
-        PatVecMap patmap = patVectorMap(nodep, range);
+        DTypeMap dtypemap;
+        PatVecMap patmap = patVectorMap(nodep, range, dtypemap);
+        AstNodeDType* const elemDTypep
+            = nodep->findBitOrLogicDType(1, 1, VSigning::UNSIGNED, bdtypep->isFourstate());
         UINFO(9, "ent " << range.left() << " to " << range.right());
         AstNodeExpr* newp = nullptr;
         for (const int ent : range.seqLeftToRight()) {
             AstNodeExpr* valuep = nullptr;
             const auto it = patmap.find(ent);
             if (it == patmap.end()) {
-                if (defaultp) {
-                    valuep = patternDefaultValuep(defaultp, nodep->findBitDType());
-                } else {
+                valuep = patternUnkeyedValuep(dtypemap, defaultp, elemDTypep);
+                if (!valuep) {
                     nodep->v3error("Assignment pattern missed initializing elements: " << ent);
                 }
             } else {
                 AstPatternItem* const patp = it->second;
                 patmap.erase(it);
-                valuep = patternMemberValueIterate(patp, nodep->findBitDType());
+                valuep = patternMemberValueIterate(patp, elemDTypep);
             }
             if (valuep) {  // Packed. Convert to concat for now.
                 if (!newp) {
@@ -11665,10 +11677,17 @@ class WidthVisitor final : public VNVisitor {
         return testp;
     }
 
-    PatVecMap patVectorMap(AstPattern* nodep, const VNumRange& range) {
+    // Map the index of each array element given by a pattern member
+    PatVecMap patVectorMap(AstPattern* nodep, const VNumRange& range, DTypeMap& dtypemap) {
+        // Also returns the data type keys in 'dtypemap'.
         PatVecMap patmap;
         int element = range.left();
         for (AstPatternItem* const patp : nodep->itemspList()) {
+            if (AstNodeDType* const keyDTypep = VN_CAST(patp->keyp(), NodeDType)) {
+                userIterate(keyDTypep, WidthVP{SELF, BOTH}.p());
+                dtypemap[keyDTypep->dtypep()->prettyDTypeName(true)] = patp;
+                continue;
+            }
             if (patp->keyp()) {
                 if (const AstConst* const constp = patternConstKeyp(patp)) {
                     if (constp->num().isFourState()) {
