@@ -3548,7 +3548,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         auto& defParamPins = m_usedDefParamPins[refp];
         const auto defParamIt = defParamPins.find(nodep->paramPath());
         if (defParamIt != defParamPins.end()) {
-            duplicatePinError(nodep, defParamIt->second, whatp);
+            // IEEE 1800-2023 23.10.1: Last defparam in source text wins
+            AstPin* const prevp = defParamIt->second;
+            defParamIt->second = nodep;
+            if (pair.first->second == prevp) pair.first->second = nodep;
+            VL_DO_DANGLING(pushDeletep(prevp->unlinkFrBack()), prevp);
             return;
         }
         defParamPins.emplace(nodep->paramPath(), nodep);
