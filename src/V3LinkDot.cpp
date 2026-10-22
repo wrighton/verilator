@@ -1950,8 +1950,10 @@ class LinkDotFindVisitor final : public VNVisitor {
                         findvarp->fileline()->modifyStateInherit(nodep->fileline());
                         findvarp->gotNansiType(true);
                         UASSERT_OBJ(nodep->subDTypep(), nodep, "Var has no type");
+                        // Signed on either declaration applies to both (IEEE 1800-2023 23.2.2.1)
                         if (nodep->subDTypep()->numeric().isSigned()
-                            && !findvarp->subDTypep()->numeric().isSigned()) {
+                            || findvarp->subDTypep()->numeric().isSigned()) {
+                            nodep->subDTypep()->numeric(VSigning{true});
                             findvarp->subDTypep()->numeric(VSigning{true});
                         }
                         AstNodeDType* const varDtp = findvarp->subDTypep();
