@@ -2591,9 +2591,11 @@ public:
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            // A defparam path from $root names one instance, any other is matched as a suffix
+            const string rootedName = "$root." + instanceName;
             for (AstPin* const pinp : cellp->paramspList()) {
-                if (!pinp->paramPath().empty() && instanceName != pinp->paramPath()
-                    && !VString::endsWith(instanceName, "." + pinp->paramPath())) {
+                if (!pinp->paramPath().empty() && rootedName != pinp->paramPath()
+                    && !VString::endsWith(rootedName, "." + pinp->paramPath())) {
                     VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
                 }
             }

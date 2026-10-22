@@ -29,4 +29,5 @@ module t;
   end
   defparam tblk.P = 2;  // Unsupported, in the instance of the defparam
   defparam t.Q = 2;  // Unsupported, in the instance of the defparam
+  defparam $root.t.Q = 4;  // Unsupported, in the instance of the defparam
 endmodule

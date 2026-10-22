@@ -5,6 +5,9 @@
 %Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:31:16: Unsupported: defparam to 't.Q' in the instance containing the defparam or above it
    31 |   defparam t.Q = 2;   
       |                ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:32:22: Unsupported: defparam to '$root.t.Q' in the instance containing the defparam or above it
+   32 |   defparam $root.t.Q = 4;   
+      |                      ^
 %Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:12:16: Unsupported: defparam to 't.Q' in the instance containing the defparam or above it
    12 |   defparam t.Q = 3;   
       |                ^
