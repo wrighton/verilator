@@ -2953,20 +2953,9 @@ class AssertNfaVisitor final : public VNVisitor {
         }
     }
 
-    void inlineNamedProperty(AstPropSpec* outerSpecp, AstSchemaRef* schemaRefp,
-                             const AstProperty* propyp) {
-        // Recursion guard: IEEE 1800-2023 16.12.1 forbids recursive properties.
-        // V3Width emits "Recursive property call" for direct recursion before this
-        // pass runs; this catches any nested-inlining cycle that slips past.
-        if (!m_inliningProps.emplace(propyp).second) {
-            schemaRefp->v3error("Illegal recursive property reference");  // LCOV_EXCL_LINE
-            return;  // LCOV_EXCL_LINE
-        }
-        struct Guard final {
-            std::set<const AstProperty*>& setr;
-            const AstProperty* keyp;
-            ~Guard() { setr.erase(keyp); }
-        } guard{m_inliningProps, propyp};
+    // Clone the body of a property instance with its actual arguments substituted
+    AstPropSpec* clonePropertyBody(AstSchemaRef* schemaRefp, const AstProperty* propyp) {
+        // Its local variables are promoted (IEEE 1800-2023 16.12.1, 16.10).
         AstPropSpec* const propSpecp = propyp->specp()->cloneTree(false);
 
         const V3TaskConnects tconnects = V3Task::taskConnects(schemaRefp);
@@ -3005,6 +2994,24 @@ class AssertNfaVisitor final : public VNVisitor {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
         V3AssertCommon::checkSvaInstanceDelays(propSpecp, schemaRefp);
+        return propSpecp;
+    }
+
+    void inlineNamedProperty(AstPropSpec* outerSpecp, AstSchemaRef* schemaRefp,
+                             const AstProperty* propyp) {
+        // Recursion guard: IEEE 1800-2023 16.12.1 forbids recursive properties.
+        // V3Width emits "Recursive property call" for direct recursion before this
+        // pass runs; this catches any nested-inlining cycle that slips past.
+        if (!m_inliningProps.emplace(propyp).second) {
+            schemaRefp->v3error("Illegal recursive property reference");  // LCOV_EXCL_LINE
+            return;  // LCOV_EXCL_LINE
+        }
+        struct Guard final {
+            std::set<const AstProperty*>& setr;
+            const AstProperty* keyp;
+            ~Guard() { setr.erase(keyp); }
+        } guard{m_inliningProps, propyp};
+        AstPropSpec* const propSpecp = clonePropertyBody(schemaRefp, propyp);
 
         // Merge disable iff (IEEE 1800-2023 16.12.1)
         if (outerSpecp->disablep() && propSpecp->disablep()) {
@@ -3029,6 +3036,60 @@ class AssertNfaVisitor final : public VNVisitor {
 
         outerSpecp->replaceWith(propSpecp);
         VL_DO_DANGLING(pushDeletep(outerSpecp), outerSpecp);
+    }
+
+    // True if an actual argument of schemaRefp contains a property instance
+    static bool hasPropertyArg(const AstSchemaRef* schemaRefp) {
+        // Such an instance would be substituted for an untyped formal, which V3Width typed as a
+        // boolean.
+        return schemaRefp->argsp()
+               && schemaRefp->argsp()->existsAndNext(
+                   [](const AstSchemaRef* refp) { return VN_IS(refp->schemap(), Property); });
+    }
+
+    // True if nodep is within an operand of a sequence operator or an implication antecedent
+    static bool isUnderSequenceOperator(const AstNode* nodep) {
+        for (const AstNode *belowp = nodep, *abovep = nodep->aboveLoopp(); VN_IS(abovep, NodeExpr);
+             belowp = abovep, abovep = abovep->aboveLoopp()) {
+            if (VN_IS(abovep, SExpr) || VN_IS(abovep, SConsRep) || VN_IS(abovep, SGotoRep)
+                || VN_IS(abovep, SNonConsRep) || VN_IS(abovep, SIntersect)
+                || VN_IS(abovep, SWithin) || VN_IS(abovep, SThroughout)) {
+                return true;
+            }
+            const AstImplication* const implp = VN_CAST(abovep, Implication);
+            if (implp && implp->lhsp() == belowp) return true;
+        }
+        return false;
+    }
+
+    // Substitute property instances used as property operator operands by their bodies
+    void inlineNestedPropertyRefs(AstNode* rootp) {
+        // So the NFA sees them (IEEE 1800-2023 16.12.1).
+        // A body with its own clock, disable iff or strength is not a plain operand, and a
+        // property instance is not a sequence operand (IEEE 1800-2023 A.2.10); they are left
+        // for later reporting. So is a body with a match item, as its local variables would only
+        // be lowered at the top level of the property.
+        std::vector<AstSchemaRef*> schemaRefps;
+        rootp->foreach([&](AstSchemaRef* schemaRefp) {
+            if (VN_IS(schemaRefp->schemap(), Property) && !isUnderSequenceOperator(schemaRefp)) {
+                schemaRefps.push_back(schemaRefp);
+            }
+        });
+        for (AstSchemaRef* const schemaRefp : schemaRefps) {
+            const AstProperty* const propyp = VN_AS(schemaRefp->schemap(), Property);
+            const AstPropSpec* const bodySpecp = propyp->specp();
+            if (bodySpecp->sensesp() || bodySpecp->disablep()
+                || bodySpecp->propStrength() != VPropStrength::DEFAULT
+                || hasPropertyArg(schemaRefp)
+                || bodySpecp->exists([](const AstExprStmt*) { return true; }))
+                continue;
+            AstPropSpec* const propSpecp = clonePropertyBody(schemaRefp, propyp);
+            AstNode* const bodyp = propSpecp->propp()->unlinkFrBack();
+            VL_DO_DANGLING(pushDeletep(propSpecp), propSpecp);
+            schemaRefp->replaceWith(bodyp);
+            VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
+            inlineNestedPropertyRefs(bodyp);
+        }
     }
 
     void inlineSequenceRef(AstSchemaRef* schemaRefp, AstSequence* seqp) {
@@ -3429,6 +3490,7 @@ class AssertNfaVisitor final : public VNVisitor {
             }
         }
 
+        inlineNestedPropertyRefs(assertp->propp());
         inlineAllSequenceRefs(assertp->propp());
 
         if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
