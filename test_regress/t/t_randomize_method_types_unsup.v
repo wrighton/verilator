@@ -28,8 +28,16 @@ class Cls;
   }
 endclass
 
+// IEEE 1800-2023 18.5.13 example
+class SList;
+  rand int n;
+  rand SList next;
+  constraint sort { if (next != null) n < next.n; }
+endclass
+
 module t;
   Cls obj;
+  SList head;
   int res;
 
   initial begin
@@ -37,5 +45,8 @@ module t;
     obj.foo = new;
     res = obj.randomize();
     res = obj.randomize() with { dynarr.size > 2; };
+    head = new;
+    head.next = new;
+    res = head.randomize();
   end
 endmodule

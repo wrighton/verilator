@@ -876,13 +876,17 @@ class RandomizeMarkVisitor final : public VNVisitor {
         m_inStdWith = false;
     }
 
+    // True if opp depends on the value of a rand variable
+    static bool dependsOnRandValue(const AstNode* opp) {
+        // A class handle is not a solver variable, only its rand members are (see
+        // visit(AstMemberSel)), so e.g. a 'handle != null' guard is evaluated as state.
+        return opp && opp->user1() && !opp->isClassHandleValue();
+    }
     void visit(AstNodeExpr* nodep) override {
         iterateChildrenConst(nodep);
         if (!m_constraintExprGenp && !m_inStdWith) return;
-        nodep->user1((nodep->op1p() && nodep->op1p()->user1())
-                     || (nodep->op2p() && nodep->op2p()->user1())
-                     || (nodep->op3p() && nodep->op3p()->user1())
-                     || (nodep->op4p() && nodep->op4p()->user1()));
+        nodep->user1(dependsOnRandValue(nodep->op1p()) || dependsOnRandValue(nodep->op2p())
+                     || dependsOnRandValue(nodep->op3p()) || dependsOnRandValue(nodep->op4p()));
     }
     void visit(AstArg* nodep) override {
         iterateChildrenConst(nodep);
