@@ -12169,11 +12169,32 @@ public:
                                << srcDTypep->subDTypep()->widthStream()
                                << " bits) (IEEE 1800-2023 11.4.14)");
             }
-            if (VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
+            const bool packedToDynamic = (VN_IS(lhsDTypeSkippedRefp, DynArrayDType)
+                                          || VN_IS(lhsDTypeSkippedRefp, QueueDType))
+                                         && lhsDTypeSkippedRefp->subDTypep()->isIntegralOrPacked()
+                                         && !VN_IS(streamp->dtypep(), StreamDType);
+            if (packedToDynamic || VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
                 || lowerAsFixedAggregate(lhsDTypeSkippedRefp)) {
-                streamp->unlinkFrBack();
-                nodep->rhsp(
-                    new AstCvtPackedToArray{streamp->fileline(), streamp, lhsDTypeSkippedRefp});
+                FileLine* const flp = streamp->fileline();
+                AstNodeExpr* srcp = streamp->unlinkFrBack();
+                if (packedToDynamic) {
+                    // Zero-fill to a whole number of elements as for a queue target before:
+                    // a '>>' stream on the left, as a queue source is read back, a '<<' stream
+                    // on the right. IEEE 1800-2023 11.4.14 zero-fills both on the right.
+                    const int elemWidth = lhsDTypeSkippedRefp->subDTypep()->width();
+                    const int padWidth = (elemWidth - srcp->width() % elemWidth) % elemWidth;
+                    if (padWidth) {
+                        // Finish the stream now, as the concatenation would reject it as its
+                        // operand when iterated
+                        userIterate(srcp, WidthVP{SELF, FINAL, STREAM_USE_ASSIGN}.p());
+                        AstConst* const zerop
+                            = new AstConst{flp, AstConst::WidthedValue{}, padWidth, 0};
+                        srcp = VN_IS(srcp, StreamR) ? new AstConcat{flp, zerop, srcp}
+                                                    : new AstConcat{flp, srcp, zerop};
+                        srcp->didWidth(true);
+                    }
+                }
+                nodep->rhsp(new AstCvtPackedToArray{flp, srcp, lhsDTypeSkippedRefp});
             }
         }
         if (AstNodeStream* const streamp = VN_CAST(nodep->lhsp(), NodeStream)) {
