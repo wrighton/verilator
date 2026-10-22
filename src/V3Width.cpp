@@ -5256,6 +5256,22 @@ class WidthVisitor final : public VNVisitor {
         }
         return nullptr;
     }
+    AstWith* methodReductionWithClause(AstMethodCall* nodep, AstNodeDType* elemDtp,
+                                       AstNodeDType* indexDtp) {
+        // IEEE 1800-2023 7.12.3: Without 'with', reduction requires integral elements.
+        // Real sum() and product() are accepted as an extension, as the runtime handles them.
+        const AstNodeDType* const skipDtp = elemDtp->skipRefp();
+        const bool realArith
+            = skipDtp->isDouble() && (nodep->name() == "sum" || nodep->name() == "product");
+        if (!nodep->withp() && !skipDtp->isIntegralOrPacked() && !realArith) {
+            nodep->v3error("Array reduction method "
+                           << nodep->prettyNameQ()
+                           << " without a 'with' clause requires an"
+                              " integral element type, but has data type "
+                           << elemDtp->prettyDTypeNameQ() << " (IEEE 1800-2023 7.12.3)");
+        }
+        return methodWithClause(nodep, false, false, elemDtp, indexDtp, elemDtp);
+    }
     void methodOkArguments(AstNodeFTaskRef* nodep, int minArg, int maxArg) {
         if (AstWith* const withp = nodep->withp()) {
             withp->v3error("'with' not legal on this method");
@@ -5413,9 +5429,8 @@ class WidthVisitor final : public VNVisitor {
         } else if (nodep->name() == "and" || nodep->name() == "or" || nodep->name() == "xor"
                    || nodep->name() == "sum" || nodep->name() == "product") {
             // All value return
-            AstWith* const withp
-                = methodWithClause(nodep, false, false, adtypep->subDTypep(),
-                                   adtypep->findStringDType(), adtypep->subDTypep());
+            AstWith* const withp = methodReductionWithClause(nodep, adtypep->subDTypep(),
+                                                             adtypep->findStringDType());
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
@@ -5548,8 +5563,8 @@ class WidthVisitor final : public VNVisitor {
         } else if (nodep->name() == "and" || nodep->name() == "or" || nodep->name() == "xor"
                    || nodep->name() == "sum" || nodep->name() == "product") {
             // All value return
-            AstWith* const withp = methodWithClause(nodep, false, false, adtypep->subDTypep(),
-                                                    adtypep->keyDTypep(), adtypep->subDTypep());
+            AstWith* const withp
+                = methodReductionWithClause(nodep, adtypep->subDTypep(), adtypep->keyDTypep());
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
@@ -5759,8 +5774,8 @@ class WidthVisitor final : public VNVisitor {
         } else if (nodep->name() == "and" || nodep->name() == "or" || nodep->name() == "xor"
                    || nodep->name() == "sum" || nodep->name() == "product") {
             // All value return
-            AstWith* const withp = methodWithClause(nodep, false, false, adtypep->subDTypep(),
-                                                    nodep->findIntDType(), adtypep->subDTypep());
+            AstWith* const withp
+                = methodReductionWithClause(nodep, adtypep->subDTypep(), nodep->findIntDType());
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
@@ -5860,8 +5875,8 @@ class WidthVisitor final : public VNVisitor {
             newp->dtypeSetVoid();
         } else if (nodep->name() == "and" || nodep->name() == "or" || nodep->name() == "xor"
                    || nodep->name() == "sum" || nodep->name() == "product") {
-            AstWith* const withp = methodWithClause(nodep, false, false, adtypep->subDTypep(),
-                                                    nodep->findIntDType(), adtypep->subDTypep());
+            AstWith* const withp
+                = methodReductionWithClause(nodep, adtypep->subDTypep(), nodep->findIntDType());
             methodOkArguments(nodep, 0, 0);
             methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
@@ -6188,8 +6203,8 @@ class WidthVisitor final : public VNVisitor {
         }
 
         if (methodId) {
-            AstWith* const withp = methodWithClause(nodep, false, false, adtypep->subDTypep(),
-                                                    nodep->findIntDType(), adtypep->subDTypep());
+            AstWith* const withp
+                = methodReductionWithClause(nodep, adtypep->subDTypep(), nodep->findIntDType());
             methodOkArguments(nodep, 0, 0);
             if (withp) {
                 methodCallLValueRecurse(nodep, nodep->fromp(), VAccess::READ);
