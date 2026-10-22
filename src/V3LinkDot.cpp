@@ -2559,9 +2559,27 @@ class LinkDotParamVisitor final : public VNVisitor {
         VSymEnt* okSymp = nullptr;
         VSymEnt* const foundp = m_statep->findDotted(
             nodep->fileline(), m_statep->getNodeSym(nodep), path, baddot, okSymp, true);
-        AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
+        // A parameter in a named block, task or function (IEEE 1800-2023 23.10.2) is set
+        // through the instance containing that scope; walk up one path component per scope.
+        // Also walk generate blocks, to report that parameters under them are localparams.
+        VSymEnt* cellSymp = foundp;
+        string cellPath = path;
+        while (cellSymp && cellPath.find('.') != string::npos
+               && (VN_IS(cellSymp->nodep(), NodeBlock) || VN_IS(cellSymp->nodep(), NodeFTask)
+                   || VN_IS(cellSymp->nodep(), GenBlock))) {
+            cellPath.erase(cellPath.rfind('.'));
+            cellSymp = cellSymp->parentp();
+        }
+        AstCell* const cellp = cellSymp ? VN_CAST(cellSymp->nodep(), Cell) : nullptr;
+        const VSymEnt* const varSymp
+            = cellSymp != foundp ? foundp->findIdFlat(nodep->name()) : nullptr;
+        AstVar* const scopedVarp = varSymp ? VN_CAST(varSymp->nodep(), Var) : nullptr;
         if (!cellp) {
             nodep->v3error("In defparam, instance " << path << " never declared");
+        } else if (cellSymp != foundp && !(scopedVarp && scopedVarp->isGParam())) {
+            // E.g. a localparam, as is any parameter in a generate block (IEEE 1800-2023 6.20.4)
+            nodep->v3error("In defparam, " << AstNode::prettyNameQ(path + "." + nodep->name())
+                                           << " is not a parameter (IEEE 1800-2023 23.10.1)");
         } else {
             AstNodeExpr* const exprp = nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << nodep->name() << " attach-to " << cellp
@@ -2571,7 +2589,8 @@ class LinkDotParamVisitor final : public VNVisitor {
                                             -1,  // Pin# not relevant
                                             nodep->name(), exprp};
             pinp->param(true);
-            pinp->paramPath(path);
+            pinp->paramPath(cellPath);
+            pinp->modVarp(scopedVarp);
             cellp->addParamsp(pinp);
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);

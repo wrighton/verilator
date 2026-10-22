@@ -1,0 +1,17 @@
+%Error: t/t_defparam_scope_bad.v:20:20: In defparam, 'u.blk.L' is not a parameter (IEEE 1800-2023 23.10.1)
+   20 |   defparam u.blk.L = 2;   
+      |                    ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_scope_bad.v:21:20: In defparam, 'u.blk.v' is not a parameter (IEEE 1800-2023 23.10.1)
+   21 |   defparam u.blk.v = 2;   
+      |                    ^
+%Error: t/t_defparam_scope_bad.v:22:20: In defparam, 'u.blk.Z' is not a parameter (IEEE 1800-2023 23.10.1)
+   22 |   defparam u.blk.Z = 2;   
+      |                    ^
+%Error: t/t_defparam_scope_bad.v:23:18: In defparam, 'u.g.G' is not a parameter (IEEE 1800-2023 23.10.1)
+   23 |   defparam u.g.G = 2;   
+      |                  ^
+%Error: t/t_defparam_scope_bad.v:28:19: In defparam, instance tblk never declared
+   28 |   defparam tblk.P = 2;   
+      |                   ^
+%Error: Exiting due to

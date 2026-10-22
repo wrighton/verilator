@@ -353,25 +353,40 @@ class ParamProcessor final {
 
     // METHODS
 
+    // Call f on each parameter declared in a named block, task or function of the module,
+    // which only a defparam can override (IEEE 1800-2023 23.10.2)
+    template <typename T_Callable>
+    static void foreachScopedParam(AstNodeModule* modp, T_Callable&& f) {
+        for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (VN_IS(stmtp, NodeProcedure) || VN_IS(stmtp, NodeFTask)) {
+                stmtp->foreach([&](AstVar* varp) {
+                    if (varp->isGParam()) f(varp);
+                });
+            }
+        }
+    }
     static void makeSmallNames(AstNodeModule* modp) {
         std::vector<int> usedLetter;
         usedLetter.resize(256);
+        const auto nameVar = [&](AstVar* varp) {
+            char ch = varp->name()[0];
+            ch = std::toupper(ch);
+            if (ch < 'A' || ch > 'Z') ch = 'Z';
+            varp->user3(usedLetter[static_cast<int>(ch)] * 256 + ch);
+            usedLetter[static_cast<int>(ch)]++;
+        };
         // Pass 1, assign first letter to each gparam's name
         for (AstNode* const stmtp : modp->stmtspList()) {
             if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                if (varp->isGParam() || varp->isIfaceRef()) {
-                    char ch = varp->name()[0];
-                    ch = std::toupper(ch);
-                    if (ch < 'A' || ch > 'Z') ch = 'Z';
-                    varp->user3(usedLetter[static_cast<int>(ch)] * 256 + ch);
-                    usedLetter[static_cast<int>(ch)]++;
-                }
+                if (varp->isGParam() || varp->isIfaceRef()) nameVar(varp);
             } else if (AstParamTypeDType* const typep = VN_CAST(stmtp, ParamTypeDType)) {
                 const char ch = 'T';
                 typep->user3(usedLetter[static_cast<int>(ch)] * 256 + ch);
                 usedLetter[static_cast<int>(ch)]++;
             }
         }
+        // Last, so the names of module-level parameters do not change
+        foreachScopedParam(modp, nameVar);
     }
     static string paramSmallName(AstNodeModule* modp, AstNode* varp) {
         if (varp->user3() <= 1) makeSmallNames(modp);
@@ -615,6 +630,11 @@ class ParamProcessor final {
             if (originalIsCopy) originalParamp = m_originalParams[originalParamp];
             if (originalParamp) clonemapp->emplace(originalParamp, stmtp);
         }
+        foreachScopedParam(modp, [&](AstVar* varp) {
+            const AstNode* const originalParamp = varp->clonep();
+            clonemapp->emplace(originalIsCopy ? m_originalParams[originalParamp] : originalParamp,
+                               varp);
+        });
     }
     void relinkPins(const CloneMap* clonemapp, AstPin* startpinp) {
         for (AstPin* pinp = startpinp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
@@ -700,7 +720,16 @@ class ParamProcessor final {
     void checkSupportedParam(AstNodeModule* modp, AstPin* pinp) const {
         // ConsArray is not supported because that can not be set via -G
         // option.
-        if (pinp->modVarp()) {
+        if (const AstVar* const modvarp = pinp->modVarp()) {
+            // Nor can -G set a parameter in a named block, task or function, only a defparam
+            if (!pinp->paramPath().empty()) {
+                foreachScopedParam(modp, [&](const AstVar* varp) {
+                    if (varp != modvarp) return;
+                    pinp->v3warn(E_UNSUPPORTED, "Unsupported: defparam to a parameter in a named"
+                                                " block, task or function of hierarchical block "
+                                                    << AstNode::prettyNameQ(modp->origName()));
+                });
+            }
             bool supported = false;
             if (const AstConst* const constp = VN_CAST(pinp->exprp(), Const)) {
                 supported = true;
@@ -1866,6 +1895,7 @@ class ParamProcessor final {
             }
             if (originalParamp) m_originalParams[stmtp] = originalParamp;
         }
+        foreachScopedParam(classp, [&](AstVar* varp) { m_originalParams[varp] = varp->clonep(); });
     }
 
     // Set interfaces types inside generic modules
