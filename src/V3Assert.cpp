@@ -163,6 +163,22 @@ string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
            + std::to_string(directiveType) + ">(VerilatedAssertCtlQuery::"s + query + ")"s;
 }
 
+bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
+    // An integral type, or an unpacked array or structure of such types (IEEE 1800-2023 16.9.3).
+    dtypep = dtypep->skipRefp();
+    if (dtypep->isIntegralOrPacked()) return true;
+    if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+    if (!structp) return false;
+    for (const AstMemberDType* memberp = structp->membersp(); memberp;
+         memberp = VN_AS(memberp->nextp(), MemberDType)) {
+        if (!isSampledType(memberp->subDTypep())) return false;
+    }
+    return true;
+}
+
 bool V3AssertCommon::checkSvaValueLimit(AstNode* nodep, const AstConst* constp, const char* what) {
     // Temporal values can materialize as O(N) AST or state in later passes.
     // Leave headroom for a range ring's extra slot and V3Number's signed
@@ -380,12 +396,25 @@ class DefaultSampledValueVisitor final : public VNVisitor {
     bool m_defaulted = false;  // A reference below was replaced by its default
 
     // METHODS
-    AstConst* newTypeDefault(AstNodeExpr* nodep) {
+    AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
         m_defaulted = true;
-        AstConst* const constp
-            = new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()};
-        if (nodep->dtypep()->isFourstate()) constp->num().setAllBitsX();
-        constp->dtypeFrom(nodep);
+        AstNodeDType* const skipDtp = dtypep->skipRefp();
+        if (AstUnpackArrayDType* const arrayp = VN_CAST(skipDtp, UnpackArrayDType)) {
+            return new AstConsArray{flp, arrayp, newTypeDefault(flp, arrayp->subDTypep())};
+        }
+        AstStructDType* const structp = VN_CAST(skipDtp, StructDType);
+        if (structp && !structp->packed()) {
+            AstConsStruct* const consp = new AstConsStruct{flp, structp};
+            for (AstMemberDType* memberp = structp->membersp(); memberp;
+                 memberp = VN_AS(memberp->nextp(), MemberDType)) {
+                consp->addItemsp(new AstConsStructItem{flp, memberp,
+                                                       newTypeDefault(flp, memberp->subDTypep())});
+            }
+            return consp;
+        }
+        AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
+        if (dtypep->isFourstate()) constp->num().setAllBitsX();
+        constp->dtypep(dtypep);
         return constp;
     }
 
@@ -400,7 +429,7 @@ class DefaultSampledValueVisitor final : public VNVisitor {
         }
         if (setDefaulted) {
             m_defaulted = true;  // Propagate up that replacement was made
-            nodep->replaceWith(newTypeDefault(nodep));
+            nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
@@ -421,7 +450,7 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
             return;
         }
-        nodep->replaceWith(newTypeDefault(nodep));
+        nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstArraySel* nodep) override { visitSelect(nodep); }

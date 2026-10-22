@@ -10633,9 +10633,11 @@ class WidthVisitor final : public VNVisitor {
     void iterateCheckSampledSelf(AstNode* parentp, AstNode* underp) {
         // Check the expression of a sampled value function that only stores and compares
         // values ($past, $sampled, $stable, $future_gclk, $steady_gclk), so may also be real
-        // (IEEE 1800-2023 16.9.3, 16.9.4)
+        // (IEEE 1800-2023 16.9.3, 16.9.4). V3AssertPre also allows an unpacked array or
+        // structure for $past, $sampled and $stable.
         underp = userIterateSubtreeReturnEdits(underp, WidthVP{SELF, PRELIM}.p());
-        if (underp->dtypep()->skipRefp()->isDouble()) {
+        if (underp->dtypep()->skipRefp()->isDouble()
+            || V3AssertCommon::isSampledType(underp->dtypep())) {
             iterateCheck(parentp, "LHS", underp, SELF, FINAL, underp->dtypep(), EXTEND_EXP);
         } else {
             iterateCheckSizedSelf(parentp, "LHS", underp, SELF, FINAL, /* deferUntyped */ true);
