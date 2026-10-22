@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_property_default_arg_unsup.v:12:26: Unsupported: sequence expression as formal argument default
+   12 |   property prop_seq(x, s = a ##1 b);
+      |                          ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
