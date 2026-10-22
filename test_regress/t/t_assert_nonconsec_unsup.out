@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_assert_nonconsec_unsup.v:17:59: Unsupported: nonconsecutive repetition in a property with a cycle delay (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   17 |   assert property (@(posedge clk) disable iff (d) a |-> b [= 2] ##1 c);
+      |                                                           ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_nonconsec_unsup.v:19:43: Unsupported: nonconsecutive repetition in a property with a cycle delay (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   19 |   assert property (@(posedge clk) a ##1 b [= 1] |-> c);
+      |                                           ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_unsup.v:21:37: Unsupported: nonconsecutive repetition in a property with a cycle delay (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   21 |   assert property (@(posedge clk) b [= 2] |=> c ##1 d);
+      |                                     ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_unsup.v:13:7: Unsupported: nonconsecutive repetition in a property with a cycle delay (IEEE 1800-2023 16.9.2)
+                                                     : ... note: In instance 't'
+   13 |     b [= 2];
+      |       ^~
+%Error: Exiting due to

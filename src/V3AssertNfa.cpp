@@ -3436,6 +3436,16 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
         if (isBareTopLevelUntil(propp)) return nullptr;
+        // Only V3AssertPre lowers a nonconsecutive repetition, but it cannot lower a cycle delay
+        const AstSNonConsRep* nonConsRepp = nullptr;
+        propp->foreach([&](const AstSNonConsRep* repp) { nonConsRepp = repp; });
+        if (nonConsRepp && propp->exists([](const AstSExpr*) { return true; })) {
+            nonConsRepp->v3warn(E_UNSUPPORTED,
+                                "Unsupported: nonconsecutive repetition in a property with a"
+                                " cycle delay (IEEE 1800-2023 16.9.2)");
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return nullptr;
+        }
         return propp;
     }
 
