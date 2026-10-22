@@ -1137,9 +1137,9 @@ vnum    {vnum1}|{vnum2}|{vnum3}|{vnum4}|{vnum5}
   "`autoexpand_vectornets"              { FL_FWD; FL_BRK; }  // Verilog-XL compatibility
   "`celldefine"                         { FL_FWD; PARSEP->lexFileline()->celldefineOn(true); FL_BRK; }
   "`default_decay_time"{ws}+[^\n\r]*    { FL_FWD; FL_BRK; }  // Verilog spec - delays only
-  "`default_nettype"{ws}+"wire"         { FL_FWD; PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, true); FL_BRK; }
+  "`default_nettype"{ws}+("tri"|"wire") { FL_FWD; PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, true); FL_BRK; }
   "`default_nettype"{ws}+"none"         { FL_FWD; PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, false); FL_BRK; }
-  "`default_nettype"{ws}+[a-zA-Z0-9]*   { FL; yylval.fl->v3warn(E_UNSUPPORTED, "Unsupported: `default_nettype of other than none or wire: '"
+  "`default_nettype"{ws}+[a-zA-Z0-9]*   { FL; yylval.fl->v3warn(E_UNSUPPORTED, "Unsupported: `default_nettype of other than none, tri or wire: '"
                                                                 << yytext << "'");
                                           FL_BRK; }
   "`default_trireg_strength"{ws}+[^\n\r]*   { FL; yylval.fl->v3warn(E_UNSUPPORTED, "Unsupported: Verilog optional directive not implemented: '"
