@@ -94,21 +94,10 @@ class SeqEventLowerVisitor final : public VNVisitor {
                 VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
                 return;
             }
-            AstVar* const eventp = new AstVar{flp, VVarType::MODULETEMP, m_names.get(nodep),
-                                              m_modp->findBasicDType(VBasicDTypeKwd::EVENT)};
-            eventp->lifetime(VLifetime::STATIC_EXPLICIT);
-            m_modp->addStmtsp(eventp);
-            v3Global.setHasEvents();
             schemaRefp->unlinkFrBack();
+            AstVar* const eventp
+                = V3AssertCommon::newSequenceEvent(flp, m_modp, m_names.get(nodep), schemaRefp);
             nodep->sensp(new AstVarRef{flp, eventp, VAccess::READ});
-            AstFireEvent* const firep
-                = new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false};
-            AstCover* const coverp
-                = new AstCover{flp, new AstPropSpec{flp, nullptr, nullptr, schemaRefp}, firep,
-                               VAssertType::CONCURRENT};
-            coverp->isCoverSeq(true);
-            coverp->isSeqEvent(true);
-            m_modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
             return;
         }
         iterateChildren(nodep);
