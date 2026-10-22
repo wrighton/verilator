@@ -1,0 +1,30 @@
+%Error: t/t_var_chandle_bad.v:15:16: Chandle type not legal on port (IEEE 1800-2023 6.14): 'a'
+                                   : ... note: In instance 't.sub'
+   15 |     input ch_t a,   
+      |                ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_var_chandle_bad.v:16:20: Chandle type not legal on port (IEEE 1800-2023 6.14): 'b'
+                                   : ... note: In instance 't.sub'
+   16 |     output chandle b[2]   
+      |                    ^
+%Error: t/t_var_chandle_bad.v:10:19: Chandle type not legal on port (IEEE 1800-2023 6.14): 'i'
+                                   : ... note: In instance 't'
+   10 |     input chandle i   
+      |                   ^
+%Error: t/t_var_chandle_bad.v:36:12: Continuous assignment not legal to chandle type (IEEE 1800-2023 6.14)
+                                   : ... note: In instance 't'
+   36 |   assign d = c;   
+      |            ^
+%Error: t/t_var_chandle_bad.v:37:17: Continuous assignment not legal to chandle type (IEEE 1800-2023 6.14)
+                                   : ... note: In instance 't'
+   37 |   assign arr[0] = c;   
+      |                 ^
+%Error: t/t_var_chandle_bad.v:38:12: Event control not legal on chandle type (IEEE 1800-2023 6.14)
+                                   : ... note: In instance 't'
+   38 |   always @(c) b = 1;   
+      |            ^
+%Error: t/t_var_chandle_bad.v:39:20: Event control not legal on chandle type (IEEE 1800-2023 6.14)
+                                   : ... note: In instance 't'
+   39 |   always @(posedge d) b = 1;   
+      |                    ^
+%Error: Exiting due to

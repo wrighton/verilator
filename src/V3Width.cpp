@@ -3509,6 +3509,10 @@ class WidthVisitor final : public VNVisitor {
             nodep->dtypep(wildp);  // Skip RefDType like for other dynamic array types
         }
         if (VN_IS(nodep->dtypep()->skipRefToConstp(), ConstDType)) nodep->isConst(true);
+        if (nodep->isIO() && !nodep->isFuncLocal() && nodep->isCHandle()) {
+            nodep->v3error(
+                "Chandle type not legal on port (IEEE 1800-2023 6.14): " << nodep->prettyNameQ());
+        }
         // Parameters if implicit untyped inherit from what they are assigned to
         const AstBasicDType* const bdtypep = VN_CAST(nodep->dtypep(), BasicDType);
         bool didchk = false;
@@ -7061,6 +7065,10 @@ class WidthVisitor final : public VNVisitor {
                     return;
                 }
             }
+            if (VN_IS(nodep, AssignW) && nodep->lhsp()->isCHandle()) {
+                nodep->v3error("Continuous assignment not legal to chandle type "
+                               "(IEEE 1800-2023 6.14)");
+            }
             nodep->dtypeFrom(nodep->lhsp());
             //
             // AstPattern needs to know the proposed data type of the lhs, so pass on the prelim
@@ -8500,7 +8508,10 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else {
             userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
-            if (nodep->edgeType().anEdge()) {
+            if (nodep->sensp()->isCHandle()) {
+                nodep->sensp()->v3error(
+                    "Event control not legal on chandle type (IEEE 1800-2023 6.14)");
+            } else if (nodep->edgeType().anEdge()) {
                 AstNodeDType* const sensDtp = nodep->sensp()->dtypep()->skipRefp();
                 if (sensDtp->isDouble()) {
                     nodep->sensp()->v3error(
