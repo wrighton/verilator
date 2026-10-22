@@ -312,7 +312,7 @@ private:
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
-        V3AssertCommon::checkSvaInstanceDelays(clonedp, schemaRefp);
+        V3AssertCommon::checkSvaInstanceConstants(clonedp, schemaRefp);
         // Replace the reference with the inlined body
         schemaRefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
@@ -358,7 +358,7 @@ private:
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
-        V3AssertCommon::checkSvaInstanceDelays(propExprp, schemaRefp);
+        V3AssertCommon::checkSvaInstanceConstants(propExprp, schemaRefp);
         return propExprp;
     }
     AstPropSpec* substitutePropertyCall(AstPropSpec* nodep) {

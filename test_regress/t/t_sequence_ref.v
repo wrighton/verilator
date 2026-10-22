@@ -99,10 +99,82 @@ module t (
   assert property (prop_delay(DLY + 1))
   else prop_other_fails++;
 
+  // Formal arguments used as repetition counts and $past tick counts, whose actual
+  // arguments are elaboration-time constants (IEEE 1800-2023 16.8). Each holds with one
+  // actual argument and fails with another; goto and nonconsecutive repetition failures
+  // are counted once per failing tick, as attempts started on several ticks fail together.
+  logic f;
+  int rep_fails = 0;
+  int rep_range_fails = 0;
+  int goto_fails = 0;
+  int nonconsec_fails = 0;
+  int past_fails = 0;
+  int rep_other_fails = 0;
+  int rep_range_other_fails = 0;
+  int goto_other_fails = 0;
+  int nonconsec_other_fails = 0;
+  int past_other_fails = 0;
+  property prop_rep(sig1, sig2, n);
+    sig1 |-> sig2 [* n];
+  endproperty
+  property prop_goto(sig1, sig2, n);
+    sig1 [-> n] |-> sig2;
+  endproperty
+  property prop_nonconsec(sig1, sig2, n);
+    sig1 [= n] |-> sig2;
+  endproperty
+  property prop_past(sig1, sig2, n);
+    sig1 |-> $past(sig2, n);
+  endproperty
+  // A property instance passing its own formal argument on
+  property prop_past_outer(untyped cnt);
+    prop_past(e, d, cnt);
+  endproperty
+  sequence seq_rep_range(logic sig, int lo, int hi);
+    sig [* lo: hi];
+  endsequence
+  property prop_rep_range(untyped lo, untyped hi);
+    @(posedge clk) d |-> seq_rep_range(f, lo, hi);
+  endproperty
+  assert property (@(posedge clk) prop_rep(d, f, DLY + 1))
+  else rep_fails++;
+
+  assert property (prop_rep_range(DLY, DLY + 1))
+  else rep_range_fails++;
+  assert property (@(posedge clk) prop_goto(f, f, DLY + 1))
+  else goto_fails++;
+  assert property (@(posedge clk) prop_nonconsec(e, !d, 1))
+  else nonconsec_fails++;
+  assert property (@(posedge clk) prop_past(e, d, DLY))
+  else past_fails++;
+  assert property (@(posedge clk) e |-> prop_past_outer(DLY))
+  else past_fails++;
+  assert property (@(posedge clk) prop_rep(d, f, DLY + 2))
+  else rep_other_fails++;
+  assert property (@(posedge clk) d |-> seq_rep_range(f, DLY + 2, DLY + 3))
+  else rep_range_other_fails++;
+  time goto_fail_time = 0;
+  time nonconsec_fail_time = 0;
+  assert property (@(posedge clk) prop_goto(f, e, DLY))
+  else begin
+    if (goto_fail_time != $time) goto_other_fails++;
+    goto_fail_time = $time;
+  end
+  assert property (@(posedge clk) prop_nonconsec(f, d, DLY))
+  else begin
+    if (nonconsec_fail_time != $time) nonconsec_other_fails++;
+    nonconsec_fail_time = $time;
+  end
+  assert property (@(posedge clk) prop_past(e, d, DLY - 1))
+  else past_other_fails++;
+  assert property (@(posedge clk) e |-> prop_past_outer(DLY - 1))
+  else past_other_fails++;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     d <= (cyc == 2);
     e <= (cyc == 4);
+    f <= (cyc >= 2 && cyc <= 4);
     case (cyc)
       2, 5: begin
         a <= 1'b1;
@@ -129,6 +201,16 @@ module t (
       `checkd(range_other_fails, 1)
       `checkd(upto_other_fails, 1)
       `checkd(prop_other_fails, 1)
+      `checkd(rep_fails, 0)
+      `checkd(rep_range_fails, 0)
+      `checkd(goto_fails, 0)
+      `checkd(nonconsec_fails, 0)
+      `checkd(past_fails, 0)
+      `checkd(rep_other_fails, 1)
+      `checkd(rep_range_other_fails, 1)
+      `checkd(goto_other_fails, 1)
+      `checkd(nonconsec_other_fails, 1)
+      `checkd(past_other_fails, 2)
       $write("*-* All Finished *-*\n");
       $finish;
     end
