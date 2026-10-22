@@ -354,8 +354,8 @@ class LinkLValueVisitor final : public VNVisitor {
                 }
             }
         } else {
-            // It is the only place where the access is set to member select nodes.
             // If it doesn't have to be set to WRITE, it means that it is READ.
+            // (V3Width marks the target of a modifying built-in method WRITE.)
             nodep->access(VAccess::READ);
         }
         iterateChildren(nodep);
