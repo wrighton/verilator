@@ -206,8 +206,8 @@ private:
     VSymEnt* m_packageEntp = nullptr;  // Root of global package names
     std::multimap<std::string, VSymEnt*>
         m_nameScopeSymMap;  // Map of scope referenced by non-pretty textual name
-    std::set<std::pair<AstNodeModule*, std::string>>
-        m_implicitNameSet;  // For [module][signalname] if we can implicitly create it
+    std::set<std::pair<const AstNode*, std::string>>
+        m_implicitNameSet;  // For [module/genblock][signalname] if we can implicitly create it
     std::array<ScopeAliasMap, SAMN__MAX> m_scopeAliasMap;  // Map of <lhs,rhs> aliases
     std::vector<VSymEnt*> m_ifaceVarSyms;  // List of AstIfaceRefDType's to be imported
     IfaceModSyms m_ifaceModSyms;  // List of AstIface+Symbols to be processed
@@ -526,14 +526,15 @@ public:
                     "Scope never assigned a symbol entry '" << nodep->name() << "'");
         return it->second;
     }
-    void implicitOkAdd(AstNodeModule* nodep, const string& varname) {
-        // Mark the given variable name as being allowed to be implicitly declared
+    void implicitOkAdd(const AstNode* nodep, const string& varname) {
+        // Mark the given variable name as being allowed to be implicitly declared in the given
+        // module or generate block
         if (nodep) {
             const auto it = m_implicitNameSet.find(std::make_pair(nodep, varname));
             if (it == m_implicitNameSet.end()) m_implicitNameSet.emplace(nodep, varname);
         }
     }
-    bool implicitOk(AstNodeModule* nodep, const string& varname) {
+    bool implicitOk(const AstNode* nodep, const string& varname) {
         return nodep
                && (m_implicitNameSet.find(std::make_pair(nodep, varname))
                    != m_implicitNameSet.end());
@@ -2524,6 +2525,8 @@ class LinkDotParamVisitor final : public VNVisitor {
     // STATE
     LinkDotState* const m_statep;  // State to pass between visitors, including symbol table
     AstNodeModule* m_modp = nullptr;  // Current module
+    // Current module or generate block, where implicit nets are declared (IEEE 1800-2023 6.10)
+    const AstNode* m_scopep = nullptr;
 
     void pinImplicitExprRecurse(AstNode* nodep) {
         // Under a pin, Check interconnect expression for a pin reference or a concat.
@@ -2534,7 +2537,7 @@ class LinkDotParamVisitor final : public VNVisitor {
             // To prevent user errors, we should only do single bit
             // implicit vars, however some netlists (MIPS) expect single
             // bit implicit wires to get created with range 0:0 etc.
-            m_statep->implicitOkAdd(m_modp, nodep->name());
+            m_statep->implicitOkAdd(m_scopep, nodep->name());
         }
         // These are perhaps a little too generous, as a SELect of siga[sigb]
         // perhaps shouldn't create an implicit variable.  But, we've warned...
@@ -2564,7 +2567,14 @@ class LinkDotParamVisitor final : public VNVisitor {
             return;
         }
         VL_RESTORER(m_modp);
+        VL_RESTORER(m_scopep);
         m_modp = nodep;
+        m_scopep = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstGenBlock* nodep) override {  // ParamVisitor::
+        VL_RESTORER(m_scopep);
+        if (nodep->name() != "") m_scopep = nodep;
         iterateChildren(nodep);
     }
     void visit(AstPin* nodep) override {  // ParamVisitor::
@@ -3403,7 +3413,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
     }
 
     // METHODS - Variables
-    AstVar* createImplicitVar(VSymEnt* /*lookupSymp*/, AstParseRef* nodep, AstNodeModule* modp,
+    VSymEnt* implicitScopeSymp(const AstParseRef* nodep) {
+        // Innermost generate block, or the module, where the reference may be implicitly
+        // declared, else nullptr
+        for (VSymEnt* symp = m_curSymp; symp != m_modSymp; symp = symp->parentp()) {
+            UASSERT_OBJ(symp, nodep, "Reference not under its module's symbol table");
+            if (m_statep->implicitOk(symp->nodep(), nodep->name())) return symp;
+        }
+        return m_statep->implicitOk(m_modp, nodep->name()) ? m_modSymp : nullptr;
+    }
+    AstVar* createImplicitVar(VSymEnt* lookupSymp, AstParseRef* nodep, AstNodeModule* modp,
                               VSymEnt* moduleSymp, bool noWarn) {
         // Create implicit after warning
         if (!noWarn) {
@@ -3431,16 +3450,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
             = new AstVar{nodep->fileline(), VVarType::WIRE, nodep->name(), VFlagLogicPacked{}, 1};
         newp->lifetime(VLifetime::STATIC_IMPLICIT);
         newp->trace(modp->modTrace());
-        if (inGenBlockScope()) {
-            // Local to the generate block (IEEE 1800-2023 6.10)
-            m_genBlockp->addItemsp(newp);
-            m_statep->insertSym(m_curSymp, newp->name(), newp, nullptr /*classOrPackagep*/);
-            return newp;
+        // Declare in the module or generate block lookupSymp, which might be above the
+        // current scope (IEEE 1800-2023 6.10)
+        if (AstGenBlock* const blockp = VN_CAST(lookupSymp->nodep(), GenBlock)) {
+            if (AstGenFor* const forp = blockp->genforp()) {
+                forp->addItemsp(newp);  // In each iteration
+            } else {
+                blockp->addItemsp(newp);
+            }
+        } else {
+            modp->addStmtsp(newp);
         }
-        modp->addStmtsp(newp);
-        // Link it to signal list, must add the variable under the module;
-        // current scope might be lower now
-        m_statep->insertSym(moduleSymp, newp->name(), newp, nullptr /*classOrPackagep*/);
+        m_statep->insertSym(lookupSymp, newp->name(), newp, nullptr /*classOrPackagep*/);
         return newp;
     }
     AstVar* foundToVarp(const VSymEnt* symp, AstNode* nodep, VAccess access) {
@@ -4687,7 +4708,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const AstVar* const laterVarp = foundp && !m_ds.m_dotp && inGenBlockScope()
                                                 ? VN_CAST(foundp->nodep(), Var)
                                                 : nullptr;
-            if (laterVarp && !laterVarp->isParam() && m_statep->implicitOk(m_modp, nodep->name())
+            if (laterVarp && !laterVarp->isParam()
+                && m_statep->implicitOk(m_genBlockp, nodep->name())
                 && m_curSymp->isEnclosedBy(foundp->parentp(), m_modSymp)
                 && nodep->fileline()->tokenNum() < laterVarp->fileline()->tokenNum()) {
                 foundp = nullptr;
@@ -5145,8 +5167,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // Cells/interfaces can't be implicit
                     const bool checkImplicit
                         = (!m_ds.m_dotp && m_ds.m_dotText == "" && !m_ds.m_disablep && !foundp);
-                    const bool err
-                        = !(checkImplicit && m_statep->implicitOk(m_modp, nodep->name()));
+                    VSymEnt* const implicitSymp
+                        = checkImplicit ? implicitScopeSymp(nodep) : nullptr;
+                    const bool err = !implicitSymp;
                     if (err) {
                         if (foundp) {
                             nodep->v3error("Found definition of '"
@@ -5181,7 +5204,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         // Create if implicit, and also if error (so only complain once)
                         // Else if a scope is allowed, making a signal won't help error cascade
                         AstVar* const varp
-                            = createImplicitVar(m_curSymp, nodep, m_modp, m_modSymp, err);
+                            = createImplicitVar(implicitSymp ? implicitSymp : m_modSymp, nodep,
+                                                m_modp, m_modSymp, err);
                         AstVarRef* const newp
                             = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
                         nodep->replaceWith(newp);
