@@ -1493,6 +1493,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         puts(") ");
         iterateConst(nodep->propp());
     }
+    void visit(AstSStrength* nodep) override {
+        puts(nodep->strength() == VPropStrength::STRONG ? "strong(" : "weak(");
+        iterateConst(nodep->exprp());
+        puts(")");
+    }
     void visit(AstSClocked* nodep) override {
         puts("@(");
         iterateConst(nodep->sensesp());
