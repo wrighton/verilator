@@ -68,7 +68,7 @@ module t;
     $finish;
   end
 
-  always_ff @(posedge clk) begin
+  always @(posedge clk) begin
     #1 `checkd(cnt_A, cnt_B);
   end
 

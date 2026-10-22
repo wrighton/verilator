@@ -61,7 +61,8 @@ class WidthCommitVisitor final : public VNVisitor {
     bool m_contReads = false;  // Check read continuous automatic variables
     bool m_dynsizedelem = false;  // Writing dynamically-sized array element, not the array itself
     VMemberMap m_memberMap;  // Member names cached for fast lookup
-    bool m_taskRefWarn = true;  // Allow task reference warnings
+    bool m_taskRefWarn = true;  // Allow task reference warnings, false under fork..join_none
+    const AstAlways* m_alwaysFfp = nullptr;  // Current always_ff
     bool m_underSel = false;  // Under AstMemberSel or AstSel
     bool m_underAlwaysEdged = false;  // Under always with sequential SenTree
     std::vector<AstNew*> m_virtualNewsp;  // Instantiations of virtual classes
@@ -84,6 +85,18 @@ private:
                     << nodep->warnMore() << "... Suggest make caller 'function "
                     << m_ftaskp->prettyName() << "' a task\n"
                     << m_ftaskp->warnContextSecondary());
+        if (m_alwaysFfp && m_taskRefWarn) {
+            if (VN_IS(nodep, Delay) || VN_IS(nodep, Wait)
+                || (VN_IS(nodep, Assign) && nodep->isTimingControl())) {
+                nodep->v3error("Blocking timing controls are not legal under always_ff"
+                               " (IEEE 1800-2023 9.2.2.4)\n"
+                               << nodep->warnMore() << "... Suggest use a normal 'always'");
+            } else if (VN_IS(nodep, EventControl) && m_alwaysFfp->sentreep()) {
+                nodep->v3error("Only one event control is legal under always_ff"
+                               " (IEEE 1800-2023 9.2.2.4)\n"
+                               << nodep->warnMore() << "... Suggest use a normal 'always'");
+            }
+        }
     }
     AstNodeDType* editOneDType(AstNodeDType* nodep) {
         // See if the dtype/refDType can be converted to a standard one
@@ -277,7 +290,15 @@ private:
         VL_RESTORER(m_underAlwaysEdged);
         m_underAlwaysEdged
             = nodep->sentreep() && nodep->sentreep()->sensesp() && nodep->sentreep()->hasEdge();
+        VL_RESTORER(m_alwaysFfp);
+        m_alwaysFfp = nodep->keyword() == VAlwaysKwd::ALWAYS_FF ? nodep : nullptr;
         // Iterate will delete ComboStar sentrees, so after above
+        iterateChildren(nodep);
+        editDType(nodep);
+    }
+    void visit(AstNodeCoverOrAssert* nodep) override {
+        VL_RESTORER(m_alwaysFfp);
+        m_alwaysFfp = nullptr;  // Property delays are not procedural timing controls
         iterateChildren(nodep);
         editDType(nodep);
     }
@@ -453,7 +474,13 @@ private:
             nodep->name("");  // Clear to save memory; nodep->name() will work via nodep->varp()
     }
     void visit(AstAssign* nodep) override {
-        iterateChildren(nodep);
+        iterateAndNextNull(nodep->rhsp());
+        iterateAndNextNull(nodep->lhsp());
+        {
+            VL_RESTORER(m_alwaysFfp);
+            m_alwaysFfp = nullptr;  // Report the assignment instead of its timing control
+            iterateAndNextNull(nodep->timingControlp());
+        }
         editDType(nodep);
         // Lint
         if (m_underAlwaysEdged) {
@@ -487,7 +514,11 @@ private:
         editDType(nodep);
     }
     void visit(AstAssignDly* nodep) override {
-        iterateAndNextNull(nodep->timingControlp());
+        {
+            VL_RESTORER(m_alwaysFfp);
+            m_alwaysFfp = nullptr;  // Timing control of a non-blocking assignment is legal
+            iterateAndNextNull(nodep->timingControlp());
+        }
         iterateAndNextNull(nodep->rhsp());
         {
             VL_RESTORER(m_contNbap);
