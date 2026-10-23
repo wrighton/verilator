@@ -334,6 +334,7 @@ class SvaNfaBuilder final {
     bool m_isSeqEvent = false;
     bool m_inSequencePrefix = false;  // Prefix composition does not preserve every endpoint
     bool m_wantBoolLeaf = false;  // Building a |-> / |=> or top-level body (see buildOrMerge)
+    bool m_inAntecedent = false;  // Building an implication antecedent, every match counts
 
     struct RangeDelayRejectInfo final {
         SvaStateVertex* startp = nullptr;
@@ -647,10 +648,10 @@ class SvaNfaBuilder final {
         } else {
             // The first eligible tick is explicit. The ring retains attempts for the
             // remaining ticks and exposes the final tick for rejection. Only properties
-            // clear on success, since cover sequence counts every endpoint.
+            // clear on success, since a cover sequence and an antecedent use every endpoint.
             midSources.push_back(currentp);
             currentp = addDelayChain(currentp, range + 1U, flp, false,
-                                     m_isCoverSeq ? nullptr : rhsExprp);
+                                     m_isCoverSeq || m_inAntecedent ? nullptr : rhsExprp);
         }
         return true;
     }
@@ -1712,7 +1713,10 @@ public:
     BuildResult buildImplicationEdges(AstNodeExpr* antExprp, AstNodeExpr* bodyExprp,
                                       SvaStateVertex* entryVtxp, bool isOverlapped,
                                       bool isFollowedBy, AstNode* errorNodep, FileLine* flp) {
+        VL_RESTORER(m_inAntecedent);
+        m_inAntecedent = true;
         const BuildResult antResult = buildExpr(antExprp, entryVtxp);
+        m_inAntecedent = false;
         if (!antResult.valid()) return antResult;
 
         // Followed-by requires pure-boolean antecedent for non-vacuous-fail at
@@ -1733,6 +1737,11 @@ public:
         if (antResult.finalCondp) {
             m_graph.addLink(antResult.termVertexp, trigVtxp,
                             sampled(antResult.finalCondp->cloneTreePure(false)));
+            // The first eligible tick of a range delay is a separate source
+            for (SvaStateVertex* const midp : antResult.midSources) {
+                m_graph.addLink(midp, trigVtxp,
+                                sampled(antResult.finalCondp->cloneTreePure(false)));
+            }
             // Followed-by non-vacuous fail: rejectOnFail fires when the attempt
             // is live (termVtx reachable) and sampled(antecedent) is false.
             if (isFollowedBy) {
