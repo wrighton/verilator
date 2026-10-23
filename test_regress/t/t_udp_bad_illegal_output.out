@@ -27,4 +27,12 @@
                                           : ... note: In instance 'top'
    33 |     0 0 0  :   *;
       |                ^
+%Error: t/t_udp_bad_illegal_output.v:34:16: Illegal value for combinational UDP line output
+                                          : ... note: In instance 'top'
+   34 |     0 1 1  :   -;
+      |                ^
+%Error: t/t_udp_bad_illegal_output.v:35:16: Illegal value for combinational UDP line output
+                                          : ... note: In instance 'top'
+   35 |     x 1 1  :   -;
+      |                ^
 %Error: Exiting due to
