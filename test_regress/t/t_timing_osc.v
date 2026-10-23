@@ -42,6 +42,7 @@ module bhv_dco (
     input real fine_cw,
     output logic rf_out
 );
+  timeunit 1s; timeprecision 1fs;
 
   parameter realtime coarse_ofst = 600ps;
   parameter realtime coarse_res = 60ps;
@@ -49,8 +50,6 @@ module bhv_dco (
   parameter realtime medium_res = 6ps;
   parameter realtime fine_ofst = 70ps;
   parameter realtime fine_res = 0.2ps;
-
-  timeunit 1s; timeprecision 1fs;
 
   realtime coarse_delay, medium_delay, fine_delay, jitter;
   assign coarse_delay = 0.5 * (coarse_cw * coarse_res + coarse_ofst);
