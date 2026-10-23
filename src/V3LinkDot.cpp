@@ -2546,6 +2546,15 @@ class LinkDotParamVisitor final : public VNVisitor {
             pinImplicitExprRecurse(nodep->exprp());
         }
     }
+    // Return if a defparam is in a generate block, and the instance it changes is not
+    static bool outsideDefParamGenBlock(const VSymEnt* defSymp, const VSymEnt* cellSymp) {
+        // The defparam's symbol is its innermost generate block, else its module.
+        if (!VN_IS(defSymp->nodep(), GenBlock)) return false;
+        for (; cellSymp; cellSymp = cellSymp->parentp()) {
+            if (cellSymp == defSymp) return false;
+        }
+        return true;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         nodep->v3warn(DEFPARAM, "defparam is deprecated (IEEE 1800-2023 C.4.1)\n"
@@ -2562,6 +2571,10 @@ class LinkDotParamVisitor final : public VNVisitor {
         AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
         if (!cellp) {
             nodep->v3error("In defparam, instance " << path << " never declared");
+        } else if (outsideDefParamGenBlock(m_statep->getNodeSym(nodep), foundp)) {
+            nodep->v3error("In defparam under a generate block, instance "
+                           << AstNode::prettyNameQ(path)
+                           << " is outside that generate block (IEEE 1800-2023 23.10.1)");
         } else {
             AstNodeExpr* const exprp = nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << nodep->name() << " attach-to " << cellp

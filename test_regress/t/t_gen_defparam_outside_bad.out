@@ -1,0 +1,11 @@
+%Error: t/t_gen_defparam_outside_bad.v:21:18: In defparam under a generate block, instance 'u' is outside that generate block (IEEE 1800-2023 23.10.1)
+   21 |     defparam u.W = 3;   
+      |                  ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_gen_defparam_outside_bad.v:25:25: In defparam under a generate block, instance 'g.u_in' is outside that generate block (IEEE 1800-2023 23.10.1)
+   25 |       defparam g.u_in.W = 5;   
+      |                         ^
+%Error: t/t_gen_defparam_outside_bad.v:32:18: In defparam under a generate block, instance 'u' is outside that generate block (IEEE 1800-2023 23.10.1)
+   32 |     defparam u.W = 7;   
+      |                  ^
+%Error: Exiting due to
