@@ -1,8 +1,28 @@
+%Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:19:45: Unsupported: consecutive repetition range followed by a later sequence element in a property, other than '##0' or '##1' and a boolean (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   19 |     @(posedge clk) a |-> (b ##1 a [* 1: 2]) ##1 b;
+      |                                             ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:22:37: Unsupported: consecutive repetition range followed by a later sequence element in a property, other than '##0' or '##1' and a boolean (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   22 |     @(posedge clk) a |-> b [* 1: 2] ##2 a;
+      |                                     ^~
+%Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:25:37: Unsupported: consecutive repetition range followed by a later sequence element in a property, other than '##0' or '##1' and a boolean (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   25 |     @(posedge clk) a |-> b [* 1: 2] ##[1:2] a;
+      |                                     ^~
+%Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:28:45: Unsupported: consecutive repetition range followed by a later sequence element in a property, other than '##0' or '##1' and a boolean (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   28 |     @(posedge clk) a |-> (a ##1 b) [* 1: 2] ##1 b;
+      |                                             ^~
+%Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:31:37: Unsupported: consecutive repetition range followed by a later sequence element in a property, other than '##0' or '##1' and a boolean (IEEE 1800-2023 16.9.2)
+                                                      : ... note: In instance 't'
+   31 |     @(posedge clk) a |-> b [* 1: 2] ##1 (a ##1 b);
+      |                                     ^~
 %Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:13:28: Unsupported: [=M:N] nonconsecutive range repetition (IEEE 1800-2023 16.9.2)
                                                       : ... note: In instance 't'
    13 |     @(posedge clk) a |-> b [= 1: 2];
       |                            ^~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_assert_rep_range_unsup.v:16:31: Unsupported: [=M:N] nonconsecutive range repetition (IEEE 1800-2023 16.9.2)
                                                       : ... note: In instance 't'
    16 |     @(posedge clk) a [= 1: 2] |-> b;

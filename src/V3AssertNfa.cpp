@@ -694,6 +694,11 @@ class SvaNfaBuilder final {
         // Handle LHS (preExpr)
         SvaStateVertex* currentp = entryVtxp;
         if (AstNodeExpr* const preExprp = sexprp->preExprp()) {
+            if (isTopLevelStep && !m_isCover && preExprp->exists([](const AstSConsRep* repp) {
+                    return repp->maxCountp() != nullptr;
+                })) {
+                return buildConsRepRangeTail(sexprp, entryVtxp);
+            }
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
             const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
@@ -734,6 +739,51 @@ class SvaNfaBuilder final {
             return result;
         }
         return {currentp, exprp, std::move(rangeMidSources)};
+    }
+
+    // Build a consecutive repetition range followed by a later step in a property
+    BuildResult buildConsRepRangeTail(AstSExpr* sexprp, SvaStateVertex* entryVtxp) {
+        // Each length is an alternative, and one failing the later step must not reject while
+        // another may still match, which the merged threads of the plain lowering cannot tell
+        // apart. With a boolean g, `f[*m:n] ##1 g` is `f[*m] ##1 ((f || g) throughout ##[0:n-m]
+        // g)`: from the end of f[*m] each tick matches on g, continues while f holds, and fails
+        // otherwise. Likewise `f[*m:n] ##0 g` is `f[*m-1] ##1 (f throughout ##[0:n-m] (f && g))`
+        // (m >= 1).
+        FileLine* const flp = sexprp->fileline();
+        AstSConsRep* const repp = VN_CAST(sexprp->preExprp(), SConsRep);
+        const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+        if (!repp || repp->exprp()->isMultiCycleSva() || delayp->isRangeDelay()
+            || getConstUInt(delayp->lhsp()) > 1 || sexprp->exprp()->isMultiCycleSva()) {
+            sexprp->v3warn(E_UNSUPPORTED, "Unsupported: consecutive repetition range followed by"
+                                          " a later sequence element in a property, other than"
+                                          " '##0' or '##1' and a boolean"
+                                          " (IEEE 1800-2023 16.9.2)");
+            return BuildResult::failWithError();
+        }
+        const bool fused = getConstUInt(delayp->lhsp()) == 0;
+        AstNodeExpr* const fp = repp->exprp();
+        AstNodeExpr* const gp = sexprp->exprp();
+        // An empty match fused with g does not match (IEEE 1800-2023 16.9.2.1)
+        const unsigned minN = std::max(getConstUInt(repp->countp()), fused ? 1U : 0U);
+        const unsigned prefixN = fused ? minN - 1 : minN;
+        AstNodeExpr* const guardp
+            = fused ? fp->cloneTreePure(false)
+                    : new AstLogOr{flp, fp->cloneTreePure(false), gp->cloneTreePure(false)};
+        AstNodeExpr* const endp
+            = fused ? new AstLogAnd{flp, fp->cloneTreePure(false), gp->cloneTreePure(false)}
+                    : gp->cloneTreePure(false);
+        guardp->dtypeSetBit();
+        endp->dtypeSetBit();
+        AstDelay* const rangep = new AstDelay{flp, new AstConst{flp, 0U}, /*isCycle=*/true};
+        rangep->rhsp(new AstConst{flp, getConstUInt(repp->maxCountp()) - minN});
+        AstNodeExpr* treep = new AstSThroughout{flp, guardp, new AstSExpr{flp, rangep, endp}};
+        if (prefixN) {
+            treep = new AstSExpr{
+                flp, new AstSConsRep{flp, fp->cloneTreePure(false), new AstConst{flp, prefixN}},
+                new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true}, treep};
+        }
+        treep->dtypeSetBit();
+        return buildFromLoweringTree(treep, entryVtxp, /*isTopLevelStep=*/true);
     }
 
     BuildResult buildConsRep(AstSConsRep* repp, SvaStateVertex* entryVtxp,
