@@ -1,0 +1,5 @@
+%Error: t/t_inst_port_ref_wire_bad.v:8:20: Ref port 'r' is declared as a net, but must be a variable (IEEE 1800-2023 23.2.2.2)
+    8 |     ref wire [1:0] r   
+      |                    ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

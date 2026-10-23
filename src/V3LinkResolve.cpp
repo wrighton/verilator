@@ -97,6 +97,11 @@ class LinkResolveVisitor final : public VNVisitor {
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
         if (m_ftaskp) nodep->funcLocal(true);
+        if (nodep->isRef() && nodep->isNet()) {
+            nodep->v3error("Ref port " << nodep->prettyNameQ()
+                                       << " is declared as a net, but must be a variable"
+                                          " (IEEE 1800-2023 23.2.2.2)");
+        }
         if (nodep->isSigModPublic()) {
             nodep->sigModPublic(false);  // We're done with this attribute
             m_modp->modPublic(true);  // Avoid flattening if signals are exposed

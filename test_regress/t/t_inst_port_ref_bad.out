@@ -1,0 +1,22 @@
+%Error: t/t_inst_port_ref_bad.v:17:17: Ref port 'r' is connected to net 'w', but must be connected to a variable (IEEE 1800-2023 23.3.3.2)
+                                     : ... note: In instance 't'
+   17 |   sub u_net (.r(w));   
+      |                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_port_ref_bad.v:18:20: Ref port 'r' is connected to an expression, but must be connected to a variable (IEEE 1800-2023 23.3.3.2)
+                                     : ... note: In instance 't'
+   18 |   sub u_expr (.r(a & b));   
+      |                    ^
+%Error: t/t_inst_port_ref_bad.v:19:19: Ref port 'r' is connected to an expression, but must be connected to a variable (IEEE 1800-2023 23.3.3.2)
+                                     : ... note: In instance 't'
+   19 |   sub u_const (.r(2'b01));   
+      |                   ^~~~~
+%Error: t/t_inst_port_ref_bad.v:19:17: Ref connection 'r' requires matching types; ref requires 'logic[1:0]' data type but connection is 'bit[1:0]' data type.
+                                     : ... note: In instance 't'
+   19 |   sub u_const (.r(2'b01));   
+      |                 ^
+%Error: t/t_inst_port_ref_bad.v:20:21: Streaming concatenation cannot be connected to 'ref' port (IEEE 1800-2023 11.4.14)
+                                     : ... note: In instance 't'
+   20 |   sub u_stream (.r({<<{a}}));   
+      |                     ^~
+%Error: Exiting due to

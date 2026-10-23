@@ -7692,6 +7692,24 @@ class WidthVisitor final : public VNVisitor {
                                         << "' port (IEEE 1800-2023 11.4.14)");
             }
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
+            if (pinDirection == VDirection::REF && !VN_IS(nodep->exprp(), NodeStream)) {
+                const AstNodeExpr* const exprp = VN_AS(nodep->exprp(), NodeExpr);
+                if (!exprp->getVAccessTargetRecurse()) {
+                    exprp->v3error("Ref port " << nodep->modVarp()->prettyNameQ()
+                                               << " is connected to an expression, but must be"
+                                                  " connected to a variable"
+                                                  " (IEEE 1800-2023 23.3.3.2)");
+                }
+                exprp->foreach([nodep](const AstNodeVarRef* refp) {
+                    if (refp->access().isWriteOrRW() && refp->varp()->isNet()) {
+                        refp->v3error("Ref port " << nodep->modVarp()->prettyNameQ()
+                                                  << " is connected to net "
+                                                  << refp->varp()->prettyNameQ()
+                                                  << ", but must be connected to a variable"
+                                                     " (IEEE 1800-2023 23.3.3.2)");
+                    }
+                });
+            }
             AstNodeDType* modDTypep = nodep->modVarp()->dtypep();
             AstNodeDType* conDTypep = nodep->exprp()->dtypep();
             UASSERT_OBJ(modDTypep, nodep, "Unlinked pin data type");
