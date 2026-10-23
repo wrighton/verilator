@@ -691,12 +691,27 @@ class SvaNfaBuilder final {
         FileLine* const flp = sexprp->fileline();
         AstNodeExpr* const exprp = sexprp->exprp();
 
+        // An empty match of a zero-minimum repetition next to the delay takes a cycle off the
+        // delay: `s ##n empty` is `s ##(n-1) 1` and `empty ##n s` is `##(n-1) s`, and neither
+        // matches for n == 0 (IEEE 1800-2023 16.9.2.1). A zero-minimum repetition lowered from
+        // a vertex has its empty match there, and its first repetition on the next tick.
+        AstSConsRep* const preZeroMinp = zeroMinRep(sexprp->preExprp());
+        AstSConsRep* const zeroMinp = zeroMinRep(exprp);
+        if ((preZeroMinp || zeroMinp) && (delayp->isRangeDelay() || (preZeroMinp && zeroMinp))) {
+            sexprp->v3warn(E_UNSUPPORTED, "Unsupported: zero-minimum consecutive repetition next"
+                                          " to a ranged cycle delay or another zero-minimum"
+                                          " repetition (IEEE 1800-2023 16.9.2.1)");
+            return BuildResult::failWithError();
+        }
+
         // Handle LHS (preExpr)
         SvaStateVertex* currentp = entryVtxp;
         if (AstNodeExpr* const preExprp = sexprp->preExprp()) {
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
-            const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
+            // The empty match is added after the delay, so the first repetition is not required
+            const BuildResult pre = preZeroMinp ? buildConsRep(preZeroMinp, currentp, false, true)
+                                                : buildExpr(preExprp, currentp, isTopLevelStep);
             if (!pre.valid()) return BuildResult::fail(pre.errorEmitted);  // LCOV_EXCL_LINE
             if (pre.finalCondp) {
                 SvaStateVertex* const condVtxp = scopedCreateVertex();
@@ -724,7 +739,20 @@ class SvaNfaBuilder final {
             }
         } else {
             const unsigned delayCycles = getConstUInt(delayp->lhsp());
-            currentp = addDelayChain(currentp, delayCycles, flp);
+            if (zeroMinp) {
+                if (!delayCycles) return buildConsRep(zeroMinp, currentp, isTopLevelStep, true);
+                // Lowered from the tick of its empty match, see above
+                currentp = addDelayChain(currentp, delayCycles - 1, flp);
+            } else {
+                currentp = addDelayChain(currentp, delayCycles, flp);
+                if (preZeroMinp && delayCycles) {
+                    // Empty match of the left repetition, see above
+                    SvaStateVertex* const mergeVtxp = scopedCreateVertex();
+                    guardedLink(currentp, mergeVtxp, flp);
+                    guardedLink(addDelayChain(entryVtxp, delayCycles - 1, flp), mergeVtxp, flp);
+                    currentp = mergeVtxp;
+                }
+            }
         }
 
         // Multi-cycle RHS: recurse (only plain boolean is returned as finalCondp).
@@ -736,8 +764,15 @@ class SvaNfaBuilder final {
         return {currentp, exprp, std::move(rangeMidSources)};
     }
 
+    static AstSConsRep* zeroMinRep(AstNodeExpr* nodep) {
+        AstSConsRep* const repp = VN_CAST(nodep, SConsRep);
+        return repp && getConstUInt(repp->countp()) == 0 ? repp : nullptr;
+    }
+
+    // nonEmpty: Drop the empty match of a zero-minimum repetition
     BuildResult buildConsRep(AstSConsRep* repp, SvaStateVertex* entryVtxp,
-                             bool isTopLevelStep = false) {
+                             bool isTopLevelStep = false, bool nonEmpty = false) {
+        // With nonEmpty the first repetition is on the entry tick.
         FileLine* const flp = repp->fileline();
         AstNodeExpr* const exprp = repp->exprp();
         // Multi-cycle expr in ConsRep not yet supported; bail to avoid invalid AST.
@@ -746,7 +781,7 @@ class SvaNfaBuilder final {
                                         " consecutive repetition (IEEE 1800-2023 16.9.2)");
             return BuildResult::failWithError();
         }
-        const unsigned minN = getConstUInt(repp->countp());
+        const unsigned minN = std::max(getConstUInt(repp->countp()), nonEmpty ? 1U : 0U);
 
         // Sum sites across prefix + unbounded/range tail so one hoist covers
         // every check edge of this repetition.
