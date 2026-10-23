@@ -85,6 +85,9 @@ class InstVisitor final : public VNVisitor {
             // resolution it built for it, so a port merged into it would be driven by
             // the resolution of the instance as well
             if (exprVarp->isTristate()) return false;
+            // The default value of an input is used only when it is not connected
+            // (IEEE 1800-2023 23.2.2.4), so it must not initialize the connected variable
+            if (modVarp->isInput() && modVarp->hasUserInit()) return false;
         }
         // They will become the same variable, so propagate file-line and attributes
         exprVarp->fileline()->modifyStateInherit(modVarp->fileline());
