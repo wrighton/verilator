@@ -305,7 +305,7 @@ vnum    {vnum1}|{vnum2}|{vnum3}|{vnum4}|{vnum5}
   "$realtime"           { FL; return yD_REALTIME; }
   "$realtobits"         { FL; return yD_REALTOBITS; }
   "$recovery"           { FL; return yaTIMINGSPEC; }
-  "$recrem"             { FL; return yaTIMINGSPEC; }
+  "$recrem"             { FL; return yD_RECREM; }
   "$removal"            { FL; return yaTIMINGSPEC; }
   "$rewind"             { FL; return yD_REWIND; }
   "$rtoi"               { FL; return yD_RTOI; }

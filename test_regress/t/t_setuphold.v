@@ -30,6 +30,12 @@ module t (/*AUTOARG*/
   logic[3:0] sh4;
   logic[3:0] sh5 = 5;
   logic[3:0] sh6;
+  logic[3:0] rr1 = 7;
+  logic[3:0] rr2;
+  logic[3:0] rr3 = 9;
+  logic[3:0] rr4;
+  wire rr_CLK;
+  wire rr_D;
 
   int cyc = 0;
 
@@ -56,6 +62,14 @@ module t (/*AUTOARG*/
     $setuphold (edge [0Z, z1, 10] fake_CLK, edge [01, x0, 0X] fake_CLK &&& sh1, 0, 0);
 
     $setuphold (posedge clk, negedge d, 0, 0, notifier, (0:0:0), 0, t_in);
+
+    // $recrem has the same delayed signal arguments as $setuphold
+    $recrem (posedge clk, negedge d, 0, 0, notifier, (0:0:0), 0, rr_CLK, rr_D);
+    $recrem (posedge rr1, negedge rr3, 0, 0, notifier,,, rr2, rr4);
+    $recrem (posedge clk, negedge d, 0, 0, notifier, (1:2:3), (0:0:0));
+    $recrem (posedge clk, negedge d, 0, 0, notifier, (1:2:3));
+    $recrem (posedge clk, negedge d, 0, 0, notifier);
+    $recrem (posedge clk, negedge d, 0, 0);
   endspecify
 
   initial begin
@@ -63,6 +77,9 @@ module t (/*AUTOARG*/
       $stop;
     end
     if (sh5 != sh6) begin
+      $stop;
+    end
+    if (rr1 != rr2 || rr3 != rr4) begin
       $stop;
     end
     if (BL_0 != BL_X[0] || BL_1 != BL_X2[4:1]) begin
@@ -74,6 +91,9 @@ module t (/*AUTOARG*/
     cyc <= cyc + 1;
     $display("%d %d", clk, delayed_CLK);
     if (delayed_CLK != clk || delayed_D != d) begin
+      $stop;
+    end
+    if (rr_CLK != clk || rr_D != d) begin
       $stop;
     end
     if (cyc == 10) begin

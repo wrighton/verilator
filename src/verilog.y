@@ -720,6 +720,7 @@ BISONPRE_VERSION(3.7,%define api.header.include {"V3ParseBison.h"})
 %token<fl>              yD_READMEMH     "$readmemh"
 %token<fl>              yD_REALTIME     "$realtime"
 %token<fl>              yD_REALTOBITS   "$realtobits"
+%token<fl>              yD_RECREM       "$recrem"
 %token<fl>              yD_REWIND       "$rewind"
 %token<fl>              yD_RIGHT        "$right"
 %token<fl>              yD_RISING_GCLK  "$rising_gclk"
@@ -6020,19 +6021,25 @@ system_timing_check<nodep>:         // ==IEEE: system_timing_check
                 setuphold_timing_check                      { $$ = $1; }
         ;
 
-setuphold_timing_check<nodep>:      // ==IEEE: $setuphold_timing_check
-                yD_SETUPHOLD '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ')' ';'
+setuphold_timing_check<nodep>:      // ==IEEE: $setuphold_timing_check, $recrem_timing_check
+                setupholdOrRecrem '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ')' ';'
                         { $$ = nullptr; DEL($3, $5, $7, $9); }
-        |       yD_SETUPHOLD '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ')' ';'
+        |       setupholdOrRecrem '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ')' ';'
                         { $$ = nullptr; DEL($3, $5, $7, $9); }
-        |       yD_SETUPHOLD '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ')' ';'
+        |       setupholdOrRecrem '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ')' ';'
                         { $$ = nullptr; DEL($3, $5, $7, $9, $13); }
-        |       yD_SETUPHOLD '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ',' minTypMaxE ')' ';'
+        |       setupholdOrRecrem '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ',' minTypMaxE ')' ';'
                         { $$ = nullptr; DEL($3, $5, $7, $9, $13, $15); }
-        |       yD_SETUPHOLD '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ',' minTypMaxE ',' delayed_referenceE ')' ';'
+        |       setupholdOrRecrem '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ',' minTypMaxE ',' delayed_referenceE ')' ';'
                         { $$ = new AstSetuphold{$1, $3, $5, $17}; DEL($7, $9, $13, $15);  }
-        |       yD_SETUPHOLD '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ',' minTypMaxE ',' delayed_referenceE ',' delayed_referenceE ')' ';'
+        |       setupholdOrRecrem '(' timing_check_event ',' timing_check_event ',' timing_check_limit ',' timing_check_limit ',' idAnyE ',' minTypMaxE ',' minTypMaxE ',' delayed_referenceE ',' delayed_referenceE ')' ';'
                         { $$ = new AstSetuphold{$1, $3, $5, $17, $19}; DEL($7, $9, $13, $15); }
+        ;
+
+setupholdOrRecrem<fl>:  // IEEE: part of $setuphold_timing_check, $recrem_timing_check
+        //                      // Same arguments and delayed signals (IEEE 1800-2023 31.3.6, 31.9)
+                yD_RECREM                               { $$ = $1; }
+        |       yD_SETUPHOLD                            { $$ = $1; }
         ;
 
 timing_check_event<nodeExprp>:      // ==IEEE: $timing_check_event
@@ -6078,7 +6085,7 @@ junkToSemiList<fl>:
         ;
 
 junkToSemi:
-                BISONPRE_NOT(';',yD_SETUPHOLD,yENDMODULE,yENDSPECIFY,ySPECPARAM)        { }
+                BISONPRE_NOT(';',yD_RECREM,yD_SETUPHOLD,yENDMODULE,yENDSPECIFY,ySPECPARAM)        { }
         |       error                                   { }  // LCOV_EXCL_LINE
         ;
 

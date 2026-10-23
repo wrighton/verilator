@@ -1208,7 +1208,7 @@ public:
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
 };
 class AstSetuphold final : public AstNodeStmt {
-    // Verilog $setuphold
+    // Verilog $setuphold, or $recrem (same arguments and delayed signals)
     // @astgen op1 := refevp : AstNodeExpr
     // @astgen op2 := dataevp : AstNodeExpr
     // @astgen op3 := delrefp : Optional[AstNodeExpr]

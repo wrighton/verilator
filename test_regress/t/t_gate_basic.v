@@ -73,7 +73,6 @@ module t (
    $nochange();
    $period();
    $recovery();
-   $recrem();
    $removal();
    $setup();
    $skew();
