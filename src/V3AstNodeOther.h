@@ -1785,6 +1785,7 @@ class AstPin final : public AstNode {
     string m_name;  // Pin name, or "" for number based interconnect
     string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
+    bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
 public:
@@ -1812,6 +1813,8 @@ public:
     void param(bool flag) { m_param = flag; }
     const string& paramPath() const { return m_paramPath; }
     void paramPath(const string& path) { m_paramPath = path; }
+    bool defparamGenAlt() const { return m_defparamGenAlt; }
+    void defparamGenAlt(bool flag) { m_defparamGenAlt = flag; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }

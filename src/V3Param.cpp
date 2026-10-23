@@ -3862,6 +3862,18 @@ class ParamVisitor final : public VNVisitor {
 
     // Generate Statements
 
+    // Report defparams into a generate branch that is not elaborated, that resolve elsewhere
+    static void checkDroppedDefparams(AstNode* nodep) {
+        // IEEE 1800-2023 23.10.4.2: Resolved after elaboration, the path names the scope
+        // outside the block, but V3LinkDot attached the defparam to an instance in it
+        nodep->foreach([](const AstPin* pinp) {
+            if (!pinp->defparamGenAlt()) return;
+            pinp->v3warn(E_UNSUPPORTED, "Unsupported: defparam into a generate block that is not"
+                                        " elaborated, whose path also names a scope outside it"
+                                        " (IEEE 1800-2023 23.10.4.2)");
+        });
+    }
+
     // Traverse a generate condition (if/case expression, for init/cond/inc).
     //
     // m_cellps assumes a queued ref outlives the drain loop, which holds elsewhere
@@ -3892,6 +3904,7 @@ class ParamVisitor final : public VNVisitor {
             } else {
                 nodep->unlinkFrBack();
             }
+            checkDroppedDefparams(nodep);
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             // Normal edit rules will now recurse the replacement
         } else {
@@ -3994,6 +4007,7 @@ class ParamVisitor final : public VNVisitor {
         } else {
             nodep->unlinkFrBack();
         }
+        checkDroppedDefparams(nodep);
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
     }
 
