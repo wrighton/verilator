@@ -8187,8 +8187,29 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
     }
+    void checkDeferredAction(const AstNodeCoverOrAssert* nodep, const AstNode* stmtsp) {
+        // IEEE 1800-2023 16.4: A deferred assertion action is a single subroutine call.
+        // Rejects each other statement kind, as system task calls have too many node types.
+        if (!nodep->userType().containsAny(VAssertType::OBSERVED_DEFERRED_IMMEDIATE
+                                           | VAssertType::FINAL_DEFERRED_IMMEDIATE))
+            return;
+        for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            if (VN_IS(stmtp, NodeAssign) || VN_IS(stmtp, NodeBlock) || VN_IS(stmtp, If)
+                || VN_IS(stmtp, Case) || VN_IS(stmtp, RandCase) || VN_IS(stmtp, Loop)
+                || VN_IS(stmtp, NodeCoverOrAssert) || VN_IS(stmtp, Delay)
+                || VN_IS(stmtp, EventControl) || VN_IS(stmtp, Wait) || VN_IS(stmtp, WaitFork)
+                || VN_IS(stmtp, FireEvent) || VN_IS(stmtp, DisableFork) || VN_IS(stmtp, JumpGo)
+                || VN_IS(stmtp, Release) || VN_IS(stmtp, Deassign) || VN_IS(stmtp, RandSequence)) {
+                stmtp->v3error("Deferred assertion action must be a single subroutine call"
+                               " (IEEE 1800-2023 16.4)");
+                return;
+            }
+        }
+    }
     void visit(AstAssert* nodep) override {
         assertAtStatement(nodep);
+        checkDeferredAction(nodep, nodep->passsp());
+        checkDeferredAction(nodep, nodep->failsp());
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
         userIterateAndNext(nodep->passsp(), nullptr);
         userIterateAndNext(nodep->failsp(), nullptr);
@@ -8205,6 +8226,7 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstCover* nodep) override {
         assertAtStatement(nodep);
+        checkDeferredAction(nodep, nodep->passsp());
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
         userIterateAndNext(nodep->passsp(), nullptr);
     }
