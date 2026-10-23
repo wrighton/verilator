@@ -48,7 +48,13 @@ class UdpVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstAssign* nodep) override {
-        if (m_inInitial) { m_outputInitVerfp = VN_CAST(nodep->lhsp(), VarRef); }
+        if (m_inInitial) {
+            m_outputInitVerfp = VN_CAST(nodep->lhsp(), VarRef);
+            if (!isInitValue(nodep->rhsp())) {
+                nodep->rhsp()->v3error("UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0"
+                                       " (IEEE 1800-2023 29.7)");
+            }
+        }
         iterateChildren(nodep);
     }
     void visit(AstPrimitive* nodep) override {
@@ -199,6 +205,14 @@ class UdpVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
     void visit(AstLogAnd* nodep) override { iterateChildren(nodep); }
     void visit(AstLogNot* nodep) override { iterateChildren(nodep); }
+    // Whether an expression is an IEEE init_val
+    static bool isInitValue(const AstNode* nodep) {
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (!constp || constp->num().isOpaque() || constp->num().autoExtend()) return false;
+        const V3Number& num = constp->num();
+        if (num.sized()) return num.width() == 1 && !num.isAnyZ();
+        return num.isEqZero() || num.isEqOne();
+    }
     // For logic processing.
     static bool isEdgeTrig(std::string& valName) {
         if (valName == "x" || valName == "X") return false;

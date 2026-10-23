@@ -1,0 +1,36 @@
+%Error: t/t_udp_initial_bad.v:13:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+                                   : ... note: In instance 't'
+   13 |   initial q = 1'bz;   
+      |               ^~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_udp_initial_bad.v:23:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+                                   : ... note: In instance 't'
+   23 |   initial q = 2'b01;   
+      |               ^~~~~
+%Error: t/t_udp_initial_bad.v:33:20: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+                                   : ... note: In instance 't'
+   33 |   initial q = 1'b1 & 1'b1;   
+      |                    ^
+%Error: t/t_udp_initial_bad.v:43:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+                                   : ... note: In instance 't'
+   43 |   initial q = '1;   
+      |               ^~
+%Error: t/t_udp_initial_bad.v:53:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+                                   : ... note: In instance 't'
+   53 |   initial q = 2;   
+      |               ^
+%Error: t/t_udp_initial_bad.v:63:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+                                   : ... note: In instance 't'
+   63 |   initial q = 1.0;   
+      |               ^~~
+%Warning-WIDTHTRUNC: t/t_udp_initial_bad.v:53:13: Operator ASSIGN expects 1 bits on the Assign RHS, but Assign RHS's CONST '?32?sh2' generates 32 or 2 bits.
+                                                : ... note: In instance 't'
+   53 |   initial q = 2;   
+      |             ^
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: t/t_udp_initial_bad.v:23:13: Operator ASSIGN expects 1 bits on the Assign RHS, but Assign RHS's CONST '2'h1' generates 2 bits.
+                                                : ... note: In instance 't'
+   23 |   initial q = 2'b01;   
+      |             ^
+%Error: Exiting due to
