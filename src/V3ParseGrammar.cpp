@@ -28,6 +28,22 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 #include "V3ParseBison.c"
 
 //======================================================================
+// Functions requiring bison state
+
+void yyerror(const char* errmsg) {
+    FileLine* const fl = PARSEP->bisonLastFileline();
+    const int token = PARSEP->bisonLastToken();
+    if (token == yaT_BEGIN_KEYWORDS || token == yaT_END_KEYWORDS) {
+        fl->v3error(errmsg << '\n'
+                           << fl->warnMore()
+                           << "... `begin_keywords and `end_keywords are only allowed outside a"
+                              " design element (IEEE 1800-2023 22.14)");
+    } else {
+        fl->v3error(errmsg);
+    }
+}
+
+//======================================================================
 // V3ParseImp functions requiring bison state
 
 int V3ParseImp::bisonParse() {

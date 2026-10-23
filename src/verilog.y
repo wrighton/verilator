@@ -161,7 +161,7 @@ static void UNSUPREAL(FileLine* fileline) {
 
 //======================================================================
 
-void yyerror(const char* errmsg) { PARSEP->bisonLastFileline()->v3error(errmsg); }
+void yyerror(const char* errmsg);  // In V3ParseGrammar.cpp
 
 template <typename T_Node, typename T_Next>
 static T_Node* addNextNull(T_Node* nodep, T_Next* nextp) {
@@ -294,6 +294,8 @@ BISONPRE_VERSION(3.7,%define api.header.include {"V3ParseBison.h"})
 
 %token<strp>            yaD_PLI         "${pli-system}"
 
+%token<fl>              yaT_BEGIN_KEYWORDS  "`begin_keywords"
+%token<fl>              yaT_END_KEYWORDS  "`end_keywords"
 %token<fl>              yaT_NOUNCONNECTED  "`nounconnecteddrive"
 %token<fl>              yaT_RESETALL    "`resetall"
 %token<fl>              yaT_UNCONNECTED_PULL0  "`unconnected_drive pull0"
@@ -1055,6 +1057,8 @@ description:                    // ==IEEE: description
         |       config_declaration                      { }
         //                      // Verilator only
         |       yaT_RESETALL                            { }  // Else, under design, and illegal based on IEEE 22.3
+        |       yaT_BEGIN_KEYWORDS                      { }  // Else, under design, and illegal based on IEEE 22.14
+        |       yaT_END_KEYWORDS                        { }  // Else, under design, and illegal based on IEEE 22.14
         |       yaT_NOUNCONNECTED                       { PARSEP->unconnectedDrive(VOptionBool::OPT_DEFAULT_FALSE); }
         |       yaT_UNCONNECTED_PULL0                   { PARSEP->unconnectedDrive(VOptionBool::OPT_FALSE); }
         |       yaT_UNCONNECTED_PULL1                   { PARSEP->unconnectedDrive(VOptionBool::OPT_TRUE); }
