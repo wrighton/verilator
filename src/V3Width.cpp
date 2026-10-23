@@ -11453,10 +11453,13 @@ public:
                                        << lwidth << " bits) is narrower than the stream ("
                                        << rwidth << " bits) (IEEE 1800-2023 11.4.14)");
             }
-            if (VN_IS(streamp->lhsp()->dtypep()->skipRefp(), QueueDType)
-                && !VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)) {
-                const int queueElementSize = streamp->lhsp()->dtypep()->subDTypep()->width();
-                UASSERT_OBJ(queueElementSize <= lwidth, nodep, "LHS < RHS");
+            const AstNodeDType* const srcDTypep = streamp->lhsp()->dtypep()->skipRefp();
+            if (lwidth != 0 && srcDTypep->isDynamicallySized()
+                && srcDTypep->subDTypep()->width() > lwidth) {
+                nodep->v3error("Target fixed size variable ("
+                               << lwidth << " bits) is narrower than each element of the stream ("
+                               << srcDTypep->subDTypep()->width()
+                               << " bits) (IEEE 1800-2023 11.4.14)");
             }
             if (VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
                 || lowerAsFixedAggregate(lhsDTypeSkippedRefp)) {
