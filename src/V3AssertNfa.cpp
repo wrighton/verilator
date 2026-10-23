@@ -366,7 +366,8 @@ class SvaNfaBuilder final {
     bool m_trackVacuous = false;  // Record vacuous successes (they fail a negated assertion)
     bool m_atPropEnd = false;  // Building the consequent of a followed-by ending the property
     bool m_hasAndLatch = false;  // An 'and' combines its operands' matches (buildAndCombiner)
-    bool m_inAntecedent = false;  // Building an implication antecedent, where nothing fails
+    // Building an implication antecedent, which cannot fail, and every match of which counts
+    bool m_inAntecedent = false;
     // Building the consequent of an antecedent with an empty match, which keeps merge vertices
     bool m_inEmptyMatchConsequent = false;
     // Building an operand of an 'or' that keeps its merge vertex, whose own 'or's keep theirs
@@ -704,10 +705,10 @@ class SvaNfaBuilder final {
         } else {
             // The first eligible tick is explicit. The ring retains attempts for the
             // remaining ticks and exposes the final tick for rejection. Only properties
-            // clear on success, since cover sequence counts every endpoint.
+            // clear on success, since a cover sequence and an antecedent use every endpoint.
             midSources.push_back(currentp);
             currentp = addDelayChain(currentp, range + 1U, flp, false,
-                                     m_isCoverSeq ? nullptr : rhsExprp);
+                                     m_isCoverSeq || m_inAntecedent ? nullptr : rhsExprp);
         }
         return true;
     }
@@ -1541,17 +1542,22 @@ class SvaNfaBuilder final {
                                      sampled(rhs.finalCondp->cloneTreePure(false))},
                         flp);
         } else {
-            if (lhs.finalCondp) {
-                guardedLink(lhs.termVertexp, mergeVtxp,
-                            sampled(lhs.finalCondp->cloneTreePure(false)), flp);
-            } else {
-                guardedLink(lhs.termVertexp, mergeVtxp, flp);
-            }
-            if (rhs.finalCondp) {
-                guardedLink(rhs.termVertexp, mergeVtxp,
-                            sampled(rhs.finalCondp->cloneTreePure(false)), flp);
-            } else {
-                guardedLink(rhs.termVertexp, mergeVtxp, flp);
+            for (const BuildResult* const opp : {&lhs, &rhs}) {
+                // The first eligible tick of a range delay is a separate source, which an
+                // antecedent takes, as each of its matches starts the consequent. Elsewhere it is
+                // left out, as a match there does not take the attempt out of the ring, which
+                // could match it again.
+                std::vector<SvaStateVertex*> endps;
+                if (m_inAntecedent) endps = opp->midSources;
+                endps.push_back(opp->termVertexp);
+                for (SvaStateVertex* const endp : endps) {
+                    if (opp->finalCondp) {
+                        guardedLink(endp, mergeVtxp,
+                                    sampled(opp->finalCondp->cloneTreePure(false)), flp);
+                    } else {
+                        guardedLink(endp, mergeVtxp, flp);
+                    }
+                }
             }
         }
         freeUnlinkedCondp(lhs.finalCondp);
@@ -2493,6 +2499,16 @@ public:
         AstNodeExpr* antMatchp = nullptr;
         if (antResult.finalCondp) {
             antMatchp = sampled(antResult.finalCondp->cloneTreePure(false));
+            // The first eligible tick of a range delay is a separate source; as at the
+            // terminal, a throughout guard dropped on that tick prevents the match
+            for (SvaStateVertex* const midp : antResult.midSources) {
+                AstNodeExpr* midMatchp = antMatchp->cloneTreePure(false);
+                for (AstNodeExpr* const condp : midp->m_throughoutConds) {
+                    midMatchp
+                        = new AstLogAnd{flp, midMatchp, sampled(condp->cloneTreePure(false))};
+                }
+                m_graph.addLink(midp, trigVtxp, midMatchp);
+            }
             // finalCondp is cloned into the Sampled nodes; if the original is
             // not parented anywhere in the AST anymore it must be freed here
             // or ASan flags it as a leak (e.g. t_sequence_bool_ops).
