@@ -379,6 +379,7 @@ class WidthVisitor final : public VNVisitor {
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
     bool m_underSExpr = false;  // Visiting under a sequence expression
+    const AstNodeExpr* m_cycleDelayPropp = nullptr;  // Operand of unary cycle delay
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
     bool m_underMemberRef = false;  // Viting under a MemberRef
     AstNodeExpr* m_fromParentp = nullptr;  // Method call or member select iterating its fromp()
@@ -478,9 +479,17 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstLogOr* nodep) override { visit_log_and_or(nodep); }
     // Sequence and/or/intersect (IEEE 1800-2023 16.9.2), same width rules as LogAnd/LogOr
     void visit(AstSAnd* nodep) override { visit_log_and_or(nodep); }
-    void visit(AstSIntersect* nodep) override { visit_log_and_or(nodep); }
+    void visit(AstSIntersect* nodep) override {
+        VL_RESTORER(m_underSExpr);
+        m_underSExpr = true;
+        visit_log_and_or(nodep);
+    }
     void visit(AstSOr* nodep) override { visit_log_and_or(nodep); }
-    void visit(AstSWithin* nodep) override { visit_log_and_or(nodep); }
+    void visit(AstSWithin* nodep) override {
+        VL_RESTORER(m_underSExpr);
+        m_underSExpr = true;
+        visit_log_and_or(nodep);
+    }
     void visit(AstLogEq* nodep) override {
         // Conversion from real not in IEEE, but a fallout
         visit_log_and_or(nodep);
@@ -1912,6 +1921,8 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstSConsRep* nodep) override {
         // IEEE 1800-2023 16.9.2 -- consecutive repetition [*N], [*N:M], [*N:$], [+], [*]
+        VL_RESTORER(m_underSExpr);
+        m_underSExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
@@ -1948,6 +1959,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstPropAlways* nodep) override {
         // IEEE 1800-2023 16.12.11
         assertAtExpr(nodep);
+        if (replacePropertyInSExpr(nodep)) return;
         if (m_vup->prelim()) {
             userIterateAndNext(nodep->propp(), WidthVP{SELF, BOTH}.p());
             AstNodeExpr* propp = nodep->propp();
@@ -2118,9 +2130,24 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
     }
 
+    // Report and replace a property operator in a sequence expression, true if replaced
+    bool replacePropertyInSExpr(AstNodeExpr* nodep) {
+        // IEEE 1800-2023 A.2.10: A property operator is not a sequence operand, but the parser
+        // accepts a property expression for some sequence operands.
+        if (!m_underSExpr || nodep == m_cycleDelayPropp) return false;
+        nodep->v3error("Unexpected property operator in sequence expression context"
+                       " (IEEE 1800-2023 A.2.10)");
+        AstConst* const newp = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
+        newp->dtypeSetBit();
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
+
     void visit(AstImplication* nodep) override {
-        m_seqUnsupp = nodep;
         assertAtExpr(nodep);
+        if (replacePropertyInSExpr(nodep)) return;
+        m_seqUnsupp = nodep;
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "LHS", nodep->lhsp(), BOTH);
             iterateCheckBool(nodep, "RHS", nodep->rhsp(), BOTH);
@@ -2130,6 +2157,7 @@ class WidthVisitor final : public VNVisitor {
 
     void visit(AstUntil* nodep) override {
         assertAtExpr(nodep);
+        if (replacePropertyInSExpr(nodep)) return;
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "LHS", nodep->lhsp(), BOTH);
             iterateCheckBool(nodep, "RHS", nodep->rhsp(), BOTH);
@@ -2168,6 +2196,8 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstSGotoRep* nodep) override {
+        VL_RESTORER(m_underSExpr);
+        m_underSExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
@@ -2181,6 +2211,8 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstSNonConsRep* nodep) override {
+        VL_RESTORER(m_underSExpr);
+        m_underSExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
@@ -2250,11 +2282,9 @@ class WidthVisitor final : public VNVisitor {
         m_hasSExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            // lhsp is a boolean expression, not a sequence -- clear m_underSExpr temporarily
             VL_RESTORER(m_underSExpr);
-            m_underSExpr = false;
-            iterateCheckBool(nodep, "lhsp", nodep->lhsp(), BOTH);
             m_underSExpr = true;
+            iterateCheckBool(nodep, "lhsp", nodep->lhsp(), BOTH);
             iterate(nodep->rhsp());
             nodep->dtypeSetBit();
         }
@@ -2269,6 +2299,9 @@ class WidthVisitor final : public VNVisitor {
                 iterateCheckBool(nodep, "preExprp", nodep->preExprp(), BOTH);
             }
             iterate(nodep->delayp());
+            // A property operand of a leading cycle delay is accepted (lowered like nexttime)
+            VL_RESTORER(m_cycleDelayPropp);
+            if (!nodep->preExprp()) m_cycleDelayPropp = nodep->exprp();
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
             nodep->dtypeSetBit();
         }
@@ -8755,7 +8788,12 @@ class WidthVisitor final : public VNVisitor {
         nodep->doingWidth(true);
         // Temporaries made for the body are property-local variables, promoted per instance
         VL_RESTORER(m_propertyp);
+        VL_RESTORER(m_underSExpr);
+        VL_RESTORER(m_cycleDelayPropp);
         m_propertyp = nodep;
+        // The body is not in the context of the instance that may be widthing it
+        m_underSExpr = false;
+        m_cycleDelayPropp = nullptr;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "PropSpec", nodep->specp(), SELF, BOTH);
         nodep->didWidth(true);
@@ -8776,6 +8814,11 @@ class WidthVisitor final : public VNVisitor {
             const AstBasicDType* const basicp = VN_CAST(varp->childDTypep(), BasicDType);
             if (basicp && basicp->implicit()) m_seqUntypedFormals.insert(varp);
         }
+        VL_RESTORER(m_underSExpr);
+        VL_RESTORER(m_cycleDelayPropp);
+        // The body is a sequence expression, whatever the context of the instance widthing it
+        m_underSExpr = true;
+        m_cycleDelayPropp = nullptr;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
         nodep->didWidth(true);
@@ -9546,6 +9589,7 @@ class WidthVisitor final : public VNVisitor {
         // VAbortKind distinguishes accept/reject and sync/async, but the
         // type-check path is identical for all four.
         assertAtExpr(nodep);
+        if (replacePropertyInSExpr(nodep)) return;
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "cond", nodep->condp(), BOTH);
             iterateCheckBool(nodep, "prop", nodep->propp(), BOTH);
