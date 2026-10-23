@@ -20,6 +20,13 @@
 //
 // 0 1 0 on a, b, c turns into !a&b&~c
 //
+// Before that, check that no two table lines can match the same input
+// combination yet give different outputs. Each input field is reduced to the
+// set of (previous, current) value pairs it matches: a level symbol matches
+// only stable pairs, and an edge symbol only changing pairs, so level lines
+// never overlap edge lines (level lines take precedence), and edges on
+// different inputs never overlap.
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -90,6 +97,7 @@ class UdpVisitor final : public VNVisitor {
             m_inputVars[0]->v3error("First UDP port must be the output port");
         }
         m_oFieldVarp = m_outputVars[0];
+        checkConflicts(nodep);
 
         m_alwaysBlockp = new AstAlways{fl, VAlwaysKwd::ALWAYS, nullptr, nullptr};
         fl->warnOff(V3ErrorCode::LATCH, true);
@@ -199,6 +207,100 @@ class UdpVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
     void visit(AstLogAnd* nodep) override { iterateChildren(nodep); }
     void visit(AstLogNot* nodep) override { iterateChildren(nodep); }
+    // Sets of table values, bit 0/1/2 for value 0/1/x
+    static constexpr int VALUE_0 = 1;
+    static constexpr int VALUE_1 = 2;
+    static constexpr int VALUE_X = 4;
+    static constexpr int VALUE_ANY = VALUE_0 | VALUE_1 | VALUE_X;
+    // Set of values a level symbol matches
+    static int levelValues(char symbol) {
+        switch (symbol) {
+        case '0': return VALUE_0;
+        case '1': return VALUE_1;
+        case 'x':
+        case 'X': return VALUE_X;
+        case 'b':
+        case 'B': return VALUE_0 | VALUE_1;
+        default: return VALUE_ANY;  // '?', or illegal symbols, which are reported elsewhere
+        }
+    }
+    // Set of changing value pairs between value sets, bit 3*previous+current
+    static int changes(int previous, int current) {
+        int pairs = 0;
+        for (int p = 0; p < 3; ++p) {
+            for (int c = 0; c < 3; ++c) {
+                if (p != c && (previous >> p & 1) && (current >> c & 1)) pairs |= 1 << (3 * p + c);
+            }
+        }
+        return pairs;
+    }
+    // Set of (previous, current) value pairs an input field matches
+    static int fieldPairs(const string& field) {
+        if (field.size() == 2) return changes(levelValues(field[0]), levelValues(field[1]));
+        switch (field[0]) {
+        case 'r':
+        case 'R': return changes(VALUE_0, VALUE_1);
+        case 'f':
+        case 'F': return changes(VALUE_1, VALUE_0);
+        case 'p':
+        case 'P': return changes(VALUE_0, VALUE_1 | VALUE_X) | changes(VALUE_X, VALUE_1);
+        case 'n':
+        case 'N': return changes(VALUE_1, VALUE_0 | VALUE_X) | changes(VALUE_X, VALUE_0);
+        case '*': return changes(VALUE_ANY, VALUE_ANY);
+        default: break;
+        }
+        const int values = levelValues(field[0]);
+        int pairs = 0;
+        for (int v = 0; v < 3; ++v) {
+            if (values >> v & 1) pairs |= 1 << (4 * v);
+        }
+        return pairs;
+    }
+    // Whether two table lines can match the same inputs yet give different outputs
+    static bool linesConflict(const AstUdpTableLine* ap, const AstUdpTableLine* bp) {
+        for (const AstNode *aip = ap->iFieldsp(), *bip = bp->iFieldsp(); aip && bip;
+             aip = aip->nextp(), bip = bip->nextp()) {
+            if (!(fieldPairs(aip->name()) & fieldPairs(bip->name()))) return false;
+        }
+        // Current output values both lines match, any for combinational lines
+        int states = VALUE_ANY;
+        const AstNode* aOutp = ap->oFieldsp();
+        if (!ap->udpIsCombo()) {
+            states &= levelValues(aOutp->name()[0]);
+            aOutp = aOutp->nextp();
+        }
+        const AstNode* bOutp = bp->oFieldsp();
+        if (!bp->udpIsCombo()) {
+            states &= levelValues(bOutp->name()[0]);
+            bOutp = bOutp->nextp();
+        }
+        // Compare outputs per current output value, as '-' outputs that value
+        for (int s = 0; s < 3; ++s) {
+            if (!(states >> s & 1)) continue;
+            const int aValue = aOutp->name() == "-" ? 1 << s : levelValues(aOutp->name()[0]);
+            const int bValue = bOutp->name() == "-" ? 1 << s : levelValues(bOutp->name()[0]);
+            if (aValue != bValue) return true;
+        }
+        return false;
+    }
+    static void checkConflicts(const AstUdpTable* nodep) {
+        // Quadratic in table lines, but UDP tables are small
+        for (const AstNode* linep = nodep->linesp(); linep; linep = linep->nextp()) {
+            const AstUdpTableLine* const bp = VN_AS(linep, UdpTableLine);
+            for (const AstNode* earlierp = nodep->linesp(); earlierp != linep;
+                 earlierp = earlierp->nextp()) {
+                const AstUdpTableLine* const ap = VN_AS(earlierp, UdpTableLine);
+                if (linesConflict(ap, bp)) {
+                    bp->v3error("UDP table line gives a different output than an earlier line"
+                                " for the same inputs (IEEE 1800-2023 29.3.4)\n"
+                                << bp->warnContextPrimary() << '\n'
+                                << ap->warnOther() << "... Location of earlier line\n"
+                                << ap->warnContextSecondary());
+                    break;
+                }
+            }
+        }
+    }
     // For logic processing.
     static bool isEdgeTrig(std::string& valName) {
         if (valName == "x" || valName == "X") return false;

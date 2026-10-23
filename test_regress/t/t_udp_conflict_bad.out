@@ -1,0 +1,51 @@
+%Error: t/t_udp_conflict_bad.v:15:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   15 |     ? 1 : 0;   
+      |     ^
+        t/t_udp_conflict_bad.v:14:5: ... Location of earlier line
+   14 |     1 ? : 1;
+      |     ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_udp_conflict_bad.v:19:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   19 |     x ? : 0;   
+      |     ^
+        t/t_udp_conflict_bad.v:17:5: ... Location of earlier line
+   17 |     x 0 : x;   
+      |     ^
+%Error: t/t_udp_conflict_bad.v:29:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   29 |     (0?) 0 : ? : 1;   
+      |     ^
+        t/t_udp_conflict_bad.v:28:5: ... Location of earlier line
+   28 |     r 0 : ? : 0;
+      |     ^
+%Error: t/t_udp_conflict_bad.v:31:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   31 |     (?0) 1 : ? : 0;   
+      |     ^
+        t/t_udp_conflict_bad.v:30:5: ... Location of earlier line
+   30 |     F ? : ? : -;
+      |     ^
+%Error: t/t_udp_conflict_bad.v:36:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   36 |     0 * : 0 : 1;   
+      |     ^
+        t/t_udp_conflict_bad.v:35:5: ... Location of earlier line
+   35 |     0 (X1) : 0 : -;
+      |     ^
+%Error: t/t_udp_conflict_bad.v:38:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   38 |     1 0 : B : 1;   
+      |     ^
+        t/t_udp_conflict_bad.v:37:5: ... Location of earlier line
+   37 |     1 0 : 0 : 0;
+      |     ^
+%Error: t/t_udp_conflict_bad.v:41:5: UDP table line gives a different output than an earlier line for the same inputs (IEEE 1800-2023 29.3.4)
+                                   : ... note: In instance 't'
+   41 |     1 (x0) : ? : 1;   
+      |     ^
+        t/t_udp_conflict_bad.v:39:5: ... Location of earlier line
+   39 |     1 n : ? : 0;
+      |     ^
+%Error: Exiting due to
