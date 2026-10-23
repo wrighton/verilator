@@ -111,6 +111,12 @@ const VBasicDTypeKwd LOGIC_IMPLICIT = VBasicDTypeKwd::LOGIC_IMPLICIT;
     }
 #define VARDTYPE_NDECL(dtypep) \
     { GRAMMARP->setDType(dtypep); }  // Port that is range or signed only (not a decl)
+// An output port inheriting its direction, but with its own data type, does not inherit the port
+// kind, so is a variable (IEEE 1800-2023 23.2.2.3)
+#define PORTKINDDEFAULT() \
+    { \
+        if (GRAMMARP->m_portDirOmitted && GRAMMARP->m_varIO == VDirection::OUTPUT) VARDECL(PORT); \
+    }
 
 #define VARDONEA(fl, name, array, attrs) GRAMMARP->createVariable((fl), (name), (array), (attrs))
 #define VARDONEP(portp, array, attrs) \
@@ -1440,10 +1446,10 @@ port<nodep>:                    // ==IEEE: port
         //                      // IEEE: portDirNetE data_type '.' portSig -> handled with AstDot in expr.
         //
         |       portDirNetE data_type           portSig variable_dimensionListE sigAttrListE
-                        { $$ = $3; VARDTYPE($2); VARIOANSI();
+                        { $$ = $3; PORTKINDDEFAULT(); VARDTYPE($2); VARIOANSI();
                           addNextNull($$, VARDONEP($$, $4, $5)); }
         |       portDirNetE data_type           portSig variable_dimensionListE sigAttrListE '=' constExpr
-                        { $$ = $3; VARDTYPE($2); VARIOANSI();
+                        { $$ = $3; PORTKINDDEFAULT(); VARDTYPE($2); VARIOANSI();
                           if (AstVar* vp = VARDONEP($$, $4, $5)) { addNextNull($$, vp); vp->valuep($7); } }
         |       portDirNetE yVAR data_type      portSig variable_dimensionListE sigAttrListE
                         { $$ = $4; VARDECL(VAR); VARDTYPE($3); VARIOANSI();
@@ -1494,12 +1500,12 @@ port<nodep>:                    // ==IEEE: port
         ;
 
 portDirNetE:                    // IEEE: part of port, optional net type and/or direction
-                /* empty */                             { }
+                /* empty */                             { GRAMMARP->m_portDirOmitted = true; }
         //                      // Per spec, if direction given default the nettype.
         //                      // The higher level rule may override this VARDTYPE with one later in the parse.
-        |       port_direction                                  { VARDECL(PORT); VARDTYPE_NDECL(nullptr); }
-        |       port_direction { VARDECL(PORT); } net_type      { VARDTYPE_NDECL(nullptr); }  // net_type calls VARDECL
-        |       net_type                                        { VARDTYPE_NDECL(nullptr); }  // net_type calls VARDECL
+        |       port_direction                                  { GRAMMARP->m_portDirOmitted = false; VARDECL(PORT); VARDTYPE_NDECL(nullptr); }
+        |       port_direction { GRAMMARP->m_portDirOmitted = false; VARDECL(PORT); } net_type      { VARDTYPE_NDECL(nullptr); }  // net_type calls VARDECL
+        |       net_type                                        { GRAMMARP->m_portDirOmitted = false; VARDTYPE_NDECL(nullptr); }  // net_type calls VARDECL
         ;
 
 port_declNetE:                  // IEEE: part of port_declaration, optional net type
