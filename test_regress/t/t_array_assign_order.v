@@ -10,6 +10,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 typedef int be_t[0:3];
@@ -147,6 +148,59 @@ module t;
     `checkd(q[1][3], 10);
     da = {da, be};
     `checkd(da[1][3], 10);
+  end
+
+  // A dynamic array or a queue takes elements in left-to-right order
+  function automatic int f_dyn(int a[]);
+    return a[0];
+  endfunction
+  function automatic int f_queue(int a[$]);
+    return a[0];
+  endfunction
+  function automatic string f_strs(string a[]);
+    return a[0];
+  endfunction
+  initial begin
+    le_t le;
+    int d[];
+    int q[$];
+    int qb[$:7];
+    int le2[2:1][1:0];
+    int d2[][0:1];
+    string ls[2:1];
+    string ds[];
+    le = be;
+    d = le;
+    `checkd(d[0], 10);
+    `checkd(d[3], 13);
+    q = le;
+    `checkd(q[0], 10);
+    `checkd(q[3], 13);
+    qb = le;
+    `checkd(qb[0], 10);
+    d = be;
+    `checkd(d[0], 10);
+    d = new[5](le);
+    `checkd(d[0], 10);
+    `checkd(d[3], 13);
+    `checkd(d[4], 0);
+    q = {le};
+    `checkd(q[0], 10);
+    d = {be, le};
+    `checkd(d[3], 13);
+    `checkd(d[4], 10);
+    `checkd(f_dyn(le), 10);
+    `checkd(f_queue(le), 10);
+    for (int i = 1; i <= 2; ++i)
+      for (int j = 0; j <= 1; ++j) le2[i][j] = 10 * i + j + $urandom_range(0, 0);
+    d2 = le2;
+    `checkd(d2[0][0], 21);
+    `checkd(d2[1][1], 10);
+    ls[2] = "left";
+    ls[1] = "right";
+    ds = ls;
+    `checks(ds[0], "left");
+    `checks(f_strs(ls), "left");
   end
 
   // Return value
