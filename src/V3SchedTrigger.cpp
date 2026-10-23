@@ -696,7 +696,10 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
             const int bitIndex = static_cast<int>(i % WORD_SIZE);
             AstNodeExpr* const wordp = new AstArraySel{flp, wr(kit.m_vscp), wrdIndex};
             AstNodeExpr* const lhsp = new AstSel{flp, wordp, bitIndex, 1};
-            AstNodeExpr* const rhsp = new AstConst{flp, AstConst::BitTrue{}};
+            // An event qualified with 'iff' triggers only when the condition is true
+            // (IEEE 1800-2023 9.4.2.3)
+            AstNodeExpr* const rhsp = senItemp->condp() ? senItemp->condp()->cloneTreePure(false)
+                                                        : new AstConst{flp, AstConst::BitTrue{}};
             initialTrigsp = AstNode::addNext(initialTrigsp, new AstAssign{flp, lhsp, rhsp});
         }
 
