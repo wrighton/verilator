@@ -70,4 +70,7 @@ module t (
   assert property (@(posedge clk)
       a |-> ##[1:2] (a | b | c | d | e) ##1 (a | b | c | d | e));
 
+  // A ranged end of the non-boolean operand of a property 'or'
+  assert property (@(posedge clk) a or (b ##[1:2] c));
+
 endmodule
