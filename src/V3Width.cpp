@@ -7525,8 +7525,22 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
     }
+    void checkDeferredAction(const AstNodeCoverOrAssert* nodep, const AstNode* stmtp) {
+        // IEEE 1800-2023 16.4: A deferred assertion action is a single subroutine call.
+        // All of these statements are single nodes, so the list head is the whole action.
+        if (!nodep->userType().containsAny(VAssertType::OBSERVED_DEFERRED_IMMEDIATE
+                                           | VAssertType::FINAL_DEFERRED_IMMEDIATE))
+            return;
+        if (VN_IS(stmtp, NodeAssign) || VN_IS(stmtp, NodeBlock) || VN_IS(stmtp, NodeIf)
+            || VN_IS(stmtp, Case) || VN_IS(stmtp, Loop)) {
+            stmtp->v3error("Deferred assertion action must be a single subroutine call"
+                           " (IEEE 1800-2023 16.4)");
+        }
+    }
     void visit(AstAssert* nodep) override {
         assertAtStatement(nodep);
+        checkDeferredAction(nodep, nodep->passsp());
+        checkDeferredAction(nodep, nodep->failsp());
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
         userIterateAndNext(nodep->passsp(), nullptr);
         userIterateAndNext(nodep->failsp(), nullptr);
@@ -7543,6 +7557,7 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstCover* nodep) override {
         assertAtStatement(nodep);
+        checkDeferredAction(nodep, nodep->passsp());
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
         userIterateAndNext(nodep->passsp(), nullptr);
     }
