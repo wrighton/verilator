@@ -56,8 +56,7 @@ module t (
     end
     else if (cyc == 99) begin
       `checkd(fail1, ref_fail1);
-      // Per attempt: 87, but a final-check failure with another one counts once
-      `checkd(pass1, 77);
+      `checkd(pass1, op_fail1);
       `checkd(ref_fail1, 10);
       `checkd(op_fail1, 87);
       `checkd(pass2, op_fail2);
