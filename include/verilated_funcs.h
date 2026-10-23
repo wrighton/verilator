@@ -3282,6 +3282,7 @@ inline void VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<VlWide<N_Words>>& q, WD
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
         VL_SEL_WWII(actualWidth, rbits, q.atWrite(i), rwp, actualBitPos, actualWidth);
+        q.atWrite(i)[VL_WORDS_I(actualWidth) - 1] &= VL_MASK_E(actualWidth);
     }
 }
 
@@ -3412,8 +3413,10 @@ inline void VL_UNPACK_UQ_W(int lbits, int rbits, VlUnpacked<QData, N_Depth>& q, 
 template <std::size_t N_Depth, std::size_t N_Words>
 inline void VL_UNPACK_UW_W(int lbits, int rbits, VlUnpacked<VlWide<N_Words>, N_Depth>& q,
                            WDataInP rwp, const int bit_offset = 0) {
-    for (size_t i = 0; i < N_Depth; ++i)
+    for (size_t i = 0; i < N_Depth; ++i) {
         VL_SEL_WWII(lbits, rbits, q[i], rwp, bit_offset + (N_Depth - 1 - i) * lbits, lbits);
+        q[i][VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);
+    }
 }
 
 // Return QData from double (numeric)
