@@ -1022,9 +1022,11 @@ class ConstVisitor final : public VNVisitor {
                                     const bool packReal) {
         const AstNodeDType* const dtypep = fromp->dtypep()->skipRefp();
         if (const AstUnpackArrayDType* const unpackDtypep = VN_CAST(dtypep, UnpackArrayDType)) {
-            for (const int idx : unpackDtypep->declRange().seqLeftToRight()) {
-                AstArraySel* const selp
-                    = new AstArraySel{fromp->fileline(), fromp->cloneTreePure(false), idx};
+            const VNumRange range = unpackDtypep->declRange();
+            for (const int idx : range.seqLeftToRight()) {
+                // Select by offset from the low index
+                AstArraySel* const selp = new AstArraySel{
+                    fromp->fileline(), fromp->cloneTreePure(false), idx - range.lo()};
                 collectFixedAggregateTerms(selp, termps, packReal);
             }
             VL_DO_DANGLING(pushDeletep(fromp), fromp);
