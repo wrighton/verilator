@@ -692,8 +692,9 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         const auto& pair = senExprBuilder.build(senItemp);
         trigps.emplace_back(pair.first);
 
-        // Add initialization time trigger
-        if (pair.second || v3Global.opt.xInitialEdge()) {
+        // Add initialization time trigger, but not when qualified with 'iff', which would
+        // ignore the condition (IEEE 1800-2023 9.4.2.3)
+        if ((pair.second || v3Global.opt.xInitialEdge()) && !senItemp->condp()) {
             const int wrdIndex = static_cast<int>(i / WORD_SIZE);
             const int bitIndex = static_cast<int>(i % WORD_SIZE);
             AstNodeExpr* const wordp = new AstArraySel{flp, wr(kit.m_vscp), wrdIndex};

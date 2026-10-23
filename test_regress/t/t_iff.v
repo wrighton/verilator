@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2019 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -17,6 +22,20 @@ module t (
   wire [63:0] result;  // From test of Test.v
   // End of automatics
   Test test (.*);
+
+  // Not triggered at time 0 while the condition is false (IEEE 1800-2023 9.4.2.3)
+  logic iff_a = 1'b0;
+  logic iff_en = 1'b0;
+  int iff_count = 0;
+  always @(iff_a iff iff_en) iff_count = iff_count + 1;
+  always @(posedge clk) begin
+    if (cyc == 1) `checkd(iff_count, 0);
+    if (cyc == 2) iff_a <= 1'b1;
+    if (cyc == 4) `checkd(iff_count, 0);
+    if (cyc == 5) iff_en <= 1'b1;
+    if (cyc == 6) iff_a <= 1'b0;
+    if (cyc == 8) `checkd(iff_count, 1);
+  end
 
   // Test loop
   always @(posedge clk) begin
