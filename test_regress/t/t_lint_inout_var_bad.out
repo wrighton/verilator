@@ -1,0 +1,21 @@
+%Warning-NONSTD: t/t_lint_inout_var_bad.v:13:27: Inout port 'y' is declared as a variable, but should be a net (IEEE 1800-2023 23.3.3.2)
+   13 |     inout var logic [1:0] y   
+      |                           ^
+                 ... For warning description see https://verilator.org/warn/NONSTD?v=latest
+                 ... Use "/* verilator lint_off NONSTD */" and lint_on around source to disable this message.
+%Warning-NONSTD: t/t_lint_inout_var_bad.v:20:9: Inout port 'y' is declared as a variable, but should be a net (IEEE 1800-2023 23.3.3.2)
+   20 |   inout y;
+      |         ^
+%Warning-NONSTD: t/t_lint_inout_var_bad.v:28:17: Inout port 'y' is connected to variable 'v', but should be connected to a net (IEEE 1800-2023 23.3.3.2)
+                                               : ... note: In instance 't'
+   28 |   sub u_var (.y(v));   
+      |                 ^
+%Warning-NONSTD: t/t_lint_inout_var_bad.v:33:17: Inout port 'y' is connected to variable 'arr', but should be connected to a net (IEEE 1800-2023 23.3.3.2)
+                                               : ... note: In instance 't'
+   33 |   sub u_sel (.y(arr[idx+:2]));   
+      |                 ^~~
+%Warning-NONSTD: t/t_lint_inout_var_bad.v:34:24: Inout port 'y' is connected to variable 'v', but should be connected to a net (IEEE 1800-2023 23.3.3.2)
+                                               : ... note: In instance 't'
+   34 |   sub u_cat (.y({w[0], v[0]}));   
+      |                        ^
+%Error: Exiting due to
