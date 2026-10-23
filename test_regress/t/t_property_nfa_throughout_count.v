@@ -65,11 +65,10 @@ module t (
     end
     #1 disable_now = 0;
     @(negedge clk) begin
-      `checkd(fixed_fail, 1);
-      `checkd(range_fail, 1);
-      // Per attempt: 4, the three attempts in the delay and the one starting on the drop;
-      // the starting attempt counts twice, for its step and for the guard
-      `checkd(negated_pass, 5);
+      `checkd(fixed_fail, 3);
+      `checkd(range_fail, 3);
+      // Per attempt: the three attempts in the delay and the one starting on the drop
+      `checkd(negated_pass, 4);
       `checkd(negated_cover, 1);
       `checkd(disabled_fail, 0);
       drop_tag = 0;
