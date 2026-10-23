@@ -106,4 +106,20 @@
                                : ... note: In instance 't'
   104 |     event_dyn_dest = {>>{source_q}};
       |                    ^
+%Error: t/t_stream_bad.v:117:12: Target fixed size variable (4 bits) is narrower than each element of the stream (8 bits) (IEEE 1800-2023 11.4.14)
+                               : ... note: In instance 't'
+  117 |     narrow = {>>{byte_q}};
+      |            ^
+%Error: t/t_stream_bad.v:118:14: Target fixed size variable (8 bits) is narrower than each element of the stream (32 bits) (IEEE 1800-2023 11.4.14)
+                               : ... note: In instance 't'
+  118 |     one_byte = {>>{int_q}};
+      |              ^
+%Error: t/t_stream_bad.v:119:12: Target fixed size variable (4 bits) is narrower than each element of the stream (8 bits) (IEEE 1800-2023 11.4.14)
+                               : ... note: In instance 't'
+  119 |     narrow = {<<4{byte_d}};
+      |            ^
+%Error: t/t_stream_bad.v:120:14: Target fixed size variable (16 bits) is narrower than each element of the stream (32 bits) (IEEE 1800-2023 11.4.14)
+                               : ... note: In instance 't'
+  120 |     narrow16 = {>>{byte4_q}};
+      |              ^
 %Error: Exiting due to
