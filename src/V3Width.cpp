@@ -8164,6 +8164,16 @@ class WidthVisitor final : public VNVisitor {
                 AstArg* const argp = tconnect.second;
                 AstNodeExpr* pinp = argp->exprp();
                 if (!pinp) continue;  // Argument error we'll find later
+                // Before width and string conversion, as calls may then become other
+                // expressions. Other non-variables are found in V3Task, after which calls are
+                // already lifted into temporaries.
+                if ((portp->isRef() || portp->isConstRef())
+                    && VN_IS(pinp->baseFromp(true), NodeFTaskRef)) {
+                    pinp->v3error("Ref argument " << portp->prettyNameQ()
+                                                  << " requires a variable, but connection is"
+                                                     " from a function call result (IEEE"
+                                                     " 1800-2023 13.5.2)");
+                }
                 // Prelim may cause the node to get replaced; we've lost our
                 // pointer, so need to iterate separately later
                 if (portp->attrSFormat()
