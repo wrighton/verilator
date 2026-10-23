@@ -20,4 +20,7 @@ module t;
   assert property (p_nc_range);
   a_nc_lhs_range :
   assert property (p_nc_lhs_range);
+  // A cover never rejects, so a later element after the range is supported
+  c_goto_range_seq :
+  cover property (@(posedge clk) b [-> 1: 2] ##1 a);
 endmodule

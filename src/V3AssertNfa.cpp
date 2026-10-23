@@ -346,6 +346,9 @@ class SvaNfaBuilder final {
     bool m_candidateMissRejects = false;
     // Sticky: after an unbounded cycle delay, whose later candidates can still match
     bool m_afterUnboundedDelay = false;
+    // A range of counts followed by a later element keeps the earlier lowering, whose merged
+    // threads cannot tell the counts apart, and its failures are counted per tick
+    bool m_rangeFallback = false;
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
@@ -732,6 +735,11 @@ class SvaNfaBuilder final {
         // Handle LHS (preExpr)
         SvaStateVertex* currentp = entryVtxp;
         if (AstNodeExpr* const preExprp = sexprp->preExprp()) {
+            // A goto repetition range ends at several occurrences, which the merged threads
+            // cannot tell apart, so a later step keeps the earlier lowering
+            if (isTopLevelStep && !m_noEosFailure && isGotoRangeTail(sexprp)) {
+                m_rangeFallback = true;
+            }
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
             const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
@@ -950,8 +958,7 @@ class SvaNfaBuilder final {
         AstNodeExpr* const exprp = repp->exprp();
         const unsigned minN = getConstUInt(repp->countp());
         if (minN == 0) return BuildResult::fail();
-        const bool hasMax = repp->maxCountp() != nullptr;
-        const unsigned maxN = hasMax ? getConstUInt(repp->maxCountp()) : minN;
+        const unsigned maxN = repp->maxCountp() ? getConstUInt(repp->maxCountp()) : minN;
         if (m_isCoverSeq) {
             // Several attempts may coalesce in the one-bit wait vertex before reaching the ring,
             // so a cover sequence action block could run too few times.
@@ -961,14 +968,24 @@ class SvaNfaBuilder final {
 
         AstVar* const hoistVarp = tryHoistSampled(exprp, flp, 2);
 
-        // The first guardedEdge is the ##1 before waiting for a match. In the wait state, false
-        // takes the clocked self-loop, while true takes the zero-delay guardedLink on that tick.
+        // The first occurrence may be on the entry tick (IEEE 1800-2023 16.9.2). From the
+        // entry and from the wait state, false takes a clocked edge to the wait state, while
+        // true takes the zero-delay guardedLink on that tick.
         SvaStateVertex* const waitVtxp = scopedCreateVertex();
-        guardedEdge(entryVtxp, waitVtxp, flp);
-        guardedEdge(waitVtxp, waitVtxp,
-                    new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
         SvaStateVertex* currentp = scopedCreateVertex();
-        guardedLink(waitVtxp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        if (m_rangeFallback) {
+            // The earlier lowering, which looks for the first occurrence from the next tick
+            guardedEdge(entryVtxp, waitVtxp, flp);
+            guardedEdge(waitVtxp, waitVtxp,
+                        new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
+            guardedLink(waitVtxp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        } else {
+            for (SvaStateVertex* const fromp : {entryVtxp, waitVtxp}) {
+                guardedEdge(fromp, waitVtxp,
+                            new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
+                guardedLink(fromp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+            }
+        }
 
         if (minN > 1) {
             SvaStateVertex* const ringVtxp = addDelayChain(
@@ -978,10 +995,15 @@ class SvaNfaBuilder final {
             guardedLink(ringVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
             currentp = checkVtxp;
         }
-        if (!hasMax) {
-            currentp->m_isUnbounded = true;  // [->N] waits unboundedly
-            m_inUnboundedScope = true;
-            m_candidateMissRejects = true;
+        // Waiting for an occurrence never rejects. [->N] then has exactly one match, at the
+        // Nth occurrence, so later steps are required and may reject
+        if (maxN == minN) {
+            if (m_rangeFallback) {
+                // The earlier lowering, see m_rangeFallback
+                currentp->m_isUnbounded = true;
+                m_inUnboundedScope = true;
+                m_candidateMissRejects = true;
+            }
             return {currentp, nullptr, {}};
         }
 
@@ -989,15 +1011,13 @@ class SvaNfaBuilder final {
         // only on expr, preserving arbitrarily long gaps between occurrences.
         SvaStateVertex* const mergeVtxp = scopedCreateVertex();
         guardedLink(currentp, mergeVtxp, flp);  // accept at match_M
-        if (maxN > minN) {
-            SvaStateVertex* const ringVtxp
-                = addDelayChain(currentp, maxN - minN + 1, flp, false, nullptr,
-                                sampledRefOrClone(hoistVarp, exprp, flp));
-            ringVtxp->m_replayAbortReject = true;
-            SvaStateVertex* const checkVtxp = scopedCreateVertex();
-            guardedLink(ringVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
-            guardedLink(checkVtxp, mergeVtxp, flp);
-        }
+        SvaStateVertex* const ringVtxp
+            = addDelayChain(currentp, maxN - minN + 1, flp, false, nullptr,
+                            sampledRefOrClone(hoistVarp, exprp, flp));
+        ringVtxp->m_replayAbortReject = true;
+        SvaStateVertex* const checkVtxp = scopedCreateVertex();
+        guardedLink(ringVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        guardedLink(checkVtxp, mergeVtxp, flp);
         mergeVtxp->m_isUnbounded = true;  // [->M:N] still has unbounded waits between matches
         m_inUnboundedScope = true;
         m_candidateMissRejects = true;
@@ -1700,6 +1720,26 @@ public:
         , m_isSeqEvent{isSeqEvent}
         , m_trackVacuous{trackVacuous} {}
 
+    bool rangeFallback() const { return m_rangeFallback; }
+    // Lower the property with the earlier lowering of its ranges of counts, before anything is
+    // built (see needsRangeFallback)
+    void presetRangeFallback() { m_rangeFallback = true; }
+    // True if sexprp follows a goto repetition range with a later element
+    static bool isGotoRangeTail(const AstSExpr* sexprp) {
+        const AstNodeExpr* const prep = sexprp->preExprp();
+        return prep && prep->exists([](const AstSGotoRep* repp) {
+            return repp->maxCountp()
+                   && getConstUInt(repp->maxCountp()) != getConstUInt(repp->countp());
+        });
+    }
+    // True if a range of counts in bodyp, the body or consequent of a property, keeps its
+    // earlier lowering (see m_rangeFallback): a goto repetition range followed by a later
+    // element. The whole property is then so lowered, decided before anything is built, as a
+    // vertex built before the range would take the other lowering.
+    static bool needsRangeFallback(AstNodeExpr* bodyp, bool noEosFailure) {
+        return !noEosFailure
+               && bodyp->exists([](const AstSExpr* sexprp) { return isGotoRangeTail(sexprp); });
+    }
     // Reset scope between antecedent and consequent: liveness must not leak.
     // m_outerAbortStack survives: an abort wrapping the implication covers the
     // consequent too (IEEE 1800-2023 16.12.14).
@@ -4098,6 +4138,9 @@ class AssertNfaVisitor final : public VNVisitor {
         SvaNfaBuilder builder{graph,       m_modp,     m_propTempNames,
                               isCoverSeq,  isSeqEvent, coverp != nullptr,
                               trackVacuous};
+        if (SvaNfaBuilder::needsRangeFallback(seqBodyp, coverp != nullptr)) {
+            builder.presetRangeFallback();
+        }
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
