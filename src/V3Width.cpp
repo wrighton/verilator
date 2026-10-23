@@ -8213,6 +8213,38 @@ class WidthVisitor final : public VNVisitor {
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
     }
 
+    // True if a pin connection is a net or variable lvalue the instance can drive
+    static bool isPinLvalue(const AstNodeExpr* nodep) {
+        // Checked before its PRELIM visit (IEEE 1800-2023 10.3.2).
+        if (VN_IS(nodep, NodeVarRef)) return true;
+        if (const AstNodePreSel* const selp = VN_CAST(nodep, NodePreSel)) {
+            return isPinLvalue(selp->fromp());
+        }
+        if (const AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
+            return isPinLvalue(memberRefp->fromp());
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            return isPinLvalue(streamp->lhsp());
+        }
+        if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            return isPinLvalue(concatp->lhsp()) && isPinLvalue(concatp->rhsp());
+        }
+        if (const AstPattern* const patp = VN_CAST(nodep, Pattern)) {
+            // Only positional items, as in an assignment_pattern_variable_lvalue (A.8.5)
+            for (const AstPatternItem* const itemp : patp->itemspList()) {
+                if (itemp->keyp() || itemp->repp() || !isPinLvalue(itemp->lhssp())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        // A concatenation of one item, e.g. '{a}', is a replication by one
+        if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            return repp->countp()->isOne() && isPinLvalue(repp->srcp());
+        }
+        return false;
+    }
+
     // Select the part of a pin connection that belongs to an element of an instance array,
     // one dimension at a time, starting with 'rangep'. 'idx' is the row-major position of the
     // element in the dimensions from 'rangep' inwards, each counted from the left. The
@@ -8363,6 +8395,19 @@ class WidthVisitor final : public VNVisitor {
                                                               " (IEEE 1800-2023 23.3.3.2)");
                     }
                 });
+            }
+            // A constant, or a concatenation starting with one, is reported later as PORTSHORT
+            const AstNodeExpr* exprp = VN_AS(nodep->exprp(), NodeExpr);
+            const AstReplicate* const repp = VN_CAST(exprp, Replicate);
+            if (repp && repp->countp()->isOne()) exprp = repp->srcp();  // A '{...}'
+            const AstConcat* const concatp = VN_CAST(exprp, Concat);
+            const bool isShort = VN_IS(exprp, Const) || (concatp && VN_IS(concatp->lhsp(), Const));
+            if ((pinDirection == VDirection::OUTPUT || pinDirection == VDirection::INOUT)
+                && !isShort && !isPinLvalue(exprp)) {
+                nodep->exprp()->v3error(ucfirst(pinDirection.prettyName())
+                                        << " port " << nodep->modVarp()->prettyNameQ()
+                                        << " is connected to an expression that cannot be"
+                                           " assigned (IEEE 1800-2023 23.3.3)");
             }
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             // Outputs are continuous assignments; inouts are transistor connections (23.3.3).
