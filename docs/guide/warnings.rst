@@ -1479,6 +1479,13 @@ List Of Warnings
    synchronous drive may be silently lost. Declare the clocking block
    ``input`` if the intent is only to observe the signal.
 
+   It also warns when a whole variable is driven by more than one
+   continuous assignment or instance output port, or is driven by an
+   instance output port and also written by a procedural assignment in an
+   ``initial`` or ``always`` block. IEEE 1800-2023 6.5 and 23.3.3.2 do not
+   permit these combinations of drivers on a variable; declare the signal
+   as a net if multiple drivers are intended.
+
    Ignoring this warning may hide clock domain crossing, timing, or
    portability bugs. It may also cause longer simulation runtimes due to
    reduced optimizations.

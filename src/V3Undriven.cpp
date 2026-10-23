@@ -53,6 +53,8 @@ class UndrivenVarEntry final {
     const AstNode* m_initStaticp = nullptr;  // varref if in InitialStatic driven
     const AstNode* m_initialp = nullptr;  // varref if driven in an explicit initial block
     const AstNode* m_contAssignp = nullptr;  // varref if in continuous assignment driven
+    const AstNode* m_outPinp = nullptr;  // varref if driven by an instance output port
+    const AstNode* m_plainProcp = nullptr;  // varref if procedurally assigned in initial/always
     const AstNode* m_procWritep = nullptr;  // varref if written in process
     bool m_underGen = false;  // Under a generate
     bool m_ftaskDriven = false;  // Last driven by function or task
@@ -182,6 +184,10 @@ public:
     void initialp(const AstNode* nodep) { m_initialp = nodep; }
     const AstNode* contAssignp() const { return m_contAssignp; }
     void contAssignp(const AstNode* nodep) { m_contAssignp = nodep; }
+    const AstNode* outPinp() const { return m_outPinp; }
+    void outPinp(const AstNode* nodep) { m_outPinp = nodep; }
+    const AstNode* plainProcp() const { return m_plainProcp; }
+    void plainProcp(const AstNode* nodep) { m_plainProcp = nodep; }
     const AstNode* procWritep() const { return m_procWritep; }
     void procWritep(const AstNode* nodep) { m_procWritep = nodep; }
     void underGenerate() { m_underGen = true; }
@@ -391,6 +397,7 @@ class UndrivenVisitor final : public VNVisitorConst {
     bool m_inProcAssign = false;  // In procedural assignment
     bool m_inFTaskRef = false;  // In function or task call
     bool m_inInoutOrRefPin = false;  // Connected to pin that is inout
+    bool m_inOutputPin = false;  // Connected to pin that is output
     bool m_inSelLhs = false;  // Iterating the fromp of an AstSel (a partial-bit write target)
     const AstNodeFTask* m_taskp = nullptr;  // Current task
     const AstAlways* m_alwaysp = nullptr;  // Current always of either type
@@ -510,6 +517,48 @@ class UndrivenVisitor final : public VNVisitorConst {
                               << otherWritep->warnOther()
                               << "... Location of clocking block output\n"
                               << otherWritep->warnContextSecondary());
+        }
+    }
+
+    // In a procedural assignment in an initial or plain always block
+    bool inPlainProcAssign() const { return m_inProcAssign && (m_inInitial || m_alwaysPlainp); }
+    // Warn on another driver of a variable written as a whole by a continuous driver
+    void warnContinuousDriven(AstNodeVarRef* nodep, const UndrivenVarEntry* entryp) {
+        // A continuous driver is a continuous assignment or an output port connection.
+        // Such a variable must have no other driver (IEEE 1800-2023 6.5, 23.3.3.2). Drivers from
+        // always_comb/always_ff are reported above.
+        if (nodep->varp()->varType() != VVarType::VAR
+            || !nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return;
+        }
+        const AstNode* const otherContp
+            = entryp->contAssignp() ? entryp->contAssignp() : entryp->outPinp();
+        if ((m_inContAssign || m_inOutputPin) && otherContp) {
+            nodep->v3warn(MULTIDRIVEN,
+                          "Variable driven by multiple continuous assignments or output ports"
+                              << " (IEEE 1800-2023 6.5): " << nodep->prettyNameQ() << '\n'
+                              << nodep->warnOther() << '\n'
+                              << nodep->warnContextPrimary() << '\n'
+                              << otherContp->warnOther() << "... Location of other driver\n"
+                              << otherContp->warnContextSecondary());
+        } else if (m_inOutputPin && entryp->plainProcp()) {
+            nodep->v3warn(MULTIDRIVEN,
+                          "Variable driven by output port also written by procedural assignment"
+                              << " (IEEE 1800-2023 23.3.3.2): " << nodep->prettyNameQ() << '\n'
+                              << nodep->warnOther() << '\n'
+                              << nodep->warnContextPrimary() << '\n'
+                              << entryp->plainProcp()->warnOther()
+                              << "... Location of other write\n"
+                              << entryp->plainProcp()->warnContextSecondary());
+        } else if (inPlainProcAssign() && entryp->outPinp()) {
+            nodep->v3warn(MULTIDRIVEN,
+                          "Variable written by procedural assignment also driven by output port"
+                              << " (IEEE 1800-2023 23.3.3.2): " << nodep->prettyNameQ() << '\n'
+                              << nodep->warnOther() << '\n'
+                              << nodep->warnContextPrimary() << '\n'
+                              << entryp->outPinp()->warnOther()
+                              << "... Location of output port connection\n"
+                              << entryp->outPinp()->warnContextSecondary());
         }
     }
 
@@ -684,6 +733,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                                                        << otherWritep->warnContextSecondary());
                     }
                     warnClockingDriven(nodep, entryp, otherWritep, otherWriteIsStaticInit);
+                    warnContinuousDriven(nodep, entryp);
                 }
                 if (multidrivenCommon && !nodep->varp()->isUsedLoopIdx()
                     && !nodep->varp()->fileline()->warnIsOff(V3ErrorCode::MULTIDRIVENPROC)) {
@@ -738,6 +788,8 @@ class UndrivenVisitor final : public VNVisitorConst {
                 if (m_inInitialStatic && !entryp->initStaticp()) entryp->initStaticp(nodep);
                 if (m_inInitial && !entryp->initialp()) entryp->initialp(nodep);
                 if (m_inContAssign && !entryp->contAssignp()) entryp->contAssignp(nodep);
+                if (m_inOutputPin && !entryp->outPinp()) entryp->outPinp(nodep);
+                if (inPlainProcAssign() && !entryp->plainProcp()) entryp->plainProcp(nodep);
                 if (m_alwaysp && m_inProcAssign && !entryp->procWritep())
                     entryp->procWritep(nodep);
             }
@@ -879,7 +931,9 @@ class UndrivenVisitor final : public VNVisitorConst {
     }
     void visit(AstPin* nodep) override {
         VL_RESTORER(m_inInoutOrRefPin);
+        VL_RESTORER(m_inOutputPin);
         m_inInoutOrRefPin = nodep->modVarp()->isInoutOrRef();
+        m_inOutputPin = nodep->modVarp()->direction() == VDirection::OUTPUT;
         iterateChildrenConst(nodep);
     }
 

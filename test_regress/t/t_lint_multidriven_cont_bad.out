@@ -1,0 +1,51 @@
+%Warning-MULTIDRIVEN: t/t_lint_multidriven_cont_bad.v:25:10: Variable driven by multiple continuous assignments or output ports (IEEE 1800-2023 6.5): 'v_assigns'
+                                                           : ... note: In instance 't'
+                      t/t_lint_multidriven_cont_bad.v:25:10: 
+   25 |   assign v_assigns = b;   
+      |          ^~~~~~~~~
+                      t/t_lint_multidriven_cont_bad.v:24:10: ... Location of other driver
+   24 |   assign v_assigns = a;
+      |          ^~~~~~~~~
+                      ... For warning description see https://verilator.org/warn/MULTIDRIVEN?v=latest
+                      ... Use "/* verilator lint_off MULTIDRIVEN */" and lint_on around source to disable this message.
+%Warning-MULTIDRIVEN: t/t_lint_multidriven_cont_bad.v:29:20: Variable driven by multiple continuous assignments or output ports (IEEE 1800-2023 6.5): 'v_ports'
+                                                           : ... note: In instance 't'
+                      t/t_lint_multidriven_cont_bad.v:29:20: 
+   29 |   sub u_ports2 (.y(v_ports));   
+      |                    ^~~~~~~
+                      t/t_lint_multidriven_cont_bad.v:28:20: ... Location of other driver
+   28 |   sub u_ports1 (.y(v_ports));
+      |                    ^~~~~~~
+%Warning-MULTIDRIVEN: t/t_lint_multidriven_cont_bad.v:33:10: Variable driven by multiple continuous assignments or output ports (IEEE 1800-2023 6.5): 'v_port_assign'
+                                                           : ... note: In instance 't'
+                      t/t_lint_multidriven_cont_bad.v:33:10: 
+   33 |   assign v_port_assign = a;   
+      |          ^~~~~~~~~~~~~
+                      t/t_lint_multidriven_cont_bad.v:32:25: ... Location of other driver
+   32 |   sub u_port_assign (.y(v_port_assign));
+      |                         ^~~~~~~~~~~~~
+%Warning-MULTIDRIVEN: t/t_lint_multidriven_cont_bad.v:37:11: Variable written by procedural assignment also driven by output port (IEEE 1800-2023 23.3.3.2): 'v_port_initial'
+                                                           : ... note: In instance 't'
+                      t/t_lint_multidriven_cont_bad.v:37:11: 
+   37 |   initial v_port_initial = 1'b1;   
+      |           ^~~~~~~~~~~~~~
+                      t/t_lint_multidriven_cont_bad.v:36:26: ... Location of output port connection
+   36 |   sub u_port_initial (.y(v_port_initial));
+      |                          ^~~~~~~~~~~~~~
+%Warning-MULTIDRIVEN: t/t_lint_multidriven_cont_bad.v:41:25: Variable driven by output port also written by procedural assignment (IEEE 1800-2023 23.3.3.2): 'v_always_port'
+                                                           : ... note: In instance 't'
+                      t/t_lint_multidriven_cont_bad.v:41:25: 
+   41 |   sub u_always_port (.y(v_always_port));   
+      |                         ^~~~~~~~~~~~~
+                      t/t_lint_multidriven_cont_bad.v:40:25: ... Location of other write
+   40 |   always @(posedge clk) v_always_port <= a;
+      |                         ^~~~~~~~~~~~~
+%Warning-MULTIDRIVEN: t/t_lint_multidriven_cont_bad.v:45:21: Variable also written to in always_ff (IEEE 1800-2023 9.2.2.4): 'v_ff_port'
+                                                           : ... note: In instance 't'
+                      t/t_lint_multidriven_cont_bad.v:45:21: 
+   45 |   sub u_ff_port (.y(v_ff_port));   
+      |                     ^~~~~~~~~
+                      t/t_lint_multidriven_cont_bad.v:44:28: ... Location of always_ff write
+   44 |   always_ff @(posedge clk) v_ff_port <= a;
+      |                            ^~~~~~~~~
+%Error: Exiting due to
