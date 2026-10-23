@@ -2691,6 +2691,12 @@ class LinkDotParamVisitor final : public VNVisitor {
                           "Unsupported: defparam to "
                               << varPathQ
                               << " in the instance containing the defparam or above it");
+        } else if (VN_IS(defSymp->nodep(), GenBlock) && !isAboveSym(defSymp, cellSymp)) {
+            // The defparam's symbol is its innermost generate block, else its module
+            nodep->v3error("In defparam under generate block "
+                           << defSymp->nodep()->prettyNameQ() << ", instance "
+                           << AstNode::prettyNameQ(cellPath)
+                           << " is outside that generate block (IEEE 1800-2023 23.10.1)");
         } else {
             const string anchoredPath = defParamAnchoredPath(nodep, cellPath);
             auto& prevr = m_defParamPins[std::make_tuple(cellp, name, scopedVarp, anchoredPath)];
