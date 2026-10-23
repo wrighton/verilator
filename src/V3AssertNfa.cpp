@@ -3403,12 +3403,12 @@ class AssertNfaVisitor final : public VNVisitor {
     // Inline property/sequence refs and reject unsupported shapes.
     // Returns the PropSpec to lower, or nullptr when fully handled here.
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
-        if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
-            if (AstFuncRef* const funcrefp = VN_CAST(specp->propp(), FuncRef)) {
-                if (const AstProperty* const propyp = VN_CAST(funcrefp->taskp(), Property)) {
-                    inlineNamedProperty(specp, funcrefp, propyp);
-                }
-            }
+        // Repeat, as the inlined body may itself be only a property instance
+        while (true) {
+            AstPropSpec* const specp = VN_AS(assertp->propp(), PropSpec);
+            AstFuncRef* const funcrefp = VN_CAST(specp->propp(), FuncRef);
+            if (!funcrefp || !VN_IS(funcrefp->taskp(), Property)) break;
+            inlineNamedProperty(specp, funcrefp, VN_AS(funcrefp->taskp(), Property));
         }
 
         inlineAllSequenceRefs(assertp->propp());
