@@ -3,4 +3,40 @@
    18 |   assert property (@(posedge clk) ##1 not val);
       |                                       ^~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_sexpr_bad.v:21:39: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   21 |   cover property (@(posedge clk) (val |-> val) ##1 val);
+      |                                       ^~~
+%Error: t/t_property_sexpr_bad.v:22:39: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   22 |   cover property (@(posedge clk) (val |=> val) [*2]);
+      |                                       ^~~
+%Error: t/t_property_sexpr_bad.v:23:39: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   23 |   cover property (@(posedge clk) (val #-# val) [->2]);
+      |                                       ^~~
+%Error: t/t_property_sexpr_bad.v:24:39: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   24 |   cover property (@(posedge clk) (val until val) [=2]);
+      |                                       ^~~~~
+%Error: t/t_property_sexpr_bad.v:25:35: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   25 |   cover property (@(posedge clk) (s_always [1:2] val) intersect val);
+      |                                   ^~~~~~~~
+%Error: t/t_property_sexpr_bad.v:26:35: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   26 |   cover property (@(posedge clk) (accept_on (val) val) within val);
+      |                                   ^~~~~~~~~
+%Error: t/t_property_sexpr_bad.v:27:39: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   27 |   cover property (@(posedge clk) (val |-> val) throughout val);
+      |                                       ^~~
+%Error: t/t_property_sexpr_bad.v:28:40: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   28 |   cover property (@(posedge clk) ((val |-> val) and val) ##1 val);
+      |                                        ^~~
+%Error: t/t_property_sexpr_bad.v:29:35: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   29 |   cover property (@(posedge clk) (if (val) val) ##1 val);
+      |                                   ^~
 %Error: Exiting due to

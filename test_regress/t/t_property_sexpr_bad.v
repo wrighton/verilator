@@ -16,4 +16,25 @@ module t (
   end
 
   assert property (@(posedge clk) ##1 not val);
+
+  // Property operators as sequence operands
+  cover property (@(posedge clk) (val |-> val) ##1 val);
+  cover property (@(posedge clk) (val |=> val) [*2]);
+  cover property (@(posedge clk) (val #-# val) [->2]);
+  cover property (@(posedge clk) (val until val) [=2]);
+  cover property (@(posedge clk) (s_always [1:2] val) intersect val);
+  cover property (@(posedge clk) (accept_on (val) val) within val);
+  cover property (@(posedge clk) (val |-> val) throughout val);
+  cover property (@(posedge clk) ((val |-> val) and val) ##1 val);
+  cover property (@(posedge clk) (if (val) val) ##1 val);
+
+  // A property declared after its instance after a leading cycle delay is fine
+  cover property (@(posedge clk) ##1 p_later);
+
+  // Property if/else has lower precedence than a cycle delay, so this is fine
+  assert property (@(posedge clk) if (val) val ##1 val else val ##2 val);
+
+  property p_later;
+    val |-> val;
+  endproperty
 endmodule
