@@ -23,4 +23,31 @@
 %Error: t/t_timescale_parse_bad.v:19:17: timeprecision illegal value
    19 |   timeprecision 2ps;    
       |                 ^~~
+%Error: t/t_timescale_parse_bad.v:26:12: timeunit declaration must precede other items in the module (IEEE 1800-2023 3.14.2.2)
+   26 |   timeunit 1ns;   
+      |            ^~~
+%Error: t/t_timescale_parse_bad.v:27:17: timeprecision declaration must precede other items in the module (IEEE 1800-2023 3.14.2.2)
+   27 |   timeprecision 1ps;   
+      |                 ^~~
+%Error: t/t_timescale_parse_bad.v:32:12: timeunit declaration must precede other items in the interface (IEEE 1800-2023 3.14.2.2)
+   32 |   timeunit 1ns;   
+      |            ^~~
+%Error: t/t_timescale_parse_bad.v:37:12: timeunit declaration must precede other items in the program (IEEE 1800-2023 3.14.2.2)
+   37 |   timeunit 1ns;   
+      |            ^~~
+%Error: t/t_timescale_parse_bad.v:42:12: timeunit declaration must precede other items in the package (IEEE 1800-2023 3.14.2.2)
+   42 |   timeunit 1ns;   
+      |            ^~~
+%Error: t/t_timescale_parse_bad.v:50:12: timeunit '1ps' does not match previous timeunit '1ns' (IEEE 1800-2023 3.14.2.2)
+   50 |   timeunit 1ps;   
+      |            ^~~
+%Error: t/t_timescale_parse_bad.v:51:17: timeprecision '1fs' does not match previous timeprecision '1ps' (IEEE 1800-2023 3.14.2.2)
+   51 |   timeprecision 1fs;   
+      |                 ^~~
+%Error: t/t_timescale_parse_bad.v:62:17: timeunit '1ns' must be greater than or equal to timeprecision '10ns' (IEEE 1800-2023 3.14)
+   62 |   timeprecision 10ns;   
+      |                 ^~~~
+%Error: t/t_timescale_parse_bad.v:66:12: timeunit '1ns' must be greater than or equal to timeprecision '10ns' (IEEE 1800-2023 3.14)
+   66 |   timeunit 1ns / 10ns;   
+      |            ^~~
 %Error: Exiting due to
