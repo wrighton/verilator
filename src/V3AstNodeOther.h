@@ -2071,7 +2071,7 @@ public:
     bool hasHybrid() const;  // Includes a HYBRID SenItem
 };
 class AstSetuphold final : public AstNode {
-    // Verilog $setuphold
+    // Verilog $setuphold, or $recrem (same arguments and delayed signals)
     // Parents: MODULE
     // @astgen op1 := refevp : AstNodeExpr
     // @astgen op2 := dataevp : AstNodeExpr
