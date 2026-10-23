@@ -48,6 +48,7 @@ struct PairHash final {
 class WidthCommitVisitor final : public VNVisitor {
     // NODE STATE
     //  AstVar::user1p           -> bool.  Processed
+    //  AstVar::user2()          -> bool.  Port of an automatic subroutine
     //  AstNodeFTask::user2()    -> uint64_t. Non-zero if ever referenced (called)
     //  AstNew::user2()          -> uint64_t. Count of number of references, minus references in
     //  functions never called
@@ -169,7 +170,8 @@ private:
             if (varp->isClassMember() && !varp->lifetime().isStatic()) {
                 // Only an NBA may update a non-static class property
                 if (!m_inNba) varType = "Class non-static";
-            } else if (varp->lifetime().isAutomatic() && !(varp->isFuncLocal() && varp->isIO())) {
+            } else if (varp->lifetime().isAutomatic() && (!varp->isIO() || varp->user2())) {
+                // V3LinkParse may also make ports of static subroutines automatic, so check user2
                 varType = "Automatic lifetime";
             }
             if (varType.empty() && varDtp->isDynamicallySized() && m_dynsizedelem)
@@ -562,6 +564,8 @@ private:
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
         editDType(nodep);
+        // Visited before references from within the subroutine, the only legal ones
+        if (nodep->isIO() && m_ftaskp && m_ftaskp->lifetime().isAutomatic()) nodep->user2(true);
         if (nodep->isFuncLocal() && nodep->direction() == VDirection::INPUT && nodep->valuep()) {
             // It's the default value of optional argument.
             // Such values are added to function calls in V3Width so can be removed now
