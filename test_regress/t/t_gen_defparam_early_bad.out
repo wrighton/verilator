@@ -1,0 +1,8 @@
+%Error: t/t_gen_defparam_early_bad.v:17:18: In defparam, instance 't.n' resolves differently before generate block 't' is elaborated (IEEE 1800-2023 23.10.4.2)
+   17 |   defparam t.n.p = 1;   
+      |                  ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_gen_defparam_early_bad.v:29:18: In defparam, instance 'x.n' resolves differently before generate block 'x' is elaborated (IEEE 1800-2023 23.10.4.2)
+   29 |   defparam x.n.p = 4;   
+      |                  ^
+%Error: Exiting due to

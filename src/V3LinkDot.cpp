@@ -2546,6 +2546,23 @@ class LinkDotParamVisitor final : public VNVisitor {
             pinImplicitExprRecurse(nodep->exprp());
         }
     }
+    // Return the generate block starting a defparam path that also resolves without it
+    const VSymEnt* defParamEarlyGenBlock(AstDefParam* nodep, const string& path) {
+        // Only a block not containing the defparam; the path then necessarily resolves elsewhere.
+        VSymEnt* const defSymp = m_statep->getNodeSym(nodep);
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        const VSymEnt* const genSymp = m_statep->findDotted(
+            nodep->fileline(), defSymp, path.substr(0, path.find('.')), baddot, okSymp, true);
+        if (!VN_IS(genSymp->nodep(), GenBlock)) return nullptr;
+        for (const VSymEnt* symp = defSymp; symp; symp = symp->parentp()) {
+            if (symp == genSymp) return nullptr;
+        }
+        // Continue the upwards search above the scope containing the generate block
+        const VSymEnt* const altSymp = m_statep->findDotted(
+            nodep->fileline(), genSymp->parentp()->parentp(), path, baddot, okSymp, true);
+        return altSymp ? genSymp : nullptr;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         nodep->v3warn(DEFPARAM, "defparam is deprecated (IEEE 1800-2023 C.4.1)\n"
@@ -2562,6 +2579,11 @@ class LinkDotParamVisitor final : public VNVisitor {
         AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
         if (!cellp) {
             nodep->v3error("In defparam, instance " << path << " never declared");
+        } else if (const VSymEnt* const genSymp = defParamEarlyGenBlock(nodep, path)) {
+            nodep->v3error(
+                "In defparam, instance "
+                << AstNode::prettyNameQ(path) << " resolves differently before generate block "
+                << genSymp->nodep()->prettyNameQ() << " is elaborated (IEEE 1800-2023 23.10.4.2)");
         } else {
             AstNodeExpr* const exprp = nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << nodep->name() << " attach-to " << cellp
