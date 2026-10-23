@@ -7551,6 +7551,30 @@ class WidthVisitor final : public VNVisitor {
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
     }
 
+    // True if a pin connection is a net or variable lvalue the instance can drive
+    static bool isPinLvalue(const AstNodeExpr* nodep) {
+        // Checked before its PRELIM visit (IEEE 1800-2023 10.3.2).
+        if (VN_IS(nodep, NodeVarRef)) return true;
+        if (VN_IS(nodep, Const)) return true;  // Reported later as PORTSHORT
+        if (const AstNodePreSel* const selp = VN_CAST(nodep, NodePreSel)) {
+            return isPinLvalue(selp->fromp());
+        }
+        if (const AstMemberSel* const selp = VN_CAST(nodep, MemberSel)) {
+            return isPinLvalue(selp->fromp());
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            return isPinLvalue(streamp->lhsp());
+        }
+        if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            return isPinLvalue(concatp->lhsp()) && isPinLvalue(concatp->rhsp());
+        }
+        // A concatenation of one item, e.g. '{a}', is a replication by one
+        if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            return repp->countp()->isOne() && isPinLvalue(repp->srcp());
+        }
+        return false;
+    }
+
     // Select the part of a pin connection that belongs to an element of an instance array,
     // one dimension at a time, starting with 'rangep'. 'idx' is the row-major position of the
     // element in the dimensions from 'rangep' inwards, each counted from the left. The
@@ -7690,6 +7714,13 @@ class WidthVisitor final : public VNVisitor {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
                                         << pinDirection.prettyName()
                                         << "' port (IEEE 1800-2023 11.4.14)");
+            }
+            if ((pinDirection == VDirection::OUTPUT || pinDirection == VDirection::INOUT)
+                && !isPinLvalue(VN_AS(nodep->exprp(), NodeExpr))) {
+                nodep->exprp()->v3error(ucfirst(pinDirection.prettyName())
+                                        << " port " << nodep->modVarp()->prettyNameQ()
+                                        << " is connected to an expression that cannot be"
+                                           " assigned (IEEE 1800-2023 23.3.3)");
             }
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             AstNodeDType* modDTypep = nodep->modVarp()->dtypep();

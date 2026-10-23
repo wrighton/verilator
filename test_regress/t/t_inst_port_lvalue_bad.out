@@ -1,0 +1,30 @@
+%Error: t/t_inst_port_lvalue_bad.v:34:19: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   34 |   sub u_and (.y(a & b));   
+      |                   ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_port_lvalue_bad.v:35:17: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   35 |   sub u_not (.y(~a));   
+      |                 ^
+%Error: t/t_inst_port_lvalue_bad.v:36:23: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   36 |   sub u_cond (.y(a[0] ? a : b));   
+      |                       ^
+%Error: t/t_inst_port_lvalue_bad.v:37:21: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   37 |   sub u_cat_bad (.y({a[0], a[1] | b[1]}));   
+      |                     ^
+%Error: t/t_inst_port_lvalue_bad.v:38:22: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   38 |   sub u_cat_bad2 (.y({~a[0], a[1]}));   
+      |                      ^
+%Error: t/t_inst_port_lvalue_bad.v:39:19: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   39 |   sub u_rep (.y({2{a[0]}}));   
+      |                   ^
+%Error: t/t_inst_port_lvalue_bad.v:40:21: Inout port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   40 |   sub_io u_io (.y(c & d));   
+      |                     ^
+%Error: Exiting due to
