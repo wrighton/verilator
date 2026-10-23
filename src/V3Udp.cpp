@@ -110,6 +110,14 @@ class UdpVisitor final : public VNVisitor {
         AstNode* iNodep = nodep->iFieldsp();
         AstNode* oNodep = nodep->oFieldsp();
         AstSenTree* edgetrigp = nullptr;
+        string const oValName = nodep->udpIsCombo() ? oNodep->name() : oNodep->nextp()->name();
+        if (nodep->udpIsCombo()) {
+            if (!isCombOutputSig(oValName)) {
+                oNodep->v3error("Illegal value for combinational UDP line output");
+            }
+        } else if (!isSequentOutputSig(oValName)) {
+            oNodep->nextp()->v3error("Illegal value for sequential UDP line output");
+        }
 
         AstLogAnd* logandp = new AstLogAnd{fl, new AstConst{fl, AstConst::BitTrue{}},
                                            new AstConst{fl, AstConst::BitTrue{}}};
@@ -153,7 +161,6 @@ class UdpVisitor final : public VNVisitor {
                                                                          << ", got " << inputvars);
         }
 
-        string const oValName = nodep->udpIsCombo() ? oNodep->name() : oNodep->nextp()->name();
         if (oValName == "-") {
             if (edgetrigp) VL_DO_DANGLING(pushDeletep(edgetrigp), edgetrigp);
             if (logandp) VL_DO_DANGLING(pushDeletep(logandp), logandp);
@@ -184,15 +191,9 @@ class UdpVisitor final : public VNVisitor {
             = newOutputAssign(fl, getOutputNum(nodep, oValName), edgetrigp != nullptr);
         AstIf* const ifp = new AstIf{fl, logandp, assignp};
         if (nodep->udpIsCombo()) {
-            if (!isCombOutputSig(oValName)) {
-                oNodep->v3error("Illegal value for combinational UDP line output");
-            }
             m_alwaysBlockp->addStmtsp(ifp);
             if (edgetrigp) VL_DO_DANGLING(pushDeletep(edgetrigp), edgetrigp);
             return;
-        }
-        if (!isSequentOutputSig(oValName)) {
-            oNodep->nextp()->v3error("Illegal value for sequential UDP line output");
         }
         m_alwaysBlockp->addNext(new AstAlways{fl, VAlwaysKwd::ALWAYS, edgetrigp, ifp});
     }
