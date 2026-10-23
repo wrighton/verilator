@@ -1,0 +1,32 @@
+%Error: t/t_typedef_fwd_kind_bad.v:16:18: Forward typedef 'struct_int_t' declared as 'struct' does not match its definition (IEEE 1800-2023 6.18)
+   16 |   typedef struct struct_int_t;   
+      |                  ^~~~~~~~~~~~
+        t/t_typedef_fwd_kind_bad.v:17:15: ... Location of definition
+   17 |   typedef int struct_int_t;
+      |               ^~~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_typedef_fwd_kind_bad.v:18:16: Forward typedef 'enum_struct_t' declared as 'enum' does not match its definition (IEEE 1800-2023 6.18)
+   18 |   typedef enum enum_struct_t;   
+      |                ^~~~~~~~~~~~~
+        t/t_typedef_fwd_kind_bad.v:19:27: ... Location of definition
+   19 |   typedef struct {int a;} enum_struct_t;
+      |                           ^~~~~~~~~~~~~
+%Error: t/t_typedef_fwd_kind_bad.v:20:17: Forward typedef 'union_enum_t' declared as 'union' does not match its definition (IEEE 1800-2023 6.18)
+   20 |   typedef union union_enum_t;   
+      |                 ^~~~~~~~~~~~
+        t/t_typedef_fwd_kind_bad.v:21:20: ... Location of definition
+   21 |   typedef enum {A} union_enum_t;
+      |                    ^~~~~~~~~~~~
+%Error: t/t_typedef_fwd_kind_bad.v:22:17: Forward typedef 'cls_int_t' declared as 'class' does not match its definition (IEEE 1800-2023 6.18)
+   22 |   typedef class cls_int_t;   
+      |                 ^~~~~~~~~
+        t/t_typedef_fwd_kind_bad.v:23:15: ... Location of definition
+   23 |   typedef int cls_int_t;
+      |               ^~~~~~~~~
+%Error: t/t_typedef_fwd_kind_bad.v:24:18: Forward typedef 'StructCls' declared as 'struct' does not match its definition (IEEE 1800-2023 6.18)
+   24 |   typedef struct StructCls;   
+      |                  ^~~~~~~~~
+        t/t_typedef_fwd_kind_bad.v:25:3: ... Location of definition
+   25 |   class StructCls;
+      |   ^~~~~
+%Error: Exiting due to

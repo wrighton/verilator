@@ -2659,7 +2659,22 @@ class LinkDotParamVisitor final : public VNVisitor {
             // point to avoid error something wasn't declared
             // Might be forward declaring something odd (with declTokenNumSetMin not implemented,
             // but should be harmless to ignore as this is just for error detection
-            foundp->nodep()->declTokenNumSetMin(nodep->fileline()->tokenNum());
+            AstNode* const defp = foundp->nodep();
+            defp->declTokenNumSetMin(nodep->fileline()->tokenNum());
+            // Check the kind of the definition, unless it is a typedef of another type name,
+            // which is not resolved yet
+            const AstTypedef* const typedefp = VN_CAST(defp, Typedef);
+            if ((VN_IS(defp, Class) || (typedefp && !VN_IS(typedefp->subDTypep(), RefDType)))
+                && !nodep->fwdType().isNodeCompatible(defp)) {
+                nodep->v3error("Forward typedef " << nodep->prettyNameQ() << " declared as '"
+                                                  << nodep->fwdType().ascii()
+                                                  << "' does not match its definition"
+                                                     " (IEEE 1800-2023 6.18)\n"
+                                                  << nodep->warnContextPrimary() << '\n'
+                                                  << defp->warnOther()
+                                                  << "... Location of definition\n"
+                                                  << defp->warnContextSecondary());
+            }
         } else if (v3Global.opt.pedantic()) {
             // We only check it was ever really defined in pedantic mode, as it
             // might have been in a header file referring to a module we never
