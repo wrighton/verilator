@@ -366,7 +366,8 @@ class SvaNfaBuilder final {
     bool m_isSeqEvent = false;
     bool m_inSequencePrefix = false;  // Prefix composition does not preserve every endpoint
     bool m_wantBoolLeaf = false;  // Building a |-> / |=> or top-level body (see buildOrMerge)
-    bool m_inAntecedent = false;  // Building an implication antecedent, which cannot fail
+    // Building an implication antecedent, which cannot fail, and every match of which counts
+    bool m_inAntecedent = false;
     // Building the consequent of an antecedent with a zero-minimum repetition, whose empty
     // match is not filtered (see buildImplicationEdges)
     bool m_inEmptyMatchConsequent = false;
@@ -674,10 +675,10 @@ class SvaNfaBuilder final {
         } else {
             // The first eligible tick is explicit. The ring retains attempts for the
             // remaining ticks and exposes the final tick for rejection. Only properties
-            // clear on success, since cover sequence counts every endpoint.
+            // clear on success, since a cover sequence and an antecedent use every endpoint.
             midSources.push_back(currentp);
             currentp = addDelayChain(currentp, range + 1U, flp, false,
-                                     m_isCoverSeq ? nullptr : rhsExprp);
+                                     m_isCoverSeq || m_inAntecedent ? nullptr : rhsExprp);
         }
         return true;
     }
@@ -1093,8 +1094,19 @@ class SvaNfaBuilder final {
                 new AstLogOr{flp, sampledClone(lhs.finalCondp), sampledClone(rhs.finalCondp)},
                 flp);
         } else {
-            guardedLink(lhs.termVertexp, mergeVtxp, sampledClone(lhs.finalCondp), flp);
-            guardedLink(rhs.termVertexp, mergeVtxp, sampledClone(rhs.finalCondp), flp);
+            for (const BuildResult* const opp : {&lhs, &rhs}) {
+                // The first eligible tick of a range delay is a separate source
+                std::vector<SvaStateVertex*> endps = opp->midSources;
+                endps.push_back(opp->termVertexp);
+                for (SvaStateVertex* const endp : endps) {
+                    if (opp->finalCondp) {
+                        guardedLink(endp, mergeVtxp,
+                                    sampled(opp->finalCondp->cloneTreePure(false)), flp);
+                    } else {
+                        guardedLink(endp, mergeVtxp, flp);
+                    }
+                }
+            }
         }
         freeUnlinkedCondp(lhs.finalCondp);
         freeUnlinkedCondp(rhs.finalCondp);
@@ -1846,11 +1858,26 @@ public:
         // Use raw createStateVertex() so trigVtxp starts without liveness --
         // reaching the antecedent terminal is a definitive event.
         SvaStateVertex* const trigVtxp = m_graph.createStateVertex();
-        AstNodeExpr* antMatchp = sampledClone(antResult.finalCondp);
-        // finalCondp is cloned into the Sampled nodes; if the original is
-        // not parented anywhere in the AST anymore it must be freed here
-        // or ASan flags it as a leak (e.g. t_sequence_bool_ops).
-        freeUnlinkedCondp(antResult.finalCondp);
+        AstNodeExpr* antMatchp = nullptr;
+        if (antResult.finalCondp) {
+            antMatchp = sampled(antResult.finalCondp->cloneTreePure(false));
+            // The first eligible tick of a range delay is a separate source; as at the
+            // terminal, a throughout guard dropped on that tick prevents the match
+            for (SvaStateVertex* const midp : antResult.midSources) {
+                AstNodeExpr* midMatchp = antMatchp->cloneTreePure(false);
+                for (AstNodeExpr* const condp : midp->m_throughoutConds) {
+                    midMatchp
+                        = new AstLogAnd{flp, midMatchp, sampled(condp->cloneTreePure(false))};
+                }
+                m_graph.addLink(midp, trigVtxp, midMatchp);
+            }
+            // finalCondp is cloned into the Sampled nodes; if the original is
+            // not parented anywhere in the AST anymore it must be freed here
+            // or ASan flags it as a leak (e.g. t_sequence_bool_ops).
+            if (!antResult.finalCondp->backp()) {
+                VL_DO_DANGLING(antResult.finalCondp->deleteTree(), antResult.finalCondp);
+            }
+        }
         // Antecedent vertices do not reject on a dropped throughout guard, so a guard
         // dropped on the last tick must instead prevent the match
         if (AstNodeExpr* const guardp
