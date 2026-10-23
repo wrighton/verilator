@@ -1,0 +1,26 @@
+%Error: t/t_sampled_local_bad.v:15:26: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   15 |     (a, t = b) |=> $rose(t) && $fell(t) && $stable(t) && $changed(t);   
+      |                          ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sampled_local_bad.v:15:38: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   15 |     (a, t = b) |=> $rose(t) && $fell(t) && $stable(t) && $changed(t);   
+      |                                      ^
+%Error: t/t_sampled_local_bad.v:15:52: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   15 |     (a, t = b) |=> $rose(t) && $fell(t) && $stable(t) && $changed(t);   
+      |                                                    ^
+%Error: t/t_sampled_local_bad.v:15:67: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   15 |     (a, t = b) |=> $rose(t) && $fell(t) && $stable(t) && $changed(t);   
+      |                                                                   ^
+%Error: t/t_sampled_local_bad.v:21:31: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   21 |     (a, t = {b, b}) |=> $past(t[0]) || ($sampled(t + 1) == 0);   
+      |                               ^
+%Error: t/t_sampled_local_bad.v:21:50: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   21 |     (a, t = {b, b}) |=> $past(t[0]) || ($sampled(t + 1) == 0);   
+      |                                                  ^
+%Error: Exiting due to
