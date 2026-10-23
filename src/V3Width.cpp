@@ -7691,6 +7691,17 @@ class WidthVisitor final : public VNVisitor {
                                         << pinDirection.prettyName()
                                         << "' port (IEEE 1800-2023 11.4.14)");
             }
+            if (pinDirection == VDirection::INOUT) {
+                nodep->exprp()->foreach([nodep](const AstNodeVarRef* refp) {
+                    if (refp->access().isWriteOrRW() && refp->varp()->varType() == VVarType::VAR) {
+                        refp->v3warn(NONSTD, "Inout port " << nodep->modVarp()->prettyNameQ()
+                                                           << " is connected to variable "
+                                                           << refp->varp()->prettyNameQ()
+                                                           << ", but should be connected to a net"
+                                                              " (IEEE 1800-2023 23.3.3.2)");
+                    }
+                });
+            }
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             AstNodeDType* modDTypep = nodep->modVarp()->dtypep();
             AstNodeDType* conDTypep = nodep->exprp()->dtypep();

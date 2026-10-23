@@ -16,10 +16,10 @@ endmodule
 module t;
   u_struct_t u_i, u_o;
 
-  u_mh u_mh (
+  u_mh u_mh (  // verilator lint_off NONSTD
       u_i,
       u_o
-  );
+  );  // verilator lint_on NONSTD
 
   initial begin
     u_i.x = 1;

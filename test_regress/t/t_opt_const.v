@@ -90,7 +90,7 @@ module Test(/*AUTOARG*/
   logic bug3509_out;
   wire  bug3399_out0;
   wire  bug3399_out1;
-  logic bug3786_out;
+  wire bug3786_out;
   logic bug3824_out;
   logic bug4059_out;
   logic bug4832_out;
