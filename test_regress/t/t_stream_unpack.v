@@ -380,6 +380,22 @@ module t;
         `checkh(arr2d_w[0][0], 96'h123456789abcdef012345678);
         `checkh(arr2d_w[0][1], 96'h9abcdef01234567812345678);
       end
+
+      // Wide elements not a multiple of 32 bits, bits above each element cleared
+      begin
+        automatic logic [139:0] packed_140;
+        automatic logic [69:0] arr_w70[2];
+        automatic logic [69:0] q_w70[$];
+
+        packed_140 = {70'h3f_ffff_ffff_ffff_ffff, 70'h1};
+        arr_w70 = { >> {packed_140}};
+        `checkh(arr_w70[0], 70'h3f_ffff_ffff_ffff_ffff);
+        `checkh(arr_w70[1], 70'h1);
+        `checkh(arr_w70[1] == 70'h1, 1'b1);
+        { >> {q_w70}} = packed_140;
+        `checkh(q_w70[1], 70'h1);
+        `checkh(q_w70[1] == 70'h1, 1'b1);
+      end
     end
 
     $write("*-* All Finished *-*\n");
