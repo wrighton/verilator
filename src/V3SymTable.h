@@ -53,6 +53,10 @@ class VSymEnt final {
     string m_symPrefix;  // String to prefix symbols with (for V3LinkDot, unused here)
     bool m_exported = true;  // Allow importing
     bool m_imported = false;  // Was imported
+    bool m_importedWildcard = false;  // Was imported by a package wildcard import
+    bool m_importAmbiguous = false;  // Wildcard imported, but a different item of the same name
+                                     // was also wildcard imported (IEEE 1800-2023 26.3)
+    bool m_hidesWildcard = false;  // Declaration hides a wildcard imported item of the same name
 #ifdef VL_DEBUG
     VL_DEFINE_DEBUG_FUNCTIONS;
 #else
@@ -123,6 +127,10 @@ public:
     void exported(bool flag) { m_exported = flag; }
     bool imported() const { return m_imported; }
     void imported(bool flag) { m_imported = flag; }
+    bool importedWildcard() const { return m_importedWildcard; }
+    bool importAmbiguous() const { return m_importAmbiguous; }
+    bool hidesWildcard() const { return m_hidesWildcard; }
+    void hidesWildcard(bool flag) { m_hidesWildcard = flag; }
     VSymEnt* insert(const string& name, VSymEnt* entp) {
         UINFO(9, "     SymInsert se" << cvtToHex(this) << " '" << name << "' se" << cvtToHex(entp)
                                      << "  " << entp->nodep());
@@ -232,14 +240,22 @@ public:
 
 private:
     void importOneSymbol(VSymGraph* graphp, const string& name, const VSymEnt* srcp,
-                         bool honorExport) {
-        if ((!honorExport || srcp->exported())
-            && !findIdFlat(name)) {  // Don't insert over existing entry
-            VSymEnt* const symp = new VSymEnt{graphp, srcp};
-            symp->exported(false);  // Can't reimport an import without an export
-            symp->imported(true);
-            reinsert(name, symp);
+                         bool honorExport, bool wildcard) {
+        if (honorExport && !srcp->exported()) return;
+        if (VSymEnt* const existp = findIdFlat(name)) {
+            // Declarations and explicit imports take precedence over wildcard imports
+            if (!existp->m_importedWildcard) return;
+            if (wildcard) {
+                // Only an error if referenced (IEEE 1800-2023 26.3)
+                if (existp->nodep() != srcp->nodep()) existp->m_importAmbiguous = true;
+                return;
+            }
         }
+        VSymEnt* const symp = new VSymEnt{graphp, srcp};
+        symp->exported(false);  // Can't reimport an import without an export
+        symp->imported(true);
+        symp->m_importedWildcard = wildcard;
+        reinsert(name, symp);
     }
     void exportOneSymbol(VSymGraph* /*graphp*/, const string& name, const VSymEnt* srcp) const {
         if (srcp->exported()) {
@@ -265,7 +281,7 @@ public:
         for (IdNameMap::const_iterator it = srcp->m_idNameMap.begin();
              it != srcp->m_idNameMap.end(); ++it) {
             if (!haveExterns.count(it->first))
-                importOneSymbol(graphp, it->first, it->second, false);
+                importOneSymbol(graphp, it->first, it->second, false, false);
         }
     }
     void importFromPackage(VSymGraph* graphp, const VSymEnt* srcp, const string& id_or_star) {
@@ -273,12 +289,12 @@ public:
         if (id_or_star != "*") {
             const auto it = srcp->m_idNameMap.find(id_or_star);
             if (it != srcp->m_idNameMap.end()) {
-                importOneSymbol(graphp, it->first, it->second, true);
+                importOneSymbol(graphp, it->first, it->second, true, false);
             }
         } else {
             for (IdNameMap::const_iterator it = srcp->m_idNameMap.begin();
                  it != srcp->m_idNameMap.end(); ++it) {
-                importOneSymbol(graphp, it->first, it->second, true);
+                importOneSymbol(graphp, it->first, it->second, true, true);
             }
         }
     }

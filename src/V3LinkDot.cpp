@@ -509,6 +509,9 @@ public:
         symp->fallbackp(abovep);
         nodep->user1p(symp);
         checkDuplicate(abovep, nodep, name);
+        // Variables have no declaration order check, so need one for IEEE 1800-2023 26.3
+        const VSymEnt* const oldp = abovep->findIdFlat(name);
+        symp->hidesWildcard(VN_IS(nodep, Var) && oldp && oldp->importedWildcard());
         abovep->reinsert(name, symp);
         return symp;
     }
@@ -3841,6 +3844,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
                            << declp->warnContextSecondary());
         }
     }
+    static void checkWildcardImportRef(const AstNode* nodep, const VSymEnt* foundp) {
+        // IEEE 1800-2023 26.3: A reference must not match a name wildcard imported from
+        // multiple packages, nor precede a declaration hiding a wildcard imported name
+        if (foundp->importAmbiguous()) {
+            nodep->v3error("Reference to " << nodep->prettyNameQ()
+                                           << " is ambiguous, as wildcard imports of multiple"
+                                              " packages define it (IEEE 1800-2023 26.3)");
+        } else if (foundp->hidesWildcard()
+                   && nodep->fileline()->tokenNum() < foundp->nodep()->fileline()->tokenNum()) {
+            nodep->v3error("Reference to "
+                           << nodep->prettyNameQ()
+                           << " makes a wildcard imported name visible, so a later declaration "
+                              "of the same name is illegal (IEEE 1800-2023 26.3)\n"
+                           << nodep->warnContextPrimary() << '\n'
+                           << foundp->nodep()->warnOther() << "... Location of declaration\n"
+                           << foundp->nodep()->warnContextSecondary());
+        }
+    }
     void checkMemberDeclOrder(AstNode* nodep, AstMemberDType* declp) {
         const uint32_t declTokenNum = declp->fileline()->tokenNum();
         if (nodep->fileline()->tokenNum() < declTokenNum) {
@@ -4689,6 +4710,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (foundp) {
                 UINFO(9, indent() << "found=se" << cvtToHex(foundp) << "  exp=" << expectWhat
                                   << "  n=" << foundp->nodep());
+                if (first) checkWildcardImportRef(nodep, foundp);
             }
             // What fell out?
             bool ok = false;
@@ -5680,6 +5702,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
 
             if (taskp) {
+                if (first) checkWildcardImportRef(nodep, foundp);
                 if (staticAccess && !taskp->isStatic()) {
                     // TODO bug4077
                     // nodep->v3error("Static access to non-static task/function "
@@ -6506,6 +6529,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 foundp = m_statep->getNodeSym(nodep->classOrPackagep())->findIdFlat(nodep->name());
             } else if (m_ds.m_dotPos == DP_FIRST || m_ds.m_dotPos == DP_NONE) {
                 foundp = findIdFallbackSkipMemberDType(m_curSymp, nodep->name());
+                if (foundp) checkWildcardImportRef(nodep, foundp);
             } else {
                 // Defensive: dotPos should be DP_FIRST/DP_NONE or classOrPackagep set.
                 v3fatalSrc("Unexpected dotPos="
@@ -6656,7 +6680,26 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         if (m_statep->forParamed()) VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
-    void visit(AstPackageImport* nodep) override { visitPackageImportOrExport(nodep); }
+    void visit(AstPackageImport* nodep) override {
+        // IEEE 1800-2023 26.3: An explicit import is illegal if the identifier is declared in
+        // the same scope or explicitly imported from another package
+        if (m_statep->forPrimary() && nodep->name() != "*") {
+            const VSymEnt* const impp
+                = m_statep->getNodeSym(nodep->packagep())->findIdFlat(nodep->name());
+            const VSymEnt* const foundp = m_curSymp->findIdFlat(nodep->name());
+            if (impp && foundp && foundp->nodep() != impp->nodep()) {
+                nodep->v3error("Explicit import of '"
+                               << nodep->packagep()->prettyName() << "::" << nodep->prettyName()
+                               << "' conflicts with a declaration or import of the same name"
+                                  " in the same scope (IEEE 1800-2023 26.3)\n"
+                               << nodep->warnContextPrimary() << '\n'
+                               << foundp->nodep()->warnOther()
+                               << "... Location of other declaration\n"
+                               << foundp->nodep()->warnContextSecondary());
+            }
+        }
+        visitPackageImportOrExport(nodep);
+    }
     void visit(AstPackageExport* nodep) override { visitPackageImportOrExport(nodep); }
     void visit(AstPackageExportStarStar* nodep) override { visitPackageImportOrExport(nodep); }
     void visit(AstCellRef* nodep) override {

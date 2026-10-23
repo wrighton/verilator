@@ -1,0 +1,35 @@
+%Error: t/t_package_import_conflict_bad.v:56:11: Reference to 'y' makes a wildcard imported name visible, so a later declaration of the same name is illegal (IEEE 1800-2023 26.3)
+   56 |   int a = y;
+      |           ^
+        t/t_package_import_conflict_bad.v:57:7: ... Location of declaration
+   57 |   int y;
+      |       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_package_import_conflict_bad.v:49:10: Explicit import of 'p3::y' conflicts with a declaration or import of the same name in the same scope (IEEE 1800-2023 26.3)
+   49 |   import p3::y;
+      |          ^~
+        t/t_package_import_conflict_bad.v:50:7: ... Location of other declaration
+   50 |   int y;
+      |       ^
+%Error: t/t_package_import_conflict_bad.v:43:10: Explicit import of 'p2::x' conflicts with a declaration or import of the same name in the same scope (IEEE 1800-2023 26.3)
+   43 |   import p2::x;
+      |          ^~
+        t/t_package_import_conflict_bad.v:8:7: ... Location of other declaration
+    8 |   int x = 1;
+      |       ^
+%Error: t/t_package_import_conflict_bad.v:45:10: Explicit import of 'p3::y' conflicts with a declaration or import of the same name in the same scope (IEEE 1800-2023 26.3)
+   45 |   import p3::y;
+      |          ^~
+        t/t_package_import_conflict_bad.v:44:7: ... Location of other declaration
+   44 |   int y;
+      |       ^
+%Error: t/t_package_import_conflict_bad.v:32:11: Reference to 'x' is ambiguous, as wildcard imports of multiple packages define it (IEEE 1800-2023 26.3)
+   32 |   int a = x;
+      |           ^
+%Error: t/t_package_import_conflict_bad.v:33:3: Reference to 't' is ambiguous, as wildcard imports of multiple packages define it (IEEE 1800-2023 26.3)
+   33 |   t b;
+      |   ^
+%Error: t/t_package_import_conflict_bad.v:34:15: Reference to 'f' is ambiguous, as wildcard imports of multiple packages define it (IEEE 1800-2023 26.3)
+   34 |   initial a = f();
+      |               ^
+%Error: Exiting due to
