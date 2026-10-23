@@ -144,8 +144,8 @@ module Test(/*AUTOARG*/
   bug3445 i_bug3445(.clk(clk), .in(d), .out(bug3445_out));
   bug3470 i_bug3470(.clk(clk), .in(d), .out(bug3470_out));
   bug3509 i_bug3509(.clk(clk), .in(d), .out(bug3509_out));
-  bug3399 i_bug3399(.clk(clk), .in(d), .out0(bug3399_out0), .out1(bug3399_out1));
-  bug3786 i_bug3786(.clk(clk), .in(d), .out(bug3786_out));
+  bug3399 i_bug3399(.clk(clk), .in(d), .out0(bug3399_out0), .out1(bug3399_out1));  // verilator lint_off NONSTD
+  bug3786 i_bug3786(.clk(clk), .in(d), .out(bug3786_out));  // verilator lint_on NONSTD
   bug3824 i_bug3824(.clk(clk), .in(d), .out(bug3824_out));
   bug4059 i_bug4059(.clk(clk), .in(d), .out(bug4059_out));
   bug4832 i_bug4832(.clk(clk), .in(d), .out(bug4832_out));
