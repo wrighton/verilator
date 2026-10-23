@@ -351,6 +351,7 @@ class SvaNfaBuilder final {
     // A range of counts followed by a later element keeps the earlier lowering, whose merged
     // threads cannot tell the counts apart, and its failures are counted per tick
     bool m_rangeFallback = false;
+    bool m_inRangeCandidate = false;  // Building the operand after a ranged cycle delay
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
@@ -742,6 +743,16 @@ class SvaNfaBuilder final {
             if (isTopLevelStep && !m_noEosFailure && isGotoRangeTail(sexprp)) {
                 m_rangeFallback = true;
             }
+            if (isTopLevelStep && !m_noEosFailure && preExprp->exists([](const AstSConsRep* repp) {
+                    return repp->maxCountp() != nullptr;
+                })) {
+                // Inside the candidates of a ranged delay the alternatives of each would fail
+                // the attempt on their own, while the earlier lowering merges the candidates
+                if (rangeTailRep(sexprp) && !m_inRangeCandidate) {
+                    return buildConsRepRangeTail(sexprp, entryVtxp);
+                }
+                m_rangeFallback = true;
+            }
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
             const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
@@ -777,11 +788,82 @@ class SvaNfaBuilder final {
 
         // Multi-cycle RHS: recurse (only plain boolean is returned as finalCondp).
         if (exprp->isMultiCycleSva()) {
+            VL_RESTORER(m_inRangeCandidate);
+            if (delayp->isRangeDelay()) m_inRangeCandidate = true;
             const BuildResult result = buildExpr(exprp, currentp, isTopLevelStep);
             if (result.valid()) addFiniteRangeReject(rangeRejectInfo, result, flp);
             return result;
         }
         return {currentp, exprp, std::move(rangeMidSources)};
+    }
+
+    // The repetition of a consecutive repetition range of a boolean followed by `##0 g` or
+    // `##1 g`, g a boolean, in sexprp, also after a leading fixed delay, which
+    // buildConsRepRangeTail lowers, or nullptr. Another form keeps the earlier lowering, whose
+    // merged end points reject when one count fails the later element.
+    static AstSConsRep* rangeTailRep(AstSExpr* sexprp) {
+        AstNodeExpr* preExprp = sexprp->preExprp();
+        if (const AstSExpr* const leadp = VN_CAST(preExprp, SExpr)) {
+            const AstDelay* const leadDelayp = VN_AS(leadp->delayp(), Delay);
+            if (!leadp->preExprp() && !leadDelayp->isRangeDelay()) preExprp = leadp->exprp();
+        }
+        AstSConsRep* const repp = VN_CAST(preExprp, SConsRep);
+        const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+        if (!repp || !repp->maxCountp() || repp->exprp()->isMultiCycleSva()
+            || delayp->isRangeDelay() || getConstUInt(delayp->lhsp()) > 1
+            || sexprp->exprp()->isMultiCycleSva()) {
+            return nullptr;
+        }
+        return repp;
+    }
+
+    // Build a consecutive repetition range followed by a later step in a property
+    BuildResult buildConsRepRangeTail(AstSExpr* sexprp, SvaStateVertex* entryVtxp) {
+        // Each length is an alternative, and one failing the later step must not reject while
+        // another may still match, which the merged threads of the plain lowering cannot tell
+        // apart. With a boolean g, `f[*m:n] ##1 g` is `f[*m] ##1 ((f || g) throughout ##[0:n-m]
+        // g)`: from the end of f[*m] each tick matches on g, continues while f holds, and fails
+        // otherwise. Likewise `f[*m:n] ##0 g` is `f[*m-1] ##1 (f throughout ##[0:n-m] (f && g))`
+        // (m >= 1).
+        FileLine* const flp = sexprp->fileline();
+        // A leading fixed delay just starts the range later: `##k f[*m:n] ##1 g`
+        SvaStateVertex* startp = entryVtxp;
+        if (const AstSExpr* const leadp = VN_CAST(sexprp->preExprp(), SExpr)) {
+            const AstDelay* const leadDelayp = VN_AS(leadp->delayp(), Delay);
+            if (!leadp->preExprp() && !leadDelayp->isRangeDelay()) {
+                // Start from a plain vertex, as a delay ring end cannot carry the throughout
+                startp = scopedCreateVertex();
+                guardedLink(addDelayChain(entryVtxp, getConstUInt(leadDelayp->lhsp()), flp),
+                            startp, flp);
+            }
+        }
+        AstSConsRep* const repp = rangeTailRep(sexprp);
+        UASSERT_OBJ(repp, sexprp, "Repetition range tail of another form");
+        const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+        const bool fused = getConstUInt(delayp->lhsp()) == 0;
+        AstNodeExpr* const fp = repp->exprp();
+        AstNodeExpr* const gp = sexprp->exprp();
+        // An empty match fused with g does not match (IEEE 1800-2023 16.9.2.1)
+        const unsigned minN = std::max(getConstUInt(repp->countp()), fused ? 1U : 0U);
+        const unsigned prefixN = fused ? minN - 1 : minN;
+        AstNodeExpr* const guardp
+            = fused ? fp->cloneTreePure(false)
+                    : new AstLogOr{flp, fp->cloneTreePure(false), gp->cloneTreePure(false)};
+        AstNodeExpr* const endp
+            = fused ? new AstLogAnd{flp, fp->cloneTreePure(false), gp->cloneTreePure(false)}
+                    : gp->cloneTreePure(false);
+        guardp->dtypeSetBit();
+        endp->dtypeSetBit();
+        AstDelay* const rangep = new AstDelay{flp, new AstConst{flp, 0U}, /*isCycle=*/true};
+        rangep->rhsp(new AstConst{flp, getConstUInt(repp->maxCountp()) - minN});
+        AstNodeExpr* treep = new AstSThroughout{flp, guardp, new AstSExpr{flp, rangep, endp}};
+        if (prefixN) {
+            treep = new AstSExpr{
+                flp, new AstSConsRep{flp, fp->cloneTreePure(false), new AstConst{flp, prefixN}},
+                new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true}, treep};
+        }
+        treep->dtypeSetBit();
+        return buildFromLoweringTree(treep, startp, /*isTopLevelStep=*/true);
     }
 
     BuildResult buildConsRep(AstSConsRep* repp, SvaStateVertex* entryVtxp,
@@ -1740,8 +1822,23 @@ public:
     // element. The whole property is then so lowered, decided before anything is built, as a
     // vertex built before the range would take the other lowering.
     static bool needsRangeFallback(AstNodeExpr* bodyp, bool noEosFailure) {
-        return !noEosFailure
-               && bodyp->exists([](const AstSExpr* sexprp) { return isGotoRangeTail(sexprp); });
+        if (noEosFailure) return false;
+        // The elements of the operands of ranged delays
+        std::unordered_set<const AstSExpr*> candps;
+        bodyp->foreach([&](const AstSExpr* sexprp) {
+            const AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+            if (!delayp || !delayp->isRangeDelay()) return;
+            sexprp->exprp()->foreach([&](const AstSExpr* innerp) { candps.insert(innerp); });
+        });
+        return bodyp->exists([&](AstSExpr* sexprp) {
+            if (isGotoRangeTail(sexprp)) return true;
+            // A consecutive repetition range followed by a later element, other than the form
+            // buildConsRepRangeTail lowers outside the candidates of a ranged delay
+            const AstNodeExpr* const prep = sexprp->preExprp();
+            return prep && prep->exists([](const AstSConsRep* repp) {
+                return repp->maxCountp() != nullptr;
+            }) && (!rangeTailRep(sexprp) || candps.count(sexprp));
+        });
     }
     // Reset scope between antecedent and consequent: liveness must not leak.
     // m_outerAbortStack survives: an abort wrapping the implication covers the

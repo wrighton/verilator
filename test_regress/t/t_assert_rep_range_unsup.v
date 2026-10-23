@@ -15,6 +15,12 @@ module t;
   property p_nc_lhs_range;
     @(posedge clk) a [= 1: 2] |-> b;
   endproperty
+  property p_cons_range_multi;
+    @(posedge clk) a |-> (a ##1 b) [* 1: 2] ##1 b;
+  endproperty
+  property p_cons_range_lead_range;
+    @(posedge clk) a |-> ##[1:2] b [* 1: 2] ##1 a;
+  endproperty
 
   a_nc_range :
   assert property (p_nc_range);
@@ -23,4 +29,8 @@ module t;
   // A cover never rejects, so a later element after the range is supported
   c_goto_range_seq :
   cover property (@(posedge clk) b [-> 1: 2] ##1 a);
+  a_cons_range_multi :
+  assert property (p_cons_range_multi);
+  a_cons_range_lead_range :
+  assert property (p_cons_range_lead_range);
 endmodule
