@@ -3676,13 +3676,13 @@ string AstPin::prettyOperatorName() const {
 void AstPragma::dump(std::ostream& str) const {
     Super::dump(str);
     str << " " << pragType();
-    if (pragType() == VPragmaType::TIMEUNIT_SET) {  //
+    if (isTimescale()) {
         str << " timescale=" << timescale();
     }
 }
 void AstPragma::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "pragType", pragType().ascii());
-    if (pragType() == VPragmaType::TIMEUNIT_SET) {
+    if (isTimescale()) {
         dumpJsonStr(str, "timescale", timescale().ascii());
     }
     dumpJsonGen(str);
