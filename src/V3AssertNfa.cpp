@@ -735,6 +735,20 @@ class SvaNfaBuilder final {
         FileLine* const flp = sexprp->fileline();
         AstNodeExpr* const exprp = sexprp->exprp();
 
+        // An empty match of a zero-minimum repetition next to the delay takes a cycle off the
+        // delay: `s ##n empty` is `s ##(n-1) 1` and `empty ##n s` is `##(n-1) s`, and neither
+        // matches for n == 0 (IEEE 1800-2023 16.9.2.1). A zero-minimum repetition lowered from
+        // a vertex has its empty match there, and its first repetition on the next tick.
+        AstSConsRep* preZeroMinp = zeroMinRep(sexprp->preExprp());
+        AstSConsRep* zeroMinp = zeroMinRep(exprp);
+        if ((preZeroMinp || zeroMinp) && (delayp->isRangeDelay() || (preZeroMinp && zeroMinp))) {
+            // Next to a ranged delay, or on both sides of one delay, keep the earlier lowering,
+            // whose empty match is a cycle late
+            preZeroMinp = nullptr;
+            zeroMinp = nullptr;
+            m_rangeFallback = true;
+        }
+
         // Handle LHS (preExpr)
         SvaStateVertex* currentp = entryVtxp;
         if (AstNodeExpr* const preExprp = sexprp->preExprp()) {
@@ -755,7 +769,9 @@ class SvaNfaBuilder final {
             }
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
-            const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
+            // The empty match is added after the delay, so the first repetition is not required
+            const BuildResult pre = preZeroMinp ? buildConsRep(preZeroMinp, currentp, false, true)
+                                                : buildExpr(preExprp, currentp, isTopLevelStep);
             if (!pre.valid()) return BuildResult::fail(pre.errorEmitted);  // LCOV_EXCL_LINE
             if (pre.finalCondp) {
                 SvaStateVertex* const condVtxp = scopedCreateVertex();
@@ -783,7 +799,20 @@ class SvaNfaBuilder final {
             }
         } else {
             const unsigned delayCycles = getConstUInt(delayp->lhsp());
-            currentp = addDelayChain(currentp, delayCycles, flp);
+            if (zeroMinp) {
+                if (!delayCycles) return buildConsRep(zeroMinp, currentp, isTopLevelStep, true);
+                // Lowered from the tick of its empty match, see above
+                currentp = addDelayChain(currentp, delayCycles - 1, flp);
+            } else {
+                currentp = addDelayChain(currentp, delayCycles, flp);
+                if (preZeroMinp && delayCycles) {
+                    // Empty match of the left repetition, see above
+                    SvaStateVertex* const mergeVtxp = scopedCreateVertex();
+                    guardedLink(currentp, mergeVtxp, flp);
+                    guardedLink(addDelayChain(entryVtxp, delayCycles - 1, flp), mergeVtxp, flp);
+                    currentp = mergeVtxp;
+                }
+            }
         }
 
         // Multi-cycle RHS: recurse (only plain boolean is returned as finalCondp).
@@ -866,8 +895,15 @@ class SvaNfaBuilder final {
         return buildFromLoweringTree(treep, startp, /*isTopLevelStep=*/true);
     }
 
+    static AstSConsRep* zeroMinRep(AstNodeExpr* nodep) {
+        AstSConsRep* const repp = VN_CAST(nodep, SConsRep);
+        return repp && getConstUInt(repp->countp()) == 0 ? repp : nullptr;
+    }
+
+    // nonEmpty: Drop the empty match of a zero-minimum repetition
     BuildResult buildConsRep(AstSConsRep* repp, SvaStateVertex* entryVtxp,
-                             bool isTopLevelStep = false) {
+                             bool isTopLevelStep = false, bool nonEmpty = false) {
+        // With nonEmpty the first repetition is on the entry tick.
         FileLine* const flp = repp->fileline();
         AstNodeExpr* const exprp = repp->exprp();
         // Multi-cycle expr in ConsRep not yet supported; bail to avoid invalid AST.
@@ -876,7 +912,7 @@ class SvaNfaBuilder final {
                                         " consecutive repetition (IEEE 1800-2023 16.9.2)");
             return BuildResult::failWithError();
         }
-        const unsigned minN = getConstUInt(repp->countp());
+        const unsigned minN = std::max(getConstUInt(repp->countp()), nonEmpty ? 1U : 0U);
 
         // Sum sites across prefix + unbounded/range tail so one hoist covers
         // every check edge of this repetition.
@@ -1821,7 +1857,19 @@ public:
     // earlier lowering (see m_rangeFallback): a goto repetition range followed by a later
     // element. The whole property is then so lowered, decided before anything is built, as a
     // vertex built before the range would take the other lowering.
-    static bool needsRangeFallback(AstNodeExpr* bodyp, bool noEosFailure) {
+    static bool needsRangeFallback(AstNodeExpr* bodyp, AstNodeExpr* antp, bool noEosFailure) {
+        // A zero-minimum repetition next to a ranged delay, or on both sides of one delay, in
+        // the antecedent too
+        const auto zeroMinNextToRange = [](AstSExpr* sexprp) {
+            const AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+            if (!delayp || !delayp->isCycleDelay()) return false;
+            const bool pre = zeroMinRep(sexprp->preExprp());
+            const bool post = zeroMinRep(sexprp->exprp());
+            return (pre || post) && (delayp->isRangeDelay() || (pre && post));
+        };
+        if (bodyp->exists(zeroMinNextToRange) || (antp && antp->exists(zeroMinNextToRange))) {
+            return true;
+        }
         if (noEosFailure) return false;
         // The elements of the operands of ranged delays
         std::unordered_set<const AstSExpr*> candps;
@@ -4365,7 +4413,9 @@ class AssertNfaVisitor final : public VNVisitor {
         SvaNfaBuilder builder{graph,       m_modp,     m_propTempNames,
                               isCoverSeq,  isSeqEvent, coverp != nullptr,
                               trackVacuous};
-        if (SvaNfaBuilder::needsRangeFallback(seqBodyp, coverp != nullptr)) {
+        if (SvaNfaBuilder::needsRangeFallback(seqBodyp,
+                                              parts.hasImplication ? parts.triggerExprp : nullptr,
+                                              coverp != nullptr)) {
             builder.presetRangeFallback();
         }
 
