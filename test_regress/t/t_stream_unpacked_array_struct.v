@@ -42,12 +42,30 @@ module t (
   wire [W-1:0] rd_r = {>>{aw_r}};
   wire [W-1:0] rd_l = {<<8{aw_l}};  // {<<{}} read of aggregate array previously crashed
 
+  // Streaming is by left-to-right element order, also with nonzero bounds
+  typedef s_t dsc_t[3:1];
+  typedef s_t asc_t[1:3];
+  wire [47:0] src3 = crc[47:0];
+  dsc_t dw;
+  asc_t awa;
+  always_comb{>>{dw}} = src3;
+  always_comb{>>{awa}} = src3;
+  wire [47:0] rd_d = {>>{dw}};
+  wire [47:0] rd_a = {>>{awa}};
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     crc <= {crc[62:0], crc[63] ^ crc[2] ^ crc[0]};
     if (cyc > 1) begin
       `checkh(rd_r, src);
       `checkh(rd_l, src);
+      `checkh(dw[3].a, src3[47:40]);
+      `checkh(dw[2].b, src3[23:16]);
+      `checkh(dw[1].b, src3[7:0]);
+      `checkh(awa[1].a, src3[47:40]);
+      `checkh(awa[3].b, src3[7:0]);
+      `checkh(rd_d, src3);
+      `checkh(rd_a, src3);
     end
     if (cyc == 20) begin
       $write("*-* All Finished *-*\n");
