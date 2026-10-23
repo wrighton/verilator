@@ -970,6 +970,10 @@ class SvaNfaBuilder final {
         return !condp->exists(
             [](const AstNodeExpr* np) { return np->isMultiCycleSva() || VN_IS(np, Implication); });
     }
+    // True if an expression has a multi-cycle sequence or property in it
+    static bool isMultiCycle(const AstNodeExpr* exprp) {
+        return exprp->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); });
+    }
 
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
@@ -1032,6 +1036,23 @@ class SvaNfaBuilder final {
         freeUnlinkedCondp(lhs.finalCondp);
         freeUnlinkedCondp(rhs.finalCondp);
         return {mergeVtxp, nullptr, {}};
+    }
+
+    // Build `b and p` at the end of a property, with b boolean
+    BuildResult buildBoolAndProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
+                                 FileLine* flp) {
+        // It fails at once when b fails and otherwise exactly when p does (IEEE 1800-2023
+        // 16.12.5).
+        SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+        sinkVtxp->m_isRejectSink = true;
+        SvaTransEdge* const edgep
+            = m_graph.addLink(entryVtxp, sinkVtxp, sampled(boolp->cloneTreePure(false)));
+        edgep->m_rejectOnFail = true;
+        SvaStateVertex* const propEntryp = scopedCreateVertex();
+        guardedLink(entryVtxp, propEntryp, sampled(boolp->cloneTreePure(false)), flp);
+        VL_RESTORER(m_wantBoolLeaf);
+        m_wantBoolLeaf = true;
+        return buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
     }
 
     // Build done-latch combiner for SAnd/SIntersect (IEEE 1800-2023 16.9.5).
@@ -1194,7 +1215,7 @@ class SvaNfaBuilder final {
             }
             return flattenFixedSeq(sexprp->exprp(), baseOffset + preLen + delayCycles, out);
         }
-        if (nodep->isMultiCycleSva()) return false;
+        if (!isPlainBoolean(nodep)) return false;
         out[baseOffset].push_back(nodep);
         return true;
     }
@@ -1658,6 +1679,24 @@ public:
                                 wantBoolLeaf);
         }
         if (AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            // Both operands start together (IEEE 1800-2023 16.9.5): with fixed lengths the
+            // 'and' holds exactly when every check of both operands holds
+            if (!andp->propertyControl()) {
+                if (AstNodeExpr* const conjp
+                    = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline())) {
+                    return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
+                }
+                if (wantBoolLeaf) {
+                    if (isPlainBoolean(andp->lhsp())) {
+                        return buildBoolAndProp(andp->lhsp(), andp->rhsp(), entryVtxp,
+                                                andp->fileline());
+                    }
+                    if (isPlainBoolean(andp->rhsp())) {
+                        return buildBoolAndProp(andp->rhsp(), andp->lhsp(), entryVtxp,
+                                                andp->fileline());
+                    }
+                }
+            }
             return buildAndCombiner(andp->lhsp(), andp->rhsp(), entryVtxp, andp->fileline());
         }
         if (AstSIntersect* const intp = VN_CAST(nodep, SIntersect)) {
@@ -1698,6 +1737,12 @@ public:
         }
         if (AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return buildUntil(untilp, entryVtxp, isTopLevelStep);
+        }
+        // A 'not' of a multi-cycle operand is no boolean leaf; at the top it is unwrapped
+        if (VN_IS(nodep, LogNot) && isMultiCycle(nodep)) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'not' of a multi-cycle operand inside "
+                                         "another property operator");
+            return BuildResult::failWithError();
         }
         // Boolean leaf (including LogAnd): return as finalCond
         return {entryVtxp, nodep, {}};

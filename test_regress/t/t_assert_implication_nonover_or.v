@@ -19,7 +19,7 @@ module t (
   int fail_delay_or = 0, fail_and = 0;
   int cov_prop_or = 0, cov_prop_lor = 0, cov_seq_or = 0, cov_seq_lor = 0;
   int pass_top_or = 0, fail_top_or = 0, pass_top_not_or = 0, fail_top_not_or = 0;
-  int fail_rep0 = 0, fail_rep1 = 0, fail_nonbool_l = 0, fail_nonbool_l2 = 0, fail_nonbool_r = 0;
+  int fail_rep0 = 0, fail_rep1 = 0, fail_nonbool_l = 0, fail_nonbool_r = 0;
 
   // a in cycles 3, 6, 9, 12; the consequent cycle after each has
   //   cycle 4: x=0 y=0 -> every disjunction fails
@@ -55,8 +55,6 @@ module t (
   // and y3 in cycle 18, so each holds and nothing may be reported.
   assert property (@(posedge clk) a3 |=> ((not (x3 |-> y3)) or y3))
   else fail_nonbool_l = fail_nonbool_l + 1;
-  assert property (@(posedge clk) a3 |=> ((not (x3 |=> y3)) or y3))
-  else fail_nonbool_l2 = fail_nonbool_l2 + 1;
   assert property (@(posedge clk) a3 |=> (y3 or(not (x3 |-> y3))))
   else fail_nonbool_r = fail_nonbool_r + 1;
 
@@ -93,7 +91,6 @@ module t (
       `checkd(fail_rep0, 0);
       `checkd(fail_rep1, 1);
       `checkd(fail_nonbool_l, 0);
-      `checkd(fail_nonbool_l2, 0);
       `checkd(fail_nonbool_r, 0);
       $write("*-* All Finished *-*\n");
       $finish;
