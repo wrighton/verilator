@@ -694,6 +694,18 @@ class SvaNfaBuilder final {
         // Handle LHS (preExpr)
         SvaStateVertex* currentp = entryVtxp;
         if (AstNodeExpr* const preExprp = sexprp->preExprp()) {
+            // A goto repetition range ends at several occurrences. A later step failing after
+            // one of them must not reject while another may still match, which the merged
+            // threads cannot tell apart, so the later steps would never reject.
+            if (isTopLevelStep && !m_isCover && preExprp->exists([](const AstSGotoRep* repp) {
+                    return repp->maxCountp()
+                           && getConstUInt(repp->maxCountp()) != getConstUInt(repp->countp());
+                })) {
+                sexprp->v3warn(E_UNSUPPORTED, "Unsupported: goto repetition range followed by"
+                                              " a later sequence element in a property"
+                                              " (IEEE 1800-2023 16.9.2)");
+                return BuildResult::failWithError();
+            }
             VL_RESTORER(m_inSequencePrefix);
             m_inSequencePrefix = true;
             const BuildResult pre = buildExpr(preExprp, currentp, isTopLevelStep);
@@ -906,8 +918,7 @@ class SvaNfaBuilder final {
         AstNodeExpr* const exprp = repp->exprp();
         const unsigned minN = getConstUInt(repp->countp());
         if (minN == 0) return BuildResult::fail();
-        const bool hasMax = repp->maxCountp() != nullptr;
-        const unsigned maxN = hasMax ? getConstUInt(repp->maxCountp()) : minN;
+        const unsigned maxN = repp->maxCountp() ? getConstUInt(repp->maxCountp()) : minN;
         if (m_isCoverSeq) {
             // Several attempts may coalesce in the one-bit wait vertex before reaching the ring,
             // so a cover sequence action block could run too few times.
@@ -917,14 +928,16 @@ class SvaNfaBuilder final {
 
         AstVar* const hoistVarp = tryHoistSampled(exprp, flp, 2);
 
-        // The first guardedEdge is the ##1 before waiting for a match. In the wait state, false
-        // takes the clocked self-loop, while true takes the zero-delay guardedLink on that tick.
+        // The first occurrence may be on the entry tick (IEEE 1800-2023 16.9.2). From the
+        // entry and from the wait state, false takes a clocked edge to the wait state, while
+        // true takes the zero-delay guardedLink on that tick.
         SvaStateVertex* const waitVtxp = scopedCreateVertex();
-        guardedEdge(entryVtxp, waitVtxp, flp);
-        guardedEdge(waitVtxp, waitVtxp,
-                    new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
         SvaStateVertex* currentp = scopedCreateVertex();
-        guardedLink(waitVtxp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        for (SvaStateVertex* const fromp : {entryVtxp, waitVtxp}) {
+            guardedEdge(fromp, waitVtxp,
+                        new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
+            guardedLink(fromp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        }
 
         if (minN > 1) {
             SvaStateVertex* const ringVtxp = addDelayChain(
@@ -934,25 +947,21 @@ class SvaNfaBuilder final {
             guardedLink(ringVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
             currentp = checkVtxp;
         }
-        if (!hasMax) {
-            currentp->m_isUnbounded = true;  // [->N] waits unboundedly
-            m_inUnboundedScope = true;
-            return {currentp, nullptr, {}};
-        }
+        // Waiting for an occurrence never rejects. [->N] then has exactly one match, at the
+        // Nth occurrence, so later steps are required and may reject
+        if (maxN == minN) return {currentp, nullptr, {}};
 
         // [->M:N]: the range ring holds matches from M through N and advances
         // only on expr, preserving arbitrarily long gaps between occurrences.
         SvaStateVertex* const mergeVtxp = scopedCreateVertex();
         guardedLink(currentp, mergeVtxp, flp);  // accept at match_M
-        if (maxN > minN) {
-            SvaStateVertex* const ringVtxp
-                = addDelayChain(currentp, maxN - minN + 1, flp, false, nullptr,
-                                sampledRefOrClone(hoistVarp, exprp, flp));
-            ringVtxp->m_replayAbortReject = true;
-            SvaStateVertex* const checkVtxp = scopedCreateVertex();
-            guardedLink(ringVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
-            guardedLink(checkVtxp, mergeVtxp, flp);
-        }
+        SvaStateVertex* const ringVtxp
+            = addDelayChain(currentp, maxN - minN + 1, flp, false, nullptr,
+                            sampledRefOrClone(hoistVarp, exprp, flp));
+        ringVtxp->m_replayAbortReject = true;
+        SvaStateVertex* const checkVtxp = scopedCreateVertex();
+        guardedLink(ringVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        guardedLink(checkVtxp, mergeVtxp, flp);
         mergeVtxp->m_isUnbounded = true;  // [->M:N] still has unbounded waits between matches
         m_inUnboundedScope = true;
         return {mergeVtxp, nullptr, {}};
