@@ -11,4 +11,8 @@
                                                                    : ... note: In instance 't'
    15 |   assert property (@(posedge clk) (x or y) #-# s_eventually b);
       |                                      ^~
+%Error-UNSUPPORTED: t/t_assert_implication_nonover_or_unsup.v:18:43: Unsupported: 'not' of a multi-cycle operand inside another property operator
+                                                                   : ... note: In instance 't'
+   18 |   assert property (@(posedge clk) x |=> ((not (b |=> c)) or c));
+      |                                           ^~~
 %Error: Exiting due to
