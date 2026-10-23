@@ -1652,6 +1652,11 @@ List Of Warnings
    which IEEE 1800-2023 23.3.3.2 does not allow. Verilator simulates them as
    if they were nets. Instead declare or connect a net, such as a ``wire``.
 
+   Also warns on an initializer on an output port that is a net,
+   such as ``output wire y = 1'b1``, which IEEE 1800-2023 23.2.2.2 does not
+   allow. Verilator uses it as the initial value of the net. Instead use a
+   continuous assignment, or declare the port as a variable.
+
    Ignoring this warning will only suppress the lint check; it will
    simulate correctly.
 
