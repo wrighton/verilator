@@ -1,0 +1,94 @@
+%Error: t/t_assert_deferred_act_bad.v:19:29: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   19 |     assert final (a) else n = 1;   
+      |                             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_deferred_act_bad.v:20:20: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   20 |     assert #0 (a) n++;   
+      |                    ^~
+%Error: t/t_assert_deferred_act_bad.v:21:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   21 |     assume final (a) else begin   
+      |                           ^~~~~
+%Error: t/t_assert_deferred_act_bad.v:24:18: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   24 |     cover #0 (a) if (a) $display("pass");   
+      |                  ^~
+%Error: t/t_assert_deferred_act_bad.v:25:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   25 |     assert final (a) else case (a) default: $display("fail"); endcase   
+      |                           ^~~~
+%Error: t/t_assert_deferred_act_bad.v:26:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   26 |     assert final (a) else while (n < 2) $display("fail");   
+      |                           ^~~~~
+%Error: t/t_assert_deferred_act_bad.v:27:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   27 |     assert final (a) else repeat (2) $display("fail");   
+      |                           ^~~~~~
+%Error: t/t_assert_deferred_act_bad.v:39:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   39 |     assert final (a) else foreach (q[i]) $display(i);   
+      |                           ^~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:40:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   40 |     assert final (a) else ->ev;   
+      |                           ^~
+%Error: t/t_assert_deferred_act_bad.v:41:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   41 |     assert final (a) else #1 $display("fail");   
+      |                           ^
+%Error: t/t_assert_deferred_act_bad.v:42:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   42 |     assert final (a) else @(ev) $display("fail");   
+      |                           ^
+%Error: t/t_assert_deferred_act_bad.v:43:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   43 |     assert final (a) else wait (n == 1) $display("fail");   
+      |                           ^~~~
+%Error: t/t_assert_deferred_act_bad.v:44:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   44 |     assert final (a) else wait fork;   
+      |                           ^~~~
+%Error: t/t_assert_deferred_act_bad.v:45:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   45 |     assert final (a) else disable fork;   
+      |                           ^~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:46:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   46 |     assert final (a) else force w = 1'b1;   
+      |                           ^~~~~
+%Error: t/t_assert_deferred_act_bad.v:47:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   47 |     assert final (a) else release w;   
+      |                           ^~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:48:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   48 |     assert final (a) else assign r = 1'b1;   
+      |                           ^~~~~~
+%Error: t/t_assert_deferred_act_bad.v:49:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   49 |     assert final (a) else deassign r;   
+      |                           ^~~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:50:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   50 |     assert final (a) else assert (n == 0);   
+      |                           ^~~~~~
+%Error: t/t_assert_deferred_act_bad.v:51:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   51 |     assert final (a) else randcase 1: $display("fail"); endcase   
+      |                           ^~~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:52:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   52 |     assert final (a) else randsequence(main) main: {$display("fail");}; endsequence   
+      |                           ^~~~~~~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:54:29: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   54 |       assert final (a) else disable blk;   
+      |                             ^~~~~~~
+%Error: t/t_assert_deferred_act_bad.v:59:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
+                                           : ... note: In instance 't'
+   59 |     assert final (a) else return;   
+      |                           ^~~~~~
+%Error: Exiting due to
