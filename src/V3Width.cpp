@@ -7690,6 +7690,14 @@ class WidthVisitor final : public VNVisitor {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
                                         << pinDirection.prettyName()
                                         << "' port (IEEE 1800-2023 11.4.14)");
+            } else if (VN_IS(nodep->exprp(), NodeStream)
+                       && nodep->modVarp()->dtypep()->skipRefp()->isDynamicallySized()) {
+                nodep->exprp()->v3warn(E_UNSUPPORTED,
+                                       "Unsupported: Streaming concatenation connected to "
+                                       "dynamically sized port "
+                                           << nodep->modVarp()->prettyNameQ());
+                pushDeletep(nodep->exprp()->unlinkFrBack());
+                return;
             }
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             AstNodeDType* modDTypep = nodep->modVarp()->dtypep();

@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_stream_port_unsup.v:15:18: Unsupported: Streaming concatenation connected to dynamically sized port 'p'
+                                                 : ... note: In instance 't'
+   15 |   sub_q u_q (.p({>>{a, b}}), .n(n));
+      |                  ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_stream_port_unsup.v:16:22: Unsupported: Streaming concatenation connected to dynamically sized port 'p'
+                                                 : ... note: In instance 't'
+   16 |   sub_dyn u_dyn (.p({<<8{a, b}}));
+      |                      ^~
+%Error-UNSUPPORTED: t/t_stream_port_unsup.v:17:22: Unsupported: Streaming concatenation connected to dynamically sized port 'p'
+                                                 : ... note: In instance 't'
+   17 |   sub_out u_out (.p({>>{a, b}}));
+      |                      ^~
+%Error: Exiting due to
