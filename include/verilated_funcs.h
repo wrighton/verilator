@@ -3421,8 +3421,10 @@ inline void VL_UNPACK_UQ_W(int lbits, int rbits, VlUnpacked<QData, N_Depth>& q, 
 template <std::size_t N_Depth, std::size_t N_Words>
 inline void VL_UNPACK_UW_W(int lbits, int rbits, VlUnpacked<VlWide<N_Words>, N_Depth>& q,
                            WDataInP rwp, const int bit_offset = 0) {
-    for (size_t i = 0; i < N_Depth; ++i)
+    for (size_t i = 0; i < N_Depth; ++i) {
         VL_SEL_WWII(lbits, rbits, q[i], rwp, bit_offset + (N_Depth - 1 - i) * lbits, lbits);
+        q[i][VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);
+    }
 }
 
 // Return QData from double (numeric)
