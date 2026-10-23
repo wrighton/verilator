@@ -189,31 +189,31 @@ class UnrollGenVisitor final : public VNVisitor {
         m_forVarp->usedLoopIdx(true);
 
         AstNode* newbodysp = nullptr;
-        if (stmtsp) {
-            pushDeletep(stmtsp);  // Always cloned below.
-            size_t iterCount = 0;
-            const size_t iterLimit = v3Global.opt.unrollLimit();
-            // Implicit localparams are not referenced, except hierarchically, and hide the genvar
-            FileLine* const paramFlp = new FileLine{m_forVarp->fileline()};
-            paramFlp->modifyWarnOff(V3ErrorCode::UNUSEDPARAM, true);
-            paramFlp->modifyWarnOff(V3ErrorCode::VARHIDDEN, true);
-            while (true) {
-                UINFO(8, "      Looping " << loopValue);
-                V3Number res{nodep};
-                if (!simulateTree(condp, &loopValue, nullptr, res)) {
-                    nodep->v3error("Loop unrolling failed.");
-                    return false;
+        if (stmtsp) pushDeletep(stmtsp);  // Always cloned below.
+        size_t iterCount = 0;
+        const size_t iterLimit = v3Global.opt.unrollLimit();
+        // Implicit localparams are not referenced, except hierarchically, and hide the genvar
+        FileLine* const paramFlp = new FileLine{m_forVarp->fileline()};
+        paramFlp->modifyWarnOff(V3ErrorCode::UNUSEDPARAM, true);
+        paramFlp->modifyWarnOff(V3ErrorCode::VARHIDDEN, true);
+        while (true) {
+            UINFO(8, "      Looping " << loopValue);
+            V3Number res{nodep};
+            if (!simulateTree(condp, &loopValue, nullptr, res)) {
+                nodep->v3error("Loop unrolling failed.");
+                return false;
+            }
+            if (!res.isEqOne()) {
+                break;  // Done with the loop
+            } else {
+                if (++iterCount > iterLimit) {
+                    nodep->v3error("Unrolling generate loop took too long; probably this is "
+                                   "an infinite loop, otherwise set '--unroll-limit' above "
+                                   << iterLimit);
+                    break;
                 }
-                if (!res.isEqOne()) {
-                    break;  // Done with the loop
-                } else {
-                    if (++iterCount > iterLimit) {
-                        nodep->v3error("Unrolling generate loop took too long; probably this is "
-                                       "an infinite loop, otherwise set '--unroll-limit' above "
-                                       << iterLimit);
-                        break;
-                    }
 
+                if (stmtsp) {  // Else empty body, still check termination
                     // Replace iterator values with constant
                     AstNode* oneloopp = stmtsp->cloneTree(true);
                     AstConst* varValuep = new AstConst{nodep->fileline(), loopValue};
@@ -238,16 +238,16 @@ class UnrollGenVisitor final : public VNVisitor {
                         AstNode::addNext<AstNode, AstNode>(paramp, oneloopp), false};
                     VL_DO_DANGLING(pushDeletep(varValuep), varValuep);
                     newbodysp = AstNode::addNextNull(newbodysp, oneloopp);
-
-                    // loopValue += valInc
-                    const AstAssign* const incpassp = VN_AS(incp, Assign);
-                    V3Number newLoopValue{nodep};
-                    if (!simulateTree(incpassp->rhsp(), &loopValue, incpassp, newLoopValue)) {
-                        nodep->v3error("Loop unrolling failed");
-                        return false;
-                    }
-                    loopValue.opAssign(newLoopValue);
                 }
+
+                // loopValue += valInc
+                const AstAssign* const incpassp = VN_AS(incp, Assign);
+                V3Number newLoopValue{nodep};
+                if (!simulateTree(incpassp->rhsp(), &loopValue, incpassp, newLoopValue)) {
+                    nodep->v3error("Loop unrolling failed");
+                    return false;
+                }
+                loopValue.opAssign(newLoopValue);
             }
         }
         if (!newbodysp) {  // initp might have effects after the loop
