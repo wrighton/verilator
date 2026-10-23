@@ -26,7 +26,7 @@ module t;
   else $error("sequence failed");
   assert property (@(posedge clk) a ##1 b ##1 c) passes++;
   assert property (@(posedge clk) a ##1 b ##1 c);
-  // The failures of the attempts of an implication on one tick are not counted apart, with or
+  // The failures of the attempts of an implication on one tick are counted apart, with or
   // without 'else'
   assert property (@(posedge clk) x |-> y ##1 z) passes++;
   else $error("implication failed");

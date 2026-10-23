@@ -60,10 +60,11 @@ module t (
     end
     else if (cyc == 99) begin
       `checkd(fail1, ref_fail1);
-      `checkd(pass1, 87);
+      `checkd(pass1, op_fail1);
       `checkd(ref_fail1, 10);
       `checkd(op_fail1, 87);
       `checkd(pass2, ref_op_fail2);
+      `checkd(op_fail2, ref_op_fail2);
       $write("*-* All Finished *-*\n");
       $finish;
     end
