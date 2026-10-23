@@ -32,6 +32,10 @@ module t (
   int count_fail7 = 0;
   int count_fail8 = 0;
   int count_fail9 = 0;
+  int count_fail10 = 0;
+  int count_fail11 = 0;
+  int fail_cyc10 = 0;
+  int fail_cyc11 = 0;
 
   // Test: a[->2] |-> b (overlapping implication, 2 non-consecutive occurrences)
   assert property (@(posedge clk) a [-> 2] |-> b)
@@ -69,6 +73,23 @@ module t (
   assert property (@(posedge clk) a [-> 2: 2] |-> b)
   else count_fail9 <= count_fail9 + 1;
 
+  // Tests 10-11: after a fixed prefix the first occurrence may be on the entry tick of the
+  // repetition, here one tick after s; as a control, it is one tick later in test 11
+  wire s10 = cyc == 20;
+  wire a10 = cyc == 21;
+  wire s11 = cyc == 40;
+  wire a11 = cyc == 42;
+  assert property (@(posedge clk) s10 ##1 a10 [-> 1] ##1 1'b1 |-> 1'b0)
+  else begin
+    count_fail10 <= count_fail10 + 1;
+    fail_cyc10 <= $sampled(cyc);
+  end
+  assert property (@(posedge clk) s11 ##1 a11 [-> 1] ##1 1'b1 |-> 1'b0)
+  else begin
+    count_fail11 <= count_fail11 + 1;
+    fail_cyc11 <= $sampled(cyc);
+  end
+
   always @(posedge clk) begin
 `ifdef TEST_VERBOSE
     $write("[%0t] cyc==%0d crc=%x a=%b b=%b c=%b d=%b\n", $time, cyc, crc, a, b, c, d);
@@ -89,6 +110,10 @@ module t (
       `checkd(count_fail7, 20);
       `checkd(count_fail8, 20);
       `checkd(count_fail9, count_fail1);
+      `checkd(count_fail10, 1);
+      `checkd(fail_cyc10, 22);
+      `checkd(count_fail11, 1);
+      `checkd(fail_cyc11, 43);
       $write("*-* All Finished *-*\n");
       $finish;
     end

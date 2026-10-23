@@ -950,14 +950,16 @@ class SvaNfaBuilder final {
 
         AstVar* const hoistVarp = tryHoistSampled(exprp, flp, 2);
 
-        // The first guardedEdge is the ##1 before waiting for a match. In the wait state, false
-        // takes the clocked self-loop, while true takes the zero-delay guardedLink on that tick.
+        // The first occurrence may be on the entry tick (IEEE 1800-2023 16.9.2). From the
+        // entry and from the wait state, false takes a clocked edge to the wait state, while
+        // true takes the zero-delay guardedLink on that tick.
         SvaStateVertex* const waitVtxp = scopedCreateVertex();
-        guardedEdge(entryVtxp, waitVtxp, flp);
-        guardedEdge(waitVtxp, waitVtxp,
-                    new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
         SvaStateVertex* currentp = scopedCreateVertex();
-        guardedLink(waitVtxp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        for (SvaStateVertex* const fromp : {entryVtxp, waitVtxp}) {
+            guardedEdge(fromp, waitVtxp,
+                        new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)}, flp);
+            guardedLink(fromp, currentp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
+        }
 
         if (minN > 1) {
             SvaStateVertex* const ringVtxp = addDelayChain(
