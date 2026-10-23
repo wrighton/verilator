@@ -8592,6 +8592,16 @@ class WidthVisitor final : public VNVisitor {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
                                         << pinDirection.prettyName()
                                         << "' port (IEEE 1800-2023 11.4.14)");
+            } else if (VN_IS(nodep->exprp(), NodeStream)
+                       && (VN_IS(nodep->modVarp()->dtypep()->skipRefp(), AssocArrayDType)
+                           || VN_IS(nodep->modVarp()->dtypep()->skipRefp(), WildcardArrayDType))) {
+                // Not a bit-stream type (IEEE 1800-2023 6.24.3)
+                nodep->exprp()->v3error("Streaming concatenation cannot be connected to "
+                                        "associative array port "
+                                        << nodep->modVarp()->prettyNameQ()
+                                        << " (IEEE 1800-2023 11.4.14).");
+                pushDeletep(nodep->exprp()->unlinkFrBack());
+                return;
             }
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             // Outputs are continuous assignments; inouts are transistor connections (23.3.3).
