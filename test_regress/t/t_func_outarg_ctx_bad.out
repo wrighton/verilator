@@ -1,0 +1,23 @@
+%Error: t/t_func_outarg_ctx_bad.v:33:14: Function 'fout' with output, inout or ref argument 'o' is called in a continuous assignment (IEEE 1800-2023 13.4)
+   33 |   assign x = fout(y);   
+      |              ^~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_func_outarg_ctx_bad.v:34:19: Function 'finout' with output, inout or ref argument 'o' is called in a continuous assignment (IEEE 1800-2023 13.4)
+   34 |   wire [31:0] w = finout(y);   
+      |                   ^~~~~~
+%Error: t/t_func_outarg_ctx_bad.v:37:13: Function 'fref' with output, inout or ref argument 'r' is called in an instance connection (IEEE 1800-2023 13.4)
+   37 |   sub u (.a(fref(y)));   
+      |             ^~~~
+%Error: t/t_func_outarg_ctx_bad.v:41:7: Function 'fout' with output, inout or ref argument 'o' is called in an event expression (IEEE 1800-2023 13.4)
+   41 |     @(fout(y));   
+      |       ^~~~
+%Error: t/t_func_outarg_ctx_bad.v:42:16: Function 'finout' with output, inout or ref argument 'o' is called in a procedural continuous assignment (IEEE 1800-2023 13.4)
+   42 |     assign x = finout(z);   
+      |                ^~~~~~
+%Error: t/t_func_outarg_ctx_bad.v:43:15: Function 'fref' with output, inout or ref argument 'r' is called in a procedural continuous assignment (IEEE 1800-2023 13.4)
+   43 |     force z = fref(y);   
+      |               ^~~~
+%Error: t/t_func_outarg_ctx_bad.v:48:20: Function 'fref' with output, inout or ref argument 'r' is called in an event expression (IEEE 1800-2023 13.4)
+   48 |   always @(posedge fref(y)) z = 1;   
+      |                    ^~~~
+%Error: Exiting due to

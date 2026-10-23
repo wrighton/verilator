@@ -40,6 +40,8 @@ class LinkLValueVisitor final : public VNVisitor {
     bool m_inFunc = false;  // Set if inside AstNodeFTask
     bool m_inInitialStatic = false;  // Set if inside AstInitialStatic
     bool m_inInitialStaticStmt = false;  // Set if inside AstInitialStaticStmt
+    // Non-procedural context, e.g. "a continuous assignment", if under one
+    const char* m_nonProcContextp = nullptr;
     VAccess m_setRefLvalue;  // Set VarRefs to lvalues for pin assignments
 
     // VISITORS
@@ -114,6 +116,12 @@ class LinkLValueVisitor final : public VNVisitor {
         VL_RESTORER(m_setRefLvalue);
         VL_RESTORER(m_setContinuously);
         VL_RESTORER(m_setStrengthSpecified);
+        VL_RESTORER(m_nonProcContextp);
+        if (VN_IS(nodep, AssignW)) {
+            m_nonProcContextp = "a continuous assignment";
+        } else if (VN_IS(nodep, AssignCont) || VN_IS(nodep, AssignForce)) {
+            m_nonProcContextp = "a procedural continuous assignment";
+        }
         {
             m_setRefLvalue = VAccess::WRITE;
             m_setContinuously = VN_IS(nodep, AssignW);
@@ -154,6 +162,16 @@ class LinkLValueVisitor final : public VNVisitor {
                 }
             }
         }
+    }
+    void visit(AstCell* nodep) override {
+        VL_RESTORER(m_nonProcContextp);
+        m_nonProcContextp = "an instance connection";
+        iterateChildren(nodep);
+    }
+    void visit(AstSenItem* nodep) override {
+        VL_RESTORER(m_nonProcContextp);
+        m_nonProcContextp = "an event expression";
+        iterateChildren(nodep);
     }
     void visit(AstAlias* nodep) override {
         VL_RESTORER(m_setRefLvalue);
@@ -355,6 +373,12 @@ class LinkLValueVisitor final : public VNVisitor {
             if (!argp) continue;
             AstNodeExpr* const pinp = argp->exprp();
             if (!pinp) continue;
+            if (m_nonProcContextp && portp->direction().isWritable()) {
+                nodep->v3error("Function "
+                               << nodep->prettyNameQ() << " with output, inout or ref argument "
+                               << portp->prettyNameQ() << " is called in " << m_nonProcContextp
+                               << " (IEEE 1800-2023 13.4)");
+            }
             VL_RESTORER(m_setRefLvalue);
             m_setRefLvalue = portp->direction().pinAccess();
             iterate(pinp);
