@@ -315,6 +315,11 @@ static AstNodeStmt* newIfAssertFailOn(AstNodeStmt* bodyp, VAssertDirectiveType d
 //######################################################################
 // NFA Builder
 
+// True if a node has a multi-cycle sequence or property expression in it
+static bool hasMultiCycleExpr(const AstNode* nodep) {
+    return nodep->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); });
+}
+
 class SvaNfaBuilder final {
     SvaGraph& m_graph;  // NFA graph being built
     AstNodeModule* const m_modp;  // Module to receive hoisted sampled-prop temps
@@ -1034,6 +1039,20 @@ class SvaNfaBuilder final {
         return {mergeVtxp, nullptr, {}};
     }
 
+    // Build `b and p` at the end of a property, with b boolean
+    BuildResult buildBoolAndProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
+                                 FileLine* flp) {
+        // It fails at once when b fails and otherwise exactly when p does (IEEE 1800-2023
+        // 16.12.5).
+        SvaStateVertex* const propEntryp = scopedCreateVertex();
+        SvaTransEdge* const edgep
+            = guardedLink(entryVtxp, propEntryp, sampled(boolp->cloneTreePure(false)), flp);
+        edgep->m_rejectOnFail = true;
+        VL_RESTORER(m_wantBoolLeaf);
+        m_wantBoolLeaf = true;
+        return buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
+    }
+
     // Build done-latch combiner for SAnd/SIntersect (IEEE 1800-2023 16.9.5).
     BuildResult buildAndCombiner(AstNodeExpr* lhsExprp, AstNodeExpr* rhsExprp,
                                  SvaStateVertex* entryVtxp, FileLine* flp) {
@@ -1194,16 +1213,16 @@ class SvaNfaBuilder final {
             }
             return flattenFixedSeq(sexprp->exprp(), baseOffset + preLen + delayCycles, out);
         }
-        if (nodep->isMultiCycleSva()) return false;
+        if (!isPlainBoolean(nodep)) return false;
         out[baseOffset].push_back(nodep);
         return true;
     }
 
-    // Conjoin two equal-length fixed sequences into one: at each clock offset
-    // AND the boolean checks of both operands (IEEE 1800-2023 16.9.6 -- both
-    // operands match the same window). Returns null if either operand is not a
-    // plain fixed sequence of boolean leaves.
+    // Conjoin two fixed-length sequences starting together into one sequence, or null
     static AstNodeExpr* conjoinFixedSeqs(AstNodeExpr* lhsp, AstNodeExpr* rhsp, FileLine* flp) {
+        // At each clock offset AND the boolean checks of both operands. The result ends with the
+        // longer operand, which is exact for 'and' (IEEE 1800-2023 16.9.5), and for 'intersect'
+        // of equal lengths (16.9.6). Null if an operand is not a fixed sequence of boolean leaves.
         std::map<int, std::vector<AstNodeExpr*>> checks;
         if (!flattenFixedSeq(lhsp, 0, checks) || !flattenFixedSeq(rhsp, 0, checks)) return nullptr;
         if (checks.empty()) return nullptr;
@@ -1658,6 +1677,24 @@ public:
                                 wantBoolLeaf);
         }
         if (AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            // Both operands start together (IEEE 1800-2023 16.9.5): with fixed lengths the
+            // 'and' holds exactly when every check of both operands holds
+            if (!andp->propertyControl()) {
+                if (AstNodeExpr* const conjp
+                    = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline())) {
+                    return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
+                }
+                if (wantBoolLeaf) {
+                    if (isPlainBoolean(andp->lhsp())) {
+                        return buildBoolAndProp(andp->lhsp(), andp->rhsp(), entryVtxp,
+                                                andp->fileline());
+                    }
+                    if (isPlainBoolean(andp->rhsp())) {
+                        return buildBoolAndProp(andp->rhsp(), andp->lhsp(), entryVtxp,
+                                                andp->fileline());
+                    }
+                }
+            }
             return buildAndCombiner(andp->lhsp(), andp->rhsp(), entryVtxp, andp->fileline());
         }
         if (AstSIntersect* const intp = VN_CAST(nodep, SIntersect)) {
@@ -1698,6 +1735,12 @@ public:
         }
         if (AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return buildUntil(untilp, entryVtxp, isTopLevelStep);
+        }
+        // A 'not' of a multi-cycle operand is no boolean leaf; at the top it is unwrapped
+        if (VN_IS(nodep, LogNot) && hasMultiCycleExpr(nodep)) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'not' of a multi-cycle operand inside "
+                                         "another property operator");
+            return BuildResult::failWithError();
         }
         // Boolean leaf (including LogAnd): return as finalCond
         return {entryVtxp, nodep, {}};
@@ -3070,13 +3113,6 @@ class AssertNfaVisitor final : public VNVisitor {
                 }
             });
         }
-    }
-
-    static bool hasMultiCycleExpr(const AstNode* nodep) {
-        return nodep->exists([](const AstNode* np) {
-            if (const auto* const ep = VN_CAST(np, NodeExpr)) return ep->isMultiCycleSva();
-            return false;
-        });
     }
 
     static VPropStrength effectiveAssertPropStrength(const AstPropSpec* const propSpecp) {
