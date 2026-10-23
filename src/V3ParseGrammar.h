@@ -74,6 +74,7 @@ public:
     bool allTracingOn(const FileLine* fl) const {
         return v3Global.opt.trace() && m_tracingParse && fl->tracingOn();
     }
+    void checkTimeunits(const AstNodeModule* modp, const AstNode* itemsp) VL_MT_DISABLED;
     AstRange* scrubRange(AstNodeRange* rangep) VL_MT_DISABLED;
     AstRange* scrubRangeMulti(AstNodeRange* rangep) VL_MT_DISABLED;
     AstNodePreSel* scrubSel(AstNodeExpr* fromp, AstNodePreSel* selp) VL_MT_DISABLED;

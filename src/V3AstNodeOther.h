@@ -1814,19 +1814,21 @@ public:
 };
 class AstPragma final : public AstNode {
     const VPragmaType m_pragType;  // Type of pragma
-    const VTimescale m_timescale;  // For TIMEUNIT_SET
+    const VTimescale m_timescale;  // For TIMEUNIT_SET/TIMEPRECISION_SET, declared value
 public:
     // Pragmas don't result in any output code, they're just flags that affect
     // other processing in verilator.
     AstPragma(FileLine* fl, VPragmaType pragType)
         : ASTGEN_SUPER_Pragma(fl)
         , m_pragType{pragType} {
-        UASSERT_OBJ(pragType != VPragmaType::TIMEUNIT_SET, fl, "Should use other constructor");
+        UASSERT_OBJ(!isTimescale(), fl, "Should use other constructor");
     }
-    AstPragma(FileLine* fl, const VTimescale& timescale)
+    AstPragma(FileLine* fl, VPragmaType pragType, const VTimescale& timescale)
         : ASTGEN_SUPER_Pragma(fl)
-        , m_pragType{VPragmaType::TIMEUNIT_SET}
-        , m_timescale{timescale} {}
+        , m_pragType{pragType}
+        , m_timescale{timescale} {
+        UASSERT_OBJ(isTimescale(), fl, "Should use other constructor");
+    }
     ASTGEN_MEMBERS_AstPragma;
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
@@ -1836,6 +1838,10 @@ public:
         return pragType() == VN_DBG_AS(samep, Pragma)->pragType();
     }
     VTimescale timescale() const { return m_timescale; }
+    bool isTimescale() const {
+        return m_pragType == VPragmaType::TIMEUNIT_SET
+               || m_pragType == VPragmaType::TIMEPRECISION_SET;
+    }
 };
 class AstPropSpec final : public AstNode {
     // A clocked property

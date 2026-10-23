@@ -17,8 +17,8 @@ module from_unit;
 endmodule
 
 module t;
-  from_unit from_unit ();
   timeunit 100ps;
+  from_unit from_unit ();
   initial begin
     show();
     from_unit.show();

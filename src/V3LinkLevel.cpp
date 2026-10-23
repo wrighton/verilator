@@ -103,8 +103,10 @@ void V3LinkLevel::timescaling(const ModVec& mods) {
             if (AstPragma* pragp = VN_CAST(childp, Pragma)) {
                 if (pragp->pragType() == VPragmaType::TIMEUNIT_SET) {
                     modp->timeunit(pragp->timescale());
-                    VL_DO_DANGLING(pragp->unlinkFrBack()->deleteTree(), pragp);
                 }
+                // Precision was merged into the netlist when parsed
+                if (pragp->isTimescale())
+                    VL_DO_DANGLING(pragp->unlinkFrBack()->deleteTree(), pragp);
             }
         }
     }

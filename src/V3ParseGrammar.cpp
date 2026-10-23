@@ -106,6 +106,43 @@ AstAssignW* V3ParseGrammar::createSupplyExpr(FileLine* fileline, const string& n
     return assignp;
 }
 
+void V3ParseGrammar::checkTimeunits(const AstNodeModule* modp, const AstNode* itemsp) {
+    // IEEE 1800-2023 3.14.2.2: timeunit and timeprecision declarations precede all other items
+    // of a design element's body, and any later repeat must match the earlier declaration.
+    // Checked here as only the parser knows where the header ends and the body begins.
+    VTimescale unit{VTimescale::NONE};
+    VTimescale prec{VTimescale::NONE};
+    bool itemSeen = false;
+    for (const AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
+        const AstPragma* const pragp = VN_CAST(nodep, Pragma);
+        if (!pragp) {
+            itemSeen = true;
+            continue;
+        }
+        if (!pragp->isTimescale()) continue;
+        const bool isUnit = pragp->pragType() == VPragmaType::TIMEUNIT_SET;
+        const char* const kwd = isUnit ? "timeunit" : "timeprecision";
+        VTimescale& declared = isUnit ? unit : prec;
+        if (!declared.isNone()) {
+            if (!(pragp->timescale() == declared)) {
+                pragp->v3error(kwd << " '" << pragp->timescale() << "' does not match previous "
+                                   << kwd << " '" << declared << "' (IEEE 1800-2023 3.14.2.2)");
+            }
+            continue;
+        }
+        if (itemSeen) {
+            pragp->v3error(kwd << " declaration must precede other items in the "
+                               << modp->verilogKwd() << " (IEEE 1800-2023 3.14.2.2)");
+        }
+        declared = pragp->timescale();
+        if (!unit.isNone() && !prec.isNone() && unit < prec) {
+            pragp->v3error("timeunit '" << unit << "' must be greater than or equal to"
+                                        << " timeprecision '" << prec
+                                        << "' (IEEE 1800-2023 3.14)");
+        }
+    }
+}
+
 AstRange* V3ParseGrammar::scrubRangeMulti(AstNodeRange* nrangep) {
     // Remove any UnsizedRange's from list; preserves multi-dim chain via nextp().
     for (AstNodeRange *nodep = nrangep, *nextp; nodep; nodep = nextp) {

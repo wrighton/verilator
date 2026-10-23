@@ -1077,6 +1077,7 @@ timeunits_declaration<nodep>:   // ==IEEE: timeunits_declaration
 package_declaration:            // ==IEEE: package_declaration
                 packageFront package_itemListE yENDPACKAGE endLabelE
                         { $1->modTrace(GRAMMARP->allTracingOn($1->fileline()));  // Stash for implicit wires, etc
+                          GRAMMARP->checkTimeunits($1, $2);
                           if ($2) $1->addStmtsp($2);
                           GRAMMARP->endLabel($<fl>4, $1, $4); }
         ;
@@ -1211,6 +1212,7 @@ module_declaration:             // ==IEEE: module_declaration
                           $1->hasParameterList($<flag>2);
                           if ($2) $1->addStmtsp($2);
                           if ($3) $1->addStmtsp($3);
+                          GRAMMARP->checkTimeunits($1, $5);
                           if ($5) $1->addStmtsp($5);
                           GRAMMARP->endLabel($<fl>7, $1, $7); }
         |       udpFront portsStarE ';'
@@ -1535,6 +1537,7 @@ interface_declaration:          // IEEE: interface_declaration + interface_nonan
                         interface_itemListE yENDINTERFACE endLabelE
                         { if ($2) $1->addStmtsp($2);
                           if ($3) $1->addStmtsp($3);
+                          GRAMMARP->checkTimeunits($1, $5);
                           if ($5) $1->addStmtsp($5);
                           $1->hasParameterList($<flag>2); }
         |       yEXTERN intFront parameter_port_listE portsStarE ';'
@@ -1626,6 +1629,7 @@ program_declaration:            // IEEE: program_declaration + program_nonansi_h
                           $1->hasParameterList($<flag>2);
                           if ($2) $1->addStmtsp($2);
                           if ($3) $1->addStmtsp($3);
+                          GRAMMARP->checkTimeunits($1, $5);
                           if ($5) $1->addStmtsp($5);
                           GRAMMARP->endLabel($<fl>7, $1, $7); }
         |       yEXTERN pgmFront parameter_port_listE portsStarE ';'
