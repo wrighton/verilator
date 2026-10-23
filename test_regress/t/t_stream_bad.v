@@ -27,6 +27,8 @@ module t;
   // so a stream is not valid
   logic [31:0] ref_var;
   sub_ref i_sub_ref (.r({>>{ref_var}}));
+  sub_assoc i_sub_assoc (.p({>>{ref_var}}));
+  sub_wild i_sub_wild (.p({>>{ref_var}}));
 
   // Each element of a dynamically sized stream source is wider than the fixed size target
   typedef byte byte_q_t[$];
@@ -53,5 +55,15 @@ endmodule
 
 module sub_ref (
     ref logic [31:0] r
+);
+endmodule
+
+module sub_assoc (
+    input byte p[int]
+);
+endmodule
+
+module sub_wild (
+    input byte p[*]
 );
 endmodule

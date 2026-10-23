@@ -39,20 +39,28 @@
                               : ... note: In instance 't'
    29 |   sub_ref i_sub_ref (.r({>>{ref_var}}));
       |                          ^~
-%Error: t/t_stream_bad.v:41:12: Target fixed size variable (4 bits) is narrower than each element of the stream (8 bits) (IEEE 1800-2023 11.4.14)
+%Error: t/t_stream_bad.v:30:30: Streaming concatenation cannot be connected to associative array port 'p' (IEEE 1800-2023 11.4.14)
                               : ... note: In instance 't'
-   41 |     narrow = {>>{byte_q}};
-      |            ^
-%Error: t/t_stream_bad.v:42:14: Target fixed size variable (8 bits) is narrower than each element of the stream (32 bits) (IEEE 1800-2023 11.4.14)
+   30 |   sub_assoc i_sub_assoc (.p({>>{ref_var}}));
+      |                              ^~
+%Error: t/t_stream_bad.v:31:28: Streaming concatenation cannot be connected to associative array port 'p' (IEEE 1800-2023 11.4.14)
                               : ... note: In instance 't'
-   42 |     one_byte = {>>{int_q}};
-      |              ^
+   31 |   sub_wild i_sub_wild (.p({>>{ref_var}}));
+      |                            ^~
 %Error: t/t_stream_bad.v:43:12: Target fixed size variable (4 bits) is narrower than each element of the stream (8 bits) (IEEE 1800-2023 11.4.14)
                               : ... note: In instance 't'
-   43 |     narrow = {<<4{byte_d}};
+   43 |     narrow = {>>{byte_q}};
       |            ^
-%Error: t/t_stream_bad.v:44:14: Target fixed size variable (16 bits) is narrower than each element of the stream (32 bits) (IEEE 1800-2023 11.4.14)
+%Error: t/t_stream_bad.v:44:14: Target fixed size variable (8 bits) is narrower than each element of the stream (32 bits) (IEEE 1800-2023 11.4.14)
                               : ... note: In instance 't'
-   44 |     narrow16 = {>>{byte4_q}};
+   44 |     one_byte = {>>{int_q}};
+      |              ^
+%Error: t/t_stream_bad.v:45:12: Target fixed size variable (4 bits) is narrower than each element of the stream (8 bits) (IEEE 1800-2023 11.4.14)
+                              : ... note: In instance 't'
+   45 |     narrow = {<<4{byte_d}};
+      |            ^
+%Error: t/t_stream_bad.v:46:14: Target fixed size variable (16 bits) is narrower than each element of the stream (32 bits) (IEEE 1800-2023 11.4.14)
+                              : ... note: In instance 't'
+   46 |     narrow16 = {>>{byte4_q}};
       |              ^
 %Error: Exiting due to
