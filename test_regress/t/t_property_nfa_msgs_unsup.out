@@ -53,6 +53,14 @@
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:71:13: Unsupported: Bounded ranged cycle delay in a sequence prefix
    71 |       a |-> ##[1:2] (a | b | c | d | e) ##1 (a | b | c | d | e));
       |             ^~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:75:43: Unsupported: multi-cycle antecedent of an implication in a negated property
+                                                       : ... note: In instance 't'
+   75 |   assert property (@(posedge clk) not ((a ##1 b) |=> c));
+      |                                           ^~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:76:43: Unsupported: implication inside another property operator in a negated property
+                                                       : ... note: In instance 't'
+   76 |   assert property (@(posedge clk) not ((a |=> b) or c));
+      |                                           ^~~
 %Error: t/t_property_nfa_msgs_unsup.v:56:22: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                            : ... note: In instance 't'
                                            : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context

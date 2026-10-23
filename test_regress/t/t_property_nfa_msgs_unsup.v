@@ -70,4 +70,9 @@ module t (
   assert property (@(posedge clk)
       a |-> ##[1:2] (a | b | c | d | e) ##1 (a | b | c | d | e));
 
+  // A negated implication's vacuous success is tracked only at the end of the property
+  // and for an antecedent decided at the start of the attempt
+  assert property (@(posedge clk) not ((a ##1 b) |=> c));
+  assert property (@(posedge clk) not ((a |=> b) or c));
+
 endmodule
