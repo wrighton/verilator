@@ -2621,6 +2621,22 @@ class LinkDotParamVisitor final : public VNVisitor {
         }
         return false;
     }
+    // Return if a defparam path starts with a generate block, and also resolves without it
+    bool defParamGenAlt(AstDefParam* nodep, const string& path) {
+        // Only a block not containing the defparam; the path then necessarily resolves elsewhere.
+        // Which applies is known once V3Param knows if the block is elaborated.
+        VSymEnt* const defSymp = m_statep->getNodeSym(nodep);
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        const VSymEnt* const genSymp = m_statep->findDotted(
+            nodep->fileline(), defSymp, path.substr(0, path.find('.')), baddot, okSymp, true);
+        if (!VN_IS(genSymp->nodep(), GenBlock)) return false;
+        if (isAboveSym(genSymp, defSymp)) return false;
+        // Continue the upwards search above the scope containing the generate block
+        return m_statep->findDotted(nodep->fileline(), genSymp->parentp()->parentp(), path, baddot,
+                                    okSymp, true)
+               != nullptr;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
@@ -2725,6 +2741,7 @@ class LinkDotParamVisitor final : public VNVisitor {
                                                 VString::dot(scopePath, ".", name), exprp};
                 pinp->param(true);
                 pinp->paramPath(anchoredPath);
+                pinp->defparamGenAlt(defParamGenAlt(nodep, path));
                 pinp->modVarp(scopedVarp);
                 cellp->addParamsp(pinp);
                 prevr = DefParamPin{pinp, cellSymp, exprp ? nullptr : nodep};
