@@ -2221,13 +2221,29 @@ class SvaNfaLowering final {
             new AstAlways{c.flp, VAlwaysKwd::ALWAYS, c.senTreep->cloneTree(false), ackp});
     }
 
+    // Add the threads of a terminal Link that reach their final check this tick
+    static void addTerminalCount(LowerCtx& c, AstNodeExpr*& totalCountp, const SvaTransEdge& tedge,
+                                 AstNodeExpr* const countp) {
+        // Threads another check of the vertex rejects are counted by that check instead.
+        UASSERT_OBJ(!tedge.m_condp, tedge.fromVtxp(),
+                    "Conditional terminal Link only comes from a mid-window source");
+        AstNodeExpr* enablep = newRequiredStepsHoldp(c, tedge.fromVtxp());
+        if (AstNodeExpr* const rejectCondp = newThroughoutRejectCondp(c, tedge.fromVtxp())) {
+            AstNodeExpr* const notRejectp = new AstLogNot{c.flp, rejectCondp};
+            enablep = enablep ? new AstLogAnd{c.flp, enablep, notRejectp} : notRejectp;
+        }
+        totalCountp = addCountp(c.flp, totalCountp, countp, enablep);
+    }
+
     // Phase 3/3a/3b: Compute terminal match/reject signals, required-step reject,
     // throughout-drop reject; clean up intermediate state signals.
     // Phase 3: terminalActive and rejectBase from Links to matchVertex.
     // Builder only adds Links (non-clocked) to matchVertex via addLink in
     // wireMatchAndMidSources. For cover sequence, also count each end-of-match
     // so the action can be replayed without unrolling endpoints.
-    void computeTerminalMatchAndReject(LowerCtx& c, SignalSet& sigs, const bool needMatchCount) {
+    // If terminalCountpp is set, also count the threads whose final check decides this tick.
+    void computeTerminalMatchAndReject(LowerCtx& c, SignalSet& sigs, const bool needMatchCount,
+                                       AstNodeExpr** const terminalCountpp) {
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
             if (tedgep->toVtxp() != c.graph.m_matchVertexp) continue;
             SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
@@ -2259,12 +2275,21 @@ class SvaNfaLowering final {
                     = orExprs(c.flp, sigs.terminalActivep, srcSigp->cloneTreePure(false));
                 // reject |= (wrapped || idx == size - 1) && head && final_condition;
                 AstNodeExpr* expireContribp = delayRingOutputCount(c.flp, fromVtxp);
+                if (terminalCountpp) {
+                    addTerminalCount(c, *terminalCountpp, *tedgep,
+                                     expireContribp->cloneTreePure(false));
+                }
                 expireContribp = andCond(c.flp, expireContribp, tedgep->m_condp);
                 sigs.rejectBasep = orExprs(c.flp, sigs.rejectBasep, expireContribp);
                 VL_DO_DANGLING(srcSigp->deleteTree(), srcSigp);
             } else if (fromVtxp->m_isUnbounded || fromVtxp->m_isAndCombiner) {
                 sigs.terminalActivep = orExprs(c.flp, sigs.terminalActivep, srcSigp);
             } else {
+                if (terminalCountpp) {
+                    addTerminalCount(
+                        c, *terminalCountpp, *tedgep,
+                        new AstExtend{c.flp, srcSigp->cloneTreePure(false), m_u32DTypep->width()});
+                }
                 sigs.terminalActivep
                     = orExprs(c.flp, sigs.terminalActivep, srcSigp->cloneTreePure(false));
                 sigs.rejectBasep = orExprs(c.flp, sigs.rejectBasep, srcSigp);
@@ -2287,6 +2312,58 @@ class SvaNfaLowering final {
         return addCountp(c.flp, nullptr, activeThreadCountp, enablep);
     }
 
+    // Condition under which a rejectOnFail Link keeps its source threads
+    static AstNodeExpr* newRequiredStepCondp(LowerCtx& c, const SvaTransEdge& tedge) {
+        if (!tedge.m_condVtxp) return tedge.m_condp->cloneTreePure(false);
+        UASSERT_OBJ(tedge.m_condVtxp->datap()->stateSigp, tedge.m_condVtxp,
+                    "rejectOnFail condVtxp missing stateSig");
+        AstNodeExpr* const condp = tedge.m_condVtxp->datap()->stateSigp->cloneTreePure(false);
+        if (!tedge.m_condp) return condp;
+        return new AstLogOr{c.flp, condp, tedge.m_condp->cloneTreePure(false)};
+    }
+    // Condition under which every rejectOnFail Link leaving a vertex keeps its threads
+    static AstNodeExpr* newRequiredStepsHoldp(LowerCtx& c, const SvaStateVertex* const vtxp) {
+        // Or nullptr if there is none.
+        // A thread such a Link rejects is counted by that Link, so the other checks of the vertex
+        // count only the threads kept here.
+        AstNodeExpr* holdp = nullptr;
+        for (const V3GraphEdge& edger : vtxp->outEdges()) {
+            const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
+            if (!tedger.m_rejectOnFail) continue;
+            AstNodeExpr* const condp = newRequiredStepCondp(c, tedger);
+            holdp = holdp ? new AstLogAnd{c.flp, holdp, condp} : condp;
+        }
+        return holdp;
+    }
+    // Condition rejecting a vertex's threads on a throughout drop or abort, or nullptr
+    static AstNodeExpr* newThroughoutRejectCondp(LowerCtx& c, const SvaStateVertex* const vtxp) {
+        if (vtxp->m_throughoutConds.empty() && !vtxp->m_abortRejectp) return nullptr;
+        AstNodeExpr* guardp = nullptr;
+        for (AstNodeExpr* const cp : vtxp->m_throughoutConds) {
+            AstNodeExpr* const sp = sampled(cp->cloneTreePure(false));
+            guardp = guardp ? static_cast<AstNodeExpr*>(new AstLogAnd{c.flp, guardp, sp}) : sp;
+        }
+        if (vtxp->m_abortRejectp) {
+            AstNodeExpr* const notAbortp
+                = new AstLogNot{c.flp, sampled(vtxp->m_abortRejectp->cloneTreePure(false))};
+            guardp = guardp ? static_cast<AstNodeExpr*>(new AstLogAnd{c.flp, guardp, notAbortp})
+                            : notAbortp;
+        }
+        AstNodeExpr* rejectCondp = new AstLogNot{c.flp, guardp};
+        if (vtxp->m_abortClearp) {
+            // Any abort clears the ring. Accept aborts suppress a simultaneous guard failure;
+            // reject aborts are restored below so they still force rejection.
+            AstNodeExpr* const notAbortClearp
+                = new AstLogNot{c.flp, sampled(vtxp->m_abortClearp->cloneTreePure(false))};
+            rejectCondp = new AstLogAnd{c.flp, rejectCondp, notAbortClearp};
+            if (vtxp->m_abortRejectp) {
+                rejectCondp = new AstLogOr{c.flp, rejectCondp,
+                                           sampled(vtxp->m_abortRejectp->cloneTreePure(false))};
+            }
+        }
+        return rejectCondp;
+    }
+
     // Phase 3b: Throughout-drop and ring-wide abort rejection.
     void computeThroughoutReject(LowerCtx& c, SignalSet& sigs, const bool needThreadFailCount) {
         for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
@@ -2305,34 +2382,14 @@ class SvaNfaLowering final {
                             "Throughout-conds vertex missing state representation");
                 stateExprp = vtxp->datap()->stateSigp->cloneTreePure(false);
             }
-            AstNodeExpr* guardp = nullptr;
-            for (AstNodeExpr* const cp : conds) {
-                AstNodeExpr* const sp = sampled(cp->cloneTreePure(false));
-                guardp = guardp ? static_cast<AstNodeExpr*>(new AstLogAnd{c.flp, guardp, sp}) : sp;
-            }
-            if (vtxp->m_abortRejectp) {
-                AstNodeExpr* const notAbortp
-                    = new AstLogNot{c.flp, sampled(vtxp->m_abortRejectp->cloneTreePure(false))};
-                guardp = guardp
-                             ? static_cast<AstNodeExpr*>(new AstLogAnd{c.flp, guardp, notAbortp})
-                             : notAbortp;
-            }
-            AstNodeExpr* rejectCondp = new AstLogNot{c.flp, guardp};
-            if (vtxp->m_abortClearp) {
-                // Any abort clears the ring. Accept aborts suppress a simultaneous guard failure;
-                // reject aborts are restored below so they still force rejection.
-                AstNodeExpr* const notAbortClearp
-                    = new AstLogNot{c.flp, sampled(vtxp->m_abortClearp->cloneTreePure(false))};
-                rejectCondp = new AstLogAnd{c.flp, rejectCondp, notAbortClearp};
-                if (vtxp->m_abortRejectp) {
-                    rejectCondp = new AstLogOr{
-                        c.flp, rejectCondp, sampled(vtxp->m_abortRejectp->cloneTreePure(false))};
-                }
-            }
+            AstNodeExpr* const rejectCondp = newThroughoutRejectCondp(c, vtxp);
             if (needThreadFailCount) {
-                AstNodeExpr* const contributionp
-                    = newThroughoutThreadFailCountp(c, vtxp->datap()->delayRingLiveCountVarp,
-                                                    stateExprp, rejectCondp->cloneTreePure(false));
+                AstNodeExpr* countCondp = rejectCondp->cloneTreePure(false);
+                if (AstNodeExpr* const holdp = newRequiredStepsHoldp(c, vtxp)) {
+                    countCondp = new AstLogAnd{c.flp, countCondp, holdp};
+                }
+                AstNodeExpr* const contributionp = newThroughoutThreadFailCountp(
+                    c, vtxp->datap()->delayRingLiveCountVarp, stateExprp, countCondp);
                 sigs.threadFailCountp = addCountp(c.flp, sigs.threadFailCountp, contributionp);
                 if (vtxp->m_abortRejectp && vtxp->m_delayRingAdvanceCondp) {
                     // An advancing ring thread also occupies its same-tick match vertex in the
@@ -2352,10 +2409,20 @@ class SvaNfaLowering final {
     }
 
     SignalSet computeSignals(LowerCtx& c, const bool needThreadFailCount,
-                             const bool needThroughoutThreadFailCount, const bool needMatchCount) {
+                             const bool needRejectCount, const bool needMatchCount) {
         SignalSet sigs;
 
-        computeTerminalMatchAndReject(c, sigs, needMatchCount);
+        // Each terminal thread fails when the final condition is false.
+        AstNodeExpr* terminalCountp = nullptr;
+        const bool needTerminalCount = needRejectCount && c.matchCondp;
+        computeTerminalMatchAndReject(c, sigs, needMatchCount,
+                                      needTerminalCount ? &terminalCountp : nullptr);
+        if (terminalCountp) {
+            // thread_fail_count = final_condition ? 0 : terminal_count;
+            sigs.threadFailCountp
+                = addCountp(c.flp, nullptr, terminalCountp,
+                            new AstLogNot{c.flp, sampled(c.matchCondp->cloneTreePure(false))});
+        }
 
         // Phase 3a: required-step rejection.
         // Builder only sets m_rejectOnFail on non-clocked Links with m_condp
@@ -2367,18 +2434,7 @@ class SvaNfaLowering final {
                         fromVtxp,
                         "rejectOnFail Link must have condp/condVtxp and source stateSig");
             AstNodeExpr* const srcSigp = fromVtxp->datap()->stateSigp->cloneTreePure(false);
-            AstNodeExpr* condp = nullptr;
-            if (tedgep->m_condVtxp) {
-                UASSERT_OBJ(tedgep->m_condVtxp->datap()->stateSigp, tedgep->m_condVtxp,
-                            "rejectOnFail condVtxp missing stateSig");
-                condp = tedgep->m_condVtxp->datap()->stateSigp->cloneTreePure(false);
-                if (tedgep->m_condp) {
-                    condp = new AstLogOr{c.flp, condp, tedgep->m_condp->cloneTreePure(false)};
-                }
-            } else {
-                condp = tedgep->m_condp->cloneTreePure(false);
-            }
-            AstNodeExpr* const notCondp = new AstLogNot{c.flp, condp};
+            AstNodeExpr* const notCondp = new AstLogNot{c.flp, newRequiredStepCondp(c, *tedgep)};
             AstNodeExpr* const rawFailp = new AstLogAnd{c.flp, srcSigp, notCondp};
             if (needThreadFailCount) {
                 // thread_fail_count += fail;
@@ -2390,7 +2446,7 @@ class SvaNfaLowering final {
             sigs.requiredStepRejectp = orExprs(c.flp, sigs.requiredStepRejectp, failp);
         }
 
-        computeThroughoutReject(c, sigs, needThroughoutThreadFailCount);
+        computeThroughoutReject(c, sigs, needRejectCount);
         if (sigs.threadFailCountp) {
             sigs.threadFailCountp
                 = addCountp(c.flp, nullptr, sigs.threadFailCountp, notKillActive(c));
@@ -2445,6 +2501,11 @@ class SvaNfaLowering final {
                 sigs.matchCountp = gateCheckedCountp(
                     c.flp, sigs.matchCountp, sigs.matchCountOverflowp,
                     new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+            }
+            if (sigs.threadFailCountp) {
+                sigs.threadFailCountp
+                    = addCountp(c.flp, nullptr, sigs.threadFailCountp,
+                                new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
             }
         }
 
@@ -2692,7 +2753,7 @@ public:
     SignalSet lower(AstNodeCoverOrAssert* const assertp, SvaGraph& graph,
                     AstSenTree* const senTreep, AstNodeExpr* const matchCondp,
                     AstNodeExpr* const disableExprp, const bool needThreadFailCount,
-                    const bool needThroughoutThreadFailCount) {
+                    const bool needRejectCount) {
         FileLine* const flp = assertp->fileline();
         AstCover* const coverp = VN_CAST(assertp, Cover);
         const bool isSeqEvent = coverp && coverp->isSeqEvent();
@@ -2860,7 +2921,7 @@ public:
 
         // Phase 3/3a/3b: Compute terminal match/reject signals (cleans up stateSig).
         const SignalSet sigs
-            = computeSignals(c, needThreadFailCount, needThroughoutThreadFailCount, countMatches);
+            = computeSignals(c, needThreadFailCount, needRejectCount, countMatches);
 
         // Strong s_always[m:n] end-of-simulation liveness: if any in-window state
         // is still set at $finish, the universal-quantifier window never completed
@@ -3536,8 +3597,10 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool needMatch = assertAssertp && assertAssertp->passsp()
                                && (!parts.hasImplication || splitImplicationPasssp);
 
+        // Rejections of a negated operand are passes. Only the required-step count of a
+        // non-implication operand still replays, for the pass action prefixed to failsp.
         const bool needsThreadFailReplay
-            = assertAssertp && assertAssertp->failsp() && !parts.hasImplication;
+            = assertAssertp && assertAssertp->failsp() && !(parts.hasImplication && negated);
         const auto signals
             = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp, disableExprp,
                                  needsThreadFailReplay, needsThreadFailReplay && !negated);
@@ -3558,12 +3621,9 @@ class AssertNfaVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
         if (result.finalCondp && !result.finalCondp->backp()) pushDeletep(result.finalCondp);
 
-        if (splitImplicationPasssp) {
-            splitImplicationPassActions(assertAssertp, parts, matchExprp);
-        } else {
-            attachActionHandlers(assertAssertp, matchExprp, threadFailReplaySenTreep,
-                                 signals.threadFailCountp);
-        }
+        if (splitImplicationPasssp) splitImplicationPassActions(assertAssertp, parts, matchExprp);
+        attachActionHandlers(assertAssertp, splitImplicationPasssp ? nullptr : matchExprp,
+                             threadFailReplaySenTreep, signals.threadFailCountp);
 
         AstNode* const innerPropp = propp->propp();
         innerPropp->replaceWith(outputExprp);

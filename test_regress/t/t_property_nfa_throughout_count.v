@@ -65,8 +65,8 @@ module t (
     end
     #1 disable_now = 0;
     @(negedge clk) begin
-      `checkd(fixed_fail, 1);
-      `checkd(range_fail, 1);
+      `checkd(fixed_fail, 3);
+      `checkd(range_fail, 3);
       `checkd(negated_pass, 1);
       `checkd(negated_cover, 1);
       `checkd(disabled_fail, 0);
