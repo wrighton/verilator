@@ -41,7 +41,7 @@ module test (  // Outputs
   output [1:0] res;
   input clk;
   input in;
-
+  reg [1:0] res;
   // This is a SystemVerilog 2009 only test
   generate
     genvar i;
