@@ -25,7 +25,7 @@ module t (
     lhs = rhs;
   endfunction
 
-  function int get_val(const ref int rhs);
+  function automatic int get_val(const ref int rhs);
     return rhs;
   endfunction
 
@@ -43,6 +43,10 @@ module t (
     iq[1000] = 1000;
     `checkh(iq.size(), 2);
     `checks(iq[1000], 0);
+    // Array query functions of a typedef'd queue
+    `checkh($size(iq), 2);
+    `checkh($high(iq), 1);
+    `checkh($right(iq), 1);
     `checks(get_val(iq[0]), 9000);
   end
 
