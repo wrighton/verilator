@@ -40,4 +40,24 @@
                                          : ... note: In instance 't'
    30 |   assert property (@(posedge clk) a [*n:$] |-> 1);
       |                                     ^~
+%Error-UNSUPPORTED: t/t_assert_consec_rep_bad.v:33:37: Unsupported: [*0] consecutive repetition
+                                                     : ... note: In instance 't'
+   33 |   assert property (@(posedge clk) a [*0] ##0 a |-> 1);
+      |                                     ^~
+%Error: t/t_assert_consec_rep_bad.v:36:39: Expecting expression to be constant, but variable isn't const: 'n'
+                                         : ... note: In instance 't'
+   36 |   assert property (@(posedge clk) a [*n] ##1 a |-> 1);
+      |                                       ^
+%Error: t/t_assert_consec_rep_bad.v:36:37: Consecutive repetition count must be constant expression (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   36 |   assert property (@(posedge clk) a [*n] ##1 a |-> 1);
+      |                                     ^~
+%Error: t/t_assert_consec_rep_bad.v:37:41: Expecting expression to be constant, but variable isn't const: 'n'
+                                         : ... note: In instance 't'
+   37 |   assert property (@(posedge clk) a [*0:n] ##1 a |-> 1);
+      |                                         ^
+%Error: t/t_assert_consec_rep_bad.v:37:37: Consecutive repetition max count must be constant expression (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   37 |   assert property (@(posedge clk) a [*0:n] ##1 a |-> 1);
+      |                                     ^~
 %Error: Exiting due to

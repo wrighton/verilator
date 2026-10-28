@@ -29,4 +29,11 @@ module t (input clk);
   // Bad: non-constant unbounded minimum
   assert property (@(posedge clk) a [*n:$] |-> 1);
 
+  // Bad: [*0] next to ##0, which never matches
+  assert property (@(posedge clk) a [*0] ##0 a |-> 1);
+
+  // Bad: non-constant counts next to a cycle delay
+  assert property (@(posedge clk) a [*n] ##1 a |-> 1);
+  assert property (@(posedge clk) a [*0:n] ##1 a |-> 1);
+
 endmodule
