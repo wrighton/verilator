@@ -3980,8 +3980,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
             // Resolve pin expression to the enclosing module's port Var. At primary
             // LinkDot the expression may still be an AstParseRef, so also look up by name.
             AstVar* enclosingVarp = nullptr;
-            const AstVarRef* const varRefp = VN_CAST(exprp, VarRef);
-            if (varRefp) {
+            // A VarXRef is a hierarchical reference to an interface instance
+            const AstNodeVarRef* const varRefp = VN_CAST(exprp, NodeVarRef);
+            if (VN_IS(exprp, VarRef)) {
                 enclosingVarp = varRefp->varp();
             } else if (const AstParseRef* const parseRefp = VN_CAST(exprp, ParseRef)) {
                 if (m_modp) {
