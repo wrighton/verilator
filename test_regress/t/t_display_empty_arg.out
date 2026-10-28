@@ -1,0 +1,14 @@
+fwrite 1
+101010
+2a
+52
+fdisplay
+101010
+2a
+52
+fstrobe
+101010
+2a
+52
+fmonitoro 52
+*-* All Finished *-*

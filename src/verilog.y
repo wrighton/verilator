@@ -4276,10 +4276,10 @@ system_t_stmt_call<nodeStmtp>:  // IEEE: part of system_tf_call (as task returni
         |       yD_STOP '(' expr ')'                    { $$ = new AstStop{$1, false}; DEL($3); }
         //
         |       yD_SFORMAT '(' expr ',' exprDispList ')'        { $$ = new AstSFormat{$1, false, $3, $5}; }
-        |       yD_SWRITE  '(' expr ',' exprDispList ')'        { $$ = new AstSFormat{$1, true, $3, $5, 'd'}; }
-        |       yD_SWRITEB '(' expr ',' exprDispList ')'        { $$ = new AstSFormat{$1, true, $3, $5, 'b'}; }
-        |       yD_SWRITEH '(' expr ',' exprDispList ')'        { $$ = new AstSFormat{$1, true, $3, $5, 'h'}; }
-        |       yD_SWRITEO '(' expr ',' exprDispList ')'        { $$ = new AstSFormat{$1, true, $3, $5, 'o'}; }
+        |       yD_SWRITE  '(' expr dispArgsE ')'               { $$ = new AstSFormat{$1, true, $3, $4, 'd'}; }
+        |       yD_SWRITEB '(' expr dispArgsE ')'               { $$ = new AstSFormat{$1, true, $3, $4, 'b'}; }
+        |       yD_SWRITEH '(' expr dispArgsE ')'               { $$ = new AstSFormat{$1, true, $3, $4, 'h'}; }
+        |       yD_SWRITEO '(' expr dispArgsE ')'               { $$ = new AstSFormat{$1, true, $3, $4, 'o'}; }
         //
         |       yD_DISPLAY parenE                               { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, nullptr, nullptr}; }
         |       yD_DISPLAY '(' commasE exprDispList ')'         { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, nullptr, $4}; }
@@ -4305,28 +4305,22 @@ system_t_stmt_call<nodeStmtp>:  // IEEE: part of system_tf_call (as task returni
         |       yD_WRITEH   '(' commasE exprDispList ')'        { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, nullptr, $4, 'h'}; }
         |       yD_WRITEO   parenE                              { $$ = nullptr; }  // NOP
         |       yD_WRITEO   '(' commasE exprDispList ')'        { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, nullptr, $4, 'o'}; }
-        |       yD_FDISPLAY '(' expr ')'                        { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, nullptr}; }
-        |       yD_FDISPLAY '(' expr ',' exprDispList ')'       { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $5}; }
-        |       yD_FDISPLAYB '(' expr ')'                       { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, nullptr, 'b'}; }
-        |       yD_FDISPLAYB '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $5, 'b'}; }
-        |       yD_FDISPLAYH '(' expr ')'                       { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, nullptr, 'h'}; }
-        |       yD_FDISPLAYH '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $5, 'h'}; }
-        |       yD_FDISPLAYO '(' expr ')'                       { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, nullptr, 'o'}; }
-        |       yD_FDISPLAYO '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $5, 'o'}; }
-        |       yD_FMONITOR  '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $5}; }
-        |       yD_FMONITORB '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $5, 'b'}; }
-        |       yD_FMONITORH '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $5, 'h'}; }
-        |       yD_FMONITORO '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $5, 'o'}; }
-        |       yD_FSTROBE   '(' expr ')'                       { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, nullptr}; }
-        |       yD_FSTROBE   '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $5}; }
-        |       yD_FSTROBEB  '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $5, 'b'}; }
-        |       yD_FSTROBEH  '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $5, 'h'}; }
-        |       yD_FSTROBEO  '(' expr ',' exprDispList ')'      { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $5, 'o'}; }
-        |       yD_FWRITE   '(' expr ')'                        { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, nullptr}; }
-        |       yD_FWRITE   '(' expr ',' exprDispList ')'       { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $5}; }
-        |       yD_FWRITEB  '(' expr ',' exprDispList ')'       { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $5, 'b'}; }
-        |       yD_FWRITEH  '(' expr ',' exprDispList ')'       { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $5, 'h'}; }
-        |       yD_FWRITEO  '(' expr ',' exprDispList ')'       { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $5, 'o'}; }
+        |       yD_FDISPLAY '(' expr dispArgsE ')'              { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $4}; }
+        |       yD_FDISPLAYB '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $4, 'b'}; }
+        |       yD_FDISPLAYH '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $4, 'h'}; }
+        |       yD_FDISPLAYO '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_DISPLAY, $3, $4, 'o'}; }
+        |       yD_FMONITOR  '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $4}; }
+        |       yD_FMONITORB '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $4, 'b'}; }
+        |       yD_FMONITORH '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $4, 'h'}; }
+        |       yD_FMONITORO '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_MONITOR, $3, $4, 'o'}; }
+        |       yD_FSTROBE   '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $4}; }
+        |       yD_FSTROBEB  '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $4, 'b'}; }
+        |       yD_FSTROBEH  '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $4, 'h'}; }
+        |       yD_FSTROBEO  '(' expr dispArgsE ')'             { $$ = new AstDisplay{$1, VDisplayType::DT_STROBE, $3, $4, 'o'}; }
+        |       yD_FWRITE   '(' expr dispArgsE ')'              { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $4}; }
+        |       yD_FWRITEB  '(' expr dispArgsE ')'              { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $4, 'b'}; }
+        |       yD_FWRITEH  '(' expr dispArgsE ')'              { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $4, 'h'}; }
+        |       yD_FWRITEO  '(' expr dispArgsE ')'              { $$ = new AstDisplay{$1, VDisplayType::DT_WRITE, $3, $4, 'o'}; }
         |       yD_INFO     parenE                              { $$ = new AstDisplay{$1, VDisplayType::DT_INFO, nullptr, nullptr}; }
         |       yD_INFO     '(' commasE exprDispList ')'        { $$ = new AstDisplay{$1, VDisplayType::DT_INFO, nullptr, $4}; }
         |       yD_WARNING  parenE                              { $$ = new AstDisplay{$1, VDisplayType::DT_WARNING, nullptr, nullptr}; }
@@ -4338,11 +4332,8 @@ system_t_stmt_call<nodeStmtp>:  // IEEE: part of system_tf_call (as task returni
         |       yD_FATAL    parenE
                         { $$ = new AstDisplay{$1, VDisplayType::DT_FATAL, nullptr, nullptr};
                           $$->addNext(new AstStop{$1, true}); }
-        |       yD_FATAL    '(' expr ')'
-                        { $$ = new AstDisplay{$1, VDisplayType::DT_FATAL, nullptr, nullptr};
-                          $$->addNext(new AstStop{$1, true}); DEL($3); }
-        |       yD_FATAL    '(' expr ',' exprDispList ')'
-                        { $$ = new AstDisplay{$1, VDisplayType::DT_FATAL, nullptr, $5};
+        |       yD_FATAL    '(' expr dispArgsE ')'
+                        { $$ = new AstDisplay{$1, VDisplayType::DT_FATAL, nullptr, $4};
                           $$->addNext(new AstStop{$1, true}); DEL($3); }
         //
         |       yD_ASSERTCTL '(' expr ')'                                            { $$ = new AstAssertCtl{$1, $3}; }
@@ -4585,14 +4576,13 @@ severity_system_task<nodep>: // IEEE: severity_system_task/elaboration_severity_
 severity_system_task_guts<nodep>:    // IEEE: part of severity_system_task (1800-2009)
         //                      // $fatal first argument is exit number, must be constant
                 yD_INFO parenE                          { $$ = new AstElabDisplay{$1, VDisplayType::DT_INFO, nullptr}; }
-        |       yD_INFO '(' exprList ')'                { $$ = new AstElabDisplay{$1, VDisplayType::DT_INFO, $3}; }
+        |       yD_INFO '(' commasE exprDispList ')'    { $$ = new AstElabDisplay{$1, VDisplayType::DT_INFO, $4}; }
         |       yD_WARNING parenE                       { $$ = new AstElabDisplay{$1, VDisplayType::DT_WARNING, nullptr}; }
-        |       yD_WARNING '(' exprList ')'             { $$ = new AstElabDisplay{$1, VDisplayType::DT_WARNING, $3}; }
+        |       yD_WARNING '(' commasE exprDispList ')' { $$ = new AstElabDisplay{$1, VDisplayType::DT_WARNING, $4}; }
         |       yD_ERROR parenE                         { $$ = new AstElabDisplay{$1, VDisplayType::DT_ERROR, nullptr}; }
-        |       yD_ERROR '(' exprList ')'               { $$ = new AstElabDisplay{$1, VDisplayType::DT_ERROR, $3}; }
+        |       yD_ERROR '(' commasE exprDispList ')'   { $$ = new AstElabDisplay{$1, VDisplayType::DT_ERROR, $4}; }
         |       yD_FATAL parenE                         { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, nullptr}; }
-        |       yD_FATAL '(' expr ')'                   { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, nullptr}; DEL($3); }
-        |       yD_FATAL '(' expr ',' exprListE ')'     { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, $5}; DEL($3); }
+        |       yD_FATAL '(' expr dispArgsE ')'         { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, $4}; DEL($3); }
         ;
 
 systemDpiArgsE<argp>:           // IEEE: part of system_if_call for arguments of $dpi call
@@ -5462,6 +5452,12 @@ vrdList<nodeExprp>:
 commasE:
                 /* empty */                             { } /* ignored */
         |       ',' commasE                             { } /* ignored */
+        ;
+
+dispArgsE<nodeExprp>:               // IEEE: [ ',' list_of_arguments ] after a leading argument
+                /* empty */                             { $$ = nullptr; }
+        |       ',' commasE                             { $$ = nullptr; }
+        |       ',' commasE exprDispList                { $$ = $3; }
         ;
 
 commaVRDListE<nodeExprp>:
