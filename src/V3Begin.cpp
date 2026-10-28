@@ -35,7 +35,18 @@
 #include "V3String.h"
 #include "V3UniqueNames.h"
 
+#include <unordered_map>
+
 VL_DEFINE_DEBUG_FUNCTIONS;
+
+//######################################################################
+
+// Name of static variable 'varName' of block 'scope' of 'ftaskName' once moved out
+static std::string staticVarName(const std::string& ftaskName, const std::string& scope,
+                                 const std::string& varName) {
+    // 'scope' is a named block in the function/task 'ftaskName'.
+    return ftaskName + "__Vstatic__" + VString::dot(scope, "__DOT__", varName);
+}
 
 //######################################################################
 
@@ -51,6 +62,9 @@ class BeginVisitor final : public VNVisitor {
     std::vector<AstMemberRef*> m_paramMemberRefps;  // Member references to parameters
     std::vector<AstNodeFTaskRef*> m_ftaskRefps;  // References to tasks
     std::vector<AstIfaceRefDType*> m_ifaceRefDTypeps;  // Interface types of cells
+    std::vector<AstVarXRef*> m_staticVarRefps;  // Non-parameter hierarchical references
+    // Static variables moved out of a function/task -> named block scope inside it
+    std::unordered_map<const AstVar*, std::string> m_staticVarScopes;
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -252,7 +266,8 @@ class BeginVisitor final : public VNVisitor {
         // If static variable, move it outside a function.
         if (nodep->lifetime().isStatic() && m_ftaskp) {
             const std::string newName
-                = m_ftaskp->name() + "__Vstatic__" + dot(m_unnamedScope, nodep->name());
+                = staticVarName(m_ftaskp->name(), m_unnamedScope, nodep->name());
+            m_staticVarScopes.emplace(nodep, m_unnamedScope);
             if (nodep->isIO()) {
                 if (nodep->direction().isRef()) {
                     nodep->v3error(
@@ -350,7 +365,11 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstVarXRef* nodep) override {
         if (nodep->user1SetOnce()) return;
-        if (nodep->varp()->isParam()) m_paramRefps.push_back(nodep);
+        if (nodep->varp()->isParam()) {
+            m_paramRefps.push_back(nodep);
+        } else {
+            m_staticVarRefps.push_back(nodep);
+        }
         const std::string& scope = m_ftaskp ? m_ftaskNamedScope : m_namedScope;
         if (scope != "" && nodep->inlinedDots() == "") nodep->inlinedDots(scope);
     }
@@ -416,6 +435,25 @@ class BeginVisitor final : public VNVisitor {
     explicit BeginVisitor(AstNetlist* nodep) {
         iterate(nodep);
         // Fix up references, now that all renames are done
+        for (AstVarXRef* const refp : m_staticVarRefps) {
+            // A reference '<path>.<ftask>.<blocks>.<var>' to a static variable moved out of the
+            // function/task becomes '<path>.<moved var>'
+            const auto it = m_staticVarScopes.find(refp->varp());
+            if (it != m_staticVarScopes.end()) {
+                const std::string& scope = it->second;
+                std::string dotted = refp->dotted();
+                if (!scope.empty()) {
+                    const std::string blocks = "." + VString::replaceSubstr(scope, "__DOT__", ".");
+                    UASSERT_OBJ(VString::endsWith(dotted, blocks), refp, "Path lacks the blocks");
+                    dotted.resize(dotted.size() - blocks.size());
+                }
+                const size_t pos = dotted.rfind('.');
+                UASSERT_OBJ(pos != std::string::npos, refp, "Path lacks the function/task");
+                refp->name(staticVarName(dotted.substr(pos + 1), scope, refp->name()));
+                refp->dotted(dotted.substr(0, pos));
+                UINFO(9, "    relinkVarXRef " << refp);
+            }
+        }
         for (AstNodeVarRef* const refp : m_paramRefps) moveToConstPool(refp, refp->varp());
         for (AstMemberRef* const refp : m_paramMemberRefps) moveToConstPool(refp, refp->varp());
         for (AstNodeFTaskRef* const refp : m_ftaskRefps) refp->name(refp->taskp()->name());
