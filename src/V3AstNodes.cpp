@@ -2072,6 +2072,14 @@ void AstImplication::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isOverlapped);
     dumpJsonBoolFuncIf(str, isFollowedBy);
 }
+void AstInitial::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (fromSource()) str << " [SRC]";
+}
+void AstInitial::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, fromSource);
+    dumpJsonGen(str);
+}
 AstNodeExpr* AstInsideRange::newAndFromInside(AstNodeExpr* exprp, AstNodeExpr* lhsp,
                                               AstNodeExpr* rhsp) {
     const bool lhsUnbounded = VN_IS(lhsp, Unbounded);

@@ -19,6 +19,8 @@
 //              SCOPE
 //                      {all blocked statements}
 //
+//      Make the last initial procedure of the programs to end call $finish
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -65,6 +67,7 @@ class ScopeVisitor final : public VNVisitor {
     // Varrefs-in-scopes needing fixup when done
     std::vector<std::pair<AstVarRef*, AstScope*>> m_varRefScopes;
     std::vector<AstScope*> m_scopes;  // Scopes awaiting attachment to their modules
+    std::vector<AstInitial*> m_programInitialps;  // Initial procedures of program instances
 
     // METHODS
 
@@ -123,6 +126,30 @@ class ScopeVisitor final : public VNVisitor {
         }
     }
 
+    // Make the simulation finish when all program initial procedures have ended
+    void makeProgramFinish(AstTopScope* topScopep) {
+        // IEEE 1800-2023 24.7: Implicit $finish once all initial procedures within all
+        // programs have ended. Count the running procedures down, and finish at zero.
+        AstVarScope* const countp = topScopep->createTemp("__VprogramInitials", 32);
+        FileLine* const flp = topScopep->fileline();
+        topScopep->scopep()->addBlocksp(new AstInitialStatic{
+            flp, new AstAssign{flp, new AstVarRef{flp, countp, VAccess::WRITE},
+                               new AstConst{flp, AstConst::WidthedValue{}, 32,
+                                            static_cast<uint32_t>(m_programInitialps.size())}}});
+        for (AstInitial* const initialp : m_programInitialps) {
+            FileLine* const fl = initialp->fileline();
+            initialp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, countp, VAccess::WRITE},
+                              new AstSub{fl, new AstVarRef{fl, countp, VAccess::READ},
+                                         new AstConst{fl, AstConst::WidthedValue{}, 32, 1}}});
+            initialp->addStmtsp(
+                new AstIf{fl,
+                          new AstEq{fl, new AstVarRef{fl, countp, VAccess::READ},
+                                    new AstConst{fl, AstConst::WidthedValue{}, 32, 0}},
+                          new AstFinish{fl}});
+        }
+    }
+
     // VISITORS
     void visit(AstNetlist* nodep) override {
         AstNodeModule* const modp = nodep->topModulep();
@@ -140,6 +167,7 @@ class ScopeVisitor final : public VNVisitor {
         for (AstScope* const scopep : m_scopes) scopep->modp()->addStmtsp(scopep);
         if (v3Global.opt.mtasks()) V3Control::applyThreadsGroupWorkers(m_scopes);
         cleanupVarRefs();
+        if (!m_programInitialps.empty()) makeProgramFinish(nodep->topScopep());
     }
     void visit(AstNodeModule* nodep) override {
         // Create required blocks and add to module
@@ -256,8 +284,16 @@ class ScopeVisitor final : public VNVisitor {
         VL_RESTORER(m_procedurep);
         m_procedurep = nodep;
         UINFO(4, "    Move " << nodep);
+        AstNodeProcedure* const clonep = cloneOrMove(nodep);
+        AstInitial* const initialp = VN_CAST(clonep, Initial);
+        const AstModule* const modp = VN_CAST(m_modp, Module);
+        // Initial blocks created internally, e.g. from a constant continuous assignment, are
+        // not initial procedures for IEEE 1800-2023 24.7
+        if (initialp && initialp->fromSource() && modp && modp->isProgram()) {
+            m_programInitialps.push_back(initialp);
+        }
         // We iterate under the *clone*
-        iterateChildren(cloneOrMove(nodep));
+        iterateChildren(clonep);
     }
     void visit(AstAlias* nodep) override {
         // Add to list of blocks under this scope

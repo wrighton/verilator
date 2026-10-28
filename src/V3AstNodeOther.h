@@ -3657,10 +3657,15 @@ public:
     ASTGEN_MEMBERS_AstFinal;
 };
 class AstInitial final : public AstNodeProcedure {
+    bool m_fromSource = false;  // An initial procedure in the source, not created internally
 public:
     AstInitial(FileLine* fl, AstNodeStmt* stmtsp)
         : ASTGEN_SUPER_Initial(fl, stmtsp) {}
     ASTGEN_MEMBERS_AstInitial;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    bool fromSource() const { return m_fromSource; }
+    void fromSource(bool flag) { m_fromSource = flag; }
 };
 class AstInitialAutomatic final : public AstNodeProcedure {
     // Automatic variable initialization
