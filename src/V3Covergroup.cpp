@@ -341,6 +341,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     // Names of the transition sequence states, as a bin may hold several sequences
     V3UniqueNames m_seqposNames{"__Vseqpos"};
     VDouble0 m_statTransitionTables;  // Statistic tracking
+    // Single bins whose values the constructor computes; see constructedValues()
+    std::set<const AstCoverBin*> m_constructedValueBins;
     std::vector<AstNodeExpr*> m_detachedValues;  // Array-bin values m_cpBins refers to
     std::set<AstCoverCross*>
         m_droppedCrosses;  // Crosses with a bare-variable item: drop (COVERIGN)
@@ -520,6 +522,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         m_droppedBins.clear();
         m_sizedNames.reset();
         m_seqposNames.reset();
+        m_constructedValueBins.clear();
         m_runtimePoints.clear();
         m_runtimeCrosses.clear();
         m_excludedVars.clear();
@@ -678,10 +681,42 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return VN_CAST(binp->rangesp(), CoverWith);
     }
 
-    // True for bins whose values the covergroup constructor computes: a sized array, or bins of
-    // the values a 'with' filter keeps
-    static bool isConstructedBins(const AstCoverBin* binp) {
-        return isSizedArray(binp) || binWith(binp);
+    // True for bins whose values the covergroup constructor computes
+    bool isConstructedBins(const AstCoverBin* binp) const {
+        // A sized array, bins of the values a 'with' filter keeps, or a bin of values known only
+        // then.
+        return isSizedArray(binp) || binWith(binp) || m_constructedValueBins.count(binp);
+    }
+
+    // True if a bin has a non-constant value or bound known when the covergroup is constructed
+    bool constructedValues(const AstCoverBin* binp) {
+        // An expression of constants, instance constants, and covergroup arguments (IEEE 1800-2023
+        // 19.5).
+        // Members not allowed, such as sample arguments, are reported by
+        // CovergroupExprValidVisitor; other values by buildBinCondition.
+        const auto notAllowed = [&](const AstNode* nodep) {
+            if (const AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
+                return !memberRefp->varp()->isConst();
+            }
+            const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
+            return refp && !refp->varp()->isConst()
+                   && m_memberMap.findMember(m_covergroupp, refp->varp()->name()) != refp->varp();
+        };
+        const auto constant
+            = [](const AstNode* nodep) { return VN_IS(nodep, Const) || VN_IS(nodep, Unbounded); };
+        bool constructed = false;
+        bool allowed = true;
+        const auto checkValue = [&](const AstNode* valuep) {
+            const AstInsideRange* const irp = VN_CAST(valuep, InsideRange);
+            if (irp ? constant(irp->lhsp()) && constant(irp->rhsp()) : constant(valuep)) return;
+            if (valuep->exists(notAllowed)) allowed = false;
+            constructed = true;
+        };
+        for (const AstNode* const rangep : binp->rangespList()) checkValue(rangep);
+        binp->foreach([&](const AstCoverTransItem* itemp) {
+            for (const AstNode* const valuep : itemp->valuespList()) checkValue(valuep);
+        });
+        return constructed && allowed;
     }
 
     // The range list of a bin's values, or of the candidates of its 'with' filter; null for all
@@ -751,6 +786,17 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                 if (binp->binsType().binIsNormal()) coverpointp->user2(true);
                 dropBins(coverpointp, binp);
                 continue;
+            }
+            if (!isSizedArray(binp) && !binWith(binp) && constructedValues(binp)) {
+                // Only a single bin of an integral coverpoint has values the constructor
+                // computes
+                if (!integral || binp->isArray() || binp->isWildcard() || binp->transp()) {
+                    binp->v3warn(E_UNSUPPORTED, "Unsupported: covergroup argument or instance"
+                                                " constant value in this kind of bin");
+                    dropBins(coverpointp, binp);
+                    continue;
+                }
+                m_constructedValueBins.insert(binp);
             }
             if (!isConstructedBins(binp)) continue;
             if (isSizedArray(binp) && !checkBinsArraySize(coverpointp, binp, integral)) continue;
@@ -1100,7 +1146,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return false;
     }
 
-    static bool coverpointHasConstructedBins(const AstCoverpoint* coverpointp) {
+    bool coverpointHasConstructedBins(const AstCoverpoint* coverpointp) const {
         for (const AstNode* const nodep : coverpointp->binspList()) {
             if (isConstructedBins(VN_AS(nodep, CoverBin))) return true;
         }
@@ -2004,6 +2050,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         args.push_back(ctext(fl, quoted(VIdProtect::protectIf(fl->filename(), prot))));
         args.push_back(cnum(fl, static_cast<uint32_t>(fl->lineno())));
         args.push_back(cnum(fl, static_cast<uint32_t>(fl->firstColumn())));
+        if (!withp) args.push_back(cnum(fl, !binp->isArray()));
         m_constructorp->addStmtsp(
             itemCall(fl, cpVarp,
                      withp ? VCMethod::COVERGROUP_WITH_FINISH : VCMethod::COVERGROUP_SIZED_FINISH,
@@ -4643,6 +4690,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         AstVar* const handleVarp
             = new AstVar{fl, VVarType::MEMBER, "__Vcg_enclosingp", enclDTypep};
         m_covergroupp->addMembersp(handleVarp);
+        m_memberMap.insert(m_covergroupp, handleVarp);
         AstVar* const argumentp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vcg_parentp", enclDTypep};
         argumentp->direction(VDirection::INPUT);
         argumentp->declDirection(VDirection::INPUT);

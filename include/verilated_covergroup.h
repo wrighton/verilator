@@ -209,11 +209,11 @@ public:
     void sizedRange(QData lo, QData hi);
     void sizedRangeW(WDataInP lop, WDataInP hip);
     /// Distribute the values sizedRange() added over the bins of the sized array 'name[count]'
-    /// (IEEE 1800-2023 19.5.1).  'positive' is false for a count below one, which is invalid.
-    /// At most 'limit' bins may hold values.  Needs valueType(); bins append after those of
-    /// init().
+    /// (IEEE 1800-2023 19.5.1), or if 'single', put them in the one bin 'name', of count 1.
+    /// 'positive' is false for a count below one, which is invalid.  At most 'limit' bins may
+    /// hold values.  Needs valueType(); bins append after those of init().
     void sizedFinish(VlCovBinKind kind, QData count, bool positive, uint32_t limit,
-                     const char* name, const char* file, int line, int col);
+                     const char* name, const char* file, int line, int col, bool single);
     /// Declared bins [sizedFirst(), sizedEnd()) of the sized array 'sized', counted in
     /// sizedFinish() order, for cross selections.
     uint32_t sizedFirst(uint32_t sized) const;
