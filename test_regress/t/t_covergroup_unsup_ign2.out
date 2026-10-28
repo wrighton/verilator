@@ -27,24 +27,6 @@
 %Warning-COVERIGN: t/t_covergroup_unsup.v:127:57: Unsupported: covergroup value range '[...]'
   127 |     { bins bts2 = ( 2, 3 ), ( [5:6] ), ( [5 +/- 2] ), ( [ 5 +%- 20.0] ) ; }
       |                                                         ^
-%Warning-COVERIGN: t/t_covergroup_unsup.v:130:23: Unsupported: '[*]' in cover transition
-  130 |     { bins bts2 = ( 3 [*5] ) ; }
-      |                       ^~
-%Warning-COVERIGN: t/t_covergroup_unsup.v:131:23: Unsupported: '[*]' in cover transition
-  131 |     { bins bts2 = ( 3 [*5:6] ) ; }
-      |                       ^~
-%Warning-COVERIGN: t/t_covergroup_unsup.v:132:23: Unsupported: '[->' in cover transition
-  132 |     { bins bts2 = ( 3 [->5] ) ; }
-      |                       ^~~
-%Warning-COVERIGN: t/t_covergroup_unsup.v:133:23: Unsupported: '[->' in cover transition
-  133 |     { bins bts2 = ( 3 [->5:6] ) ; }
-      |                       ^~~
-%Warning-COVERIGN: t/t_covergroup_unsup.v:134:23: Unsupported: '[=]' in cover transition
-  134 |     { bins bts2 = ( 3 [=5] ) ; }
-      |                       ^~
-%Warning-COVERIGN: t/t_covergroup_unsup.v:135:23: Unsupported: '[=]' in cover transition
-  135 |     { bins bts2 = ( 3 [=5:6] ) ; }
-      |                       ^~
 %Warning-COVERIGN: t/t_covergroup_unsup.v:141:12: Unsupported: 'bins' array (non-auto)
   141 |     { bins nonAuto[4]; }
       |            ^~~~~~~
