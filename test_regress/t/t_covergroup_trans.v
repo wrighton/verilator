@@ -58,6 +58,12 @@ module t;
       bins tr = (0 => 1);
       bins vals[] = {2, [4:5]};  // discrete + range elements
     }
+    // A transition bin holds no values, so the default bin gets every value but 3
+    cp_default: coverpoint state {
+      bins tr = (1 => 2);
+      bins three = {3};
+      bins others = default;
+    }
   endgroup
 
   cg cg_inst = new;
