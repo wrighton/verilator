@@ -443,14 +443,24 @@ class AssertVisitor final : public VNVisitor {
         // cppcheck-suppress missingReturn
         switch (directiveType) {
         case VAssertDirectiveType::INTRINSIC: return new AstConst{fl, AstConst::BitTrue{}};
-        case VAssertDirectiveType::VIOLATION_CASE: {
-            if (v3Global.opt.assertCase()) {
-                return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()",
-                                    1};
-            }
+        case VAssertDirectiveType::VIOLATION_CASE:
+        case VAssertDirectiveType::VIOLATION_IF: {
+            const bool enabled = directiveType == VAssertDirectiveType::VIOLATION_CASE
+                                     ? v3Global.opt.assertCase()
+                                     : v3Global.opt.assertOn();
             // If assertions are off, have constant propagation rip them out later
             // This allows syntax errors and such to be detected normally.
-            return new AstConst{fl, AstConst::BitFalse{}};
+            if (!enabled) return new AstConst{fl, AstConst::BitFalse{}};
+            // Unique/unique0/priority checks are controlled by their assertion type
+            // (IEEE 1800-2023 Table 20-6), as assert directives; full_case/parallel_case
+            // checks have no type and follow the global state.
+            if (type != VAssertType::INTERNAL) {
+                return new AstCExpr{fl, AstCExpr::Pure{},
+                                    V3AssertCommon::assertCtlGetCall("ASSERT_CTL_ON", type,
+                                                                     VAssertDirectiveType::ASSERT),
+                                    1};
+            }
+            return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()", 1};
         }
         case VAssertDirectiveType::ASSERT:
         case VAssertDirectiveType::COVER:
@@ -463,7 +473,6 @@ class AssertVisitor final : public VNVisitor {
             return new AstConst{fl, AstConst::BitFalse{}};
         }
         case VAssertDirectiveType::INTERNAL:
-        case VAssertDirectiveType::VIOLATION_IF:
         case VAssertDirectiveType::RESTRICT: {
             if (v3Global.opt.assertOn()) {
                 return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()",
@@ -1379,13 +1388,10 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstAssertCtl* nodep) override {
         iterateChildren(nodep);
 
-        bool assertTypeConst = true;
         if (!nodep->assertTypesp()) {
             nodep->assertTypes(VAssertType{ALL_ASSERT_TYPES});
         } else if (const AstConst* const assertTypesp = VN_CAST(nodep->assertTypesp(), Const)) {
             nodep->assertTypes(VAssertType{assertTypesp->toSInt()});
-        } else {
-            assertTypeConst = false;
         }
 
         bool controlTypeConst = false;
@@ -1403,14 +1409,6 @@ class AssertVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
-        if (assertTypeConst && nodep->assertTypes() != ALL_ASSERT_TYPES
-            && nodep->assertTypes().containsAny(VAssertType::UNIQUE | VAssertType::UNIQUE0
-                                                | VAssertType::PRIORITY)) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: assert control assertion_type");
-            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
-            return;
-        }
-
         bool directiveTypeConst = true;
         if (!nodep->directiveTypesp()) {
             nodep->directiveTypes(VAssertDirectiveType::ASSERT | VAssertDirectiveType::ASSUME
