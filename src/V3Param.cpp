@@ -352,7 +352,7 @@ class ParamProcessor final {
     // Module -> a defparam in it or below it, or nullptr (see nestedDefparamp)
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
     // "instance.parameter" path -> value of a defparam, see ParamVisitor::visit(AstDefParam)
-    std::unordered_map<std::string, AstNodeExpr*> m_defparamValues;
+    std::unordered_map<std::string, AstNode*> m_defparamValues;
     // Instance name -> original name of its module, for instances deparameterized so far
     std::unordered_map<string, string> m_instanceOrigNames;
     VNDeleter m_deleter;  // Used to delay deletion of nodes
@@ -2518,7 +2518,7 @@ class ParamProcessor final {
 
 public:
     // A defparam, in this instance of its module, gives the parameter at 'path' this value
-    void defparamValue(const string& path, AstNodeExpr* valuep) {
+    void defparamValue(const string& path, AstNode* valuep) {
         m_deleter.pushDeletep(valuep);
         m_defparamValues[path] = valuep;
     }
@@ -2616,15 +2616,23 @@ public:
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             m_instanceOrigNames[instanceName] = srcModp->origName();
+            const auto paramOf = [](const AstPin* pinp) -> const AstNode* {
+                if (pinp->modVarp()) return pinp->modVarp();
+                return pinp->modPTypep();
+            };
+            std::set<const AstNode*> defparamParams;  // Parameters set by a defparam to this cell
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
                 if (defParamNames(pinp->paramPath(), instanceName)) {
-                    if (pinp->exprp()) continue;
-                    // Value from the instance of the defparam's module
-                    const auto it
-                        = m_defparamValues.find(defparamPath(instanceName) + "." + pinp->name());
-                    if (it != m_defparamValues.end()) {
-                        pinp->exprp(it->second->cloneTree(false));
+                    if (!pinp->exprp()) {  // Value from the instance of the defparam's module
+                        const auto it = m_defparamValues.find(defparamPath(instanceName) + "."
+                                                              + pinp->name());
+                        if (it != m_defparamValues.end()) {
+                            pinp->exprp(it->second->cloneTree(false));
+                        }
+                    }
+                    if (pinp->exprp()) {
+                        defparamParams.emplace(paramOf(pinp));
                         continue;
                     }
                     // No value: the defparam is in a generate block not built.
@@ -2632,6 +2640,12 @@ public:
                     // instance they may set.
                 }
                 VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+            }
+            // IEEE 1800-2023 23.10: A defparam overrides the parameter value assignment
+            for (AstPin* const pinp : cellp->paramspList()) {
+                if (pinp->paramPath().empty() && defparamParams.count(paramOf(pinp))) {
+                    VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
+                }
             }
             // Nested generic-iface forwarding (#7454): rewrite VarRef placeholders
             // left by V3LinkDot to concrete IfaceRefDTypes now that the enclosing
