@@ -200,8 +200,12 @@ class AssertElabVisitor final : public VNVisitor {
                 FileLine* const flp = new FileLine{noCoverFileLine(varp->fileline())};
                 flp->modifyWarnOff(V3ErrorCode::UNDRIVEN, true);
                 flp->modifyWarnOff(V3ErrorCode::UNUSEDSIGNAL, true);
-                AstVar* const newVarp = new AstVar{flp, VVarType::MODULETEMP,
-                                                   m_propVarNames.get(varp), varp->dtypep()};
+                // An XTEMP stays one, see isMatchItem in V3AssertNfa
+                const VVarType varType = varp->varType() == VVarType::XTEMP
+                                             ? VVarType::XTEMP
+                                             : VVarType::MODULETEMP;
+                AstVar* const newVarp
+                    = new AstVar{flp, varType, m_propVarNames.get(varp), varp->dtypep()};
                 newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
                 m_modp->addStmtsp(newVarp);
                 localVarMap[varp] = newVarp;
