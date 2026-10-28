@@ -46,6 +46,77 @@ module t;
     after_disable_fork = 1'b1;
   end
 
+  // Self-disable of a loop body containing a fork, with a break out of the loop
+  int loop_cnt = 0;
+  initial begin
+    while (1) begin : loop_blk
+      fork
+        #1 loop_cnt++;
+      join
+      if (loop_cnt > 2) break;
+      disable loop_blk;
+      loop_cnt += 10;
+    end
+    `checkd(loop_cnt, 3);
+  end
+
+  // Disable from a fork branch, with break and continue out of the block
+  int branch_cnt = 0;
+  initial begin
+    for (int i = 0; i < 5; i++) begin : branch_blk
+      if (i == 3) break;
+      fork
+        begin
+          #1 branch_cnt++;
+          if (i == 0) disable branch_blk;
+        end
+      join
+      if (i == 1) continue;
+      branch_cnt += 10;
+    end
+    `checkd(branch_cnt, 13);
+  end
+
+  // Disable from a fork branch, with return out of the task
+  int task_cnt = 0;
+  task automatic task_loop();
+    for (int i = 0; i < 3; i++) begin : task_blk
+      fork
+        begin
+          #1 task_cnt++;
+          if (i == 0) disable task_blk;
+        end
+      join
+      if (i == 1) return;
+      task_cnt += 10;
+    end
+    task_cnt += 100;
+  endtask
+  initial begin
+    task_loop();
+    `checkd(task_cnt, 2);
+  end
+
+  // Disable of nested blocks from a fork branch
+  int nested_cnt = 0;
+  initial begin
+    for (int i = 0; i < 3; i++) begin : outer_blk
+      begin : inner_blk
+        fork
+          begin
+            #1 nested_cnt++;
+            if (i == 0) disable inner_blk;
+            if (i == 1) disable outer_blk;
+          end
+        join
+        if (i == 2) break;
+        nested_cnt += 10;
+      end
+      nested_cnt += 100;
+    end
+    `checkd(nested_cnt, 103);
+  end
+
   initial begin
     #10;
     `checkd(after_disable, 1'b0);
