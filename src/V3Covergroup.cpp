@@ -1068,6 +1068,9 @@ class FunctionalCoverageVisitor final : public VNVisitor {
             // The values of constructed bins are known at construction; see emitSizedSample, and
             // binCondition for those of ignore and illegal bins
             if (isConstructedBins(cbinp)) continue;
+            // A transition bin is not a value bin, so excludes no value from a default bin
+            // (IEEE 1800-2023 19.5)
+            if (cbinp->transp()) continue;
             if (isAutoBins(cbinp)) {
                 // Automatic bins partition the whole domain, leaving no default value
                 if (anyBinMatchp) VL_DO_DANGLING(pushDeletep(anyBinMatchp), anyBinMatchp);
