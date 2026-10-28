@@ -14,6 +14,8 @@ class Cls;
   extern function void f2args2(bit a);  // ok
   extern function void f2args3_bad(bit a, bit b, bit c);  //<--- Error (missing arg)
   extern function void farg_name_bad(bit declnamebad);  //<--- Error (declname arg)
+  extern function int fret_arg_bad(int a);  //<--- Error (mismatch arg type, with return)
+  extern task tret_arg_bad(int a);  //<--- Error (mismatch arg type, with return)
 endclass
 
 function bit Cls::func_bad();
@@ -43,6 +45,14 @@ endfunction
 
 function void Cls::farg_name_bad(bit declname);
 endfunction
+
+function int Cls::fret_arg_bad(byte a);
+  return 0;
+endfunction
+
+task Cls::tret_arg_bad(byte a);
+  return;
+endtask
 
 module t;
   initial $stop;
