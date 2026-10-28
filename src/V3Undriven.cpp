@@ -62,6 +62,7 @@ class UndrivenVarEntry final {
     const AstAlways* m_alwPlainp = nullptr;  // plain always of var if driven within plain always
     const AstClocking* m_clockingp = nullptr;  // clocking block of var if driven as output
     const AstNodeVarRef* m_nodep = nullptr;  // varref if driven, else nullptr
+    const AstNodeVarRef* m_wholeWritep = nullptr;  // varref if written as a whole, else nullptr
     const AstNode* m_initStaticp = nullptr;  // varref if in InitialStatic driven
     const AstNode* m_initialp = nullptr;  // varref if driven in an explicit initial block
     const AstNode* m_contAssignp = nullptr;  // varref if in continuous assignment driven
@@ -226,6 +227,8 @@ public:
     bool isDrivenClockingWhole() const { return m_wholeFlags[FLAG_DRIVEN_CLOCKING]; }
     bool isFtaskDriven() const { return m_ftaskDriven; }
     const AstNodeVarRef* getNodep() const { return m_nodep; }
+    const AstNodeVarRef* wholeWritep() const { return m_wholeWritep; }
+    void wholeWritep(const AstNodeVarRef* nodep) { m_wholeWritep = nodep; }
     const AstAlways* getAlwCombp() const { return m_alwCombp; }
     const AstAlways* getAlwFFp() const { return m_alwFFp; }
     const AstAlways* getAlwPlainp() const { return m_alwPlainp; }
@@ -482,7 +485,7 @@ class UndrivenVisitor final : public VNVisitorConst {
     bool m_inInitialSetup = false;  // In InitialAutomatic*/InitialStatic* assignment LHS
     bool m_inInitialStatic = false;  // In InitialStatic
     bool m_inProcAssign = false;  // In procedural assignment
-    bool m_inForce = false;  // In force/release target, which overrides rather than drives
+    bool m_inUncheckedWrite = false;  // In force/release/$readmem target; skip multi-writer checks
     bool m_inFTaskRef = false;  // In function or task call
     bool m_inInoutOrRefPin = false;  // Connected to pin that is inout
     const AstPin* m_drivingPinp = nullptr;  // In a pin of an output port, which drives its net
@@ -657,11 +660,21 @@ class UndrivenVisitor final : public VNVisitorConst {
         iterateChildrenConst(nodep);
     }
     void visit(AstArraySel* nodep) override {
-        // Arrays are rarely constant assigned, so for now we punt and do all entries
-        iterateChildrenConst(nodep);
+        // Arrays are rarely constant assigned, so for now we punt and do all entries.
+        // For the multiple driver checks, a constant element select is a partial write, as
+        // the longest static prefix is not the whole array (IEEE 1800-2023 11.5.3).
+        {
+            VL_RESTORER(m_inSelLhs);
+            m_inSelLhs = !V3Width::selectNonConstantRecurse(nodep->bitp(), /*inSel=*/true);
+            iterateConst(nodep->fromp());
+        }
+        iterateConst(nodep->bitp());
     }
     void visit(AstSliceSel* nodep) override {
-        // Arrays are rarely constant assigned, so for now we punt and do all entries
+        // Arrays are rarely constant assigned, so for now we punt and do all entries.
+        // Slice bounds are constant, so a slice is a partial write, as for AstArraySel.
+        VL_RESTORER(m_inSelLhs);
+        m_inSelLhs = true;
         iterateChildrenConst(nodep);
     }
     void visit(AstMemberRef* nodep) override {
@@ -777,8 +790,10 @@ class UndrivenVisitor final : public VNVisitorConst {
                     UINFO(9, " Full bus.  Entryp=" << cvtToHex(entryp));
                     warnAlwCombOrder(nodep, entryp->firstUsedNotDrivenp());
                 }
-                const AstNodeVarRef* const otherVarRefp = entryp->getNodep();
-                const AstNode* const otherWritep = otherVarRefp
+                // A partial write only overlaps an earlier write of the whole variable
+                const AstNodeVarRef* const otherVarRefp
+                    = m_inSelLhs ? entryp->wholeWritep() : entryp->getNodep();
+                const AstNode* const otherWritep = otherVarRefp || m_inSelLhs
                                                        ? static_cast<const AstNode*>(otherVarRefp)
                                                        : entryp->callNodep();
                 const bool sameFileLine
@@ -786,9 +801,8 @@ class UndrivenVisitor final : public VNVisitorConst {
                 // Preconditions shared by MULTIDRIVEN and MULTIDRIVENPROC.
                 const bool multidrivenCommon
                     = entryp->isDrivenWhole() && !m_inBBox && !VN_IS(nodep, VarXRef)
-                      && !VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType) && !sameFileLine
-                      && !entryp->isUnderGen() && otherWritep && !entryp->isFtaskDriven()
-                      && !ftaskDef && !m_inSelLhs && !m_inForce;
+                      && !sameFileLine && !entryp->isUnderGen() && otherWritep
+                      && !entryp->isFtaskDriven() && !ftaskDef && !m_inUncheckedWrite;
                 // The two warnings are gated independently on the variable
                 // declaration's fileline, as v3warn suppression will check
                 // the driving fileline and still warn even if the warning
@@ -846,7 +860,10 @@ class UndrivenVisitor final : public VNVisitorConst {
                     }
                     warnClockingDriven(nodep, entryp, otherWritep, otherWriteIsStaticInit);
                 }
-                if (multidrivenCommon && !nodep->varp()->isUsedLoopIdx()
+                // Unpacked arrays are commonly written by several plain always blocks, e.g.
+                // a multi-port memory, so are not reported
+                if (multidrivenCommon && !m_inSelLhs && !nodep->varp()->isUsedLoopIdx()
+                    && !VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType)
                     && !nodep->varp()->fileline()->warnIsOff(V3ErrorCode::MULTIDRIVENPROC)) {
                     // Two plain always blocks driving the whole signal: legal
                     // SystemVerilog, but a driver conflict for synthesis. The
@@ -868,12 +885,13 @@ class UndrivenVisitor final : public VNVisitorConst {
                     }
                     warnClockingDrivenProc(nodep, entryp, otherWritep, otherWriteIsStaticInit);
                 }
-                if (m_inForce) {
+                if (m_inUncheckedWrite) {
                     // Not recorded as the other write of a later MULTIDRIVEN
                     entryp->drivenWhole(static_cast<const AstNode*>(nodep));
                 } else if (!m_inInitialSetup || nodep->varp()->hasUserInit()) {
                     // Else don't count default initialization as a driver to a net/variable
                     entryp->drivenWhole(nodep, ftaskDef);
+                    if (!m_inSelLhs && !ftaskDef && !m_inBBox) entryp->wholeWritep(nodep);
                 }
                 if (m_alwaysCombp && entryp->isDrivenAlwaysCombWhole()
                     && m_alwaysCombp != entryp->getAlwCombp()
@@ -944,8 +962,8 @@ class UndrivenVisitor final : public VNVisitorConst {
         VL_RESTORER(m_inInitial);
         m_inInitial = false;
         // A force overrides the other drivers rather than adding one (IEEE 1800-2023 10.6.2)
-        VL_RESTORER(m_inForce);
-        m_inForce = true;
+        VL_RESTORER(m_inUncheckedWrite);
+        m_inUncheckedWrite = true;
         iterateConst(nodep->lhsp());
     }
     void visit(AstAssignW* nodep) override {
@@ -961,9 +979,16 @@ class UndrivenVisitor final : public VNVisitorConst {
     void visit(AstRelease* nodep) override {
         VL_RESTORER(m_inInitial);
         m_inInitial = false;
-        VL_RESTORER(m_inForce);
-        m_inForce = true;
+        VL_RESTORER(m_inUncheckedWrite);
+        m_inUncheckedWrite = true;
         iterateConst(nodep->lhsp());
+    }
+    void visit(AstReadMem* nodep) override {
+        // A memory preload, often in an initial block for a memory an always_ff writes, is
+        // commonly accepted by other tools, so is not reported as another writer
+        VL_RESTORER(m_inUncheckedWrite);
+        m_inUncheckedWrite = true;
+        iterateChildrenConst(nodep);
     }
     void visit(AstInitial* nodep) override {
         VL_RESTORER(m_inInitial);
