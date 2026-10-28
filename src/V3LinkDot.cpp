@@ -4417,6 +4417,27 @@ class LinkDotResolveVisitor final : public VNVisitor {
         return resultp;
     }
 
+    // Error if a pin connects a modport other than the modport of its interface port
+    void checkPinModport(const AstNode* nodep, const AstModport* modportp) const {
+        // IEEE 1800-2023 25.5: When both name a modport, the names shall be identical
+        const VSymEnt* const foundp = m_pinSymp->findIdFlat(m_pinp->name());
+        const AstVar* const portp = foundp ? VN_CAST(foundp->nodep(), Var) : nullptr;
+        if (!portp) return;  // Reported by visit(AstPin)
+        const AstNodeDType* const dtypep = portp->subDTypep()->elemDTypep(false);
+        string portModport;
+        if (const AstIfaceRefDType* const refp = VN_CAST(dtypep, IfaceRefDType)) {
+            portModport = refp->modportName();
+        } else if (const AstIfaceGenericDType* const genp = VN_CAST(dtypep, IfaceGenericDType)) {
+            portModport = genp->modportName();
+        }
+        if (!portModport.empty() && portModport != modportp->name()) {
+            nodep->v3error("Port " << portp->prettyNameQ() << " declared with modport "
+                                   << AstNode::prettyNameQ(portModport)
+                                   << " is connected to modport " << modportp->prettyNameQ()
+                                   << " (IEEE 1800-2023 25.5)");
+        }
+    }
+
     static bool isDotThisReference(const AstDot* nodep) {
         return VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "this";
     }
@@ -5090,6 +5111,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // We drop __BRA__??__KET__ as cells don't have that naming yet
                     AstVar* const ifaceRefVarp
                         = findIfaceTopVarp(nodep, parentEntp, cellp->name());
+                    if (m_pinp && m_pinp->exprp() == m_ds.m_dotp) checkPinModport(nodep, modportp);
                     // Nested cell (e.g. 'o.l.mp'): reference ifaceRefVarp via the prefix
                     // Modports only legal under `interface` so can just look back one dot
                     const size_t cellPos = m_ds.m_dotText.rfind('.');
