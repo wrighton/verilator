@@ -1,0 +1,26 @@
+check v=0
+[0] %Error: t_assert_ctl_unique.v:23: Assertion failed in top.t.check: unique case, but none matched for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:31: Assertion failed in top.t.check: priority case, but non-match found for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:35: Assertion failed in top.t.check: 'unique if' statement violated
+check v=3
+[0] %Error: t_assert_ctl_unique.v:23: Assertion failed in top.t.check: unique case, but multiple matches found for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:27: Assertion failed in top.t.check: unique0 case, but multiple matches found for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:35: Assertion failed in top.t.check: 'unique if' statement violated
+check v=0
+[0] %Error: t_assert_ctl_unique.v:23: Assertion failed in top.t.check: unique case, but none matched for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:31: Assertion failed in top.t.check: priority case, but non-match found for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:35: Assertion failed in top.t.check: 'unique if' statement violated
+check v=0
+[0] %Error: t_assert_ctl_unique.v:31: Assertion failed in top.t.check: priority case, but non-match found for '1'h1'
+check v=3
+[0] %Error: t_assert_ctl_unique.v:27: Assertion failed in top.t.check: unique0 case, but multiple matches found for '1'h1'
+check v=0
+check v=3
+check v=0
+check v=3
+[0] %Error: t_assert_ctl_unique.v:27: Assertion failed in top.t.check: unique0 case, but multiple matches found for '1'h1'
+check v=0
+[0] %Error: t_assert_ctl_unique.v:23: Assertion failed in top.t.check: unique case, but none matched for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:31: Assertion failed in top.t.check: priority case, but non-match found for '1'h1'
+[0] %Error: t_assert_ctl_unique.v:35: Assertion failed in top.t.check: 'unique if' statement violated
+*-* All Finished *-*
