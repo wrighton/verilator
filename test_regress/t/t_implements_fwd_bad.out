@@ -1,0 +1,14 @@
+%Error: t/t_implements_fwd_bad.v:10:25: Interface class 'IfFwd' is implemented through a forward typedef, before its declaration (IEEE 1800-2023 8.26.4)
+   10 | class ClsBad implements IfFwd;   
+      |                         ^~~~~
+        t/t_implements_fwd_bad.v:16:11: ... Location of declaration
+   16 | interface class IfFwd;
+      |           ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_implements_fwd_bad.v:13:31: Interface class 'IfFwd' is extended through a forward typedef, before its declaration (IEEE 1800-2023 8.26.4)
+   13 | interface class IfBad extends IfFwd;   
+      |                               ^~~~~
+        t/t_implements_fwd_bad.v:16:11: ... Location of declaration
+   16 | interface class IfFwd;
+      |           ^~~~~
+%Error: Exiting due to
