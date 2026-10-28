@@ -3587,6 +3587,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Dotted lookup is always relative to module, as maybe variable
         // name lower down with same scope name we want to ignore (t_math_divw)
         VSymEnt* dotSymp = m_modSymp;
+        // References in a class are relative to the module the class is declared in
+        while (VN_IS(dotSymp->nodep(), Class)) dotSymp = dotSymp->parentp();
         const string inl = AstNode::dedotName(inlinedDots);
         string baddot;
         VSymEnt* okSymp = nullptr;

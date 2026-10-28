@@ -222,6 +222,9 @@ static void process() {
         v3Global.assertDTypesResolved(true);
         v3Global.widthMinUsage(VWidthMinUsage::MATCHES_WIDTH);
 
+        // Record scope of hierarchical references, before passes move them out of their block
+        V3Begin::xrefScopeAll(v3Global.rootp());
+
         // End of elaboration
         V3Stats::addStatPerf(V3Stats::STAT_WALLTIME_ELAB, elabWallTime.deltaTime());
         const VlOs::DeltaWallTime cvtWallTime{true};

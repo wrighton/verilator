@@ -139,7 +139,9 @@ private:
     static AstNodeExpr* newDriveRefp(FileLine* flp, const SynchDrive& drive, AstVar* varp,
                                      const VAccess& access) {
         if (const AstVarXRef* const xrefp = VN_CAST(drive.refp, VarXRef)) {
-            return new AstVarXRef{flp, varp, xrefp->dotted(), access};
+            AstVarXRef* const newp = new AstVarXRef{flp, varp, xrefp->dotted(), access};
+            newp->inlinedDots(xrefp->inlinedDots());
+            return newp;
         } else if (const AstMemberSel* const selp = VN_CAST(drive.refp, MemberSel)) {
             // The interface expression is evaluated again, so it must not have side effects;
             // cloneTreePure warns if it has any
