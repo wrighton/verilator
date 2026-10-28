@@ -2599,9 +2599,22 @@ public:
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             m_instanceOrigNames[instanceName] = srcModp->origName();
+            const auto paramOf = [](const AstPin* pinp) -> const AstNode* {
+                if (pinp->modVarp()) return pinp->modVarp();
+                return pinp->modPTypep();
+            };
+            std::set<const AstNode*> defparamParams;  // Parameters set by a defparam to this cell
             for (AstPin* const pinp : cellp->paramspList()) {
-                if (!pinp->paramPath().empty()
-                    && !defParamNames(pinp->paramPath(), instanceName)) {
+                if (pinp->paramPath().empty()) continue;
+                if (!defParamNames(pinp->paramPath(), instanceName)) {
+                    VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
+                } else {
+                    defparamParams.emplace(paramOf(pinp));
+                }
+            }
+            // IEEE 1800-2023 23.10: A defparam overrides the parameter value assignment
+            for (AstPin* const pinp : cellp->paramspList()) {
+                if (pinp->paramPath().empty() && defparamParams.count(paramOf(pinp))) {
                     VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
                 }
             }
