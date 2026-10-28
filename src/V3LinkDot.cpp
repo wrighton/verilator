@@ -3285,6 +3285,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<std::string, AstNode*> m_ifClassImpNames;  // Names imported from interface class
     // Inherited interface implementations needing a forward in the current class, by name
     std::map<std::string, const VSymEnt*> m_ifForwards;
+    // References to names imported through a wildcard package export
+    std::vector<std::pair<FileLine*, const VSymEnt*>> m_wildcardExportRefs;
     std::set<AstClass*> m_extendsParam;  // Classes that have a parameterized super class
                                          // (except the default instances)
                                          // They are added to the set only in linkDotPrimary.
@@ -3844,7 +3846,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                            << declp->warnContextSecondary());
         }
     }
-    static void checkWildcardImportRef(const AstNode* nodep, const VSymEnt* foundp) {
+    void checkWildcardImportRef(const AstNode* nodep, const VSymEnt* foundp) {
         // IEEE 1800-2023 26.3: A reference must not match a name wildcard imported from
         // multiple packages, nor precede a declaration hiding a wildcard imported name
         if (foundp->importAmbiguous()) {
@@ -3860,6 +3862,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                            << nodep->warnContextPrimary() << '\n'
                            << foundp->nodep()->warnOther() << "... Location of declaration\n"
                            << foundp->nodep()->warnContextSecondary());
+        }
+        // IEEE 1800-2023 26.6: Checked once all references are known, see constructor
+        if (foundp->exportedWildcardp()) {
+            m_wildcardExportRefs.emplace_back(nodep->fileline(), foundp);
         }
     }
     void checkMemberDeclOrder(AstNode* nodep, AstMemberDType* declp) {
@@ -6810,6 +6816,20 @@ public:
             AstNodeModule* const modp = p.second;
             modp->foreach([](AstNode* const nodep) { nodep->user3(false); });
             iterate(modp);
+        }
+        // A wildcard export only exports names its package references (IEEE 1800-2023 26.6).
+        // Later passes do not look up all references again, so cannot check this.
+        if (m_statep->forPrimary()) {
+            for (const auto& pair : m_wildcardExportRefs) {
+                if (pair.second->exportedWildcardp()->referenced()) continue;
+                const AstNode* const declp = pair.second->nodep();
+                pair.first->v3error("Reference to " << declp->prettyNameQ()
+                                                    << " through a package's wildcard export, but"
+                                                       " that package does not reference "
+                                                    << declp->prettyNameQ()
+                                                    << ", so does not export it"
+                                                       " (IEEE 1800-2023 26.6)");
+            }
         }
     }
     ~LinkDotResolveVisitor() override = default;
