@@ -10868,11 +10868,12 @@ class WidthVisitor final : public VNVisitor {
                 return newp;
             }
         }
-        if (attrType == VAttrType::ENUM_NAME && !nodep->isPure() && (m_modep || m_ftaskp)) {
+        if (!nodep->isPure() && (m_modep || m_ftaskp)) {
+            // Evaluate once, as the range check below reads the value again
             AstExprStmt* const capturep = newEnumCapture(nodep, adtypep);
             AstNodeExpr* const valuep = capturep->resultp()->unlinkFrBack();
-            capturep->resultp(enumSelect(valuep, adtypep, attrType));
-            capturep->dtypeSetString();
+            capturep->resultp(enumSelect(valuep, adtypep, attrType, step));
+            capturep->dtypeFrom(capturep->resultp());
             return capturep;
         }
         if (attrType == VAttrType::ENUM_NAME && adtypep->isWide()) {
@@ -10903,23 +10904,30 @@ class WidthVisitor final : public VNVisitor {
             const int selwidth = V3Number::log2b(msbdim) + 1;  // Width to address a bit
             AstVarRef* const tabRefp
                 = enumVarRefp(adtypep, attrType, false, (1ULL << selwidth) - 1, step);
+            // A value above the table, not being a member, must not alias an item, as next/prev
+            // then return the default value (IEEE 1800-2023 6.19.5.3)
+            const bool aboveTable = adtypep->width() > selwidth;
             AstNodeExpr* const boundp
-                = attrType == VAttrType::ENUM_NAME
-                          && (adtypep->width() > selwidth || msbdim != (1ULL << selwidth) - 1)
+                = aboveTable
+                          || (attrType == VAttrType::ENUM_NAME && msbdim != (1ULL << selwidth) - 1)
                       ? new AstGt{nodep->fileline(), nodep->cloneTree(false),
                                   new AstConst{nodep->fileline(),
                                                V3Number{nodep, adtypep->width(),
                                                         static_cast<uint32_t>(msbdim)}}}
                       : nullptr;
-            newp = new AstArraySel{
-                nodep->fileline(), tabRefp,
-                // Select in case widths are off due to msblen!=width
-                // We return "random" values if outside the range, which is fine
-                // as next/previous on illegal values just need something good out
-                new AstSel{nodep->fileline(), nodep, 0, selwidth}};
+            newp = new AstArraySel{nodep->fileline(), tabRefp,
+                                   // Select in case widths are off due to msblen!=width
+                                   new AstSel{nodep->fileline(), nodep, 0, selwidth}};
             if (boundp) {
-                newp = new AstCond{nodep->fileline(), boundp,
-                                   new AstConst{nodep->fileline(), AstConst::String{}, ""}, newp};
+                AstConst* defaultp;
+                if (attrType == VAttrType::ENUM_NAME) {
+                    defaultp = new AstConst{nodep->fileline(), AstConst::String{}, ""};
+                } else {
+                    defaultp = new AstConst{nodep->fileline(), AstConst::WidthedValue{},
+                                            adtypep->width(), 0};
+                    defaultp->dtypeFrom(adtypep);
+                }
+                newp = new AstCond{nodep->fileline(), boundp, defaultp, newp};
             }
         }
         if (attrType == VAttrType::ENUM_NAME) {
