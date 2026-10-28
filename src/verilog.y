@@ -6707,8 +6707,12 @@ property_spec<propSpecp>:               // IEEE: property_spec
                         { $$ = $5; $$->fileline($1); $$->sensesp($3); }
         |       '@' senitemVar property_exprSpec
                         { $$ = $3; $$->fileline($1); $$->sensesp($2); }
+        |       '@' senitemVar yDISABLE yIFF '(' expr ')' property_exprSpec
+                        { $$ = $8; $$->fileline($1); $$->sensesp($2); $$->disablep($6); }
         |       yDISABLE yIFF '(' expr ')' '@' '(' senitem ')' property_exprSpec
                         { $$ = $10; $$->fileline($1); $$->sensesp($8); $$->disablep($4); }
+        |       yDISABLE yIFF '(' expr ')' '@' senitemVar property_exprSpec
+                        { $$ = $8; $$->fileline($1); $$->sensesp($7); $$->disablep($4); }
         //UNSUP remove above
         |       yDISABLE yIFF '(' expr ')' property_exprSpec
                         { $$ = $6; $$->fileline($4->fileline()); $$->disablep($4); }
