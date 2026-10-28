@@ -56,4 +56,36 @@ module t;
   row3_t rows3[2];
   row2_t rows2[2];
   assign rows3 = rows2;
+
+  int assocIntA[int];
+  int assocStrA[string];
+  int assocNestA[string][int];
+  int assocNestB[string][byte];
+  int assocIntegerA[integer];
+  initial begin
+    assocStrA = assocIntA;
+    assocNestA = assocNestB;
+    assocIntA = assocIntegerA;
+  end
+
+  class Cls1;
+  endclass
+  class Cls2;
+  endclass
+  int assocRealA[real];
+  int assocCls1A[Cls1];
+  int assocCls2A[Cls2];
+  real dynRealA[];
+  int dynIntA[];
+  logic [1:0][3:0] dynPackA[];
+  initial begin
+    assocIntA = assocStrA;
+    assocRealA = assocIntA;
+    assocCls1A = assocCls2A;
+    assocIntA = assocCls1A;
+    assocCls1A = assocIntA;
+    dynRealA = dynIntA;
+    dynRealA = dynPackA;
+    dynPackA = dynRealA;
+  end
 endmodule
