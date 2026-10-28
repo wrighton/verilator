@@ -5,8 +5,8 @@
 // SPDX-License-Identifier: CC0-1.0
 
 // The default failure of an assertion without 'else' runs as often on each tick as an explicit
-// fail action does (IEEE 1800-2023 16.14.1). An attempt failing at the last step on a tick
-// another attempt fails is not yet counted, so both report one failure fewer there.
+// fail action does, once for each attempt failing there, also for an attempt failing at the
+// last step on a tick another attempt fails (IEEE 1800-2023 16.14.1).
 module t;
   logic clk = 0;
   always #5 clk = ~clk;
