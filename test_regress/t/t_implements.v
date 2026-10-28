@@ -45,10 +45,31 @@ class Cls extends Base;
   endfunction
 endclass
 
+interface class Iext12 extends Icls1, Icls2;
+  pure virtual function int icfboth;
+endclass
+
+class Cls12 implements Iext12;
+  virtual function int icf1;
+    return 11;
+  endfunction
+  virtual function int icf2(int in);
+    return in + 12;
+  endfunction
+  virtual function int icfboth;
+    return 13;
+  endfunction
+  virtual function int icfpartial;
+    return 14;
+  endfunction
+endclass
+
 module t;
 
   Cls c;
   Iext1 i1;
+  Cls12 c12;
+  Iext12 i12;
 
   initial begin
     if (Icls1::LP1 != 1) $stop;
@@ -62,6 +83,13 @@ module t;
     i1 = c;
     if (i1.icf1() != 1) $stop;
     if (i1.icf101() != 101) $stop;
+
+    // Methods inherited from every extended interface class
+    c12 = new;
+    i12 = c12;
+    if (i12.icf1() != 11) $stop;
+    if (i12.icf2(1000) != 1012) $stop;
+    if (i12.icfboth() != 13) $stop;
 
     $write("*-* All Finished *-*\n");
     $finish;
