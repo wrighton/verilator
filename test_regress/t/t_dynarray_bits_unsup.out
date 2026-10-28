@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_dynarray_bits_unsup.v:12:9: Unsupported: $bits of dynamic array or queue of 'int$[]'
+                                                  : ... note: In instance 't'
+   12 |     n = $bits(d);
+      |         ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_dynarray_bits_unsup.v:13:9: Unsupported: $bits of dynamic array or queue of 'string'
+                                                  : ... note: In instance 't'
+   13 |     n = $bits(q);
+      |         ^~~~~
+%Error: Exiting due to
