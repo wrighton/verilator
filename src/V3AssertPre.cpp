@@ -1762,6 +1762,14 @@ private:
         iterate(nodep->propp());
         iterateNull(nodep->matchCountp());
     }
+    void visit(AstSClocked* nodep) override {
+        // V3AssertNfa hoists or reports the clocking events in the assertions it inlines;
+        // the ones left here came from the body of a nested property instance
+        nodep->v3warn(E_UNSUPPORTED,
+                      "Unsupported: clocking event inside nested property instance");
+        nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstPExpr* nodep) override {
         // V3AssertNfa handles multi-cycle property expressions before this pass,
         // so the following unsupported paths are defensive and typically unreached.

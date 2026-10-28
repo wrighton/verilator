@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_assert_multiclock_unsup.v:25:45: Unsupported: clocking event inside sequence expression
+                                                       : ... note: In instance 't'
+   25 |   assert property (@(posedge wclk) push |=> @(posedge rclk) pop);
+      |                                             ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_multiclock_unsup.v:26:45: Unsupported: clocking event inside sequence expression
+                                                       : ... note: In instance 't'
+   26 |   assert property (@(posedge wclk) push |-> @rclk pop);
+      |                                             ^
+%Error-UNSUPPORTED: t/t_assert_multiclock_unsup.v:17:30: Unsupported: clocking event inside sequence expression
+                                                       : ... note: In instance 't'
+   17 |     @(posedge wclk) push ##1 @(posedge rclk) pop;
+      |                              ^
+%Error-UNSUPPORTED: t/t_assert_multiclock_unsup.v:28:44: Unsupported: clocking event inside sequence expression
+                                                       : ... note: In instance 't'
+   28 |   cover property (@(posedge wclk) push ##2 @(negedge rclk) pop);
+      |                                            ^
+%Error-UNSUPPORTED: t/t_assert_multiclock_unsup.v:21:14: Unsupported: clocking event inside nested property instance
+                                                       : ... note: In instance 't'
+   21 |     push |-> @(posedge rclk) pop;
+      |              ^
+%Error: Exiting due to
