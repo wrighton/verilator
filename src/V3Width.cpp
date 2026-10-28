@@ -9509,11 +9509,21 @@ class WidthVisitor final : public VNVisitor {
         lhsp = lhsp->skipRefToEnump();
         rhsp = rhsp->skipRefToEnump();
         if (lhsp == rhsp) return true;
-        // If both are basic types, check if they are the same type
-        if (VN_IS(lhsp, BasicDType) && VN_IS(rhsp, BasicDType)) {
-            const auto* lbp = VN_CAST(lhsp, BasicDType);
-            const auto* rbp = VN_CAST(rhsp, BasicDType);
-            if (lbp->isString() != rbp->isString()) return false;
+        // Built-in types that are not integral, e.g. real and string, are equivalent only to
+        // the same type
+        const AstBasicDType* const lbp = VN_CAST(lhsp, BasicDType);
+        const AstBasicDType* const rbp = VN_CAST(rhsp, BasicDType);
+        if ((lbp && !lbp->isIntegralOrPacked()) || (rbp && !rbp->isIntegralOrPacked())) {
+            return lbp && rbp && lbp->keyword() == rbp->keyword();
+        }
+        // Class types are equivalent only to the same class, but arrays of a derived class are
+        // also accepted for arrays of its base class (see t_queue_bounded)
+        const AstClassRefDType* const lclassp = VN_CAST(lhsp, ClassRefDType);
+        const AstClassRefDType* const rclassp = VN_CAST(rhsp, ClassRefDType);
+        if (lclassp || rclassp) {
+            return lclassp && rclassp
+                   && (AstClass::isClassExtendedFrom(lclassp->classp(), rclassp->classp())
+                       || AstClass::isClassExtendedFrom(rclassp->classp(), lclassp->classp()));
         }
 
         // d) Unpacked fixed-size array types are equivalent if they have equivalent element types
@@ -10461,6 +10471,24 @@ class WidthVisitor final : public VNVisitor {
                                "only with associative arrays (IEEE 1800-2023 7.6)"
                                << warnDTypes(nodep, lhsDtp, rhsDtp, lhsName, rhsName));
                 return;
+            }
+            // ... and only with the same index type
+            if (const AstAssocArrayDType* const lhsAssocp
+                = VN_CAST(lhsDtpIterp, AssocArrayDType)) {
+                const AstNodeDType* const lKeyp = lhsAssocp->keyDTypep()->skipRefp();
+                const AstNodeDType* const rKeyp
+                    = VN_AS(rhsDtpIterp, AssocArrayDType)->keyDTypep()->skipRefp();
+                // Integral index types differing only in signedness (or an enum and its base
+                // type) stay accepted, as simulators disagree on them (see t_cast_types)
+                const bool signOnly = lKeyp->isIntegralOrPacked() && rKeyp->isIntegralOrPacked()
+                                      && lKeyp->width() == rKeyp->width()
+                                      && lKeyp->isFourstate() == rKeyp->isFourstate();
+                if (!signOnly && !isEquivalentDType(lKeyp, rKeyp)) {
+                    nodep->v3error("Illegal assignment: Associative array index types are not "
+                                   "equivalent (IEEE 1800-2023 7.9.9)"
+                                   << warnDTypes(nodep, lhsDtp, rhsDtp, lhsName, rhsName));
+                    return;
+                }
             }
             lhsDtpIterp = lhsDtpIterp->subDTypep()->skipRefp();
             rhsDtpIterp = rhsDtpIterp->subDTypep()->skipRefp();
