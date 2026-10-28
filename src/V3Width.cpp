@@ -6600,7 +6600,8 @@ class WidthVisitor final : public VNVisitor {
         if (isElement) {
             iterateCheckTyped(itemp, "value", valuep, arrayDtp->subDTypep(), FINAL);
         } else {
-            userIterateAndNext(valuep, WidthVP{arrayDtp, FINAL}.p());
+            userIterateAndNext(convertUnpackedOrder(valuep, arrayDtp),
+                               WidthVP{arrayDtp, FINAL}.p());
         }
     }
     void addConsItem(AstNodeExpr* consp, AstNodeExpr* valuep) {
@@ -8309,8 +8310,9 @@ class WidthVisitor final : public VNVisitor {
                     iterateCheckSelf(nodep, "Function Argument", pinp, SELF, FINAL);
                 } else if (!portp->basicp() || portp->basicp()->isOpaque()) {
                     // Output args: at return caller = callee, reverse direction.
-                    checkClassAssign(nodep, "Function Argument", pinp, portDTypep,
-                                     portp->direction() == VDirection::OUTPUT);
+                    pinp = VN_AS(checkClassAssign(nodep, "Function Argument", pinp, portDTypep,
+                                                  portp->direction() == VDirection::OUTPUT),
+                                 NodeExpr);
                     userIterate(pinp, WidthVP{portDTypep, FINAL, STREAM_USE_ASSIGN}.p());
                 } else {
                     iterateCheckAssign(nodep, "Function Argument", pinp, FINAL, portDTypep,
@@ -9798,8 +9800,9 @@ class WidthVisitor final : public VNVisitor {
                            << warnDTypes(nodep, lhsDtp, rhsDtp, lhsName, rhsName));
         }
     }
-    void checkClassAssign(const AstNode* nodep, const char* side, AstNode* rhsp,
-                          AstNodeDType* const lhsDTypep, bool isOutputArg = false) {
+    // Returns rhsp, or the conversion that replaced it
+    AstNode* checkClassAssign(const AstNode* nodep, const char* side, AstNode* rhsp,
+                              AstNodeDType* const lhsDTypep, bool isOutputArg = false) {
         UASSERT_OBJ(rhsp->dtypep(), rhsp, "Node has no type");
         const AstNodeDType* const lhsRawDTypep = lhsDTypep->skipRefp();
         const AstNodeDType* const rhsRawDTypep = rhsp->dtypep()->skipRefp();
@@ -9811,9 +9814,9 @@ class WidthVisitor final : public VNVisitor {
                     = isOutputArg ? rhsClassRefp->classp() : lhsClassRefp->classp();
                 const AstClass* const srcp
                     = isOutputArg ? lhsClassRefp->classp() : rhsClassRefp->classp();
-                if (isBaseClassRecurse(dstp, srcp)) return;
+                if (isBaseClassRecurse(dstp, srcp)) return rhsp;
             } else if (rhsp->isNull()) {
-                return;
+                return rhsp;
             }
             nodep->v3error(side << " expects a " << lhsClassRefp->prettyTypeName() << ", got "
                                 << rhsRawDTypep->prettyTypeName());
@@ -9822,18 +9825,21 @@ class WidthVisitor final : public VNVisitor {
                                 << " cannot be assigned to non-class "
                                 << lhsDTypep->prettyDTypeNameQ());
         }
-        if (VN_IS(lhsRawDTypep, DynArrayDType) && VN_IS(rhsRawDTypep, UnpackArrayDType)) {
+        if ((VN_IS(lhsRawDTypep, DynArrayDType) || VN_IS(lhsRawDTypep, QueueDType))
+            && VN_IS(rhsRawDTypep, UnpackArrayDType)) {
+            AstNodeExpr* const fromp = convertUnpackedOrder(VN_AS(rhsp, NodeExpr), lhsDTypep);
             VNRelinker relinker;
-            rhsp->unlinkFrBack(&relinker);
-            relinker.relink(
-                new AstCvtUnpackToQueue{rhsp->fileline(), VN_AS(rhsp, NodeExpr), lhsDTypep});
+            fromp->unlinkFrBack(&relinker);
+            rhsp = new AstCvtUnpackToQueue{fromp->fileline(), fromp, lhsDTypep};
+            relinker.relink(rhsp);
         } else if (VN_IS(lhsRawDTypep, UnpackArrayDType)
                    && (VN_IS(rhsRawDTypep, DynArrayDType) || VN_IS(rhsRawDTypep, QueueDType))) {
             VNRelinker relinker;
             rhsp->unlinkFrBack(&relinker);
-            relinker.relink(
-                new AstCvtQueueToUnpack{rhsp->fileline(), VN_AS(rhsp, NodeExpr), lhsDTypep});
+            rhsp = new AstCvtQueueToUnpack{rhsp->fileline(), VN_AS(rhsp, NodeExpr), lhsDTypep};
+            relinker.relink(rhsp);
         }
+        return rhsp;
     }
     static bool similarDTypeRecurse(const AstNodeDType* const node1p,
                                     const AstNodeDType* const node2p) {
@@ -9997,7 +10003,7 @@ class WidthVisitor final : public VNVisitor {
             }
         }
         // We iterate and size the RHS based on the result of RHS evaluation
-        checkClassAssign(parentp, side, rhsp, lhsDTypep);
+        rhsp = checkClassAssign(parentp, side, rhsp, lhsDTypep);
         const bool lhsStream = (VN_IS(parentp, NodeAssign)
                                 && VN_IS(VN_AS(parentp, NodeAssign)->lhsp(), NodeStream));
         rhsp = iterateCheck(parentp, side, rhsp, ASSIGN, FINAL, lhsDTypep,
@@ -10005,9 +10011,27 @@ class WidthVisitor final : public VNVisitor {
         // UINFOTREE(1, parentp, "", "checkout");
         (void)rhsp;  // cppcheck
     }
-    // Convert an unpacked array value to an equivalent type with some dimension reversed,
-    // keeping elements in left-to-right order (IEEE 1800-2023 7.6)
+    // Convert an unpacked array value to a type with some dimension reversed
     AstNodeExpr* convertUnpackedOrder(AstNodeExpr* exprp, AstNodeDType* dtypep) {
+        // Elements keep their left-to-right order (IEEE 1800-2023 7.6).
+        // A dynamic array or queue takes the elements in the order of an ascending fixed-size
+        // array.
+        const AstUnpackArrayDType* const fromArrayp
+            = VN_CAST(exprp->dtypep()->skipRefp(), UnpackArrayDType);
+        if (fromArrayp
+            && (VN_IS(dtypep->skipRefp(), DynArrayDType)
+                || VN_IS(dtypep->skipRefp(), QueueDType))) {
+            FileLine* const flp = exprp->fileline();
+            AstUnpackArrayDType* const ascendingp
+                = new AstUnpackArrayDType{flp, dtypep->skipRefp()->subDTypep(),
+                                          new AstRange{flp, 0, fromArrayp->elementsConst() - 1}};
+            if (!ascendingp->isReverseOf(fromArrayp)) {
+                VL_DO_DANGLING(ascendingp->deleteTree(), ascendingp);
+                return exprp;
+            }
+            v3Global.rootp()->typeTablep()->addTypesp(ascendingp);
+            dtypep = ascendingp;
+        }
         const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
         if (!arrayp || !arrayp->isReverseOf(exprp->dtypep())) return exprp;
         VNRelinker relinker;
