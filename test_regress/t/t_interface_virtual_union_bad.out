@@ -1,0 +1,10 @@
+%Error: t/t_interface_virtual_union_bad.v:16:17: Virtual interface not legal as union member (IEEE 1800-2023 25.9): 'vb'
+                                               : ... note: In instance 't'
+   16 |     virtual bus vb;
+      |                 ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_virtual_union_bad.v:21:12: Virtual interface not legal as union member (IEEE 1800-2023 25.9): 'vb'
+                                               : ... note: In instance 't'
+   21 |     vbus_t vb;
+      |            ^~
+%Error: Exiting due to

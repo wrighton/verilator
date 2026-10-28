@@ -4083,6 +4083,12 @@ class WidthVisitor final : public VNVisitor {
                 itemp->v3error("Unpacked data type "
                                << dtp->prettyDTypeNameQ()
                                << " in packed struct/union (IEEE 1800-2023 7.2.1)");
+            const AstIfaceRefDType* const irefp = VN_CAST(dtp, IfaceRefDType);
+            if (VN_IS(nodep, UnionDType) && irefp && irefp->isVirtual()) {
+                itemp->v3error(
+                    "Virtual interface not legal as union member (IEEE 1800-2023 25.9): "
+                    << itemp->prettyNameQ());
+            }
             if ((VN_IS(nodep, UnionDType) || nodep->packed()) && itemp->valuep()) {
                 itemp->v3error("Initial values not allowed in packed struct/union"
                                " (IEEE 1800-2023 7.2.2)");
