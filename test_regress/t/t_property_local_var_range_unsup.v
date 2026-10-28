@@ -54,6 +54,53 @@ module t (
   endproperty
   assert property (p_nested_in_body);
 
+  // A range delay after a match item in the antecedent is unsupported.
+  property p_ante_range;
+    int snap;
+    @(posedge clk) (valid, snap = cyc) ##[1:2] valid |-> (cyc > snap);
+  endproperty
+  assert property (p_ante_range);
+
+  // A composite sequence operator after a match item in the antecedent is
+  // unsupported.
+  property p_ante_composite;
+    int snap;
+    @(posedge clk) (valid, snap = cyc) ##1 valid [* 2] |-> (cyc > snap);
+  endproperty
+  assert property (p_ante_composite);
+
+  // A match item assigning a select is unsupported.
+  property p_select_lhs;
+    logic [1:0] bits;
+    @(posedge clk) (valid, bits[0] = cyc[0]) ##1 valid |-> bits[0];
+  endproperty
+  assert property (p_select_lhs);
+
+  // A reference in a composite sequence operator before a match item is
+  // unsupported.
+  property p_composite_before_item;
+    int snap, snap2;
+    @(posedge clk) (valid, snap = cyc) ##1 ((cyc > snap) [* 2], snap2 = cyc) |-> (cyc > snap2);
+  endproperty
+  assert property (p_composite_before_item);
+
+  // A match item reading a value assigned before a range delay is unsupported.
+  property p_item_after_range;
+    int snap, snap2;
+    @(posedge clk) (valid, snap = cyc) ##[1:2] (valid, snap2 = snap) |-> (cyc > snap2);
+  endproperty
+  assert property (p_item_after_range);
+
+  // A match item in a nested implication is unsupported.
+  property p_nested_implication;
+    int snap;
+    @(posedge clk) (valid, snap = cyc) ##1 1 |-> (valid, snap = snap + 1) |-> (cyc > snap);
+  endproperty
+  assert property (p_nested_implication);
+
+  // A subroutine call match item in an antecedent is unsupported.
+  assert property (@(posedge clk) (valid, $display("valid")) ##1 valid |-> (cyc > 0));
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     valid <= (cyc == 2);
