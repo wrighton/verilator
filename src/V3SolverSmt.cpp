@@ -2086,6 +2086,69 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
     }
     void visit(AstSFormatF* nodep) override {}
+    // Move soft items of a constraint 'if' out to guarded soft constraints after 'lastp'
+    void hoistGuardedSofts(AstNode*& lastp, AstConstraintIf* ifp, AstNodeExpr* outerCondp) {
+        // The 'if' folds into one hard expression, so each soft item needs its own
+        // 'if (guard) soft item' (IEEE 1800-2023 18.5.14). Order is kept, as later soft
+        // constraints have priority.
+        if (!ifp->exists([](const AstConstraintExpr* const exprp) { return exprp->isSoft(); })) {
+            return;
+        }
+        hoistGuardedSoftItems(lastp, ifp->thensp(),
+                              newGuardAnd(outerCondp, ifp->condp()->cloneTreePure(false)));
+        if (ifp->elsesp()) {
+            hoistGuardedSoftItems(lastp, ifp->elsesp(), newGuardAnd(outerCondp, newNotCond(ifp)));
+        }
+    }
+    // Move soft items of a constraint 'if' branch out to guarded soft constraints
+    void hoistGuardedSoftItems(AstNode*& lastp, AstNode* itemsp, AstNodeExpr* condp) {
+        for (AstNode *itemp = itemsp, *nextp; itemp; itemp = nextp) {
+            nextp = itemp->nextp();
+            if (AstConstraintIf* const ifp = VN_CAST(itemp, ConstraintIf)) {
+                hoistGuardedSofts(lastp, ifp, condp);
+                continue;
+            }
+            const AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr);
+            AstConstraintForeach* const foreachp = VN_CAST(itemp, ConstraintForeach);
+            if (!(exprp && exprp->isSoft())
+                && !(foreachp && foreachp->exists([](const AstConstraintExpr* const softp) {
+                       return softp->isSoft();
+                   }))) {
+                continue;
+            }
+            FileLine* const fl = itemp->fileline();
+            itemp->replaceWith(new AstConstraintExpr{fl, new AstConst{fl, AstConst::BitTrue{}}});
+            AstNodeConstraintItem* hoistp;
+            if (foreachp) {
+                // 'if (c) foreach (...) body' is 'foreach (...) if (c) body'
+                foreachp->addBodyp(new AstConstraintIf{fl, condp->cloneTreePure(false),
+                                                       foreachp->bodyp()->unlinkFrBackWithNext(),
+                                                       nullptr});
+                hoistp = foreachp;
+            } else {
+                hoistp = new AstConstraintIf{fl, condp->cloneTreePure(false),
+                                             VN_AS(itemp, NodeConstraintItem), nullptr};
+            }
+            lastp->addNextHere(hoistp);
+            lastp = hoistp;
+        }
+        VL_DO_DANGLING(condp->deleteTree(), condp);
+    }
+    // Negated condition of a constraint 'if'
+    static AstNodeExpr* newNotCond(const AstConstraintIf* ifp) {
+        AstNodeExpr* const notp
+            = new AstLogNot{ifp->fileline(), ifp->condp()->cloneTreePure(false)};
+        notp->user1(ifp->condp()->user1());
+        return notp;
+    }
+    // Condition 'outerCondp && condp', taking ownership of condp
+    static AstNodeExpr* newGuardAnd(AstNodeExpr* outerCondp, AstNodeExpr* condp) {
+        if (!outerCondp) return condp;
+        AstNodeExpr* const andp
+            = new AstLogAnd{condp->fileline(), outerCondp->cloneTreePure(false), condp};
+        andp->user1(outerCondp->user1() || condp->user1());
+        return andp;
+    }
     void visit(AstConstraintIf* nodep) override {
         // Outside a fold, this if's branches are folded here and m_constraintVars collects
         // their names for the constraint replacing it; a nested if adds to its parent's fold
@@ -2094,6 +2157,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                     "Constraint names of an earlier fold were not taken over");
         AstNodeExpr* newp = nullptr;
         FileLine* const fl = nodep->fileline();
+        // A single soft item under 'if' without 'else' stays soft, as made by hoistGuardedSofts
+        const AstConstraintExpr* const softp = VN_CAST(nodep->thensp(), ConstraintExpr);
+        const bool isSoft = softp && softp->isSoft() && !softp->nextp() && !nodep->elsesp();
+        if (foldOwner && !isSoft) {
+            AstNode* lastp = nodep;
+            hoistGuardedSofts(lastp, nodep, nullptr);
+        }
         AstNodeExpr* const thenp = editSingle(fl, nodep->thensp());
         AstNodeExpr* const elsep = editSingle(fl, nodep->elsesp());
         if (thenp && elsep) {
@@ -2107,6 +2177,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             newp->dtypeSetBit();  // Result is boolean (prevents bare-var != 0 wrapping)
             newp->user1(true);  // Assume result-dependent
             AstConstraintExpr* const exprp = new AstConstraintExpr{fl, newp};
+            exprp->isSoft(isSoft);
             nodep->replaceWith(exprp);
             // Iterated next (AstNode::iterateAndNext), and takes over the folded names
             if (foldOwner) m_foldTakerp = exprp;
@@ -2922,13 +2993,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNode* hoistListp = nullptr;
         for (AstNode* const stmtp : VNList<AstNode>{itemsp}) {
             if (AstConstraintIf* const ifp = VN_CAST(stmtp, ConstraintIf)) {
-                FileLine* const fl = ifp->fileline();
                 // then branch: accumulated = outer && this.cond
                 AstNodeExpr* const thenCondp
-                    = outerCondp ? static_cast<AstNodeExpr*>(
-                                       new AstLogAnd{fl, outerCondp->cloneTreePure(false),
-                                                     ifp->condp()->cloneTreePure(false)})
-                                 : ifp->condp()->cloneTreePure(false);
+                    = newGuardAnd(outerCondp, ifp->condp()->cloneTreePure(false));
                 if (AstNode* const thenHoistp
                     = extractConditionalDisableSofts(ifp->thensp(), thenCondp)) {
                     hoistListp
@@ -2937,12 +3004,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 VL_DO_DANGLING(thenCondp->deleteTree(), thenCondp);
                 if (ifp->elsesp()) {
                     // else branch: accumulated = outer && !this.cond
-                    AstNodeExpr* const notInnerp
-                        = new AstLogNot{fl, ifp->condp()->cloneTreePure(false)};
-                    AstNodeExpr* const elseCondp
-                        = outerCondp ? static_cast<AstNodeExpr*>(new AstLogAnd{
-                                           fl, outerCondp->cloneTreePure(false), notInnerp})
-                                     : notInnerp;
+                    AstNodeExpr* const elseCondp = newGuardAnd(outerCondp, newNotCond(ifp));
                     if (AstNode* const elseHoistp
                         = extractConditionalDisableSofts(ifp->elsesp(), elseCondp)) {
                         hoistListp
@@ -3573,7 +3635,9 @@ class SolverSmtLowering final : public V3SolverLowering {
             VL_DO_DANGLING(pushDeletep(chainp), chainp);
             return buildFrozenMembership(distp, buckets);
         }
-        return new AstConstraintIf{fl, gatep, chainp, buildFrozenMembership(distp, buckets)};
+        // A constraint 'if' condition is boolean, and the gate may be a wider mode word
+        return new AstConstraintIf{fl, new AstRedOr{fl, gatep}, chainp,
+                                   buildFrozenMembership(distp, buckets)};
     }
 
     AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp) {
