@@ -527,7 +527,10 @@ size_t V3ParseImp::tokenPipeScanIdInst(size_t depthIn) {
     // Return location of following token, or input if not found
     // yaID/*module_identifier*/ [ '#' '('...')' ] yaID/*name_of_instance*/ [ '['...']' ] '(' ...
     // yaID/*module_identifier*/ [ '#' id|etc ] yaID/*name_of_instance*/ [ '['...']' ] '(' ...
+    // yaID/*udp_identifier*/ '(' strength ... ')' [ '#' ... ] yaID/*name_of_instance*/ ...
     size_t depth = depthIn;
+    if (tokenPeekp(depth)->token == '(' && isStrengthToken(tokenPeekp(depth + 1)->token))
+        depth = tokenPipeScanParens(depth);
     depth = tokenPipeScanParam(depth, true);
 
     if (tokenPeekp(depth)->token != yaID__LEX) return depthIn;

@@ -1,0 +1,20 @@
+%Error-UNSUPPORTED: t/t_udp_strength_unsup.v:19:9: Unsupported: drive strength on UDP instance
+   19 |   p_buf (strong0, weak1) u1 (o1, a);
+      |         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_udp_strength_unsup.v:20:9: Unsupported: drive strength on UDP instance
+   20 |   p_buf (pull1, weak0) #3 u2 (o2, a), u3 (o3, a);
+      |         ^
+%Error-UNSUPPORTED: t/t_udp_strength_unsup.v:21:9: Unsupported: drive strength on UDP instance
+   21 |   p_buf (supply0, strong1) #(1, 2) u4 (o4, a);
+      |         ^
+%Error-UNSUPPORTED: t/t_udp_strength_unsup.v:22:9: Unsupported: drive strength on UDP instance
+   22 |   p_buf (weak0, weak1) (o5, a);
+      |         ^
+%Error-UNSUPPORTED: t/t_udp_strength_unsup.v:23:10: Unsupported: highz strength
+   23 |   p_buf (highz0, weak1) u6 (o6, a);
+      |          ^~~~~~
+%Error-UNSUPPORTED: t/t_udp_strength_unsup.v:23:9: Unsupported: drive strength on UDP instance
+   23 |   p_buf (highz0, weak1) u6 (o6, a);
+      |         ^
+%Error: Exiting due to

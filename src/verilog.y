@@ -1996,7 +1996,6 @@ port_declaration<nodep>:        // ==IEEE: port_declaration
                           VARDTYPE(dtp); }
         /*cont*/    mpInstnameList
                         { $$ = $5; }
-        //UNSUP: strengthSpecE for udp_instantiations
         ;
 
 tf_port_declaration<nodep>:     // ==IEEE: tf_port_declaration
@@ -3289,10 +3288,10 @@ etcInst<nodep>:                 // IEEE: module_instantiation + gate_instantiati
 instDecl<nodep>:
         //                      // Disambigurated from data_declaration based on
         //                      // idInst which is found as IEEE requires a later '('
-                idInst parameter_value_assignmentInstE
-        /*mid*/         { INSTPREP($<fl>1, *$1, $2); }
+                idInst udpDriveStrengthE parameter_value_assignmentInstE
+        /*mid*/         { INSTPREP($<fl>1, *$1, $3); }
         /*cont*/    instnameList ';'
-                        { $$ = $4;
+                        { $$ = $5;
                           GRAMMARP->m_impliedDecl = false;
                           if (GRAMMARP->m_instParamp) {
                               VL_DO_CLEAR(GRAMMARP->m_instParamp->deleteTree(),
@@ -3301,10 +3300,16 @@ instDecl<nodep>:
         //
         //                      // IEEE: part of udp_instance when no name_of_instance
         //                      // Note no unpacked dimension nor list of instances
-        |       id
+        |       id udpDriveStrengthE
         /*mid*/         { INSTPREP($<fl>1, *$1, nullptr); }
         /*cont*/    instnameParenUdpn ';'
-                        { $$ = $3; GRAMMARP->m_impliedDecl = false; }
+                        { $$ = $4; GRAMMARP->m_impliedDecl = false; }
+        ;
+
+udpDriveStrengthE:              // IEEE: [ drive_strength ] for udp_instantiation
+                /* empty */                             { }
+        |       driveStrength
+                        { BBUNSUP($<fl>1, "Unsupported: drive strength on UDP instance"); DEL($1); }
         ;
 
 mpInstnameList<nodep>:          // Similar to instnameList, but for modport instantiations which have no parenthesis
