@@ -54,6 +54,29 @@ module t (
   endproperty
   assert property (p_nested_in_body);
 
+  // A range delay after a match item within a sequence is unsupported.
+  sequence s_range;
+    int snap;
+    (1, snap = cyc) ##[1:3] (cyc > snap);
+  endsequence
+  assert property (@(posedge clk) valid |-> s_range);
+
+  // A composite sequence operator after a match item within a sequence is
+  // unsupported.
+  property p_seq_composite;
+    int snap;
+    @(posedge clk) valid |-> (1, snap = cyc) ##1 valid [* 2] ##1 (cyc > snap);
+  endproperty
+  assert property (p_seq_composite);
+
+  // A consequent reference to a local variable captured by a match item
+  // within a multi-cycle antecedent is unsupported.
+  property p_multi_ante;
+    int snap;
+    @(posedge clk) (valid, snap = cyc) ##1 1 |-> (cyc == snap + 1);
+  endproperty
+  assert property (p_multi_ante);
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     valid <= (cyc == 2);

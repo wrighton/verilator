@@ -297,12 +297,17 @@ private:
         for (const auto& tconnect : tconnects) {
             portMap[tconnect.first] = tconnect.second->exprp();
         }
+        const std::unordered_map<const AstVar*, AstVar*> localVarMap
+            = V3AssertCommon::newSvaLocalVars(seqp, m_modp, m_propVarNames);
         clonedp->foreach([&](AstVarRef* refp) {
-            const auto it = portMap.find(refp->varp());
-            if (it != portMap.end()) {
-                refp->replaceWith(it->second->cloneTree(false));
+            const auto portIt = portMap.find(refp->varp());
+            if (portIt != portMap.end()) {
+                refp->replaceWith(portIt->second->cloneTree(false));
                 VL_DO_DANGLING(pushDeletep(refp), refp);
+                return;
             }
+            const auto localIt = localVarMap.find(refp->varp());
+            if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
@@ -334,19 +339,8 @@ private:
         // Promote property-local variables (non-port vars, IEEE 16.10) to
         // module-level __Vpropvar temps. Cross-cycle persistence is handled
         // by the match item lowering in visit(AstImplication*).
-        std::unordered_map<const AstVar*, AstVar*> localVarMap;
-        for (AstNode* const declp : propp->declspList()) {
-            if (AstVar* const varp = VN_CAST(declp, Var)) {
-                if (!varp->isIO()) {
-                    const string newName = m_propVarNames.get(varp);
-                    AstVar* const newVarp = new AstVar{varp->fileline(), VVarType::MODULETEMP,
-                                                       newName, varp->dtypep()};
-                    newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
-                    m_modp->addStmtsp(newVarp);
-                    localVarMap[varp] = newVarp;
-                }
-            }
-        }
+        const std::unordered_map<const AstVar*, AstVar*> localVarMap
+            = V3AssertCommon::newSvaLocalVars(propp, m_modp, m_propVarNames);
 
         // Single traversal: substitute ports and update local var references
         propExprp->foreach([&](AstVarRef* refp) {
