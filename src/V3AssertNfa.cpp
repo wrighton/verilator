@@ -3096,6 +3096,23 @@ class AssertNfaVisitor final : public VNVisitor {
         });
     }
 
+    // First subroutine call match item in a property, or nullptr
+    static const AstNode* matchItemCall(const AstNode* nodep) {
+        // Calls are not executed at the end points of their sequence (IEEE 1800-2023 16.11). Any
+        // other match item is an assignment by here, as V3LinkInc lowers increments.
+        const AstNode* callp = nullptr;
+        nodep->exists([&callp](const AstExprStmt* exprStmtp) {
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (!VN_IS(stmtp, Assign)) {
+                    callp = stmtp;
+                    return true;
+                }
+            }
+            return false;
+        });
+        return callp;
+    }
+
     static VPropStrength effectiveAssertPropStrength(const AstPropSpec* const propSpecp) {
         if (propSpecp->propStrength() != VPropStrength::DEFAULT) return propSpecp->propStrength();
         return propSpecp->fileline()->language() <= V3LangCode::L1800_2005 ? VPropStrength::STRONG
@@ -3432,6 +3449,12 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->v3warn(E_UNSUPPORTED,
                             "Unsupported: property instance inside a multi-cycle property "
                             "expression");
+            VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
+            return nullptr;
+        }
+        if (const AstNode* const callp = matchItemCall(propp)) {
+            callp->v3warn(E_UNSUPPORTED, "Unsupported: subroutine call match item in a multi-cycle"
+                                         " property (IEEE 1800-2023 16.11)");
             VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
             return nullptr;
         }

@@ -1,0 +1,38 @@
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:28:45: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   28 |   assert property (@(posedge clk) (a ##1 b, $display("a then b")) |-> c);
+      |                                             ^~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:29:39: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   29 |   assert property (@(posedge clk) (a, $display("a")) ##1 b |-> c);
+      |                                       ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:30:45: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   30 |   assert property (@(posedge clk) (a ##1 b, note(b)) |-> c);
+      |                                             ^~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:19:15: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   19 |     (a ##1 b, $display("s_call"));
+      |               ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:24:22: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   24 |     (a ##1 b, v = d, $display("v=%0d", v)) |-> c;
+      |                      ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:34:51: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   34 |   assert property (@(posedge clk) a |-> (b ##1 c, $display("b then c")));
+      |                                                   ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:35:51: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   35 |   assert property (@(posedge clk) a |=> b ##1 (c, $display("c")));
+      |                                                   ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:37:48: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   37 |   assert property (@(posedge clk) (a [* 1: 2], $display("a run")) ##1 b);
+      |                                                ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_match_call_unsup.v:38:44: Unsupported: subroutine call match item in a multi-cycle property (IEEE 1800-2023 16.11)
+                                                         : ... note: In instance 't'
+   38 |   cover property (@(posedge clk) (a ##1 b, $display("a then b")));
+      |                                            ^~~~~~~~
+%Error: Exiting due to
