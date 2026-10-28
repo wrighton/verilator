@@ -605,6 +605,31 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         // with the coverage database is handled per coverpoint/cross by their runtime
         // registerBins() calls (emitted in generateCoverpoint/generateCross).
         generateCoverageComputationCode();
+        generateStartStop();
+    }
+
+    // Implement start() and stop(), gating sample()
+    void generateStartStop() {
+        // IEEE 1800-2023 19.8: stop() stops collecting coverage until start() is called, so a
+        // stopped instance's sample() neither counts bins nor advances transition state.
+        FileLine* const fl = m_covergroupp->fileline();
+        AstVar* const stoppedVarp
+            = new AstVar{fl, VVarType::MEMBER, "__Vcg_stopped", m_covergroupp->findBitDType()};
+        m_covergroupp->addMembersp(stoppedVarp);
+        for (const bool stop : {false, true}) {
+            AstFunc* const funcp
+                = VN_AS(m_memberMap.findMember(m_covergroupp, stop ? "stop" : "start"), Func);
+            funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, stoppedVarp, VAccess::WRITE},
+                                           new AstConst{fl, AstConst::BitTrue{}, stop}});
+        }
+        // Function-local variables stay declared ahead of the guard
+        AstIf* const ifp
+            = new AstIf{fl, new AstNot{fl, new AstVarRef{fl, stoppedVarp, VAccess::READ}}};
+        for (AstNode *stmtp = m_sampleFuncp->stmtsp(), *nextp; stmtp; stmtp = nextp) {
+            nextp = stmtp->nextp();
+            if (!VN_IS(stmtp, Var)) ifp->addThensp(stmtp->unlinkFrBack());
+        }
+        m_sampleFuncp->addStmtsp(ifp);
     }
 
     static constexpr size_t VALUE_LIST_ENTRIES = 256;  // Metadata entries per constructor call
