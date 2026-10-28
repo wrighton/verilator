@@ -1844,11 +1844,13 @@ IData _vl_vsscanf(FILE* fp,  // If a fscanf
                     }
                     break;
                 }
-                default: {  // LCOV_EXCL_START
-                    const std::string msg = "Unknown _vl_vsscanf code: "s + pos[0];
-                    VL_FATAL_MT(__FILE__, __LINE__, "", msg.c_str());
-                    break;
-                }  // LCOV_EXCL_STOP
+                default: {
+                    // Only reachable with a format known only at runtime
+                    const std::string msg
+                        = "Unsupported or unknown $sscanf/$fscanf format code: '%"s + pos[0] + "'";
+                    VL_FATAL_MT("", 0, "", msg.c_str());
+                    goto done;
+                }
 
                 }  // switch
 

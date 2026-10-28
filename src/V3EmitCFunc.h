@@ -258,7 +258,7 @@ public:
     // METHODS
     bool displayEmitHeader(AstNode* nodep);
     void displayNode(AstNode* nodep, AstSFormatF* fmtp, const string& vformat, AstNode* exprsp,
-                     bool isScan);
+                     bool isScan, AstNode* scanFormatp = nullptr);
 
     bool emitSimpleOk(AstNodeExpr* nodep);
     void emitIQW(const AstNode* nodep) {
@@ -1159,10 +1159,10 @@ public:
         displayNode(nodep, nodep, nodep->text(), nodep->exprsp(), false);
     }
     void visit(AstFScanF* nodep) override {
-        displayNode(nodep, nullptr, nodep->text(), nodep->exprsp(), true);
+        displayNode(nodep, nullptr, nodep->text(), nodep->exprsp(), true, nodep->formatp());
     }
     void visit(AstSScanF* nodep) override {
-        displayNode(nodep, nullptr, nodep->text(), nodep->exprsp(), true);
+        displayNode(nodep, nullptr, nodep->text(), nodep->exprsp(), true, nodep->formatp());
     }
     void visit(AstValuePlusArgs* nodep) override {
         putns(nodep, "VL_VALUEPLUSARGS_IN");
