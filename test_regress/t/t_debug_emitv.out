@@ -1127,7 +1127,8 @@ module t;
             bins t01 = (3'h0 => 3'h1);
             bins t12 = (3'h1 => 3'h2);
             bins talt = (3'h2 => 3'h3), (3'h4 => 3'h5);
-            bins trep = (3'h0 => 3'h1);
+            bins trep = (3'h0 => 3'h1 [->32'sh2]);
+            bins trng = (3'h0 [*32'sh2:32'sh3]);
             bins tarr[] = (3'h0 => 3'h1), (3'h1 => 
                                            3'h2);
         };
