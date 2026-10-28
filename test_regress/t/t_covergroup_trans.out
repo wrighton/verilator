@@ -21,6 +21,9 @@ t.cg_alt.cx_two.<one,auto_0> [cross]: 1
 t.cg_alt.cx_two.<one,auto_1> [cross]: 0
 t.cg_alt.cx_two.<seq,auto_0> [cross]: 1
 t.cg_alt.cx_two.<seq,auto_1> [cross]: 0
+t.cg_array.cp_default.others [default]: 3
+t.cg_array.cp_default.three: 1
+t.cg_array.cp_default.tr: 1
 t.cg_array.cp_mix.tr: 1
 t.cg_array.cp_mix.vals[0]: 1
 t.cg_array.cp_mix.vals[1]: 0
