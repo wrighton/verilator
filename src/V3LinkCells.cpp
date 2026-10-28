@@ -627,6 +627,17 @@ class LinkCellsVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
 
+    void checkGateNotInIface(const AstNode* nodep) {
+        if (VN_IS(m_modp, Iface)) {
+            nodep->v3error("Interface " << m_modp->prettyNameQ()
+                                        << " cannot instantiate a gate primitive"
+                                           " (IEEE 1800-2023 25.3)");
+        }
+    }
+    // AstImplicit and AstPull are only created by gate primitive instances
+    void visit(AstImplicit* nodep) override { checkGateNotInIface(nodep); }
+    void visit(AstPull* nodep) override { checkGateNotInIface(nodep); }
+
     void visit(AstCell* nodep) override {
         // Cell: Resolve its filename.  If necessary, parse it.
         // Execute only once.  Complication is that cloning may result in
@@ -692,6 +703,16 @@ class LinkCellsVisitor final : public VNVisitor {
                     cellEdge(vertex(m_modp), vertex(cellmodp), 1, false, nodep);
                 }
             }
+        }
+        // Bind may add a module instance to an interface; the interface itself may not
+        const AstModule* const cellModulep = VN_CAST(nodep->modp(), Module);
+        if (VN_IS(m_modp, Iface) && !m_fromBind
+            && (VN_IS(nodep->modp(), Primitive)
+                || (cellModulep && !cellModulep->isChecker() && !cellModulep->isProgram()))) {
+            nodep->v3error("Interface " << m_modp->prettyNameQ() << " cannot instantiate "
+                                        << nodep->modp()->verilogKwd() << " "
+                                        << nodep->modp()->prettyNameQ()
+                                        << " (IEEE 1800-2023 25.3)");
         }
         // Remove AstCell(AstPin("",nullptr)), it's a side effect of how we parse "()"
         // the empty middle is identical to the empty rule that must find pins in "(,)".
