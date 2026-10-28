@@ -1,0 +1,10 @@
+%Error: t/t_property_local_var_unassigned_bad.v:20:16: Local variable 'v' is referenced but never assigned (IEEE 1800-2023 16.10)
+                                                     : ... note: In instance 't'
+   20 |     a |=> q == v;
+      |                ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_local_var_unassigned_bad.v:27:17: Local variable 'v' is referenced but never assigned (IEEE 1800-2023 16.10)
+                                                     : ... note: In instance 't'
+   27 |     a |=> (q == v) ##1 (d == v);
+      |                 ^
+%Error: Exiting due to
