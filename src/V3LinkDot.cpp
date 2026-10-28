@@ -1217,9 +1217,19 @@ class LinkDotFindVisitor final : public VNVisitor {
         nodep->isExternDef(true);  // So we check there's a matching extern
         nodep->classOrPackagep()->unlinkFrBack()->deleteTree();
         // Any "Type::" reference in the function's IO are really "MovedToClass::" references
+        // A default argument value may be given only in the prototype (IEEE 1800-2023 8.24)
+        VSymEnt* const protoSymp
+            = m_statep->getNodeSym(classp)->findIdFlat("extern " + nodep->name());
         for (AstNode* const declp : nodep->declspList()) {
-            if (AstVar* const portp = VN_CAST(declp, Var)) {
-                if (portp->isIO()) moveExternFuncDeclRefs(portp, classp);
+            AstVar* const portp = VN_CAST(declp, Var);
+            if (!portp || !portp->isIO()) continue;
+            moveExternFuncDeclRefs(portp, classp);
+            const VSymEnt* const protoPortSymp
+                = protoSymp ? protoSymp->findIdFlat(portp->name()) : nullptr;
+            const AstVar* const protoPortp
+                = protoPortSymp ? VN_CAST(protoPortSymp->nodep(), Var) : nullptr;
+            if (protoPortp && protoPortp->valuep() && !portp->valuep()) {
+                portp->valuep(protoPortp->valuep()->cloneTree(false));
             }
         }
     }
