@@ -121,7 +121,6 @@ class SeqEventLowerVisitor final : public VNVisitor {
             if (automaticActual) {
                 nodep->v3error("Arguments to a sequence used as an event control must be"
                                " static (IEEE 1800-2023 9.4.2.4)");
-                VN_AS(funcrefp->taskp(), Sequence)->isReferenced(false);
                 VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
                 return;
             }

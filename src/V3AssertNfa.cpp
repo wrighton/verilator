@@ -3069,9 +3069,6 @@ class AssertNfaVisitor final : public VNVisitor {
         V3AssertCommon::checkSvaInstanceDelays(clonedp, funcrefp);
         funcrefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
-        // Clear referenced flag so V3AssertPre cleanup does not emit
-        // spurious UNSUPPORTED for sequences that were already inlined here.
-        seqp->isReferenced(false);
     }
 
     // Must run before hasMultiCycleExpr() so NFA sees sequence bodies.

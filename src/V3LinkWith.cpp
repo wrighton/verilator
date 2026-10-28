@@ -88,11 +88,6 @@ class LinkWithVisitor final : public VNVisitor {
 
     void visit(AstNodeFTaskRef* nodep) override {
         VL_RESTORER(m_currentRandomizeSelectp);
-        if (nodep->taskp()) {
-            if (AstSequence* const seqp = VN_CAST(nodep->taskp(), Sequence))
-                seqp->isReferenced(true);
-        }
-
         if (nodep->name() == "randomize") {
             if (const AstMethodCall* const methodcallp = VN_CAST(nodep, MethodCall)) {
                 if (m_inRandomizeWith) {

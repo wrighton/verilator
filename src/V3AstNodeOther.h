@@ -3037,22 +3037,15 @@ public:
 class AstSequence final : public AstNodeFTask {
     // A sequence inside a module
     // TODO when supported might not want to be a NodeFTask
-    bool m_referenced = false;  // Set by V3LinkResolve when referenced; cleared by
-                                // V3AssertPre after inlining; if still set after
-                                // V3AssertPre, the reference is in an unsupported context
 public:
     AstSequence(FileLine* fl, const string& name, AstNode* stmtp)
         : ASTGEN_SUPER_Sequence(fl, name, stmtp) {}
     ASTGEN_MEMBERS_AstSequence;
-    void dump(std::ostream& str) const override;
-    void dumpJson(std::ostream& str) const override;
     bool hasDType() const override VL_MT_SAFE { return true; }
     AstNodeFTask* cloneType(const string& name) override {
         return new AstSequence{fileline(), name, nullptr};
     }
     string verilogKwd() const override { return "sequence"; }
-    bool isReferenced() const { return m_referenced; }
-    void isReferenced(bool flag) { m_referenced = flag; }
 };
 class AstTask final : public AstNodeFTask {
     // A task inside a module

@@ -3956,14 +3956,6 @@ bool AstSenTree::hasStatic() const {
     }
     return false;
 }
-void AstSequence::dump(std::ostream& str) const {
-    Super::dump(str);
-    if (isReferenced()) str << " [REFED]";
-}
-void AstSequence::dumpJson(std::ostream& str) const {
-    dumpJsonBoolFuncIf(str, isReferenced);
-    dumpJsonGen(str);
-}
 void AstSliceSel::dump(std::ostream& str) const {
     Super::dump(str);
     if (declRange().ranged()) str << " decl" << declRange();

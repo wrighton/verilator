@@ -18,8 +18,11 @@ module t (
     @(g) a ##1 b;
   endsequence
 
+  sequence s_inner;
+    a ##1 b;
+  endsequence
   sequence s_ref;
-    @(posedge clk) a;
+    s_inner ##1 a;
   endsequence
 
   // Legal but its endpoint topology is not buildable, so the wait could never
@@ -29,11 +32,10 @@ module t (
   endsequence
   // verilog_format: on
 
-  // Legal: p is never asserted, so s_ref stays referenced outside any
-  // assertion property, which is not yet supported.
-  property p;
-    s_ref;
-  endproperty
+  // Not legal, a sequence instance is not an expression, but not yet reported as such;
+  // s_inner stays referenced from the inlined body of s_ref
+  bit x;
+  initial x = s_ref;
 
   initial begin
     @s_nonedge;

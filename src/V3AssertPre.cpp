@@ -329,8 +329,6 @@ private:
         // Replace the FuncRef with the inlined body
         funcrefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
-        // Clear referenced flag; sequences with isReferenced==false are deleted in assertPreAll
-        seqp->isReferenced(false);
     }
     AstPropSpec* clonePropertyBody(AstFuncRef* funcrefp, const AstProperty* propp) {
         AstPropSpec* propExprp = getPropertyExprp(propp);
@@ -1874,6 +1872,37 @@ private:
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
+    // Delete sequence declarations, or report those still instanced after inlining
+    void cleanupSequences() {
+        // Instances in the netlist were inlined, except in unsupported contexts.
+        // Instances inside sequence declarations are not uses: they were inlined with
+        // the body that contains them, or are unused like that body (IEEE 1800-2023 16.8
+        // does not require a declaration to be used). Property declarations are gone.
+        // NODE STATE
+        //  AstFuncRef::user4()   // bool. Instance inside a sequence declaration
+        //  AstSequence::user4()  // bool. Instanced outside sequence declarations
+        const VNUser4InUse user4InUse;
+        for (AstSequence* const seqp : m_seqsToCleanup) {
+            seqp->foreach([](AstFuncRef* refp) { refp->user4(true); });
+        }
+        m_netlistp->foreach([](const AstFuncRef* refp) {
+            if (refp->user4()) return;
+            if (AstSequence* const seqp = VN_CAST(refp->taskp(), Sequence)) seqp->user4(true);
+        });
+        bool anyUnsupported = false;
+        for (AstSequence* const seqp : m_seqsToCleanup) {
+            if (!seqp->user4()) continue;
+            seqp->v3warn(E_UNSUPPORTED,
+                         "Unsupported: sequence referenced outside assertion property");
+            anyUnsupported = true;
+        }
+        // Keep all on error, as a reported sequence may instance any other
+        if (anyUnsupported) return;
+        for (AstSequence* const seqp : m_seqsToCleanup) {
+            VL_DO_DANGLING(seqp->unlinkFrBack()->deleteTree(), seqp);
+        }
+    }
+
 public:
     // CONSTRUCTORS
     explicit AssertPreVisitor(AstNetlist* nodep)
@@ -1883,17 +1912,7 @@ public:
         iterate(nodep);
         // Fix up varref names
         for (AstVarXRef* xrefp : m_xrefsp) xrefp->name(xrefp->varp()->name());
-        // Clean up sequence declarations after inlining.
-        // Referenced sequences that were inlined have isReferenced cleared.
-        // Remaining referenced sequences are in unsupported contexts (e.g. @seq event).
-        for (AstSequence* seqp : m_seqsToCleanup) {
-            if (seqp->isReferenced()) {
-                seqp->v3warn(E_UNSUPPORTED,
-                             "Unsupported: sequence referenced outside assertion property");
-            } else {
-                VL_DO_DANGLING(seqp->unlinkFrBack()->deleteTree(), seqp);
-            }
-        }
+        if (!m_seqsToCleanup.empty()) cleanupSequences();
     }
     ~AssertPreVisitor() override = default;
 };
