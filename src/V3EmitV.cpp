@@ -461,7 +461,18 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
         puts(")");
     }
-    void visit(AstCoverTransItem* nodep) override { iterateChildrenConst(nodep); }
+    void visit(AstCoverTransItem* nodep) override {
+        iterateAndNextConstNull(nodep->valuesp());
+        if (!nodep->repMinp()) return;
+        const string op = nodep->repType().ascii();
+        puts(" " + op.substr(0, op.size() - 1));  // Operator without its ']'
+        iterateConst(nodep->repMinp());
+        if (nodep->repMaxp()) {
+            puts(":");
+            iterateConst(nodep->repMaxp());
+        }
+        puts("]");
+    }
 
     void visit(AstCvtPackString* nodep) override {
         putfs(nodep, "");

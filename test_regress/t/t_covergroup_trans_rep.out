@@ -1,0 +1,9 @@
+t.cg.cp.arr: 2
+t.cg.cp.long: 1
+t.cg.cp.mid: 1
+t.cg.cp.multi: 2
+t.cg.cp.param: 3
+t.cg.cp.rep: 2
+t.cg.cp.rng: 3
+t.cg.cp_ign.ign [ignore]: 1
+t.cg.cp_ign.zo: 2

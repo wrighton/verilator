@@ -2413,6 +2413,17 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstCoverTransSet* nodep) override { userIterateAndNext(nodep->itemsp(), m_vup); }
     void visit(AstCoverTransItem* nodep) override {
         widthCovergroupRanges(nodep->valuesp(), m_vup ? m_vup->dtypep()->width() : 0);
+        // Repetition counts are self-determined, which V3Covergroup checks once folded
+        for (AstNodeExpr* countp : {nodep->repMinp(), nodep->repMaxp()}) {
+            if (!countp) continue;
+            if (VN_IS(countp, Unbounded)) {
+                countp->dtypeSetInt();
+            } else {
+                countp = VN_AS(userIterateSubtreeReturnEdits(countp, WidthVP{SELF, BOTH}.p()),
+                               NodeExpr);
+                V3Const::constifyEdit(countp);  // countp may change
+            }
+        }
     }
     void visit(AstPow* nodep) override {
         // Pow is special, output sign only depends on LHS sign, but

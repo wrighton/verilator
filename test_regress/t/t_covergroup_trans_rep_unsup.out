@@ -1,0 +1,62 @@
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:27:25: Unsupported: covergroup value range '[...]'
+   27 |       bins tolerance = ([2 +/- 1] [*2]);
+      |                         ^
+                   ... For warning description see https://verilator.org/warn/COVERIGN?v=latest
+                   ... Use "/* verilator lint_off COVERIGN */" and lint_on around source to disable this message.
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:17:23: Unsupported: '[->]' in cover transition
+                                                         : ... note: In instance 't'
+   17 |       bins goto1 = (3 [->2]);
+      |                       ^~~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:18:28: Unsupported: '[->]' in cover transition
+                                                         : ... note: In instance 't'
+   18 |       bins goto2 = (0 => 3 [->1:2]);
+      |                            ^~~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:19:26: Unsupported: '[=]' in cover transition
+                                                         : ... note: In instance 't'
+   19 |       bins noncons1 = (3 [=2] => 1);
+      |                          ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:20:26: Unsupported: '[=]' in cover transition
+                                                         : ... note: In instance 't'
+   20 |       bins noncons2 = (3 [=1:2]);
+      |                          ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:21:22: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   21 |       bins zero = (3 [*ZERO]);
+      |                      ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:22:26: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   22 |       bins reversed = (3 [*3:2]);
+      |                          ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:23:27: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   23 |       bins unbounded = (3 [*1:UNB]);
+      |                           ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:24:28: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   24 |       bins unbounded2 = (3 [*1:$]);
+      |                            ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:25:19: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   25 |       bins x = (3 [*'x]);
+      |                   ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:26:28: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   26 |       bins real_count = (3 [*2.0]);
+      |                            ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:28:26: Unsupported: '[*]' in cover transition, other than a constant positive count or range
+                                                         : ... note: In instance 't'
+   28 |       bins nonconst = (3 [*n]);
+      |                          ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:29:22: Unsupported: '[*]' in cover transition, expanding to over 65536 values
+                                                         : ... note: In instance 't'
+   29 |       bins huge = (3 [*70000]);
+      |                      ^~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:30:33: Unsupported: '[->]' in cover transition
+                                                         : ... note: In instance 't'
+   30 |       ignore_bins ign = (1 => 0 [->2]);
+      |                                 ^~~
+%Warning-COVERIGN: t/t_covergroup_trans_rep_unsup.v:33:47: Unsupported: '[->]' in cover transition
+                                                         : ... note: In instance 't'
+   33 |     cp_dropped: coverpoint v {bins goto3 = (0 [->2] => 1);}
+      |                                               ^~~
+%Error: Exiting due to

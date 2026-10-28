@@ -533,6 +533,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         std::map<AstCoverCross*, std::vector<AstCoverpoint*>> inputs;
         for (AstCoverpoint* const cpp : m_coverpoints) {
             checkBinNames(cpp);
+            expandTransitionRepetitions(cpp);
             checkConstructedBins(cpp);
             if (!cpp->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) continue;
             // Bins without values leave the report (IEEE 1800-2023 19.11.1), exclusions or not.
@@ -691,6 +692,90 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     void dropBins(const AstCoverpoint* coverpointp, AstCoverBin* binp) {
         m_droppedBins[coverpointp].push_back(binp->name());
         VL_DO_DANGLING(pushDeletep(binp->unlinkFrBack()), binp);
+    }
+
+    // Expand the consecutive repetitions of a coverpoint's transition bins, dropping the bins
+    // with repetitions that cannot be expanded
+    void expandTransitionRepetitions(AstCoverpoint* coverpointp) {
+        for (AstNode *nodep = coverpointp->binsp(), *nextp; nodep; nodep = nextp) {
+            nextp = nodep->nextp();
+            AstCoverBin* const binp = VN_AS(nodep, CoverBin);
+            for (AstNode *setp = binp->transp(), *nextSetp; setp; setp = nextSetp) {
+                nextSetp = setp->nextp();
+                if (!expandTransitionSet(VN_AS(setp, CoverTransSet))) {
+                    if (binp->binsType().binIsNormal()) coverpointp->user2(true);
+                    dropBins(coverpointp, binp);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Replace a transition set holding repetitions by the sequences they expand to; false if
+    // unsupported
+    bool expandTransitionSet(AstCoverTransSet* setp) {
+        // IEEE 1800-2023 19.5.2: '3 [* 5]' is '3=>3=>3=>3=>3', and '3 [* 3:5]' is the
+        // sequences '3=>3=>3', '3=>3=>3=>3', and '3=>3=>3=>3=>3'
+        static constexpr size_t EXPANDED_MAX = 65536;  // Items all sequences may hold
+        if (!setp->exists([](const AstCoverTransItem* itemp) {
+                return itemp->repType() != VTransRepType::NONE;
+            })) {
+            return true;
+        }
+        // A count, if a positive constant, else 0
+        const auto count = [](const AstNodeExpr* exprp) -> uint64_t {
+            const AstConst* const constp = VN_CAST(exprp, Const);
+            if (!constp || constp->num().isOpaque() || constp->num().isFourState()) return 0;
+            return std::max<int64_t>(constCount(constp), 0);
+        };
+        std::vector<std::vector<AstCoverTransItem*>> seqs{{}};
+        for (AstCoverTransItem* const itemp : setp->itemspList()) {
+            uint64_t lo = 1;
+            uint64_t hi = 1;
+            if (itemp->repType() != VTransRepType::NONE) {
+                if (itemp->repType() != VTransRepType::CONSEC) {
+                    itemp->v3warn(COVERIGN, "Unsupported: '" << itemp->repType().ascii()
+                                                             << "' in cover transition");
+                    return false;
+                }
+                lo = count(itemp->repMinp());
+                hi = itemp->repMaxp() ? count(itemp->repMaxp()) : lo;
+                if (lo < 1 || hi < lo) {
+                    itemp->v3warn(COVERIGN, "Unsupported: '[*]' in cover transition, other "
+                                            "than a constant positive count or range");
+                    return false;
+                }
+            }
+            std::vector<std::vector<AstCoverTransItem*>> nextSeqs;
+            size_t total = 0;
+            for (const std::vector<AstCoverTransItem*>& seq : seqs) {
+                for (uint64_t reps = lo; reps <= hi; ++reps) {
+                    total += seq.size() + reps;
+                    if (total > EXPANDED_MAX) {
+                        itemp->v3warn(COVERIGN, "Unsupported: '[*]' in cover transition, "
+                                                "expanding to over "
+                                                    << EXPANDED_MAX << " values");
+                        return false;
+                    }
+                    nextSeqs.push_back(seq);
+                    auto& nextSeq = nextSeqs.back();
+                    nextSeq.insert(nextSeq.end(), reps, itemp);
+                }
+            }
+            seqs.swap(nextSeqs);
+        }
+        for (const std::vector<AstCoverTransItem*>& seq : seqs) {
+            AstCoverTransItem* itemsp = nullptr;
+            for (AstCoverTransItem* const itemp : seq) {
+                itemsp = AstNode::addNextNull(
+                    itemsp, new AstCoverTransItem{
+                                itemp->fileline(),
+                                itemp->valuesp() ? itemp->valuesp()->cloneTree(true) : nullptr});
+            }
+            setp->addNextHere(new AstCoverTransSet{setp->fileline(), itemsp});
+        }
+        VL_DO_DANGLING(pushDeletep(setp->unlinkFrBack()), setp);
+        return true;
     }
 
     // Check the size of a sized array of bins, which drops an invalid array.  A real coverpoint's
@@ -2677,11 +2762,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         for (AstNode* const itemp : transSetp->itemspList())
             items.push_back(VN_AS(itemp, CoverTransItem));
 
-        if (items.empty()) {
-            binp->v3error("Transition set without items");
-            return;
-        }
-
+        UASSERT_OBJ(!items.empty(), binp, "Transition set without items");
         if (items.size() == 1) {
             // Single item transition not valid (need at least 2 values for =>)
             binp->v3error("Transition requires at least two values");
@@ -2820,13 +2901,13 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         }
     };
 
-    // True if a transition sequence has items, the parser dropping unsupported ones, and each
-    // holds a value of the coverpoint (IEEE 1800-2023 19.5.7), not as a wildcard (see
-    // transitionTable), so the sequence can match.  A value not resolved, which generating the
-    // matching reports, counts as one.  Resolves the values once, keeping the answer in user1.
+    // True if each item of a transition sequence holds a value of the coverpoint (IEEE
+    // 1800-2023 19.5.7), not as a wildcard (see transitionTable), so the sequence can match.  A
+    // value not resolved, which generating the matching reports, counts as one.  Resolves the
+    // values once, keeping the answer in user1.
     static bool transitionPossible(AstCoverTransSet* setp, AstNodeExpr* exprp) {
         if (setp->user1()) return setp->user1() == 1;
-        bool possible = setp->itemsp() != nullptr;
+        bool possible = true;
         for (const AstCoverTransItem* const itemp : setp->itemspList()) {
             bool holds = false;
             for (AstNode* const valuep : itemp->valuespList()) {

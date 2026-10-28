@@ -7312,19 +7312,17 @@ trans_range_list<nodep>:  // ==IEEE: trans_range_list (returns AstCoverTransItem
                         $$ = new AstCoverTransItem{$<fl>1, $1, VTransRepType::NONE};
                 }
         |       trans_item yP_BRASTAR cgexpr ']'
-                        { $$ = nullptr; BBCOVERIGN($<fl>2, "Unsupported: '[*]' in cover transition"); DEL($1, $3); }
+                        { $$ = new AstCoverTransItem{$<fl>2, $1, VTransRepType::CONSEC, $3}; }
         |       trans_item yP_BRASTAR cgexpr ':' cgexpr ']'
-                        { $$ = nullptr; BBCOVERIGN($<fl>2, "Unsupported: '[*]' in cover transition"); DEL($1, $3, $5); }
+                        { $$ = new AstCoverTransItem{$<fl>2, $1, VTransRepType::CONSEC, $3, $5}; }
         |       trans_item yP_BRAMINUSGT cgexpr ']'
-                        { BBCOVERIGN($<fl>2, "Unsupported: '[->' in cover transition"); DEL($3);
-                          $$ = new AstCoverTransItem{$<fl>1, $1, VTransRepType::GOTO}; }
+                        { $$ = new AstCoverTransItem{$<fl>2, $1, VTransRepType::GOTO, $3}; }
         |       trans_item yP_BRAMINUSGT cgexpr ':' cgexpr ']'
-                        { $$ = nullptr; BBCOVERIGN($<fl>2, "Unsupported: '[->' in cover transition"); DEL($1, $3, $5); }
+                        { $$ = new AstCoverTransItem{$<fl>2, $1, VTransRepType::GOTO, $3, $5}; }
         |       trans_item yP_BRAEQ cgexpr ']'
-                        { BBCOVERIGN($<fl>2, "Unsupported: '[=]' in cover transition"); DEL($3);
-                          $$ = new AstCoverTransItem{$<fl>1, $1, VTransRepType::NONCONS}; }
+                        { $$ = new AstCoverTransItem{$<fl>2, $1, VTransRepType::NONCONS, $3}; }
         |       trans_item yP_BRAEQ cgexpr ':' cgexpr ']'
-                        { $$ = nullptr; BBCOVERIGN($<fl>2, "Unsupported: '[=]' in cover transition"); DEL($1, $3, $5); }
+                        { $$ = new AstCoverTransItem{$<fl>2, $1, VTransRepType::NONCONS, $3, $5}; }
         ;
 
 trans_item<nodep>:  // ==IEEE: range_list (returns range list node)

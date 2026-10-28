@@ -1264,15 +1264,19 @@ class AstCoverTransItem final : public AstNode {
     // @astgen op1 := valuesp : List[AstNode]
     // @astgen op2 := repMinp : Optional[AstNodeExpr]
     // @astgen op3 := repMaxp : Optional[AstNodeExpr]
-    const VTransRepType m_repType;
+    const VTransRepType m_repType;  // Repetition operator, if any
 
 public:
-    AstCoverTransItem(FileLine* fl, AstNode* valuesp, VTransRepType repType = VTransRepType::NONE)
+    AstCoverTransItem(FileLine* fl, AstNode* valuesp, VTransRepType repType = VTransRepType::NONE,
+                      AstNodeExpr* repMinp = nullptr, AstNodeExpr* repMaxp = nullptr)
         : ASTGEN_SUPER_CoverTransItem(fl)
         , m_repType{repType} {
         addValuesp(valuesp);
+        this->repMinp(repMinp);
+        this->repMaxp(repMaxp);
     }
     ASTGEN_MEMBERS_AstCoverTransItem;
+    VTransRepType repType() const { return m_repType; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
 };
