@@ -17,11 +17,11 @@
       |                                   ^~~~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:35:65: Unsupported: multi-cycle sequence expression inside consecutive repetition (IEEE 1800-2023 16.9.2)
                                                        : ... note: In instance 't'
-   35 |   assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 2]));
+   35 |   assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 1:2]));
       |                                                                 ^~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:38:52: Unsupported: multi-cycle sequence expression inside consecutive repetition (IEEE 1800-2023 16.9.2)
                                                        : ... note: In instance 't'
-   38 |   assert property (@(posedge clk) if (a) ((b ##1 c)[*2]) else d) $display("pass");
+   38 |   assert property (@(posedge clk) if (a) ((b ##1 c)[*1:2]) else d) $display("pass");
       |                                                    ^~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:41:3: Unsupported: property instance inside a multi-cycle property expression
                                                       : ... note: In instance 't'

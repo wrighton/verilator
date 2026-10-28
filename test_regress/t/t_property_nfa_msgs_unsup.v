@@ -32,10 +32,10 @@ module t (
     $display("pass");
 
   // An unsupported body under an abort reports itself, not an internal error
-  assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 2]));
+  assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 1:2]));
 
   // A body the builder rejects wins over the property if/case message
-  assert property (@(posedge clk) if (a) ((b ##1 c)[*2]) else d) $display("pass");
+  assert property (@(posedge clk) if (a) ((b ##1 c)[*1:2]) else d) $display("pass");
 
   // A named property instance nested in a composite is rejected, not dropped
   assert property (@(posedge clk) p_nested or e);

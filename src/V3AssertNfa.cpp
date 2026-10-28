@@ -740,7 +740,18 @@ class SvaNfaBuilder final {
                              bool isTopLevelStep = false) {
         FileLine* const flp = repp->fileline();
         AstNodeExpr* const exprp = repp->exprp();
-        // Multi-cycle expr in ConsRep not yet supported; bail to avoid invalid AST.
+        if (exprp->isMultiCycleSva() && !repp->maxCountp() && !repp->unbounded()) {
+            // `s[*n]` is `s ##1 s ##1 ... ##1 s` (IEEE 1800-2023 16.9.2)
+            AstNodeExpr* chainp = exprp->cloneTree(false);
+            for (unsigned i = getConstUInt(repp->countp()); i > 1; --i) {
+                AstDelay* const delayp
+                    = new AstDelay{flp, new AstConst{flp, 1U}, /*isCycle=*/true};
+                chainp = new AstSExpr{flp, chainp, delayp, exprp->cloneTree(false)};
+                chainp->dtypeSetBit();
+            }
+            return buildFromLoweringTree(chainp, entryVtxp, isTopLevelStep);
+        }
+        // Other multi-cycle expr in ConsRep not yet supported; bail to avoid invalid AST.
         if (exprp->isMultiCycleSva()) {
             repp->v3warn(E_UNSUPPORTED, "Unsupported: multi-cycle sequence expression inside"
                                         " consecutive repetition (IEEE 1800-2023 16.9.2)");
