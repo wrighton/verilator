@@ -8700,6 +8700,15 @@ class WidthVisitor final : public VNVisitor {
         // Width-check the sequence body so expressions are typed for later inlining.
         // Referenced sequences in assertion context will be inlined by V3AssertPre.
         if (nodep->didWidth()) return;
+        for (const AstNode* const declp : nodep->declspList()) {
+            const AstVar* const varp = VN_CAST(declp, Var);
+            // A local variable initializer is not lowered
+            if (varp && !varp->isIO() && varp->valuep()) {
+                varp->valuep()->v3warn(E_UNSUPPORTED,
+                                       "Unsupported: initializer of a sequence local"
+                                       " variable (IEEE 1800-2023 16.10)");
+            }
+        }
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
         nodep->didWidth(true);

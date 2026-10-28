@@ -22,6 +22,10 @@
 
 #include "V3Ast.h"
 
+#include <unordered_map>
+
+class V3UniqueNames;
+
 //============================================================================
 
 class V3AssertCommon final {
@@ -42,6 +46,10 @@ public:
     // Check the cycle delays of a sequence or property instance, after its formal arguments are
     // replaced with the actual arguments (IEEE 1800-2023 16.8), reporting errors on instp
     static void checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Create a module variable for each local variable of one sequence or property instance
+    static std::unordered_map<const AstVar*, AstVar*>
+    newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* modp,
+                    V3UniqueNames& names) VL_MT_DISABLED;
 };
 
 class V3Assert final {
