@@ -2203,10 +2203,21 @@ class LinkDotFindVisitor final : public VNVisitor {
             m_curSymp = m_statep->insertBlock(m_curSymp, "__Vforeach" + cvtToStr(m_modWithNum),
                                               nodep, m_classOrPackagep);
             m_curSymp->fallbackp(VL_RESTORER_PREV(m_curSymp));
+            // The array without element selects, e.g. 'a' in 'foreach (a[i][j])'
+            const AstNode* arrayp = nodep->headerp()->fromp();
+            while (const AstNodePreSel* const selp = VN_CAST(arrayp, NodePreSel)) {
+                arrayp = selp->fromp();
+            }
+            const AstParseRef* const arrayRefp = VN_CAST(arrayp, ParseRef);
             for (AstNode *nextp, *argp = nodep->headerp()->elementsp(); argp; argp = nextp) {
                 nextp = argp->nextp();
                 AstVar* argrefp = nullptr;
                 if (AstParseRef* const parserefp = VN_CAST(argp, ParseRef)) {
+                    if (arrayRefp && arrayRefp->name() == parserefp->name()) {
+                        parserefp->v3error("Foreach loop variable has the same name as the array: "
+                                           << parserefp->prettyNameQ()
+                                           << " (IEEE 1800-2023 12.7.3)");
+                    }
                     // IEEE 1800-2023 12.7.3: foreach loop variable type shall be int (2-state)
                     // This might get changed in V3Width when types resolve (e.g., for assoc
                     // arrays)
