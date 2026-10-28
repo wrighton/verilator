@@ -2398,9 +2398,19 @@ public:
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            std::set<const AstVar*> defparamVarps;  // Parameters set by a defparam to this cell
             for (AstPin* const pinp : cellp->paramspList()) {
-                if (!pinp->paramPath().empty() && instanceName != pinp->paramPath()
+                if (pinp->paramPath().empty()) continue;
+                if (instanceName != pinp->paramPath()
                     && !VString::endsWith(instanceName, "." + pinp->paramPath())) {
+                    VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
+                } else {
+                    defparamVarps.emplace(pinp->modVarp());
+                }
+            }
+            // IEEE 1800-2023 23.10: A defparam overrides the parameter value assignment
+            for (AstPin* const pinp : cellp->paramspList()) {
+                if (pinp->paramPath().empty() && defparamVarps.count(pinp->modVarp())) {
                     VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
                 }
             }

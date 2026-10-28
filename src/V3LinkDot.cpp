@@ -3287,9 +3287,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                          // They are added to the set only in linkDotPrimary.
     bool m_insideClassExtParam = false;  // Inside a class from m_extendsParam
     AstNew* m_explicitSuperNewp = nullptr;  // Hit a "super.new" call inside a "new" function
-    std::map<AstNode*, AstPin*> m_usedPins;  // Pin used in this cell, map to duplicate
-    std::map<AstNode*, std::map<std::string, AstPin*>> m_usedDefParamPins;
-    // Defparam pins used for a given formal, by hierarchical path
+    // Pin used in this cell, by formal and defparam path (empty if not a defparam)
+    std::map<std::pair<AstNode*, std::string>, AstPin*> m_usedPins;
     std::map<std::string, AstNodeModule*> m_modulesToRevisit;  // Modules to revisit a second time
     AstNode* m_lastDeferredp = nullptr;  // Last node which requested a revisit of its module
     AstNodeDType* m_packedArrayDtp = nullptr;  // Datatype reference for packed array
@@ -3532,26 +3531,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                     << origp->warnContextSecondary());
     }
     void markAndCheckPinDup(AstPin* nodep, AstNode* refp, const char* whatp) {
-        const auto pair = m_usedPins.emplace(refp, nodep);
-        if (pair.second) {
-            if (!nodep->paramPath().empty())
-                m_usedDefParamPins[refp].emplace(nodep->paramPath(), nodep);
-            return;
-        } else {
-            AstNode* const origp = pair.first->second;
-            if (nodep->paramPath().empty() || VN_AS(origp, Pin)->paramPath().empty()) {
-                duplicatePinError(nodep, origp, whatp);
-                return;
-            }
-        }
-
-        auto& defParamPins = m_usedDefParamPins[refp];
-        const auto defParamIt = defParamPins.find(nodep->paramPath());
-        if (defParamIt != defParamPins.end()) {
-            duplicatePinError(nodep, defParamIt->second, whatp);
-            return;
-        }
-        defParamPins.emplace(nodep->paramPath(), nodep);
+        // A defparam overrides an instance's parameter value assignment (IEEE 1800-2023
+        // 23.10), so is only checked against other defparams; V3Param removes the
+        // overridden pin once it knows which defparams apply to the instance
+        const auto pair = m_usedPins.emplace(std::make_pair(refp, nodep->paramPath()), nodep);
+        if (!pair.second) duplicatePinError(nodep, pair.first->second, whatp);
     }
     static bool extendsClass(const AstClass* classp, const AstClass* targetp) {
         // Return true if classp inherits from targetp through already resolved extends
@@ -4123,7 +4107,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         UINFO(5, indent() << "visit " << nodep);
         checkNoDot(nodep);
         VL_RESTORER_CLEAR(m_usedPins);
-        VL_RESTORER_CLEAR(m_usedDefParamPins);
         UASSERT_OBJ(nodep->modp(), nodep,
                     "Instance has unlinked module");  // V3LinkCell should have errored out
         VL_RESTORER(m_cellp);
@@ -4161,7 +4144,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         UINFO(5, indent() << "visit " << nodep);
         // Can be under dot if called as package::class and that class resolves, so no checkNoDot
         VL_RESTORER_CLEAR(m_usedPins);
-        VL_RESTORER_CLEAR(m_usedDefParamPins);
         UASSERT_OBJ(nodep->classp(), nodep, "ClassRef has unlinked class");
         UASSERT_OBJ(m_statep->forPrimary() || !nodep->paramsp() || V3Error::errorCount(), nodep,
                     "class reference parameter not removed by V3Param");
@@ -5128,7 +5110,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         UINFO(8, indent() << "visit " << nodep);
         UINFO(9, indent() << m_ds.ascii());
         VL_RESTORER_CLEAR(m_usedPins);
-        VL_RESTORER_CLEAR(m_usedDefParamPins);
         UASSERT_OBJ(m_statep->forPrimary() || !nodep->paramsp(), nodep,
                     "class reference parameter not removed by V3Param");
         {
@@ -6701,7 +6682,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (ifacep->dead()) return;
             checkNoDot(nodep);
             VL_RESTORER_CLEAR(m_usedPins);
-            VL_RESTORER_CLEAR(m_usedDefParamPins);
             VL_RESTORER(m_pinSymp);
             m_pinSymp = m_statep->getNodeSym(ifacep);
             iterateAndNextNull(nodep->paramsp());

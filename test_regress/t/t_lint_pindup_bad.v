@@ -22,7 +22,7 @@ module t (
       .nexist(i2)  // Not found
   );
 
-  defparam sub.P = 2;  // Dup
+  defparam sub.P = 2;  // Overrides instance value
   defparam sub.subnotfound.P = 2;  // Not found
   defparam sub.NEXIST = 2;  // Not found
 

@@ -37,12 +37,6 @@
         t/t_lint_pindup_bad.v:15:8: ... Location of original parameter connection
    15 |       .P(2),
       |        ^
-%Error: t/t_lint_pindup_bad.v:25:18: Duplicate parameter connection: 'P'
-   25 |   defparam sub.P = 2;   
-      |                  ^
-        t/t_lint_pindup_bad.v:15:8: ... Location of original parameter connection
-   15 |       .P(2),
-      |        ^
 %Error-PINNOTFOUND: t/t_lint_pindup_bad.v:27:23: Parameter not found: 'NEXIST'
                                                : ... Suggested alternative: 'EXIST'
    27 |   defparam sub.NEXIST = 2;   
