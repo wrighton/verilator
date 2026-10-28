@@ -6632,9 +6632,12 @@ class RandomizeVisitor final : public VNVisitor {
                 randomizeFuncp->addStmtsp(setupBlockp);
                 {
                     expandUniqueElementList(capturedTreep);
+                    // Expansion may delete the first item
+                    AstNode* const itemsp = setupBlockp->stmtsp();
                     ConstraintExprVisitor{
-                        nullptr, m_memberMap,   capturedTreep,         setupBlockp,   stdrand,
-                        nullptr, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, nullptr};
+                        nullptr,       m_memberMap, itemsp,        setupBlockp,
+                        stdrand,       nullptr,     m_writtenVars, &m_uniqueConstraintId,
+                        m_uniqueNames, nullptr};
                 }
                 AstCExpr* const solverCallp = new AstCExpr{fl};
                 solverCallp->dtypeSetBit();
@@ -6849,7 +6852,8 @@ class RandomizeVisitor final : public VNVisitor {
         // class-level size-constrained arrays.
         VInsertionSet<AstVar*> allSizeArrays;
         expandUniqueElementList(capturedTreep);
-        ConstraintExprVisitor{classp,        m_memberMap,  capturedTreep, setupBlockp,
+        AstNode* const itemsp = setupBlockp->stmtsp();  // Expansion may delete the first item
+        ConstraintExprVisitor{classp,        m_memberMap,  itemsp,        setupBlockp,
                               localGenp,     randModeVarp, m_writtenVars, &m_uniqueConstraintId,
                               m_uniqueNames, nullptr,      &allSizeArrays};
 
@@ -7018,12 +7022,14 @@ class RandomizeVisitor final : public VNVisitor {
                 randomizeFuncp->addStmtsp(methodp->makeStmt());
             }
 
-            expandUniqueElementList(capturedClonep);
             AstBegin* const elementSetupBlockp
                 = new AstBegin{fl, "__Vsetup_constraints", capturedClonep, true};
             randomizeFuncp->addStmtsp(elementSetupBlockp);
+            expandUniqueElementList(capturedClonep);
+            // Expansion may delete the first item
+            AstNode* const elementItemsp = elementSetupBlockp->stmtsp();
             ConstraintExprVisitor{
-                classp,       m_memberMap,   capturedClonep,        elementSetupBlockp, localGenp,
+                classp,       m_memberMap,   elementItemsp,         elementSetupBlockp, localGenp,
                 randModeVarp, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames,      nullptr};
 
             // Pin the sizes so the final solve can't move them

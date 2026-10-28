@@ -58,6 +58,27 @@ class UniqueElemSingle;
   endfunction
 endclass
 
+// Inline unique over scalars as the first item of the with-block
+class UniqueInline;
+  rand bit [1:0] x, y, z;
+  function int self_rand();
+    return randomize() with {
+      unique {x, y, z};
+      x != 0;
+    };
+  endfunction
+endclass
+
+// Size-constrained array, so randomize() with also solves in two phases
+class UniqueInlineSized;
+  rand bit [1:0] x, y, z;
+  rand bit [3:0] q[$];
+  constraint q_con {
+    q.size() == 3;
+    unique {q};
+  }
+endclass
+
 module t;
   UniqueElemSubset ues;
   UniqueElemFour uef;
@@ -83,6 +104,33 @@ module t;
     repeat (5) begin
       randomize_result = uesgl.randomize();
       `checkd(randomize_result, 1);
+    end
+
+    begin
+      automatic UniqueInline ui = new;
+      automatic bit [1:0] a, b, c;
+      repeat (20) begin
+        // std::randomize
+        randomize_result = std::randomize(a, b, c) with { unique {a, b, c}; };
+        `checkd(randomize_result, 1);
+        `checkd(a != b && a != c && b != c, 1);
+        randomize_result = std::randomize(a) with { unique {a}; };
+        `checkd(randomize_result, 1);
+        randomize_result = ui.randomize() with { unique {x, y, z}; };
+        `checkd(randomize_result, 1);
+        `checkd(ui.x != ui.y && ui.x != ui.z && ui.y != ui.z, 1);
+        // randomize() with in the class itself
+        randomize_result = ui.self_rand();
+        `checkd(randomize_result, 1);
+        `checkd(ui.x != ui.y && ui.x != ui.z && ui.y != ui.z && ui.x != 0, 1);
+      end
+    end
+    begin
+      automatic UniqueInlineSized uis = new;
+      randomize_result = uis.randomize() with { unique {x, y, z}; };
+      `checkd(randomize_result, 1);
+      `checkd(uis.x != uis.y && uis.x != uis.z && uis.y != uis.z, 1);
+      `checkd(uis.q.size(), 3);
     end
 
     $write("*-* All Finished *-*\n");
