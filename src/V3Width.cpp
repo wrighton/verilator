@@ -2669,7 +2669,8 @@ class WidthVisitor final : public VNVisitor {
                 }
             }
 
-            if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
+            if (VN_IS(dtypep->skipRefp(), QueueDType)
+                || VN_IS(dtypep->skipRefp(), DynArrayDType)) {
                 switch (nodep->attrType()) {
                 case VAttrType::DIM_SIZE: {
                     AstNodeExpr* const fromp = VN_AS(nodep->fromp()->unlinkFrBack(), NodeExpr);
