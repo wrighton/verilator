@@ -8,6 +8,20 @@
 // emit COVERIGN rather than silently producing zero coverage.
 
 module t;
+  bit mclk;
+
+  class ModuleClk;
+    bit [3:0] value;
+
+    covergroup cov_modclk @(posedge mclk);
+      coverpoint value;
+    endgroup
+
+    function new();
+      cov_modclk = new;
+    endfunction
+  endclass
+
   class ExternalClk;
     bit clk;
     bit [3:0] value;
@@ -54,8 +68,10 @@ module t;
 
   ExternalClk ec;
   ComplexEvt cx;
+  ModuleClk mc;
 
   initial begin
+    mc = new;
     ec = new;
     cx = new;
     $write("*-* All Finished *-*\n");
