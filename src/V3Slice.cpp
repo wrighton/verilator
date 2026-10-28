@@ -105,6 +105,17 @@ class SliceVisitor final : public VNVisitor {
                 = VN_CAST(subDTypep->skipRefp(), UnpackArrayDType);
             if (!subArrayp || !subArrayp->isReverseOf(elemp->dtypep())) return elemp;
             return new AstCvtUnpackToUnpack{nodep->fileline(), elemp, subDTypep};
+        } else if (const AstCvtPackedToArray* const cvtp = VN_CAST(nodep, CvtPackedToArray)) {
+            UINFO(9, "  cloneCvtPackedToArray(" << elements << "," << elemIdx << ") " << nodep);
+            // The element's bits, the leftmost element taking the most significant bits
+            AstNodeExpr* const fromp = cvtp->fromp();
+            AstNodeDType* const subDTypep = arrayp->subDTypep();
+            const int width = subDTypep->widthStream();
+            AstNodeExpr* const selp
+                = new AstSel{nodep->fileline(), fromp->cloneTree(false, needPure),
+                             fromp->width() - static_cast<int>(elemIdx + 1) * width, width};
+            if (!VN_IS(subDTypep->skipRefp(), UnpackArrayDType)) return selp;
+            return new AstCvtPackedToArray{nodep->fileline(), selp, subDTypep};
         } else if (AstCond* const snodep = VN_CAST(nodep, Cond)) {
             UINFO(9, "  cloneCond(" << elements << "," << elemIdx << ") " << nodep);
             return new AstCond{snodep->fileline(), snodep->condp()->cloneTree(false, needPure),
