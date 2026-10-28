@@ -209,6 +209,7 @@ module t (/*AUTOARG*/
     $fgetc(fd);  //  stmt
     $fflush(fd);
     $fscanf(fd, "%d", sum);
+    $fscanf(fd, str, sum);
     $fdisplay("i = ", sum);
     $fwrite(fd, "hello");
     $readmemh(fd, array);
@@ -252,6 +253,7 @@ module t (/*AUTOARG*/
     $display("struct = %p", ps);
     $display("%% [%t] [%t] to=%o td=%d", $time, $realtime, $time, $time);
     $sscanf("foo=5", "foo=%d", i);
+    $sscanf("foo=5", str, i);
     $printtimescale;
     if (i != 5) $stop;
 

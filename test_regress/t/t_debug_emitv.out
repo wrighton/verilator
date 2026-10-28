@@ -209,6 +209,8 @@ module Vt_debug_emitv_t;
             $fflush(fd);
             $fscanf(fd, "%d", sum);
             ;
+            $fscanf(fd, str, sum);
+            ;
             $fdisplay(32'h69203d20, "%d", sum);
             $fwrite(fd, "hello");
             $readmemh(string'(fd), array);
@@ -297,6 +299,8 @@ module Vt_debug_emitv_t;
                      $realtime, $time, $time);
             $sscanf(40'h666f6f3d35, "foo=%d", i);
             ;
+            $sscanf(40'h666f6f3d35, str, i);
+            ;
             $printtimescale;
             if ((i != 'sh5)) begin
                 $stop;
@@ -315,7 +319,7 @@ module Vt_debug_emitv_t;
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", 
                                136'h742f745f64656275675f656d6974762e76, 
-                               'sh10b, SUB_B, 2'h1);
+                               'sh10d, SUB_B, 2'h1);
                         $stop;
                     end
                 end

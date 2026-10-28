@@ -146,6 +146,34 @@ module t;
     `checkd(code, 1);
     `checkd(idx, 345);
 
+    // The format can be any string or integral expression (IEEE 1800-2023 21.3.4.3)
+    begin
+      string key;
+      string fmt;
+      logic [71:0] ifmt;
+      code = $sscanf("csr x", "%s", key);  // Not constant
+      fmt = {key, ",%h,%h"};
+      code = $sscanf("csr,1f,2e", fmt, idx, val);
+      `checkd(code, 2);
+      `checkh(idx, 32'h1f);
+      `checkh(val, 32'h2e);
+      code = $sscanf("csr:31", {key, ":%d"}, idx);
+      `checkd(code, 1);
+      `checkd(idx, 31);
+      code = $sscanf("csr,1f", fmt, idx, val);  // Input ends
+      `checkd(code, 1);
+      code = $sscanf("csr,1f,2e", fmt, idx);  // More conversions than arguments
+      `checkd(code, 1);
+      ifmt = {"%", key.len() == 3 ? "o" : "d", " %d    "};
+      code = $sscanf("17 5", ifmt, idx, val);
+      `checkd(code, 2);
+      `checkd(idx, 15);
+      `checkd(val, 5);
+      code = $sscanf("42", 16'h2564, idx);
+      `checkd(code, 1);
+      `checkd(idx, 42);
+    end
+
     $finish;
   end
 

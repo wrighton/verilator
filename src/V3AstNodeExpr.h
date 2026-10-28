@@ -1606,15 +1606,16 @@ public:
 class AstFScanF final : public AstNodeExpr {
     // @astgen op1 := exprsp : List[AstNodeExpr] // VarRefs for results
     // @astgen op2 := filep : Optional[AstNodeExpr] // file (must be a VarRef)
+    // @astgen op3 := formatp : Optional[AstNodeExpr] // Format, until a literal moves to m_text
     string m_text;
     VTimescale m_timeunit;  // Parent module time unit
 
 public:
-    AstFScanF(FileLine* fl, const string& text, AstNodeExpr* filep, AstNodeExpr* exprsp)
-        : ASTGEN_SUPER_FScanF(fl)
-        , m_text{text} {
+    AstFScanF(FileLine* fl, AstNodeExpr* formatp, AstNodeExpr* filep, AstNodeExpr* exprsp)
+        : ASTGEN_SUPER_FScanF(fl) {
         addExprsp(exprsp);
         this->filep(filep);
+        this->formatp(formatp);
         dtypeSetInteger2State();  // Spec says integer return
     }
     ASTGEN_MEMBERS_AstFScanF;
@@ -2554,15 +2555,16 @@ public:
 class AstSScanF final : public AstNodeExpr {
     // @astgen op1 := exprsp : List[AstNodeExpr] // VarRefs for results
     // @astgen op2 := fromp : AstNodeExpr
+    // @astgen op3 := formatp : Optional[AstNodeExpr] // Format, until a literal moves to m_text
     string m_text;
     VTimescale m_timeunit;  // Parent module time unit
 
 public:
-    AstSScanF(FileLine* fl, const string& text, AstNodeExpr* fromp, AstNodeExpr* exprsp)
-        : ASTGEN_SUPER_SScanF(fl)
-        , m_text{text} {
+    AstSScanF(FileLine* fl, AstNodeExpr* formatp, AstNodeExpr* fromp, AstNodeExpr* exprsp)
+        : ASTGEN_SUPER_SScanF(fl) {
         addExprsp(exprsp);
         this->fromp(fromp);
+        this->formatp(formatp);
         dtypeSetInteger2State();  // Spec says integer return
     }
     ASTGEN_MEMBERS_AstSScanF;
@@ -2580,6 +2582,7 @@ public:
         return text() == asamep->text() && timeunit() == asamep->timeunit();
     }
     string text() const { return m_text; }  // * = Text to display
+    void text(const string& text) { m_text = text; }
     VTimescale timeunit() const { return m_timeunit; }
     void timeunit(const VTimescale& flag) { m_timeunit = flag; }
     bool isSystemFunc() const override { return true; }

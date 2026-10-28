@@ -355,14 +355,19 @@ class LinkResolveVisitor final : public VNVisitor {
         iterateChildren(nodep);
         expectDescriptor(nodep, VN_CAST(nodep->filep(), NodeVarRef));
     }
-    void visit(AstFScanF* nodep) override {
+    // Move a string literal scan format to text(), and check it
+    template <typename T_ScanF>
+    void visitScanF(T_ScanF* nodep) {
         iterateChildren(nodep);
+        // Other formats are only known at runtime (IEEE 1800-2023 21.3.4.3)
+        const AstConst* const constp = VN_CAST(nodep->formatp(), Const);
+        if (!constp || !constp->num().isFromString()) return;
+        nodep->text(constp->num().toString());
+        VL_DO_DANGLING(pushDeletep(nodep->formatp()->unlinkFrBack()), constp);
         expectFormat(nodep, nodep->text(), nodep->exprsp(), true);
     }
-    void visit(AstSScanF* nodep) override {
-        iterateChildren(nodep);
-        expectFormat(nodep, nodep->text(), nodep->exprsp(), true);
-    }
+    void visit(AstFScanF* nodep) override { visitScanF(nodep); }
+    void visit(AstSScanF* nodep) override { visitScanF(nodep); }
     void visit(AstSFormatF* nodep) override {
         if (nodep->user2SetOnce()) return;
         iterateChildren(nodep);

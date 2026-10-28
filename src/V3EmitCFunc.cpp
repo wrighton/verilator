@@ -239,10 +239,11 @@ bool EmitCFunc::displayEmitHeader(AstNode* nodep) {
 }
 
 void EmitCFunc::displayNode(AstNode* nodep, AstSFormatF* fmtp,  // fmtp is nullptr for AstScan
-                            const string& vformat, AstNode* exprsp, bool isScan) {
+                            const string& vformat, AstNode* exprsp, bool isScan,
+                            AstNode* scanFormatp) {
     // Check format, if it exists
-    const bool exprFormat = fmtp && fmtp->exprFormat();
-    bool needsScope = exprFormat;
+    const bool exprFormat = (fmtp && fmtp->exprFormat()) || scanFormatp;
+    bool needsScope = exprFormat && !isScan;  // No %m in scans
     bool needsTimescale = exprFormat;
     int formatArgs = 0;
     if (!exprFormat) {
@@ -283,7 +284,9 @@ void EmitCFunc::displayNode(AstNode* nodep, AstSFormatF* fmtp,  // fmtp is nullp
 
     const bool isStmt = displayEmitHeader(nodep);
 
-    if (exprFormat) {
+    if (scanFormatp) {
+        iterateConst(scanFormatp);
+    } else if (exprFormat) {
         UASSERT_OBJ(exprsp, nodep, "Missing format expression");
         iterateConst(exprsp);
         emitDatap(exprsp);
