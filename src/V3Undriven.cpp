@@ -774,6 +774,13 @@ class UndrivenVisitor final : public VNVisitorConst {
         m_inProcAssign = true;
         iterateChildrenConst(nodep);
     }
+    void visit(AstAssignCont* nodep) override {
+        // Procedural continuous assignment, so like other procedural assignments may not
+        // write a net (IEEE 1800-2023 10.6.1)
+        VL_RESTORER(m_inProcAssign);
+        m_inProcAssign = true;
+        iterateChildrenConst(nodep);
+    }
     void visit(AstAssignForce* nodep) override {
         iterateConst(nodep->rhsp());
         VL_RESTORER(m_inInitial);

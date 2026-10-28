@@ -7103,6 +7103,7 @@ class WidthVisitor final : public VNVisitor {
             // UINFOTREE(1, nodep, "", "AssignOut");
         }
         if (VN_IS(nodep, AssignForce)) checkForceReleaseLhs(nodep, nodep->lhsp());
+        if (VN_IS(nodep, AssignCont)) checkAssignContLhs(nodep->lhsp());
         if (AstNode* const controlp = nodep->timingControlp()) {
             if (!m_underFork && VN_IS(m_ftaskp, Func)) {
                 controlp->v3error("Timing controls are not legal in functions. Suggest use a task "
@@ -11163,6 +11164,19 @@ class WidthVisitor final : public VNVisitor {
                            << nodep->warnContextPrimary() << '\n'
                            << selNodep->warnOther() << "... Location of non-constant index\n"
                            << selNodep->warnContextSecondary());
+    }
+
+    // Error if a procedural continuous assignment writes a bit or part select
+    void checkAssignContLhs(const AstNodeExpr* lhsp) {
+        if (const AstConcat* const concatp = VN_CAST(lhsp, Concat)) {
+            checkAssignContLhs(concatp->lhsp());
+            checkAssignContLhs(concatp->rhsp());
+        } else if (const AstSel* const selp = VN_CAST(lhsp, Sel)) {
+            // A packed struct member is also a Sel, but is not a bit/part select
+            if (VN_IS(selp->fromp()->dtypep()->skipRefp(), NodeUOrStructDType)) return;
+            lhsp->v3error("Procedural continuous assignment left-hand-side must not be a "
+                          "bit/part select (IEEE 1800-2023 10.6.1)");
+        }
     }
 
     //----------------------------------------------------------------------

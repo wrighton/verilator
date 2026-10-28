@@ -1,0 +1,22 @@
+%Error: t/t_assign_deassign_sel_bad.v:26:13: Procedural continuous assignment left-hand-side must not be a bit/part select (IEEE 1800-2023 10.6.1)
+                                           : ... note: In instance 't'
+   26 |     assign v[1] = 1'b1;   
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assign_deassign_sel_bad.v:27:13: Procedural continuous assignment left-hand-side must not be a bit/part select (IEEE 1800-2023 10.6.1)
+                                           : ... note: In instance 't'
+   27 |     assign v[2:1] = 2'b11;   
+      |             ^
+%Error: t/t_assign_deassign_sel_bad.v:28:13: Procedural continuous assignment left-hand-side must not be a bit/part select (IEEE 1800-2023 10.6.1)
+                                           : ... note: In instance 't'
+   28 |     assign v[i+:2] = 2'b11;   
+      |             ^
+%Error: t/t_assign_deassign_sel_bad.v:29:14: Procedural continuous assignment left-hand-side must not be a bit/part select (IEEE 1800-2023 10.6.1)
+                                           : ... note: In instance 't'
+   29 |     assign pa[1] = 2'b11;   
+      |              ^
+%Error: t/t_assign_deassign_sel_bad.v:30:17: Procedural continuous assignment left-hand-side must not be a bit/part select (IEEE 1800-2023 10.6.1)
+                                           : ... note: In instance 't'
+   30 |     assign {a, v[0]} = 2'b11;   
+      |                 ^
+%Error: Exiting due to
