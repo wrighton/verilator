@@ -1,0 +1,20 @@
+%Error: t/t_module_input_default_bad.v:38:34: Expecting expression to be constant, but variable isn't const: 'x'
+                                            : ... note: In instance 't.u'
+   38 |     input int bad_pkg_var = pkg::x,   
+      |                                  ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_module_input_default_bad.v:39:30: Expecting expression to be constant, but variable isn't const: 'unit_var'
+                                            : ... note: In instance 't.u'
+   39 |     input int bad_unit_var = unit_var,   
+      |                              ^~~~~~~~
+%Error: t/t_module_input_default_bad.v:40:26: Expecting expression to be constant, but variable isn't const: 'a'
+                                            : ... note: In instance 't.u'
+   40 |     input int bad_port = a,   
+      |                          ^
+%Error: t/t_module_input_default_bad.v:41:31: Expecting expression to be constant, but can't determine constant for FUNCREF 'nonconst'
+                                            : ... note: In instance 't.u'
+        t/t_module_input_default_bad.v:13:12: ... Location of non-constant VARREF 'x': Language violation: reference to non-function-local variable
+        t/t_module_input_default_bad.v:41:31: ... Called from 'nonconst()' with parameters:
+   41 |     input int bad_func = pkg::nonconst(),   
+      |                               ^~~~~~~~
+%Error: Exiting due to

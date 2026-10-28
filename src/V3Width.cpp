@@ -7102,6 +7102,15 @@ class WidthVisitor final : public VNVisitor {
             iterateCheckAssign(nodep, "Assign RHS", nodep->rhsp(), FINAL, lhsDTypep);
             // UINFOTREE(1, nodep, "", "AssignOut");
         }
+        if (VN_IS(m_procedurep, InitialStatic)) {
+            // An initializer of an input port is its default value, which IEEE 1800-2023
+            // 23.2.2.4 requires to be a constant expression. A function input written here is
+            // in a function body widthed on its first call, from a static initializer.
+            const AstVarRef* const lhsp = VN_CAST(nodep->lhsp(), VarRef);
+            if (lhsp && lhsp->varp()->isInput() && !lhsp->varp()->isFuncLocal()) {
+                V3Const::constifyParamsEdit(nodep->rhsp());  // Reports a non-constant
+            }
+        }
         if (VN_IS(nodep, AssignForce)) checkForceReleaseLhs(nodep, nodep->lhsp());
         if (AstNode* const controlp = nodep->timingControlp()) {
             if (!m_underFork && VN_IS(m_ftaskp, Func)) {
