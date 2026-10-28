@@ -3096,6 +3096,23 @@ class AssertNfaVisitor final : public VNVisitor {
         });
     }
 
+    // First subroutine call match item in a property, or nullptr
+    static const AstNode* matchItemCall(const AstNode* nodep) {
+        // Calls are not executed at the end points of their sequence (IEEE 1800-2023 16.11). Any
+        // other match item is an assignment by here, as V3LinkInc lowers increments.
+        const AstNode* callp = nullptr;
+        nodep->exists([&callp](const AstExprStmt* exprStmtp) {
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (!VN_IS(stmtp, Assign)) {
+                    callp = stmtp;
+                    return true;
+                }
+            }
+            return false;
+        });
+        return callp;
+    }
+
     static VPropStrength effectiveAssertPropStrength(const AstPropSpec* const propSpecp) {
         if (propSpecp->propStrength() != VPropStrength::DEFAULT) return propSpecp->propStrength();
         return propSpecp->fileline()->language() <= V3LangCode::L1800_2005 ? VPropStrength::STRONG
@@ -3290,16 +3307,26 @@ class AssertNfaVisitor final : public VNVisitor {
         }
     }
 
-    // Replace one VarRef to a captured local var with $past(rhs, K)
-    // (or rhs inline when K == 0). No-op if refp is not in matchMap.
-    void substituteMatchItemRef(AstVarRef* refp, unsigned K,
-                                const std::unordered_map<const AstVar*, AstNodeExpr*>& matchMap) {
-        const auto it = matchMap.find(refp->varp());
-        if (it == matchMap.end()) return;
-        AstNodeExpr* newp = it->second->cloneTreePure(false);
-        if (K > 0) {
-            AstConst* const ticksp = new AstConst{refp->fileline(), AstConst::WidthedValue{}, 32,
-                                                  static_cast<uint32_t>(K)};
+    // Value of a local variable assigned by a lowered match item
+    struct MatchItemValue final {
+        AstNodeExpr* rhsp;  // Assigned expression, with earlier local variables substituted
+        unsigned cycle;  // Cycle of the assignment, relative to the start of the antecedent
+    };
+    using MatchItemValues = std::unordered_map<const AstVar*, MatchItemValue>;
+
+    // Replace a VarRef to a captured local var at cycle K, returning the replacement
+    AstNodeExpr* substituteMatchItemRef(AstVarRef* refp, unsigned K,
+                                        const MatchItemValues& values) {
+        // The replacement is $past(rhs, ticks since the assignment), or rhs inline in the same
+        // cycle.
+        // No-op if refp is not in values.
+        const auto it = values.find(refp->varp());
+        if (it == values.end()) return refp;
+        AstNodeExpr* newp = it->second.rhsp->cloneTreePure(false);
+        const unsigned ticks = K - it->second.cycle;
+        if (ticks > 0) {
+            AstConst* const ticksp
+                = new AstConst{refp->fileline(), AstConst::WidthedValue{}, 32, ticks};
             AstPast* const pastp = new AstPast{refp->fileline(), newp, ticksp, nullptr,
                                                /* propertyTiming */ true};
             pastp->dtypeFrom(newp);
@@ -3307,16 +3334,17 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         refp->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(refp), refp);
-        return;
+        return newp;
     }
 
-    // Recursively walk a consequent. Returns cycle length consumed and
-    // substitutes each VarRef to a captured local var with $past(rhs, K)
-    // (or rhs inline when K == 0). Reports E_UNSUPPORTED on non-constant
-    // delays or composite sequence operators and returns -1 on failure.
-    int
-    walkSubstituteMatchItems(AstNodeExpr* nodep, unsigned K,
-                             const std::unordered_map<const AstVar*, AstNodeExpr*>& matchItems) {
+    // Lower the match items of a sequence starting at cycle K, returning its cycle length
+    int walkSubstituteMatchItems(AstNodeExpr*& nodep, unsigned K, MatchItemValues& values,
+                                 const char* wherep) {
+        // Walks in time order (IEEE 1800-2023 16.10). Returns -1 on failure.
+        // Each local variable a match item assigns is recorded in values, each later reference to
+        // it is substituted (see substituteMatchItemRef), and the match item is replaced by its
+        // sequence, updating nodep. Report E_UNSUPPORTED on non-constant delays or composite
+        // sequence operators.
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             // IEEE 1800-2023 16.9.2: cycle_delay's lhsp is a constant_expression
             // and the delay form in a sequence is always `##N`, folded by
@@ -3327,66 +3355,81 @@ class AssertNfaVisitor final : public VNVisitor {
                         "SVA cycle delay must have a constant lhsp");
             if (delayp->isRangeDelay()) {
                 sexprp->v3warn(E_UNSUPPORTED, "Unsupported: property local variable used across "
-                                              "non-constant cycle delay in consequent"
-                                              " (IEEE 1800-2023 16.10)");
+                                              "non-constant cycle delay in "
+                                                  << wherep << " (IEEE 1800-2023 16.10)");
                 return -1;
             }
             const unsigned delayCycles = VN_AS(delayp->lhsp(), Const)->toUInt();
             int preLen = 0;
-            if (AstNodeExpr* const prep = sexprp->preExprp()) {
-                preLen = walkSubstituteMatchItems(prep, K, matchItems);
+            if (AstNodeExpr* prep = sexprp->preExprp()) {
+                preLen = walkSubstituteMatchItems(prep, K, values, wherep);
                 if (preLen < 0) return -1;
             }
+            AstNodeExpr* bodyp = sexprp->exprp();
             const int bodyLen
-                = walkSubstituteMatchItems(sexprp->exprp(), K + preLen + delayCycles, matchItems);
+                = walkSubstituteMatchItems(bodyp, K + preLen + delayCycles, values, wherep);
             if (bodyLen < 0) return -1;
             return preLen + delayCycles + bodyLen;
         }
-        if (nodep->isMultiCycleSva()) {
+        if (AstExprStmt* const exprStmtp = VN_CAST(nodep, ExprStmt)) {
+            // IEEE 1800-2023 16.10 BNF requires `(expr, match_item {, match_item})`
+            // with at least one match item; V3LinkParse only emits ExprStmt for
+            // this form and only emits AstAssign with VarRef LHS for each item.
+            // The items are executed in order at the end of the sequence.
+            AstNodeExpr* resultp = exprStmtp->resultp();
+            const int len = walkSubstituteMatchItems(resultp, K, values, wherep);
+            if (len < 0) return -1;
+            for (AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                AstAssign* const assignp = VN_AS(stmtp, Assign);
+                AstNodeExpr* rhsp = assignp->rhsp();
+                walkSubstituteMatchItems(rhsp, K + len, values, wherep);
+                values[VN_AS(assignp->lhsp(), VarRef)->varp()] = {rhsp, K + len};
+            }
+            // The values stay owned by exprStmtp, which is only deleted after this pass
+            exprStmtp->replaceWith(resultp->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(exprStmtp), exprStmtp);
+            nodep = resultp;
+            return len;
+        }
+        // A match item below a nested operator, e.g. an implication, is not lowered
+        if (nodep->isMultiCycleSva() || nodep->exists([](const AstExprStmt*) { return true; })) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: property local variable used across "
-                                         "composite sequence operator in consequent"
-                                         " (IEEE 1800-2023 16.10)");
+                                         "composite sequence operator in "
+                                             << wherep << " (IEEE 1800-2023 16.10)");
             return -1;
         }
         std::vector<AstVarRef*> refs;
         nodep->foreach([&refs](AstVarRef* p) { refs.push_back(p); });
-        for (AstVarRef* const refp : refs) substituteMatchItemRef(refp, K, matchItems);
+        for (AstVarRef* const refp : refs) {
+            AstNodeExpr* const newp = substituteMatchItemRef(refp, K, values);
+            if (refp == nodep) nodep = newp;
+        }
         return 0;
     }
 
-    // Lower property-local match-item assignments before NFA construction.
-    // Without this, the antecedent's AstExprStmt(<x = rhs_expr>, antBool)
-    // survives into every NFA edge as a continuous-alias side-effect, so the
-    // local-var temp tracks the current cycle's rhs_expr rather than the
-    // antecedent-match cycle's value -- wrong for `|-> ##N` and `|=> ##N`
-    // with N > 0 (issue #7587). Each consequent reference to the local var
-    // is replaced with `$past(rhs_expr, K)` where K = (overlapped ? 0 : 1)
-    // plus any accumulated `##N` delay. Returns true if E_UNSUPPORTED was
-    // emitted; caller must replace the body with BitFalse and bail.
-    bool liftMatchItemSubstitutions(PropertyParts& parts, AstNodeExpr* seqBodyp) {
+    // Lower match-item assignments in an antecedent, true if E_UNSUPPORTED was emitted
+    bool liftMatchItemSubstitutions(PropertyParts& parts, AstNodeExpr*& seqBodyp) {
+        // Done before NFA construction. On E_UNSUPPORTED the caller must replace the body with
+        // BitFalse and bail.
+        // Without this, the antecedent's AstExprStmt(<x = rhs_expr>, antBool) survives into every
+        // NFA edge as a continuous-alias side-effect, so the local-var temp tracks the current
+        // cycle's rhs_expr rather than the match-item cycle's value -- wrong for any reference in
+        // a later cycle (issue #7587). Each reference to the local var, in the rest of the
+        // antecedent or in the consequent, is replaced with `$past(rhs_expr, K)` where K is the
+        // number of cycles since the match item; for the consequent this includes the rest of the
+        // antecedent, and one cycle for `|=>`.
         if (!parts.hasImplication) return false;
-        AstExprStmt* const exprStmtp = VN_CAST(parts.triggerExprp, ExprStmt);
-        if (!exprStmtp) return false;
-        // IEEE 1800-2023 16.10 BNF requires `(expr, match_item {, match_item})`
-        // with at least one match item; V3LinkParse only emits ExprStmt for
-        // this form and only emits AstAssign with VarRef LHS for each item.
-        std::unordered_map<const AstVar*, AstNodeExpr*> matchItems;
-        for (AstNode* const stmtp : exprStmtp->stmtspList()) {
-            AstAssign* const assignp = VN_AS(stmtp, Assign);
-            AstVarRef* const lhsRefp = VN_AS(assignp->lhsp(), VarRef);
-            matchItems[lhsRefp->varp()] = assignp->rhsp();
+        if (!parts.triggerExprp->exists([](const AstExprStmt*) { return true; })) return false;
+        MatchItemValues values;
+        int length = walkSubstituteMatchItems(parts.triggerExprp, 0, values, "antecedent");
+        if (length >= 0) {
+            length = walkSubstituteMatchItems(seqBodyp, length + (parts.isOverlapped ? 0 : 1),
+                                              values, "consequent");
         }
-        const unsigned startK = parts.isOverlapped ? 0 : 1;
-        const int length = walkSubstituteMatchItems(seqBodyp, startK, matchItems);
         // Match-item substitution / strip mutates ancestor purity. Release
         // builds don't auto-clear caches on edits, so refresh here.
         VIsCached::clearCacheTree();
-        if (length < 0) return true;
-        AstNodeExpr* const antBoolp = exprStmtp->resultp()->unlinkFrBack();
-        exprStmtp->replaceWith(antBoolp);
-        VL_DO_DANGLING(pushDeletep(exprStmtp), exprStmtp);
-        parts.triggerExprp = antBoolp;
-        return false;
+        return length < 0;
     }
 
     // Outcome counts for a property if/case are wrong in an outcome-multiplying
@@ -3432,6 +3475,12 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->v3warn(E_UNSUPPORTED,
                             "Unsupported: property instance inside a multi-cycle property "
                             "expression");
+            VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
+            return nullptr;
+        }
+        if (const AstNode* const callp = matchItemCall(propp)) {
+            callp->v3warn(E_UNSUPPORTED, "Unsupported: subroutine call match item in a multi-cycle"
+                                         " property (IEEE 1800-2023 16.11)");
             VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
             return nullptr;
         }

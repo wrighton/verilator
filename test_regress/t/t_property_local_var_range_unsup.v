@@ -54,6 +54,31 @@ module t (
   endproperty
   assert property (p_nested_in_body);
 
+  // A range delay after a match item in the antecedent is unsupported.
+  property p_ante_range;
+    int snap;
+    @(posedge clk) (valid, snap = cyc) ##[1:2] valid |-> (cyc > snap);
+  endproperty
+  assert property (p_ante_range);
+
+  // A composite sequence operator in an antecedent with a match item is
+  // unsupported.
+  property p_ante_composite;
+    int snap;
+    @(posedge clk) (valid [* 2], snap = cyc) |=> (cyc > snap);
+  endproperty
+  assert property (p_ante_composite);
+
+  // A match item in a nested implication is unsupported.
+  property p_nested_implication;
+    int snap;
+    @(posedge clk) (valid, snap = cyc) ##1 1 |-> (valid, snap = snap + 1) |-> (cyc > snap);
+  endproperty
+  assert property (p_nested_implication);
+
+  // A subroutine call match item in an antecedent is unsupported.
+  assert property (@(posedge clk) (valid, $display("valid")) ##1 valid |-> (cyc > 0));
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     valid <= (cyc == 2);
