@@ -30,6 +30,14 @@ module t (  /*AUTOARG*/
       .o(so)
   );
 
+  wire [31:0] in_q1, in_q2;
+  sub_in s_in (
+      .d1(cyc),
+      .d2(~cyc),
+      .q1(in_q1),
+      .q2(in_q2)
+  );
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     if (a != cyc) $stop;
@@ -42,6 +50,8 @@ module t (  /*AUTOARG*/
     if (s.b != cyc) $stop;
 
     if (so != ~cyc) $stop;
+    if (in_q1 != cyc) $stop;
+    if (in_q2 != ~cyc) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
 
@@ -63,4 +73,18 @@ module sub_out (
   wire [31:0] w;
   alias o = w;
   assign w = ~cyc;
+endmodule
+
+module sub_in (
+    input wire [31:0] d1,
+    input wire [31:0] d2,
+    output wire [31:0] q1,
+    output wire [31:0] q2
+);
+  // Aliasing an input net is not a write to it (IEEE 1800-2023 10.11)
+  wire [31:0] w1, w2;
+  alias w1 = d1;
+  alias d2 = w2;
+  assign q1 = w1;
+  assign q2 = w2;
 endmodule
