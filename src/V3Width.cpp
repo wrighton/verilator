@@ -3813,10 +3813,32 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstNodeCons* nodep) override {}  // Widthed when created
     void visit(AstNodeConsItem* nodep) override {}  // Widthed when created
+    void replaceDistUnbounded(AstNodeExpr* boundp, const AstNodeExpr* exprp, bool upper) {
+        if (!VN_IS(boundp, Unbounded)) return;
+        V3Number num{boundp, exprp->width(), 0};
+        if (upper) num.setAllBits1();
+        if (exprp->isSigned()) {
+            num.setBit(exprp->width() - 1, !upper);
+            num.isSigned(true);
+        }
+        boundp->replaceWith(new AstConst{boundp->fileline(), num});
+        VL_DO_DANGLING(pushDeletep(boundp), boundp);
+    }
     void visit(AstDist* nodep) override {
         //  x dist {a :/ p, b :/ q} --> (p > 0 && x == a) || (q > 0 && x == b)
         // (only outside constraints; inside constraints V3Randomize handles weighted selection)
         userIterateAndNext(nodep->exprp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+        // V3Randomize lowers a constraint dist to range comparisons and picks, which need
+        // concrete bounds, so replace '$' by the lowest or highest value of the type of the
+        // dist expression (IEEE 1800-2023 18.5.3, 11.4.13)
+        if (m_constraintp && nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            for (AstDistItem* const itemp : nodep->itemspList()) {
+                if (AstInsideRange* const irp = VN_CAST(itemp->rangep(), InsideRange)) {
+                    replaceDistUnbounded(irp->lhsp(), nodep->exprp(), false);
+                    replaceDistUnbounded(irp->rhsp(), nodep->exprp(), true);
+                }
+            }
+        }
         for (AstNode* const itemp : nodep->itemspList()) {
             VL_DO_DANGLING(userIterate(itemp, WidthVP{CONTEXT_DET, PRELIM}.p()), itemp);
         }

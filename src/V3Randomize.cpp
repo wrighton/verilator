@@ -5542,6 +5542,30 @@ class RandomizeVisitor final : public VNVisitor {
         return andp;
     }
 
+    // Number of values in the range, as a 64-bit expression
+    static AstNodeExpr* newDistRangeSize(FileLine* fl, const AstInsideRange* irp) {
+        const bool isSigned = irp->lhsp()->isSigned();
+        const AstConst* const lopC = VN_CAST(irp->lhsp(), Const);
+        const AstConst* const hipC = VN_CAST(irp->rhsp(), Const);
+        if (lopC && hipC) {
+            const uint64_t lo = isSigned ? lopC->num().toSQuad() : lopC->toUQuad();
+            const uint64_t hi = isSigned ? hipC->num().toSQuad() : hipC->toUQuad();
+            return new AstConst{fl, AstConst::Unsized64{}, hi - lo + 1};
+        }
+        AstNodeExpr* const lo64p
+            = isSigned ? static_cast<AstNodeExpr*>(
+                             new AstExtendS{fl, irp->lhsp()->cloneTreePure(false), 64})
+                       : static_cast<AstNodeExpr*>(
+                             new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64});
+        AstNodeExpr* const hi64p
+            = isSigned ? static_cast<AstNodeExpr*>(
+                             new AstExtendS{fl, irp->rhsp()->cloneTreePure(false), 64})
+                       : static_cast<AstNodeExpr*>(
+                             new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64});
+        return new AstAdd{fl, new AstConst{fl, AstConst::Unsized64{}, 1ULL},
+                          new AstSub{fl, hi64p, lo64p}};
+    }
+
     struct DistBucket final {
         AstNodeExpr* rangep;  // A single value or an InsideRange
         AstNodeExpr* weightExprp;  // Effective 64-bit weight (range weight scaled by size)
@@ -5560,20 +5584,7 @@ class RandomizeVisitor final : public VNVisitor {
             // := on a range weights every element, so scale by the range size.
             if (!ditemp->isWhole()) {
                 if (const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange)) {
-                    const AstConst* const lop = VN_CAST(irp->lhsp(), Const);
-                    const AstConst* const hip = VN_CAST(irp->rhsp(), Const);
-                    AstNodeExpr* rangeSizep;
-                    if (lop && hip) {
-                        const uint64_t rangeSize = hip->toUQuad() - lop->toUQuad() + 1;
-                        rangeSizep = new AstConst{fl, AstConst::Unsized64{}, rangeSize};
-                    } else {
-                        rangeSizep = new AstAdd{
-                            fl, new AstConst{fl, AstConst::Unsized64{}, 1},
-                            new AstSub{fl,
-                                       new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64},
-                                       new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64}}};
-                    }
-                    weightExprp = new AstMul{fl, weightExprp, rangeSizep};
+                    weightExprp = new AstMul{fl, weightExprp, newDistRangeSize(fl, irp)};
                 }
             }
             buckets.push_back({ditemp->rangep(), weightExprp});
@@ -5796,27 +5807,7 @@ class RandomizeVisitor final : public VNVisitor {
         AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
         distExprCopyp->user1(true);
         const int distWidth = distp->exprp()->width();
-        const AstConst* const lopC = VN_CAST(irp->lhsp(), Const);
-        const AstConst* const hipC = VN_CAST(irp->rhsp(), Const);
-        AstNodeExpr* rangeSzp;
-        if (lopC && hipC) {
-            const uint64_t rsz = hipC->toUQuad() - lopC->toUQuad() + 1;
-            rangeSzp = new AstConst{fl, AstConst::Unsized64{}, rsz};
-        } else {
-            const bool isSigned = irp->lhsp()->isSigned();
-            AstNodeExpr* const lo64p
-                = isSigned ? static_cast<AstNodeExpr*>(
-                                 new AstExtendS{fl, irp->lhsp()->cloneTreePure(false), 64})
-                           : static_cast<AstNodeExpr*>(
-                                 new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64});
-            AstNodeExpr* const hi64p
-                = isSigned ? static_cast<AstNodeExpr*>(
-                                 new AstExtendS{fl, irp->rhsp()->cloneTreePure(false), 64})
-                           : static_cast<AstNodeExpr*>(
-                                 new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64});
-            rangeSzp = new AstAdd{fl, new AstConst{fl, AstConst::Unsized64{}, 1ULL},
-                                  new AstSub{fl, hi64p, lo64p}};
-        }
+        AstNodeExpr* const rangeSzp = newDistRangeSize(fl, irp);
         AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
         rand64p->dtypeSetUInt64();
         AstNodeExpr* const offsetp
