@@ -1090,7 +1090,8 @@ Summary:
 
    Rarely needed. Disable converting assignments of whole unpacked arrays into
    assignments of the individual elements. Signals that are accessed from
-   SystemC are always converted.
+   SystemC, and assignments to a slice of an unpacked array, are always
+   converted.
 
 .. option:: -fno-split
 
@@ -1131,7 +1132,8 @@ Summary:
 
    Rarely needed. Set the maximum array size (number of elements) for slice
    optimization to avoid excessive memory usage. Defaults to 256. A value
-   of 0 removes the limit.
+   of 0 removes the limit. Assignments to a slice of an unpacked array are
+   always converted.
 
 .. option:: --func-recursion-depth <value>
 

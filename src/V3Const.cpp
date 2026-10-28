@@ -4833,11 +4833,15 @@ void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const 
     const AstNodeDType* const dtypep = fromp->dtypep()->skipRefp();
     const AstNodeUOrStructDType* const sdtypep = VN_CAST(dtypep, NodeUOrStructDType);
     if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+        const AstSliceSel* const slicep = VN_CAST(fromp, SliceSel);
         for (const int index : adtypep->declRange().seqLeftToRight()) {
-            collectFixedAggregateTerms(
-                deleter,
-                new AstArraySel{flp, fromp->cloneTree(false, warnImpure), index - adtypep->lo()},
-                termps, packReal, warnImpure);
+            // Select from the sliced array, as a slice is a copy that cannot be written
+            AstArraySel* const selp
+                = slicep ? new AstArraySel{flp, slicep->fromp()->cloneTree(false, warnImpure),
+                                           slicep->declRange().lo() + index - adtypep->lo()}
+                         : new AstArraySel{flp, fromp->cloneTree(false, warnImpure),
+                                           index - adtypep->lo()};
+            collectFixedAggregateTerms(deleter, selp, termps, packReal, warnImpure);
         }
     } else if (sdtypep && !sdtypep->packed()) {
         for (const AstMemberDType* const itemp : sdtypep->memberspList()) {
