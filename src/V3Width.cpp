@@ -3247,6 +3247,13 @@ class WidthVisitor final : public VNVisitor {
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, PRELIM, STREAM_USE_CAST}.p());
             UINFOTREE(9, nodep, "", "CastDit");
             AstNodeDType* const toDtp = nodep->dtypep()->skipRefToEnump();
+            const bool bitStream = (toDtp->isAggregateType()
+                                    || nodep->fromp()->dtypep()->skipRefp()->isAggregateType())
+                                   && isFixedBitStream(toDtp)
+                                   && isFixedBitStream(nodep->fromp()->dtypep());
+            if (bitStream && !toDtp->matchingDType(nodep->fromp()->dtypep())) {
+                castBitStream(nodep, toDtp);
+            }
             AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefToEnump();
             const auto castable = AstNode::computeCastable(toDtp, fromDtp, nodep->fromp());
             bool bad = false;
@@ -3278,6 +3285,8 @@ class WidthVisitor final : public VNVisitor {
             // Note we don't sign fromp() that would make the algorithm O(n^2) if lots of casting.
             AstNodeExpr* newp = nullptr;
             if (bad) {
+            } else if (bitStream && toDtp->isAggregateType()) {
+                // Of the type already, or converted by castBitStream
             } else if (AstBasicDType* const basicp = toDtp->basicp()) {
                 if (!basicp->isString() && fromDtp->isString()) {
                     newp = new AstNToI{nodep->fileline(), nodep->fromp()->unlinkFrBack(), toDtp};
@@ -3333,11 +3342,13 @@ class WidthVisitor final : public VNVisitor {
                                                   dstElementBits,
                                                   srcElementBits};
                 }
-            } else if (VN_IS(toDtp, ClassRefDType)) {
+            } else if (VN_IS(toDtp, ClassRefDType) || castable.isSameish()) {
                 // Can just remove cast
             } else {
-                nodep->v3fatalSrc("Unimplemented: Casting non-simple data type "
-                                  << toDtp->prettyDTypeNameQ());
+                // Neither assignment compatible nor both bit-stream types (IEEE 1800-2023 6.24)
+                nodep->v3error("Incompatible types to static cast to "
+                               << toDtp->prettyDTypeNameQ() << " from "
+                               << fromDtp->prettyDTypeNameQ() << '\n');
             }
             if (!newp) newp = nodep->fromp()->unlinkFrBack();
             nodep->fromp(newp);
@@ -3384,6 +3395,80 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstCastWrap* nodep) override {
         // Inserted by V3Width only so we know has been resolved
         userIterateAndNext(nodep->lhsp(), WidthVP{nodep->dtypep(), BOTH, STREAM_USE_CAST}.p());
+    }
+    // Whether a fixed-size bit-stream type (IEEE 1800-2023 6.24.3)
+    static bool isFixedBitStream(const AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+            return isFixedBitStream(adtypep->subDTypep());
+        }
+        if (const AstStructDType* const sdtypep = VN_CAST(dtypep, StructDType)) {
+            for (const AstMemberDType* const itemp : sdtypep->memberspList()) {
+                if (!isFixedBitStream(itemp->dtypep())) return false;
+            }
+            return true;
+        }
+        return dtypep->isIntegralOrPacked();
+    }
+    // Replace a bit-stream cast operand with a value of the bits, of the target type if unpacked
+    void castBitStream(AstCast* nodep, AstNodeDType* toDtp) {
+        // The operand is packed into a vector, which an unpacked target then takes apart
+        // (IEEE 1800-2023 6.24.3)
+        iterateCheckSelf(nodep, "value", nodep->fromp(), SELF, FINAL);
+        AstNodeExpr* fromp = nodep->fromp()->unlinkFrBack();
+        const int width = toDtp->widthStream();
+        const int fromWidth = fromp->dtypep()->widthStream();
+        if (fromWidth != width) {
+            nodep->v3error("Bit-stream cast to "
+                           << toDtp->prettyDTypeNameQ() << " (" << width << " bits) from "
+                           << fromp->dtypep()->prettyDTypeNameQ() << " (" << fromWidth
+                           << " bits) requires types of equal size"
+                              " (IEEE 1800-2023 6.24.3)");
+            VL_DO_DANGLING(pushDeletep(fromp), fromp);
+            fromp = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, width, 0};
+        } else if (fromp->dtypep()->skipRefp()->isAggregateType()) {
+            fromp = new AstCvtArrayToPacked{
+                fromp->fileline(), fromp,
+                nodep->findBitOrLogicDType(width, width, VSigning::UNSIGNED,
+                                           fromp->dtypep()->isFourstate())};
+        }
+        nodep->fromp(toDtp->isAggregateType() ? unpackBitStream(fromp, toDtp) : fromp);
+    }
+    // Convert a packed vector to a value of a fixed-size bit-stream type
+    AstNodeExpr* unpackBitStream(AstNodeExpr* packedp, AstNodeDType* dtypep) {
+        if (!dtypep->containsUnpackedStruct()) {
+            if (!dtypep->skipRefp()->isAggregateType()) {
+                packedp->dtypeFrom(dtypep);
+                return packedp;
+            }
+            return new AstCvtPackedToArray{packedp->fileline(), packedp, dtypep};
+        }
+        // Each element or member takes the next slice, the first the most significant bits
+        FileLine* const flp = packedp->fileline();
+        int lsb = packedp->width();
+        const auto slicep = [&](AstNodeDType* subDtp) {
+            const int width = subDtp->widthStream();
+            lsb -= width;
+            return unpackBitStream(new AstSel{flp, packedp->cloneTreePure(false), lsb, width},
+                                   subDtp);
+        };
+        AstNodeExpr* newp = nullptr;
+        if (AstUnpackArrayDType* const adtypep = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
+            AstConsArray* const consp = new AstConsArray{flp, adtypep};
+            for (const int idx : adtypep->declRange().seqLeftToRight()) {
+                consp->valuep(idx - adtypep->lo(), slicep(adtypep->subDTypep()));
+            }
+            newp = consp;
+        } else {
+            AstStructDType* const sdtypep = VN_AS(dtypep->skipRefp(), StructDType);
+            AstConsStruct* const consp = new AstConsStruct{flp, sdtypep};
+            for (AstMemberDType* const itemp : sdtypep->memberspList()) {
+                consp->addItemsp(new AstConsStructItem{flp, itemp, slicep(itemp->dtypep())});
+            }
+            newp = consp;
+        }
+        VL_DO_DANGLING(pushDeletep(packedp), packedp);
+        return newp;
     }
     void castSized(AstNode* nodep, AstNode* underp, int width) {
         const AstBasicDType* underDtp = VN_CAST(underp->dtypep(), BasicDType);

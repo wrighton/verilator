@@ -4206,6 +4206,14 @@ class ConstVisitor final : public VNVisitor {
         if (operandBoolShift(nodep->condp())) replaceBoolShift(nodep->condp());
     }
 
+    void visit(AstCvtArrayToPacked* nodep) override {
+        iterateChildren(nodep);
+        // Unpacked structs are packed member by member
+        if (lowerAsFixedAggregate(nodep->fromp()->dtypep())) {
+            nodep->replaceWith(packFixedAggregate(nodep->fromp()->unlinkFrBack()));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
+    }
     void visit(AstConsArray* nodep) override { iterateChildren(nodep); }
     void visit(AstConsStruct* nodep) override { iterateChildren(nodep); }
     void visit(AstConsStructItem* nodep) override { iterateChildren(nodep); }
