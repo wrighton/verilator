@@ -8036,8 +8036,36 @@ class WidthVisitor final : public VNVisitor {
                 propStmtp->v3fatalSrc("Invalid statement under AstProperty");
             }
         }
+        checkLocalVarsAssigned(nodep);
         nodep->didWidth(true);
         nodep->doingWidth(false);
+    }
+    // Report local variables of a property that are read but never assigned
+    static void checkLocalVarsAssigned(const AstProperty* nodep) {
+        // A local variable shall be assigned before it is referenced (IEEE 1800-2023 16.10).
+        // Only a variable without any assignment is reported, and one passed to an instance
+        // counts as assigned, as it may be assigned through a formal argument.
+        std::unordered_set<const AstVar*> unassignedps;
+        for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            const AstVar* const varp = VN_CAST(stmtp, Var);
+            if (varp && !varp->isIO()) unassignedps.emplace(varp);
+        }
+        // Not AstNodeAssign, as foreach does not look for that under the ExprStmt of a match item
+        nodep->foreach([&](const AstAssign* assignp) {
+            if (VN_IS(assignp->rhsp(), CReset)) return;  // Default value of the declaration
+            assignp->lhsp()->foreach(
+                [&](const AstNodeVarRef* refp) { unassignedps.erase(refp->varp()); });
+        });
+        nodep->foreach([&](const AstNodeFTaskRef* instp) {
+            instp->foreach([&](const AstNodeVarRef* refp) { unassignedps.erase(refp->varp()); });
+        });
+        nodep->foreach([&](const AstNodeVarRef* refp) {
+            if (refp->access().isReadOnly() && unassignedps.erase(refp->varp())) {
+                refp->v3error("Local variable " << refp->prettyNameQ()
+                                                << " is referenced but never assigned"
+                                                   " (IEEE 1800-2023 16.10)");
+            }
+        });
     }
     void visit(AstReturn* nodep) override { nodep->v3fatalSrc("'return' missed in LinkJump"); }
     void visit(AstSequence* nodep) override {
