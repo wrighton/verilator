@@ -4010,9 +4010,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             // Resolve pin expression to the enclosing module's port Var. At primary
             // LinkDot the expression may still be an AstParseRef, so also look up by name.
             AstVar* enclosingVarp = nullptr;
-            const AstVarRef* const varRefp = VN_CAST(exprp, VarRef);
-            if (varRefp) {
-                enclosingVarp = varRefp->varp();
+            // A VarXRef is a hierarchical reference to an interface instance
+            const AstNodeVarRef* const varRefp = VN_CAST(exprp, NodeVarRef);
+            if (const AstVarRef* const localRefp = VN_CAST(exprp, VarRef)) {
+                enclosingVarp = localRefp->varp();
             } else if (const AstParseRef* const parseRefp = VN_CAST(exprp, ParseRef)) {
                 if (m_modp) {
                     if (VSymEnt* const symp
@@ -4051,6 +4052,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                                             ifacep->name()};
                     }
                     newIfaceRefp->ifacep(ifacep);
+                    for (const AstPin* const paramp : refp->cellp()->paramspList()) {
+                        // A hierarchical reference's instance has parameter values of another
+                        // module, which cannot be evaluated here
+                        if (VN_IS(exprp, VarXRef) && !VN_IS(paramp->exprp(), Const)) {
+                            exprp->v3warn(E_UNSUPPORTED,
+                                          "Unsupported: Generic interface port connected to a "
+                                          "hierarchical reference to an interface instance with "
+                                          "a parameter value that is not a constant: "
+                                              << exprp->prettyNameQ());
+                            break;
+                        }
+                    }
                     if (refp->cellp()->paramsp()) {
                         newIfaceRefp->addParamsp(refp->cellp()->paramsp()->cloneTree(true));
                     }
