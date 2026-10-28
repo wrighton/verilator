@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 `define STRINGIFY(x) `"x`"
 // verilog_format: on
 
@@ -65,6 +66,28 @@ module t;
       `checkh(rmem[0], 65'h1_0000_0001);
       `checkh(rmem[2], 65'h3_0000_0003);
       `checkh(rmem[3], 65'h0);
+    end
+    begin
+      // Queues, bounded and typedef'd, load at their current size (IEEE 1800-2023 21.4.1)
+      logic [14:0] q[$];
+      typedef logic [14:0] bq_t[$:3];
+      bq_t bq;
+      int fd;
+      fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/readmem_q.hex"}, "w");
+      $fdisplay(fd, "7001\n7002\n7003\n@6 7006");
+      $fclose(fd);
+      q = '{0, 0};
+      $readmemh({`STRINGIFY(`TEST_OBJ_DIR), "/readmem_q.hex"}, q);
+      `checkd(q.size(), 2);
+      `checkh(q[0], 15'h7001);
+      `checkh(q[1], 15'h7002);
+      bq = '{0, 0, 0};
+      $readmemh({`STRINGIFY(`TEST_OBJ_DIR), "/readmem_q.hex"}, bq, 1);
+      `checkd(bq.size(), 3);
+      `checkh(bq[0], 15'h0);
+      `checkh(bq[1], 15'h7001);
+      `checkh(bq[2], 15'h7002);
+      $writememh({`STRINGIFY(`TEST_OBJ_DIR), "/writemem_q.hex"}, bq, 2, 1);
     end
     $write("*-* All Finished *-*\n");
     $finish;

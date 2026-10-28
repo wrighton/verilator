@@ -1162,7 +1162,8 @@ public:
             if (!varrefp) {
                 nodep->v3error(nodep->verilogKwd() << " loading non-variable");
             } else if (VN_IS(varrefp->varp()->dtypeSkipRefp(), AssocArrayDType)
-                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), DynArrayDType)) {
+                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), DynArrayDType)
+                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), QueueDType)) {
                 // nodep->memp() below will when verilated code is compiled create a C++ template
                 memUsePtr = false;
             } else if (const AstUnpackArrayDType* const adtypep

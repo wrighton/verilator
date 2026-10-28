@@ -1509,9 +1509,9 @@ void VL_WRITEMEM_N(bool hex, int bits, const std::string& filename,
     }
 }
 
-template <typename T_Value>
-void VL_READMEM_N(bool hex, int bits, const std::string& filename, VlQueue<T_Value>& obj,
-                  QData start, QData end) VL_MT_SAFE {
+template <typename T_Value, size_t N_MaxSize>
+void VL_READMEM_N(bool hex, int bits, const std::string& filename,
+                  VlQueue<T_Value, N_MaxSize>& obj, QData start, QData end) VL_MT_SAFE {
     VlReadMem rmem{hex, bits, filename, start, end};
     if (VL_UNLIKELY(!rmem.isOpen())) return;
     while (true) {
@@ -1523,9 +1523,9 @@ void VL_READMEM_N(bool hex, int bits, const std::string& filename, VlQueue<T_Val
     }
 }
 
-template <typename T_Value>
-void VL_WRITEMEM_N(bool hex, int bits, const std::string& filename, const VlQueue<T_Value>& obj,
-                   QData start, QData end) VL_MT_SAFE {
+template <typename T_Value, size_t N_MaxSize>
+void VL_WRITEMEM_N(bool hex, int bits, const std::string& filename,
+                   const VlQueue<T_Value, N_MaxSize>& obj, QData start, QData end) VL_MT_SAFE {
     const QData depth = obj.size();
     const bool descending = start > end;  // IEEE 1800-2023 21.4
     start = std::min(start, depth - 1);
