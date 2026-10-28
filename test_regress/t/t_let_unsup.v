@@ -6,14 +6,13 @@
 
 module t;
 
-  let F(untyped a) = 30 + a;
-  let G(int a) = 30 + a;
-  let H(signed a) = 30 + a;
+  let G(int a[2]) = 30 + a[0];
+  let H(signed a[2]) = 30 + a[0];
 
   initial begin
-    if (F(1) != (30 + 1)) $stop;
-    if (G(1) != (30 + 1)) $stop;
-    if (H(1) != (30 + 1)) $stop;
+    int arr[2] = '{1, 2};
+    if (G(arr) != (30 + 1)) $stop;
+    if (H(arr) != (30 + 1)) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end

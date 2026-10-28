@@ -191,7 +191,15 @@ class LinkResolveVisitor final : public VNVisitor {
                     AstNodeExpr* const pinp = it->second;
                     UINFO(9, "let pin subst " << refp << " <- " << pinp);
                     // Side effects are copied into pins, to match other simulators
-                    refp->replaceWith(pinp->cloneTree(false));
+                    AstNodeExpr* substp = pinp->cloneTree(false);
+                    // The actual of a typed formal is cast to its type (IEEE 1800-2023 11.12)
+                    AstNodeDType* const portDTypep = it->first->childDTypep();
+                    const AstBasicDType* const basicp = VN_CAST(portDTypep, BasicDType);
+                    if (!basicp || !basicp->untyped()) {
+                        substp = new AstCast{substp->fileline(), substp, VFlagChildDType{},
+                                             portDTypep->cloneTree(false)};
+                    }
+                    refp->replaceWith(substp);
                     VL_DO_DANGLING(pushDeletep(refp), refp);
                 }
             });
