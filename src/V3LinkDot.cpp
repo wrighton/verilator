@@ -6395,6 +6395,20 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         cextp->v3error("Attempting to extend from interface class "
                                        << baseClassp->prettyNameQ() << '\n'
                                        << "... Suggest use 'implements'");
+                    } else if (baseClassp->isInterfaceClass()
+                               && baseClassp->declTokenNum() < cextp->fileline()->tokenNum()
+                               && cextp->fileline()->tokenNum()
+                                      < baseClassp->fileline()->tokenNum()) {
+                        // Forward typedef (it lowered declTokenNum) < use < declaration
+                        cextp->v3error("Interface class "
+                                       << baseClassp->prettyNameQ() << " is "
+                                       << (cextp->isImplements() ? "implemented" : "extended")
+                                       << " through a forward typedef, before its declaration"
+                                          " (IEEE 1800-2023 8.26.4)\n"
+                                       << cextp->warnContextPrimary() << '\n'
+                                       << baseClassp->warnOther()
+                                       << "... Location of declaration\n"
+                                       << baseClassp->warnContextSecondary());
                     }
                     baseClassp->isExtended(true);
                     nodep->isExtended(true);
