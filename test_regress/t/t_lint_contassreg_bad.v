@@ -6,13 +6,17 @@
 
 
 module t (
-    r
+    r,
+    r2
 );
 
   output r;
+  output [1:0] r2;
 
   reg r;
+  reg [1:0] r2;
 
   assign r = 1'b0;  // Bad
+  assign r2[1] = 1'b0;  // Bad
 
 endmodule

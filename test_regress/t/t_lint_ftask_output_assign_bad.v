@@ -7,6 +7,7 @@
 module t (
     input logic in,
     output wire wire_out,
+    output wire [1:0] wire_vec_out,
     output logic reg_out
 );
   function void set_f(output set_out, input set_in);
@@ -22,5 +23,6 @@ module t (
     set_f(reg_out, in);
     set_task(wire_out, in);
     set_task(reg_out, in);
+    set_task(wire_vec_out[1], in);
   end
 endmodule

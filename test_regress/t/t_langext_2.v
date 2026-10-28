@@ -38,7 +38,7 @@ module test (  // Outputs
     clk,
     in
 );
-  output [1:0] res;
+  output reg [1:0] res;
   input clk;
   input in;
 

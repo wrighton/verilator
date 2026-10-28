@@ -393,7 +393,7 @@ endmodule
 // In an XOR tree, the entire result is flipped if necessary according to
 // total polarity. This bug was introduced when fixing issue #3445.
 module bug4059(input wire clk, input wire [31:0] in, output wire out);
-  wire [127:0] words_i;
+  logic [127:0] words_i;
   for (genvar i = 0; i < $bits(in); ++i) begin
     always_ff @(posedge clk)
       words_i[4 * i +: 4] <= {4{in[i]}};

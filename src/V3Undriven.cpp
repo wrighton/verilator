@@ -513,6 +513,30 @@ class UndrivenVisitor final : public VNVisitorConst {
         }
     }
 
+    // Warn if a written variable is the wrong kind for the assignment, net or variable
+    void warnWriteKind(AstNodeVarRef* nodep) {
+        // Ignore interface variables and similar ugly items
+        if (!nodep->access().isWriteOrRW() || VN_IS(nodep, VarXRef)) return;
+        if (m_inProcAssign && !nodep->varp()->varType().isProcAssignable()
+            && !nodep->varp()->isDeclTyped()  //
+            && !nodep->varp()->isClassMember() && !nodep->varp()->isFuncLocal()) {
+            nodep->v3warn(PROCASSWIRE, "Procedural assignment to wire, perhaps intended var"
+                                           << " (IEEE 1800-2023 6.5): " << nodep->prettyNameQ());
+        } else if (m_inContAssign && !nodep->varp()->varType().isContAssignable()
+                   && !nodep->fileline()->language().systemVerilog()) {
+            nodep->v3warn(CONTASSREG, "Continuous assignment to reg, perhaps intended wire"
+                                          << " (IEEE 1364-2005 6.1; Verilog only, legal in SV): "
+                                          << nodep->prettyNameQ());
+        }
+        if (m_inFTaskRef && nodep->varp()->varType().isNet()) {
+            nodep->v3warn(
+                PROCASSWIRE,
+                "Passed wire on output or inout subroutine argument, expected expression that "
+                "is valid on the left hand side of a procedural assignment"
+                    << " (IEEE 1800-2023 13.5): " << nodep->prettyNameQ());
+        }
+    }
+
     // VISITORS
     void visit(AstVar* nodep) override {
         const bool funcInout = nodep->isFuncLocal() && nodep->isInout();
@@ -549,6 +573,7 @@ class UndrivenVisitor final : public VNVisitorConst {
         AstNodeVarRef* const varrefp = VN_CAST(nodep->fromp(), NodeVarRef);
         AstConst* const constp = VN_CAST(nodep->lsbp(), Const);
         if (varrefp && constp && !constp->num().isFourState()) {
+            warnWriteKind(varrefp);
             for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
                 UndrivenVarEntry* const entryp = getEntryp(varrefp->varp(), usr);
                 const int lsb = constp->toUInt();
@@ -574,29 +599,7 @@ class UndrivenVisitor final : public VNVisitorConst {
     }
     void visit(AstNodeVarRef* nodep) override {
         // Any variable
-        if (nodep->access().isWriteOrRW()
-            && !VN_IS(nodep, VarXRef)) {  // Ignore interface variables and similar ugly items
-            if (m_inProcAssign && !nodep->varp()->varType().isProcAssignable()
-                && !nodep->varp()->isDeclTyped()  //
-                && !nodep->varp()->isClassMember() && !nodep->varp()->isFuncLocal()) {
-                nodep->v3warn(PROCASSWIRE, "Procedural assignment to wire, perhaps intended var"
-                                               << " (IEEE 1800-2023 6.5): "
-                                               << nodep->prettyNameQ());
-            } else if (m_inContAssign && !nodep->varp()->varType().isContAssignable()
-                       && !nodep->fileline()->language().systemVerilog()) {
-                nodep->v3warn(CONTASSREG,
-                              "Continuous assignment to reg, perhaps intended wire"
-                                  << " (IEEE 1364-2005 6.1; Verilog only, legal in SV): "
-                                  << nodep->prettyNameQ());
-            }
-            if (m_inFTaskRef && nodep->varp()->varType().isNet()) {
-                nodep->v3warn(
-                    PROCASSWIRE,
-                    "Passed wire on output or inout subroutine argument, expected expression that "
-                    "is valid on the left hand side of a procedural assignment"
-                        << " (IEEE 1800-2023 13.5): " << nodep->prettyNameQ());
-            }
-        }
+        warnWriteKind(nodep);
 
         // If writeSummary is enabled, task/function definitions are treated as non-executed.
         // Remember that anything driven here doesn't count toward MULTIDRIVEN.
