@@ -89,7 +89,7 @@ module t (/*AUTOARG*/
   union_t unu;
 
   integer i1;
-  int array[3];
+  /* verilator lint_off MULTIDRIVEN */ int array[3]; /* verilator lint_on MULTIDRIVEN */
   initial array = '{1,2,3};
   logic [63:32] downto_32 = '0;
 

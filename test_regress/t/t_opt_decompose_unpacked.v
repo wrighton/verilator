@@ -109,7 +109,7 @@ module t (
   st_t sv[2];  // No split: variable index
   st_t sv2[2];  // No split: variable index
   // Forced, and assigned from it
-  logic [6:0] frc[2];  // No split: forced
+  /* verilator lint_off MULTIDRIVEN */ logic [6:0] frc[2]; /* verilator lint_on MULTIDRIVEN */  // No split: forced
   logic [6:0] frcr[2];  // No split: assigned from a forced variable
   // Struct pattern reading the variable itself
   st_t ssw = '{a: 7'd1, b: 33'd2, c: '{5'd3, 5'd4}};  // No split: pattern value

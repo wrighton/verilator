@@ -1457,6 +1457,10 @@ List Of Warnings
    ``always_ff`` block is also written by another process. IEEE 1800
    requires variables written in these specialized always blocks to be
    written only by that process.
+   An unpacked array element written with a non-constant index counts as a
+   write of the whole array (its longest static prefix), so conflicts with
+   any other write of the array; elements written with constant indices are
+   not compared with each other.
 
    Faulty ``always_ff`` example:
 
