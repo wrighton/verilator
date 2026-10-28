@@ -3584,7 +3584,7 @@ class WidthVisitor final : public VNVisitor {
                                                   dstElementBits,
                                                   srcElementBits};
                 }
-            } else if (VN_IS(toDtp, ClassRefDType)) {
+            } else if (VN_IS(toDtp, ClassRefDType) || castable.isSameish()) {
                 // Can just remove cast
             } else {
                 nodep->v3fatalSrc("Unimplemented: Casting non-simple data type "
@@ -3906,6 +3906,7 @@ class WidthVisitor final : public VNVisitor {
         FileLine* const fl = valuep->fileline();
         AstVar* const varp = makeTempVarp(m_bitstreamTempNames.get(valuep), valuep,
                                           valuep->dtypep()->skipRefToEnump());
+        varp->noSubst(true);
         AstAssign* const assignp
             = new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, valuep};
         // Width the assignment under a holder, as iterating requires a node with a parent
@@ -9721,6 +9722,9 @@ class WidthVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     return;
                 }
+                // Finish the operands, which replaces casts
+                userIterateAndNext(nodep->lhsp(), WidthVP{nodep->lhsp()->dtypep(), FINAL}.p());
+                userIterateAndNext(nodep->rhsp(), WidthVP{nodep->rhsp()->dtypep(), FINAL}.p());
                 // Elements are compared by their left-to-right order, as when assigned (7.4.6)
                 convertUnpackedOrder(nodep->rhsp(), nodep->lhsp()->dtypep());
             } else if (nodep->lhsp()->isDouble() || nodep->rhsp()->isDouble()) {
