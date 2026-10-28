@@ -4958,6 +4958,7 @@ void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const 
     const AstNodeUOrStructDType* const sdtypep = VN_CAST(dtypep, NodeUOrStructDType);
     if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
         const AstConsArray* const consp = VN_CAST(fromp, ConsArray);
+        const AstSliceSel* const slicep = VN_CAST(fromp, SliceSel);
         for (const int index : adtypep->declRange().seqLeftToRight()) {
             // Select by offset from the low index, from a constant array directly
             AstNodeExpr* selp;
@@ -4965,6 +4966,10 @@ void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const 
                 AstNodeExpr* const valuep = consp->valuep(index - adtypep->lo());
                 UASSERT_OBJ(valuep, consp, "Constant array element missing");
                 selp = valuep->cloneTree(false);
+            } else if (slicep) {
+                // Select from the sliced array, as a slice is a copy that cannot be written
+                const int offset = slicep->declRange().lo() + index - adtypep->lo();
+                selp = new AstArraySel{flp, slicep->fromp()->cloneTree(false, warnImpure), offset};
             } else {
                 selp = new AstArraySel{flp, fromp->cloneTree(false, warnImpure),
                                        index - adtypep->lo()};

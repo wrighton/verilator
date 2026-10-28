@@ -157,7 +157,8 @@ class SliceVisitor final : public VNVisitor {
                 return resultSelp;
             }
         } else if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, NodeSel) || VN_IS(nodep, CMethodHard)
-                   || VN_IS(nodep, MemberRef) || VN_IS(nodep, StructSel)) {
+                   || VN_IS(nodep, MemberRef) || VN_IS(nodep, StructSel)
+                   || VN_IS(nodep, CvtQueueToUnpack)) {
             UINFO(9, "  cloneSel(" << elements << "," << elemIdx << ") " << nodep);
             const int leOffset = !arrayp->rangep()->ascending()
                                      ? arrayp->rangep()->elementsConst() - 1 - elemIdx
@@ -185,7 +186,7 @@ class SliceVisitor final : public VNVisitor {
         const bool lhsSlice = VN_IS(nodep->lhsp(), SliceSel);
         if (VN_IS(stp, CvtPackedToArray) && !lhsSlice) return false;
         if (VN_IS(stp, CvtArrayToArray)) return false;
-        if (VN_IS(stp, CvtQueueToUnpack)) return false;
+        if (VN_IS(stp, CvtQueueToUnpack) && !lhsSlice) return false;
         if (VN_IS(stp, CReset)) return false;
 
         // Any isSc variables must be expanded regardless of --fno-slice. So must an array
