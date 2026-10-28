@@ -2713,11 +2713,32 @@ class WidthVisitor final : public VNVisitor {
                     break;
                 }
                 case VAttrType::DIM_BITS: {
-                    if (VN_IS(dtypep, DynArrayDType)) {
-                        nodep->v3warn(E_UNSUPPORTED, "Unsupported: $bits for dynamic array");
+                    // Current number of elements times the element size (IEEE 1800-2023 20.6.2)
+                    FileLine* const flp = nodep->fileline();
+                    const AstNodeDType* const elemDtp = dtypep->skipRefp()->subDTypep();
+                    AstNodeExpr* newp = nullptr;
+                    if (!VN_IS(nodep->fromp(), NodeExpr)) {
+                        nodep->v3error("$bits argument is dynamically sized data type "
+                                       << dtypep->prettyDTypeNameQ()
+                                       << ", expected an expression (IEEE 1800-2023 20.6.2)");
+                    } else if (!elemDtp->isStreamableFixedAggregate()) {
+                        nodep->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: $bits of dynamic array or queue of "
+                                          << elemDtp->prettyDTypeNameQ());
                     } else {
-                        nodep->v3warn(E_UNSUPPORTED, "Unsupported: $bits for queue");
+                        AstNodeExpr* const sizep = new AstCMethodHard{
+                            flp, VN_AS(nodep->fromp()->unlinkFrBack(), NodeExpr),
+                            VCMethod::DYN_SIZE};
+                        sizep->dtypeSetInt();
+                        sizep->didWidth(true);
+                        sizep->protect(false);
+                        newp = new AstMul{
+                            flp, sizep,
+                            new AstConst{flp, AstConst::Signed32{}, elemDtp->widthStream()}};
                     }
+                    if (!newp) newp = new AstConst{flp, AstConst::Signed32{}, 0};
+                    nodep->replaceWith(newp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     break;
                 }
                 default: nodep->v3fatalSrc("Unhandled attribute type");

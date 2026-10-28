@@ -1,0 +1,10 @@
+%Error: t/t_dynarray_bits_bad.v:12:9: $bits argument is dynamically sized data type 'int$[]', expected an expression (IEEE 1800-2023 20.6.2)
+                                    : ... note: In instance 't'
+   12 |     n = $bits(dyn_t);
+      |         ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_dynarray_bits_bad.v:13:9: $bits argument is dynamically sized data type 'byte$[$]', expected an expression (IEEE 1800-2023 20.6.2)
+                                    : ... note: In instance 't'
+   13 |     n = $bits(queue_t);
+      |         ^~~~~
+%Error: Exiting due to
