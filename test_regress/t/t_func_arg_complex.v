@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 class Cls;
@@ -31,6 +32,47 @@ class Cls;
     return verbosity;
   endfunction
 
+endclass
+
+int unit_default_data;
+
+function int unit_get_data();
+  return unit_default_data * 2;
+endfunction
+
+class ClsNew;
+  localparam int OFFSET = 1;
+  static string type_name = "ClsNew";
+  string m_name;
+  int m_data;
+  int m_data2;
+  function new(string name = ClsNew::type_name, int data = unit_default_data + OFFSET,
+               int data2 = get_offset() + unit_get_data());
+    m_name = name;
+    m_data = data;
+    m_data2 = data2;
+  endfunction
+  static function int get_offset();
+    return 100;
+  endfunction
+endclass
+
+class ClsNewExtern;
+  const static string type_name = "ClsNewExtern";
+  string m_name;
+  extern function new(string name = type_name);
+endclass
+
+function ClsNewExtern::new(string name = type_name);
+  m_name = name;
+endfunction
+
+class ClsNewDerived extends ClsNew;
+  static string type_name = "ClsNewDerived";
+  function new(string name = type_name);
+    super.new(.data2(5));
+    m_name = {m_name, ":", name};
+  endfunction
 endclass
 
 module t;
@@ -102,6 +144,35 @@ module t;
       `checkd(v, 111);
       v = c.uvm_report(1, 222);
       `checkd(v, 222);
+    end
+
+    begin
+      ClsNew cn;
+      ClsNewExtern cx;
+      ClsNewDerived cd;
+
+      unit_default_data = 10;
+      cn = new;
+      `checks(cn.m_name, "ClsNew");
+      `checkd(cn.m_data, 11);
+      `checkd(cn.m_data2, 120);
+      ClsNew::type_name = "Renamed";
+      unit_default_data = 20;
+      cn = new();
+      `checks(cn.m_name, "Renamed");
+      `checkd(cn.m_data, 21);
+      `checkd(cn.m_data2, 140);
+      cn = new("given", 3);
+      `checks(cn.m_name, "given");
+      `checkd(cn.m_data, 3);
+
+      cx = new;
+      `checks(cx.m_name, "ClsNewExtern");
+
+      cd = new;
+      `checks(cd.m_name, "Renamed:ClsNewDerived");
+      `checkd(cd.m_data, 21);
+      `checkd(cd.m_data2, 5);
     end
 
     $write("*-* All Finished *-*\n");

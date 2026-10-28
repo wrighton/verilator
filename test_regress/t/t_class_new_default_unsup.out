@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_class_new_default_unsup.v:24:9: Unsupported: Constructor default value referring to a class member or argument, in missing argument 'from_arg'
+                                                      : ... note: In instance 't'
+   24 |     c = new;
+      |         ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_class_new_default_unsup.v:24:9: Unsupported: Constructor default value referring to a class member or argument, in missing argument 'from_member'
+                                                      : ... note: In instance 't'
+   24 |     c = new;
+      |         ^~~
+%Error-UNSUPPORTED: t/t_class_new_default_unsup.v:24:9: Unsupported: Constructor default value referring to a class member or argument, in missing argument 'from_method'
+                                                      : ... note: In instance 't'
+   24 |     c = new;
+      |         ^~~
+%Error-UNSUPPORTED: t/t_class_new_default_unsup.v:24:9: Unsupported: Constructor default value referring to a class member or argument, in missing argument 'from_this'
+                                                      : ... note: In instance 't'
+   24 |     c = new;
+      |         ^~~
+%Error: Exiting due to

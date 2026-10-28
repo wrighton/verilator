@@ -2263,6 +2263,21 @@ public:
 
 const char* const V3Task::s_dpiTemporaryVarSuffix = "__Vcvt";
 
+// True if a default argument value refers to the callee's arguments or object
+static bool defaultNeedsCallee(const AstNodeExpr* valuep) {
+    return valuep->exists([](const AstNode* nodep) {
+        if (VN_IS(nodep, ThisRef)) return true;
+        if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            const AstVar* const varp = refp->varp();
+            return varp->isFuncLocal() || (varp->isClassMember() && !varp->lifetime().isStatic());
+        }
+        if (const AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef)) {
+            return refp->taskp()->classMethod() && !refp->taskp()->isStatic();
+        }
+        return false;
+    });
+}
+
 V3TaskConnects V3Task::taskConnects(AstNodeFTaskRef* nodep, AstNode* taskStmtsp,
                                     V3TaskConnectState* statep, bool makeChanges) {
     // Output list will be in order of the port declaration variables (so
@@ -2376,7 +2391,16 @@ V3TaskConnects V3Task::taskConnects(AstNodeFTaskRef* nodep, AstNode* taskStmtsp,
                 // now; we don't have much to lose if it fails.
                 newvaluep = V3Const::constifyEdit(VN_AS(portp->valuep(), NodeExpr));
                 if (!VN_IS(newvaluep, Const)) {
-                    if (statep) {
+                    if (nodep->taskp()->isConstructor()) {
+                        // A wrapper cannot construct the object, so evaluate the default in
+                        // the caller, which is only possible if it does not need the callee
+                        if (defaultNeedsCallee(newvaluep)) {
+                            nodep->v3warn(E_UNSUPPORTED,
+                                          "Unsupported: Constructor default value referring to"
+                                          " a class member or argument, in missing argument "
+                                              << portp->prettyNameQ());
+                        }
+                    } else if (statep) {
                         portp->pinNum(i + 1);  // Make sure correct, will use to build name
                         UINFO(9, "taskConnects arg wrapper needed " << portp->valuep());
                         argWrap.insert(portp);
