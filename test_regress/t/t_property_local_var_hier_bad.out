@@ -1,0 +1,14 @@
+%Error: t/t_property_local_var_hier_bad.v:24:25: Hierarchical reference to a local variable or argument of a sequence or property (IEEE 1800-2023 16.10): 'v'
+   24 |   wire [3:0] w_here = p.v;
+      |                         ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_local_var_hier_bad.v:31:32: Hierarchical reference to a local variable or argument of a sequence or property (IEEE 1800-2023 16.10): 'v'
+   31 |   wire [3:0] w_local = u_sub.p.v;
+      |                                ^
+%Error: t/t_property_local_var_hier_bad.v:33:27: Hierarchical reference to a local variable or argument of a sequence or property (IEEE 1800-2023 16.10): 'x'
+   33 |   wire w_formal = u_sub.p.x;
+      |                           ^
+%Error: t/t_property_local_var_hier_bad.v:35:31: Hierarchical reference to a local variable or argument of a sequence or property (IEEE 1800-2023 16.10): 'y'
+   35 |   wire w_seq_formal = u_sub.s.y;
+      |                               ^
+%Error: Exiting due to

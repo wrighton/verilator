@@ -4816,6 +4816,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 } else if (allowVar) {
+                    // Items of a sequence or property are not visible outside of it
+                    const AstNode* const dotScopep = m_ds.m_dotSymp->nodep();
+                    if (!first && (VN_IS(dotScopep, Property) || VN_IS(dotScopep, Sequence))) {
+                        nodep->v3error("Hierarchical reference to a local variable or argument"
+                                       " of a sequence or property (IEEE 1800-2023 16.10): "
+                                       << varp->prettyNameQ());
+                        m_ds.m_dotText = "";  // Avoid a second error on the dotted path
+                    }
                     AstNode* newp;
                     if (m_ds.m_dotText != "") {
                         AstVarXRef* const refp
