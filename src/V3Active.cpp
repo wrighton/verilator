@@ -763,6 +763,13 @@ class CovergroupInjectVisitor final : public VNVisitor {
         AstSenTree* const eventp = VN_CAST(classp->user2p(), SenTree);
         if (!eventp) return;  // No automatic sampling for this covergroup
 
+        // A static process cannot sample an instance that is a member of each object
+        if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+            varp->v3warn(COVERIGN, "Unsupported: 'covergroup' clocking event of an instance "
+                                   "held in a class member; no coverage sampled");
+            return;
+        }
+
         // V3Covergroup guarantees every supported-event covergroup has a registered sample CFunc
         AstCFunc* const sampleCFuncp = VN_AS(classp->user1p(), CFunc);
         UASSERT_OBJ(sampleCFuncp, nodep,

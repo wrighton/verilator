@@ -1,0 +1,16 @@
+p::PkgMon::cg.cp.auto_0: 1
+p::PkgMon::cg.cp.auto_1: 1
+p::PkgMon::cg.cp.auto_2: 1
+p::PkgMon::cg.cp.auto_3: 1
+t.ArgMon::cg.cp.auto_0: 1
+t.ArgMon::cg.cp.auto_1: 1
+t.ArgMon::cg.cp.auto_2: 0
+t.ArgMon::cg.cp.auto_3: 0
+t.Mon::cg.cp.auto_0: 1
+t.Mon::cg.cp.auto_1: 1
+t.Mon::cg.cp.auto_2: 2
+t.Mon::cg.cp.auto_3: 2
+t.RefMon::cg.cp.auto_0: 1
+t.RefMon::cg.cp.auto_1: 1
+t.RefMon::cg.cp.auto_2: 1
+t.RefMon::cg.cp.auto_3: 1
