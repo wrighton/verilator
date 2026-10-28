@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_consec_rep_empty_unsup.v:13:37: Unsupported: [*0] consecutive repetition
+                                                             : ... note: In instance 't'
+   13 |   assert property (@(posedge clk) a [*0] ##0 a |-> 1);
+      |                                     ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
