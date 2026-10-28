@@ -8691,8 +8691,38 @@ class WidthVisitor final : public VNVisitor {
         m_propertyp = nodep;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "PropSpec", nodep->specp(), SELF, BOTH);
+        checkLocalVarsAssigned(nodep);
         nodep->didWidth(true);
         nodep->doingWidth(false);
+    }
+    // Report local variables of a property that are read but never assigned
+    static void checkLocalVarsAssigned(const AstProperty* nodep) {
+        // A local variable shall be assigned before it is referenced (IEEE 1800-2023 16.10).
+        // Only a variable without any assignment is reported, and one passed to an instance
+        // counts as assigned, as it may be assigned through a formal argument.
+        std::unordered_set<const AstVar*> unassignedps;
+        for (const AstNode* const declp : nodep->declspList()) {
+            const AstVar* const varp = VN_CAST(declp, Var);
+            // A declaration assignment is kept as the variable's value
+            if (varp && !varp->isIO() && !varp->valuep()) unassignedps.emplace(varp);
+        }
+        // Not AstNodeAssign, as foreach does not look for that under the ExprStmt of a match item
+        nodep->foreach([&](const AstAssign* assignp) {
+            assignp->lhsp()->foreach(
+                [&](const AstNodeVarRef* refp) { unassignedps.erase(refp->varp()); });
+        });
+        const auto eraseArgs = [&](const AstNodeExpr* instp) {
+            instp->foreach([&](const AstNodeVarRef* refp) { unassignedps.erase(refp->varp()); });
+        };
+        nodep->foreach([&](const AstNodeFTaskRef* instp) { eraseArgs(instp); });
+        nodep->foreach([&](const AstSchemaRef* instp) { eraseArgs(instp); });
+        nodep->foreach([&](const AstNodeVarRef* refp) {
+            if (refp->access().isReadOnly() && unassignedps.erase(refp->varp())) {
+                refp->v3error("Local variable " << refp->prettyNameQ()
+                                                << " is referenced but never assigned"
+                                                   " (IEEE 1800-2023 16.10)");
+            }
+        });
     }
     void visit(AstReturn* nodep) override { nodep->v3fatalSrc("'return' missed in LinkJump"); }
     void visit(AstSequence* nodep) override {
