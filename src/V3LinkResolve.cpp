@@ -96,7 +96,15 @@ class LinkResolveVisitor final : public VNVisitor {
     }
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
-        if (m_ftaskp) nodep->funcLocal(true);
+        if (m_ftaskp) {
+            nodep->funcLocal(true);
+            // A local's data type requires constant expressions, so a call there means the
+            // function may not be a constant function (IEEE 1800-2023 13.4.3)
+            if (!nodep->isIO() && !nodep->isParam() && nodep->childDTypep()
+                && nodep->childDTypep()->exists([](const AstNodeFTaskRef*) { return true; })) {
+                m_ftaskp->usesConstFunc(true);
+            }
+        }
         if (nodep->isSigModPublic()) {
             nodep->sigModPublic(false);  // We're done with this attribute
             m_modp->modPublic(true);  // Avoid flattening if signals are exposed

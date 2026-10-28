@@ -1,0 +1,15 @@
+%Error: t/t_lint_const_func_nested_bad.v:20:23: Expecting expression to be constant, but can't determine constant for FUNCREF 'packed_dim'
+                                              : ... note: In instance 't'
+        t/t_lint_const_func_nested_bad.v:15:26: ... Location of non-constant FUNC 'packed_dim': Language violation: Constant function uses a constant function where a constant expression is required (IEEE 1800-2023 13.4.3)
+        t/t_lint_const_func_nested_bad.v:20:23: ... Called from 'packed_dim()' with parameters:
+           a = ?32?h1
+   20 |   localparam int P1 = packed_dim(1);
+      |                       ^~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_lint_const_func_nested_bad.v:28:23: Expecting expression to be constant, but can't determine constant for FUNCREF 'unpacked_dim'
+                                              : ... note: In instance 't'
+        t/t_lint_const_func_nested_bad.v:22:26: ... Location of non-constant FUNC 'unpacked_dim': Language violation: Constant function uses a constant function where a constant expression is required (IEEE 1800-2023 13.4.3)
+        t/t_lint_const_func_nested_bad.v:28:23: ... Called from 'unpacked_dim()' with parameters:
+   28 |   localparam int P2 = unpacked_dim();
+      |                       ^~~~~~~~~~~~
+%Error: Exiting due to

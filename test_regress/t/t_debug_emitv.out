@@ -1550,6 +1550,23 @@ module Vt_debug_emitv_seq_event;
 endmodule
 package Vt_debug_emitv_p;
     logic pkgvar;
+    function ident;
+        input int signed value;
+        begin : label10
+            ident = /*CRESET*/;
+            ident = value;
+            disable label10;
+        end
+    endfunction
+    function uses_const_func;
+        logic [1:0]  v;
+        begin : label11
+            uses_const_func = /*CRESET*/;
+            v = /*CRESET*/;
+            uses_const_func = 32'h2;
+            disable label11;
+        end
+    endfunction
 endpackage
 package Vt_debug_emitv_Pkg;
     bit signed [31:0]  PKG_PARAM;

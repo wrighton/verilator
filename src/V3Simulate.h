@@ -597,6 +597,12 @@ private:
                 "Constant function may not be declared under generate (IEEE 1800-2023 13.4.3)");
             clearOptimizable(nodep, "Constant function called under generate");
         }
+        if (nodep->usesConstFunc()) {
+            clearOptimizable(nodep,
+                             "Language violation: Constant function uses a constant function"
+                             " where a constant expression is required (IEEE 1800-2023"
+                             " 13.4.3)");
+        }
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
     }
