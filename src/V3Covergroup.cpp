@@ -4332,16 +4332,6 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return vars;
     }
 
-    bool hasEnclosingEventRef(AstCovergroup* cgp) const {
-        if (!m_embeddedVarp || !cgp->eventp()) return false;
-        const std::set<const AstVar*> enclosingVars = enclosingInstanceVars();
-        bool found = false;
-        cgp->eventp()->foreach([&](AstVarRef* refp) {
-            if (enclosingVars.count(refp->varp())) found = true;
-        });
-        return found;
-    }
-
     static bool parseEmbeddedEventExpr(AstNodeExpr* exprp, AstVar*& baseVarp,
                                        AstVar*& memberVarp) {
         if (AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
@@ -4399,6 +4389,19 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         // IEEE 1800-2023 19.3 samples coverpoints whenever their clocking event occurs. A
         // per-instance event cannot use V3Active's static sensitivity path, so spawn
         // 'fork forever begin @(event); cg.sample(); end join_none' after each construction.
+        // The event may read the instance's members, such as its arguments, so its 'iff' guards
+        // are evaluated only while the instance exists
+        eventp->foreach([&](AstSenItem* itemp) {
+            if (AstNodeExpr* const condp = itemp->condp()) {
+                FileLine* const fl = condp->fileline();
+                itemp->condp(new AstLogAnd{fl, newEmbeddedVarNonNull(fl), condp->unlinkFrBack()});
+            }
+        });
+        eventp->foreach([&](AstVarRef* refp) {
+            if (m_memberMap.findMember(m_covergroupp, refp->varp()->name()) == refp->varp()) {
+                rewriteVarRef(refp, m_embeddedVarp);
+            }
+        });
         for (AstNodeAssign* const constructp : constructps) {
             FileLine* const fl = constructp->fileline();
             AstLoop* const loopp = new AstLoop{fl};
@@ -4698,17 +4701,18 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                     // event exists, so cgp->eventp() is always non-null here.
                     UASSERT_OBJ(cgp->eventp(), cgp,
                                 "Sentinel AstCovergroup in class must have non-null eventp");
-                    if (hasEnclosingEventRef(cgp)) {
-                        UASSERT_OBJ(m_embeddedVarp, cgp,
-                                    "Embedded covergroup event has no instance variable");
+                    // Every embedded covergroup takes the per-instance path: the static
+                    // processes V3Active creates cannot sample a per-object member
+                    if (m_embeddedVarp) {
                         if (v3Global.opt.timing().isSetTrue()) {
                             embeddedEventForkp = cgp->eventp()->unlinkFrBack();
                         } else {
                             embeddedEventTriggers = collectEmbeddedEventTriggers(cgp);
                             if (embeddedEventTriggers.empty()) {
                                 cgp->v3warn(COVERIGN,
-                                            "Unsupported: 'covergroup' clocking event on complex "
-                                            "member expression; use --timing for full support.");
+                                            "Unsupported: embedded 'covergroup' clocking event "
+                                            "other than on simple non-static members of the "
+                                            "enclosing class; use --timing for full support.");
                                 hasUnsupportedEvent = true;
                             }
                         }
