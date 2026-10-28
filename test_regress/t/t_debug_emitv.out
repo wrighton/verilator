@@ -1829,6 +1829,23 @@ module seq_event;
 endmodule
 package p;
     logic pkgvar;
+    function ident;
+        input int value;
+        begin : label10
+            ident = /*CRESET*/;
+            ident = value;
+            disable label10;
+        end
+    endfunction
+    function uses_const_func;
+        logic [1:0]  v;
+        begin : label11
+            uses_const_func = /*CRESET*/;
+            v = /*CRESET*/;
+            uses_const_func = 32'h2;
+            disable label11;
+        end
+    endfunction
 endpackage
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
@@ -1851,7 +1868,7 @@ package std;
         protected chandle m_process;
         function self;
             process p;
-            begin : label10
+            begin : label12
                 self = /*CRESET*/;
                 p = /*CRESET*/;
                 $c(vlProcess->initFromSelf(p););
@@ -1863,7 +1880,7 @@ package std;
                     end
                 end
                 self = p;
-                disable label10;
+                disable label12;
             end
         endfunction
         task set_status;
@@ -1871,10 +1888,10 @@ package std;
             $c(m_process->state(s););
         endtask
         function status;
-            begin : label11
+            begin : label13
                 status = /*CRESET*/;
                 status = $c(m_process->state());
-                disable label11;
+                disable label13;
             end
         endfunction
         task kill;
@@ -1910,12 +1927,12 @@ package std;
         endtask
         function get_randstate;
             string s;
-            begin : label12
+            begin : label14
                 get_randstate = /*CRESET*/;
                 s = string'($c(0));
                 $c(s = m_process->randstate(););
                 get_randstate = s;
-                disable label12;
+                disable label14;
             end
         endfunction
         task set_randstate;
@@ -1954,7 +1971,7 @@ package std;
         endtask
         task get;
             input int keyCount;
-            begin : label13
+            begin : label15
                 dropKilled();
                 if (((m_keyCount >= keyCount) && ((
                                                    m_queue.size() 
@@ -1967,7 +1984,7 @@ package std;
                     begin
                         m_keyCount = (m_keyCount - 
                                       keyCount);
-                        disable label13;
+                        disable label15;
                     end
                 end
                 m_queue.push_back(
@@ -1994,15 +2011,15 @@ package std;
         endtask
         function try_get;
             input int keyCount;
-            begin : label14
+            begin : label16
                 try_get = /*CRESET*/;
                 if ((m_keyCount < keyCount)) begin
                     try_get = 32'sh0;
-                    disable label14;
+                    disable label16;
                 end
                 m_keyCount = (m_keyCount - keyCount);
                 try_get = 32'sh1;
-                disable label14;
+                disable label16;
             end
         endfunction
     endclass
