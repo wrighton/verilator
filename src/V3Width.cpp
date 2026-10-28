@@ -4949,6 +4949,16 @@ class WidthVisitor final : public VNVisitor {
         nodep->v3error("Concurrent assertion expression references non-static class member "
                        << nodep->prettyNameQ() << " (IEEE 1800-2023 16.6)");
     }
+    // Append classp and, depth first, each class it extends or implements, once each
+    static void memberClassesRecurse(AstClass* classp, std::vector<AstClass*>& classps) {
+        // An interface class inherits the members of every interface class it extends (IEEE
+        // 1800-2023 8.26), and may reach one through several of them.
+        if (std::find(classps.begin(), classps.end(), classp) != classps.end()) return;
+        classps.push_back(classp);
+        for (const AstClassExtends* const extp : classp->extendspList()) {
+            memberClassesRecurse(extp->classp(), classps);
+        }
+    }
     bool memberRefClass(AstMemberRef* nodep, AstClassRefDType* adtypep) {
         if (nodep->name() == "rand_mode" || nodep->name() == "randomize") {
             AstMethodCall* const newp = new AstMethodCall{
@@ -4963,7 +4973,9 @@ class WidthVisitor final : public VNVisitor {
         AstClass* const first_classp = adtypep->classp();
         UASSERT_OBJ(first_classp, nodep, "Unlinked");
         if (first_classp->isCovergroup() && memberRefCoverItem(nodep, first_classp)) return true;
-        for (AstClass* classp = first_classp; classp;) {
+        std::vector<AstClass*> classps;
+        memberClassesRecurse(first_classp, classps);
+        for (AstClass* const classp : classps) {
             if (AstNode* const foundp = m_memberMap.findMember(classp, nodep->name())) {
                 if (AstVar* const varp = VN_CAST(foundp, Var)) {
                     if (!varp->didWidth()) userIterate(varp, nullptr);
@@ -5024,17 +5036,15 @@ class WidthVisitor final : public VNVisitor {
                                   << foundp->warnOther() << "... Location of found object\n"
                                   << foundp->warnContextSecondary());
             }
-            classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
         }
 
         VSpellCheck speller;
-        for (AstClass* classp = first_classp; classp;) {
+        for (AstClass* const classp : classps) {
             for (AstNode* const itemp : classp->memberspList()) {
                 if (VN_IS(itemp, Constraint) || VN_IS(itemp, EnumItemRef) || VN_IS(itemp, Var)) {
                     speller.pushCandidate(itemp->prettyName());
                 }
             }
-            classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
         }
         const string suggest = speller.bestCandidateMsg(nodep->prettyName());
         nodep->v3error(
@@ -6092,7 +6102,9 @@ class WidthVisitor final : public VNVisitor {
             V3Randomize::newSRandomFunc(m_memberMap, first_classp);
         }
         UASSERT_OBJ(first_classp, nodep, "Unlinked");
-        for (AstClass* classp = first_classp; classp;) {
+        std::vector<AstClass*> classps;
+        memberClassesRecurse(first_classp, classps);
+        for (AstClass* const classp : classps) {
             if (nodep->fileline()->timingOn()) {
                 if (classp->name() == "semaphore" || classp->name() == "process"
                     || VString::startsWith(classp->name(), "mailbox")) {
@@ -6179,15 +6191,13 @@ class WidthVisitor final : public VNVisitor {
                 v3Global.useRandomizeMethods(true);
                 nodep->dtypep(nodep->findBasicDType(VBasicDTypeKwd::INT));
             }
-            classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
         }
         {
             VSpellCheck speller;
-            for (AstClass* classp = first_classp; classp;) {
+            for (AstClass* const classp : classps) {
                 for (AstNode* const itemp : classp->memberspList()) {
                     if (VN_IS(itemp, NodeFTask)) speller.pushCandidate(itemp->prettyName());
                 }
-                classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr;
             }
             const string suggest = speller.bestCandidateMsg(nodep->prettyName());
             nodep->v3error("Class method "
