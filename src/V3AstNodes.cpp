@@ -4639,6 +4639,14 @@ void AstVar::dumpJson(std::ostream& str) const {
     if (rand().isRandomizable()) dumpJsonStr(str, "rand", rand().ascii());
     dumpJsonGen(str);
 }
+bool AstVar::isNetOrNetPort() const {
+    if (isNet()) return true;
+    if (varType() != VVarType::PORT) return false;
+    // Port kind omitted: inputs and inouts are nets, outputs are nets unless
+    // explicitly data typed (IEEE 1800-2023 23.2.2.3)
+    return direction() == VDirection::INPUT || direction() == VDirection::INOUT
+           || (direction() == VDirection::OUTPUT && !isDeclTyped());
+}
 bool AstVar::isScBigUint() const {
     // Pragma has the highest priority
     if (m_attrScBigUint) return true;

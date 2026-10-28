@@ -2679,6 +2679,8 @@ public:
     bool isIfaceParam() const { return m_isIfaceParam; }
     bool isSignal() const { return varType().isSignal(); }
     bool isNet() const { return varType().isNet(); }
+    // True if a net, including a port whose omitted kind defaults to a net
+    bool isNetOrNetPort() const;
     bool isWor() const { return varType().isWor(); }
     bool isWiredNet() const { return varType().isWiredNet(); }
     bool isTemp() const { return varType().isTemp(); }

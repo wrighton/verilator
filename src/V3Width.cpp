@@ -1484,7 +1484,7 @@ class WidthVisitor final : public VNVisitor {
                 return false;
             }
             AstVar* const varp = varRefp->varp();
-            if (!varp->isNet()) {
+            if (!varp->isNetOrNetPort()) {
                 exprp->v3error("Only nets are allowed in alias (IEEE 1800-2023 10.11): "
                                << varp->prettyNameQ());
                 return false;
@@ -3658,8 +3658,7 @@ class WidthVisitor final : public VNVisitor {
             // drivers (IEEE 1800-2023 23.3.3.3). Input ports default to net
             // when port kind is omitted (23.2.2.3, PORT type).
             const bool hierRef = !m_curModVars.count(nodep->varp());
-            const bool netPort
-                = nodep->varp()->isNet() || nodep->varp()->varType() == VVarType::PORT;
+            const bool netPort = nodep->varp()->isNetOrNetPort();
             const bool contAssign = VN_IS(m_writerp, AssignW);
             const bool pinConn = VN_IS(m_writerp, Pin);
             if (!(hierRef && netPort && (contAssign || pinConn))) {
