@@ -105,6 +105,19 @@ class SliceVisitor final : public VNVisitor {
                 = VN_CAST(subDTypep->skipRefp(), UnpackArrayDType);
             if (!subArrayp || !subArrayp->isReverseOf(elemp->dtypep())) return elemp;
             return new AstCvtUnpackToUnpack{nodep->fileline(), elemp, subDTypep};
+        } else if (const AstCvtPackedToArray* const cvtp = VN_CAST(nodep, CvtPackedToArray)) {
+            UINFO(9, "  cloneCvtPackedToArray(" << elements << "," << elemIdx << ") " << nodep);
+            // The leftmost element takes the most significant bits
+            AstNodeDType* const subDTypep = arrayp->subDTypep();
+            const int elemWidth = subDTypep->widthStream();
+            const int lsb = static_cast<int>(elements - 1 - elemIdx) * elemWidth;
+            AstNodeExpr* fromp = cvtp->fromp()->cloneTree(false, needPure);
+            if (fromp->width() < lsb + elemWidth) {
+                fromp = new AstExtend{fromp->fileline(), fromp, lsb + elemWidth};
+            }
+            AstNodeExpr* const selp = new AstSel{nodep->fileline(), fromp, lsb, elemWidth};
+            if (!VN_IS(subDTypep->skipRefp(), UnpackArrayDType)) return selp;
+            return new AstCvtPackedToArray{nodep->fileline(), selp, subDTypep};
         } else if (AstCond* const snodep = VN_CAST(nodep, Cond)) {
             UINFO(9, "  cloneCond(" << elements << "," << elemIdx << ") " << nodep);
             return new AstCond{snodep->fileline(), snodep->condp()->cloneTree(false, needPure),
@@ -134,7 +147,8 @@ class SliceVisitor final : public VNVisitor {
                 return resultSelp;
             }
         } else if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, NodeSel) || VN_IS(nodep, CMethodHard)
-                   || VN_IS(nodep, MemberRef) || VN_IS(nodep, StructSel)) {
+                   || VN_IS(nodep, MemberRef) || VN_IS(nodep, StructSel)
+                   || VN_IS(nodep, CvtQueueToUnpack)) {
             UINFO(9, "  cloneSel(" << elements << "," << elemIdx << ") " << nodep);
             const int leOffset = !arrayp->rangep()->ascending()
                                      ? arrayp->rangep()->elementsConst() - 1 - elemIdx
@@ -158,8 +172,10 @@ class SliceVisitor final : public VNVisitor {
         AstNode* stp = nodep->rhsp();
         const AstUnpackArrayDType* const arrayp = VN_CAST(dtp, UnpackArrayDType);
         if (!arrayp) return false;
-        if (VN_IS(stp, CvtPackedToArray)) return false;
-        if (VN_IS(stp, CvtQueueToUnpack)) return false;
+        // A slice target can only be written element by element
+        const bool lhsSlice = VN_IS(nodep->lhsp(), SliceSel);
+        if (VN_IS(stp, CvtPackedToArray) && !lhsSlice) return false;
+        if (VN_IS(stp, CvtQueueToUnpack) && !lhsSlice) return false;
         if (VN_IS(stp, CReset)) return false;
 
         // Any isSc variables must be expanded regardless of --fno-slice. So must an array
@@ -167,7 +183,7 @@ class SliceVisitor final : public VNVisitor {
         // array representation that could be assigned.
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
-        if (!hasSc && !VN_IS(nodep->lhsp(), ConsArray) && !v3Global.opt.fSlice()) {
+        if (!hasSc && !lhsSlice && !VN_IS(nodep->lhsp(), ConsArray) && !v3Global.opt.fSlice()) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
         }
@@ -175,7 +191,7 @@ class SliceVisitor final : public VNVisitor {
         // Skip optimization if array is too large
         const int elements = arrayp->rangep()->elementsConst();
         const int elementLimit = v3Global.opt.fSliceElementLimit();
-        if (elements > elementLimit && elementLimit > 0) {
+        if (!lhsSlice && elements > elementLimit && elementLimit > 0) {
             ++m_statSliceElementSkips;
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
