@@ -34,7 +34,18 @@
 #include "V3String.h"
 #include "V3UniqueNames.h"
 
+#include <unordered_map>
+
 VL_DEFINE_DEBUG_FUNCTIONS;
+
+//######################################################################
+
+// Name of static variable 'varName' of block 'scope' of 'ftaskName' once moved out
+static std::string staticVarName(const std::string& ftaskName, const std::string& scope,
+                                 const std::string& varName) {
+    // 'scope' is a named block in the function/task 'ftaskName'.
+    return ftaskName + "__Vstatic__" + VString::dot(scope, "__DOT__", varName);
+}
 
 //######################################################################
 
@@ -44,6 +55,8 @@ class BeginState final {
     // AstNodeFTask::user1      -> bool, 1=processed
     const VNUser1InUse m_inuser1;
     bool m_anyFuncInBegin = false;  // Any function found inside a begin block
+    // Static variables moved out of a function/task -> named block scope inside it
+    std::unordered_map<const AstVar*, std::string> m_staticVarScopes;
 
 public:
     BeginState() = default;
@@ -53,6 +66,12 @@ public:
         m_anyFuncInBegin = true;
     }
     bool anyFuncInBegin() const { return m_anyFuncInBegin; }
+    const std::unordered_map<const AstVar*, std::string>& staticVarScopes() const {
+        return m_staticVarScopes;
+    }
+    void addStaticVar(const AstVar* varp, const std::string& scope) {
+        m_staticVarScopes.emplace(varp, scope);
+    }
 };
 
 //######################################################################
@@ -295,7 +314,8 @@ class BeginVisitor final : public VNVisitor {
         // If static variable, move it outside a function.
         if (nodep->lifetime().isStatic() && m_ftaskp) {
             const std::string newName
-                = m_ftaskp->name() + "__Vstatic__" + dot(m_unnamedScope, nodep->name());
+                = staticVarName(m_ftaskp->name(), m_unnamedScope, nodep->name());
+            m_statep->addStaticVar(nodep, m_unnamedScope);
             if (nodep->isIO()) {
                 if (nodep->direction().isRef()) {
                     nodep->v3error(
@@ -452,6 +472,9 @@ private:
     //  Input:
     //   AstNodeFTask::user1p           // bool.  Node replaced, rename it
 
+    // STATE
+    const BeginState* const m_statep;  // Global state
+
     // VISITORS
     void visit(AstNodeFTaskRef* nodep) override {
         UASSERT_OBJ(nodep->taskp(), nodep, "unlinked");
@@ -464,6 +487,27 @@ private:
     void visit(AstVarRef* nodep) override {
         if (nodep->varp()->user1()) {  // It was converted
             UINFO(9, "    relinVarRef " << nodep);
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstVarXRef* nodep) override {
+        // A reference '<path>.<ftask>.<blocks>.<var>' to a static variable moved out of the
+        // function/task becomes '<path>.<moved var>'
+        const auto& staticVarScopes = m_statep->staticVarScopes();
+        const auto it = staticVarScopes.find(nodep->varp());
+        if (it != staticVarScopes.end()) {
+            const std::string& scope = it->second;
+            std::string dotted = nodep->dotted();
+            if (!scope.empty()) {
+                const std::string blocks = "." + VString::replaceSubstr(scope, "__DOT__", ".");
+                UASSERT_OBJ(VString::endsWith(dotted, blocks), nodep, "Path lacks the blocks");
+                dotted.resize(dotted.size() - blocks.size());
+            }
+            const size_t pos = dotted.rfind('.');
+            UASSERT_OBJ(pos != std::string::npos, nodep, "Path lacks the function/task");
+            nodep->name(staticVarName(dotted.substr(pos + 1), scope, nodep->name()));
+            nodep->dotted(dotted.substr(0, pos));
+            UINFO(9, "    relinkVarXRef " << nodep);
         }
         iterateChildrenConst(nodep);
     }
@@ -480,7 +524,10 @@ private:
 
 public:
     // CONSTRUCTORS
-    BeginRelinkVisitor(AstNetlist* nodep, BeginState*) { iterateConst(nodep); }
+    BeginRelinkVisitor(AstNetlist* nodep, const BeginState* statep)
+        : m_statep{statep} {
+        iterateConst(nodep);
+    }
     ~BeginRelinkVisitor() override = default;
 };
 
@@ -492,7 +539,9 @@ void V3Begin::debeginAll(AstNetlist* nodep) {
     {
         BeginState state;
         { BeginVisitor{nodep, &state}; }
-        if (state.anyFuncInBegin()) BeginRelinkVisitor{nodep, &state};
+        if (state.anyFuncInBegin() || !state.staticVarScopes().empty()) {
+            BeginRelinkVisitor{nodep, &state};
+        }
     }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("begin", 0, dumpTreeEitherLevel() >= 3);
 }
