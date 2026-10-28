@@ -32,6 +32,10 @@ module t (/*AUTOARG*/
     roa = '0;  // Not an error
     vo = '0;  // Not an error
     voa = '0;  // Not an error
+    oa[0] = '0;  // Error
+    woa[1:0] <= '0;  // Error
+    roa[1] = '0;  // Not an error
+    voa[0] <= '0;  // Not an error
   end
 
 endmodule
