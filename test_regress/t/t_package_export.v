@@ -49,6 +49,27 @@ package pkg31;
   import pkg30::*;
 endpackage
 
+// IEEE 1800-2023 26.6: A package export may precede a corresponding package import
+package pkg40;
+  export pkg1::PARAM2;
+  export pkg1::*;
+  import pkg1::PARAM2;
+  import pkg1::PARAM3;
+  parameter PARAM1 = 8;
+endpackage
+package pkg41;
+  import pkg40::*;
+endpackage
+
+package pkg50;
+  export *::*;
+  import pkg1::*;
+  parameter PARAM1 = PARAM2 + PARAM3 - 24;
+endpackage
+package pkg51;
+  import pkg50::*;
+endpackage
+
 module t;
 
   reg [pkg11::PARAM1 : 0] bus11;
@@ -62,6 +83,14 @@ module t;
   reg [pkg31::PARAM1 : 0] bus31;
   reg [pkg31::PARAM2 : 0] bus32;
   reg [pkg31::PARAM3 : 0] bus33;
+
+  reg [pkg41::PARAM1 : 0] bus41;
+  reg [pkg41::PARAM2 : 0] bus42;
+  reg [pkg41::PARAM3 : 0] bus43;
+
+  reg [pkg51::PARAM1 : 0] bus51;
+  reg [pkg51::PARAM2 : 0] bus52;
+  reg [pkg51::PARAM3 : 0] bus53;
 
   initial begin
     $write("*-* All Finished *-*\n");

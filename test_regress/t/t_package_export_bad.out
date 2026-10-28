@@ -2,28 +2,28 @@
    44 |   export pkg1::BAD_DOES_NOT_EXIST;
       |                ^~~~~~~~~~~~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_package_export.v:55:15: Can't find definition of scope/variable/func: 'PARAM2'
+%Error: t/t_package_export.v:76:15: Can't find definition of scope/variable/func: 'PARAM2'
                                   : ... Suggested alternative: 'PARAM1'
-   55 |   reg [pkg11::PARAM2 : 0] bus12;
+   76 |   reg [pkg11::PARAM2 : 0] bus12;
       |               ^~~~~~
-%Error: t/t_package_export.v:56:15: Can't find definition of scope/variable/func: 'PARAM3'
+%Error: t/t_package_export.v:77:15: Can't find definition of scope/variable/func: 'PARAM3'
                                   : ... Suggested alternative: 'PARAM1'
-   56 |   reg [pkg11::PARAM3 : 0] bus13;
+   77 |   reg [pkg11::PARAM3 : 0] bus13;
       |               ^~~~~~
-%Error: t/t_package_export.v:59:15: Can't find definition of scope/variable/func: 'PARAM2'
+%Error: t/t_package_export.v:80:15: Can't find definition of scope/variable/func: 'PARAM2'
                                   : ... Suggested alternative: 'PARAM1'
-   59 |   reg [pkg21::PARAM2 : 0] bus22;
+   80 |   reg [pkg21::PARAM2 : 0] bus22;
       |               ^~~~~~
-%Error: t/t_package_export.v:60:15: Can't find definition of scope/variable/func: 'PARAM3'
+%Error: t/t_package_export.v:81:15: Can't find definition of scope/variable/func: 'PARAM3'
                                   : ... Suggested alternative: 'PARAM1'
-   60 |   reg [pkg21::PARAM3 : 0] bus23;
+   81 |   reg [pkg21::PARAM3 : 0] bus23;
       |               ^~~~~~
-%Error: t/t_package_export.v:63:15: Can't find definition of scope/variable/func: 'PARAM2'
+%Error: t/t_package_export.v:84:15: Can't find definition of scope/variable/func: 'PARAM2'
                                   : ... Suggested alternative: 'PARAM1'
-   63 |   reg [pkg31::PARAM2 : 0] bus32;
+   84 |   reg [pkg31::PARAM2 : 0] bus32;
       |               ^~~~~~
-%Error: t/t_package_export.v:64:15: Can't find definition of scope/variable/func: 'PARAM3'
+%Error: t/t_package_export.v:85:15: Can't find definition of scope/variable/func: 'PARAM3'
                                   : ... Suggested alternative: 'PARAM1'
-   64 |   reg [pkg31::PARAM3 : 0] bus33;
+   85 |   reg [pkg31::PARAM3 : 0] bus33;
       |               ^~~~~~
 %Error: Exiting due to

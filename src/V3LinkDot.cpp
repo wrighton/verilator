@@ -1157,6 +1157,7 @@ class LinkDotFindVisitor final : public VNVisitor {
     int m_modArgNum = 0;  // Arg block number for randomize(), 0=none seen
     std::vector<AstIface*> m_virtIfaces;  // interfaces used as virtual,
                                           // needed for handleUnvisitedVirtIfaces()
+    std::vector<AstNode*> m_exportps;  // Package exports in the current package
 
     // METHODS
     void makeImplicitNew(AstClass* nodep) {
@@ -1325,6 +1326,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         VL_RESTORER(m_modBlockNum);
         VL_RESTORER(m_modWithNum);
         VL_RESTORER(m_modArgNum);
+        VL_RESTORER_CLEAR(m_exportps);
         if (doit && nodep->user2()) {
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Identically recursive module (module instantiates "
@@ -1357,6 +1359,13 @@ class LinkDotFindVisitor final : public VNVisitor {
             nodep->user2(true);
             iterateChildren(nodep);
             nodep->user2(false);
+            for (AstNode* const exportp : m_exportps) {
+                if (AstPackageExport* const pkgExportp = VN_CAST(exportp, PackageExport)) {
+                    doExport(pkgExportp);
+                } else {
+                    m_curSymp->exportStarStar(m_statep->symsp());
+                }
+            }
             nodep->user4(true);
             // Interfaces need another pass when signals are resolved. When creating
             // scopes this is done from the AstScopes in LinkDotScopeVisitor instead, as
@@ -2175,6 +2184,14 @@ class LinkDotFindVisitor final : public VNVisitor {
         // No longer needed, but can't delete until any multi-instantiated modules are expanded
     }
     void visit(AstPackageExport* nodep) override {  // FindVisitor::
+        // IEEE 1800-2023 26.6: An export may precede its import, so export after the imports
+        m_exportps.push_back(nodep);
+    }
+    void visit(AstPackageExportStarStar* nodep) override {  // FindVisitor::
+        m_exportps.push_back(nodep);
+    }
+    // Mark the items a package export names as exported
+    void doExport(AstPackageExport* nodep) {
         UINFO(9, "  Link: " << nodep);
         if (!nodep->packagep()) return;  // Errored in V3LinkCells
         VSymEnt* const srcp = m_statep->getNodeSym(nodep->packagep());
@@ -2187,11 +2204,6 @@ class LinkDotFindVisitor final : public VNVisitor {
         }
         m_curSymp->exportFromPackage(m_statep->symsp(), srcp, nodep->name());
         UINFO(9, "    Link Done: " << nodep);
-        // No longer needed, but can't delete until any multi-instantiated modules are expanded
-    }
-    void visit(AstPackageExportStarStar* nodep) override {  // FindVisitor::
-        UINFO(4, "  Link: " << nodep);
-        m_curSymp->exportStarStar(m_statep->symsp());
         // No longer needed, but can't delete until any multi-instantiated modules are expanded
     }
 
