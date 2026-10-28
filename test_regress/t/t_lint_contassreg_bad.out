@@ -1,26 +1,30 @@
-%Error-CONTASSREG: t/t_lint_contassreg_bad.v:16:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'r'
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:18:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'r'
                                                   : ... note: In instance 't'
-   16 |   assign r = 1'b0;   
+   18 |   assign r = 1'b0;   
       |          ^
                    ... For error description see https://verilator.org/warn/CONTASSREG?v=latest
-%Error-CONTASSREG: t/t_lint_contassreg_bad.v:24:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'rr'
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:19:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'r2'
                                                   : ... note: In instance 't'
-   24 |   assign rr = 1'b0;   
+   19 |   assign r2[1] = 1'b0;   
       |          ^~
-%Error-CONTASSREG: t/t_lint_contassreg_bad.v:25:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'ri'
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:27:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'rr'
                                                   : ... note: In instance 't'
-   25 |   assign ri = 0;   
+   27 |   assign rr = 1'b0;   
       |          ^~
-%Error-CONTASSREG: t/t_lint_contassreg_bad.v:38:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'a'
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:28:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'ri'
+                                                  : ... note: In instance 't'
+   28 |   assign ri = 0;   
+      |          ^~
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:41:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'a'
                                                   : ... note: In instance 't.sub'
-   38 |   assign a = 1'b0;   
+   41 |   assign a = 1'b0;   
       |          ^
-%Error-CONTASSREG: t/t_lint_contassreg_bad.v:39:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'b'
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:42:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'b'
                                                   : ... note: In instance 't.sub'
-   39 |   assign b = 1'b0;   
+   42 |   assign b = 1'b0;   
       |          ^
-%Error-CONTASSREG: t/t_lint_contassreg_bad.v:43:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'f'
+%Error-CONTASSREG: t/t_lint_contassreg_bad.v:46:10: Continuous assignment to reg, perhaps intended wire (IEEE 1364-2005 6.1; Verilog only, legal in SV): 'f'
                                                   : ... note: In instance 't.sub'
-   43 |   assign f = 0;   
+   46 |   assign f = 0;   
       |          ^
 %Error: Exiting due to
