@@ -3787,19 +3787,11 @@ public:
 class AstSequence final : public AstNodeSchema {
     // Verilog "sequence" definition
     // @astgen op2 := exprp : AstNodeExpr
-    // Set by V3LinkWith when referenced; cleared by V3AssertPre after inlining; if still set
-    // after V3AssertPre, the reference is in an unsupported context
-    bool m_referenced = false;
-
 public:
     AstSequence(FileLine* fl, const std::string& name)
         : ASTGEN_SUPER_Sequence(fl, name) {}
     ASTGEN_MEMBERS_AstSequence;
-    void dump(std::ostream& str) const override;
-    void dumpJson(std::ostream& str) const override;
     std::string verilogKwd() const override { return "sequence"; }
-    bool isReferenced() const { return m_referenced; }
-    void isReferenced(bool flag) { m_referenced = flag; }
 };
 
 #endif  // Guard
