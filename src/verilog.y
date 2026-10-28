@@ -120,12 +120,13 @@ const VBasicDTypeKwd LOGIC_IMPLICIT = VBasicDTypeKwd::LOGIC_IMPLICIT;
 #define GATERANGE(rangep) \
     { GRAMMARP->m_gateRangep = rangep; }
 
-#define INSTPREP(modfl, modname, paramsp) \
+#define INSTPREP(modfl, modname, paramsp, driveStrength) \
     { \
         GRAMMARP->m_impliedDecl = true; \
         GRAMMARP->m_instModuleFl = modfl; \
         GRAMMARP->m_instModule = modname; \
         GRAMMARP->m_instParamp = paramsp; \
+        GRAMMARP->m_instDriveStrength = driveStrength; \
     }
 
 #define DEL(...) \
@@ -1998,7 +1999,6 @@ port_declaration<nodep>:        // ==IEEE: port_declaration
                           VARDTYPE(dtp); }
         /*cont*/    mpInstnameList
                         { $$ = $5; }
-        //UNSUP: strengthSpecE for udp_instantiations
         ;
 
 tf_port_declaration<nodep>:     // ==IEEE: tf_port_declaration
@@ -3293,10 +3293,10 @@ etcInst<nodep>:                 // IEEE: module_instantiation + gate_instantiati
 instDecl<nodep>:
         //                      // Disambigurated from data_declaration based on
         //                      // idInst which is found as IEEE requires a later '('
-                idInst parameter_value_assignmentInstE
-        /*mid*/         { INSTPREP($<fl>1, *$1, $2); }
+                idInst udpDriveStrengthE parameter_value_assignmentInstE
+        /*mid*/         { INSTPREP($<fl>1, *$1, $3, $2); }
         /*cont*/    instnameList ';'
-                        { $$ = $4;
+                        { $$ = $5;
                           GRAMMARP->m_impliedDecl = false;
                           if (GRAMMARP->m_instParamp) {
                               VL_DO_CLEAR(GRAMMARP->m_instParamp->deleteTree(),
@@ -3305,10 +3305,16 @@ instDecl<nodep>:
         //
         //                      // IEEE: part of udp_instance when no name_of_instance
         //                      // Note no unpacked dimension nor list of instances
-        |       id
-        /*mid*/         { INSTPREP($<fl>1, *$1, nullptr); }
+        |       id udpDriveStrengthE
+        /*mid*/         { INSTPREP($<fl>1, *$1, nullptr, $2); }
         /*cont*/    instnameParenUdpn ';'
-                        { $$ = $3; GRAMMARP->m_impliedDecl = false; }
+                        { $$ = $4; GRAMMARP->m_impliedDecl = false; }
+        ;
+
+udpDriveStrengthE<cbool>:       // IEEE: [ drive_strength ] for udp_instantiation
+                /* empty */                             { $$ = false; }
+        //                      // Checked in V3LinkCells once known whether a UDP is instanced
+        |       driveStrength                           { $$ = true; DEL($1); }
         ;
 
 mpInstnameList<nodep>:          // Similar to instnameList, but for modport instantiations which have no parenthesis

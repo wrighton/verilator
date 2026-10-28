@@ -36,6 +36,7 @@ public:
     AstStrengthSpec* m_netStrengthp = nullptr;  // Pointer to strength for next net declaration
     FileLine* m_instModuleFl = nullptr;  // Fileline of module referenced for instantiations
     AstPin* m_instParamp = nullptr;  // Parameters for instantiations
+    bool m_instDriveStrength = false;  // Drive strength given for instantiations
     string m_instModule;  // Name of module referenced for instantiations
     VVarType m_varDecl = VVarType::UNKNOWN;  // Type for next signal declaration (reg/wire/etc)
     VDirection m_varIO = VDirection::NONE;  // Direction for next signal declaration (reg/wire/etc)
@@ -97,6 +98,7 @@ public:
             (singletonp()->m_instParamp ? singletonp()->m_instParamp->cloneTree(true) : nullptr),
             singletonp()->scrubRangeMulti(rangelistp)};
         nodep->trace(singletonp()->allTracingOn(fileline));
+        nodep->hasDriveStrength(singletonp()->m_instDriveStrength);
         return nodep;
     }
     static AstNode* createPatternKey(AstNodeExpr* exprp) {

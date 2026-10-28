@@ -643,6 +643,17 @@ class LinkCellsVisitor final : public VNVisitor {
             // but we might support modules-under-modules someday.
             AstNodeModule* cellmodp = resolveModule(nodep, nodep->modName(), m_modp->libname());
             if (cellmodp) {
+                if (nodep->hasDriveStrength()) {
+                    if (VN_IS(cellmodp, Primitive)) {
+                        nodep->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: drive strength on UDP instance");
+                    } else {
+                        nodep->v3error("Drive strength is only allowed on UDP instances, not on "
+                                       "an instance of "
+                                       << cellmodp->verilogKwd() << " " << cellmodp->prettyNameQ()
+                                       << " (IEEE 1800-2023 23.3.2)");
+                    }
+                }
                 if (cellmodp == m_modp || cellmodp->user2p() == m_modp) {
                     UINFO(1, "Self-recursive module " << cellmodp);
                     cellmodp->recursive(true);
