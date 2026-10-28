@@ -1952,8 +1952,9 @@ List Of Warnings
    out-of-block declaration of that function. IEEE requires this error.
 
    The typical solution is to fix the prototype to match the declaration
-   exactly, including in number of arguments, name of arguments, argument
-   data types, and return data type (for functions).
+   exactly, including task versus function, number of arguments, name of
+   arguments, argument directions, argument data types, and return data type
+   (for functions).
 
    Disabling this error will cause Verilator to ignore the prototype and
    may make the code illegal in other tools.
