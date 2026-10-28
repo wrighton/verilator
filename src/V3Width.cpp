@@ -289,6 +289,7 @@ class WidthVisitor final : public VNVisitor {
     std::vector<AstVar*> m_splitIfaceArrayVarps;  // Interface arrays split by V3Param
     const AstEnumItem* m_enumItemp = nullptr;  // Current enum item
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
+    bool m_underConcAssert = false;  // Visiting a concurrent assertion expression
     AstNodeModule* m_modep = nullptr;  // Current module
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
@@ -4352,6 +4353,12 @@ class WidthVisitor final : public VNVisitor {
         nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    // Report a non-static class member referenced in a concurrent assertion
+    void checkConcAssertClassMember(const AstNode* nodep) {
+        if (!m_underConcAssert) return;
+        nodep->v3error("Concurrent assertion expression references non-static class member "
+                       << nodep->prettyNameQ() << " (IEEE 1800-2023 16.6)");
+    }
     bool memberSelClass(AstMemberSel* nodep, AstClassRefDType* adtypep) {
         if (nodep->name() == "rand_mode" || nodep->name() == "randomize") {
             AstMethodCall* const newp = new AstMethodCall{
@@ -4385,6 +4392,7 @@ class WidthVisitor final : public VNVisitor {
                                                           << nodep->prettyNameQ()
                                                           << " (IEEE 1800-2023 6.20.6)");
                     }
+                    checkConcAssertClassMember(nodep);
                     nodep->dtypep(foundp->dtypep());
                     nodep->varp(varp);
                     nodep->didWidth(true);
@@ -5520,6 +5528,7 @@ class WidthVisitor final : public VNVisitor {
                     // Resolved here, as a caller may not iterate the replacement
                     userIterate(newp, m_vup);
                 } else {
+                    checkConcAssertClassMember(nodep);
                     nodep->taskp(ftaskp);
                     nodep->dtypeFrom(ftaskp);
                     nodep->classOrPackagep(classp);
@@ -6789,7 +6798,11 @@ class WidthVisitor final : public VNVisitor {
                 untilp->replaceWith(new AstConst{untilp->fileline(), AstConst::BitFalse{}});
                 VL_DO_DANGLING(pushDeletep(untilp), untilp);
             }
-            iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);
+            {
+                VL_RESTORER(m_underConcAssert);
+                m_underConcAssert = true;
+                iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);
+            }
             userIterateAndNext(nodep->sensesp(), nullptr);
             if (nodep->disablep()) {
                 iterateCheckBool(nodep, "Disable", nodep->disablep(),
@@ -8045,6 +8058,8 @@ class WidthVisitor final : public VNVisitor {
         // Width-check the sequence body so expressions are typed for later inlining.
         // Referenced sequences in assertion context will be inlined by V3AssertPre.
         if (nodep->didWidth()) return;
+        VL_RESTORER(m_underConcAssert);
+        m_underConcAssert = true;
         nodep->dtypeSetBit();
         for (AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
             if (VN_IS(stmtp, Var)) {
