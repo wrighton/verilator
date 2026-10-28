@@ -4612,8 +4612,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string baddot;
             VSymEnt* okSymp = nullptr;
             // Restricted 'with (id_list)': only id_list names bind into target class.
+            // Outside 'with', only arguments of obj.randomize(...) bind into it.
             if (m_randSymp
-                && (!m_currentWithp || m_currentWithp->nameResolvesToTarget(nodep->name()))) {
+                && (m_currentWithp ? m_currentWithp->nameResolvesToTarget(nodep->name())
+                                   : m_randMethodCallp != nullptr)) {
                 foundp = m_randSymp->findIdFlat(nodep->name());
                 if (foundp) {
                     if (m_currentWithp && m_currentWithp->restricted()) {
@@ -4635,6 +4637,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         return;
                     }
                     UINFO(9, indent() << "randomize-with fromSym " << foundp->nodep());
+                    if (AstVar* const varp = VN_CAST(foundp->nodep(), Var)) {
+                        if (varp->isParam()) {
+                            // Constant, so usable where one is required (e.g. a cast width)
+                            AstVarRef* const newp
+                                = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
+                            newp->classOrPackagep(foundp->classOrPackagep());
+                            nodep->replaceWith(newp);
+                            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                            return;
+                        }
+                    }
                     AstLambdaArgRef* const lambdaRefp
                         = new AstLambdaArgRef{nodep->fileline(), "__Vrandwith_obj", false};
                     AstMemberSel* newp = new AstMemberSel{nodep->fileline(), lambdaRefp,
@@ -5502,6 +5515,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (m_ds.m_dotPos != DP_MEMBER || nodep->name() != "randomize") {
             // Visit arguments at the beginning.
             // They may be visitted even if the current node can't be linked now.
+            VL_RESTORER(m_randSymp);
+            // An in-class 'randomize() with' targets this object (IEEE 1800-2023 18.7)
+            if (nodep->name() == "randomize" && m_ds.m_dotPos != DP_PACKAGE) {
+                m_randSymp = getThisClassSymp();
+            }
             symIterateChildren(nodep, m_curSymp);
         }
 

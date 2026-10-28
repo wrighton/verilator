@@ -104,8 +104,63 @@ class SubC extends SubB;
   endfunction
 endclass
 
+// randomize() with called on this object from its own methods (IEEE 1800-2023 18.7)
+class InClass;
+  rand int x;
+  int lim = 200;
+  function int self_rand(int x);
+    return randomize() with { x == local::x; };
+  endfunction
+  function int self_rand_shadow(int lim);
+    return randomize() with { x == lim; };
+  endfunction
+  function int this_rand(int lim);
+    return this.randomize() with { x == local::lim + lim; };
+  endfunction
+  function int this_rand_arg(int lim);
+    return this.randomize(x) with { x == lim - local::lim; };
+  endfunction
+endclass
+class InClassSub extends InClass;
+  function int super_rand(int lim);
+    return super.randomize() with { x == local::lim + 1; };
+  endfunction
+endclass
+// Parameters of the target class are constants inside 'with' (e.g. a cast width)
+class ParamCls #(
+    parameter int W = 7
+);
+  localparam int LP = 3;
+  rand bit [W-1:0] x;
+  function int self_cast(int v);
+    return randomize() with { x == W'(local::v + LP); };
+  endfunction
+endclass
+
 module t;
   SubC obj = new;
+
+  initial begin
+    automatic InClassSub ic = new;
+    if (ic.self_rand(7) != 1) $stop;
+    if (ic.x != 7) $stop;
+    if (ic.self_rand_shadow(7) != 1) $stop;
+    if (ic.x != 200) $stop;
+    if (ic.this_rand(7) != 1) $stop;
+    if (ic.x != 207) $stop;
+    if (ic.this_rand_arg(7) != 1) $stop;
+    if (ic.x != 193) $stop;
+    if (ic.super_rand(7) != 1) $stop;
+    if (ic.x != 8) $stop;
+  end
+
+  initial begin
+    automatic ParamCls #(5) pc = new;
+    if (pc.randomize() with { x == W'(LP + 1); } != 1) $stop;
+    if (pc.x != 4) $stop;
+    if (pc.self_cast(30) != 1) $stop;
+    if (pc.x != 1) $stop;  // 33 truncated to 5 bits
+  end
 
   initial begin
     if (obj.doit != 1) $stop;
