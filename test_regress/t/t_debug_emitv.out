@@ -290,6 +290,8 @@ module t;
             $fflush(fd);
             $fscanf(fd, "%d", sum);
             ;
+            $fscanf(fd, str, sum);
+            ;
             $fdisplay("i = ", "%d", sum);
             $fwrite(fd, "hello");
             $readmemh(string'(fd), array);
@@ -378,6 +380,8 @@ module t;
                      $realtime, $time, $time);
             $sscanf("foo=5", "foo=%d", i);
             ;
+            $sscanf("foo=5", str, i);
+            ;
             $printtimescale;
             if ((i != 32'sh5)) begin
                 $stop;
@@ -395,7 +399,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh191, SUB_B, 2'h1);
+                               32'sh193, SUB_B, 2'h1);
                         $stop;
                     end
                 end
