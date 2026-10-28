@@ -40,6 +40,8 @@ class LinkLValueVisitor final : public VNVisitor {
     bool m_inFunc = false;  // Set if inside AstNodeFTask
     bool m_inInitialStatic = false;  // Set if inside AstInitialStatic
     bool m_inInitialStaticStmt = false;  // Set if inside AstInitialStaticStmt
+    // Non-procedural context, e.g. "a continuous assignment", if under one
+    const char* m_nonProcContextp = nullptr;
     VAccess m_setRefLvalue;  // Set VarRefs to lvalues for pin assignments
 
     // VISITORS
@@ -114,6 +116,12 @@ class LinkLValueVisitor final : public VNVisitor {
         VL_RESTORER(m_setRefLvalue);
         VL_RESTORER(m_setContinuously);
         VL_RESTORER(m_setStrengthSpecified);
+        VL_RESTORER(m_nonProcContextp);
+        if (VN_IS(nodep, AssignW)) {
+            m_nonProcContextp = "a continuous assignment";
+        } else if (VN_IS(nodep, AssignCont) || VN_IS(nodep, AssignForce)) {
+            m_nonProcContextp = "a procedural continuous assignment";
+        }
         {
             m_setRefLvalue = VAccess::WRITE;
             m_setContinuously = VN_IS(nodep, AssignW);
@@ -154,6 +162,16 @@ class LinkLValueVisitor final : public VNVisitor {
                 }
             }
         }
+    }
+    void visit(AstCell* nodep) override {
+        VL_RESTORER(m_nonProcContextp);
+        m_nonProcContextp = "an instance connection";
+        iterateChildren(nodep);
+    }
+    void visit(AstSenItem* nodep) override {
+        VL_RESTORER(m_nonProcContextp);
+        m_nonProcContextp = "an event expression";
+        iterateChildren(nodep);
     }
     void visit(AstAlias* nodep) override {
         VL_RESTORER(m_setRefLvalue);
@@ -285,8 +303,15 @@ class LinkLValueVisitor final : public VNVisitor {
         iterateAndNextNull(nodep->rhsp());
         iterateAndNextNull(nodep->thsp());
     }
-    // cppcheck-suppress constParameterPointer
     void prepost_visit(AstNodeUniop* nodep) {
+        if (m_nonProcContextp) {
+            nodep->v3error("Increment or decrement operator is used in "
+                           << m_nonProcContextp << " (IEEE 1800-2023 11.3.6)");
+            // V3LinkInc cannot lower it here, so leave just the operand
+            nodep->replaceWith(nodep->lhsp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         VL_RESTORER(m_setRefLvalue);
         m_setRefLvalue = VAccess::WRITE;
         iterateAndNextNull(nodep->lhsp());

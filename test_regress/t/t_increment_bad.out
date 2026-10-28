@@ -1,16 +1,37 @@
+%Error: t/t_increment_bad.v:20:13: Increment or decrement operator is used in an event expression (IEEE 1800-2023 11.3.6)
+   20 |   always @(a++) a = 0;
+      |             ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_increment_bad.v:21:30: Increment or decrement operator is used in an event expression (IEEE 1800-2023 11.3.6)
+   21 |   initial @(posedge clk iff a-- > 0);
+      |                              ^~
+%Error: t/t_increment_bad.v:39:15: Increment or decrement operator is used in a continuous assignment (IEEE 1800-2023 11.3.6)
+   39 |   assign c = a++;
+      |               ^~
+%Error: t/t_increment_bad.v:40:19: Increment or decrement operator is used in a continuous assignment (IEEE 1800-2023 11.3.6)
+   40 |   wire [31:0] w = --a;
+      |                   ^~
+%Error: t/t_increment_bad.v:41:14: Increment or decrement operator is used in an instance connection (IEEE 1800-2023 11.3.6)
+   41 |   sub u (.i(b--));
+      |              ^~
+%Error: t/t_increment_bad.v:44:8: Increment or decrement operator is used in an event expression (IEEE 1800-2023 11.3.6)
+   44 |     @(e++);
+      |        ^~
+%Error: t/t_increment_bad.v:45:16: Increment or decrement operator is used in a procedural continuous assignment (IEEE 1800-2023 11.3.6)
+   45 |     assign c = ++e;
+      |                ^~
+%Error: t/t_increment_bad.v:46:16: Increment or decrement operator is used in a procedural continuous assignment (IEEE 1800-2023 11.3.6)
+   46 |     force d = e--;
+      |                ^~
+%Error: t/t_increment_bad.v:49:21: Increment or decrement operator is used in an event expression (IEEE 1800-2023 11.3.6)
+   49 |   always @(posedge e++) e = 1;
+      |                     ^~
 %Error: t/t_increment_bad.v:13:36: Pre/post increment/decrement operator not allowed in a property (IEEE 1800-2023 16.6)
    13 |   assert property (@(posedge clk) a++ >= 0);
       |                                    ^~
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_increment_bad.v:16:5: Pre/post increment/decrement operator not allowed in a sequence (IEEE 1800-2023 16.6)
    16 |     ++a > 0;
       |     ^~
-%Error: t/t_increment_bad.v:20:13: Pre/post increment/decrement operator not allowed in an event expression (IEEE 1800-2023 11.3.6)
-   20 |   always @(a++) a = 0;
-      |             ^~
-%Error: t/t_increment_bad.v:21:30: Pre/post increment/decrement operator not allowed in an event expression (IEEE 1800-2023 11.3.6)
-   21 |   initial @(posedge clk iff a-- > 0);
-      |                              ^~
 %Error: t/t_increment_bad.v:27:13: Pre/post increment/decrement operator not allowed in a constraint (IEEE 1800-2023 18.5)
    27 |       x == y++;
       |             ^~
