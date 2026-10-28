@@ -6020,11 +6020,36 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 nodep->isStatic(protop->isStatic());
                 nodep->isVirtual(protop->isVirtual());
                 nodep->lifetime(protop->lifetime());
+                // AstTask is a task or void function; a task versus a non-void function is
+                // reported by V3Width as a return data type mismatch
+                if (VN_IS(protop, Task) && VN_IS(nodep, Task)
+                    && protop->verilogTask() != nodep->verilogTask()) {
+                    protop->v3warn(PROTOTYPEMIS,
+                                   "In prototype for "
+                                       << nodep->prettyNameQ() << ", prototype is a "
+                                       << (protop->verilogTask() ? "task" : "function")
+                                       << " but out-of-block declaration is a "
+                                       << (nodep->verilogTask() ? "task" : "function")
+                                       << " (IEEE 1800-2023 8.24)\n"
+                                       << protop->warnContextPrimary() << '\n'
+                                       << nodep->warnOther()
+                                       << "... Location of out-of-block declaration\n"
+                                       << nodep->warnContextSecondary());
+                }
                 // Always add an FUNC_RETURN_PROTO even if task, so we can locate the prototype
                 nodep->addDeclsp(new AstAttrOf{protop->fileline(), VAttrType::FUNC_RETURN_PROTO,
                                                protop->fvarp()
                                                    ? protop->fvarp()->subDTypep()->cloneTree(false)
                                                    : new AstVoidDType{protop->fileline()}});
+                // Directions are checked here; V3Width checks the argument count and data types
+                std::vector<const AstVar*> declPorts;
+                for (AstNode* const declp : nodep->declspList()) {
+                    const AstVar* const portp = VN_CAST(declp, Var);
+                    if (portp && portp->isIO() && !portp->isFuncReturn()) {
+                        declPorts.push_back(portp);
+                    }
+                }
+                size_t argn = 0;
                 for (AstNode* const declp : protop->declspList()) {
                     const AstVar* const portp = VN_CAST(declp, Var);
                     if (!portp || portp->isFuncReturn()) continue;
@@ -6033,6 +6058,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                         portp->subDTypep()->cloneTree(false)};
                     attrp->name(portp->name());
                     nodep->addDeclsp(attrp);
+                    if (argn < declPorts.size()
+                        && portp->direction() != declPorts[argn]->direction()) {
+                        const AstVar* const declPortp = declPorts[argn];
+                        portp->v3warn(PROTOTYPEMIS,
+                                      "In prototype for "
+                                          << nodep->prettyNameQ() << ", argument "
+                                          << portp->prettyNameQ() << " direction '"
+                                          << portp->direction().verilogKwd()
+                                          << "' does not match out-of-block declaration's"
+                                             " direction '"
+                                          << declPortp->direction().verilogKwd()
+                                          << "' (IEEE 1800-2023 8.24)\n"
+                                          << portp->warnContextPrimary() << '\n'
+                                          << declPortp->warnOther()
+                                          << "... Location of out-of-block declaration\n"
+                                          << declPortp->warnContextSecondary());
+                    }
+                    ++argn;
                 }
             } else {
                 nodep->v3error("extern not found that declares " + nodep->prettyNameQ());
