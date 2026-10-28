@@ -2861,7 +2861,8 @@ class WidthVisitor final : public VNVisitor {
                 }
             }
 
-            if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
+            if (VN_IS(dtypep->skipRefp(), QueueDType)
+                || VN_IS(dtypep->skipRefp(), DynArrayDType)) {
                 switch (nodep->attrType()) {
                 case VAttrType::DIM_SIZE: {
                     AstNodeExpr* const fromp = VN_AS(nodep->fromp()->unlinkFrBack(), NodeExpr);
@@ -2904,11 +2905,13 @@ class WidthVisitor final : public VNVisitor {
                     break;
                 }
                 case VAttrType::DIM_BITS: {
-                    if (VN_IS(dtypep, DynArrayDType)) {
+                    if (VN_IS(dtypep->skipRefp(), DynArrayDType)) {
                         nodep->v3warn(E_UNSUPPORTED, "Unsupported: $bits for dynamic array");
                     } else {
                         nodep->v3warn(E_UNSUPPORTED, "Unsupported: $bits for queue");
                     }
+                    nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::Signed32{}, 0});
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     break;
                 }
                 default: nodep->v3fatalSrc("Unhandled attribute type");
