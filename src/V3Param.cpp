@@ -2606,6 +2606,8 @@ public:
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            // Parameters a defparam to this cell sets
+            std::unordered_set<const AstVar*> defparamVarps;
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
                 if (!pinp->exprp()) {  // Value from the instance of the defparam's module
@@ -2614,6 +2616,7 @@ public:
                     if (it != m_defparamValues.end()) {
                         m_elementValuesUsed.emplace(it->first);
                         pinp->exprp(it->second->cloneTree(false));
+                        defparamVarps.emplace(pinp->modVarp());
                         continue;
                     }
                     // No value: the defparam sets another instance of this module, or is in a
@@ -2624,10 +2627,17 @@ public:
                     if (instanceName == pinp->paramPath()
                         || VString::endsWith(instanceName, "." + pinp->paramPath())) {
                         m_elementDefparamsMatched.emplace(pinp->fileline(), pinp->paramPath());
+                        defparamVarps.emplace(pinp->modVarp());
                         continue;
                     }
                 }
                 VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+            }
+            // IEEE 1800-2023 23.10: A defparam overrides the parameter value assignment
+            for (AstPin* const pinp : cellp->paramspList()) {
+                if (pinp->paramPath().empty() && defparamVarps.count(pinp->modVarp())) {
+                    VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+                }
             }
             // Nested generic-iface forwarding (#7454): rewrite VarRef placeholders
             // left by V3LinkDot to concrete IfaceRefDTypes now that the enclosing
