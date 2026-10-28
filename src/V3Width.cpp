@@ -9788,6 +9788,24 @@ class WidthVisitor final : public VNVisitor {
                                << warnDTypes(nodep, lhsDtp, rhsDtp, lhsName, rhsName));
                 return;
             }
+            // ... and only with the same index type
+            if (const AstAssocArrayDType* const lhsAssocp
+                = VN_CAST(lhsDtpIterp, AssocArrayDType)) {
+                const AstNodeDType* const lKeyp = lhsAssocp->keyDTypep()->skipRefp();
+                const AstNodeDType* const rKeyp
+                    = VN_AS(rhsDtpIterp, AssocArrayDType)->keyDTypep()->skipRefp();
+                // Integral index types differing only in signedness stay accepted, as
+                // simulators disagree on them (see t_cast_types)
+                const bool signOnly = lKeyp->isIntegralOrPacked() && rKeyp->isIntegralOrPacked()
+                                      && lKeyp->width() == rKeyp->width()
+                                      && lKeyp->isFourstate() == rKeyp->isFourstate();
+                if (!signOnly && !isEquivalentDType(lKeyp, rKeyp)) {
+                    nodep->v3error("Illegal assignment: Associative array index types are not "
+                                   "equivalent (IEEE 1800-2023 7.9.9)"
+                                   << warnDTypes(nodep, lhsDtp, rhsDtp, lhsName, rhsName));
+                    return;
+                }
+            }
             lhsDtpIterp = lhsDtpIterp->subDTypep()->skipRefp();
             rhsDtpIterp = rhsDtpIterp->subDTypep()->skipRefp();
         }

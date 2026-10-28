@@ -56,4 +56,15 @@ module t;
   row3_t rows3[2];
   row2_t rows2[2];
   assign rows3 = rows2;
+
+  int assocIntA[int];
+  int assocStrA[string];
+  int assocNestA[string][int];
+  int assocNestB[string][byte];
+  int assocIntegerA[integer];
+  initial begin
+    assocStrA = assocIntA;
+    assocNestA = assocNestB;
+    assocIntA = assocIntegerA;
+  end
 endmodule

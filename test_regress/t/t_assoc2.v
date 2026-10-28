@@ -21,6 +21,25 @@ module t (
   // associative array of an associative array
   logic [31:0] a[logic [31:0]][logic [63:0]];
 
+  initial begin
+    // Index types need only be equivalent (IEEE 1800-2023 6.22.2, 7.9.9)
+    typedef int idx_t;
+    int src[bit signed [31:0]];
+    int dst[idx_t];
+    src[3] = 7;
+    dst = src;
+    `checkh(dst[3], 7);
+  end
+
+  initial begin
+    // Index types differing only in signedness are accepted
+    int src[int];
+    int dst[bit [31:0]];
+    src[5] = 9;
+    dst = src;
+    `checkh(dst[5], 9);
+  end
+
   task static disp();
     int i = 60;
     imap[i++] = 600;

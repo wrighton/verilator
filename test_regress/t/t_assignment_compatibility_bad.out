@@ -123,4 +123,22 @@
                                                 : ... Right-hand data type: 'logic$[0:1][0:1]'
    58 |   assign rows3 = rows2;
       |                ^
+%Error: t/t_assignment_compatibility_bad.v:66:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[string]'
+                                                : ... Right-hand data type: 'int$[int]'
+   66 |     assocStrA = assocIntA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:67:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]$[string]'
+                                                : ... Right-hand data type: 'int$[byte]$[string]'
+   67 |     assocNestA = assocNestB;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:68:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[integer]'
+   68 |     assocIntA = assocIntegerA;
+      |               ^
 %Error: Exiting due to
