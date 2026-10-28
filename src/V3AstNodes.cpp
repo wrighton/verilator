@@ -1923,6 +1923,14 @@ bool AstExprStmt::isPure() {
     if (AstNode::afterCommentp(stmtsp())) return false;
     return resultp()->isPure();
 }
+void AstFScanF::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " " << timeunit();
+}
+void AstFScanF::dumpJson(std::ostream& str) const {
+    dumpJsonStr(str, "timeunit", timeunit().ascii());
+    dumpJsonGen(str);
+}
 void AstFireEvent::dump(std::ostream& str) const {
     Super::dump(str);
     if (isDelayed()) str << " [DLY]";
