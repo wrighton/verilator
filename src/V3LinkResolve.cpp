@@ -173,7 +173,8 @@ class LinkResolveVisitor final : public VNVisitor {
             // UINFOTREE(9, nodep, "", "let-ref");
             // cppcheck-suppress constVariablePointer
             AstStmtExpr* const letStmtp = VN_AS(letp->stmtsp(), StmtExpr);
-            AstNodeExpr* const newp = letStmtp->exprp()->cloneTree(false);
+            // Clone with the statement, so a body that is only a formal can be replaced
+            AstStmtExpr* const newStmtp = letStmtp->cloneTree(false);
             const V3TaskConnects tconnects = V3Task::taskConnects(nodep, letp->stmtsp());
             std::map<const AstVar*, AstNodeExpr*> portToExprs;
             for (const auto& tconnect : tconnects) {
@@ -184,7 +185,7 @@ class LinkResolveVisitor final : public VNVisitor {
                 portToExprs.emplace(portp, pinp);
             }
             // Replace VarRefs of arguments with the argument values
-            newp->foreach([&](AstVarRef* refp) {  //
+            newStmtp->foreach([&](AstVarRef* refp) {  //
                 const auto it = portToExprs.find(refp->varp());
                 if (it != portToExprs.end()) {
                     AstNodeExpr* const pinp = it->second;
@@ -194,6 +195,8 @@ class LinkResolveVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(refp), refp);
                 }
             });
+            AstNodeExpr* const newp = newStmtp->exprp()->unlinkFrBack();
+            VL_DO_DANGLING(newStmtp->deleteTree(), newStmtp);
             // UINFOTREE(9, newp, "", "let-new");
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
