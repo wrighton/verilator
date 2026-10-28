@@ -292,7 +292,7 @@ class WidthVisitor final : public VNVisitor {
     AstNodeModule* m_modep = nullptr;  // Current module
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
-    const AstNode* m_writerp = nullptr;  // Assignment, release or pin whose lvalue is iterated
+    const AstNode* m_writerp = nullptr;  // Assignment, release, pin or alias being iterated
     const AstWith* m_withp = nullptr;  // Current 'with' statement
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
@@ -1467,6 +1467,8 @@ class WidthVisitor final : public VNVisitor {
 
     void visit(AstAlias* nodep) override {
         if (!nodep->didWidthAndSet()) {
+            VL_RESTORER(m_writerp);
+            m_writerp = nodep;
             userIterateAndNext(nodep->itemsp(), WidthVP{SELF, BOTH}.p());
         }
 
@@ -3652,7 +3654,10 @@ class WidthVisitor final : public VNVisitor {
                    && !nodep->varp()->isFuncLocal() && nodep->varp()->isReadOnly()
                    && (!m_ftaskp || !m_ftaskp->isConstructor())
                    && !VN_IS(m_procedurep, InitialAutomatic) && !VN_IS(m_procedurep, InitialStatic)
-                   && !VN_IS(m_writerp, AssignForce) && !VN_IS(m_writerp, Release)) {
+                   && !VN_IS(m_writerp, AssignForce)
+                   && !VN_IS(m_writerp, Release)
+                   // An alias joins nets, it does not drive them (IEEE 1800-2023 10.11)
+                   && !VN_IS(m_writerp, Alias)) {
             // Skip ASSIGNIN for continuous assignments to net-type input ports
             // via hierarchical reference. Net ports allow multiple continuous
             // drivers (IEEE 1800-2023 23.3.3.3). Input ports default to net
