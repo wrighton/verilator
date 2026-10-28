@@ -1461,6 +1461,8 @@ class WidthVisitor final : public VNVisitor {
             }
             iterateCheckTyped(nodep, "Associative select", nodep->bitp(), adtypep->keyDTypep(),
                               BOTH);
+            checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8.5)",
+                             nodep->bitp(), adtypep->keyDTypep());
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }
@@ -2893,6 +2895,14 @@ class WidthVisitor final : public VNVisitor {
             if (!elemDTypep->isIntegralOrPacked()) {
                 nodep->v3error("Unpacked data type " << elemDTypep->prettyDTypeNameQ()
                                                      << " in packed array (IEEE 1800-2023 7.4.1)");
+            } else if (const AstBasicDType* const basicp
+                       = VN_CAST(nodep->subDTypep()->skipRefToEnump(), BasicDType)) {
+                // Stop at enums, as packed arrays of enums are legal whatever their base type
+                if (!basicp->keyword().isBitLogic()) {
+                    nodep->v3error("Integer type with predefined width "
+                                   << basicp->prettyDTypeNameQ()
+                                   << " in packed array (IEEE 1800-2023 7.4.1)");
+                }
             }
             const int width = nodep->subDTypep()->width() * nodep->rangep()->elementsConst();
             nodep->widthForce(width, width);
@@ -5047,6 +5057,8 @@ class WidthVisitor final : public VNVisitor {
         iterateCheck(nodep, "index", index_exprp, CONTEXT_DET, FINAL, adtypep->keyDTypep(),
                      EXTEND_EXP);
         VL_DANGLING(index_exprp);  // May have been edited
+        checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8.5)",
+                         nodep->argsp()->exprp(), adtypep->keyDTypep());
         return nodep->argsp()->exprp();
     }
     AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep,
@@ -5865,6 +5877,15 @@ class WidthVisitor final : public VNVisitor {
 
             classp = refp->classp();
             UASSERT_OBJ(classp, nodep, "Unlinked");
+            if (classp->name() == "process") {
+                // Only process::self() may create std::process objects
+                const AstPackage* const packagep = getItemPackage(classp);
+                if (packagep && packagep->name() == "std"
+                    && (!m_ftaskp || m_containingClassFinder.find(m_ftaskp) != classp)) {
+                    nodep->v3error("Cannot create objects of class 'process' with new,"
+                                   " use process::self() (IEEE 1800-2023 9.7)");
+                }
+            }
             if (AstNodeFTask* const ftaskp
                 = VN_CAST(m_memberMap.findMember(classp, "new"), Func)) {
                 nodep->taskp(ftaskp);
@@ -8196,6 +8217,14 @@ class WidthVisitor final : public VNVisitor {
                 }
                 if (portp->isWritable()) {
                     V3LinkLValue::linkLValueSet(pinp, portp->direction().pinAccess());
+                }
+                // Before width, as calls may then become other expressions. Other non-variables
+                // are found in V3Task, after which calls are already lifted into temporaries.
+                if ((portp->isRef() || portp->isConstRef()) && VN_IS(pinp, NodeFTaskRef)) {
+                    pinp->v3error("Ref argument " << portp->prettyNameQ()
+                                                  << " requires a variable, but connection is a"
+                                                     " function call result (IEEE 1800-2023"
+                                                     " 13.5.2)");
                 }
                 // AstPattern requires assignments to pass datatype on PRELIM
                 VL_DO_DANGLING(userIterate(pinp, WidthVP{portp->dtypep(), PRELIM}.p()), pinp);
