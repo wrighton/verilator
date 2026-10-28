@@ -3269,6 +3269,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     VSymEnt* m_pinSymp = nullptr;  // SymEnt for pin lookups
     VSymEnt* m_randSymp = nullptr;  // SymEnt for randomize target class's lookups
     const AstCell* m_cellp = nullptr;  // Current cell
+    const AstPin* m_pinp = nullptr;  // Current pin
     AstNodeModule* m_modp = nullptr;  // Current module
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
@@ -4179,6 +4180,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Pin: Link to submodule's port
         LINKDOT_VISIT_START();
         checkNoDot(nodep);
+        VL_RESTORER(m_pinp);
+        m_pinp = nodep;
         iterateChildren(nodep);
         if (!nodep->modVarp()) {
             UASSERT_OBJ(m_pinSymp, nodep, "Pin not under instance?");
@@ -4251,6 +4254,27 @@ class LinkDotResolveVisitor final : public VNVisitor {
             markAndCheckPinDup(nodep, foundp->nodep(), whatp);
         }
         // Early return() above when deleted
+    }
+
+    // Error if a pin connects a modport other than the modport of its interface port
+    void checkPinModport(const AstNode* nodep, const AstModport* modportp) const {
+        // IEEE 1800-2023 25.5: When both name a modport, the names shall be identical
+        const VSymEnt* const foundp = m_pinSymp->findIdFlat(m_pinp->name());
+        const AstVar* const portp = foundp ? VN_CAST(foundp->nodep(), Var) : nullptr;
+        if (!portp) return;  // Reported by visit(AstPin)
+        const AstNodeDType* const dtypep = portp->subDTypep()->elemDTypep(false);
+        string portModport;
+        if (const AstIfaceRefDType* const refp = VN_CAST(dtypep, IfaceRefDType)) {
+            portModport = refp->modportName();
+        } else if (const AstIfaceGenericDType* const genp = VN_CAST(dtypep, IfaceGenericDType)) {
+            portModport = genp->modportName();
+        }
+        if (!portModport.empty() && portModport != modportp->name()) {
+            nodep->v3error("Port " << portp->prettyNameQ() << " declared with modport "
+                                   << AstNode::prettyNameQ(portModport)
+                                   << " is connected to modport " << modportp->prettyNameQ()
+                                   << " (IEEE 1800-2023 25.5)");
+        }
     }
 
     static bool isDotThisReference(const AstDot* nodep) {
@@ -4894,13 +4918,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // We drop __BRA__??__KET__ as cells don't have that naming yet
                     AstVar* const ifaceRefVarp
                         = findIfaceTopVarp(nodep, parentEntp, cellp->name());
-                    //
+                    if (m_pinp && m_pinp->exprp() == m_ds.m_dotp) checkPinModport(nodep, modportp);
                     ok = true;
                     m_ds.m_dotText = VString::dot(m_ds.m_dotText, ".", nodep->name());
                     m_ds.m_dotSymp = foundp;
                     m_ds.m_dotPos = DP_SCOPE;
                     UINFO(9, indent() << "modport -> iface varref " << foundp->nodep());
-                    // We lose the modport name here, so we cannot detect mismatched modports.
                     AstVarRef* const refp
                         = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                     AstNodeExpr* newp = refp;
