@@ -7,16 +7,20 @@
 
 module t (
     r,
+    r2,
     rr,
     ri,
     wr
 );
 
   output r;
+  output [1:0] r2;
 
   reg r;
+  reg [1:0] r2;
 
   assign r = 1'b0;  // Bad
+  assign r2[1] = 1'b0;  // Bad
 
   reg rr;
   output rr;
