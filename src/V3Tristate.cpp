@@ -414,6 +414,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                                      // though that module's own graph has no Z on the net.
         std::unordered_map<int, int>
             bitPulls;  // Per-bit pull: bit_index -> direction (1=up, 0=down)
+        bool assigned = false;  // Written as a whole other than by a cell's port connection
+        bool cellOutput = false;  // Written by a cell's port connection, so may carry a z the
+                                  // cell's module did not recognise as tristate
     };
 
     AstUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -605,8 +608,16 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
     AstNodeExpr* getEnExprBasedOnOriginalp(AstNodeExpr* const nodep) {
         if (AstVarRef* const varrefp = VN_CAST(nodep, VarRef)) {
-            return new AstVarRef{varrefp->fileline(), getCreateEnVarp(varrefp->varp(), false),
-                                 VAccess::READ};
+            AstVar* const varp = varrefp->varp();
+            // A variable, or an assigned net, that is not tristate, nor a port or connected to a
+            // cell's port that may carry a z, is always driven. (Its __en would never be
+            // assigned, which is right only for an undriven net.)
+            const AuxAstVar& aux = m_varAux(varp);
+            if (!varp->isIO() && !aux.cellOutput && (aux.assigned || !varp->isNet())
+                && !m_tgraph.isTristate(varp)) {
+                return newAllZerosOrOnes(nodep, true);
+            }
+            return new AstVarRef{varrefp->fileline(), getCreateEnVarp(varp, false), VAccess::READ};
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
             AstVar* const enVarp = getCreateEnVarp(xrefp->varp(), false);
             return newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(), VAccess::READ,
@@ -2314,6 +2325,15 @@ class TristateVisitor final : public TristateBaseVisitor {
         if (m_graphing) {
             if (nodep->access().isWriteOrRW()) associateLogic(nodep, nodep->varp());
             if (nodep->access().isReadOrRW()) associateLogic(nodep->varp(), nodep);
+            if (nodep->access().isWriteOrRW()) {
+                AuxAstVar& aux = m_varAux(nodep->varp());
+                if (m_cellp) {
+                    aux.cellOutput = true;
+                } else if (!VN_IS(nodep->backp(), Sel) && !VN_IS(nodep->backp(), NodeSel)) {
+                    // Bits a select does not write stay undriven
+                    aux.assigned = true;
+                }
+            }
             // A plain (non-Z) cross-hierarchy driver has no Z in its own module's graph, so
             // mark a net already known tristate (interface net, or a net whose module already
             // created its __en) tristate here. Interface nets collect the driver as a
