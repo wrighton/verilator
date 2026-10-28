@@ -5627,23 +5627,24 @@ let_port_list<nodep>:   // IEEE: let_port_list
 
 let_port_item<varp>:  // IEEE: let_port_Item
         //                      // IEEE: Expanded let_formal_type
+        //                      // V3LinkResolve casts actuals of formals that are not UNTYPED
                 yUNTYPED idAny/*formal_port_identifier*/ variable_dimensionListE exprEqE
                         { $$ = new AstVar{$<fl>2, VVarType::VAR, *$2, VFlagChildDType{},
-                                          new AstBasicDType{$<fl>2, LOGIC_IMPLICIT}};
+                                          new AstBasicDType{$<fl>2, VBasicDTypeKwd::UNTYPED}};
                           $$->direction(VDirection::INOUT);
                           if ($4) $$->valuep($4);
                           PINNUMINC(); }
         |       data_type idAny/*formal_port_identifier*/ variable_dimensionListE exprEqE
-                        { BBUNSUP($<fl>1, "Unsupported: let typed ports");
-                          $$ = new AstVar{$<fl>2, VVarType::VAR, *$2, VFlagChildDType{},
-                                          new AstBasicDType{$<fl>2, LOGIC_IMPLICIT}};
+                        { $$ = new AstVar{$<fl>2, VVarType::VAR, *$2, VFlagChildDType{},
+                                          GRAMMARP->createArray($1, $3, false)};
                           $$->direction(VDirection::INOUT);
                           if ($4) $$->valuep($4);
                           PINNUMINC(); }
         |       implicit_typeE id/*formal_port_identifier*/ variable_dimensionListE exprEqE
-                        { if ($1) BBUNSUP($<fl>1, "Unsupported: let typed ports");
-                          $$ = new AstVar{$<fl>2, VVarType::VAR, *$2, VFlagChildDType{},
-                                          new AstBasicDType{$<fl>2, LOGIC_IMPLICIT}};
+                        { AstNodeDType* const dtypep
+                              = $1 ? GRAMMARP->createArray($1, $3, false)
+                                   : new AstBasicDType{$<fl>2, VBasicDTypeKwd::UNTYPED};
+                          $$ = new AstVar{$<fl>2, VVarType::VAR, *$2, VFlagChildDType{}, dtypep};
                           $$->direction(VDirection::INOUT);
                           if ($4) $$->valuep($4);
                           PINNUMINC(); }
