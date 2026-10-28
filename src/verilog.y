@@ -2764,7 +2764,10 @@ continuous_assign<nodep>:       // IEEE: continuous_assign
         ;
 
 initial_construct<nodep>:       // IEEE: initial_construct
-                yINITIAL stmt                      { $$ = new AstInitial{$1, $2}; }
+                yINITIAL stmt
+                        { AstInitial* const initialp = new AstInitial{$1, $2};
+                          initialp->fromSource(true);
+                          $$ = initialp; }
         ;
 
 

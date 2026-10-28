@@ -3,7 +3,7 @@
   {"type":"MODULE","name":"t","addr":"(F)","loc":"d,67:8,67:9","origName":"t","verilogName":"t","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
     {"type":"VAR","name":"p","addr":"(G)","loc":"d,69:10,69:11","dtypep":"(H)","origName":"p","verilogName":"p","direction":"NONE","declDirection":"NONE","icoMaybeWritten":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"Packet"},
-    {"type":"INITIAL","addr":"(I)","loc":"d,71:3,71:10",
+    {"type":"INITIAL","addr":"(I)","loc":"d,71:3,71:10","fromSource":true,
      "stmtsp": [
       {"type":"BEGIN","addr":"(J)","loc":"d,71:11,71:16","unnamed":true,
        "stmtsp": [
