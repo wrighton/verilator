@@ -155,6 +155,9 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstNodeFTask* nodep) override {
         UINFO(8, "  " << nodep);
+        // %m uses the original name; m_displayScope already has the enclosing blocks
+        VL_RESTORER_COPY(m_displayScope);
+        m_displayScope = dot(m_displayScope, nodep->name());
         // Rename it
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));
@@ -166,14 +169,12 @@ class BeginVisitor final : public VNVisitor {
         // naming; so that any begin's inside the function will rename
         // inside the function.
         // Process children
-        VL_RESTORER_COPY(m_displayScope);
         VL_RESTORER(m_ftaskp);
         VL_RESTORER(m_liftedp);
         VL_RESTORER_CLEAR(m_ftaskNamedScope);
         m_ftaskNamedScope = m_namedScope;
         VL_RESTORER_CLEAR(m_namedScope);
         VL_RESTORER_CLEAR(m_unnamedScope);
-        m_displayScope = dot(m_displayScope, nodep->name());
 
         m_ftaskp = nodep;
         m_liftedp = nullptr;
