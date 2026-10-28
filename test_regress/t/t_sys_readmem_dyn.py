@@ -18,5 +18,6 @@ test.execute()
 test.file_grep(test.obj_dir + "/writemem_dyn_d.hex", r'^02\n01\n$')
 test.file_grep(test.obj_dir + "/writemem_dyn_a.hex", r'^01\n02\n$')
 test.file_grep(test.obj_dir + "/writemem_dyn_empty.hex", r'^$')
+test.file_grep(test.obj_dir + "/writemem_q.hex", r'^7002\n7001\n$')
 
 test.passes()
