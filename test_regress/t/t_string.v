@@ -104,6 +104,13 @@ module t (
     endfunction
   endclass
 
+  // Static cast to a string typedef (IEEE 1800-2023 6.24.1)
+  initial begin
+    automatic logic [23:0] packed_abc = "abc";
+    `checks({str_t'("hi"), "!"}, "hi!");
+    `checks(str_t'(packed_abc), "abc");
+  end
+
   always @(posedge clk) begin
     // Values known only at runtime
     StrCond c;
