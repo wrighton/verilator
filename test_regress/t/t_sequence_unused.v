@@ -23,11 +23,40 @@ interface apb_if (
 
 endinterface
 
+// Sequence library where no sequence is used by an assertion
+package seq_lib;
+  sequence eventually_true(e);
+    (!e) [*0:$] ##1 e;
+  endsequence
+  sequence e1_not_before_e2(e1, e2);
+    (!e1) throughout eventually_true(e2);
+  endsequence
+endpackage
+
 module t (
     input clk
 );
 
   apb_if ifc (clk);
+
+  // Sequences instanced only by declarations that are not used (IEEE 1800-2023 16.8)
+  logic a = 0, b = 1;
+  sequence s_ab(x, y);
+    x ##1 y;
+  endsequence
+  property p_unused(x, y);
+    x |-> s_ab(y, y);
+  endproperty
+  sequence s_inner;
+    a ##1 b;
+  endsequence
+  sequence s_unused;
+    s_inner ##1 a;
+  endsequence
+  property p_restrict;
+    s_inner;
+  endproperty
+  restrict property (p_restrict);
 
   initial $finish;
 
