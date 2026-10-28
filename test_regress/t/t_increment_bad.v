@@ -33,4 +33,21 @@ module t (
     static C c = new;
     void'(c.randomize() with {x == a++;});
   end
+
+  // Assignment operators outside procedural statements (IEEE 1800-2023 11.3.6)
+  int b, c, d, e;
+  assign c = a++;
+  wire [31:0] w = --a;
+  sub u (.i(b--));
+  // verilator lint_off IEEEMAYDEPRECATE
+  initial begin
+    assign c = ++e;
+    force d = e--;
+  end
+  // verilator lint_on IEEEMAYDEPRECATE
+endmodule
+
+module sub (
+    input int i
+);
 endmodule
