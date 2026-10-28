@@ -1761,6 +1761,11 @@ static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDTyp
         const bool upcast = AstClass::isClassExtendedFrom(fromClassp, toClassp);
         if (upcast) return VCastable::COMPATIBLE;
         if (downcast) return VCastable::DYNAMIC_CLASS;
+        // IEEE 1800-2023 8.26.5: An object may implement any interface class, so whether it is
+        // castable to or from an interface class is only known at runtime
+        if (toClassp->isInterfaceClass() || fromClassp->isInterfaceClass()) {
+            return VCastable::DYNAMIC_CLASS;
+        }
         return VCastable::INCOMPATIBLE;
     } else if (const AstIfaceRefDType* const toIfp
                = VN_CAST(checkIfaceArgCompat ? toDtp->elemDTypep(true) : toDtp, IfaceRefDType)) {
@@ -1842,7 +1847,11 @@ AstNodeDType* AstNode::getCommonClassTypep(AstNode* node1p, AstNode* node2p) {
     {
         const VCastable castable = computeCastable(node1p->dtypep(), node2p->dtypep(), node2p);
         if (castable.isSameish() || castable.isCompatible()) return node1p->dtypep();
-        if (castable == VCastable::DYNAMIC_CLASS) return node2p->dtypep();
+        if (castable == VCastable::DYNAMIC_CLASS
+            && computeCastable(node2p->dtypep(), node1p->dtypep(), node1p)
+                   == VCastable::COMPATIBLE) {
+            return node2p->dtypep();
+        }
     }
 
     AstClassRefDType* classDtypep1 = VN_CAST(node1p->dtypep()->skipRefp(), ClassRefDType);
