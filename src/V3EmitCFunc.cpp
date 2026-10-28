@@ -332,13 +332,15 @@ void EmitCFunc::displayNode(AstNode* nodep, AstSFormatF* fmtp,  // fmtp is nullp
             timeunit = anodep->fmtp()->timeunit();
         } else if (const AstSFormat* const anodep = VN_CAST(nodep, SFormat)) {
             timeunit = anodep->fmtp()->timeunit();
+        } else if (const AstFScanF* const anodep = VN_CAST(nodep, FScanF)) {
+            timeunit = anodep->timeunit();
         } else if (const AstSScanF* const anodep = VN_CAST(nodep, SScanF)) {
             timeunit = anodep->timeunit();
         } else if (const AstSFormatF* const anodep = VN_CAST(nodep, SFormatF)) {
             timeunit = anodep->timeunit();
         }
         UASSERT_OBJ(!timeunit.isNone(), nodep,
-                    "Use of %t must be under AstDisplay, AstSFormat, or AstSFormatF, or "
+                    "Use of %t must be under AstDisplay, AstSFormat, AstSFormatF, FScanF, or "
                     "SScanF, and timeunit set");
         ofp()->puts(", '"s + VFormatAttr{VFormatAttr::TIMEUNIT}.ascii() + "'");
         ofp()->puts(","s + cvtToStr((int)timeunit.powerOfTen()));

@@ -1063,6 +1063,11 @@ class LinkParseVisitor final : public VNVisitor {
         iterateChildren(nodep);
         nodep->timeunit(m_modp->timeunit());
     }
+    void visit(AstFScanF* nodep) override {
+        cleanFileline(nodep);
+        iterateChildren(nodep);
+        nodep->timeunit(m_modp->timeunit());
+    }
     void visit(AstSScanF* nodep) override {
         cleanFileline(nodep);
         iterateChildren(nodep);
