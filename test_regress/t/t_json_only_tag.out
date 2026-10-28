@@ -36,7 +36,7 @@
         ]}
       ]}
     ]},
-    {"type":"INITIAL","addr":"(HB)","loc":"d,39:3,39:10",
+    {"type":"INITIAL","addr":"(HB)","loc":"d,39:3,39:10","fromSource":true,
      "stmtsp": [
       {"type":"BEGIN","addr":"(IB)","loc":"d,39:11,39:16","unnamed":true,
        "stmtsp": [
