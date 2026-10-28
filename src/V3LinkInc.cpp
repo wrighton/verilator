@@ -248,6 +248,26 @@ class LinkIncVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     // VISITORS -- illegal
+    void visit(AstAssignW* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "a continuous assignment (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
+    void visit(AstAssignCont* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "a procedural continuous assignment (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
+    void visit(AstAssignForce* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "a procedural continuous assignment (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
+    void visit(AstCell* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "an instance connection (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
     void visit(AstSenTree* nodep) override {
         VL_RESTORER(m_illegalReasonp);
         m_illegalReasonp = "an event expression (IEEE 1800-2023 11.3.6)";
