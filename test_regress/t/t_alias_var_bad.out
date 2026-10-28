@@ -1,8 +1,16 @@
+%Error: t/t_alias_var_bad.v:34:9: Only nets are allowed in alias (IEEE 1800-2023 10.11): 'o'
+                                : ... note: In instance 't.s'
+   34 |   alias o = w;
+      |         ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_alias_var_bad.v:35:9: Only nets are allowed in alias (IEEE 1800-2023 10.11): 'r'
+                                : ... note: In instance 't.s'
+   35 |   alias r = v;
+      |         ^
 %Error: t/t_alias_var_bad.v:18:9: Only nets are allowed in alias (IEEE 1800-2023 10.11): 'a'
                                 : ... note: In instance 't'
    18 |   alias a = b;
       |         ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_alias_var_bad.v:18:13: Only nets are allowed in alias (IEEE 1800-2023 10.11): 'b'
                                  : ... note: In instance 't'
    18 |   alias a = b;
