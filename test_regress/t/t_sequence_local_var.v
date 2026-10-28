@@ -73,6 +73,41 @@ module t (
   endproperty
   cover property (p_init_local);
 
+  // --- Scenario 7: sequence-local variable (IEEE 1800-2023 16.8, 16.10) ---
+  // Captured by a match item, referenced after a cycle delay in the same
+  // sequence. Each instance gets its own variable.
+  sequence s_capture;
+    int t;
+    (1, t = cyc) ##1 (cyc == t + 1);
+  endsequence
+  assert property (@(posedge clk) valid |-> s_capture);
+  assert property (@(posedge clk) 1 |-> s_capture);
+
+  // --- Scenario 8: wrong expectation on a sequence-local variable ---
+  // Must fail once per valid, so the reference is not just the current value.
+  int seq_fail = 0;
+  sequence s_capture_late;
+    int t;
+    (1, t = cyc) ##2 (cyc == t + 1);
+  endsequence
+  assert property (@(posedge clk) valid |-> s_capture_late)
+  else seq_fail++;
+
+  // --- Scenario 9: sequence port, and a later match item updating a local ---
+  // t = k at cycle k, t = k + (k + 2) at cycle k + 2; at k + 3, 2 * sig == t + 4.
+  sequence s_update(int sig);
+    int t;
+    (1, t = sig) ##2 (1, t = t + sig) ##1 (2 * sig == t + 4);
+  endsequence
+  assert property (@(posedge clk) valid |=> s_update(counter_x));
+
+  // --- Scenario 10: property-local variable referenced within a sequence ---
+  property p_seq_local;
+    int t;
+    @(posedge clk) valid |-> (1, t = cyc) ##1 (cyc > 0) ##1 (1, t = t + 1) ##1 (cyc == t + 2);
+  endproperty
+  assert property (p_seq_local);
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     counter_x <= counter_x + 1;
@@ -84,6 +119,7 @@ module t (
     if (cyc == 100) begin
       if (overlap_fail > 0) $stop;
       if (nonoverlap_fail > 0) $stop;
+      if (seq_fail != 3) $stop;
       $write("*-* All Finished *-*\n");
       $finish;
     end

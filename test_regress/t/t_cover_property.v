@@ -24,6 +24,7 @@ module t (
   int n_strong = 0;  // cover property (strong(a ##1 b))
   int n_bool = 0;  // cover property (a)        -- bare boolean baseline
   int n_named = 0;  // cover property (named pr) -- identity with |=>
+  int n_seq_local = 0;  // cover property (named sequence with local variable)
 
   default clocking cb @(posedge clk);
   endclocking
@@ -49,6 +50,14 @@ module t (
   cover property (a) n_bool++;
   cp_named :
   cover property (pr) n_named++;
+
+  // IEEE 1800-2023 16.10: a local variable of a named sequence
+  sequence s_local;
+    logic [6:0] t;
+    (a, t = cyc[6:0]) ##1 (b && cyc[6:0] == t + 7'd1);
+  endsequence
+  cp_seq_local :
+  cover property (s_local) n_seq_local++;
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
@@ -76,6 +85,7 @@ module t (
     `checkd(n_strong, 28);
     `checkd(n_bool, 55);  // Other sims: pass, 25
     `checkd(n_named, 28);  // Other sims: 73, 54, 54
+    `checkd(n_seq_local, n_seq);
   end
 
 endmodule

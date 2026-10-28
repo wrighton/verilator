@@ -2949,7 +2949,7 @@ class AssertNfaVisitor final : public VNVisitor {
 
     static AstNodeExpr* getSequenceBodyExprp(const AstSequence* seqp) {
         AstNode* bodyp = seqp->stmtsp();
-        while (bodyp && VN_IS(bodyp, Var)) bodyp = bodyp->nextp();
+        while (VN_IS(bodyp, Var) || VN_IS(bodyp, InitialStaticStmt)) bodyp = bodyp->nextp();
         return VN_CAST(bodyp, NodeExpr);
     }
 
@@ -2991,19 +2991,8 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         // Promote property-local variables to module-level temps (IEEE 16.10).
-        std::unordered_map<const AstVar*, AstVar*> localVarMap;
-        for (AstNode* const stmtp : propyp->stmtspList()) {
-            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                if (!varp->isIO()) {
-                    const string newName = m_propVarNames.get(varp);
-                    AstVar* const newVarp = new AstVar{varp->fileline(), VVarType::MODULETEMP,
-                                                       newName, varp->dtypep()};
-                    newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
-                    m_modp->addStmtsp(newVarp);
-                    localVarMap[varp] = newVarp;
-                }
-            }
-        }
+        const std::unordered_map<const AstVar*, AstVar*> localVarMap
+            = V3AssertCommon::newSvaLocalVars(propyp, m_modp, m_propVarNames);
 
         propSpecp->foreach([&](AstVarRef* refp) {
             const auto portIt = portMap.find(refp->varp());
@@ -3056,12 +3045,17 @@ class AssertNfaVisitor final : public VNVisitor {
         for (const auto& tconnect : tconnects) {
             portMap[tconnect.first] = tconnect.second->exprp();
         }
+        const std::unordered_map<const AstVar*, AstVar*> localVarMap
+            = V3AssertCommon::newSvaLocalVars(seqp, m_modp, m_propVarNames);
         clonedp->foreach([&](AstVarRef* refp) {
-            const auto it = portMap.find(refp->varp());
-            if (it != portMap.end()) {
-                refp->replaceWith(it->second->cloneTree(false));
+            const auto portIt = portMap.find(refp->varp());
+            if (portIt != portMap.end()) {
+                refp->replaceWith(portIt->second->cloneTree(false));
                 VL_DO_DANGLING(pushDeletep(refp), refp);
+                return;
             }
+            const auto localIt = localVarMap.find(refp->varp());
+            if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
@@ -3310,13 +3304,13 @@ class AssertNfaVisitor final : public VNVisitor {
         return;
     }
 
-    // Recursively walk a consequent. Returns cycle length consumed and
-    // substitutes each VarRef to a captured local var with $past(rhs, K)
-    // (or rhs inline when K == 0). Reports E_UNSUPPORTED on non-constant
-    // delays or composite sequence operators and returns -1 on failure.
-    int
-    walkSubstituteMatchItems(AstNodeExpr* nodep, unsigned K,
-                             const std::unordered_map<const AstVar*, AstNodeExpr*>& matchItems) {
+    // Walk a consequent or the rest of a sequence after a match item, returning its cycle length
+    int walkSubstituteMatchItems(AstNodeExpr* nodep, unsigned K,
+                                 const std::unordered_map<const AstVar*, AstNodeExpr*>& matchItems,
+                                 const char* wherep) {
+        // The walk is described by wherep. Returns -1 on failure.
+        // Substitute each VarRef to a captured local var with $past(rhs, K) (or rhs inline when K
+        // == 0). Report E_UNSUPPORTED on non-constant delays or composite sequence operators.
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
             // IEEE 1800-2023 16.9.2: cycle_delay's lhsp is a constant_expression
             // and the delay form in a sequence is always `##N`, folded by
@@ -3327,31 +3321,90 @@ class AssertNfaVisitor final : public VNVisitor {
                         "SVA cycle delay must have a constant lhsp");
             if (delayp->isRangeDelay()) {
                 sexprp->v3warn(E_UNSUPPORTED, "Unsupported: property local variable used across "
-                                              "non-constant cycle delay in consequent"
-                                              " (IEEE 1800-2023 16.10)");
+                                              "non-constant cycle delay in "
+                                                  << wherep << " (IEEE 1800-2023 16.10)");
                 return -1;
             }
             const unsigned delayCycles = VN_AS(delayp->lhsp(), Const)->toUInt();
             int preLen = 0;
+            std::unordered_map<const AstVar*, AstNodeExpr*> bodyItems = matchItems;
             if (AstNodeExpr* const prep = sexprp->preExprp()) {
-                preLen = walkSubstituteMatchItems(prep, K, matchItems);
+                preLen = walkSubstituteMatchItems(prep, K, matchItems, wherep);
                 if (preLen < 0) return -1;
+                // A match item here reassigns its variables for the rest
+                if (const AstExprStmt* const stmtp = VN_CAST(prep, ExprStmt)) {
+                    for (const auto& itemr : matchItemsOf(stmtp)) bodyItems.erase(itemr.first);
+                }
             }
-            const int bodyLen
-                = walkSubstituteMatchItems(sexprp->exprp(), K + preLen + delayCycles, matchItems);
+            const int bodyLen = walkSubstituteMatchItems(sexprp->exprp(), K + preLen + delayCycles,
+                                                         bodyItems, wherep);
             if (bodyLen < 0) return -1;
             return preLen + delayCycles + bodyLen;
         }
         if (nodep->isMultiCycleSva()) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: property local variable used across "
-                                         "composite sequence operator in consequent"
-                                         " (IEEE 1800-2023 16.10)");
+                                         "composite sequence operator in "
+                                             << wherep << " (IEEE 1800-2023 16.10)");
             return -1;
         }
         std::vector<AstVarRef*> refs;
-        nodep->foreach([&refs](AstVarRef* p) { refs.push_back(p); });
+        nodep->foreach([&refs](AstVarRef* p) {
+            if (p->access().isReadOnly()) refs.push_back(p);
+        });
         for (AstVarRef* const refp : refs) substituteMatchItemRef(refp, K, matchItems);
         return 0;
+    }
+
+    // Map each local variable assigned by a match item to its value
+    static std::unordered_map<const AstVar*, AstNodeExpr*>
+    matchItemsOf(const AstExprStmt* exprStmtp) {
+        // IEEE 1800-2023 16.10 BNF requires `(expr, match_item {, match_item})`
+        // with at least one match item; V3LinkParse only emits ExprStmt for
+        // this form and only emits AstAssign with VarRef LHS for each item.
+        std::unordered_map<const AstVar*, AstNodeExpr*> matchItems;
+        for (AstNode* const stmtp : exprStmtp->stmtspList()) {
+            AstAssign* const assignp = VN_AS(stmtp, Assign);
+            AstVarRef* const lhsRefp = VN_AS(assignp->lhsp(), VarRef);
+            matchItems[lhsRefp->varp()] = assignp->rhsp();
+        }
+        return matchItems;
+    }
+
+    // Lower match items followed by a cycle delay in a sequence, true if E_UNSUPPORTED emitted
+    bool liftSeqMatchItems(AstNode* bodyp) {
+        // See IEEE 1800-2023 16.10.
+        // As liftMatchItemSubstitutions does for an implication: in `(b, v = e) ##N s` each
+        // reference to v in s is replaced with $past(e, K), and the match item is removed.
+        // Outermost first, so a reference in a later match item is substituted too. A reference
+        // left over elsewhere, e.g. in a consequent after a multi-cycle antecedent, is
+        // unsupported.
+        std::vector<AstSExpr*> sexprps;
+        bodyp->foreach([&](AstSExpr* sexprp) {
+            if (VN_IS(sexprp->preExprp(), ExprStmt)) sexprps.push_back(sexprp);
+        });
+        if (sexprps.empty()) return false;
+        std::unordered_set<const AstVar*> liftedVars;
+        for (AstSExpr* const sexprp : sexprps) {
+            AstExprStmt* const exprStmtp = VN_AS(sexprp->preExprp()->unlinkFrBack(), ExprStmt);
+            const std::unordered_map<const AstVar*, AstNodeExpr*> matchItems
+                = matchItemsOf(exprStmtp);
+            for (const auto& itemr : matchItems) liftedVars.emplace(itemr.first);
+            // Walk with the match item removed: the rest starts at the delay
+            const bool failed = walkSubstituteMatchItems(sexprp, 0, matchItems, "sequence") < 0;
+            sexprp->preExprp(exprStmtp->resultp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(exprStmtp), exprStmtp);
+            if (failed) return true;
+        }
+        VIsCached::clearCacheTree();
+        const AstVarRef* leftp = nullptr;
+        bodyp->exists([&](const AstVarRef* refp) {
+            if (liftedVars.count(refp->varp())) leftp = refp;
+            return leftp != nullptr;
+        });
+        if (!leftp) return false;
+        leftp->v3warn(E_UNSUPPORTED, "Unsupported: local variable referenced outside the"
+                                     " sequence of its match item (IEEE 1800-2023 16.10)");
+        return true;
     }
 
     // Lower property-local match-item assignments before NFA construction.
@@ -3367,17 +3420,9 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!parts.hasImplication) return false;
         AstExprStmt* const exprStmtp = VN_CAST(parts.triggerExprp, ExprStmt);
         if (!exprStmtp) return false;
-        // IEEE 1800-2023 16.10 BNF requires `(expr, match_item {, match_item})`
-        // with at least one match item; V3LinkParse only emits ExprStmt for
-        // this form and only emits AstAssign with VarRef LHS for each item.
-        std::unordered_map<const AstVar*, AstNodeExpr*> matchItems;
-        for (AstNode* const stmtp : exprStmtp->stmtspList()) {
-            AstAssign* const assignp = VN_AS(stmtp, Assign);
-            AstVarRef* const lhsRefp = VN_AS(assignp->lhsp(), VarRef);
-            matchItems[lhsRefp->varp()] = assignp->rhsp();
-        }
         const unsigned startK = parts.isOverlapped ? 0 : 1;
-        const int length = walkSubstituteMatchItems(seqBodyp, startK, matchItems);
+        const int length
+            = walkSubstituteMatchItems(seqBodyp, startK, matchItemsOf(exprStmtp), "consequent");
         // Match-item substitution / strip mutates ancestor purity. Release
         // builds don't auto-clear caches on edits, so refresh here.
         VIsCached::clearCacheTree();
@@ -3461,7 +3506,7 @@ class AssertNfaVisitor final : public VNVisitor {
 
         // Substitute property-local match-item refs in consequent with
         // $past(rhs, K) before NFA build (IEEE 1800-2023 16.10).
-        if (liftMatchItemSubstitutions(parts, seqBodyp)) {
+        if (liftMatchItemSubstitutions(parts, seqBodyp) || liftSeqMatchItems(propp->propp())) {
             AstPropSpec* const psp = VN_CAST(assertp->propp(), PropSpec);
             UASSERT_OBJ(psp, assertp, "Concurrent assertion must have PropSpec");
             replaceBodyOnBuildError(assertp->fileline(), psp, /*errorEmitted=*/true);
