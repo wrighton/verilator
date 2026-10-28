@@ -1,0 +1,20 @@
+%Error: t/t_strength_var_bad.v:30:27: Drive strength specified for a variable, but drive strengths only apply to nets (IEEE 1800-2023 10.3.4): 'v'
+   30 |   assign (strong0, weak1) v = 1'b1;   
+      |                           ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_strength_var_bad.v:31:31: Drive strength specified for a variable, but drive strengths only apply to nets (IEEE 1800-2023 10.3.4): 'r'
+   31 |   assign (strong0, weak1) {w, r} = 2'b11;   
+      |                               ^
+%Error: t/t_strength_var_bad.v:34:32: Drive strength specified for a variable, but drive strengths only apply to nets (IEEE 1800-2023 10.3.4): 'vg'
+   34 |   buf (strong0, weak1) u_bufv (vg, 1'b1);   
+      |                                ^~
+%Error: t/t_strength_var_bad.v:17:27: Drive strength specified for a variable, but drive strengths only apply to nets (IEEE 1800-2023 10.3.4): 'o_logic'
+   17 |   assign (strong0, weak1) o_logic = 1'b1;   
+      |                           ^~~~~~~
+%Error: t/t_strength_var_bad.v:18:27: Drive strength specified for a variable, but drive strengths only apply to nets (IEEE 1800-2023 10.3.4): 'o_reg'
+   18 |   assign (strong0, weak1) o_reg = 1'b1;   
+      |                           ^~~~~
+%Error: t/t_strength_var_bad.v:19:27: Drive strength specified for a variable, but drive strengths only apply to nets (IEEE 1800-2023 10.3.4): 'o_var'
+   19 |   assign (strong0, weak1) o_var = 1'b1;   
+      |                           ^~~~~
+%Error: Exiting due to
