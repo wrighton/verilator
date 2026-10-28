@@ -86,12 +86,6 @@ class LinkWithVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
 
-    void visit(AstSchemaRef* nodep) override {
-        if (AstSequence* const seqp = VN_CAST(nodep->schemap(), Sequence)) {
-            seqp->isReferenced(true);
-        }
-        iterateChildren(nodep);
-    }
     void visit(AstNodeFTaskRef* nodep) override {
         VL_RESTORER(m_currentRandomizeSelectp);
         if (nodep->name() == "randomize") {
