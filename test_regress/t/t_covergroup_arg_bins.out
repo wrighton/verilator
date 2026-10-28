@@ -1,0 +1,25 @@
+t.Cls::cg_embedded.cp.hi: 0
+t.Cls::cg_embedded.cp.lo: 1
+t.cg.cp.func: 1
+t.cg.cp.gated: 1
+t.cg.cp.global_const: 1
+t.cg.cp.hit: 1
+t.cg.cp.ign [ignore]: 1
+t.cg.cp.ill [illegal]: 0
+t.cg.cp.open: 2
+t.cg.cp.others [default]: 2
+t.cg.cp.rng: 2
+t.cg.cp2.a: 1
+t.cg.cp2.b: 1
+t.cg.xx.<func,a> [cross]: 0
+t.cg.xx.<func,b> [cross]: 0
+t.cg.xx.<gated,a> [cross]: 0
+t.cg.xx.<gated,b> [cross]: 0
+t.cg.xx.<global_const,a> [cross]: 0
+t.cg.xx.<global_const,b> [cross]: 0
+t.cg.xx.<hit,b> [cross]: 0
+t.cg.xx.<open,a> [cross]: 0
+t.cg.xx.<open,b> [cross]: 0
+t.cg.xx.<rng,a> [cross]: 0
+t.cg.xx.<rng,b> [cross]: 0
+t.cg.xx.both [cross]: 1
