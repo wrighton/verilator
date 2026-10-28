@@ -782,12 +782,13 @@ class UndrivenVisitor final : public VNVisitorConst {
                                                        : entryp->callNodep();
                 const bool sameFileLine
                     = otherVarRefp && nodep->fileline() == otherVarRefp->fileline();
-                // Preconditions shared by MULTIDRIVEN and MULTIDRIVENPROC.
+                // Preconditions shared by MULTIDRIVEN and MULTIDRIVENPROC. A process queue for
+                // disable by name is written by the disabled block and every disabling process.
                 const bool multidrivenCommon
                     = entryp->isDrivenWhole() && !m_inBBox && !VN_IS(nodep, VarXRef)
                       && !VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType) && !sameFileLine
                       && !entryp->isUnderGen() && otherWritep && !entryp->isFtaskDriven()
-                      && !ftaskDef && !m_inSelLhs;
+                      && !ftaskDef && !m_inSelLhs && !nodep->varp()->processQueue();
                 // The two warnings are gated independently on the variable
                 // declaration's fileline, as v3warn suppression will check
                 // the driving fileline and still warn even if the warning
