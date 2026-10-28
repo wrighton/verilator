@@ -6656,7 +6656,8 @@ public:
     bool sameNode(const AstNode* samep) const override {
         const AstVarXRef* asamep = VN_DBG_AS(samep, VarXRef);
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
-                && name() == asamep->name() && dotted() == asamep->dotted());
+                && name() == asamep->name() && dotted() == asamep->dotted()
+                && inlinedDots() == asamep->inlinedDots());
     }
 };
 
