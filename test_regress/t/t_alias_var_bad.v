@@ -17,4 +17,20 @@ module t (  /*AUTOARG*/
 
   alias a = b;
 
+  logic [3:0] r;
+  sub s (
+      .o(),
+      .r(r)
+  );
+
+endmodule
+
+module sub (
+    output logic [3:0] o,  // Variable, as explicitly data typed (IEEE 1800-2023 23.2.2.3)
+    ref logic [3:0] r
+);
+  wire [3:0] w;
+  wire [3:0] v;
+  alias o = w;
+  alias r = v;
 endmodule
