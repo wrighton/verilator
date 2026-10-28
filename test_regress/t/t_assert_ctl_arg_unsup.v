@@ -6,15 +6,15 @@
 
 module t;
   let OFF = 4;
+  let FAILOFF = 9;
   let UNIQUE = 32;
-  let UNIQUE0 = 64;
   let PRIORITY = 128;
   logic directive_type = 1'b1;
+  int control_type = 4;
 
   initial begin
-    $assertcontrol(OFF, UNIQUE);
-    $assertcontrol(OFF, UNIQUE0);
-    $assertcontrol(OFF, PRIORITY);
+    $assertcontrol(FAILOFF, UNIQUE);
+    $assertcontrol(control_type, PRIORITY);
     $assertcontrol(OFF, 1, directive_type);
   end
 endmodule
