@@ -7209,7 +7209,8 @@ class WidthVisitor final : public VNVisitor {
         if (isElement) {
             iterateCheckTyped(itemp, "value", valuep, elemDtp, FINAL);
         } else {
-            userIterateAndNext(valuep, WidthVP{arrayDtp, FINAL}.p());
+            userIterateAndNext(convertUnpackedOrder(valuep, arrayDtp),
+                               WidthVP{arrayDtp, FINAL}.p());
         }
     }
     void addConsItem(AstNodeExpr* consp, AstNodeExpr* valuep) {
@@ -10684,9 +10685,27 @@ class WidthVisitor final : public VNVisitor {
         // UINFOTREE(1, parentp, "", "checkout");
         (void)rhsp;  // cppcheck
     }
-    // Convert an unpacked array value to an equivalent type with some dimension reversed,
-    // keeping elements in left-to-right order (IEEE 1800-2023 7.6)
+    // Convert an unpacked array value to a type with some dimension reversed
     AstNodeExpr* convertUnpackedOrder(AstNodeExpr* exprp, AstNodeDType* dtypep) {
+        // Elements keep their left-to-right order (IEEE 1800-2023 7.6).
+        // A dynamic array or queue takes the elements in the order of an ascending fixed-size
+        // array.
+        const AstUnpackArrayDType* const fromArrayp
+            = VN_CAST(exprp->dtypep()->skipRefp(), UnpackArrayDType);
+        if (fromArrayp
+            && (VN_IS(dtypep->skipRefp(), DynArrayDType)
+                || VN_IS(dtypep->skipRefp(), QueueDType))) {
+            FileLine* const flp = exprp->fileline();
+            AstUnpackArrayDType* const ascendingp
+                = new AstUnpackArrayDType{flp, dtypep->skipRefp()->subDTypep(),
+                                          new AstRange{flp, 0, fromArrayp->elementsConst() - 1}};
+            if (!ascendingp->isReverseOf(fromArrayp)) {
+                VL_DO_DANGLING(ascendingp->deleteTree(), ascendingp);
+                return exprp;
+            }
+            v3Global.rootp()->typeTablep()->addTypesp(ascendingp);
+            dtypep = ascendingp;
+        }
         const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
         if (!arrayp || !arrayp->isReverseOf(exprp->dtypep())) return exprp;
         VNRelinker relinker;
