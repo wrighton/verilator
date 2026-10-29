@@ -27,4 +27,11 @@
         t/t_force_select_bad.v:27:17: ... Location of non-constant index
    27 |     release vec[bad_index+:1];   
       |                 ^~~~~~~~~
+%Error: t/t_force_select_bad.v:33:5: Deassign left-hand-side must not have variable bit/part select (IEEE 1800-2023 10.6.1)
+                                   : ... note: In instance 't'
+   33 |     deassign var_vec[bad_index+:1];   
+      |     ^~~~~~~~
+        t/t_force_select_bad.v:33:22: ... Location of non-constant index
+   33 |     deassign var_vec[bad_index+:1];   
+      |                      ^~~~~~~~~
 %Error: Exiting due to
