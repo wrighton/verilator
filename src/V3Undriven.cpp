@@ -582,8 +582,11 @@ class UndrivenVisitor final : public VNVisitorConst {
                 nodep->v3warn(PROCASSWIRE, "Procedural assignment to wire, perhaps intended var"
                                                << " (IEEE 1800-2023 6.5): "
                                                << nodep->prettyNameQ());
-            } else if (m_inContAssign && !nodep->varp()->varType().isContAssignable()
-                       && !nodep->fileline()->language().systemVerilog()) {
+            } else if (m_inContAssign && !nodep->fileline()->language().systemVerilog()
+                       && (!nodep->varp()->varType().isContAssignable()
+                           // A port declared with a data type, e.g. 'output reg', is a variable
+                           || (nodep->varp()->varType() == VVarType::PORT
+                               && nodep->varp()->isDeclTyped()))) {
                 nodep->v3warn(CONTASSREG,
                               "Continuous assignment to reg, perhaps intended wire"
                                   << " (IEEE 1364-2005 6.1; Verilog only, legal in SV): "
