@@ -10,7 +10,6 @@
    31 |     q[$ - 1] == 2;
       |      ^
 %Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:15:12: Unsupported: random member variable with the type of the containing class
-                                                            : ... note: In instance 't'
    15 |   rand Cls cls;
       |            ^~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest

@@ -1,14 +1,11 @@
 %Error: t/t_class_misstatic_bad.v:23:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
-                                       : ... note: In instance 't'
    23 |     Cls::nonstatic();   
       |          ^~~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_class_misstatic_bad.v:24:10: Cannot call non-static member function 'nonstatic_retcls' without object (IEEE 1800-2023 8.10)
-                                       : ... note: In instance 't'
    24 |     Cls::nonstatic_retcls();   
       |          ^~~~~~~~~~~~~~~~
 %Error: t/t_class_misstatic_bad.v:35:5: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
-                                      : ... note: In instance 't'
    35 |     nonstatic();   
       |     ^~~~~~~~~
 %Error: t/t_class_misstatic_bad.v:45:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
