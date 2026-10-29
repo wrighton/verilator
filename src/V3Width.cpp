@@ -280,6 +280,7 @@ class WidthVisitor final : public VNVisitor {
     WidthVP* m_vup = nullptr;  // Current node state
     bool m_underFork = false;  // Visiting under a fork
     bool m_underSExpr = false;  // Visiting under a sequence expression
+    bool m_underSvaExpr = false;  // Under a property spec, property, sequence, or sequence event
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
     bool m_underMemberSel = false;  // Viting under a MemberSel
     AstNodeExpr* m_fromParentp = nullptr;  // Method call or member select iterating its fromp()
@@ -6776,6 +6777,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstPropSpec* nodep) override {
         VL_RESTORER(m_seqUnsupp);
         VL_RESTORER(m_hasSExpr);
+        VL_RESTORER(m_underSvaExpr);
+        m_underSvaExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {  // First stage evaluation
             // Only bare strong until uses V3AssertPre's timing-based lowering. Embedded forms
@@ -8019,7 +8022,9 @@ class WidthVisitor final : public VNVisitor {
         }
         nodep->doingWidth(true);
         VL_RESTORER(m_ftaskp);
+        VL_RESTORER(m_underSvaExpr);
         m_ftaskp = nodep;
+        m_underSvaExpr = true;
         // Property call will be replaced by property body in V3AssertPre. Property body has bit
         // dtype, so set it here too
         nodep->dtypeSetBit();
@@ -8045,6 +8050,8 @@ class WidthVisitor final : public VNVisitor {
         // Width-check the sequence body so expressions are typed for later inlining.
         // Referenced sequences in assertion context will be inlined by V3AssertPre.
         if (nodep->didWidth()) return;
+        VL_RESTORER(m_underSvaExpr);
+        m_underSvaExpr = true;
         nodep->dtypeSetBit();
         for (AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
             if (VN_IS(stmtp, Var)) {
@@ -8428,6 +8435,7 @@ class WidthVisitor final : public VNVisitor {
             if (withp) nodep->withp(withp);
             return;
         }
+        if (!m_underSvaExpr) checkSvaInstanceContext(nodep);
         if ((nodep->taskp()->classMethod() && !nodep->taskp()->isStatic())
             && !VN_IS(m_procedurep, InitialAutomatic) && !m_constraintp) {
             bool allow = false;
@@ -8477,6 +8485,20 @@ class WidthVisitor final : public VNVisitor {
         nodep->didWidth(true);
         // See steps that follow in visit(AstFuncRef*)
     }
+    // Report an instance of a sequence or property outside the expressions that may contain one
+    static void checkSvaInstanceContext(const AstNodeFTaskRef* nodep) {
+        // Later passes abort on the error, so the instance is left in place
+        if (VN_IS(nodep->taskp(), Sequence)) {
+            nodep->v3error("Illegal use of sequence instance "
+                           << nodep->prettyNameQ()
+                           << " outside a sequence expression, property expression or event"
+                              " control (IEEE 1800-2023 16.8)");
+        } else if (VN_IS(nodep->taskp(), Property)) {
+            nodep->v3error("Illegal use of property instance " << nodep->prettyNameQ()
+                                                               << " outside a property expression"
+                                                                  " (IEEE 1800-2023 16.12)");
+        }
+    }
     void visit(AstNodeProcedure* nodep) override {
         assertAtStatement(nodep);
         VL_RESTORER(m_procedurep);
@@ -8499,6 +8521,10 @@ class WidthVisitor final : public VNVisitor {
             nodep->replaceWith(new AstSenItem{rhsp->fileline(), nodep->edgeType(), rhsp});
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else {
+            VL_RESTORER(m_underSvaExpr);
+            // A sequence event control (IEEE 1800-2023 9.4.2.4)
+            const AstFuncRef* const funcrefp = VN_CAST(nodep->sensp(), FuncRef);
+            if (funcrefp && VN_IS(funcrefp->taskp(), Sequence)) m_underSvaExpr = true;
             userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
             if (nodep->edgeType().anEdge()) {
                 AstNodeDType* const sensDtp = nodep->sensp()->dtypep()->skipRefp();

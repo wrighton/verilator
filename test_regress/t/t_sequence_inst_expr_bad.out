@@ -1,0 +1,38 @@
+%Error: t/t_sequence_inst_expr_bad.v:33:15: Illegal use of sequence instance 's1' outside a sequence expression, property expression or event control (IEEE 1800-2023 16.8)
+                                          : ... note: In instance 't'
+   33 |   initial x = s1;
+      |               ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_inst_expr_bad.v:34:15: Illegal use of sequence instance 's2' outside a sequence expression, property expression or event control (IEEE 1800-2023 16.8)
+                                          : ... note: In instance 't'
+   34 |   initial if (s2) x = 1;
+      |               ^~
+%Error: t/t_sequence_inst_expr_bad.v:35:15: Illegal use of sequence instance 's_outer' outside a sequence expression, property expression or event control (IEEE 1800-2023 16.8)
+                                          : ... note: In instance 't'
+   35 |   initial x = s_outer;
+      |               ^~~~~~~
+%Error: t/t_sequence_inst_expr_bad.v:36:11: Illegal use of sequence instance 's1' outside a sequence expression, property expression or event control (IEEE 1800-2023 16.8)
+                                          : ... note: In instance 't'
+   36 |   initial s1;
+      |           ^~
+%Error: t/t_sequence_inst_expr_bad.v:37:15: Illegal use of property instance 'p1' outside a property expression (IEEE 1800-2023 16.12)
+                                          : ... note: In instance 't'
+   37 |   initial x = p1;
+      |               ^~
+%Error: t/t_sequence_inst_expr_bad.v:38:11: Illegal use of property instance 'p1' outside a property expression (IEEE 1800-2023 16.12)
+                                          : ... note: In instance 't'
+   38 |   initial p1;
+      |           ^~
+%Error: t/t_sequence_inst_expr_bad.v:39:19: Illegal use of sequence instance 's1' outside a sequence expression, property expression or event control (IEEE 1800-2023 16.8)
+                                          : ... note: In instance 't'
+   39 |   initial assert (s1);
+      |                   ^~
+%Error: t/t_sequence_inst_expr_bad.v:40:12: Illegal use of property instance 'p1' outside a property expression (IEEE 1800-2023 16.12)
+                                          : ... note: In instance 't'
+   40 |   always @(p1) x = 0;
+      |            ^~
+%Error: t/t_sequence_inst_expr_bad.v:42:12: Illegal use of sequence instance 's_arg' outside a sequence expression, property expression or event control (IEEE 1800-2023 16.8)
+                                          : ... note: In instance 't'
+   42 |     return s_arg(b);
+      |            ^~~~~
+%Error: Exiting due to
