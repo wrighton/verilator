@@ -8714,7 +8714,17 @@ class WidthVisitor final : public VNVisitor {
             // An untyped formal preserves the actual argument's self-determined type, a typed
             // one casts it to its type (IEEE 1800-2023 16.8.1)
             if (portp->basicp() && portp->basicp()->untyped()) {
-                iterateCheckSelf(nodep, "Function Argument", argp->exprp(), SELF, BOTH);
+                userIterate(argp->exprp(), WidthVP{SELF, PRELIM}.p());
+                AstNodeExpr* const pinp = argp->exprp();
+                if (pinp->isDouble()) {
+                    // The property body is typed only once, for integral arguments
+                    pinp->v3warn(E_UNSUPPORTED, "Unsupported: real argument for untyped formal "
+                                                    << portp->prettyNameQ());
+                    pinp->replaceWith(new AstConst{pinp->fileline(), AstConst::BitFalse{}});
+                    VL_DO_DANGLING(pushDeletep(pinp), pinp);
+                    continue;
+                }
+                iterateCheckSelf(nodep, "Function Argument", pinp, SELF, FINAL);
             } else {
                 userIterate(argp->exprp(), WidthVP{portp->dtypep(), PRELIM}.p());
                 iterateCheckAssign(nodep, "Function Argument", argp->exprp(), FINAL,

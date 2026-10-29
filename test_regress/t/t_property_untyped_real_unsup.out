@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_property_untyped_real_unsup.v:19:25: Unsupported: real argument for untyped formal 'x'
+                                                           : ... note: In instance 't'
+   19 |   assert property (p_gt(r, 1.0));   
+      |                         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_untyped_real_unsup.v:19:28: Unsupported: real argument for untyped formal 'y'
+                                                           : ... note: In instance 't'
+   19 |   assert property (p_gt(r, 1.0));   
+      |                            ^~~
+%Error-UNSUPPORTED: t/t_property_untyped_real_unsup.v:20:25: Unsupported: real argument for untyped formal 'x'
+                                                           : ... note: In instance 't'
+   20 |   assert property (p_eq(r));   
+      |                         ^
+%Error: Exiting due to
