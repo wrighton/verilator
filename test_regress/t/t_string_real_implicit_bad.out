@@ -1,0 +1,56 @@
+%Error: t/t_string_real_implicit_bad.v:21:9: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                           : ... note: In instance 't'
+                                           : ... Suggest use string method atoreal() or realtoa()
+   21 |     r = s;   
+      |         ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_string_real_implicit_bad.v:22:9: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                           : ... note: In instance 't'
+                                           : ... Suggest use string method atoreal() or realtoa()
+   22 |     s = r;   
+      |         ^
+%Error: t/t_string_real_implicit_bad.v:23:11: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                            : ... note: In instance 't'
+                                            : ... Suggest use string method atoreal() or realtoa()
+   23 |     s = c ? s : r;   
+      |           ^
+%Error: t/t_string_real_implicit_bad.v:24:15: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                            : ... Suggest use string method atoreal() or realtoa()
+   24 |     rq = {rq, s};   
+      |               ^
+%Error: t/t_string_real_implicit_bad.v:25:18: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                            : ... note: In instance 't'
+                                            : ... Suggest use string method atoreal() or realtoa()
+   25 |     sq.push_back(r);   
+      |                  ^
+%Error: t/t_string_real_implicit_bad.v:26:13: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                            : ... note: In instance 't'
+                                            : ... Suggest use string method atoreal() or realtoa()
+   26 |     r = r + s;   
+      |             ^
+%Error: t/t_string_real_implicit_bad.v:27:8: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                           : ... note: In instance 't'
+                                           : ... Suggest use string method atoreal() or realtoa()
+   27 |     fr(s);   
+      |        ^
+%Error: t/t_string_real_implicit_bad.v:28:8: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                           : ... note: In instance 't'
+                                           : ... Suggest use string method atoreal() or realtoa()
+   28 |     fs(r);   
+      |        ^
+%Error: t/t_string_real_implicit_bad.v:29:8: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                           : ... note: In instance 't'
+                                           : ... Suggest use string method atoreal() or realtoa()
+   29 |     to(r);   
+      |        ^
+%Error: t/t_string_real_implicit_bad.v:30:9: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                           : ... note: In instance 't'
+                                           : ... Suggest use string method atoreal() or realtoa()
+   30 |     if (s == r) $stop;   
+      |         ^
+%Error: t/t_string_real_implicit_bad.v:31:13: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+                                            : ... note: In instance 't'
+                                            : ... Suggest use string method atoreal() or realtoa()
+   31 |     r = c ? s : r;   
+      |             ^
+%Error: Exiting due to
