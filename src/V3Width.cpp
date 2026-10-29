@@ -12149,11 +12149,28 @@ public:
     static bool lowerAsFixedAggregate(const AstNodeDType* const dtypep) {
         return dtypep->isStreamableFixedAggregate() && dtypep->containsUnpackedStruct();
     }
+    // Report an array whose elements streaming cannot fill, and return whether reported
+    static bool badStreamTargetArray(AstNode* nodep, const AstNodeDType* dtypep) {
+        // Elements are filled from the stream bits, so must have a fixed number of bits
+        if (!dtypep->isNonPackedArray()) return false;
+        while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+        if (dtypep->isIntegralOrPacked() || VN_IS(dtypep, NodeUOrStructDType)) return false;
+        if (dtypep->isString() || VN_IS(dtypep, ClassRefDType)) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Stream assignment to an array of "
+                                             << dtypep->prettyDTypeNameQ());
+        } else {
+            nodep->v3error("Stream assignment to an array of "
+                           << dtypep->prettyDTypeNameQ()
+                           << ", which is not a bit-stream type (IEEE 1800-2023 6.24.3)");
+        }
+        return true;
+    }
     void streamAssignLower(AstNodeAssign* nodep) {
         AstNodeDType* lhsDTypep = nodep->lhsp()->dtypep();
         // Check width of stream and wrap if needed
         if (AstNodeStream* const streamp = VN_CAST(nodep->rhsp(), NodeStream)) {
             AstNodeDType* const lhsDTypeSkippedRefp = lhsDTypep->skipRefp();
+            if (badStreamTargetArray(nodep, lhsDTypeSkippedRefp)) return;
             const int lwidth = lhsDTypeSkippedRefp->widthStream();
             const int rwidth = streamp->lhsp()->dtypep()->skipRefp()->widthStream();
             if (lwidth != 0 && lwidth < rwidth) {
@@ -12228,6 +12245,7 @@ public:
         if (AstNodeStream* const streamp = VN_CAST(nodep->lhsp(), NodeStream)) {
             const AstNodeDType* const rhsDTypep = nodep->rhsp()->dtypep()->skipRefp();
             AstNodeDType* const lhsStreamDTypep = streamp->lhsp()->dtypep()->skipRefp();
+            if (badStreamTargetArray(nodep, lhsStreamDTypep)) return;
             const int lwidth = lhsStreamDTypep->widthStream();
             const int rwidth = rhsDTypep->widthStream();
             if (rwidth != 0 && rwidth < lwidth) {
