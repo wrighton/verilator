@@ -1,0 +1,38 @@
+%Error: t/t_func_out_nonlvalue_bad.v:64:13: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   64 |     t_out(a + b);
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_func_out_nonlvalue_bad.v:65:19: Function/task inout argument 'io' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   65 |     r = f_inout(a | b);
+      |                   ^
+%Error: t/t_func_out_nonlvalue_bad.v:66:11: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   66 |     t_out(f_val());
+      |           ^~~~~
+%Error: t/t_func_out_nonlvalue_bad.v:67:20: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   67 |     t_out((a == 1) ? b : r);
+      |                    ^
+%Error: t/t_func_out_nonlvalue_bad.v:68:14: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   68 |     t_out(int'(a));
+      |              ^
+%Error: t/t_func_out_nonlvalue_bad.v:69:11: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   69 |     t_out({lo, hi + 16'd1});
+      |           ^
+%Error: t/t_func_out_nonlvalue_bad.v:70:11: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   70 |     t_out({lo - 16'd1, hi});
+      |           ^
+%Error: t/t_func_out_nonlvalue_bad.v:71:13: Function/task output argument 'o' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   71 |     t_out({2{lo}});
+      |             ^
+%Error: t/t_func_out_nonlvalue_bad.v:72:21: Function/task inout argument 'io' connected to an expression that cannot be assigned (IEEE 1800-2023 13.5)
+                                          : ... note: In instance 't'
+   72 |     r = c.f_inout(a - b);
+      |                     ^
+%Error: Exiting due to
