@@ -185,12 +185,23 @@ class AssertElabVisitor final : public VNVisitor {
     }
     // Replace formal argument references under bodyp with the actual arguments of schemaRefp,
     // and retarget property-local variable references per localVarMap
-    void substituteArgs(AstNode* bodyp, AstSchemaRef* schemaRefp,
-                        const std::unordered_map<const AstVar*, AstVar*>& localVarMap) {
+    // Substitute the actual arguments into bodyp, returning the possibly replaced body
+    AstNode* substituteArgs(AstNode* bodyp, AstSchemaRef* schemaRefp,
+                            const std::unordered_map<const AstVar*, AstVar*>& localVarMap) {
         const V3TaskConnects tconnects = V3Task::taskConnects(schemaRefp);
         std::unordered_map<const AstVar*, AstNodeExpr*> portMap;
         for (const auto& tconnect : tconnects) {
             portMap[tconnect.first] = tconnect.second->exprp();
+        }
+        bodyp = V3AssertCommon::checkSvaUnboundedActuals(bodyp, portMap, schemaRefp);
+        // A body that is only a formal argument is replaced as a whole, as the root of the
+        // clone cannot be replaced in place
+        if (const AstVarRef* const refp = VN_CAST(bodyp, VarRef)) {
+            const auto it = portMap.find(refp->varp());
+            if (it != portMap.end()) {
+                VL_DO_DANGLING(bodyp->deleteTree(), bodyp);
+                bodyp = it->second->cloneTree(false);
+            }
         }
         std::vector<AstNodeExpr*> actualps;
         bodyp->foreach([&](AstVarRef* refp) {
@@ -212,6 +223,7 @@ class AssertElabVisitor final : public VNVisitor {
         V3AssertCommon::removeActualReductions(actualps);
         // Constants with a formal argument are checked once it is substituted
         checkInstanceConstants(bodyp, schemaRefp);
+        return bodyp;
     }
     // Promote the local variables of an instance of a property or sequence to module-level
     // temps, returning each declared variable's temp (IEEE 1800-2023 16.10)
@@ -298,18 +310,8 @@ class AssertElabVisitor final : public VNVisitor {
         AstNodeExpr* clonedp = VN_AS(
             V3AssertCommon::relinkSvaInstanceBody(seqp->exprp()->cloneTree(false), schemaRefp),
             NodeExpr);
-        // A body that is only a formal argument is replaced as a whole, as the root of the
-        // clone cannot be replaced in place
-        if (const AstVarRef* const refp = VN_CAST(clonedp, VarRef)) {
-            for (const auto& tconnect : V3Task::taskConnects(schemaRefp)) {
-                if (tconnect.first != refp->varp()) continue;
-                VL_DO_DANGLING(clonedp->deleteTree(), clonedp);
-                clonedp = tconnect.second->exprp()->cloneTree(false);
-                break;
-            }
-        }
         coverageOff(clonedp);
-        substituteArgs(clonedp, schemaRefp, promoteLocalVars(seqp));
+        clonedp = VN_AS(substituteArgs(clonedp, schemaRefp, promoteLocalVars(seqp)), NodeExpr);
         schemaRefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
         // V3AssertPre reports sequences still referenced after inlining as unsupported
