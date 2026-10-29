@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_property_local_var_init_unsup.v:16:13: Unsupported: non-constant initializer of a property local variable (IEEE 1800-2023 16.10)
+                                                             : ... note: In instance 't'
+   16 |     int x = cyc;
+      |             ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_local_var_init_unsup.v:23:15: Unsupported: initializer of a property local variable assigned by a match item, read other than in the consequent of an implication whose antecedent assigns it (IEEE 1800-2023 16.10)
+                                                             : ... note: In instance 't'
+   23 |     logic x = 1'b1;
+      |               ^~~~
+%Error-UNSUPPORTED: t/t_property_local_var_init_unsup.v:30:15: Unsupported: initializer of a property local variable assigned by a match item, read other than in the consequent of an implication whose antecedent assigns it (IEEE 1800-2023 16.10)
+                                                             : ... note: In instance 't'
+   30 |     logic x = 1'b0;
+      |               ^~~~
+%Error-UNSUPPORTED: t/t_property_local_var_init_unsup.v:37:15: Unsupported: initializer of a property local variable assigned by a match item, read other than in the consequent of an implication whose antecedent assigns it (IEEE 1800-2023 16.10)
+                                                             : ... note: In instance 't'
+   37 |     logic x = 1'b1;
+      |               ^~~~
+%Error-UNSUPPORTED: t/t_property_local_var_init_unsup.v:45:15: Unsupported: initializer of a property local variable assigned by a match item, read other than in the consequent of an implication whose antecedent assigns it (IEEE 1800-2023 16.10)
+                                                             : ... note: In instance 't'
+   45 |     logic x = 1'b1;
+      |               ^~~~
+%Error: Exiting due to
