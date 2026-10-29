@@ -6863,26 +6863,21 @@ class RandomizeVisitor final : public VNVisitor {
         if (sizeArraysIt != m_sizeConstrainedArrays.end()) {
             allSizeArrays.insert(sizeArraysIt->second.begin(), sizeArraysIt->second.end());
         }
-        const bool needsSizePhase = !allSizeArrays.empty();
+        // Arrays resized by the class constraints also need their sizes solved first and
+        // pinned; their elements are not re-registered unless constrained as above
+        VInsertionSet<AstVar*> pinnedArrays = allSizeArrays;
+        if (AstTask* const resizeAllTaskp
+            = VN_AS(m_memberMap.findMember(classp, "__Vresize_constrained_arrays"), Task)) {
+            resizeAllTaskp->foreach([&](const AstTaskRef* refp) {
+                refp->taskp()->foreach([&](const AstCMethodHard* resizep) {
+                    pinnedArrays.insert(VN_AS(resizep->fromp(), VarRef)->varp());
+                });
+            });
+        }
+        const bool needsSizePhase = !pinnedArrays.empty();
         AstVar* const retVarp = VN_AS(randomizeFuncp->fvarp(), Var);
 
         if (needsSizePhase) {
-            // Call __VBasicRand and stash its result FIRST, as its own statement,
-            // before either solve. The single-statement form below (basicRandomizeFuncCallp
-            // combined inline with the solver call) relies on statement hoisting emitting
-            // __VBasicRand before the (one) solve call, so the solver's answer -- not
-            // __VBasicRand's fallback fill of every rand array element -- is what sticks.
-            // With two explicit solves as separate statements, that implicit ordering no
-            // longer holds (the hoisted __VBasicRand call would land right before the LAST
-            // statement that references it, i.e. after the final solve), so it is made
-            // explicit here instead.
-            AstVar* const basicOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_ok",
-                                                   classp->findBasicDType(VBasicDTypeKwd::BIT)};
-            basicOkVarp->funcLocal(true);
-            randomizeFuncp->addStmtsp(basicOkVarp);
-            randomizeFuncp->addStmtsp(new AstAssign{
-                fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, basicRandomizeFuncCallp});
-
             AstVar* const sizeOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vsize_ok",
                                                   classp->findBasicDType(VBasicDTypeKwd::BIT)};
             sizeOkVarp->funcLocal(true);
@@ -6917,6 +6912,18 @@ class RandomizeVisitor final : public VNVisitor {
                 }
             }
 
+            // Call __VBasicRand as its own statement after the resize, so it also fills
+            // new elements, and before the final solve, so the solver's answer sticks.
+            // The single-statement form below (basicRandomizeFuncCallp combined inline
+            // with the solver call) relies on statement hoisting for that order, which
+            // would place it after the final solve here.
+            AstVar* const basicOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_ok",
+                                                   classp->findBasicDType(VBasicDTypeKwd::BIT)};
+            basicOkVarp->funcLocal(true);
+            randomizeFuncp->addStmtsp(basicOkVarp);
+            randomizeFuncp->addStmtsp(new AstAssign{
+                fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, basicRandomizeFuncCallp});
+
             // Clear this call's constraints, then rebuild them fresh against the
             // resized arrays: the class's own constraints (re-copied from a freshly
             // re-run class setup, if any), and this with-block's own constraints
@@ -6945,7 +6952,7 @@ class RandomizeVisitor final : public VNVisitor {
             // once-ever registration (AstVar::user3()) does not re-run on the second
             // lowering pass below, so it is redone here by hand, same as the
             // class-level pattern above.
-            for (AstVar* const arrVarp : allSizeArrays) {
+            for (AstVar* const arrVarp : pinnedArrays) {
                 // The size var itself needs write_var'ing here too, unconditionally:
                 // the pin below always references it by name, but nothing else in
                 // THIS with-block's own (re-)lowered tree is guaranteed to touch it --
@@ -6972,6 +6979,7 @@ class RandomizeVisitor final : public VNVisitor {
                     sizeMethodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0});
                     randomizeFuncp->addStmtsp(sizeMethodp->makeStmt());
                 }
+                if (!allSizeArrays.exists(arrVarp)) continue;  // Elements left to __VBasicRand
 
                 if (isDynArrOfClassTypeRecurse(arrVarp->dtypep())) {
                     const uint32_t unpackedDims = arrVarp->dtypep()->dimensions(false).second;
@@ -7027,7 +7035,7 @@ class RandomizeVisitor final : public VNVisitor {
                 randModeVarp, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames,      nullptr};
 
             // Pin the sizes so the final solve can't move them
-            for (AstVar* const arrVarp : allSizeArrays) {
+            for (AstVar* const arrVarp : pinnedArrays) {
                 AstVar* const sizeVarp = VN_CAST(arrVarp->user4p(), Var);
                 if (!sizeVarp) continue;
                 AstCMethodHard* const pinp

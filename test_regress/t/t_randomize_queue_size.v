@@ -54,6 +54,24 @@ class Baz;
 endclass
 
 module t;
+  // randomize() with on objects never plainly randomized applies the class size constraints
+  initial begin
+    automatic Foo foo = new;
+    automatic Bar bar = new;
+    automatic int nonzero = 0;
+    if (foo.randomize() with { q.size() > 0; } != 1) $stop;
+    if (foo.q.size() != 15) $stop;
+    if (foo.q2.size() != 10) $stop;
+    repeat (10) begin
+      if (bar.randomize() with { min_size == 5; } != 1) $stop;
+      if (bar.min_size != 5) $stop;
+      if (bar.q.size() < 5 || bar.q.size() > 9) $stop;
+      if (bar.q2.size() > 6) $stop;
+      foreach (bar.q[i]) if (bar.q[i] != 0) nonzero++;
+    end
+    if (nonzero < 40) $stop;
+  end
+
   initial begin
     automatic Foo foo = new;
     automatic Bar bar = new;
