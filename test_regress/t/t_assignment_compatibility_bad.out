@@ -49,14 +49,14 @@
       |                       ^
 %Error: t/t_assignment_compatibility_bad.v:43:20: Illegal assignment: Associative arrays are assignment compatible only with associative arrays (IEEE 1800-2023 7.6)
                                                 : ... note: In instance 't'
-                                                : ... Left-hand data type: 'logic$[0:1]' (4-state)
-                                                : ... Right-hand data type: 'logic$[string]' (2-state)
+                                                : ... Left-hand data type: 'logic$[0:1]'
+                                                : ... Right-hand data type: 'logic$[string]'
    43 |   assign unpackedA = assocArrayA;
       |                    ^
 %Error: t/t_assignment_compatibility_bad.v:44:17: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
                                                 : ... note: In instance 't'
-                                                : ... Left-hand data type: 'logic$[$]'
-                                                : ... Right-hand data type: 'bit$[$]'
+                                                : ... Left-hand data type: 'logic$[$]' (4-state)
+                                                : ... Right-hand data type: 'bit$[$]' (2-state)
    44 |   assign queueA = queueB;
       |                 ^
 %Error: t/t_assignment_compatibility_bad.v:46:24: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)

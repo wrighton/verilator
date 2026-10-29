@@ -2890,6 +2890,12 @@ bool AstNodeDType::isDpiLogicVec() const {
            && !(basicp->keyword().isSameish(VBasicDTypeKwd::LOGIC) && !basicp->isRanged());
 }
 bool AstNodeDType::isFourstate() const { return basicp() && basicp()->isFourstate(); }
+bool AstNodeDType::isFourstateElement() const {
+    // Unlike isFourstate(), which is false for queues, dynamic and associative arrays
+    const AstNodeDType* dtypep = skipRefp();
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+    return dtypep->isFourstate();
+}
 bool AstNodeDType::isLiteralType() const VL_MT_STABLE {
     if (const auto* const dtypep = VN_CAST(skipRefp(), BasicDType)) {
         return dtypep->keyword().isLiteralType();
