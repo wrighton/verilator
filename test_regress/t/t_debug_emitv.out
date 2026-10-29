@@ -585,7 +585,7 @@ module t;
      p_args
     endproperty
     begin : assert_chain
-        assert property (@(posedge clk) (| in)
+        assert property (@(posedge clk) in
         ) begin
         end
         else begin
