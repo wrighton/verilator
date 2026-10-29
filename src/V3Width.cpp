@@ -2193,12 +2193,16 @@ class WidthVisitor final : public VNVisitor {
     // Templated to cover AstSGotoRep and AstSNonConsRep uniformly.
     template <typename T_Rep>
     void widthCheckGotoRepRange(T_Rep* nodep, const char* kind) {
-        userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+        // A '$' maximum is legal, but is not an expression to width or constify
+        const bool unbounded = VN_IS(nodep->maxCountp(), Unbounded);
         V3Const::constifyParamsEdit(nodep->countp());
-        V3Const::constifyParamsEdit(nodep->maxCountp());
+        if (!unbounded) {
+            userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            V3Const::constifyParamsEdit(nodep->maxCountp());
+        }
         const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
         const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
-        if (!minConstp || !maxConstp) {
+        if (!minConstp || (!maxConstp && !unbounded)) {
             nodep->v3error(std::string{kind}
                            + " repetition range bounds must be constant expressions"
                              " (IEEE 1800-2023 16.9.2)");
@@ -2208,6 +2212,13 @@ class WidthVisitor final : public VNVisitor {
             nodep->v3error(std::string{kind}
                            + " repetition range min count must be non-negative"
                              " (IEEE 1800-2023 16.9.2)");
+            return;
+        }
+        if (unbounded) {
+            nodep->maxCountp()->v3warn(E_UNSUPPORTED,
+                                       "Unsupported: " << kind
+                                                       << " repetition range with '$' maximum"
+                                                          " (IEEE 1800-2023 16.9.2)");
             return;
         }
         if (maxConstp->toSInt() < minConstp->toSInt()) {
