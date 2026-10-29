@@ -6725,6 +6725,12 @@ class WidthVisitor final : public VNVisitor {
                 AstPatternItem* patp = nullptr;
                 if (it == patmap.end()) {  // Default or default_type assignment
                     patp = defaultPatp_patternStruct(nodep, memp, defaultp, dtypemap);
+                    if (!patp) {  // Missed member, already reported
+                        consp->addItemsp(new AstConsStructItem{
+                            nodep->fileline(), memp,
+                            new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}}});
+                        continue;
+                    }
                     pushDeletep(patp);  // patp used below
                     patp = defaultPatp_forDType(patp, memp->virtRefDTypep(), dtypemap);
                     pushDeletep(patp);  // patp used below
