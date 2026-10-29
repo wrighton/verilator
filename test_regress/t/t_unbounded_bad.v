@@ -14,6 +14,18 @@ module t;
   parameter int P = $;
   int x;
   initial x = P + 1;
+
+  // '$' may only bound an intersect value range (IEEE 1800-2023 6.20.7)
+  covergroup cg;
+    a: coverpoint x {bins filter = {[1 : 5]} with ($);}  // <--- Bad: '$'
+    b: coverpoint x;
+    ab: cross a, b{
+      bins value = binsof (a) intersect {$};  // <--- Bad: '$'
+      bins param = binsof (a) intersect {P};  // <--- Bad: '$'
+      bins range = binsof (a) intersect {[1 : $]};
+    }
+  endgroup
+  cg cg_inst = new;
 endmodule
 
 module sub (
