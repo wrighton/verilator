@@ -535,6 +535,8 @@ class ParamProcessor final {
             key += "}";
         } else if (const AstNodeDType* const dtypep = VN_CAST(nodep, NodeDType)) {
             key += dtypep->prettyDTypeName(true);
+        } else if (VN_IS(nodep, Unbounded)) {
+            key = "$";
         }
         UASSERT_OBJ(!key.empty(), nodep, "Parameter yielded no value string");
         return key;
@@ -1535,7 +1537,8 @@ class ParamProcessor final {
             } else {
                 UINFO(9, "cellPinCleanup: before constify " << pinp << " " << modvarp);
                 V3Const::constifyParamsEdit(pinp->exprp());
-                if (isAggregateParamValue(pinp->exprp())) {
+                // '$' (IEEE 1800-2023 6.20.2.1) is not an AstConst, so is named like an aggregate
+                if (isAggregateParamValue(pinp->exprp()) || VN_IS(pinp->exprp(), Unbounded)) {
                     nameByPinValue(pinp, srcModp, modvarp, longnamer, any_overridesr);
                     return;
                 }

@@ -2281,6 +2281,9 @@ class WidthVisitor final : public VNVisitor {
         if (const auto* const varp = VN_CAST(nodep->backp(), Var)) {
             if (varp->isParam()) return;  // Ok, leave
         }
+        if (const auto* const pinp = VN_CAST(nodep->backp(), Pin)) {
+            if (pinp->param()) return;  // Ok, leave
+        }
         AstNode* backp = nodep->backp();
         if (VN_IS(backp, Sub)) backp = backp->backp();
         if (const auto* const selp = VN_CAST(backp, SelExtract)) {
