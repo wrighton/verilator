@@ -5721,10 +5721,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     return;
                 }
             }
-            if (first && nodep->name() == "randomize" && VN_IS(m_modp, Class)
+            if ((first || m_ds.m_super) && nodep->name() == "randomize" && VN_IS(m_modp, Class)
                 && !VN_IS(nodep->classOrPackagep(), Package)) {
                 // need special handling to avoid falling back to std::randomize
                 // Skip if classOrPackagep is a Package (i.e. std::randomize resolved earlier)
+                // 'super.randomize()' is the built-in randomize() of this same object; link it
+                // here too, as the base class has no randomize symbol to find
                 VMemberMap memberMap;
                 AstFunc* const randFuncp = V3Randomize::newRandomizeFunc(
                     memberMap, VN_AS(m_modp, Class), nodep->name(), true, true);
