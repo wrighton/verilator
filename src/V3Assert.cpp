@@ -616,6 +616,13 @@ class AssertVisitor final : public VNVisitor {
             AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
             forkp->addForksp(pexprp->bodyp()->unlinkFrBack());
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
+                // The end-of-simulation check runs action blocks in a final block, where an
+                // NBA, legal in an action block, executes as a blocking assignment
+                finalp->foreach([](AstAssignDly* const dlyp) {
+                    FileLine* const newfl = new FileLine{dlyp->fileline()};
+                    newfl->warnOff(V3ErrorCode::FINALDLY, true);
+                    dlyp->fileline(newfl);
+                });
                 if (!m_finalp) {
                     m_finalp = new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()};
                     m_modp->addStmtsp(m_finalp);
