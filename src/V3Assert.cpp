@@ -568,6 +568,62 @@ void V3AssertCommon::removeActualReductions(const std::vector<AstNodeExpr*>& act
     }
 }
 
+void V3AssertCommon::lowerSvaLocalVarInits(
+    AstProperty* propp, AstPropSpec* bodyp,
+    const std::unordered_map<const AstVar*, AstVar*>& localVarMap) {
+    // A local variable is initialized at the start of each attempt (IEEE 1800-2023 16.10), but
+    // its module variable is not. A read that is not after a match item assigning the variable
+    // sees the initial value. Here only the reads in the consequent of an implication whose
+    // antecedent is `(e, v = x)` are known to follow it; a read after a match item in the same
+    // sequence, which V3AssertNfa lowers later, is conservatively reported too.
+    const AstImplication* const implp = VN_CAST(bodyp->propp(), Implication);
+    const AstExprStmt* const itemsp = implp ? VN_CAST(implp->lhsp(), ExprStmt) : nullptr;
+    // V3LinkParse keeps the initializer of a local variable as its value
+    for (AstNode* const declp : propp->declspList()) {
+        AstVar* const localVarp = VN_CAST(declp, Var);
+        if (!localVarp || localVarp->isIO() || !localVarp->valuep()) continue;
+        V3Const::constifyParamsNoWarnEdit(localVarp->valuep());  // valuep may change
+        AstNodeExpr* const initp = VN_AS(localVarp->valuep(), NodeExpr);
+        const AstConst* const constp = VN_CAST(initp, Const);
+        const AstVar* const varp = localVarMap.at(localVarp);
+        std::vector<AstVarRef*> readps;
+        bool assigned = false;
+        bodyp->foreach([&](AstVarRef* refp) {
+            if (refp->varp() != varp) return;
+            if (refp->access().isReadOnly()) {
+                readps.push_back(refp);
+            } else {
+                assigned = true;
+            }
+        });
+        if (assigned) {
+            std::unordered_set<const AstVarRef*> beforeps{readps.begin(), readps.end()};
+            if (itemsp && itemsp->exists([&](const AstVarRef* refp) {
+                    return refp->varp() == varp && refp->access().isWriteOrRW();
+                })) {
+                implp->rhsp()->foreach([&](const AstVarRef* refp) { beforeps.erase(refp); });
+            }
+            if (!beforeps.empty()) {
+                initp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: initializer of a property local variable"
+                              " assigned by a match item, read other than in the"
+                              " consequent of an implication whose antecedent assigns"
+                              " it (IEEE 1800-2023 16.10)");
+            }
+        } else if (constp) {
+            for (AstVarRef* const refp : readps) {
+                AstConst* const newp = new AstConst{refp->fileline(), constp->num()};
+                newp->dtypeFrom(refp);
+                refp->replaceWith(newp);
+                VL_DO_DANGLING(refp->deleteTree(), refp);
+            }  // LCOV_EXCL_LINE -- GCC exception cleanup branch
+        } else if (!readps.empty()) {
+            initp->v3warn(E_UNSUPPORTED, "Unsupported: non-constant initializer of a property"
+                                         " local variable (IEEE 1800-2023 16.10)");
+        }
+    }
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,

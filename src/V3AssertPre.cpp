@@ -335,7 +335,7 @@ private:
         // Clear referenced flag; sequences with isReferenced==false are deleted in assertPreAll
         seqp->isReferenced(false);
     }
-    AstPropSpec* clonePropertyBody(AstSchemaRef* schemaRefp, const AstProperty* propp) {
+    AstPropSpec* clonePropertyBody(AstSchemaRef* schemaRefp, AstProperty* propp) {
         // Clone, as the property may be instanced multiple times with different arguments, in
         // different modules, or through different hierarchical paths. Substitute an inner
         // property instance in the clone, after the outer path is applied to it.
@@ -370,6 +370,7 @@ private:
             if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });  // LCOV_EXCL_LINE -- gcov attributes lambda's implicit return to `})`
 
+        V3AssertCommon::lowerSvaLocalVarInits(propp, propExprp, localVarMap);
         // Clean up argument expressions
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
@@ -379,7 +380,7 @@ private:
     }
     AstPropSpec* substitutePropertyCall(AstPropSpec* nodep) {
         if (AstSchemaRef* const schemaRefp = VN_CAST(nodep->propp(), SchemaRef)) {
-            if (const AstProperty* const propp = VN_CAST(schemaRefp->schemap(), Property)) {
+            if (AstProperty* const propp = VN_CAST(schemaRefp->schemap(), Property)) {
                 AstPropSpec* const propExprp = clonePropertyBody(schemaRefp, propp);
 
                 // Handle case with 2 disable iff statement (IEEE 1800-2023 16.12.1)
@@ -416,7 +417,7 @@ private:
         return nodep;
     }
 
-    void substituteNestedPropertyCall(AstSchemaRef* schemaRefp, const AstProperty* propp) {
+    void substituteNestedPropertyCall(AstSchemaRef* schemaRefp, AstProperty* propp) {
         AstPropSpec* const specp = clonePropertyBody(schemaRefp, propp);
         AstNode* replp = nullptr;
         if (specp->disablep()) {

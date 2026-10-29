@@ -2954,7 +2954,7 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     void inlineNamedProperty(AstPropSpec* outerSpecp, AstSchemaRef* schemaRefp,
-                             const AstProperty* propyp) {
+                             AstProperty* propyp) {
         // Recursion guard: IEEE 1800-2023 16.12.1 forbids recursive properties.
         // V3Width emits "Recursive property call" for direct recursion before this
         // pass runs; this catches any nested-inlining cycle that slips past.
@@ -2997,6 +2997,7 @@ class AssertNfaVisitor final : public VNVisitor {
         });  // LCOV_EXCL_LINE -- gcov attributes lambda's implicit return to `})`
         V3AssertCommon::removeActualReductions(actualps);
 
+        V3AssertCommon::lowerSvaLocalVarInits(propyp, propSpecp, localVarMap);
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
         }
@@ -3521,7 +3522,7 @@ class AssertNfaVisitor final : public VNVisitor {
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
         if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
             if (AstSchemaRef* const schemaRefp = VN_CAST(specp->propp(), SchemaRef)) {
-                if (const AstProperty* const propyp = VN_CAST(schemaRefp->schemap(), Property)) {
+                if (AstProperty* const propyp = VN_CAST(schemaRefp->schemap(), Property)) {
                     inlineNamedProperty(specp, schemaRefp, propyp);
                 }
             }
