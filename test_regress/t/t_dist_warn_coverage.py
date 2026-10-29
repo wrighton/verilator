@@ -80,7 +80,6 @@ for s in [
         'Unsupported RHS tristate construct:',
         'Unsupported or syntax error: Unsized range in instance or other declaration',
         'Unsupported pullup/down (weak driver) construct.',
-        'Unsupported tristate construct (not in propagation graph):',
         'Unsupported tristate port expression:',
         'Unsupported/unknown built-in queue method',
         'Unsupported: $bits for queue',
