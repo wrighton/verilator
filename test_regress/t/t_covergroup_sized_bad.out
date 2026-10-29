@@ -15,6 +15,14 @@
                                         : ... note: In instance 't'
    29 |       ignore_bins ignore_value = {UNBOUNDED};   
       |                   ^~~~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:30:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   30 |       bins value_with = {$} with (item > 1);   
+      |            ^~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:31:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   31 |       bins param_with = {1, UNBOUNDED} with (item > 0);   
+      |            ^~~~~~~~~~
 %Error: t/t_covergroup_sized_bad.v:17:17: Bins array size must be >= 1, got 0 (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
    17 |       bins zero[0] = {[0 : 3]};   
@@ -51,20 +59,20 @@
                                         : ... note: In instance 't'
    21 |       bins four_state_with = {[4'b000x : 4'hf]} with (1);   
       |                               ^
-%Error: t/t_covergroup_sized_bad.v:38:46: Cross bin 'matches' count must be >= 1, got 0 (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:41:46: Cross bin 'matches' count must be >= 1, got 0 (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   38 |       bins zero = xx with (aa == bb) matches 0;   
+   41 |       bins zero = xx with (aa == bb) matches 0;   
       |                                              ^
-%Error: t/t_covergroup_sized_bad.v:39:50: Cross bin 'matches' count must be >= 1, got -1 (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:42:50: Cross bin 'matches' count must be >= 1, got -1 (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   39 |       bins negative = xx with (aa == bb) matches -1;   
+   42 |       bins negative = xx with (aa == bb) matches -1;   
       |                                                  ^
-%Error: t/t_covergroup_sized_bad.v:40:50: Cross bin 'matches' count must be integral (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:43:50: Cross bin 'matches' count must be integral (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   40 |       bins fraction = xx with (aa == bb) matches 1.5;   
+   43 |       bins fraction = xx with (aa == bb) matches 1.5;   
       |                                                  ^~~
-%Error: t/t_covergroup_sized_bad.v:41:52: Cross bin 'matches' count must be >= 1, got b1x (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:44:52: Cross bin 'matches' count must be >= 1, got b1x (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   41 |       bins four_state = xx with (aa == bb) matches 2'b1x;   
+   44 |       bins four_state = xx with (aa == bb) matches 2'b1x;   
       |                                                    ^~~~~
 %Error: Exiting due to
