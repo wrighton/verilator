@@ -68,7 +68,9 @@ void V3ParseImp::importIfInStd(FileLine* fileline, const string& id, bool doImpo
     // Keywords that auto-import to require use of verilated_std.vh.
     // OK if overly sensitive; will over-import and keep std:: around
     // longer than migt otherwise.
-    if (v3Global.usesStdPackage()) return;  // Run once then short-circuit
+    // Run once then short-circuit. Covergroups and 'randomize' keep std:: without the import,
+    // so test that the import was made (which sets the process class), not usesStdPackage().
+    if (v3Global.rootp()->stdPackageProcessp()) return;
     const bool identifierImportsStd = (id == "mailbox" || id == "process" || id == "randomize"
                                        || id == "semaphore" || id == "std");
     if (!identifierImportsStd) return;
