@@ -552,6 +552,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         std::map<AstCoverCross*, std::vector<AstCoverpoint*>> inputs;
         for (AstCoverpoint* const cpp : m_coverpoints) {
             checkBinNames(cpp);
+            checkBinValues(cpp);
             checkConstructedBins(cpp);
             if (!cpp->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) continue;
             // Bins without values leave the report (IEEE 1800-2023 19.11.1), exclusions or not.
@@ -702,6 +703,20 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                                            << coverpointp->prettyNameQ()
                                            << " (IEEE 1800-2023 3.13)");
             VL_DO_DANGLING(pushDeletep(binp->unlinkFrBack()), binp);
+        }
+    }
+
+    // Report and delete a bins declaration with a value of '$', which may only bound a range
+    void checkBinValues(AstCoverpoint* coverpointp) {
+        for (AstNode* const nodep : coverpointp->binspList()) {
+            AstCoverBin* const binp = VN_AS(nodep, CoverBin);
+            for (AstNode* const rangep : VNList<AstNode>{binRangesp(binp)}) {
+                if (!VN_IS(rangep, Unbounded)) continue;
+                binp->v3error("Bins value may not be '$', which may only bound a range "
+                              "(IEEE 1800-2023 6.20.7)");
+                dropBins(coverpointp, binp);
+                break;
+            }
         }
     }
 
@@ -1987,11 +2002,6 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         }
         uint32_t element = 0;
         for (AstNode* const rangep : VNList<AstNode>{binRangesp(binp)}) {
-            if (VN_IS(rangep, Unbounded)) {  // A parameter of '$'
-                binp->v3error("Bins value may not be '$', which may only bound a range "
-                              "(IEEE 1800-2023 6.20.7)");
-                continue;
-            }
             generateSizedElement(cpVarp, binp, rangep, exprp, prefix + "_" + cvtToStr(element++));
         }
         if (withp) generateWithFilter(binp, withp, cpVarp, exprp, prefix);
