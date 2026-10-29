@@ -28,6 +28,23 @@ module t (
   cover property (@(posedge clk) ((val |-> val) and val) ##1 val);
   cover property (@(posedge clk) (if (val) val) ##1 val);
 
+  // Property operators and instances as an implication antecedent
+  property p_impl;
+    val |-> val;
+  endproperty
+  property p_bool;
+    val;
+  endproperty
+  assert property (@(posedge clk) (val |-> val) |-> val);
+  assert property (@(posedge clk) (val until val) |=> val);
+  assert property (@(posedge clk) (not val) #-# val);
+  assert property (@(posedge clk) p_impl |-> val);
+  assert property (@(posedge clk) p_bool |=> val);
+  // Property instance as a sequence operand or body
+  sequence s_prop;
+    p_bool;
+  endsequence
+  cover property (@(posedge clk) p_bool ##1 val);
   // A property declared after its instance after a leading cycle delay is fine
   cover property (@(posedge clk) ##1 p_later);
 

@@ -1970,13 +1970,14 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
     }
 
-    // Report and replace a property operator in a sequence expression, true if replaced
+    // Report and replace a property operator or instance in a sequence expression, true if so
     bool replacePropertyInSExpr(AstNodeExpr* nodep) {
-        // IEEE 1800-2023 A.2.10: A property operator is not a sequence operand, but the parser
-        // accepts a property expression for some sequence operands.
+        // IEEE 1800-2023 A.2.10: A property operator or instance is not a sequence operand, but
+        // the parser accepts a property expression for some sequence operands.
         if (!m_underSExpr || nodep == m_cycleDelayPropp) return false;
-        nodep->v3error("Unexpected property operator in sequence expression context"
-                       " (IEEE 1800-2023 16.12)");
+        nodep->v3error("Unexpected property " << (VN_IS(nodep, FuncRef) ? "instance" : "operator")
+                                              << " in sequence expression context"
+                                                 " (IEEE 1800-2023 16.12)");
         AstConst* const newp = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
         newp->dtypeSetBit();
         nodep->replaceWith(newp);
@@ -1989,7 +1990,12 @@ class WidthVisitor final : public VNVisitor {
         if (replacePropertyInSExpr(nodep)) return;
         m_seqUnsupp = nodep;
         if (m_vup->prelim()) {
-            iterateCheckBool(nodep, "LHS", nodep->lhsp(), BOTH);
+            {
+                // The antecedent is a sequence expression (IEEE 1800-2023 A.2.10)
+                VL_RESTORER(m_underSExpr);
+                m_underSExpr = true;
+                iterateCheckBool(nodep, "LHS", nodep->lhsp(), BOTH);
+            }
             iterateCheckBool(nodep, "RHS", nodep->rhsp(), BOTH);
             nodep->dtypeSetBit();
         }
@@ -8109,6 +8115,7 @@ class WidthVisitor final : public VNVisitor {
         return VN_CAST(pkgItemp->backp(), Package);
     }
     void visit(AstFuncRef* nodep) override {
+        if (VN_IS(nodep->taskp(), Property) && replacePropertyInSExpr(nodep)) return;
         visit(static_cast<AstNodeFTaskRef*>(nodep));
         if (nodep->taskp() && VN_IS(nodep->taskp(), Task)) {
             UASSERT_OBJ(m_vup, nodep, "Function reference where widthed expression expectation");

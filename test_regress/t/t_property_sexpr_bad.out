@@ -39,4 +39,32 @@
                                       : ... note: In instance 't'
    29 |   cover property (@(posedge clk) (if (val) val) ##1 val);
       |                                   ^~
+%Error: t/t_property_sexpr_bad.v:38:40: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   38 |   assert property (@(posedge clk) (val |-> val) |-> val);
+      |                                        ^~~
+%Error: t/t_property_sexpr_bad.v:39:40: Unexpected property operator in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   39 |   assert property (@(posedge clk) (val until val) |=> val);
+      |                                        ^~~~~
+%Error: t/t_property_sexpr_bad.v:40:36: Unexpected 'not' in sequence expression context
+                                      : ... note: In instance 't'
+   40 |   assert property (@(posedge clk) (not val) #-# val);
+      |                                    ^~~
+%Error: t/t_property_sexpr_bad.v:41:35: Unexpected property instance in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   41 |   assert property (@(posedge clk) p_impl |-> val);
+      |                                   ^~~~~~
+%Error: t/t_property_sexpr_bad.v:42:35: Unexpected property instance in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   42 |   assert property (@(posedge clk) p_bool |=> val);
+      |                                   ^~~~~~
+%Error: t/t_property_sexpr_bad.v:45:5: Unexpected property instance in sequence expression context (IEEE 1800-2023 16.12)
+                                     : ... note: In instance 't'
+   45 |     p_bool;
+      |     ^~~~~~
+%Error: t/t_property_sexpr_bad.v:47:34: Unexpected property instance in sequence expression context (IEEE 1800-2023 16.12)
+                                      : ... note: In instance 't'
+   47 |   cover property (@(posedge clk) p_bool ##1 val);
+      |                                  ^~~~~~
 %Error: Exiting due to
