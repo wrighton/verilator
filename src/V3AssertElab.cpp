@@ -153,9 +153,9 @@ class AssertElabVisitor final : public VNVisitor {
     void coverageOff(AstNode* nodep) {
         nodep->foreach([&](AstNode* np) { np->fileline(noCoverFileLine(np->fileline())); });
     }
-    // Check the cycle delays, repetition counts and $past tick counts of a sequence or property
-    // instance, after its formal arguments are replaced with the actual arguments
-    // (IEEE 1800-2023 16.8), reporting errors on instp
+    // Check the cycle delays, repetition counts, always ranges and $past tick counts of a
+    // sequence or property instance, after its formal arguments are replaced with the actual
+    // arguments (IEEE 1800-2023 16.8), reporting errors on instp
     static void checkInstanceConstants(AstNode* nodep, AstNode* instp) {
         // Collect first, as checking edits them
         std::vector<AstDelay*> delayps;
@@ -165,7 +165,7 @@ class AssertElabVisitor final : public VNVisitor {
         nodep->foreach([&](AstNodeExpr* exprp) {
             const AstPast* const pastp = VN_CAST(exprp, Past);
             if (VN_IS(exprp, SConsRep) || VN_IS(exprp, SGotoRep) || VN_IS(exprp, SNonConsRep)
-                || (pastp && pastp->ticksp())) {
+                || VN_IS(exprp, PropAlways) || (pastp && pastp->ticksp())) {
                 exprps.push_back(exprp);
             }
         });
@@ -176,6 +176,8 @@ class AssertElabVisitor final : public VNVisitor {
                 V3AssertCommon::checkSvaRepetition(repp, instp);
             } else if (AstSNonConsRep* const repp = VN_CAST(exprp, SNonConsRep)) {
                 V3AssertCommon::checkSvaRepetition(repp, instp);
+            } else if (AstPropAlways* const alwaysp = VN_CAST(exprp, PropAlways)) {
+                V3AssertCommon::checkSvaAlwaysRange(alwaysp, instp);
             } else {
                 V3AssertCommon::checkSvaPastTicks(VN_AS(exprp, Past), instp);
             }
