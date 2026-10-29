@@ -32,6 +32,7 @@
 // verilator lint_off DECLFILENAME
 // verilator lint_off TIMESCALEMOD
 // verilator lint_off UNUSEDSIGNAL
+// verilator lint_off VARHIDDEN
 package std;
   // IEEE 1800-specified standard "mailbox"
   class mailbox #(
