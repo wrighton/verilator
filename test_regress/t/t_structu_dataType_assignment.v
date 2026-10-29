@@ -9,7 +9,57 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d (%s !== %s)\n", `__FILE__,`__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
 // verilog_format: on
 
-module t;
+package pkg;
+  typedef byte byte_t;
+  typedef logic [3:0] nib;
+  // A member named like a typedef
+  typedef struct {
+    int nib;
+    nib x;
+  } n_struct;
+endpackage
+
+module sub
+  import pkg::*;
+#(
+    parameter n_struct P = '{default: 0}
+) (
+    output int nib_o,
+    output logic [3:0] x_o
+);
+  assign nib_o = P.nib;
+  assign x_o = P.x;
+endmodule
+
+typedef struct {
+  int a;
+  byte b;
+} ab_t;
+
+module sub_ab #(
+    parameter ab_t P = '{default: 0}
+) (
+    output int a_o,
+    output byte b_o
+);
+  assign a_o = P.a;
+  assign b_o = P.b;
+endmodule
+
+// The same type parameter name keys a different type in each specialization
+module mid #(
+    parameter type K = int
+) (
+    output int a_o,
+    output byte b_o
+);
+  sub_ab #(.P('{K: 1, default: 0})) u (a_o, b_o);
+endmodule
+
+module t #(
+    parameter type T = int
+);
+  import pkg::*;
 
   typedef struct {  // IEEE 1800-2023 5.10
     int a;
@@ -40,6 +90,34 @@ module t;
       } DE1;
     } BC1;
   } HIJ_struct;
+
+  // Data type keys naming a typedef or type parameter (IEEE 1800-2023 10.9.2)
+  typedef int int_t;
+  typedef int_t int2_t;
+  typedef struct {
+    int a;
+    byte b;
+    int2_t c;
+  } tk_struct;
+  typedef struct packed {
+    int a;
+    byte b;
+  } tkp_struct;
+
+  tk_struct tk;
+  tkp_struct tkp;
+  n_struct n;
+  int v = 4;
+  byte bv = 5;
+  logic [3:0] v4 = 4;
+  int bare_nib, qual_nib;
+  logic [3:0] bare_x, qual_x;
+  sub #(.P('{nib: 1, default: 0})) u_bare (bare_nib, bare_x);
+  sub #(.P('{pkg::nib: 1, default: 0})) u_qual (qual_nib, qual_x);
+  int int_a, byte_a;
+  byte int_b, byte_b;
+  mid #(.K(int)) u_int (int_a, int_b);
+  mid #(.K(byte)) u_byte (byte_a, byte_b);
 
   ab_struct ab;
   ab_struct abkey[1:0];
@@ -135,8 +213,43 @@ module t;
     `checkd(HIJ.BC1.DE1.FG1.F, 5);
     `checkd(HIJ.BC1.DE1.FG1.G, 10);
 
+    tk = '{int_t: v, default: 1};
+    `checkd(tk.a, 4);
+    `checkd(tk.b, 1);
+    `checkd(tk.c, 4);
+    tk = '{int2_t: v, byte_t: bv};
+    `checkd(tk.a, 4);
+    `checkd(tk.b, 5);
+    `checkd(tk.c, 4);
+    tk = '{T: v, default: 1};
+    `checkd(tk.a, 4);
+    `checkd(tk.b, 1);
+    `checkd(tk.c, 4);
+    tkp = '{int_t: v, byte_t: bv};
+    `checkd(tkp.a, 4);
+    `checkd(tkp.b, 5);
+    // A bare name of a member is the member, a qualified type name is a type
+    n = '{nib: v, default: 0};
+    `checkd(n.nib, 4);
+    `checkd(n.x, 0);
+    n = '{pkg::nib: v4, default: 0};
+    `checkd(n.nib, 0);
+    `checkd(n.x, 4);
+
     $write("*-* All Finished *-*\n");
     $finish;
+  end
+
+  // Parameter overrides that differ only in a member key vs a type key of the same name
+  final begin
+    `checkd(bare_nib, 1);
+    `checkd(bare_x, 0);
+    `checkd(qual_nib, 0);
+    `checkd(qual_x, 1);
+    `checkd(int_a, 1);
+    `checkd(int_b, 0);
+    `checkd(byte_a, 0);
+    `checkd(byte_b, 1);
   end
 
 endmodule
