@@ -4299,7 +4299,7 @@ AstBasicDType* AstTypeTable::findLogicBitDType(FileLine* fl, VBasicDTypeKwd kwd,
 }
 AstQueueDType* AstTypeTable::findQueueIndexDType(FileLine* fl) {
     if (VL_UNLIKELY(!m_queueIndexp)) {
-        AstQueueDType* const newp = new AstQueueDType{fl, AstNode::findUInt32DType(), nullptr};
+        AstQueueDType* const newp = new AstQueueDType{fl, AstNode::findIntDType(), nullptr};
         addTypesp(newp);
         m_queueIndexp = newp;
     }
