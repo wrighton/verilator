@@ -6986,7 +6986,9 @@ sexpr<nodeExprp>:  // ==IEEE: sequence_expr  (The name sexpr is important as reg
         //                      // "'(' sexpr ')' boolean_abbrev" matches "[sexpr:'(' expr ')'] boolean_abbrev" so we can drop it
         |       '(' ~p~sexpr ')'                        { $$ = $2; }
         |       '(' ~p~sexpr ',' sequence_match_itemList ')'
-                        { $$ = new AstExprStmt{$3, $4, $2}; }
+                        { AstExprStmt* const newp = new AstExprStmt{$3, $4, $2};
+                          newp->matchItems(true);
+                          $$ = newp; }
         //
         //                      // AND/OR are between pexprs OR sexprs (IEEE 1800-2023 16.9.2, 16.11.2)
         //                      // For expression-level (boolean) operands, AstLogAnd/AstLogOr is correct.

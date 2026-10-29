@@ -1923,6 +1923,14 @@ bool AstExprStmt::isPure() {
     if (AstNode::afterCommentp(stmtsp())) return false;
     return resultp()->isPure();
 }
+void AstExprStmt::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (matchItems()) str << " [MATCHITEMS]";
+}
+void AstExprStmt::dumpJson(std::ostream& str) const {
+    dumpJsonBoolIf(str, "matchItems", matchItems());
+    dumpJsonGen(str);
+}
 void AstFScanF::dump(std::ostream& str) const {
     Super::dump(str);
     str << " " << timeunit();

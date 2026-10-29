@@ -1492,6 +1492,9 @@ class AstExprStmt final : public AstNodeExpr {
     // resultp is evaluated AFTER the statement(s).
     // @astgen op1 := stmtsp : List[AstNodeStmt]
     // @astgen op2 := resultp : AstNodeExpr
+private:
+    bool m_matchItems = false;  // Statements are sequence match items
+
 public:
     AstExprStmt(FileLine* fl, AstNodeStmt* stmtsp, AstNodeExpr* resultp)
         : ASTGEN_SUPER_ExprStmt(fl) {
@@ -1501,11 +1504,15 @@ public:
     }
     ASTGEN_MEMBERS_AstExprStmt;
     // METHODS
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
     bool isPure() override;
     bool sameNode(const AstNode*) const override { return true; }
+    bool matchItems() const { return m_matchItems; }
+    void matchItems(bool flag) { m_matchItems = flag; }
 };
 class AstFError final : public AstNodeExpr {
     // @astgen op1 := filep : AstNodeExpr

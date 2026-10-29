@@ -901,6 +901,18 @@ module t;
         else begin
         end
     end
+    begin : assert_prop_match_item
+        assert property (@(posedge clk) 
+            ???? // IMPLICATION
+            $_EXPRSTMT(
+                $display("match");
+                , in);
+            in
+        ) begin
+        end
+        else begin
+        end
+    end
     begin : assert_prop_overlap_fb
         assert property (@(posedge clk) 
             ???? // IMPLICATION
