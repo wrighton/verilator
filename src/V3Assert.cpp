@@ -226,21 +226,28 @@ static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* er
         }
         return;
     }
+    // A '$' maximum is legal, but is not an expression to constify
+    const bool unbounded = VN_IS(nodep->maxCountp(), Unbounded);
     // Accessors are re-fetched after constifyParamsEdit, as it can replace the node in-tree
     V3Const::constifyParamsEdit(nodep->countp());
-    V3Const::constifyParamsEdit(nodep->maxCountp());
+    if (!unbounded) V3Const::constifyParamsEdit(nodep->maxCountp());
     const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
     const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
-    if (!minConstp || !maxConstp) {
+    if (!minConstp || (!maxConstp && !unbounded)) {
         errp->v3error(std::string{kind}
                       + " repetition range bounds must be constant expressions"
                         " (IEEE 1800-2023 16.9.2)");
         if (!minConstp) replaceSvaRepCount(nodep->countp());
-        if (!maxConstp) replaceSvaRepCount(nodep->maxCountp());
+        if (!maxConstp && !unbounded) replaceSvaRepCount(nodep->maxCountp());
     } else if (minConstp->toSInt() < 0) {
         errp->v3error(std::string{kind}
                       + " repetition range min count must be non-negative"
                         " (IEEE 1800-2023 16.9.2)");
+    } else if (unbounded) {
+        nodep->maxCountp()->v3warn(E_UNSUPPORTED,
+                                   "Unsupported: " << kind
+                                                   << " repetition range with '$' maximum"
+                                                      " (IEEE 1800-2023 16.9.2)");
     } else if (maxConstp->toSInt() < minConstp->toSInt()) {
         errp->v3error(std::string{kind}
                       + " repetition range max count must be >= min count"
