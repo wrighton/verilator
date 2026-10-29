@@ -56,6 +56,8 @@ $unit::DerivedMonitor::derived_cg.cp_inherited.hi: 8
 $unit::DerivedMonitor::derived_cg.cp_inherited.lo: 8
 $unit::DerivedMonitor::derived_cg.cp_this_inherited.hi: 8
 $unit::DerivedMonitor::derived_cg.cp_this_inherited.lo: 8
+$unit::ExprClockMonitor::expr_cg.cp_expr.hi: 8
+$unit::ExprClockMonitor::expr_cg.cp_expr.lo: 8
 $unit::GlobalCg.cp_global.auto_0: 0
 $unit::GlobalCg.cp_global.auto_1: 0
 $unit::GlobalCg.cp_global.auto_10: 0
