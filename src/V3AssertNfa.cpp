@@ -1611,11 +1611,14 @@ class SvaNfaBuilder final {
         BuildResult result = buildExpr(nodep->rhsp(), entryVtxp, isTopLevelStep);
         m_temporalGuardStack.pop_back();
         if (!checkFinal) return result;
+        // The guard must also hold on the tick of the final check, which without a final
+        // condition, as for a within or an and, is the tick the terminal vertex is reached
         if (AstNodeExpr* finalCondp = result.finalCondp) {
-            // The guard must also hold on the tick of the final check
             if (finalCondp->backp()) finalCondp = finalCondp->cloneTreePure(false);
             result.finalCondp = new AstLogAnd{nodep->fileline(), finalCondp,
                                               sampled(nodep->lhsp()->cloneTreePure(false))};
+        } else if (result.valid()) {
+            result.finalCondp = sampled(nodep->lhsp()->cloneTreePure(false));
         }
         return result;
     }
