@@ -1,0 +1,22 @@
+%Error: t/t_param_type_value_bad.v:31:10: Parameter type pin value isn't a type: Param 'T' of 'u_ifc'
+                                        : ... note: In instance 't'
+   31 |   ifc #(.T(5)) u_ifc ();   
+      |          ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_param_type_value_bad.v:27:10: Parameter type pin value isn't a type: Param 'T' of 'u_named'
+                                        : ... note: In instance 't'
+   27 |   sub #(.T(5)) u_named ();   
+      |          ^
+%Error: t/t_param_type_value_bad.v:28:9: Parameter type pin value isn't a type: Param 'T' of 'u_ordered'
+                                       : ... note: In instance 't'
+   28 |   sub #(5) u_ordered ();   
+      |         ^
+%Error: t/t_param_type_value_bad.v:30:25: Parameter type pin value isn't a type: Param 'T' of 'u_defparam'
+                                        : ... note: In instance 't'
+   30 |   defparam u_defparam.T = 5;   
+      |                         ^
+%Error: t/t_param_type_value_bad.v:32:9: Parameter type pin value isn't a type: Param 'T' of 'Cls'
+                                       : ... note: In instance 't'
+   32 |   Cls #(5) c;   
+      |         ^
+%Error: Exiting due to
