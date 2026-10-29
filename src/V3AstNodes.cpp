@@ -572,6 +572,38 @@ bool AstNode::isDisableQueuePushSelfStmt() {
     return false;
 }
 
+// First reference in 'nodep' to the state of the instance declaring it, or nullptr
+static const AstNode* instanceStateRefp(const AstNode* nodep,
+                                        const std::unordered_set<const AstVar*>& ownVarps,
+                                        std::unordered_set<const AstNodeFTask*>& visitedr) {
+    // 'ownVarps' are the class's own variables, also those V3Begin and V3Fork create in it;
+    // 'visitedr' are the tasks already searched
+    const AstNode* foundp = nullptr;
+    nodep->exists([&](const AstNode* refp) {
+        bool found = false;
+        if (const AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
+            // Not to a member of a package (with classOrPackagep), nor to an automatic variable
+            // of a module task (V3Begin makes its static ones variables of the module)
+            const AstVar* const varp = varRefp->varp();
+            found = !varRefp->classOrPackagep() && !ownVarps.count(varp) && !varp->isParam()
+                    && (!varp->isFuncLocalSticky() || varp->lifetime().isStatic());
+        } else if (VN_IS(refp, FuncRef) || VN_IS(refp, TaskRef)) {
+            // Not a method call, as through an object. A task of a class is searched with its
+            // class, one of a package has no instance, and one not yet linked is inherited.
+            const AstNodeFTaskRef* const taskRefp = VN_AS(refp, NodeFTaskRef);
+            const AstNodeFTask* const taskp = taskRefp->taskp();
+            found = !taskRefp->classOrPackagep() && taskp && visitedr.insert(taskp).second
+                    && instanceStateRefp(taskp, ownVarps, visitedr);
+        } else {
+            // A hierarchical reference is relative to the instance
+            found = VN_IS(refp, VarXRef);
+        }
+        if (found) foundp = refp;
+        return found;
+    });
+    return foundp;
+}
+
 //======================================================================
 // Ast* methods (except AstNode:: tree methods which generally go in V3Ast.cpp)
 // dist-ast-style-sort
@@ -1148,6 +1180,14 @@ string AstClass::embeddedCovergroupName() const {
     UASSERT_OBJ(VString::startsWith(origName(), prefix), this,
                 "Not the type of an embedded covergroup");
     return origName().substr(prefix.size());
+}
+const AstNode* AstClass::instanceStateRefp() const {
+    // Variables of the instance, and its tasks using them, but not parameters, as each
+    // parameterization is a different design unit
+    std::unordered_set<const AstVar*> ownVarps;
+    foreach([&](const AstVar* varp) { ownVarps.insert(varp); });
+    std::unordered_set<const AstNodeFTask*> visited;
+    return ::instanceStateRefp(this, ownVarps, visited);
 }
 bool AstClass::isCacheableChild(const AstNode* nodep) {
     return VN_IS(nodep, Var) || VN_IS(nodep, Typedef) || VN_IS(nodep, ParamTypeDType)

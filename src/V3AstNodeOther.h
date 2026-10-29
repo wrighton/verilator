@@ -3440,6 +3440,8 @@ public:
     // Return true if this class is an extension of base class (SLOW)
     // Accepts nullptrs
     static bool isClassExtendedFrom(const AstClass* refClassp, const AstClass* baseClassp);
+    // First reference in this class to the state of the instance declaring it, or nullptr
+    const AstNode* instanceStateRefp() const;
     uint32_t declTokenNum() const override { return m_declTokenNum; }
     void declTokenNumSetMin(uint32_t tokenNum) override {
         m_declTokenNum = std::min(m_declTokenNum, tokenNum);

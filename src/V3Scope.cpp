@@ -211,6 +211,18 @@ class ScopeVisitor final : public VNVisitor {
         // ***Note m_scopep is passed back to the caller of the routine (above)
     }
     void visit(AstClass* nodep) override {
+        // The scope of the first instance of the containing module serves all instances
+        if (m_classOrPackageScopes.count(nodep)) return;
+        if (!m_last) {
+            // V3Param copies a module per instance for such a reference, but not an
+            // interface, as a virtual interface may refer to any instance
+            if (const AstNode* const refp = nodep->instanceStateRefp()) {
+                refp->v3warn(E_UNSUPPORTED,
+                             "Unsupported: Class referencing "
+                                 << refp->prettyNameQ() << " of " << m_modp->verilogKwd() << " "
+                                 << m_modp->prettyNameQ() << " instantiated more than once");
+            }
+        }
         // Create required blocks and add to module
         VL_RESTORER(m_scopep);
         VL_RESTORER(m_aboveCellp);
