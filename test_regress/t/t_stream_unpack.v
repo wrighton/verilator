@@ -359,6 +359,62 @@ module t;
         `checkh(arr2d_24[1][1], 24'h345678);
       end
 
+      // Descending inner dimensions, still streamed left to right
+      begin
+        automatic logic [1:0] arr_ad [2][1:0];
+        automatic logic [1:0] arr_da [1:0][2];
+        automatic logic [3:0] arr_ddd [1:0][3:2][1:0];
+        automatic logic [3:0] arr_ada [0:1][3:2][0:1];
+        automatic logic [23:0] arr_ad_w [2][2:1];
+        automatic logic [7:0] packed_8;
+        automatic logic [31:0] packed_32;
+        automatic logic [95:0] packed_96;
+
+        packed_8 = 8'hb4;
+        arr_ad = {>>{packed_8}};
+        `checkh(arr_ad[0][1], 2'h2);
+        `checkh(arr_ad[0][0], 2'h3);
+        `checkh(arr_ad[1][1], 2'h1);
+        `checkh(arr_ad[1][0], 2'h0);
+        arr_da = {>>{packed_8}};
+        `checkh(arr_da[1][0], 2'h2);
+        `checkh(arr_da[1][1], 2'h3);
+        `checkh(arr_da[0][0], 2'h1);
+        `checkh(arr_da[0][1], 2'h0);
+        arr_ad = '{'{2'h1, 2'h3}, '{2'h2, 2'h0}};
+        packed_8 = {>>{arr_ad}};
+        `checkh(packed_8, 8'h78);
+        arr_da = '{'{2'h1, 2'h3}, '{2'h2, 2'h0}};
+        {>>{packed_8}} = arr_da;
+        `checkh(packed_8, 8'h78);
+
+        packed_32 = 32'h01234567;
+        arr_ddd = {>>{packed_32}};
+        `checkh(arr_ddd[1][3][1], 4'h0);
+        `checkh(arr_ddd[1][2][0], 4'h3);
+        `checkh(arr_ddd[0][3][1], 4'h4);
+        `checkh(arr_ddd[0][2][0], 4'h7);
+        arr_ddd[1][2][0] = 4'h9;
+        packed_32 = {>>{arr_ddd}};
+        `checkh(packed_32, 32'h01294567);
+        packed_32 = 32'h89abcdef;
+        arr_ada = {>>{packed_32}};
+        `checkh(arr_ada[0][3][0], 4'h8);
+        `checkh(arr_ada[0][2][1], 4'hb);
+        `checkh(arr_ada[1][3][1], 4'hd);
+        `checkh(arr_ada[1][2][0], 4'he);
+        arr_ada[0][2][1] = 4'h1;
+        packed_32 = {>>{arr_ada}};
+        `checkh(packed_32, 32'h89a1cdef);
+
+        packed_96 = 96'h123456_789abc_def012_345678;
+        arr_ad_w = {>>{packed_96}};
+        `checkh(arr_ad_w[0][2], 24'h123456);
+        `checkh(arr_ad_w[0][1], 24'h789abc);
+        `checkh(arr_ad_w[1][2], 24'hdef012);
+        `checkh(arr_ad_w[1][1], 24'h345678);
+      end
+
       // 2D Array of QData (64-bit) Elements Test
       begin
         automatic logic [127:0] packed_128;

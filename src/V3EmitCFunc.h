@@ -237,6 +237,23 @@ public:
         else if (VN_IS(dtp, QueueDType) || VN_IS(dtp, DynArrayDType))
             puts("R");
     }
+    // Return a call reversing the descending dimensions of an unpacked array, "" if none
+    static std::string unpackReverseCall(const AstNodeDType* dtypep) {
+        // VL_PACK_*/VL_UNPACK_* take each dimension in element order, but streaming is left to
+        // right (IEEE 1800-2023 11.4.14), so every descending dimension must be reversed
+        std::string args;
+        size_t usedLength = 0;  // Length of args up to the last reversed dimension
+        while (const AstUnpackArrayDType* const adtypep
+               = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
+            if (!args.empty()) args += ", ";
+            const bool reverse = !adtypep->declRange().ascending();
+            args += reverse ? "1" : "0";
+            if (reverse) usedLength = args.size();
+            dtypep = adtypep->subDTypep();
+        }
+        if (!usedLength) return "";
+        return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
+    }
     void emitScIQW(AstVar* nodep) {
         UASSERT_OBJ(nodep->isSc(), nodep, "emitting SystemC operator on non-SC variable");
         puts(nodep->isScBigUint()                           ? "SB"
@@ -532,23 +549,13 @@ public:
     void visit(AstCvtArrayToPacked* nodep) override {
         AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefp();
         AstNodeDType* const elemDtp = fromDtp->subDTypep()->skipRefp();
-        const bool descending = [&]() {
-            if (const AstUnpackArrayDType* const unpackDtp = VN_CAST(fromDtp, UnpackArrayDType))
-                return !unpackDtp->declRange().ascending();
-            return false;
-        }();
         puts("VL_PACK_");
         emitIQW(nodep);
         puts("_");
         emitRU(fromDtp);
         emitIQW(elemDtp);
-        if (descending) {
-            // Wrap source in VL_PACK_REVERSED so VL_PACK sees ascending order
-            emitOpName(nodep, "(%nw, %rw, %P, VL_PACK_REVERSED(%li))", nodep->fromp(), elemDtp,
-                       nullptr);
-        } else {
-            emitOpName(nodep, "(%nw, %rw, %P, %li)", nodep->fromp(), elemDtp, nullptr);
-        }
+        emitOpName(nodep, "(%nw, %rw, %P, " + unpackReverseCall(fromDtp) + "(%li))",
+                   nodep->fromp(), elemDtp, nullptr);
     }
 
     void visit(AstCvtUnpackToQueue* nodep) override {
@@ -634,7 +641,7 @@ public:
         bool paren = true;
         bool decind = false;
         bool rhs = true;
-        bool reverseUnpack = false;  // Set for descending CvtPackedToArray
+        std::string reverseUnpackCall;  // Set for CvtPackedToArray with descending dimensions
         const AstUnpackArrayDType* const unpackDtp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (AstSel* const selp = VN_CAST(nodep->lhsp(), Sel)) {
@@ -705,8 +712,7 @@ public:
             puts(", ");
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
-            // Descending unpacked dest: reverse after unpack
-            if (unpackDtp && !unpackDtp->declRange().ascending()) reverseUnpack = true;
+            reverseUnpackCall = unpackReverseCall(castp->dtypep());
         } else if (const AstCvtArrayToArray* const castp
                    = VN_CAST(nodep->rhsp(), CvtArrayToArray)) {
             if (castp->reverse()) {
@@ -767,8 +773,9 @@ public:
         if (paren) puts(")");
         if (decind) ofp()->blockDec();
         puts(";\n");
-        if (reverseUnpack) {
-            puts("VL_UNPACK_REVERSED(");
+        if (!reverseUnpackCall.empty()) {
+            iterateAndNextConstNull(nodep->lhsp());
+            puts(" = " + reverseUnpackCall + "(");
             iterateAndNextConstNull(nodep->lhsp());
             puts(");\n");
         }
