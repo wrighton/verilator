@@ -554,6 +554,7 @@ module t (/*AUTOARG*/
   assert_prop_s_always: assert property (@(posedge clk) s_always [1:2] in);
   assert_prop_overlap_impl: assert property (@(posedge clk) in |-> in);
   assert_prop_nonoverlap_impl: assert property (@(posedge clk) in |=> in);
+  assert_prop_match_item: assert property (@(posedge clk) (in, $display("match")) |-> in);
   assert_prop_overlap_fb: assert property (@(posedge clk) in #-# in);
   assert_prop_nonoverlap_fb: assert property (@(posedge clk) in #=# in);
   assert_prop_accept_on: assert property (@(posedge clk) accept_on (in) in);
