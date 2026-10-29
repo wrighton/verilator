@@ -1731,6 +1731,29 @@ class ConstVisitor final : public VNVisitor {
         return true;
     }
 
+    bool packStringStreamOperand(AstCvtPackString* nodep) {
+        // Pack a fixed-size unpacked stream operand, so the stream converts as a packed one
+        AstNodeStream* const streamp = VN_CAST(nodep->lhsp(), NodeStream);
+        if (!streamp || !VN_IS(streamp->dtypep(), StreamDType)) return false;
+        AstNodeExpr* const fromp = streamp->lhsp();
+        if (!fromp->dtypep()->isStreamableFixedAggregate()) return false;
+        fromp->unlinkFrBack();
+        AstNodeExpr* packedp;
+        if (lowerAsFixedAggregate(fromp->dtypep())) {
+            packedp = packFixedAggregate(fromp);
+        } else {
+            // Converted as a whole, so the operand is evaluated once
+            const int width = fromp->dtypep()->widthStream();
+            packedp = new AstCvtArrayToPacked{
+                fromp->fileline(), fromp,
+                fromp->findBitOrLogicDType(width, width, VSigning::UNSIGNED,
+                                           fromp->dtypep()->isFourstate())};
+        }
+        streamp->lhsp(packedp);
+        streamp->dtypeSetBitOrLogicUnsized(packedp->width(), packedp->widthMin(),
+                                           VSigning::UNSIGNED, packedp->isFourstateOrNoDtype());
+        return true;
+    }
     bool operandBiExtendConstShrink(AstNodeBiop* nodep) {
         // Loop unrolling favors standalone compares
         // EQ(const{width32}, EXTEND(xx{width3})) -> EQ(const{3}, xx{3})
@@ -4576,6 +4599,7 @@ class ConstVisitor final : public VNVisitor {
     TREEOP ("AstShiftL{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstShiftR{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstWordSel{operandWordOOB(nodep)}",        "replaceZero(nodep)");
+    TREEOPV("AstCvtPackString{packStringStreamOperand(nodep)}", "DONE");
     // Compress out EXTENDs to appease loop unroller
     TREEOPV("AstEq    {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
     TREEOPV("AstNeq   {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
