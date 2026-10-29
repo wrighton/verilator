@@ -2171,10 +2171,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             AstPin* outpinp = nullptr;
             AstVar* const outModVarp = m_varAux(nodep->modVarp()).outVarp;
             if (!outModVarp) {
-                // At top, no need for __out as might be input only. Otherwise resolvable.
+                // The port has an enable, as its 'z' value is read, but no tristate driver.
+                // Under the top wrapper the enable is a top-level input; below that it would
+                // have to come from the instantiating module, which is not implemented.
                 if (!m_modp->isTop()) {
-                    nodep->v3warn(E_UNSUPPORTED, "Unsupported: tristate in top-level IO: "
-                                                     << nodep->prettyNameQ());
+                    nodep->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: high-impedance value read on a port below the "
+                                  "top-level module: "
+                                      << nodep->modVarp()->prettyNameQ());
                 }
             } else {
                 AstNodeExpr* const outexprp = VN_AS(nodep->exprp(), NodeExpr)

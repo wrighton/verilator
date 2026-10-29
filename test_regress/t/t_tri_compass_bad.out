@@ -1,4 +1,4 @@
-%Error-UNSUPPORTED: t/t_tri_compass_bad.v:17:7: Unsupported: tristate in top-level IO: '__pinNumber1'
+%Error-UNSUPPORTED: t/t_tri_compass_bad.v:17:7: Unsupported: high-impedance value read on a port below the top-level module: 'i'
                                               : ... note: In instance 't'
    17 |       i,
       |       ^
