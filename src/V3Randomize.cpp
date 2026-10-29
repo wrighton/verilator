@@ -3765,6 +3765,7 @@ class CaptureVisitor final : public VNVisitor {
     std::set<AstNode*> m_ignore;  // Nodes to ignore for capturing
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     bool m_staticContext = false;  // True when capturing from a static function context
+    bool m_thisIsTarget = false;  // True when the caller's 'this' is the randomized object
 
     // METHODS
 
@@ -3884,7 +3885,8 @@ class CaptureVisitor final : public VNVisitor {
         // Propagate random-dependence marking; forcing it on read-only operands
         // would route them through the solver write path.
         if (!m_targetp && nodep->user1()) memberSelp->user1(true);
-        memberSelp->user2p(m_targetp);
+        // Only then is a member of the caller also a member of the randomized object
+        if (m_thisIsTarget) memberSelp->user2p(m_targetp);
         nodep->replaceWith(memberSelp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         m_ignore.emplace(memberSelp);
@@ -3970,10 +3972,11 @@ class CaptureVisitor final : public VNVisitor {
 
 public:
     explicit CaptureVisitor(AstNode* const nodep, AstNodeModule* callerp, AstClass* const targetp,
-                            bool staticContext = false)
+                            bool staticContext = false, bool thisIsTarget = false)
         : m_callerp{callerp}
         , m_targetp{targetp}
-        , m_staticContext{staticContext} {
+        , m_staticContext{staticContext}
+        , m_thisIsTarget{thisIsTarget} {
         iterateAndNextNull(nodep);
     }
 
@@ -6723,7 +6726,8 @@ class RandomizeVisitor final : public VNVisitor {
         }
 
         // Detach the expression and prepare variable copies
-        const CaptureVisitor captured{withp->exprp(), m_modp, classp};
+        const CaptureVisitor captured{withp->exprp(), m_modp, classp, false,
+                                      !VN_IS(nodep, MethodCall)};
         // Add function arguments
         captured.addFunctionArguments(randomizeFuncp);
 
