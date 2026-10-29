@@ -60,6 +60,8 @@ public:
     // Relink a body inlined at instp to the instancing scope, returning the possibly replaced body
     static AstNode* relinkSvaInstanceBody(AstNode* bodyp,
                                           const AstSchemaRef* instp) VL_MT_DISABLED;
+    // Remove the reduction of each single-bit actual argument substituted for a formal argument
+    static void removeActualReductions(const std::vector<AstNodeExpr*>& actualps) VL_MT_DISABLED;
 };
 
 class V3Assert final {

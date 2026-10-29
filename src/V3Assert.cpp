@@ -482,6 +482,19 @@ AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstSchemaRe
     return bodyp;
 }
 
+void V3AssertCommon::removeActualReductions(const std::vector<AstNodeExpr*>& actualps) {
+    // V3Width reduces a reference to an untyped formal argument used as a boolean, as its type is
+    // only known from the actual argument (IEEE 1800-2023 16.8). A sequence or property
+    // instance is not an operand of a reduction, and for any other single-bit actual argument the
+    // reduction is an identity.
+    for (AstNodeExpr* const actualp : actualps) {
+        AstRedOr* const redOrp = VN_CAST(actualp->firstAbovep(), RedOr);
+        if (!redOrp || actualp->width() != 1) continue;
+        redOrp->replaceWith(actualp->unlinkFrBack());
+        VL_DO_DANGLING(redOrp->deleteTree(), redOrp);
+    }
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
