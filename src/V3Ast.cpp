@@ -1723,6 +1723,11 @@ static const AstNodeDType* computeCastableBase(const AstNodeDType* nodep) {
     }
 }
 
+// Whether an unpacked struct or union
+static bool isUnpackedUOrStruct(const AstNodeDType* dtypep) {
+    return VN_IS(dtypep, NodeUOrStructDType) && dtypep->isCompound();
+}
+
 static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDType* fromDtp,
                                     const AstNode* fromConstp, const bool checkIfaceArgCompat) {
     const VCastable castable = VCastable::UNSUPPORTED;
@@ -1742,6 +1747,17 @@ static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDTyp
         = VN_IS(toBaseDtp, BasicDType) || VN_IS(toBaseDtp, NodeUOrStructDType);
 
     if (toBaseDtp == fromBaseDtp) return VCastable::COMPATIBLE;
+
+    // An unpacked struct or union is not assignment compatible with a basic type, so converts
+    // only by a bit-stream cast, which needs an integral type or (unsupported) a string
+    // (IEEE 1800-2023 6.24.1, 6.24.3)
+    const AstBasicDType* const structOtherBasicp
+        = isUnpackedUOrStruct(fromBaseDtp) ? VN_CAST(toBaseDtp, BasicDType)
+          : isUnpackedUOrStruct(toBaseDtp) ? VN_CAST(fromBaseDtp, BasicDType)
+                                           : nullptr;
+    if (structOtherBasicp && !structOtherBasicp->isIntegralOrPacked()) {
+        return structOtherBasicp->isString() ? VCastable::UNSUPPORTED : VCastable::INCOMPATIBLE;
+    }
 
     if (toNumericable) {
         if (fromNumericable) return VCastable::COMPATIBLE;

@@ -1,0 +1,26 @@
+%Error: t/t_cast_struct_bad.v:25:13: Incompatible types to static cast to 'real' from 'struct t.us_t'
+                                   : ... note: In instance 't'
+   25 |     r = real'(us);   
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_struct_bad.v:26:16: Incompatible types to static cast to 'real' from 'struct t.us_t'
+                                   : ... note: In instance 't'
+   26 |     rt = real_t'(us);   
+      |                ^
+%Error: t/t_cast_struct_bad.v:27:14: Incompatible types to static cast to 'struct t.us_t' from 'real'
+                                   : ... note: In instance 't'
+   27 |     us = us_t'(r);   
+      |              ^
+%Error: t/t_cast_struct_bad.v:28:13: Incompatible types to static cast to 'real' from 'union t.uu_t'
+                                   : ... note: In instance 't'
+   28 |     r = real'(uu);   
+      |             ^
+%Error: t/t_cast_struct_bad.v:29:14: Incompatible types to static cast to 'union t.uu_t' from 'real'
+                                   : ... note: In instance 't'
+   29 |     uu = uu_t'(rt);   
+      |              ^
+%Error: t/t_cast_struct_bad.v:30:11: Neither 'real' or 'struct t.us_t' is castable to the other one
+                                   : ... note: In instance 't'
+   30 |     r = c ? r : us;   
+      |           ^
+%Error: Exiting due to
