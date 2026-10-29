@@ -6870,7 +6870,7 @@ pexpr<nodeExprp>:  // IEEE: property_expr  (The name pexpr is important as regex
         |       yS_NEXTTIME '[' constExpr ']' pexpr %prec yS_NEXTTIME
                         { $$ = $5; BBUNSUP($1, "Unsupported: s_nexttime[] (in property expression)"); DEL($3); }
         |       yALWAYS pexpr  %prec prALWAYS
-                        { $$ = $2; }
+                        { $$ = new AstPropAlways{$1, $2, new AstConst{$1, 0}, new AstUnbounded{$1}, false}; }
         |       yALWAYS '[' constExpr ':' constExpr ']' pexpr  %prec prALWAYS
                         { $$ = new AstPropAlways{$1, $7, $3, $5, false}; }
         |       yS_ALWAYS '[' constExpr ':' constExpr ']' pexpr  %prec prS_ALWAYS

@@ -1987,8 +1987,8 @@ class WidthVisitor final : public VNVisitor {
             }
             if (hasPropertyOp) {
                 nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported: property/sequence operator inside bounded"
-                              " always (IEEE 1800-2023 16.12.11)");
+                              "Unsupported: property/sequence operator inside always"
+                              " (IEEE 1800-2023 16.12.11)");
             }
             VL_DO_DANGLING(fixWidthReduce(propp), propp);
             nodep->dtypeSetBit();
@@ -7499,6 +7499,16 @@ class WidthVisitor final : public VNVisitor {
                 untilp->v3warn(E_NOTIMING, untilp->verilogKwd() << " requires --timing");
                 untilp->replaceWith(new AstConst{untilp->fileline(), AstConst::BitFalse{}});
                 VL_DO_DANGLING(pushDeletep(untilp), untilp);
+            }
+            AstPropAlways* const alwaysp = VN_CAST(nodep->propp(), PropAlways);
+            if (alwaysp && VN_IS(alwaysp->hiBoundp(), Unbounded) && !alwaysp->isStrong()
+                && VN_IS(alwaysp->loBoundp(), Const)
+                && VN_AS(alwaysp->loBoundp(), Const)->isZero()) {
+                // A whole property always [0:$] p, e.g. `always p`, is reduced to p, as is
+                // equivalent when the property is attempted at every tick. Unlike under
+                // always, p may then contain property operators.
+                alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(alwaysp), alwaysp);
             }
             iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);
             userIterateAndNext(nodep->sensesp(), nullptr);

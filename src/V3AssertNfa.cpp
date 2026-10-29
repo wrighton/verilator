@@ -869,12 +869,18 @@ class SvaNfaBuilder final {
             // have clocked edges into it, so with lo == 0 the entry, which may be
             // reached by a link, checks the first tick itself.
             UASSERT_OBJ(!nodep->isStrong(), nodep, "Unbounded always must be weak (V3Width)");
+            if (!isTopLevelStep) {
+                // Only a top-level step rejects, so an enclosing operator would never see it fail
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: unbounded 'always' in complex property expression");
+                return BuildResult::failWithError();
+            }
             SvaStateVertex* const sinkp = m_graph.createStateVertex();
             sinkp->m_isRejectSink = true;
             const auto addCheck = [&](SvaStateVertex* fromp) {
                 SvaTransEdge* const rejEdgep
                     = guardedLink(fromp, sinkp, sampled(propp->cloneTreePure(false)), flp);
-                if (isTopLevelStep) rejEdgep->m_rejectOnFail = true;
+                rejEdgep->m_rejectOnFail = true;
             };
             SvaStateVertex* const holdp = scopedCreateVertex();
             if (lo == 0) {
@@ -3547,6 +3553,22 @@ class AssertNfaVisitor final : public VNVisitor {
         while (AstLogNot* const notp = VN_CAST(seqBodyp, LogNot)) {
             negated = !negated;
             seqBodyp = notp->lhsp();
+        }
+
+        // A negated unbounded always passes when its operand fails, which the NFA cannot
+        // express as it has no pending state for the always
+        const AstNode* negAlwaysp = nullptr;
+        propp->exists([&](const AstLogNot* notp) {
+            return notp->exists([&](const AstPropAlways* alwaysp) {
+                if (VN_IS(alwaysp->hiBoundp(), Unbounded)) negAlwaysp = alwaysp;
+                return negAlwaysp != nullptr;
+            });
+        });
+        if (negAlwaysp) {
+            negAlwaysp->v3warn(E_UNSUPPORTED,
+                               "Unsupported: unbounded 'always' in a negated property");
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return;
         }
 
         const char* const propertyControlp
