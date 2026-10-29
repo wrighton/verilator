@@ -390,6 +390,7 @@ class WidthVisitor final : public VNVisitor {
     AstProperty* m_propertyp = nullptr;  // Current property
     AstNodeModule* m_modep = nullptr;  // Current module
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
+    bool m_inConstraintExpr = false;  // Under a class or inline ('with') constraint expression
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
     const AstNode* m_writerp = nullptr;  // Assignment, release or pin whose lvalue is iterated
     const AstWith* m_withp = nullptr;  // Current 'with' statement
@@ -3928,6 +3929,8 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->rhssp(), WidthVP{SELF, BOTH}.p());
     }
     void visit(AstConstraintExpr* nodep) override {
+        VL_RESTORER(m_inConstraintExpr);
+        m_inConstraintExpr = true;
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
     }
     void visit(AstConstraintForeach* nodep) override {
@@ -4369,7 +4372,7 @@ class WidthVisitor final : public VNVisitor {
         // V3Randomize lowers a constraint dist to range comparisons and picks, which need
         // concrete bounds, so replace '$' by the lowest or highest value of the type of the
         // dist expression (IEEE 1800-2023 18.5.3, 11.4.13)
-        if (m_constraintp && nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+        if (m_inConstraintExpr && nodep->exprp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
             for (AstDistItem* const itemp : nodep->itemspList()) {
                 if (AstInsideRange* const irp = VN_CAST(itemp->rangep(), InsideRange)) {
                     replaceDistUnbounded(irp->lhsp(), nodep->exprp(), false);
@@ -4420,7 +4423,7 @@ class WidthVisitor final : public VNVisitor {
         // Inside a constraint, V3Randomize handles dist lowering with proper weights,
         // but only for simple scalar/range items. Container-type items (queues, arrays)
         // must be lowered here via insideItem() which knows how to expand them.
-        if (m_constraintp) {
+        if (m_inConstraintExpr) {
             bool canLower = true;
             for (AstDistItem* const ditemp : nodep->itemspList()) {
                 if (VN_IS(ditemp->rangep(), InsideRange)) continue;
