@@ -3032,6 +3032,27 @@ class AssertNfaVisitor final : public VNVisitor {
         return callp;
     }
 
+    // Report a goto or nonconsecutive repetition in nodep with a sequence operand, true if any
+    static bool reportSequenceRepOperand(const AstNode* nodep) {
+        // Their operand is an expression (IEEE 1800-2023 16.9.2). Checked after sequence instances
+        // are inlined, as an instance or an untyped formal argument may hide a sequence.
+        return nodep->exists([](const AstNodeExpr* repp) {
+            const AstNodeExpr* operandp = nullptr;
+            const char* kindp = nullptr;
+            if (const AstSGotoRep* const gotop = VN_CAST(repp, SGotoRep)) {
+                operandp = gotop->exprp();
+                kindp = "Goto";
+            } else if (const AstSNonConsRep* const nonConsp = VN_CAST(repp, SNonConsRep)) {
+                operandp = nonConsp->exprp();
+                kindp = "Nonconsecutive";
+            }
+            if (!operandp || !hasMultiCycleExpr(operandp)) return false;
+            repp->v3error(kindp << " repetition operand must be a boolean expression,"
+                                   " but is a sequence (IEEE 1800-2023 16.9.2)");
+            return true;
+        });
+    }
+
     static VPropStrength effectiveAssertPropStrength(const AstPropSpec* const propSpecp) {
         if (propSpecp->propStrength() != VPropStrength::DEFAULT) return propSpecp->propStrength();
         return propSpecp->fileline()->language() <= V3LangCode::L1800_2005 ? VPropStrength::STRONG
@@ -3453,6 +3474,10 @@ class AssertNfaVisitor final : public VNVisitor {
     // Reject unsupported shapes.
     // Returns the PropSpec to lower, or nullptr when fully handled here.
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
+        if (reportSequenceRepOperand(assertp->propp())) {
+            VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
+            return nullptr;
+        }
         if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
             // Leave a chain of property instances to V3AssertPre: the NFA lowering
             // reports one fail for attempts failing in the same cycle, e.g. after a goto
