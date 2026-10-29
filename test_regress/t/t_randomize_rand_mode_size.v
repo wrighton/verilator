@@ -48,6 +48,10 @@ module t;
       randomize_result = s.randomize();
       `checkd(randomize_result, 1);
       if (s.q != '{1, 2} || s.d != '{5, 6, 7}) `stop;
+      randomize_result = s.randomize() with { x == 2; };
+      `checkd(randomize_result, 1);
+      if (s.q != '{1, 2} || s.d != '{5, 6, 7}) `stop;
+      `checkd(s.x, 2);
     end
     // A state array violating its size constraint fails the randomization
     s.q = '{1, 2, 3, 4, 5};
