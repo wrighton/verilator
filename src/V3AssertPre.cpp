@@ -794,11 +794,6 @@ private:
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
     }
     void visit(AstSenTree* nodep) override {
-        if (m_inSynchDrive) {
-            nodep->v3error("Event controls cannot be used in "
-                           "synchronous drives (IEEE 1800-2023 14.16)");
-        }
-
         const AstSampled* sampledp;
         if (nodep->exists([&sampledp](const AstSampled* const sp) {
                 sampledp = sp;
@@ -890,7 +885,15 @@ private:
             iterate(nodep->lhsp());
         }
         iterate(nodep->rhsp());
-        if (nodep->timingControlp()) iterate(nodep->timingControlp());
+        if (AstNode* const controlp = nodep->timingControlp()) {
+            // Only an intra-assignment event control, not e.g. the clock of a sampled value
+            // function in the RHS
+            if (m_inSynchDrive && VN_IS(controlp, SenTree)) {
+                controlp->v3error("Event controls cannot be used in "
+                                  "synchronous drives (IEEE 1800-2023 14.16)");
+            }
+            iterate(controlp);
+        }
         // A drive without a cycle delay, also after removing '##0', updates the clockvar now
         if (m_inSynchDrive && !nodep->timingControlp()) {
             AstAssign* const assignp = new AstAssign{
