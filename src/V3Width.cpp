@@ -2282,7 +2282,16 @@ class WidthVisitor final : public VNVisitor {
         if (VN_IS(nodep->backp(), IsUnbounded)) return;  // Ok, leave
         if (VN_IS(nodep->backp(), BracketArrayDType)) return;  // Ok, leave
         if (VN_IS(nodep->backp(), QueueDType)) return;  // Ok, leave
-        if (VN_IS(nodep->aboveLoopp(), CoverBin)) return;  // V3Covergroup checks
+        const AstNode* const abovep = nodep->aboveLoopp();
+        if (VN_IS(abovep, CoverBin)) return;  // V3Covergroup checks
+        if (const AstCoverWith* const withp = VN_CAST(abovep, CoverWith)) {
+            if (nodep != withp->filterp()) return;  // Bins value, V3Covergroup checks
+        }
+        if (VN_IS(abovep, CoverBinsof)) {
+            nodep->v3error("Intersect value may not be '$', which may only bound a range "
+                           "(IEEE 1800-2023 6.20.7)");
+            return;
+        }
         if (VN_IS(nodep->backp(), InsideRange)) return;  // Ok, leave
         if (const auto* const varp = VN_CAST(nodep->backp(), Var)) {
             if (varp->isParam()) return;  // Ok, leave
