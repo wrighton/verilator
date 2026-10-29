@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_cast_struct_unsup.v:15:14: Unsupported: static cast to 'struct t.us_t' from 'string'
+                                                 : ... note: In instance 't'
+   15 |     us = us_t'(s);   
+      |              ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
