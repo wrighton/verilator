@@ -24,6 +24,9 @@ module t;
       bins set_zero[0] = values;  // <--- Bad: zero
       bins set_negative[-1] = values;  // <--- Bad: negative
       bins set_unbounded[UNBOUNDED] = values;  // <--- Bad: '$'
+      bins value = {$};  // <--- Bad: '$'
+      bins array_value[] = {1, $};  // <--- Bad: '$'
+      ignore_bins ignore_value = {UNBOUNDED};  // <--- Bad: '$'
     }
   endgroup
 
