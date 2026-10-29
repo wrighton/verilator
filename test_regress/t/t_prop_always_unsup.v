@@ -8,9 +8,10 @@ module t (input clk);
   logic a;
   logic b;
 
-  // Nested sequence/property operators inside bounded always.
+  // Nested sequence/property operators inside always.
   assert property (@(posedge clk) always [0:3] (a |-> b));
   assert property (@(posedge clk) always [0:3] (a |=> b));
   assert property (@(posedge clk) always [0:3] (a ##1 b));
+  assert property (@(posedge clk) b |-> always (a |-> b));
 
 endmodule
