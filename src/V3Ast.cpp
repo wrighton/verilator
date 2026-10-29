@@ -1599,8 +1599,10 @@ string AstNode::instanceStr() const {
         if (const AstScope* const scopep = VN_CAST(currp, Scope)) {
             return scopep->isTop() ? "" : "... note: In instance " + scopep->prettyNameQ();
         }
-        // If scopes don't exist, report an example instance of the enclosing module
-        if (const AstModule* const modp = VN_CAST(currp, Module)) {
+        // If scopes don't exist, report an example instance of the enclosing module or
+        // interface
+        const AstNodeModule* const modp = VN_CAST(currp, NodeModule);
+        if (modp && (VN_IS(modp, Module) || VN_IS(modp, Iface))) {
             const string instanceName = modp->someInstanceName();
             return instanceName.empty() ? "" : "... note: In instance '" + instanceName + "'";
         }
