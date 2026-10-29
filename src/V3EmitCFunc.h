@@ -1640,13 +1640,12 @@ public:
         }
     }
     void visit(AstToStringN* nodep) override {
-        const std::string reverseCall = EmitCUtil::unpackReverseCall(nodep->lhsp()->dtypep());
-        if (reverseCall.empty()) {
+        const std::string call = EmitCUtil::toStringCall(nodep->lhsp()->dtypep(), "%li");
+        if (call.empty()) {
             visit(static_cast<AstNodeUniop*>(nodep));
             return;
         }
-        emitOpName(nodep, "VL_TO_STRING(" + reverseCall + "(%li))", nodep->lhsp(), nullptr,
-                   nullptr);
+        emitOpName(nodep, call, nodep->lhsp(), nullptr, nullptr);
     }
     void visit(AstNodeBiop* nodep) override {
         if (nodep->emitCheckMaxWords() && nodep->widthWords() > VL_MULS_MAX_WORDS) {

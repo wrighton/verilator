@@ -1116,11 +1116,16 @@ public:
 
     // Dumping. Verilog: str = $sformatf("%p", assoc)
     std::string to_string() const {
+        return to_string([](const T_Value& value) { return VL_TO_STRING(value); });
+    }
+    // Dumping, converting each element with elemToString
+    template <typename T_Func>
+    std::string to_string(T_Func elemToString) const {
         if (m_deque.empty()) return "'{}";  // No trailing space
         std::string out = "'{";
         std::string comma;
         for (const auto& i : m_deque) {
-            out += comma + VL_TO_STRING(i);
+            out += comma + elemToString(i);
             comma = ", ";
         }
         return out + "}";
@@ -1459,11 +1464,16 @@ public:
 
     // Dumping. Verilog: str = $sformatf("%p", assoc)
     std::string to_string() const {
+        return to_string([](const T_Value& value) { return VL_TO_STRING(value); });
+    }
+    // Dumping, converting each value with valueToString
+    template <typename T_Func>
+    std::string to_string(T_Func valueToString) const {
         if (m_map.empty()) return "'{}";  // No trailing space
         std::string out = "'{";
         std::string comma;
         for (const auto& i : m_map) {
-            out += comma + VL_TO_STRING(i.first) + ":" + VL_TO_STRING(i.second);
+            out += comma + VL_TO_STRING(i.first) + ":" + valueToString(i.second);
             comma = ", ";
         }
         // Default not printed - maybe random init data
@@ -1891,10 +1901,15 @@ public:
 
     // Dumping. Verilog: str = $sformatf("%p", assoc)
     std::string to_string() const {
+        return to_string([](const T_Value& value) { return VL_TO_STRING(value); });
+    }
+    // Dumping, converting each element with elemToString
+    template <typename T_Func>
+    std::string to_string(T_Func elemToString) const {
         std::string out = "'{";
         std::string comma;
         for (int i = 0; i < N_Depth; ++i) {
-            out += comma + VL_TO_STRING(m_storage[i]);
+            out += comma + elemToString(m_storage[i]);
             comma = ", ";
         }
         return out + "}";

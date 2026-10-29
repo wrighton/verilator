@@ -94,6 +94,30 @@ std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep) {
     return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
 }
 
+std::string EmitCUtil::toStringCall(const AstNodeDType* dtypep, const std::string& expr) {
+    // Reverse descending dimensions as unpackReverseCall, also in the elements of queues,
+    // dynamic and associative arrays, which the run-time to_string converts one by one
+    dtypep = dtypep->skipRefp();
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return "";
+    if (VN_IS(dtypep, UnpackArrayDType)) {
+        const AstNodeDType* leafp = dtypep;
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(leafp, UnpackArrayDType)) {
+            leafp = adtypep->subDTypep()->skipRefp();
+        }
+        if (toStringCall(leafp, "e").empty()) {
+            const std::string reverseCall = unpackReverseCall(dtypep);
+            if (reverseCall.empty()) return "";
+            return "VL_TO_STRING(" + reverseCall + "(" + expr + "))";
+        }
+    }
+    const std::string elemCall = toStringCall(dtypep->subDTypep(), "e");
+    if (elemCall.empty()) return "";
+    const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType);
+    const bool reverse = adtypep && !adtypep->declRange().ascending();
+    return (reverse ? "VL_CVT_UNPACK_TO_UNPACK<1>(" + expr + ")" : expr)
+           + ".to_string([](const auto& e) { return " + elemCall + "; })";
+}
+
 string EmitCUtil::prefixNameProtect(const AstNode* nodep) VL_MT_STABLE {
     const string prefix = v3Global.opt.modPrefix() + "_" + VIdProtect::protect(nodep->name());
     // If all-uppercase prefix conflicts with a previous usage of the
