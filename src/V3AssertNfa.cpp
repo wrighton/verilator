@@ -3468,6 +3468,30 @@ class AssertNfaVisitor final : public VNVisitor {
         }
         return false;
     }
+    // A future value function of a multi-cycle property that V3Assert cannot lower, or nullptr
+    static const AstNode* unloweredFuturep(const AstPropSpec* propp, const PropertyParts& parts) {
+        // V3Assert evaluates the property one global clock tick late, delaying the other values
+        // of its final condition (IEEE 1800-2023 16.9.4), so future values are supported only in
+        // a boolean consequent, which stays in the final condition
+        const AstNode* futurep = nullptr;
+        const auto findFuture = [&futurep](const AstNode* nodep) {
+            if (!nodep) return;
+            nodep->exists([&futurep](const AstNode* np) {
+                if (!VN_IS(np, Future) && !VN_IS(np, Rising) && !VN_IS(np, Falling)
+                    && !VN_IS(np, Steady))
+                    return false;
+                futurep = np;
+                return true;
+            });
+        };
+        if (!parts.hasImplication || hasMultiCycleExpr(parts.seqExprp)) {
+            findFuture(propp);
+        } else {
+            findFuture(parts.triggerExprp);
+            findFuture(propp->disablep());
+        }
+        return futurep;
+    }
 
     void processAssertion(AstNodeCoverOrAssert* assertp) {
         if (assertp->immediate()) return;
@@ -3488,6 +3512,14 @@ class AssertNfaVisitor final : public VNVisitor {
 
         const char* const propertyControlp
             = unsupportedPropertyControl(assertp, seqBodyp, negated);
+
+        if (const AstNode* const futurep = unloweredFuturep(propp, parts)) {
+            futurep->v3warn(E_UNSUPPORTED, "Unsupported: future sampled value function in a"
+                                           " multi-cycle property, other than in a boolean"
+                                           " implication consequent");
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return;
+        }
 
         // Substitute property-local match-item refs in consequent with
         // $past(rhs, K) before NFA build (IEEE 1800-2023 16.10).
