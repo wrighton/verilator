@@ -986,7 +986,8 @@ class CaptureVisitor final : public VNVisitor {
             = new AstMemberRef{nodep->fileline(), thisRefp, nodep->varp()};
         // Propagate random-dependence marking only for randomize() in class method
         if (nodep->user1() && m_randomizesThis) memberRefp->user1(true);
-        memberRefp->user2p(m_targetp);
+        // Only then is a member of the caller also a member of the randomized object
+        if (m_randomizesThis) memberRefp->user2p(m_targetp);
         nodep->replaceWith(memberRefp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         m_ignore.emplace(memberRefp);
