@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_unbounded_arg_unsup.v:26:28: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                   : ... note: In instance 't'
+   26 |   assert property (p_typed($));
+      |                            ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_unbounded_arg_unsup.v:27:29: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                   : ... note: In instance 't'
+   27 |   assert property (p_struct($));
+      |                             ^
+%Error-UNSUPPORTED: t/t_unbounded_arg_unsup.v:28:17: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                   : ... note: In instance 't'
+   28 |   initial x = f($);
+      |                 ^
+%Error-UNSUPPORTED: t/t_unbounded_arg_unsup.v:29:23: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                   : ... note: In instance 't'
+   29 |   initial q.push_back($);
+      |                       ^
+%Error-UNSUPPORTED: t/t_unbounded_arg_unsup.v:32:19: Unsupported: Unbounded ('$') outside of queue or string operations
+                                                   : ... note: In instance 't'
+   32 |       main : prod($);
+      |                   ^
+%Error: Exiting due to

@@ -62,6 +62,12 @@ public:
                                           const AstSchemaRef* instp) VL_MT_DISABLED;
     // Remove the reduction of each single-bit actual argument substituted for a formal argument
     static void removeActualReductions(const std::vector<AstNodeExpr*>& actualps) VL_MT_DISABLED;
+    // Check the references of formal arguments with a '$' actual argument, before substitution,
+    // returning the possibly replaced body
+    static AstNode*
+    checkSvaUnboundedActuals(AstNode* nodep,
+                             const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
+                             AstNode* instp) VL_MT_DISABLED;
 };
 
 class V3Assert final {
