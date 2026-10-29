@@ -2058,6 +2058,13 @@ class WidthVisitor final : public VNVisitor {
     // Templated to cover AstSGotoRep and AstSNonConsRep uniformly.
     template <typename T_Rep>
     void widthCheckGotoRepRange(T_Rep* nodep, const char* kind) {
+        if (VN_IS(nodep->maxCountp(), Unbounded)) {
+            nodep->maxCountp()->v3warn(E_UNSUPPORTED,
+                                       "Unsupported: " << kind
+                                                       << " repetition range with '$' maximum"
+                                                          " (IEEE 1800-2023 16.9.2)");
+            return;
+        }
         userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
         V3Const::constifyParamsEdit(nodep->countp());
         V3Const::constifyParamsEdit(nodep->maxCountp());
