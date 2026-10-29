@@ -192,10 +192,12 @@ class AssertElabVisitor final : public VNVisitor {
         for (const auto& tconnect : tconnects) {
             portMap[tconnect.first] = tconnect.second->exprp();
         }
+        std::vector<AstNodeExpr*> actualps;
         bodyp->foreach([&](AstVarRef* refp) {
             const auto portIt = portMap.find(refp->varp());
             if (portIt != portMap.end()) {
                 AstNodeExpr* const actualp = portIt->second->cloneTree(false);
+                actualps.push_back(actualp);
                 // An assigned formal makes the actual an lvalue
                 if (refp->access().isWriteOrRW()) {
                     V3LinkLValue::linkLValueSet(actualp, refp->access());
@@ -207,6 +209,7 @@ class AssertElabVisitor final : public VNVisitor {
             const auto localIt = localVarMap.find(refp->varp());
             if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });  // LCOV_EXCL_LINE -- gcov attributes lambda's implicit return to `})`
+        V3AssertCommon::removeActualReductions(actualps);
         // Constants with a formal argument are checked once it is substituted
         checkInstanceConstants(bodyp, schemaRefp);
     }
