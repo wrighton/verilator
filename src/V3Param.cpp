@@ -3435,7 +3435,14 @@ class ParamVisitor final : public VNVisitor {
     // Make sure varrefs cause vars to constify before things above
     void visit(AstVarRef* nodep) override {
         // Might jump across functions, so beware if ever add a m_funcp
-        if (nodep->varp()) iterate(nodep->varp());
+        if (!nodep->varp()) return;
+        iterate(nodep->varp());
+        // A parameter of '$' may only be used where a literal '$' may (IEEE 1800-2023 6.20.2.1),
+        // so it is replaced by one, for later passes to handle like that literal
+        if (nodep->varp()->isParam() && VN_IS(nodep->varp()->valuep(), Unbounded)) {
+            nodep->replaceWith(new AstUnbounded{nodep->fileline()});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
     }
     bool ifaceParamReplace(AstVarXRef* nodep, AstNode* candp) {
         for (; candp; candp = candp->nextp()) {

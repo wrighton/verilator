@@ -9,4 +9,8 @@
       |     ^~
                      ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
                      ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Error-UNSUPPORTED: t/t_unbounded_bad.v:15:15: Unsupported: Unbounded ('$') outside of queue or string operations
+                                             : ... note: In instance 't'
+   15 |   initial x = P + 1;
+      |               ^
 %Error: Exiting due to

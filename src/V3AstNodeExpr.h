@@ -2287,7 +2287,7 @@ class AstSConsRep final : public AstNodeExpr {
     // op2 := countp -- min repetition count (N); always a non-negative constant after V3Width
     // op3 := maxCountp -- max repetition count (M); nullptr when exact or unbounded
     //
-    // Encoding:
+    // Encoding (after V3Width; before it, [*N:$] has maxCountp=$, unbounded=false):
     //   [*N]:   countp=N, maxCountp=nullptr, unbounded=false
     //   [*N:M]: countp=N, maxCountp=M,       unbounded=false
     //   [*N:$]: countp=N, maxCountp=nullptr,  unbounded=true
@@ -2300,7 +2300,7 @@ class AstSConsRep final : public AstNodeExpr {
     // @astgen op1 := exprp : AstNodeExpr
     // @astgen op2 := countp : AstNodeExpr
     // @astgen op3 := maxCountp : Optional[AstNodeExpr]
-    const bool m_unbounded = false;  // True when the upper bound is $
+    bool m_unbounded = false;  // True when the upper bound is $
 public:
     // Exact [*N]
     AstSConsRep(FileLine* fl, AstNodeExpr* exprp, AstNodeExpr* countp)
@@ -2329,6 +2329,7 @@ public:
         return m_unbounded == VN_DBG_AS(samep, SConsRep)->m_unbounded;  // LCOV_EXCL_LINE
     }
     bool unbounded() const { return m_unbounded; }
+    void unbounded(bool flag) { m_unbounded = flag; }
     bool isMultiCycleSva() const override { return true; }
 };
 class AstSEventually final : public AstNodeExpr {

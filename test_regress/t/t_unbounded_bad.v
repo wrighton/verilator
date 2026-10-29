@@ -8,4 +8,9 @@ module t;
   initial begin
     if ($) $stop;
   end
+
+  // A parameter of '$' may only be used where a literal '$' may (IEEE 1800-2023 6.20.2.1)
+  parameter int P = $;
+  int x;
+  initial x = P + 1;
 endmodule

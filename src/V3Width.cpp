@@ -1754,6 +1754,10 @@ class WidthVisitor final : public VNVisitor {
         // IEEE 1800-2023 16.9.2 -- consecutive repetition [*N], [*N:M], [*N:$], [+], [*]
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
+            if (VN_IS(nodep->maxCountp(), Unbounded)) {  // [*N:$], also from a parameter of '$'
+                pushDeletep(nodep->maxCountp()->unlinkFrBack());
+                nodep->unbounded(true);
+            }
             userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
             userIterateAndNext(nodep->countp(), WidthVP{SELF, BOTH}.p());
             V3Const::constifyParamsEdit(nodep->countp());
@@ -2144,6 +2148,8 @@ class WidthVisitor final : public VNVisitor {
         nodep->dtypeSetInt();  // Used in int context
         if (VN_IS(nodep->backp(), IsUnbounded)) return;  // Ok, leave
         if (VN_IS(nodep->backp(), BracketArrayDType)) return;  // Ok, leave
+        if (VN_IS(nodep->backp(), QueueDType)) return;  // Ok, leave
+        if (VN_IS(nodep->aboveLoopp(), CoverBin)) return;  // V3Covergroup checks
         if (VN_IS(nodep->backp(), InsideRange)) return;  // Ok, leave
         if (const auto* const varp = VN_CAST(nodep->backp(), Var)) {
             if (varp->isParam()) return;  // Ok, leave
