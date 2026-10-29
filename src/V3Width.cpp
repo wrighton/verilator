@@ -9148,15 +9148,18 @@ class WidthVisitor final : public VNVisitor {
         if (VN_IS(nodep->sensp(), Concat) || VN_IS(nodep->sensp(), Replicate)) {
             auto* const concatOrReplp = VN_CAST(nodep->sensp(), NodeBiop);
             auto* const rhsp = concatOrReplp->rhsp()->unlinkFrBack();
+            AstNodeExpr* const condp = nodep->condp() ? nodep->condp()->unlinkFrBack() : nullptr;
             if (nodep->edgeType() == VEdgeType::ET_CHANGED) {
                 // If it's ET_CHANGED, split concatenations into multiple senitems
                 auto* const lhsp = concatOrReplp->lhsp()->unlinkFrBack();
-                nodep->addNextHere(new AstSenItem{lhsp->fileline(), nodep->edgeType(), lhsp});
+                nodep->addNextHere(new AstSenItem{lhsp->fileline(), nodep->edgeType(), lhsp,
+                                                  condp ? condp->cloneTreePure(false) : nullptr});
             }  // Else only use the RHS
-            nodep->replaceWith(new AstSenItem{rhsp->fileline(), nodep->edgeType(), rhsp});
+            nodep->replaceWith(new AstSenItem{rhsp->fileline(), nodep->edgeType(), rhsp, condp});
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else {
-            userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
+            userIterateAndNext(nodep->sensp(), WidthVP{SELF, BOTH}.p());
+            if (nodep->condp()) iterateCheckBool(nodep, "iff condition", nodep->condp(), BOTH);
             if (nodep->edgeType().anEdge()) {
                 AstNodeDType* const sensDtp = nodep->sensp()->dtypep()->skipRefp();
                 if (sensDtp->isDouble()) {
