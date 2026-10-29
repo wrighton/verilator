@@ -4217,6 +4217,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (const AstUnlinkedRef* const unlinkedp = VN_CAST(exprp, UnlinkedRef)) {
                 exprp = unlinkedp->refp();
             }
+            // Also an element of an interface array reached hierarchically
+            while (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
+                exprp = selp->fromp();
+            }
             const AstVarXRef* const xrefp = VN_CAST(exprp, VarXRef);
             if (xrefp && xrefp->varp()->isIfaceRef()
                 && (xrefp->containsGenBlock()
@@ -4992,19 +4996,32 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_dotPos = DP_SCOPE;
                     UINFO(9, indent() << "modport -> iface varref " << foundp->nodep());
 
-                    AstCellArrayRef* const cellarrayrefp
-                        = VN_CAST(m_ds.m_unlinkedScopep, CellArrayRef);
+                    AstNode* scopep = m_ds.m_unlinkedScopep;
+                    // In 'x.iface[i].modport' only the last component is unresolved when the
+                    // hierarchical reference to 'iface' has no instance index placeholder
+                    const AstVarXRef* const xrefp = VN_CAST(newp, VarXRef);
+                    if (xrefp && xrefp->dotted().find("__BRA__??__KET__") == string::npos) {
+                        if (const AstCellRef* const crefp = VN_CAST(scopep, CellRef)) {
+                            scopep = crefp->exprp();
+                        }
+                    }
+                    AstCellArrayRef* const cellarrayrefp = VN_CAST(scopep, CellArrayRef);
                     // Only a terminal modport denotes an interface value needing SelBit.
                     // Otherwise this ParseRef is the RHS of a nested AstDot, so the enclosing
                     // AstDot must visit another ParseRef or FTaskRef before restoring DotStates.
                     // That final reference consumes CellArrayRef by constructing AstUnlinkedRef;
                     // V3Param then resolves its array index.
                     if (cellarrayrefp && lastStates.m_dotPos == DP_FINAL) {
+                        // iface[i][j].modport became CellArrayRef(iface, i, j)
+                        // Convert back to SelBit(SelBit(iface, i), j)
                         UINFO(9, indent() << "Array modport to SelBit " << cellarrayrefp);
-                        newp = new AstSelBit{cellarrayrefp->fileline(), newp,
-                                             cellarrayrefp->selp()->unlinkFrBack()};
-                        newp->user3(true);  // Don't process again
-                        VL_DO_DANGLING(pushDeletep(cellarrayrefp->unlinkFrBack()), cellarrayrefp);
+                        while (AstNodeExpr* const selp = cellarrayrefp->selp()) {
+                            newp = new AstSelBit{cellarrayrefp->fileline(), newp,
+                                                 selp->unlinkFrBack()};
+                            newp->user3(true);  // Don't process again
+                        }
+                        VL_DO_DANGLING2(pushDeletep(m_ds.m_unlinkedScopep->unlinkFrBack()), scopep,
+                                        cellarrayrefp);
                         m_ds.m_unlinkedScopep = nullptr;
                     } else if (m_ds.m_unresolvedCell && !cellarrayrefp) {
                         newp = new AstUnlinkedRef{nodep->fileline(), newp, newp->name(),
