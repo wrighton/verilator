@@ -289,13 +289,15 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         AstVar* baseVarp;  // Base enclosing-class member in the event expression
         AstVar* memberVarp;  // Selected member in a 'base.member' expression, or nullptr
         VEdgeType edgeType;  // Clocking-event edge qualifier
+        AstNodeExpr* condp;  // Clocking-event 'iff' guard (in the deleted event), or nullptr
         AstVar* prevVarp;  // Member containing the previous event value, or nullptr
         EmbeddedEventTrigger(FileLine* eventFl, AstVar* baseVarp, AstVar* memberVarp,
-                             VEdgeType edgeType)
+                             VEdgeType edgeType, AstNodeExpr* condp)
             : eventFl{eventFl}
             , baseVarp{baseVarp}
             , memberVarp{memberVarp}
             , edgeType{edgeType}
+            , condp{condp}
             , prevVarp{nullptr} {}
     };
 
@@ -4319,17 +4321,22 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return callp->makeStmt();
     }
 
+    // Route references to the covergroup's own members, e.g. its arguments, through its handle
+    void rebindCovergroupMemberRefs(AstNode* nodep) {
+        std::vector<AstVarRef*> refps;
+        nodep->foreach([&](AstVarRef* refp) {
+            if (m_memberMap.findMember(m_covergroupp, refp->varp()->name()) == refp->varp())
+                refps.push_back(refp);
+        });
+        for (AstVarRef* const refp : refps) rewriteVarRef(refp, m_embeddedVarp);
+    }
+
     void installEmbeddedEventFork(AstSenTree* eventp,
                                   const std::vector<AstNodeAssign*>& constructps) {
         // IEEE 1800-2023 19.3 samples coverpoints whenever their clocking event occurs. A
         // per-instance event cannot use V3Active's static sensitivity path, so spawn
         // 'fork forever begin @(event); cg.sample(); end join_none' after each construction.
-        // The event may read the covergroup's members, such as its arguments, of the instance.
-        eventp->foreach([&](AstVarRef* refp) {
-            if (m_memberMap.findMember(m_covergroupp, refp->varp()->name()) == refp->varp()) {
-                rewriteVarRef(refp, m_embeddedVarp);
-            }
-        });
+        rebindCovergroupMemberRefs(eventp);
         for (AstNodeAssign* const constructp : constructps) {
             FileLine* const fl = constructp->fileline();
             AstLoop* const loopp = new AstLoop{fl};
@@ -4343,7 +4350,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(eventp), eventp);
     }
 
-    AstNodeExpr* newEventReadyCondition(FileLine* fl, const EmbeddedEventTrigger& trigger) const {
+    AstNodeExpr* newEventReadyCondition(FileLine* fl, const EmbeddedEventTrigger& trigger) {
         AstNodeExpr* const curp = newEventRead(fl, trigger);
         AstNodeExpr* const prevp = new AstVarRef{fl, trigger.prevVarp, VAccess::READ};
         AstNodeExpr* edgep = nullptr;
@@ -4357,6 +4364,10 @@ class FunctionalCoverageVisitor final : public VNVisitor {
             edgep = new AstSel{fl, new AstXor{fl, curp, prevp}, 0, 1};
         } else {
             edgep = new AstNeq{fl, curp, prevp};
+        }
+        if (trigger.condp) {
+            edgep = new AstLogAnd{fl, edgep, trigger.condp->cloneTree(false)};
+            rebindCovergroupMemberRefs(edgep);
         }
         return new AstLogAnd{fl, newEmbeddedVarNonNull(fl), edgep};
     }
@@ -4372,7 +4383,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                 || !enclosingVars.count(baseVarp)) {
                 return {};
             }
-            triggers.emplace_back(itemp->fileline(), baseVarp, memberVarp, itemp->edgeType());
+            triggers.emplace_back(itemp->fileline(), baseVarp, memberVarp, itemp->edgeType(),
+                                  itemp->condp());
         }
         return triggers;
     }

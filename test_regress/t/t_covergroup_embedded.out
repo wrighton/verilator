@@ -72,6 +72,8 @@ $unit::GlobalCg.cp_global.auto_6: 0
 $unit::GlobalCg.cp_global.auto_7: 0
 $unit::GlobalCg.cp_global.auto_8: 0
 $unit::GlobalCg.cp_global.auto_9: 0
+$unit::IffClockMonitor::iff_cg.cp_iff.hi: 4
+$unit::IffClockMonitor::iff_cg.cp_iff.lo: 4
 $unit::LeafMonitor::leaf_cg.cp_cross.<hi,hi> [cross]: 0
 $unit::LeafMonitor::leaf_cg.cp_cross.<hi,lo> [cross]: 8
 $unit::LeafMonitor::leaf_cg.cp_cross.<lo,hi> [cross]: 8
