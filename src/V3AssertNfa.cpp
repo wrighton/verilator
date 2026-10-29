@@ -1475,8 +1475,14 @@ class SvaNfaBuilder final {
         // Mark entryVtxp so "cond false at tick 0" is detected as throughout-drop.
         entryVtxp->m_throughoutConds.push_back(nodep->lhsp()->cloneTreePure(false));
         m_temporalGuardStack.push_back(nodep->lhsp());
-        const BuildResult result = buildExpr(nodep->rhsp(), entryVtxp, isTopLevelStep);
+        BuildResult result = buildExpr(nodep->rhsp(), entryVtxp, isTopLevelStep);
         m_temporalGuardStack.pop_back();
+        if (AstNodeExpr* finalCondp = result.finalCondp) {
+            // The guard must also hold on the tick of the final check
+            if (finalCondp->backp()) finalCondp = finalCondp->cloneTreePure(false);
+            result.finalCondp = new AstLogAnd{nodep->fileline(), finalCondp,
+                                              sampled(nodep->lhsp()->cloneTreePure(false))};
+        }
         return result;
     }
 
@@ -2536,7 +2542,8 @@ class SvaNfaLowering final {
     }
 
     // Phase 3b: Throughout-drop and ring-wide abort rejection.
-    void computeThroughoutReject(LowerCtx& c, SignalSet& sigs, const bool needThreadFailCount) {
+    void computeThroughoutReject(LowerCtx& c, SignalSet& sigs, const bool needThreadFailCount,
+                                 std::map<int, AstNodeExpr*>& vertexFailps) {
         for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
             const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
             const auto& conds = vtxp->m_throughoutConds;
@@ -2554,7 +2561,12 @@ class SvaNfaLowering final {
                 stateExprp = vtxp->datap()->stateSigp->cloneTreePure(false);
             }
             AstNodeExpr* const rejectCondp = newThroughoutRejectCondp(c, vtxp);
-            if (needThreadFailCount) {
+            if (needThreadFailCount && !vtxp->datap()->delayRingLiveCountVarp) {
+                AstNodeExpr*& vertexFailp = vertexFailps[vtxp->color()];
+                vertexFailp = orExprs(c.flp, vertexFailp,
+                                      new AstLogAnd{c.flp, stateExprp->cloneTreePure(false),
+                                                    rejectCondp->cloneTreePure(false)});
+            } else if (needThreadFailCount) {
                 AstNodeExpr* countCondp = rejectCondp->cloneTreePure(false);
                 if (AstNodeExpr* const holdp = newRequiredStepsHoldp(c, vtxp)) {
                     countCondp = new AstLogAnd{c.flp, countCondp, holdp};
@@ -2714,6 +2726,9 @@ class SvaNfaLowering final {
         // Phase 3a: required-step rejection.
         // Builder only sets m_rejectOnFail on non-clocked Links with m_condp
         // or m_condVtxp, and the source always has a resolved stateSig.
+        // A thread failing several checks on one tick, such as its next step and a throughout
+        // guard, is one rejected thread, so count the rejections by source vertex.
+        std::map<int, AstNodeExpr*> vertexFailps;
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
             if (!tedgep->m_rejectOnFail) continue;
             const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
@@ -2732,16 +2747,19 @@ class SvaNfaLowering final {
                                     notCondp->cloneTreePure(false));
                 }
             } else if (needThreadFailCount) {
-                // thread_fail_count += fail;
-                sigs.threadFailCountp = addCountp(
-                    c.flp, sigs.threadFailCountp,
-                    new AstExtend{c.flp, rawFailp->cloneTreePure(false), m_u32DTypep->width()});
+                AstNodeExpr*& vertexFailp = vertexFailps[fromVtxp->color()];
+                vertexFailp = orExprs(c.flp, vertexFailp, rawFailp->cloneTreePure(false));
             }
             AstNodeExpr* const failp = gateNotKill(c, rawFailp);
             sigs.requiredStepRejectp = orExprs(c.flp, sigs.requiredStepRejectp, failp);
         }
 
-        computeThroughoutReject(c, sigs, needRejectCount);
+        computeThroughoutReject(c, sigs, needRejectCount, vertexFailps);
+        for (const auto& it : vertexFailps) {
+            sigs.threadFailCountp
+                = addCountp(c.flp, sigs.threadFailCountp,
+                            new AstExtend{c.flp, it.second, m_u32DTypep->width()});
+        }
         if (c.exactAbortp)
             sigs.threadFailCountp = newExactAbortFailCountp(c, sigs.threadFailCountp);
         if (sigs.threadFailCountp) {
