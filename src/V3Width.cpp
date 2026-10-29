@@ -12193,6 +12193,17 @@ public:
                                                     : new AstConcat{flp, srcp, zerop};
                         srcp->didWidth(true);
                     }
+                } else if (!lowerAsFixedAggregate(lhsDTypeSkippedRefp)
+                           && !VN_IS(srcp->dtypep(), StreamDType) && lwidth > srcp->width()) {
+                    // IEEE 1800-2023 11.4.14: A stream narrower than a fixed-size target is
+                    // left-justified, zero-filled on the right, as V3Const does for structures.
+                    // Finish the stream now, as the concatenation would reject it as its
+                    // operand when iterated.
+                    userIterate(srcp, WidthVP{SELF, FINAL, STREAM_USE_ASSIGN}.p());
+                    srcp = new AstConcat{
+                        flp, srcp,
+                        new AstConst{flp, AstConst::WidthedValue{}, lwidth - srcp->width(), 0}};
+                    srcp->didWidth(true);
                 }
                 nodep->rhsp(new AstCvtPackedToArray{flp, srcp, lhsDTypeSkippedRefp});
             }
