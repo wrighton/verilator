@@ -3309,6 +3309,8 @@ class AssertNfaVisitor final : public VNVisitor {
             = newPassOnIf(flp, nonvacuousMatchp, passsp, assertp->userType(), assertp->directive(),
                           /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
+        // Another attempt failing on the same tick runs the fail action instead
+        assertp->prependFailsp(splitsp->cloneTree(true));
         assertp->addPasssp(splitsp);
     }
 
@@ -3431,7 +3433,7 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            if (assertp->failsp()) assertp->prependFailsp(ifp->cloneTree(false));
+            assertp->prependFailsp(ifp->cloneTree(false));
         }
     }
 
@@ -3460,12 +3462,13 @@ class AssertNfaVisitor final : public VNVisitor {
                                      newTypedConstp(flp, matchCountp->dtypep(), 0)};
         }
 
-        const bool splitPasssp = splitsImplicationPasssp(assertp, parts);
-        if (splitPasssp) splitImplicationPassActions(assertAssertp, parts, matchp);
+        const bool splitImplicationPasssp = splitsImplicationPasssp(assertp, parts);
         if (assertAssertp) {
-            attachActionHandlers(assertAssertp, splitPasssp ? nullptr : matchp, senTreep,
-                                 failCountp, passCountp);
+            attachActionHandlers(assertAssertp, splitImplicationPasssp ? nullptr : matchp,
+                                 senTreep, failCountp, passCountp);
         }
+        // After the replays, which clone the fail action without the pass action prefix
+        if (splitImplicationPasssp) splitImplicationPassActions(assertAssertp, parts, matchp);
 
         AstNode* const innerPropp = propp->propp();
         innerPropp->replaceWith(outputExprp);
