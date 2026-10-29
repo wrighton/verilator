@@ -333,6 +333,47 @@ void V3AssertCommon::checkSvaPastTicks(AstPast* nodep, AstNode* errp) {
     }
 }
 
+void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
+    // Errors are reported on instp if given, else on the bound. After an error the bounds are
+    // replaced with constants, so later steps do not fail.
+    V3Const::constifyParamsEdit(nodep->loBoundp());  // loBoundp may change
+    const bool hiUnbounded = VN_IS(nodep->hiBoundp(), Unbounded);
+    if (!hiUnbounded) V3Const::constifyParamsEdit(nodep->hiBoundp());  // hiBoundp may change
+    AstNode* const loErrp = instp ? instp : nodep->loBoundp();
+    AstNode* const hiErrp = instp ? instp : nodep->hiBoundp();
+    const AstConst* const loConstp = VN_CAST(nodep->loBoundp(), Const);
+    const AstConst* const hiConstp = VN_CAST(nodep->hiBoundp(), Const);
+    bool valid = false;
+    if (!loConstp) {
+        loErrp->v3error("always range low bound must be a constant expression"
+                        " (IEEE 1800-2023 16.12.11)");
+    } else if (loConstp->toSInt() < 0) {
+        loErrp->v3error("always range low bound must be non-negative"
+                        " (IEEE 1800-2023 16.12.11)");
+    } else {
+        valid = checkSvaValueLimit(loErrp, loConstp, "always range bound");
+    }
+    if (hiUnbounded) {
+        // Weak always [m:$]
+    } else if (!hiConstp) {
+        hiErrp->v3error("always range high bound must be a constant expression"
+                        " (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    } else if (!checkSvaValueLimit(hiErrp, hiConstp, "always range bound")) {
+        valid = false;
+    } else if (loConstp && hiConstp->toSInt() < loConstp->toSInt()) {
+        hiErrp->v3error("always range high bound must be >= low bound"
+                        " (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    }
+    if (valid) return;
+    for (AstNodeExpr* const boundp : {nodep->loBoundp(), nodep->hiBoundp()}) {
+        if (VN_IS(boundp, Unbounded)) continue;
+        boundp->replaceWith(new AstConst{boundp->fileline(), AstConst::BitFalseErroring{}});
+        VL_DO_DANGLING(boundp->deleteTree(), boundp);
+    }
+}
+
 bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     return nodep->exists([](const AstNodeVarRef* refp) {
         const AstVar* const varp = refp->varp();
@@ -343,8 +384,8 @@ bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
 }
 
 void V3AssertCommon::checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) {
-    // Check the cycle delays, repetition counts and $past tick counts, now that the formal
-    // arguments are replaced with the actual arguments (IEEE 1800-2023 16.8).
+    // Check the cycle delays, repetition counts, always ranges and $past tick counts, now that
+    // the formal arguments are replaced with the actual arguments (IEEE 1800-2023 16.8).
     // A delay still referencing a formal argument of an enclosing sequence or property is
     // checked when that is instanced. Collect first, as checking edits the delays.
     std::vector<AstDelay*> delayps;
@@ -359,7 +400,7 @@ void V3AssertCommon::checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) {
     nodep->foreach([&](AstNodeExpr* exprp) {
         const AstPast* const pastp = VN_CAST(exprp, Past);
         if (VN_IS(exprp, SConsRep) || VN_IS(exprp, SGotoRep) || VN_IS(exprp, SNonConsRep)
-            || (pastp && pastp->ticksp())) {
+            || VN_IS(exprp, PropAlways) || (pastp && pastp->ticksp())) {
             if (!refsSvaFormal(exprp)) exprps.push_back(exprp);
         }
     });
@@ -370,6 +411,8 @@ void V3AssertCommon::checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) {
             checkSvaRepetition(repp, instp);
         } else if (AstSNonConsRep* const repp = VN_CAST(exprp, SNonConsRep)) {
             checkSvaRepetition(repp, instp);
+        } else if (AstPropAlways* const alwaysp = VN_CAST(exprp, PropAlways)) {
+            checkSvaAlwaysRange(alwaysp, instp);
         } else {
             checkSvaPastTicks(VN_AS(exprp, Past), instp);
         }

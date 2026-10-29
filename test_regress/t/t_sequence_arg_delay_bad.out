@@ -58,4 +58,31 @@
                                           : ... note: In instance 't'
    75 |   assert property (prop_rep_max(n))
       |                    ^~~~~~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:85:32: Expecting expression to be constant, but variable isn't const: 'n'
+   85 |   assert property (prop_always(n, 2))
+      |                                ^
+%Error: t/t_sequence_arg_delay_bad.v:85:20: always range low bound must be a constant expression (IEEE 1800-2023 16.12.11)
+                                          : ... note: In instance 't'
+   85 |   assert property (prop_always(n, 2))
+      |                    ^~~~~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:87:35: Expecting expression to be constant, but variable isn't const: 'n'
+   87 |   assert property (prop_always(1, n))
+      |                                   ^
+%Error: t/t_sequence_arg_delay_bad.v:87:20: always range high bound must be a constant expression (IEEE 1800-2023 16.12.11)
+                                          : ... note: In instance 't'
+   87 |   assert property (prop_always(1, n))
+      |                    ^~~~~~~~~~~
+%Error: t/t_sequence_arg_delay_bad.v:89:20: always range high bound must be >= low bound (IEEE 1800-2023 16.12.11)
+                                          : ... note: In instance 't'
+   89 |   assert property (prop_always(3, 1))
+      |                    ^~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_sequence_arg_delay_bad.v:91:20: Unsupported: always range bound exceeds implementation limit of 65536 (--max-num-width)
+                                                      : ... note: In instance 't'
+   91 |   assert property (prop_always(1, 32'h7fffffff))
+      |                    ^~~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_sequence_arg_delay_bad.v:93:20: always range low bound must be non-negative (IEEE 1800-2023 16.12.11)
+                                          : ... note: In instance 't'
+   93 |   assert property (prop_always_from(-1))
+      |                    ^~~~~~~~~~~~~~~~
 %Error: Exiting due to

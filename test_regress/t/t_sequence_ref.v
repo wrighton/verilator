@@ -170,6 +170,31 @@ module t (
   assert property (@(posedge clk) e |-> prop_past_outer(DLY - 1))
   else past_other_fails++;
 
+  // Likewise for formal arguments used as always range bounds (IEEE 1800-2023 16.12.11)
+  int always_fails = 0;
+  int always_other_fails = 0;
+  property prop_always(sig1, sig2, lo, hi);
+    sig1 |-> always [lo:hi] sig2;
+  endproperty
+  property prop_s_always(untyped hi);
+    @(posedge clk) d |-> s_always [0:hi] f;
+  endproperty
+  property prop_always_unbounded(untyped lo);
+    @(posedge clk) d |-> always [lo:$] !f;
+  endproperty
+  assert property (@(posedge clk) prop_always(d, f, DLY - 2, DLY))
+  else always_fails++;
+  assert property (prop_s_always(DLY))
+  else always_fails++;
+  assert property (prop_always_unbounded(DLY + 1))
+  else always_fails++;
+  assert property (@(posedge clk) prop_always(d, f, DLY - 1, DLY + 1))
+  else always_other_fails++;
+  assert property (prop_s_always(DLY + 1))
+  else always_other_fails++;
+  assert property (prop_always_unbounded(DLY))
+  else always_other_fails++;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     d <= (cyc == 2);
@@ -211,6 +236,8 @@ module t (
       `checkd(goto_other_fails, 1)
       `checkd(nonconsec_other_fails, 1)
       `checkd(past_other_fails, 2)
+      `checkd(always_fails, 0)
+      `checkd(always_other_fails, 3)
       $write("*-* All Finished *-*\n");
       $finish;
     end

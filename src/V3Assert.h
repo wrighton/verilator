@@ -47,6 +47,8 @@ public:
     static void checkSvaRepetition(AstSNonConsRep* nodep, AstNode* errp) VL_MT_DISABLED;
     // Fold and check the tick count of a $past (IEEE 1800-2023 16.9.3), reporting errors on errp
     static void checkSvaPastTicks(AstPast* nodep, AstNode* errp) VL_MT_DISABLED;
+    // Fold and check the bounds of an always range (IEEE 1800-2023 16.12.11)
+    static void checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
     // Check the constants of a sequence or property instance, reporting errors on instp

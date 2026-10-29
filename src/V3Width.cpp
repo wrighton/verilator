@@ -1894,11 +1894,9 @@ class WidthVisitor final : public VNVisitor {
             AstNodeExpr* propp = nodep->propp();
             if (!VN_IS(nodep->loBoundp(), Unbounded)) {
                 userIterateAndNext(nodep->loBoundp(), WidthVP{SELF, BOTH}.p());
-                V3Const::constifyParamsEdit(nodep->loBoundp());
             }
             if (!VN_IS(nodep->hiBoundp(), Unbounded)) {
                 userIterateAndNext(nodep->hiBoundp(), WidthVP{SELF, BOTH}.p());
-                V3Const::constifyParamsEdit(nodep->hiBoundp());
             }
             const bool loUnbounded = VN_IS(nodep->loBoundp(), Unbounded);
             const bool hiUnbounded = VN_IS(nodep->hiBoundp(), Unbounded);
@@ -1918,30 +1916,11 @@ class WidthVisitor final : public VNVisitor {
                 nodep->dtypeSetBit();
                 return;
             }
-            const AstConst* const loConstp = VN_CAST(nodep->loBoundp(), Const);
-            const AstConst* const hiConstp = VN_CAST(nodep->hiBoundp(), Const);
-            if (!loConstp) {
-                nodep->loBoundp()->v3error("always range low bound must be a constant expression"
-                                           " (IEEE 1800-2023 16.12.11)");
-            }
-            if (!hiUnbounded && !hiConstp) {
-                nodep->hiBoundp()->v3error("always range high bound must be a constant expression"
-                                           " (IEEE 1800-2023 16.12.11)");
-            }
-            if (loConstp && loConstp->toSInt() < 0) {
-                nodep->loBoundp()->v3error("always range low bound must be non-negative"
-                                           " (IEEE 1800-2023 16.12.11)");
-            } else if (loConstp) {
-                V3AssertCommon::checkSvaValueLimit(nodep->loBoundp(), loConstp,
-                                                   "always range bound");
-            }
-            if (!hiUnbounded && hiConstp) {
-                V3AssertCommon::checkSvaValueLimit(nodep->hiBoundp(), hiConstp,
-                                                   "always range bound");
-            }
-            if (!hiUnbounded && loConstp && hiConstp && hiConstp->toSInt() < loConstp->toSInt()) {
-                nodep->hiBoundp()->v3error("always range high bound must be >= low bound"
-                                           " (IEEE 1800-2023 16.12.11)");
+            // A formal argument of a sequence or property is checked when that is instanced,
+            // with the actual argument (IEEE 1800-2023 16.8)
+            if (!V3AssertCommon::refsSvaFormal(nodep->loBoundp())
+                && !V3AssertCommon::refsSvaFormal(nodep->hiBoundp())) {
+                V3AssertCommon::checkSvaAlwaysRange(nodep, nullptr);
             }
             bool hasPropertyOp = propp->isMultiCycleSva();
             if (!hasPropertyOp) {
