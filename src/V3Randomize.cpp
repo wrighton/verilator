@@ -1134,6 +1134,7 @@ class RandomizeVisitor final : public VNVisitor {
     int m_randCaseNum = 0;  // Randcase number within a module for var naming
     std::map<std::string, AstCDType*> m_randcDtypes;  // RandC data type deduplication
     AstConstraint* m_constraintp = nullptr;  // Current constraint
+    std::unordered_set<const AstClass*> m_visitedClasses;  // Classes visited so far
     // Per-handle-type pre/post virtual wrapper presence
     std::map<AstClass*, std::pair<bool, bool>> m_prePostWrap;
     ActiveSet m_activeClasses;  // Classes currently building randomize()
@@ -2318,6 +2319,12 @@ class RandomizeVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstClass* nodep) override {
+        m_visitedClasses.insert(nodep);
+        // The class lowers the constraints of its base classes with its own, so their
+        // array size methods must already be replaced by size variables
+        if (nodep->extendsp() && !m_visitedClasses.count(nodep->extendsp()->classp())) {
+            iterate(nodep->extendsp()->classp());
+        }
         VL_RESTORER(m_modp);
         VL_RESTORER(m_randCaseNum);
         m_modp = nodep;
