@@ -18,6 +18,7 @@ package Pkg;
 
   task automatic disable_named;
     begin : named
+      #1;
     end
     disable named;
   endtask
