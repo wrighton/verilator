@@ -4359,29 +4359,15 @@ public:
         // final (post-resize) length rather than their pre-solve (usually empty) one.
         FileLine* const fl = nodep->fileline();
         collectSizeConstrainedArrays(classp, allSizeArrays);
-        const bool needsSizePhase = !allSizeArrays.empty();
-        AstVar* const retVarp = randomizeFuncp->fvarp();
+        // Arrays resized by the class constraints also need their sizes solved first and
+        // pinned; their elements are not re-registered unless constrained as above
         VInsertionSet<AstVar*> pinnedArrays = allSizeArrays;
         addResizedArrays(classp, pinnedArrays);
+        const bool needsSizePhase = !pinnedArrays.empty();
+        AstVar* const retVarp = randomizeFuncp->fvarp();
         addFrozenSizePins(pinnedArrays, randomizeFuncp, localGenp, randModeVarp);
 
         if (needsSizePhase) {
-            // Call __VBasicRand and stash its result FIRST, as its own statement,
-            // before either solve. The single-statement form below (basicRandomizeFuncCallp
-            // combined inline with the solver call) relies on statement hoisting emitting
-            // __VBasicRand before the (one) solve call, so the solver's answer -- not
-            // __VBasicRand's fallback fill of every rand array element -- is what sticks.
-            // With two explicit solves as separate statements, that implicit ordering no
-            // longer holds (the hoisted __VBasicRand call would land right before the LAST
-            // statement that references it, i.e. after the final solve), so it is made
-            // explicit here instead.
-            AstVar* const basicOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_ok",
-                                                   classp->findBasicDType(VBasicDTypeKwd::BIT)};
-            basicOkVarp->funcLocal(true);
-            randomizeFuncp->addDeclsp(basicOkVarp);
-            randomizeFuncp->addStmtsp(new AstAssign{
-                fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, basicRandomizeFuncCallp});
-
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
                                                    classp->findBasicDType(VBasicDTypeKwd::BIT)};
             finalOkVarp->funcLocal(true);
@@ -4398,6 +4384,18 @@ public:
                     = new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ}, resizeStmtsp};
                 randomizeFuncp->addStmtsp(ifp);
             }
+
+            // Call __VBasicRand as its own statement after the resize, so it also fills
+            // new elements, and before the final solve, so the solver's answer sticks.
+            // The single-statement form below (basicRandomizeFuncCallp combined inline
+            // with the solver call) relies on statement hoisting for that order, which
+            // would place it after the final solve here.
+            AstVar* const basicOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_ok",
+                                                   classp->findBasicDType(VBasicDTypeKwd::BIT)};
+            basicOkVarp->funcLocal(true);
+            randomizeFuncp->addDeclsp(basicOkVarp);
+            randomizeFuncp->addStmtsp(new AstAssign{
+                fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, basicRandomizeFuncCallp});
 
             // Clear this call's constraints, then rebuild them fresh against the
             // resized arrays: the class's own constraints (re-copied from a freshly
@@ -4427,7 +4425,7 @@ public:
             // once-ever registration (AstVar::user3()) does not re-run on the second
             // lowering pass below, so it is redone here by hand, same as the
             // class-level pattern above.
-            for (AstVar* const arrVarp : allSizeArrays) {
+            for (AstVar* const arrVarp : pinnedArrays) {
                 // The size var itself needs write_var'ing here too, unconditionally:
                 // the pin below always references it by name, but nothing else in
                 // THIS with-block's own (re-)lowered tree is guaranteed to touch it --
@@ -4454,6 +4452,7 @@ public:
                     sizeMethodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0});
                     randomizeFuncp->addStmtsp(sizeMethodp->makeStmt());
                 }
+                if (!allSizeArrays.exists(arrVarp)) continue;  // Elements left to __VBasicRand
 
                 if (isDynArrOfClassTypeRecurse(arrVarp->dtypep())) {
                     const uint32_t unpackedDims = arrVarp->dtypep()->dimensions(false).second;
@@ -4517,7 +4516,7 @@ public:
             SmtUtil::replaceWithLowered(capturedClonep);
 
             // Pin the sizes so the final solve can't move them
-            for (AstVar* const arrVarp : allSizeArrays) {
+            for (AstVar* const arrVarp : pinnedArrays) {
                 randomizeFuncp->addStmtsp(newPinSizeVariable(fl, arrVarp, localGenp));
             }
 
