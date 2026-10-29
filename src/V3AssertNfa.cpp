@@ -3005,16 +3005,20 @@ class AssertNfaVisitor final : public VNVisitor {
             }
         }
 
+        std::vector<AstNodeExpr*> actualps;
         propSpecp->foreach([&](AstVarRef* refp) {
             const auto portIt = portMap.find(refp->varp());
             if (portIt != portMap.end()) {
-                refp->replaceWith(portIt->second->cloneTree(false));
+                AstNodeExpr* const actualp = portIt->second->cloneTree(false);
+                refp->replaceWith(actualp);
                 VL_DO_DANGLING(pushDeletep(refp), refp);
+                actualps.push_back(actualp);
                 return;
             }
             const auto localIt = localVarMap.find(refp->varp());
             if (localIt != localVarMap.end()) refp->varp(localIt->second);
         });  // LCOV_EXCL_LINE -- gcov attributes lambda's implicit return to `})`
+        V3AssertCommon::removeActualReductions(actualps);
 
         for (const auto& tconnect : tconnects) {
             pushDeletep(tconnect.second->exprp()->unlinkFrBack());
