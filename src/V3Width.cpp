@@ -7495,6 +7495,7 @@ class WidthVisitor final : public VNVisitor {
                                  BOTH);  // it's like an if() condition.
             }
             nodep->dtypeSetBit();
+            checkSvaInstanceOperands(nodep->propp(), true);
         }
     }
 
@@ -8762,6 +8763,7 @@ class WidthVisitor final : public VNVisitor {
         m_underSvaExpr = true;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
+        checkSvaInstanceOperands(nodep->exprp(), true);
         nodep->didWidth(true);
         // Keep all sequences for now; cleanup happens after V3AssertPre inlining.
     }
@@ -9223,6 +9225,37 @@ class WidthVisitor final : public VNVisitor {
             nodep->v3error("Illegal use of property instance " << nodep->prettyNameQ()
                                                                << " outside a property expression"
                                                                   " (IEEE 1800-2023 16.12)");
+        }
+    }
+    // Report sequence and property instances under nodep that are inside an expression
+    static void checkSvaInstanceOperands(const AstNode* nodep, bool svaOperand) {
+        // An instance may only be written where a sequence or property expression may be: as an
+        // operand of a sequence or property operator, or as the actual argument of another
+        // instance (IEEE 1800-2023 16.8, 16.12). svaOperand is whether nodep is in such a
+        // position. Logical operators also represent the property operators not, implies and
+        // iff, so are accepted.
+        const AstSchemaRef* const refp = VN_CAST(nodep, SchemaRef);
+        const bool isSequence = refp && VN_IS(refp->schemap(), Sequence);
+        const bool isInstance = isSequence || (refp && VN_IS(refp->schemap(), Property));
+        if (isInstance && !svaOperand) {
+            nodep->v3error("Illegal use of "
+                           << (isSequence ? "sequence" : "property") << " instance "
+                           << nodep->prettyNameQ() << " inside an expression"
+                           << (isSequence ? " (IEEE 1800-2023 16.8)" : " (IEEE 1800-2023 16.12)"));
+        }
+        const bool childSvaOperand
+            = isInstance || (svaOperand && VN_IS(nodep, Arg)) || VN_IS(nodep, Implication)
+              || VN_IS(nodep, Until) || VN_IS(nodep, SExpr) || VN_IS(nodep, SAnd)
+              || VN_IS(nodep, SOr) || VN_IS(nodep, SIntersect) || VN_IS(nodep, SThroughout)
+              || VN_IS(nodep, SWithin) || VN_IS(nodep, SConsRep) || VN_IS(nodep, SGotoRep)
+              || VN_IS(nodep, SNonConsRep) || VN_IS(nodep, SEventually) || VN_IS(nodep, PropAlways)
+              || VN_IS(nodep, AbortOn) || VN_IS(nodep, SClocked) || VN_IS(nodep, ExprStmt)
+              || VN_IS(nodep, LogNot) || VN_IS(nodep, LogOr) || VN_IS(nodep, LogEq);
+        for (const AstNode* const childp :
+             {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (const AstNode* itemp = childp; itemp; itemp = itemp->nextp()) {
+                checkSvaInstanceOperands(itemp, childSvaOperand);
+            }
         }
     }
     void visit(AstNodeProcedure* nodep) override {
