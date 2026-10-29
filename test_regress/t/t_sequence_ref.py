@@ -13,7 +13,7 @@ test.scenarios('vlt_all')
 
 test.compile(timing_loop=True, verilator_flags2=['--assert', '--timing', '--stats'])
 
-test.file_grep(test.stats, r'Assertions, inlined property instances\s+(\d+)', 17)
+test.file_grep(test.stats, r'Assertions, inlined property instances\s+(\d+)', 23)
 test.file_grep(test.stats, r'Assertions, inlined sequence instances\s+(\d+)', 17)
 
 test.execute()
