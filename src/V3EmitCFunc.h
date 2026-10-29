@@ -275,22 +275,6 @@ public:
     string optionalProcArg(const T* const nodep) {
         return (nodep && constructorNeedsProcess(nodep)) ? "vlProcess, " : "";
     }
-    const AstCNew* getSuperNewCallRecursep(AstNode* const nodep) {
-        // Get the super.new call
-        if (!nodep) return nullptr;
-        if (const AstCNew* const cnewp = VN_CAST(nodep, CNew)) return cnewp;
-        if (const AstStmtExpr* const stmtp = VN_CAST(nodep, StmtExpr)) {
-            if (const AstCNew* const cnewp = VN_CAST(stmtp->exprp(), CNew)) return cnewp;
-        }
-        if (const AstJumpBlock* const blockp = VN_CAST(nodep, JumpBlock)) {
-            if (const AstCNew* const cnewp = getSuperNewCallRecursep(blockp->stmtsp())) {
-                return cnewp;
-            }
-        }
-        if (const AstCNew* const cnewp = getSuperNewCallRecursep(nodep->nextp())) return cnewp;
-        return nullptr;
-    }
-
     void emitConstantW(AstConst* nodep, AstVarRef* assigntop) {
         // For tradition and compilation speed, assign each word directly into
         // output variable instead of using '='
@@ -372,30 +356,6 @@ public:
         }
     }
 
-    void putConstructorSubinit(const AstClass* classp, AstCFunc* cfuncp) {
-        // Direct non-virtual bases in declaration order
-        for (const AstClassExtends* const extp : classp->extendspList()) {
-            if (extp->classp()->isInterfaceClass()) continue;
-            if (extp->classp()->useVirtualPublic()) continue;
-            puts(EmitCUtil::prefixNameProtect(extp->classp()));
-            puts("::init");
-            if (constructorNeedsProcess(extp->classp())) {
-                puts("(vlProcess, vlSymsp");
-            } else {
-                puts("(vlSymsp");
-            }
-            // Handle super.new() args for the concrete parent
-            if (const AstCNew* const superNewCallp = getSuperNewCallRecursep(cfuncp->stmtsp())) {
-                putCommaIterateNext(superNewCallp->argsp(), true);
-            }
-            puts(");\n");
-            // Since SystemVerilog allows only for extending from one class, for sure there won't
-            // be any more constructors to be called. Even if there are some classes which are
-            // "implemented", those are interface classes which do not have constructors.
-            break;
-        }
-    }
-
     // VISITORS
     using EmitCConstInit::visit;
     void visit(AstCFunc* const nodep) override {
@@ -416,10 +376,6 @@ public:
         emitCFuncHeader(nodep, m_modp, /* withScope: */ true);
 
         puts(" {\n");
-        if (nodep->isConstructor()) {
-            const AstClass* const classp = VN_CAST(nodep->scopep()->modp(), Class);
-            if (classp && classp->extendsp()) putConstructorSubinit(classp, nodep);
-        }
 
         // "+" in the debug indicates a print from the model
         puts("VL_DEBUG_IF(VL_DBG_MSGF(\"+  ");
@@ -840,7 +796,11 @@ public:
     }
     void visit(AstCNew* nodep) override {
         if (VN_IS(nodep->dtypep(), VoidDType)) {  // super.new case
-            putsDecoration(nodep, "/*super.new*/");
+            const AstClass* const basep = VN_AS(EmitCParentModule::get(nodep->funcp()), Class);
+            putns(nodep, EmitCUtil::prefixNameProtect(basep) + "::init(" + optionalProcArg(basep)
+                             + "vlSymsp");
+            putCommaIterateNext(nodep->argsp(), true);
+            puts(")");
             return;
         }
         // assignment case;
@@ -1405,10 +1365,6 @@ public:
             putnbs(nodep, "(co_await ([&]() -> VlCoroutine {\n");
             iterateAndNextConstNull(nodep->stmtsp());
             puts("co_return;\n");
-            if (!nodep->hasResult()) {
-                puts("}()))");
-                return;
-            }
             puts("}()), ");
             iterateAndNextConstNull(nodep->resultp());
             puts(")");
@@ -1417,11 +1373,6 @@ public:
         // GCC allows compound statements in expressions, but this is not standard.
         // So we use an immediate-evaluation lambda and comma operator
         putnbs(nodep, "([&]() {\n");
-        if (!nodep->hasResult()) {
-            iterateAndNextConstNull(nodep->stmtsp());
-            puts("}())");
-            return;
-        }
         iterateAndNextConstNull(nodep->stmtsp());
         puts("}(), ");
         iterateAndNextConstNull(nodep->resultp());
