@@ -462,8 +462,12 @@ AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstSchemaRe
         return dotted + "." + refDotted;
     };
     bodyp->foreach([&](AstVarXRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
-    bodyp->foreach([&](AstNodeFTaskRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
-    bodyp->foreach([&](AstSchemaRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
+    bodyp->foreach([&](AstNodeFTaskRef* refp) {
+        if (!refp->classOrPackagep()) refp->dotted(relinkDotted(refp->dotted()));
+    });
+    bodyp->foreach([&](AstSchemaRef* refp) {
+        if (!refp->classOrPackagep()) refp->dotted(relinkDotted(refp->dotted()));
+    });
     bodyp->foreach([&](AstVarRef* refp) {
         if (refp->classOrPackagep() || ownVarps.count(refp->varp())) return;
         AstVarXRef* const xrefp
