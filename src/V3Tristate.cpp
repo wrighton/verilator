@@ -2174,10 +2174,15 @@ class TristateVisitor final : public TristateBaseVisitor {
             const AstAssignW* outAssignp = nullptr;  // If reconnected, the related assignment
             AstPin* outpinp = nullptr;
             if (!outModVarp) {
-                // At top, no need for __out as might be input only. Otherwise resolvable.
+                // The port has an enable, e.g. as its 'z' value is read, but no tristate
+                // driver. Under the top wrapper the enable is a top-level input, and for an input
+                // port it comes from the connection; otherwise it would have to come from the
+                // instantiating module, which is not implemented.
                 if (!m_modp->isTop() && !inOnly) {
-                    nodep->v3warn(E_UNSUPPORTED, "Unsupported: tristate in top-level IO: "
-                                                     << nodep->prettyNameQ());
+                    nodep->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: tristate enable on a port below the top-level "
+                                  "module: "
+                                      << nodep->modVarp()->prettyNameQ());
                 }
             } else {
                 AstNodeExpr* const outexprp = VN_AS(nodep->exprp(), NodeExpr)
