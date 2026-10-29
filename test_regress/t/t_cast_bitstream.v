@@ -65,6 +65,37 @@ module t (
     logic [1:0] arr[2];
   } nest_t;
 
+  // In constant expressions
+  typedef logic [1:0] gdesc_t[2][1:0];
+  localparam pair_t PAIR_P = pair_t'(8'ha5);
+  localparam logic [7:0] B8_P = 8'h3c;
+  localparam pair_t PAIR_REF_P = pair_t'(B8_P);
+  localparam asc_t ASC_P = asc_t'(21'h1abcde);
+  localparam grid_t GRID_P = grid_t'(8'hb4);
+  localparam gdesc_t GDESC_P = gdesc_t'(8'hb4);
+  typedef logic [32:0] w33_t[3];
+  localparam w33_t W33_P = w33_t'(99'h5_5aef0c8d_d70a4497_3fa1b2c3);
+  initial begin
+    `checkh(PAIR_P[1], 4'ha);
+    `checkh(PAIR_P[0], 4'h5);
+    `checkh(PAIR_REF_P[1], 4'h3);
+    `checkh(PAIR_REF_P[0], 4'hc);
+    `checkh(ASC_P[0], 7'h6a);
+    `checkh(ASC_P[1], 7'h79);
+    `checkh(ASC_P[2], 7'h5e);
+    `checkh(GRID_P[2][0], 2'h2);
+    `checkh(GRID_P[2][1], 2'h3);
+    `checkh(GRID_P[1][0], 2'h1);
+    `checkh(GRID_P[1][1], 2'h0);
+    `checkh(GDESC_P[0][1], 2'h2);
+    `checkh(GDESC_P[0][0], 2'h3);
+    `checkh(GDESC_P[1][1], 2'h1);
+    `checkh(GDESC_P[1][0], 2'h0);
+    `checkh(W33_P[0], 33'h1_56bbc323);
+    `checkh(W33_P[1], 33'h0_eb85224b);
+    `checkh(W33_P[2], 33'h1_3fa1b2c3);
+  end
+
   logic [98:0] crc = 99'h5_5aef0c8d_d70a4497_3fa1b2c3;
 
   function automatic us_t ident(us_t s);
