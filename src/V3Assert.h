@@ -68,6 +68,10 @@ public:
     checkSvaUnboundedActuals(AstNode* nodep,
                              const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
                              AstNode* instp) VL_MT_DISABLED;
+    // Give the reads of local variables in one property instance their initial value
+    static void lowerSvaLocalVarInits(
+        AstProperty* propp, AstPropSpec* bodyp,
+        const std::unordered_map<const AstVar*, AstVar*>& localVarMap) VL_MT_DISABLED;
 };
 
 class V3Assert final {
