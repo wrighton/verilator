@@ -1459,7 +1459,9 @@ List Of Warnings
    One case is when a variable written in an ``always_comb`` or
    ``always_ff`` block is also written by another process. IEEE 1800
    requires variables written in these specialized always blocks to be
-   written only by that process.
+   written only by that process. A ``force`` or ``release`` of such a
+   variable is not reported, as it overrides rather than drives the
+   variable.
 
    Faulty example:
 

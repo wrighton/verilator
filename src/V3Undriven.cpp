@@ -482,6 +482,7 @@ class UndrivenVisitor final : public VNVisitorConst {
     bool m_inInitialSetup = false;  // In InitialAutomatic*/InitialStatic* assignment LHS
     bool m_inInitialStatic = false;  // In InitialStatic
     bool m_inProcAssign = false;  // In procedural assignment
+    bool m_inForce = false;  // In force/release target, which overrides rather than drives
     bool m_inFTaskRef = false;  // In function or task call
     bool m_inInoutOrRefPin = false;  // Connected to pin that is inout
     const AstPin* m_drivingPinp = nullptr;  // In a pin of an output port, which drives its net
@@ -787,7 +788,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                     = entryp->isDrivenWhole() && !m_inBBox && !VN_IS(nodep, VarXRef)
                       && !VN_IS(nodep->dtypep()->skipRefp(), UnpackArrayDType) && !sameFileLine
                       && !entryp->isUnderGen() && otherWritep && !entryp->isFtaskDriven()
-                      && !ftaskDef && !m_inSelLhs;
+                      && !ftaskDef && !m_inSelLhs && !m_inForce;
                 // The two warnings are gated independently on the variable
                 // declaration's fileline, as v3warn suppression will check
                 // the driving fileline and still warn even if the warning
@@ -867,7 +868,10 @@ class UndrivenVisitor final : public VNVisitorConst {
                     }
                     warnClockingDrivenProc(nodep, entryp, otherWritep, otherWriteIsStaticInit);
                 }
-                if (!m_inInitialSetup || nodep->varp()->hasUserInit()) {
+                if (m_inForce) {
+                    // Not recorded as the other write of a later MULTIDRIVEN
+                    entryp->drivenWhole(static_cast<const AstNode*>(nodep));
+                } else if (!m_inInitialSetup || nodep->varp()->hasUserInit()) {
                     // Else don't count default initialization as a driver to a net/variable
                     entryp->drivenWhole(nodep, ftaskDef);
                 }
@@ -939,6 +943,9 @@ class UndrivenVisitor final : public VNVisitorConst {
         iterateConst(nodep->rhsp());
         VL_RESTORER(m_inInitial);
         m_inInitial = false;
+        // A force overrides the other drivers rather than adding one (IEEE 1800-2023 10.6.2)
+        VL_RESTORER(m_inForce);
+        m_inForce = true;
         iterateConst(nodep->lhsp());
     }
     void visit(AstAssignW* nodep) override {
@@ -954,6 +961,8 @@ class UndrivenVisitor final : public VNVisitorConst {
     void visit(AstRelease* nodep) override {
         VL_RESTORER(m_inInitial);
         m_inInitial = false;
+        VL_RESTORER(m_inForce);
+        m_inForce = true;
         iterateConst(nodep->lhsp());
     }
     void visit(AstInitial* nodep) override {
