@@ -20,4 +20,13 @@
 %Error: t/t_interface_hier_port_bad.v:49:19: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
    49 |   cons c_arr_mp (.b(u_arr[1].loc.mc));   
       |                   ^
+%Error: t/t_interface_hier_port_bad.v:56:18: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   56 |   cons c_nn_mp (.b(nn[0].arr[1].mc));   
+      |                  ^
+%Error: t/t_interface_hier_port_bad.v:57:21: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   57 |   cons c_gnest_mp (.b(gnest[1].n.arr[0].mc));   
+      |                     ^
+%Error: t/t_interface_hier_port_bad.v:61:20: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   61 |   cons c_gifn_mp (.b(gifn.n.arr[0].mc));   
+      |                    ^
 %Error: Exiting due to
