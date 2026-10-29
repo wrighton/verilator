@@ -743,8 +743,15 @@ class AssertVisitor final : public VNVisitor {
             AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
             forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
-                // The end-of-simulation check runs action blocks in a final block, which executes
-                // in zero time (IEEE 1800-2023 9.2.3), so a timing control there never resumes
+                // The end-of-simulation check runs action blocks in a final block, where an
+                // NBA, legal in an action block, executes as a blocking assignment
+                finalp->foreach([](AstAssignDly* const dlyp) {
+                    FileLine* const newfl = new FileLine{dlyp->fileline()};
+                    newfl->warnOff(V3ErrorCode::FINALDLY, true);
+                    dlyp->fileline(newfl);
+                });
+                // The final block executes in zero time (IEEE 1800-2023 9.2.3), so a timing
+                // control there never resumes
                 const AstNode* timingp = nullptr;
                 finalp->exists([&](const AstNode* const np) {
                     if (!np->isTimingControl()) return false;
