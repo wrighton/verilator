@@ -1595,8 +1595,10 @@ string AstNode::instanceStr() const {
     // in case we have some circular reference bug.
     constexpr unsigned maxIterations = 10000;
     unsigned iterCount = 0;
-    // Walk 'backp' chain
-    for (const AstNode* currp = this; currp; currp = currp->backp(), ++iterCount) {
+    // Walk 'backp' chain, but from a module, class or package to its parent, not to the
+    // previous module in the netlist, so code in a package or $unit class reports no instance
+    for (const AstNode* currp = this; currp;
+         currp = VN_IS(currp, NodeModule) ? currp->aboveLoopp() : currp->backp(), ++iterCount) {
         if (VL_UNCOVERABLE(iterCount >= maxIterations)) return "";  // LCOV_EXCL_LINE
         // Prefer the enclosing scope, if there is one. This is always under the enclosing module,
         // so just pick it up when encountered
