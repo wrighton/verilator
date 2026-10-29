@@ -351,7 +351,18 @@ private:
             VL_DO_DANGLING(pushDeletep(initialp->unlinkFrBack()), initialp);
         }
         m_initialps.clear();
-        m_ctorp->prependStmtsp(insertp);
+        if (!insertp) return;
+        // Property initializers run after super.new (IEEE 1800-2023 8.7), which EmitC
+        // emits in place
+        AstNode* superNewp = nullptr;
+        m_ctorp->foreach([&](AstNew* newp) {
+            if (VN_IS(newp->dtypep(), VoidDType)) superNewp = newp->backp();
+        });
+        if (superNewp) {
+            superNewp->addNextHere(insertp);
+        } else {
+            m_ctorp->prependStmtsp(insertp);
+        }
     }
     void visit(AstInitialAutomatic* nodep) override {
         m_initialps.push_back(nodep);
