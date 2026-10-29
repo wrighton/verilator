@@ -104,6 +104,7 @@ private:
     AstIf* m_disableSeqIfp = nullptr;  // Used for handling disable iff in sequences
     AstPExpr* m_pexprp = nullptr;  // Last AstPExpr
     bool m_underCover = false;  // True if the enclosing assertion is a cover
+    bool m_underPropSpec = false;  // True if under the property of a concurrent assertion
     // Other:
     V3UniqueNames m_cycleDlyNames{"__VcycleDly"};  // Cycle delay counter name generator
     V3UniqueNames m_consRepNames{"__VconsRep"};  // Consecutive repetition counter name generator
@@ -331,6 +332,20 @@ private:
         VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
         // Clear referenced flag; sequences with isReferenced==false are deleted in assertPreAll
         seqp->isReferenced(false);
+    }
+    // Run the subroutine call match items of a sequence only when it matches
+    static void guardMatchItemCalls(AstExprStmt* nodep) {
+        // The calls run at each match of the sequence (IEEE 1800-2023 16.11). A sequence lowered
+        // here is a single-cycle expression, evaluated once per attempt, so it matches when the
+        // result is true. Any other match item is an assignment, as V3LinkInc lowers increments.
+        for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
+            nextp = stmtp->nextp();
+            if (VN_IS(stmtp, Assign)) continue;
+            VNRelinker relinker;
+            stmtp->unlinkFrBack(&relinker);
+            relinker.relink(
+                new AstIf{stmtp->fileline(), nodep->resultp()->cloneTreePure(false), stmtp});
+        }
     }
     AstPropSpec* clonePropertyBody(AstFuncRef* funcrefp, const AstProperty* propp) {
         AstPropSpec* propExprp = getPropertyExprp(propp);
@@ -1394,6 +1409,10 @@ private:
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
+    void visit(AstExprStmt* nodep) override {
+        iterateChildren(nodep);
+        if (m_underPropSpec) guardMatchItemCalls(nodep);
+    }
     void visit(AstFuncRef* nodep) override {
         // IEEE 1800-2023 16.8: Inline sequence instances wherever they appear
         // in the expression tree (inside implications, boolean ops, nested refs, etc.)
@@ -1480,8 +1499,13 @@ private:
                         matchAssignsp = AstNode::addNextNull(matchAssignsp, assignp);
                     }
                 }
-                VL_DO_DANGLING(pushDeletep(lhsp), lhsp);
-                lhsp = antExprp;
+                if (exprStmtp->stmtsp()) {
+                    // Keep the guarded subroutine calls, evaluated with the antecedent
+                    exprStmtp->resultp(antExprp);
+                } else {
+                    VL_DO_DANGLING(pushDeletep(lhsp), lhsp);
+                    lhsp = antExprp;
+                }
 
                 if (matchAssignsp) {
                     AstAlways* const alwaysp
@@ -1758,7 +1782,9 @@ private:
         // cover counts non-vacuous matches only (IEEE 1800-2023 16.15.2), so an
         // implication antecedent must hold; assert passes vacuously instead.
         VL_RESTORER(m_underCover);
+        VL_RESTORER(m_underPropSpec);
         m_underCover = VN_IS(nodep->backp(), Cover);
+        m_underPropSpec = true;
         iterate(nodep->propp());
         iterateNull(nodep->matchCountp());
     }
