@@ -920,26 +920,13 @@ public:
                 }
                 // Follow scope alias for nested interface port access
                 if (!leftname.empty()) {
-                    const auto aliasIt = m_scopeAliasMap[SAMN_IFTOP].find(lookupSymp);
+                    auto aliasIt = m_scopeAliasMap[SAMN_IFTOP].find(lookupSymp);
                     if (aliasIt != m_scopeAliasMap[SAMN_IFTOP].end()) {
-                        lookupSymp = aliasIt->second;
-                        // Alias may point to __Viftop VarScope; find corresponding Cell
-                        if (const AstVarScope* const vscp
-                            = VN_CAST(lookupSymp->nodep(), VarScope)) {
-                            const string varName = vscp->varp()->name();
-                            static constexpr const char* const VIFTOP_SUFFIX = "__Viftop";
-                            if (VString::endsWith(varName, VIFTOP_SUFFIX)) {
-                                const string cellName
-                                    = varName.substr(0, varName.size() - strlen(VIFTOP_SUFFIX));
-                                VSymEnt* const parentSymp = lookupSymp->parentp();
-                                if (parentSymp) {
-                                    VSymEnt* const cellSymp = parentSymp->findIdFlat(cellName);
-                                    if (cellSymp && VN_IS(cellSymp->nodep(), Cell)) {
-                                        lookupSymp = cellSymp;  // Use Cell for member lookup
-                                    }
-                                }
-                            }
-                        }
+                        // Follow the chain, as the port may be connected to another port
+                        do {
+                            lookupSymp = aliasIt->second;
+                            aliasIt = m_scopeAliasMap[SAMN_IFTOP].find(lookupSymp);
+                        } while (aliasIt != m_scopeAliasMap[SAMN_IFTOP].end());
                     } else {
                         // No alias; try following IfaceRefDType to interface cell
                         const AstVar* varp = VN_CAST(lookupSymp->nodep(), Var);
