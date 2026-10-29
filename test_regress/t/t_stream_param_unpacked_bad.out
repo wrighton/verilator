@@ -1,0 +1,6 @@
+%Error: t/t_stream_param_unpacked_bad.v:9:41: Expecting expression to be constant, but variable isn't const: 'v'
+                                            : ... note: In instance 't'
+    9 |   localparam logic [11:0] P = {>>{4'hf, v}};
+      |                                         ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
