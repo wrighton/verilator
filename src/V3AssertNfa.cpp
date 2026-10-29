@@ -863,19 +863,30 @@ class SvaNfaBuilder final {
             // Weak always [lo:$]: unbounded upper bound (IEEE 1800-2023 16.12.11).
             // p must hold at every clock tick at least lo cycles after the attempt
             // start; those ticks are not required to exist, so there is no
-            // end-of-trace obligation (weak). The self-loop keeps the attempt live
-            // every cycle; each observed cycle is a safety obligation, so a false p
-            // rejects immediately.
+            // end-of-trace obligation (weak). Each observed cycle is a safety
+            // obligation, so a false p rejects immediately and ends the attempt.
+            // A registered vertex holds the attempt while p holds. It must only
+            // have clocked edges into it, so with lo == 0 the entry, which may be
+            // reached by a link, checks the first tick itself.
             UASSERT_OBJ(!nodep->isStrong(), nodep, "Unbounded always must be weak (V3Width)");
-            SvaStateVertex* const livep = addDelayChain(entryVtxp, lo, flp);
-            livep->m_isUnbounded = true;
-            guardedEdge(livep, livep, flp);  // stay active every subsequent cycle
             SvaStateVertex* const sinkp = m_graph.createStateVertex();
             sinkp->m_isRejectSink = true;
-            SvaTransEdge* const rejEdgep
-                = guardedLink(livep, sinkp, sampled(propp->cloneTreePure(false)), flp);
-            if (isTopLevelStep) rejEdgep->m_rejectOnFail = true;
-            return {livep, nullptr, {}};
+            const auto addCheck = [&](SvaStateVertex* fromp) {
+                SvaTransEdge* const rejEdgep
+                    = guardedLink(fromp, sinkp, sampled(propp->cloneTreePure(false)), flp);
+                if (isTopLevelStep) rejEdgep->m_rejectOnFail = true;
+            };
+            SvaStateVertex* const holdp = scopedCreateVertex();
+            if (lo == 0) {
+                addCheck(entryVtxp);
+                guardedEdge(entryVtxp, holdp, sampled(propp->cloneTreePure(false)), flp);
+            } else {
+                guardedEdge(addDelayChain(entryVtxp, lo - 1, flp), holdp, flp);
+            }
+            guardedEdge(holdp, holdp, sampled(propp->cloneTreePure(false)), flp);
+            addCheck(holdp);
+            holdp->m_isUnbounded = true;
+            return {holdp, nullptr, {}};
         }
         const unsigned hi = getConstUInt(nodep->hiBoundp());
         // Strong s_always[m:n]: mark every in-window registered vertex so an
