@@ -94,9 +94,11 @@ public:
     mutable std::shared_ptr<const ArrayInfoMap> m_arrVarsRefp;
     void setArrayInfo(const std::shared_ptr<const ArrayInfoMap>& arrVarsRefp) const {
         m_arrVarsRefp = arrVarsRefp;
+        // Counts depend on the array info, which may come from another randomizer
+        // sharing this variable
+        count_cache.clear();
     }
     mutable std::map<std::string, int> count_cache;
-    void clearCountCache() const { count_cache.clear(); }
     int countMatchingElements(const ArrayInfoMap& arr_vars, const std::string& base_name) const {
         if (VL_LIKELY(count_cache.find(base_name) != count_cache.end()))
             return count_cache[base_name];
@@ -508,7 +510,6 @@ public:
             m_index = 0;
             clear_arr_table(name);
             record_arr_table(var, name, dimension, {}, {});
-            m_vars[name]->clearCountCache();
         }
     }
 
@@ -535,7 +536,6 @@ public:
             m_index = 0;
             clear_arr_table(name);
             record_arr_table(var, name, dimension, {}, {});
-            m_vars[name]->clearCountCache();
         }
     }
     // Register unpacked array of structs
@@ -562,7 +562,6 @@ public:
             m_index = 0;
             clear_arr_table(name);
             record_arr_table(var, name, dimension, {}, {});
-            m_vars[name]->clearCountCache();
         }
     }
 
