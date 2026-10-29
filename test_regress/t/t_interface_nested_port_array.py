@@ -13,8 +13,8 @@ test.scenarios('linter')
 
 # Issue #5066: Nested interface ports through interface arrays
 # (e.g., l2.l1[0] where l1 is an interface array inside interface l2).
-# V3Param internal errors have been fixed, but V3LinkDot interface
-# connection resolution for array element selections is not yet implemented.
+# Elements of nested interface arrays as port actuals are resolved, but a
+# nested interface reached through a chain of interface ports is not yet.
 # This test documents the current behavior and should be updated when
 # full support is added.
 test.lint(fails=True, expect_filename=test.golden_filename)

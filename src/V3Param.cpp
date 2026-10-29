@@ -1115,6 +1115,10 @@ class ParamProcessor final {
             UASSERT_OBJ(cloneIrefp, portIrefp, "parameter clone didn't hit AstIfaceRefDType");
             UINFO(8, "     IfaceClo " << cloneIrefp);
             cloneIrefp->ifacep(pinIrefp->ifaceViaCellp());
+            // The connected instance, not the port's parameters, now selects the interface
+            if (cloneIrefp->paramsp()) {
+                m_deleter.pushDeletep(cloneIrefp->paramsp()->unlinkFrBackWithNext());
+            }
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
 
@@ -3242,6 +3246,7 @@ class ParamVisitor final : public VNVisitor {
             }
             varp->dtypep(nullptr);
             varp->childDTypep(portp->subDTypep()->elemDTypep()->cloneTree(false));
+            varp->user2(false);  // Not processed yet, though cloned from the processed port
             portp->addNextHere(varp);
             return;
         }
@@ -3539,6 +3544,9 @@ class ParamVisitor final : public VNVisitor {
             V3Width::widthParamsEdit(nodep->subDTypep());
             expandIfaceArrayPortDimensions(nodep, nodep->subDTypep(), "");
             nodep->isIfaceArraySplit(true);
+            // The element variables carry the interface parameters from here on
+            AstIfaceRefDType* const irefp = VN_AS(nodep->subDTypep()->elemDTypep(), IfaceRefDType);
+            if (irefp->paramsp()) pushDeletep(irefp->paramsp()->unlinkFrBackWithNext());
         }
         // Build cache of interface port names as we encounter them
         if (nodep->isIfaceRef()) { m_ifacePortNames.insert(nodep->name()); }
