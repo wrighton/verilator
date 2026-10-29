@@ -11846,13 +11846,19 @@ class WidthVisitor final : public VNVisitor {
     }
     void checkForceReleaseLhs(AstNode* nodep, AstNode* lhsp) {
         // V3Force can't check as vector may have expanded, or propagated constant into index
-        if (AstNode* const selNodep = V3Width::selectNonConstantRecurse(lhsp))
-            nodep->v3error((VN_IS(nodep, Release) ? "Release"s : "Force"s)
-                               + " left-hand-side must not have variable bit/part select "
-                                 "(IEEE 1800-2023 10.6.2)\n"
+        if (AstNode* const selNodep = V3Width::selectNonConstantRecurse(lhsp)) {
+            // IEEE 1800-2023 10.6.1 states the select restriction for assign, not deassign,
+            // so no clause is cited for a deassign
+            const bool deassign = VN_IS(nodep, Deassign);
+            nodep->v3error((deassign                ? "Deassign"s
+                            : VN_IS(nodep, Release) ? "Release"s
+                                                    : "Force"s)
+                               + " left-hand-side must not have variable bit/part select"
+                               + (deassign ? "" : " (IEEE 1800-2023 10.6.2)") + "\n"
                            << nodep->warnContextPrimary() << '\n'
                            << selNodep->warnOther() << "... Location of non-constant index\n"
                            << selNodep->warnContextSecondary());
+        }
     }
 
     //----------------------------------------------------------------------
