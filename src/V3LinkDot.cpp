@@ -4256,6 +4256,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
     static bool isDotThisReference(const AstDot* nodep) {
         return VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "this";
     }
+    // Is the dot 'local::this.x' or 'local::super.x' (IEEE 1800-2023 18.7.1)
+    static bool isDotLocalThisReference(const AstDot* nodep) {
+        const AstDot* const localp = VN_CAST(nodep->lhsp(), Dot);
+        return localp && localp->lhsp()->name() == "local::" && VN_IS(localp->rhsp(), ParseRef)
+               && (localp->rhsp()->name() == "this" || localp->rhsp()->name() == "super");
+    }
 
     void visit(AstDot* nodep) override {
         // Legal under a DOT: AstDot, AstParseRef, AstPackageRef, AstNodeSel, AstPackArrayDType
@@ -4281,6 +4287,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
             m_ds.m_dotp = nodep;  // Always, not just at start
             m_ds.m_dotPos = DP_FIRST;
 
+            if (isDotLocalThisReference(nodep)) {
+                // Resolve as 'this.'/'super.' of the scope calling 'randomize() with'
+                AstDot* const localp = VN_AS(nodep->lhsp(), Dot);
+                iterate(localp->lhsp());  // Checks that 'local::' is legal here
+                m_randSymp = nullptr;
+                localp->replaceWith(localp->rhsp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(localp), localp);
+            }
             if (isDotThisReference(nodep)) {
                 VSymEnt* classSymp = getThisClassSymp();
                 // In 'randomize() with { this.member }', 'this' refers to randomized
@@ -4509,6 +4523,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
             m_ds.m_dotErr = true;
         }
         if (nodep->name() == "this") {
+            if (m_ds.m_dotPos == DP_PACKAGE) {  // 'local::this' is not followed by a member
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'local::this' without member select");
+                m_ds.m_dotErr = true;
+                return;
+            }
             iterateChildren(nodep);
             if (m_statep->forPrimary()) return;  // The class might be parameterized somewhere
             const VSymEnt* classSymp = getThisClassSymp();

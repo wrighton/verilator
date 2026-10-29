@@ -5358,13 +5358,22 @@ exprScope<nodeExprp>:               // scope and variable for use to inside an e
         |       yD_ROOT                                 { $$ = new AstParseRef{$<fl>1, "$root"}; }
         |       idArrayed                               { $$ = $1; }
         |       packageClassScope idArrayed             { $$ = AstDot::newIfPkg($2->fileline(), $1, $2); }
+        //                      // IEEE: class_qualifier: local:: implicit_class_handle
+        |       localNextId yP_COLONCOLON yTHIS
+                        { $$ = new AstDot{$2, true, $1, new AstParseRef{$<fl>3, "this"}}; }
+        |       localNextId yP_COLONCOLON ySUPER
+                        { $$ = new AstDot{$2, true, $1, new AstParseRef{$<fl>3, "super"}}; }
         |       ~l~expr '.' idArrayed                   { $$ = new AstDot{$<fl>2, false, $1, $3}; }
-        //                      // expr below must be a "yTHIS"
+        //                      // expr below must be a "yTHIS" or "local::this"
         |       ~l~expr '.' ySUPER
                         { AstParseRef* const anodep = VN_CAST($1, ParseRef);
+                          AstDot* const localp = VN_CAST($1, Dot);
                           if (anodep && anodep->name() == "this") {
                               $$ = new AstParseRef{$<fl>1, "super"};
                               $1->deleteTree();
+                          } else if (localp && localp->rhsp()->name() == "this") {
+                              $$ = $1;
+                              localp->rhsp()->name("super");
                           } else {
                               $$ = $1;  $$->v3error("Syntax error: 'super' must be first name component, or after 'this.'");
                           }
