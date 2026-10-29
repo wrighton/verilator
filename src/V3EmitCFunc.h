@@ -277,23 +277,6 @@ public:
         else if (VN_IS(dtp, QueueDType) || VN_IS(dtp, DynArrayDType))
             puts("R");
     }
-    // Return a call reversing the descending dimensions of an unpacked array, "" if none
-    static std::string unpackReverseCall(const AstNodeDType* dtypep) {
-        // VL_PACK_*/VL_UNPACK_* take each dimension in element order, but streaming is left to
-        // right (IEEE 1800-2023 11.4.14), so every descending dimension must be reversed
-        std::string args;
-        size_t usedLength = 0;  // Length of args up to the last reversed dimension
-        while (const AstUnpackArrayDType* const adtypep
-               = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
-            if (!args.empty()) args += ", ";
-            const bool reverse = !adtypep->declRange().ascending();
-            args += reverse ? "1" : "0";
-            if (reverse) usedLength = args.size();
-            dtypep = adtypep->subDTypep();
-        }
-        if (!usedLength) return "";
-        return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
-    }
     void emitScIQW(AstVar* nodep) {
         UASSERT_OBJ(nodep->isSc(), nodep, "emitting SystemC operator on non-SC variable");
         puts(nodep->isScBigUint()                           ? "SB"
@@ -584,7 +567,9 @@ public:
                                     : nodep->packedWidth() <= VL_QUADSIZE,
                     nodep, "Packed width does not fit the result");
         const string packedWidth = cvtToStr(nodep->packedWidth());
-        emitOpName(nodep, "(" + packedWidth + ", %rw, %P, " + unpackReverseCall(fromDtp) + "(%li))",
+        emitOpName(nodep,
+                   "(" + packedWidth + ", %rw, %P, " + EmitCUtil::unpackReverseCall(fromDtp)
+                       + "(%li))",
                    nodep->fromp(), elemDtp, nullptr);
     }
 
@@ -760,7 +745,7 @@ public:
             puts(", ");
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
-            reverseUnpackCall = unpackReverseCall(castp->dtypep());
+            reverseUnpackCall = EmitCUtil::unpackReverseCall(castp->dtypep());
         } else if (const AstCvtArrayToArray* const castp
                    = VN_CAST(nodep->rhsp(), CvtArrayToArray)) {
             if (castp->reverse()) {
@@ -827,34 +812,51 @@ public:
             puts(");\n");
         }
     }
-    void visit(AstAssocSel* nodep) override {
-        iterateAndNextConstNull(nodep->fromp());
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
-        putns(nodep, atFunc);
-        iterateAndNextConstNull(nodep->bitp());
-        puts(")");
-    }
+    void visit(AstAssocSel* nodep) override { emitAssocSel(nodep); }
     void visit(AstDynArraySel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
         // Out of range writes go to a temporary (IEEE 1800-2023 7.4.6)
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
+        const std::string atFunc = nodep->refPin()           ? ".atWriteRef("
+                                   : nodep->writesAccessor() ? ".atWrite("
+                                                             : ".at(";
         putns(nodep, atFunc);
         iterateAndNextConstNull(nodep->bitp());
         puts(")");
     }
     void visit(AstQueueSel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
-        // Writing one past the last element appends (IEEE 1800-2023 7.10.1)
-        std::string atFunc = nodep->isLValue() ? ".atWriteAppend" : ".at";
+        std::string atFunc = ".at";
+        if (nodep->refPin() && !nodep->isLValue()) {
+            // Only read by a const ref, so does not append, also counted from the back
+            putns(nodep, nodep->fromBack() ? ".atWriteBackRef(" : ".atWriteRef(");
+            iterateAndNextConstNull(nodep->bitp());
+            puts(")");
+            return;
+        }
+        if (nodep->writer()) {
+            // Made writable for a select from it, so does not append, except as the writable
+            // form of '$'
+            atFunc = nodep->fromBack() ? ".atWriteAppend" : ".atWrite";
+        } else if (nodep->isLValue()) {
+            // Writing one past the last element appends (IEEE 1800-2023 7.10.1)
+            atFunc = ".atWriteAppend";
+        }
         if (nodep->fromBack()) atFunc += "Back";
+        if (nodep->refPin()) {
+            UASSERT_OBJ(nodep->isLValue(), nodep, "Pinned queue element should be written");
+            atFunc += "Ref";
+        }
         putns(nodep, atFunc + "(");
         iterateAndNextConstNull(nodep->bitp());
         puts(")");
     }
-    void visit(AstWildcardSel* nodep) override {
+    void visit(AstWildcardSel* nodep) override { emitAssocSel(nodep); }
+    // Associative or wildcard array element; a pin of an element only read does not create it
+    void emitAssocSel(AstNodeSel* nodep) {
         iterateAndNextConstNull(nodep->fromp());
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
-        putns(nodep, atFunc);
+        std::string atFunc = nodep->writesAccessor() ? ".atWrite" : ".at";
+        if (nodep->refPin()) atFunc += "Ref";
+        putns(nodep, atFunc + "(");
         iterateAndNextConstNull(nodep->bitp());
         puts(")");
     }
@@ -1667,6 +1669,15 @@ public:
         } else {
             emitOpName(nodep, nodep->emitC(), nodep->lhsp(), nullptr, nullptr);
         }
+    }
+    void visit(AstToStringN* nodep) override {
+        const std::string reverseCall = EmitCUtil::unpackReverseCall(nodep->lhsp()->dtypep());
+        if (reverseCall.empty()) {
+            visit(static_cast<AstNodeUniop*>(nodep));
+            return;
+        }
+        emitOpName(nodep, "VL_TO_STRING(" + reverseCall + "(%li))", nodep->lhsp(), nullptr,
+                   nullptr);
     }
     void visit(AstNodeBiop* nodep) override {
         if (nodep->emitCheckMaxWords() && nodep->widthWords() > VL_MULS_MAX_WORDS) {
