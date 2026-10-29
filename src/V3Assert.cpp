@@ -267,6 +267,19 @@ class AssertDeFutureVisitor final : public VNVisitor {
                       "Unsupported/illegal: Future value function used with expression with "
                           << nodep->prettyOperatorName());
     }
+    // Return a new variable that each future clock tick loads with 'valuep'
+    AstVar* newDelayedVar(const string& name, AstNodeExpr* valuep) {
+        FileLine* const flp = valuep->fileline();
+        AstAlways* const alwaysp = new AstAlways{flp, VAlwaysKwd::ALWAYS,
+                                                 m_futurep->sentreep()->cloneTree(false), nullptr};
+        m_modp->addStmtsp(alwaysp);
+        AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, name, valuep->dtypep()};
+        m_modp->addStmtsp(varp);
+        AstVarRef* const writeRefp = new AstVarRef{flp, varp, VAccess::WRITE};
+        writeRefp->user1(true);
+        alwaysp->addStmtsp(new AstAssignDly{flp, writeRefp, valuep});
+        return varp;
+    }
     // VISITORS
     void visit(AstFuture* nodep) override {
         VL_RESTORER(m_inFuture);
@@ -287,20 +300,10 @@ class AssertDeFutureVisitor final : public VNVisitor {
         auto it = m_delayedVars.find(nodep->varp());
         AstVar* outvarp;
         if (it == m_delayedVars.end()) {
-            AstSenTree* const sentreep = m_futurep->sentreep();
-            AstAlways* const alwaysp = new AstAlways{nodep->fileline(), VAlwaysKwd::ALWAYS,
-                                                     sentreep->cloneTree(false), nullptr};
-            m_modp->addStmtsp(alwaysp);
-            outvarp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
-                                 "__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
-                                 nodep->dtypep()};
-            m_modp->addStmtsp(outvarp);
-            AstVarRef* varRefAWritep = new AstVarRef{nodep->fileline(), outvarp, VAccess::WRITE};
-            varRefAWritep->user1(true);
-            AstNodeVarRef* varRefAReadp = nodep->cloneTree(false);
-            varRefAReadp->user1(true);
-            AstNode* const assp = new AstAssignDly{nodep->fileline(), varRefAWritep, varRefAReadp};
-            alwaysp->addStmtsp(assp);
+            AstNodeVarRef* const valuep = nodep->cloneTree(false);
+            valuep->user1(true);
+            outvarp = newDelayedVar("__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
+                                    valuep);
             m_delayedVars.emplace(nodep->varp(), outvarp);
         } else {
             outvarp = it->second;
@@ -329,9 +332,23 @@ public:
                 return false;
             }))
             return;
+        AstPropSpec* const specp = VN_CAST(nodep, PropSpec);
         // UINFOTREE(9, nodep, "", "defuture-in");
         visit(nodep);  // Nodep may get deleted
         // UINFOTREE(9, nodep, "", "defuture-ou");
+        // Future functions are legal only in concurrent assertions (IEEE 1800-2023 16.9.4),
+        // which have a PropSpec
+        if (!specp) return;
+        // The attempt checked at a tick is the one from the previous tick, so disable the
+        // first tick, which has no previous tick and no delayed values
+        FileLine* const flp = specp->fileline();
+        AstVar* const startedp = newDelayedVar("__VfutureStarted" + cvtToStr(m_pastNum),
+                                               new AstConst{flp, AstConst::BitTrue{}});
+        AstNodeExpr* disablep = new AstLogNot{flp, new AstVarRef{flp, startedp, VAccess::READ}};
+        if (specp->disablep()) {
+            disablep = new AstLogOr{flp, specp->disablep()->unlinkFrBack(), disablep};
+        }
+        specp->disablep(disablep);
     }
     ~AssertDeFutureVisitor() override = default;
 };
