@@ -39,4 +39,13 @@
                                                            : ... note: In instance 't'
    20 |   assert property (@(posedge clk) cyc[0] ##1 cyc[1] |-> s_eventually (cyc[2] ##1 cyc[3]));
       |                                                         ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:32:5: Unsupported: Timing control in action block of a strong property, which also runs at end of simulation
+   32 |     #1 $display("fail");
+      |     ^
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:34:50: Unsupported: Timing control in action block of a strong property, which also runs at end of simulation
+   34 |   assert property (@(posedge clk) a s_until b) n = #1 n + 1;
+      |                                                  ^
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:37:5: Unsupported: Timing control in action block of a strong property, which also runs at end of simulation
+   37 |     wait (n == 0);
+      |     ^~~~
 %Error: Exiting due to
