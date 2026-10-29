@@ -8818,6 +8818,27 @@ class WidthVisitor final : public VNVisitor {
             }
         }
     }
+    // True if an argument is valid on the left-hand side of a procedural assignment
+    static bool isArgLvalue(const AstNodeExpr* nodep) {
+        // Checked as parsed, before its PRELIM visit
+        if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef) || VN_IS(nodep, Pattern)) {
+            return true;
+        }
+        if (const AstNodePreSel* const selp = VN_CAST(nodep, NodePreSel)) {
+            return isArgLvalue(selp->fromp());
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            return isArgLvalue(streamp->lhsp());
+        }
+        if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            return isArgLvalue(concatp->lhsp()) && isArgLvalue(concatp->rhsp());
+        }
+        // The parser makes a concatenation a replication by one
+        if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            return repp->countp()->isOne() && isArgLvalue(repp->srcp());
+        }
+        return false;
+    }
     void processFTaskRefArgs(AstNodeFTaskRef* nodep) {
         VL_RESTORER(m_underCast);
         m_underCast = false;  // Arguments are checked independently of a cast of the result.
@@ -8849,6 +8870,15 @@ class WidthVisitor final : public VNVisitor {
                                                   << " requires a variable, but connection is"
                                                      " from a function call result (IEEE"
                                                      " 1800-2023 13.5.2)");
+                }
+                // A method call may be revisited, so check each argument once, as parsed
+                // A constant argument is reported later in V3Task
+                if (!argp->didWidthAndSet() && portp->isWritable() && !portp->isRef()
+                    && !VN_IS(pinp, Const) && !isArgLvalue(pinp)) {
+                    pinp->v3error("Function/task " << portp->direction().prettyName()
+                                                   << " argument " << portp->prettyNameQ()
+                                                   << " connected to an expression that cannot"
+                                                      " be assigned (IEEE 1800-2023 13.5)");
                 }
                 // Prelim may cause the node to get replaced; we've lost our
                 // pointer, so need to iterate separately later
