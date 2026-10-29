@@ -3320,6 +3320,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstGenBlock* m_genBlockp = nullptr;  // Current generate block
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
+    VSymEnt* m_argDefaultSymp = nullptr;  // Scope containing the subroutine of an argument
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
     int m_modportNum = 0;  // Uniqueify modport numbers
     int m_indent = 0;  // Indentation (tree depth) for debug
@@ -4674,6 +4675,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     return;
                 }
             }
+            if (first && m_argDefaultSymp && m_ds.m_dotSymp == m_curSymp
+                && m_argDefaultSymp->findIdFallback(nodep->name())) {
+                // An argument's default value is evaluated in the scope containing the
+                // subroutine (IEEE 1800-2023 13.5.3). Names only found inside the subroutine,
+                // such as its earlier arguments as used by UVM, are still accepted.
+                m_ds.m_dotSymp = m_argDefaultSymp;
+            }
             if (allowScope) {
                 foundp = m_statep->findDotted(nodep->fileline(), m_ds.m_dotSymp, nodep->name(),
                                               baddot, okSymp, first);  // Maybe nullptr
@@ -5547,7 +5555,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         VL_RESTORER(m_isParam);
         m_isParam = nodep->varType().isParam();
-        iterateChildren(nodep);
+        iterateAndNextNull(nodep->childDTypep());
+        iterateAndNextNull(nodep->delayp());
+        {
+            VL_RESTORER(m_argDefaultSymp);
+            if (m_ftaskp && nodep->isIO()) m_argDefaultSymp = m_curSymp->fallbackp();
+            iterateAndNextNull(nodep->valuep());
+        }
+        iterateAndNextNull(nodep->attrsp());
         if (m_statep->forPrimary() && nodep->isIO() && !m_ftaskp && !nodep->user4()) {
             nodep->v3error(
                 "Input/output/inout does not appear in port list: " << nodep->prettyNameQ());
