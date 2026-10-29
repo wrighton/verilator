@@ -6651,6 +6651,13 @@ class WidthVisitor final : public VNVisitor {
             while (patp) {
                 do {
                     if (patp->keyp()) {
+                        // A bare typedef name may also name a member, and then it is the member
+                        if (patp->isBareTypeKey()
+                            && m_memberMap.findMember(vdtypep, patp->keyp()->name())) {
+                            AstNode* const keyp = patp->keyp();
+                            keyp->replaceWith(new AstText{keyp->fileline(), keyp->name()});
+                            VL_DO_DANGLING(pushDeletep(keyp), keyp);
+                        }
                         // '{member:value} or '{data_type: default_value}
                         if (const AstText* textp = VN_CAST(patp->keyp(), Text)) {
                             // member: value

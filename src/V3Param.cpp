@@ -446,6 +446,9 @@ class ParamProcessor final {
                 if (memp->isDefault()) key += "default";
                 if (const AstText* const textp = VN_CAST(memp->keyp(), Text)) {
                     key += textp->text();
+                } else if (memp->isBareTypeKey()) {
+                    // Not yet known to be a type or a member
+                    key += memp->keyp()->name() + "/" + paramValueString(memp->keyp());
                 } else if (memp->keyp()) {
                     key += paramValueString(memp->keyp());
                 }

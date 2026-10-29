@@ -4511,6 +4511,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         new AstEnumItemRef{nodep->fileline(), itemp, foundp->classOrPackagep()});
                     UINFO(9, indent() << " new " << itemp);
                 }
+                if (VN_IS(foundp->nodep(), Typedef) || VN_IS(foundp->nodep(), ParamTypeDType)) {
+                    // A data type key, unless V3Width finds a structure member of this name
+                    textp->replaceWith(new AstRefDType{textp->fileline(), textp->text()});
+                    VL_DO_DANGLING(pushDeletep(textp), textp);
+                    nodep->isBareTypeKey(true);
+                }
             }
         }
         iterateChildren(nodep);

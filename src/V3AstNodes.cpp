@@ -3641,10 +3641,12 @@ void AstPatternItem::dump(std::ostream& str) const {
     Super::dump(str);
     if (isConcat()) str << " [CONCAT]";
     if (isDefault()) str << " [DEFAULT]";
+    if (isBareTypeKey()) str << " [BARETYPEKEY]";
 }
 void AstPatternItem::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isConcat);
     dumpJsonBoolFuncIf(str, isDefault);
+    dumpJsonBoolFuncIf(str, isBareTypeKey);
     dumpJsonGen(str);
 }
 void AstPin::dump(std::ostream& str) const {

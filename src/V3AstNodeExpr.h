@@ -626,6 +626,7 @@ class AstPatternItem final : public AstNode {
     // @astgen op4 := varrefp : Optional[AstNodeExpr]  // Decoded variable if TEXT
     bool m_isDefault = false;  // Has default
     bool m_isConcat = false;  // From concatenate
+    bool m_isBareTypeKey = false;  // Key was a bare identifier naming a type
 
 public:
     AstPatternItem(FileLine* fl, AstNodeExpr* lhssp, AstNode* keyp, AstNodeExpr* repp)
@@ -641,6 +642,8 @@ public:
     void isConcat(bool flag) { m_isConcat = flag; }
     bool isDefault() const { return m_isDefault; }
     void isDefault(bool flag) { m_isDefault = flag; }
+    bool isBareTypeKey() const { return m_isBareTypeKey; }
+    void isBareTypeKey(bool flag) { m_isBareTypeKey = flag; }
     AstNodeExpr* keyExprp() const { return varrefp() ? varrefp() : VN_CAST(keyp(), NodeExpr); }
 };
 class AstWith final : public AstNode {
