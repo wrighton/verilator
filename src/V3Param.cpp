@@ -1740,7 +1740,9 @@ class ParamProcessor final {
             const AstNodeDType* origp = modvarp->skipRefToNonRefp();
             if (!exprp) {
                 pinp->v3error("Parameter type pin value isn't a type: Param "
-                              << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
+                              << modvarp->prettyNameQ() << " of " << nodep->prettyNameQ());
+                // Keep the default, so later steps do not fail after the error
+                pinp->exprp()->unlinkFrBack()->deleteTree();
             } else if (!origp) {
                 pinp->v3error("Parameter type variable isn't a type: Param "
                               << modvarp->prettyNameQ());
