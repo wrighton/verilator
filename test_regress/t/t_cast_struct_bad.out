@@ -1,0 +1,32 @@
+%Error: t/t_cast_struct_bad.v:26:13: Incompatible types to static cast to 'real' from 'struct t.us_t'
+                                   : ... note: In instance 't'
+   26 |     r = real'(us);   
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_struct_bad.v:27:16: Incompatible types to static cast to 'real' from 'struct t.us_t'
+                                   : ... note: In instance 't'
+   27 |     rt = real_t'(us);   
+      |                ^
+%Error: t/t_cast_struct_bad.v:28:14: Incompatible types to static cast to 'struct t.us_t' from 'real'
+                                   : ... note: In instance 't'
+   28 |     us = us_t'(r);   
+      |              ^
+%Error: t/t_cast_struct_bad.v:29:13: Incompatible types to static cast to 'real' from 'union t.uu_t'
+                                   : ... note: In instance 't'
+   29 |     r = real'(uu);   
+      |             ^
+%Error: t/t_cast_struct_bad.v:30:14: Incompatible types to static cast to 'union t.uu_t' from 'real'
+                                   : ... note: In instance 't'
+   30 |     uu = uu_t'(rt);   
+      |              ^
+%Error: t/t_cast_struct_bad.v:31:11: Neither 'real' or 'struct t.us_t' is castable to the other one
+                                   : ... note: In instance 't'
+   31 |     r = c ? r : us;   
+      |           ^
+%Warning-CASTCONST: t/t_cast_struct_bad.v:32:9: $cast will always return zero as 'real' is not castable from 'struct t.us_t'
+                                              : ... note: In instance 't'
+   32 |     n = $cast(r, us);   
+      |         ^~~~~
+                    ... For warning description see https://verilator.org/warn/CASTCONST?v=latest
+                    ... Use "/* verilator lint_off CASTCONST */" and lint_on around source to disable this message.
+%Error: Exiting due to
