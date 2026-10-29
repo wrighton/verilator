@@ -274,23 +274,6 @@ public:
         else if (VN_IS(dtp, QueueDType) || VN_IS(dtp, DynArrayDType))
             puts("R");
     }
-    // Return a call reversing the descending dimensions of an unpacked array, "" if none
-    static std::string unpackReverseCall(const AstNodeDType* dtypep) {
-        // VL_PACK_*/VL_UNPACK_* take each dimension in element order, but streaming is left to
-        // right (IEEE 1800-2023 11.4.14), so every descending dimension must be reversed
-        std::string args;
-        size_t usedLength = 0;  // Length of args up to the last reversed dimension
-        while (const AstUnpackArrayDType* const adtypep
-               = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
-            if (!args.empty()) args += ", ";
-            const bool reverse = !adtypep->declRange().ascending();
-            args += reverse ? "1" : "0";
-            if (reverse) usedLength = args.size();
-            dtypep = adtypep->subDTypep();
-        }
-        if (!usedLength) return "";
-        return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
-    }
     void emitScIQW(AstVar* nodep) {
         UASSERT_OBJ(nodep->isSc(), nodep, "emitting SystemC operator on non-SC variable");
         puts(nodep->isScBigUint()                           ? "SB"
@@ -600,7 +583,7 @@ public:
         puts("_");
         emitRU(fromDtp);
         emitIQW(elemDtp);
-        emitOpName(nodep, "(%nw, %rw, %P, " + unpackReverseCall(fromDtp) + "(%li))",
+        emitOpName(nodep, "(%nw, %rw, %P, " + EmitCUtil::unpackReverseCall(fromDtp) + "(%li))",
                    nodep->fromp(), elemDtp, nullptr);
     }
 
@@ -763,7 +746,7 @@ public:
             puts(", ");
             rhs = false;
             iterateAndNextConstNull(castp->fromp());
-            reverseUnpackCall = unpackReverseCall(castp->dtypep());
+            reverseUnpackCall = EmitCUtil::unpackReverseCall(castp->dtypep());
         } else if (const AstCvtArrayToArray* const castp
                    = VN_CAST(nodep->rhsp(), CvtArrayToArray)) {
             if (castp->reverse()) {
@@ -1655,6 +1638,15 @@ public:
         } else {
             emitOpName(nodep, nodep->emitC(), nodep->lhsp(), nullptr, nullptr);
         }
+    }
+    void visit(AstToStringN* nodep) override {
+        const std::string reverseCall = EmitCUtil::unpackReverseCall(nodep->lhsp()->dtypep());
+        if (reverseCall.empty()) {
+            visit(static_cast<AstNodeUniop*>(nodep));
+            return;
+        }
+        emitOpName(nodep, "VL_TO_STRING(" + reverseCall + "(%li))", nodep->lhsp(), nullptr,
+                   nullptr);
     }
     void visit(AstNodeBiop* nodep) override {
         if (nodep->emitCheckMaxWords() && nodep->widthWords() > VL_MULS_MAX_WORDS) {

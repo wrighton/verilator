@@ -76,6 +76,24 @@ std::string EmitCMemberGroups::namedPath(const size_t idx) const {
 //######################################################################
 // EmitCUtil implementation
 
+std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep) {
+    // C++ unpacked arrays hold each dimension in element order, lowest index first, but
+    // streaming (IEEE 1800-2023 11.4.14) and %p (21.2.1.7) are left to right, so every
+    // descending dimension must be reversed
+    std::string args;
+    size_t usedLength = 0;  // Length of args up to the last reversed dimension
+    while (const AstUnpackArrayDType* const adtypep
+           = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
+        if (!args.empty()) args += ", ";
+        const bool reverse = !adtypep->declRange().ascending();
+        args += reverse ? "1" : "0";
+        if (reverse) usedLength = args.size();
+        dtypep = adtypep->subDTypep();
+    }
+    if (!usedLength) return "";
+    return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
+}
+
 string EmitCUtil::prefixNameProtect(const AstNode* nodep) VL_MT_STABLE {
     const string prefix = v3Global.opt.modPrefix() + "_" + VIdProtect::protect(nodep->name());
     // If all-uppercase prefix conflicts with a previous usage of the

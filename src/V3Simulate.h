@@ -751,8 +751,11 @@ private:
             string comma;
             const AstUnpackArrayDType* const dtypep
                 = VN_AS(valuep->dtypep()->skipRefp(), UnpackArrayDType);
-            for (int n = 0; n < dtypep->elementsConst(); ++n) {
-                result += comma + toStringRecurse(avaluep->valuep(n));
+            const int elements = dtypep->elementsConst();
+            for (int n = 0; n < elements; ++n) {
+                // Left to right, as the C++ VL_TO_STRING
+                const int index = dtypep->declRange().ascending() ? n : elements - 1 - n;
+                result += comma + toStringRecurse(avaluep->valuep(index));
                 comma = ", ";
             }
             result += "}";
