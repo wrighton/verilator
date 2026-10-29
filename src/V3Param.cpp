@@ -1816,7 +1816,7 @@ class ParamProcessor final {
                     while (const AstNodePreSel* const selp = VN_CAST(basep, NodePreSel)) {
                         basep = selp->fromp();
                     }
-                    if (const AstVarRef* const vrp = VN_CAST(basep, VarRef)) {
+                    if (const AstNodeVarRef* const vrp = VN_CAST(basep, NodeVarRef)) {
                         if (vrp->varp()) {
                             pinIrefp = VN_CAST(arraySubDTypeDeepp(vrp->varp()->subDTypep()),
                                                IfaceRefDType);
