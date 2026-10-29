@@ -183,11 +183,11 @@ class SliceVisitor final : public VNVisitor {
         // array representation that could be assigned.
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
+        const bool consLhs = VN_IS(nodep->lhsp(), ConsArray);
         // Slicing would evaluate an impure side once per element, so copy the whole array,
         // unless writing a slice, which is only done element by element
         const bool impure = !nodep->lhsp()->isPure() || !nodep->rhsp()->isPure();
-        if (!hasSc && !lhsSlice && !VN_IS(nodep->lhsp(), ConsArray)
-            && (!v3Global.opt.fSlice() || impure)) {
+        if (!hasSc && !lhsSlice && !consLhs && (!v3Global.opt.fSlice() || impure)) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
         }
@@ -195,7 +195,7 @@ class SliceVisitor final : public VNVisitor {
         // Skip optimization if array is too large
         const int elements = arrayp->rangep()->elementsConst();
         const int elementLimit = v3Global.opt.fSliceElementLimit();
-        if (!lhsSlice && elements > elementLimit && elementLimit > 0) {
+        if (!lhsSlice && !consLhs && elements > elementLimit && elementLimit > 0) {
             ++m_statSliceElementSkips;
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
@@ -235,6 +235,27 @@ class SliceVisitor final : public VNVisitor {
         return true;
     }
 
+    // Split an assignment to a structure pattern into an assignment per member
+    bool assignConsStruct(AstNodeAssign* nodep) {
+        // Such an lvalue comes e.g. from an output port connection (IEEE 1800-2023 23.3.3)
+        AstConsStruct* const consp = VN_CAST(nodep->lhsp(), ConsStruct);
+        if (!consp) return false;
+        AstNodeAssign* newlistp = nullptr;
+        for (AstConsStructItem* itemp = consp->itemsp(); itemp;
+             itemp = VN_AS(itemp->nextp(), ConsStructItem)) {
+            // Original node is replaced, so it is safe to copy it one time even if it is impure.
+            AstNodeExpr* const fromp = nodep->rhsp()->cloneTree(false, newlistp != nullptr);
+            AstStructSel* const selp
+                = new AstStructSel{fromp->fileline(), fromp, itemp->memberp()->name()};
+            selp->dtypeFrom(itemp->memberp()->dtypep());
+            newlistp = AstNode::addNext(newlistp,
+                                        nodep->cloneType(itemp->valuep()->unlinkFrBack(), selp));
+        }
+        nodep->replaceWith(newlistp);
+        VL_DO_DANGLING(nodep->deleteTree(), nodep);
+        return true;
+    }
+
     void visit(AstNodeAssign* nodep) override {
         // Called recursively on newly created assignments
         if (nodep->user1SetOnce()) return;  // Process once
@@ -244,7 +265,7 @@ class SliceVisitor final : public VNVisitor {
         VL_RESTORER(m_okConsArray);  // Set in assignOptimize
         m_assignError = false;
         m_assignp = nodep;
-        if (assignOptimize(nodep)) return;
+        if (assignOptimize(nodep) || assignConsStruct(nodep)) return;
         iterateChildren(nodep);
     }
 
