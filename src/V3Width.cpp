@@ -379,6 +379,7 @@ class WidthVisitor final : public VNVisitor {
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
     bool m_underSExpr = false;  // Visiting under a sequence expression
     const AstNodeExpr* m_cycleDelayPropp = nullptr;  // Operand of unary cycle delay
+    bool m_underSvaExpr = false;  // Under a property spec, property, sequence, or sequence event
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
     bool m_underMemberRef = false;  // Viting under a MemberRef
     AstNodeExpr* m_fromParentp = nullptr;  // Method call or member select iterating its fromp()
@@ -7472,6 +7473,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstPropSpec* nodep) override {
         VL_RESTORER(m_seqUnsupp);
         VL_RESTORER(m_hasSExpr);
+        VL_RESTORER(m_underSvaExpr);
+        m_underSvaExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {  // First stage evaluation
             // Only bare strong until uses V3AssertPre's timing-based lowering. Embedded forms
@@ -8620,7 +8623,10 @@ class WidthVisitor final : public VNVisitor {
         nodep->doingWidth(true);
         VL_RESTORER(m_funcp);
         VL_RESTORER(m_ftaskp);
+        VL_RESTORER(m_underSvaExpr);
         m_ftaskp = nodep;
+        // The body is not in the context of the assertion that may be widthing it
+        m_underSvaExpr = false;
         // First width the function variable, as if is a recursive function we need data type
         if (nodep->fvarp()) userIterate(nodep->fvarp(), nullptr);
         if (nodep->isConstructor()) {
@@ -8730,10 +8736,12 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_propertyp);
         VL_RESTORER(m_underSExpr);
         VL_RESTORER(m_cycleDelayPropp);
+        VL_RESTORER(m_underSvaExpr);
         m_propertyp = nodep;
         // The body is not in the context of the instance that may be widthing it
         m_underSExpr = false;
         m_cycleDelayPropp = nullptr;
+        m_underSvaExpr = true;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "PropSpec", nodep->specp(), SELF, BOTH);
         nodep->didWidth(true);
@@ -8747,9 +8755,11 @@ class WidthVisitor final : public VNVisitor {
         if (nodep->didWidth()) return;
         VL_RESTORER(m_underSExpr);
         VL_RESTORER(m_cycleDelayPropp);
+        VL_RESTORER(m_underSvaExpr);
         // The body is a sequence expression, whatever the context of the instance widthing it
         m_underSExpr = true;
         m_cycleDelayPropp = nullptr;
+        m_underSvaExpr = true;
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
         nodep->didWidth(true);
@@ -8759,6 +8769,7 @@ class WidthVisitor final : public VNVisitor {
         const AstProperty* const propp = VN_CAST(nodep->schemap(), Property);
         if (propp && hasPropertyOperator(propp) && replacePropertyInSExpr(nodep)) return;
         if (nodep->didWidth()) return;
+        if (!m_underSvaExpr) checkSvaInstanceContext(nodep);
         userIterate(nodep->schemap(), nullptr);
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
@@ -9200,6 +9211,20 @@ class WidthVisitor final : public VNVisitor {
         nodep->didWidth(true);
         // See steps that follow in visit(AstFuncRef*)
     }
+    // Report an instance of a sequence or property outside the expressions that may contain one
+    static void checkSvaInstanceContext(const AstSchemaRef* nodep) {
+        // Later passes abort on the error, so the instance is left in place
+        if (VN_IS(nodep->schemap(), Sequence)) {
+            nodep->v3error("Illegal use of sequence instance "
+                           << nodep->prettyNameQ()
+                           << " outside a sequence expression, property expression or event"
+                              " control (IEEE 1800-2023 16.8)");
+        } else if (VN_IS(nodep->schemap(), Property)) {
+            nodep->v3error("Illegal use of property instance " << nodep->prettyNameQ()
+                                                               << " outside a property expression"
+                                                                  " (IEEE 1800-2023 16.12)");
+        }
+    }
     void visit(AstNodeProcedure* nodep) override {
         assertAtStatement(nodep);
         VL_RESTORER(m_procedurep);
@@ -9222,6 +9247,10 @@ class WidthVisitor final : public VNVisitor {
             nodep->replaceWith(new AstSenItem{rhsp->fileline(), nodep->edgeType(), rhsp});
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else {
+            VL_RESTORER(m_underSvaExpr);
+            // A sequence event control (IEEE 1800-2023 9.4.2.4)
+            const AstSchemaRef* const schemaRefp = VN_CAST(nodep->sensp(), SchemaRef);
+            if (schemaRefp && VN_IS(schemaRefp->schemap(), Sequence)) m_underSvaExpr = true;
             userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
             if (nodep->edgeType().anEdge()) {
                 AstNodeDType* const sensDtp = nodep->sensp()->dtypep()->skipRefp();
