@@ -75,6 +75,24 @@ module t (
   assert property (prop_rep_max(n))
   else fails++;
 
+  // Likewise for formal arguments used as always range bounds (IEEE 1800-2023 16.12.11)
+  property prop_always(untyped lo, untyped hi);
+    @(posedge clk) a |-> always [lo:hi] b;
+  endproperty
+  property prop_always_from(untyped lo);
+    @(posedge clk) a |-> always [lo:$] b;
+  endproperty
+  assert property (prop_always(n, 2))
+  else fails++;
+  assert property (prop_always(1, n))
+  else fails++;
+  assert property (prop_always(3, 1))
+  else fails++;
+  assert property (prop_always(1, 32'h7fffffff))
+  else fails++;
+  assert property (prop_always_from(-1))
+  else fails++;
+
   // As 'a' is never set, none would fail
   final `checkd(fails, 0)
 
