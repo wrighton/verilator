@@ -395,7 +395,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh196, SUB_B, 2'h1);
+                               32'sh197, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -2073,6 +2073,7 @@ package Pkg;
             begin
                 __VprocessQueue_named__0.push_back(
                                                    self());
+                #1;
             end
             join
         end

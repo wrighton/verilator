@@ -159,6 +159,22 @@ class LinkJumpVisitor final : public VNVisitor {
         if (AstNode* const refp = nodep->op4p()) addPrefixToBlocksRecurse(prefix, refp);
         if (AstNode* const refp = nodep->nextp()) addPrefixToBlocksRecurse(prefix, refp);
     }
+    // Whether a block or task body may suspend, fork, or call a task
+    static bool maySuspend(const AstNode* nodep) {
+        // Otherwise it runs to completion once entered, so a disable in another process never
+        // finds it executing, and has nothing to terminate. A function call does not suspend,
+        // nor does a disable in the body, also once replaced by a process::killQueue call. A
+        // method call is not linked yet, so it may suspend.
+        const AstClass* const processClassp = v3Global.rootp()->stdPackageProcessp();
+        return nodep->exists([&](const AstNode* itemp) {
+            if (itemp->isTimingControl() || VN_IS(itemp, Fork)) return true;
+            const AstNodeFTaskRef* const refp = VN_CAST(itemp, NodeFTaskRef);
+            if (!refp || (refp->taskp() && refp->taskp()->verilogFunction())) return false;
+            return !(refp->classOrPackagep() && refp->classOrPackagep() == processClassp);
+        });
+    }
+    // Whether inside a user function
+    bool inFunction() const { return m_ftaskp && m_ftaskp->verilogFunction(); }
     bool existsBlockAbove(const std::string& name) const {
         for (const AstNode* const stackp : vlstd::reverse_view(m_blockStack)) {
             if (stackp->name() == name) return true;
@@ -616,6 +632,12 @@ class LinkJumpVisitor final : public VNVisitor {
             return;
         }
         if (AstTask* const taskp = VN_CAST(targetp, Task)) {
+            // Drop it, unless the target can be executing it: the disable is in the target
+            // itself, or in a function it calls (calling a task makes the target suspendable)
+            if (m_ftaskp != taskp && !inFunction() && !maySuspend(taskp)) {
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
+            }
             AstVar* const processQueuep = getOrCreateTaskDisableQueuep(taskp, nodep->fileline());
             AstStmtExpr* const killStmtp = insertKillStmtp(nodep, processQueuep);
 
@@ -656,7 +678,7 @@ class LinkJumpVisitor final : public VNVisitor {
                     // after disable from executing.
                     addJumpAfterKill(killStmtp, branchp ? branchp : beginp);
                 }
-            } else {
+            } else if (inFunction() || maySuspend(beginp)) {  // As for a task target
                 needBeginDisableProcess(beginp, nodep->fileline());
                 AstVar* const processQueuep
                     = getOrCreateBeginDisableQueuep(beginp, nodep->fileline());
