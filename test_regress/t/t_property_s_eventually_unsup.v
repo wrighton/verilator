@@ -24,6 +24,19 @@ module t;
   assert property (@(posedge clk) cyc[0] ##1 cyc[1] |-> s_eventually (s_always [1:2] cyc[2]));
   assert property (@(posedge clk) cyc[0] ##1 cyc[1] |-> s_eventually (cyc[2] or s_eventually cyc[3]));
 
+  // Action blocks of strong properties also run in the end-of-simulation check
+  logic a = 1, b = 0;
+  int n = 0;
+  assert property (@(posedge clk) a |-> s_eventually b)
+  else begin
+    #1 $display("fail");
+  end
+  assert property (@(posedge clk) a s_until b) n = #1 n + 1;
+  assert property (@(posedge clk) s_eventually b) begin
+    ++n;
+    wait (n == 0);
+  end
+
   always @(posedge clk) begin
     ++cyc;
     if (cyc == MAX) begin
