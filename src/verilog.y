@@ -110,7 +110,10 @@ const VBasicDTypeKwd LOGIC_IMPLICIT = VBasicDTypeKwd::LOGIC_IMPLICIT;
         GRAMMARP->m_varDeclTyped = true; \
     }
 #define VARDTYPE_NDECL(dtypep) \
-    { GRAMMARP->setDType(dtypep); }  // Port that is range or signed only (not a decl)
+    { \
+        GRAMMARP->setDType(dtypep); \
+        GRAMMARP->m_varDeclTyped = false; \
+    }  // Port that is range or signed only (not a decl)
 
 #define VARDONEA(fl, name, array, attrs) GRAMMARP->createVariable((fl), (name), (array), (attrs))
 #define VARDONEP(portp, array, attrs) \
