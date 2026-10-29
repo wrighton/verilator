@@ -502,8 +502,10 @@ private:
             // Initialize the clockvar
             AstVarRef* const skewedWriteRefp = new AstVarRef{flp, varp, VAccess::WRITE};
             skewedWriteRefp->user1(true);
-            AstInitialStatic* const initClockvarp = new AstInitialStatic{
-                flp, new AstAssign{flp, skewedWriteRefp, exprp->cloneTreePure(false)}};
+            AstNodeExpr* const initValuep = exprp->cloneTreePure(false);
+            initValuep->foreach([](AstNodeVarRef* refp) { refp->access(VAccess::READ); });
+            AstInitialStatic* const initClockvarp
+                = new AstInitialStatic{flp, new AstAssign{flp, skewedWriteRefp, initValuep}};
             m_modp->addStmtsp(initClockvarp);
             // Each drive sets a flag, so the signal is also assigned when driven with the same
             // value again, e.g. after another assignment to the signal (IEEE 1800-2023 14.16.2)

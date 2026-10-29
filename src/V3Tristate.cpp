@@ -2337,7 +2337,18 @@ class TristateVisitor final : public TristateBaseVisitor {
                     }
                     return;
                 }
-                UASSERT_OBJ(!nodep->access().isRW(), nodep, "Tristate unexpected on R/W access");
+                // A write that is not the target of the enclosing assignment comes from an
+                // output, inout or ref argument, or a system function, and has no enable.
+                // This relies on earlier passes marking only real writes as WRITE; a read
+                // left with a stale WRITE access would also be reported here.
+                if (nodep->access().isRW() || (m_assignp && !m_alhs)) {
+                    nodep->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: Tristate variable written by subroutine argument "
+                                  "or system function: "
+                                      << nodep->prettyNameQ());
+                    m_tgraph.didProcess(nodep, true);
+                    return;
+                }
                 m_tgraph.didProcess(nodep);
                 mapInsertLhsVarRef(nodep);
             } else if (nodep->access().isReadOnly()
