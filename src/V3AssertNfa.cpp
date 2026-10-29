@@ -1361,6 +1361,13 @@ class SvaNfaBuilder final {
 
     BuildResult buildThroughout(AstSThroughout* nodep, SvaStateVertex* entryVtxp,
                                 bool isTopLevelStep = false) {
+        // A delay ring also holds attempts that have not reached the start yet, which the
+        // guard must neither clear nor reject, so start from a plain vertex after it
+        if (entryVtxp->m_delayRingSize) {
+            SvaStateVertex* const startp = scopedCreateVertex();
+            guardedLink(entryVtxp, startp, nodep->fileline());
+            entryVtxp = startp;
+        }
         // Mark entryVtxp so "cond false at tick 0" is detected as throughout-drop.
         entryVtxp->m_throughoutConds.push_back(nodep->lhsp()->cloneTreePure(false));
         m_temporalGuardStack.push_back(nodep->lhsp());
