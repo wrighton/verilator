@@ -2924,7 +2924,7 @@ class AssertNfaVisitor final : public VNVisitor {
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
     AstAlways* m_alwaysp = nullptr;  // Enclosing always, for a procedural assertion
     AstSenItem* m_alwaysClockp = nullptr;  // Clock inferred from m_alwaysp
-    V3UniqueNames m_propVarNames{"__Vpropvar"};  // Property-local variable names
+    V3UniqueNames m_propVarNames{"__VnfaPropvar"};  // Property-local variable names
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
     std::set<const AstProperty*> m_inliningProps;  // Recursion guard for inlineNamedProperty
