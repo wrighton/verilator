@@ -372,6 +372,27 @@ class ThisHandleMonitor;
 endclass
 `endif
 
+class ExprClockMonitor;
+  bit clk;
+  bit prev_clk;
+  bit [3:0] sampled;
+
+  // The event signal is only assigned within expressions
+  covergroup expr_cg @(posedge clk);
+    cp_expr: coverpoint sampled {bins lo = {[0 : 7]}; bins hi = {[8 : 15]};}
+  endgroup
+
+  function new();
+    expr_cg = new;
+  endfunction
+
+  function void observe(bit [3:0] v);
+    sampled = v;
+    prev_clk = clk++;
+    prev_clk = clk--;
+  endfunction
+endclass
+
 class ClockEvent;
   bit clk;
 endclass
@@ -601,6 +622,7 @@ module t;
   ParameterizedDerivedMonitor parameterized;
   ThisMonitor this_mon;
   ThisSampleMonitor this_sample_mon;
+  ExprClockMonitor expr_clock_mon;
 `ifdef VERILATOR
   ThisHandleMonitor this_handle_mon;
 `endif
@@ -634,6 +656,7 @@ module t;
     parameterized = new;
     this_mon = new;
     this_sample_mon = new;
+    expr_clock_mon = new;
 `ifdef VERILATOR
     this_handle_mon = new;
 `endif
@@ -667,6 +690,7 @@ module t;
       parameterized.observe(i[3:0]);
       this_mon.observe(i[3:0]);
       this_sample_mon.observe(i[3:0]);
+      expr_clock_mon.observe(i[3:0]);
 `ifdef VERILATOR
       this_handle_mon.observe(i[3:0]);
 `endif

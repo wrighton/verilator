@@ -1390,10 +1390,6 @@ inline bool AstNode::mayBeUnder<AstCell>(const AstNode* nodep) {
     return !VN_IS(nodep, NodeStmt) && !VN_IS(nodep, NodeExpr);
 }
 template <>
-inline bool AstNode::mayBeUnder<AstNodeAssign>(const AstNode* nodep) {
-    return !VN_IS(nodep, NodeExpr);
-}
-template <>
 inline bool AstNode::mayBeUnder<AstVarScope>(const AstNode* nodep) {
     if (VN_IS(nodep, VarScope)) return false;  // Should not nest
     if (VN_IS(nodep, Var)) return false;
