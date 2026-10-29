@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_assert_rep_range_unbounded_unsup.v:13:49: Unsupported: Goto repetition range with '$' maximum (IEEE 1800-2023 16.9.2)
+                                                                : ... note: In instance 't'
+   13 |   assert property (@(posedge clk) a |-> b [-> 1:$]);
+      |                                                 ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_rep_range_unbounded_unsup.v:14:48: Unsupported: Nonconsecutive repetition range with '$' maximum (IEEE 1800-2023 16.9.2)
+                                                                : ... note: In instance 't'
+   14 |   assert property (@(posedge clk) a |-> b [= 1:$]);
+      |                                                ^
+%Error: Exiting due to
