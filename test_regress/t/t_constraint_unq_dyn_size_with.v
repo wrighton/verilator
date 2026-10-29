@@ -36,7 +36,39 @@ class Frame;
   }
 endclass
 
+// unique{} in the class rather than in the with-block, called repeatedly
+class Packet;
+  rand bit [1:0] x;
+  rand bit [1:0] y;
+  rand bit [3:0] q[$];
+  rand bit [3:0] d[];
+  constraint c_size {
+    q.size() == 3;
+    d.size() == 4;
+    unique {q};
+    unique {d};
+  }
+endclass
+
 module t;
+  initial begin
+    automatic Packet p = new;
+    automatic int randomize_result;
+    repeat (10) begin
+      randomize_result = p.randomize() with {x != y;};
+      `checkd(randomize_result, 1)
+      `checkd(p.x != p.y, 1)
+      `checkd(p.q.size(), 3)
+      `checkd(p.d.size(), 4)
+      for (int i = 0; i < 3; i++) begin
+        for (int j = i + 1; j < 3; j++) `checkd(p.q[i] != p.q[j], 1)
+      end
+      for (int i = 0; i < 4; i++) begin
+        for (int j = i + 1; j < 4; j++) `checkd(p.d[i] != p.d[j], 1)
+      end
+    end
+  end
+
   initial begin
     automatic Frame fr = new;
     automatic int ok;
