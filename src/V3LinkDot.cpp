@@ -6186,7 +6186,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (nodep->user3SetOnce()) return;
         LINKDOT_VISIT_START();
         const bool dotFinal = m_ds.m_dotPos == DP_FINAL;
+        const bool finalPos = m_ds.m_dotPos == DP_FINAL;
         iterateAndNextNull(nodep->fromp());
+        // A dotted reference ending in an element of an interface array: the instance array
+        // resolved to its variable, leaving a scope position; select from it, as when not dotted
+        if (finalPos && m_ds.m_dotPos == DP_SCOPE && VN_IS(nodep->fromp(), VarXRef)) {
+            m_ds.m_dotPos = DP_FINAL;
+        }
         if (m_ds.m_unresolvedClass) {
             UASSERT_OBJ(m_ds.m_dotPos != DP_SCOPE && m_ds.m_dotPos != DP_FIRST, nodep,
                         "Object of unresolved class on scope position in dotted reference");
