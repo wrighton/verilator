@@ -5,4 +5,9 @@
       |   ^~~~~~
                    ... For warning description see https://verilator.org/warn/ALWNEVER?v=latest
                    ... Use "/* verilator lint_off ALWNEVER */" and lint_on around source to disable this message.
+%Warning-ALWNEVER: t/t_event_control_star_never.v:17:3: 'always @*' will never execute as expression list is empty (no variables read)
+                                                      : ... note: In instance 't'
+                                                      : ... Suggest use an explicit sensitivity list
+   17 |   always @* begin   
+      |   ^~~~~~
 %Error: Exiting due to
