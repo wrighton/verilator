@@ -59,6 +59,28 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 //######################################################################
 // Helpers shared by the lowering visitors
 
+// Whether any operand of nodep depends on a randomized variable
+static bool operandsRand(const AstNode* nodep) {
+    return (nodep->op1p() && nodep->op1p()->user1()) || (nodep->op2p() && nodep->op2p()->user1())
+           || (nodep->op3p() && nodep->op3p()->user1())
+           || (nodep->op4p() && nodep->op4p()->user1());
+}
+
+// Whether an array index depends on a variable being randomized
+static bool isRandIndex(const AstNodeExpr* indexp) {
+    // Not user1, which can be over-marked in sum/with expansion contexts. A std::randomize()
+    // with-clause argument carries no rand qualifier of its own but is still part of the solve.
+    return indexp->exists([](const AstNodeVarRef* const vrefp) {
+        return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+    });
+}
+
+// Return the index of an array element select
+static AstNodeExpr* selIndexp(AstNode* selp) {
+    if (AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) return arraySelp->bitp();
+    return VN_AS(selp, CMethodHard)->pinsp();
+}
+
 // SMT constant with the value of nodep
 static AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
     return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
@@ -550,7 +572,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     bool editFormat(AstNodeExpr* nodep) {
-        if (nodep->user1()) return false;
+        if (nodep->user1()) return editStateArraySel(nodep);
         // Replace computable expression with SMT constant
         VNRelinker handle;
         nodep->unlinkFrBack(&handle);
@@ -865,17 +887,18 @@ class ConstraintExprVisitor final : public VNVisitor {
         extendp->user1(true);
         return extendp;
     }
-    // Return an SMT constant array of the current elements of a non-random array
-    AstSFormatF* newConstArrayp(AstNodeExpr* selp, AstNodeExpr* arrayp, int idxWidth) {
-        // Elements that do not exist read as zero, the default value of a 2-state type
-        // (IEEE 1800-2023 7.4.6). The index of a fixed-size array was already truncated to
-        // the width that addresses the array, as in other expressions.
-        if (!selp->dtypep()->skipRefp()->isIntegralOrPacked()) {
-            selp->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into a non-random array "
-                                        "of non-integral elements");
-            return getConstFormat(arrayp->unlinkFrBack());
-        }
-        FileLine* const fl = arrayp->fileline();
+    // Return an SMT array of the value of exprp at each element of the array selp selects
+    AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp) {
+        // Element i is exprp with the random index of selp replaced by i, so it may read
+        // members of the array element and depend on other random variables. Elements that do
+        // not exist read as zero, the default value of a 2-state type (IEEE 1800-2023 7.4.6),
+        // which also makes 'inside' a member array of a nonexistent element false. The index
+        // of a fixed-size array was already truncated to the width that addresses the array,
+        // as in other expressions.
+        FileLine* const fl = selp->fileline();
+        AstNodeExpr* const arrayp = VN_IS(selp, ArraySel) ? VN_AS(selp, ArraySel)->fromp()
+                                                          : VN_AS(selp, CMethodHard)->fromp();
+        const int idxWidth = std::max(32, selIndexp(selp)->width());
         AstVar* const idxVarp
             = new AstVar{fl, VVarType::BLOCKTEMP, "__VarrIdx", arrayp->findIntDType()};
         AstForeachHeader* const headerp
@@ -889,13 +912,31 @@ class ConstraintExprVisitor final : public VNVisitor {
                                            static_cast<uint32_t>(adtypep->lo())}};
             posp->dtypeFrom(idxVarp);
         }
-        AstNodeExpr* const elemp = newSel(fl, arrayp, posp->cloneTreePure(false));
-        const int width = elemp->width();
+        AstNodeExpr* const elemp = exprp->cloneTreePure(false);
+        AstNode* const elemSelp = selp->clonep();
+        AstNodeExpr* const oldIndexp = selIndexp(elemSelp);
+        oldIndexp->replaceWith(posp->cloneTreePure(false));
+        VL_DO_DANGLING(oldIndexp->deleteTree(), oldIndexp);
+        // The path from elemp down to the element select, through fromp (see randIndexSelp),
+        // no longer depends on the index
+        std::vector<AstNode*> pathps;
+        for (AstNode* nodep = elemp;; nodep = nodep->op1p()) {
+            pathps.push_back(nodep);
+            if (nodep == elemSelp) break;
+        }
+        for (auto it = pathps.rbegin(); it != pathps.rend(); ++it) {
+            (*it)->user1(operandsRand(*it));
+        }
+        AstNodeExpr* const handlep = selp->cloneTreePure(false);
+        AstNodeExpr* const handleIndexp = selIndexp(handlep);
+        handleIndexp->replaceWith(posp->cloneTreePure(false));
+        VL_DO_DANGLING(handleIndexp->deleteTree(), handleIndexp);
+        const int width = exprp->width();
         AstCStmt* const cstmtp = new AstCStmt{fl};
         cstmtp->add("ret = \"(store \" + ret + \" \" + ");
         cstmtp->add(getConstFormat(idxWidth > 32 ? new AstExtend{fl, posp, idxWidth} : posp));
         cstmtp->add(" + \" \" + ");
-        cstmtp->add(getConstFormat(elemp));
+        cstmtp->add(iterateSubtreeReturnEdits(elemp));
         cstmtp->add(" + \")\";\n");
         AstCExpr* const cexprp = new AstCExpr{fl};
         cexprp->dtypeSetString();
@@ -903,10 +944,41 @@ class ConstraintExprVisitor final : public VNVisitor {
             = (width & 3) ? "#b" + std::string(width, '0') : "#x" + std::string(width / 4, '0');
         cexprp->add("([&]{\nstd::string ret = \"((as const (Array (_ BitVec " + cvtToStr(idxWidth)
                     + ") (_ BitVec " + cvtToStr(width) + "))) " + zero + ")\";\n");
+        AstNodeStmt* bodyp = cstmtp;
+        if (VN_IS(handlep->dtypep()->skipRefp(), ClassRefDType)) {
+            // A null handle has no members; its element reads as zero like a nonexistent one
+            AstNeq* const nonNullp = new AstNeq{fl, handlep, new AstConst{fl, AstConst::Null{}}};
+            nonNullp->dtypeSetBit();
+            bodyp = new AstIf{fl, nonNullp, cstmtp};
+        } else {
+            VL_DO_DANGLING(handlep->deleteTree(), handlep);
+        }
         cexprp->add(new AstBegin{fl, m_uniqueNames.get("__VrandBlock"),
-                                 new AstForeach{fl, headerp, cstmtp}, true});
+                                 new AstForeach{fl, headerp, bodyp}, true});
         cexprp->add("return ret;\n})()");
         return new AstSFormatF{fl, "%s", false, cexprp};
+    }
+    // Replace an expression reading a non-random array through a random index
+    bool editStateArraySel(AstNodeExpr* nodep) {
+        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+        AstNodeExpr* const selp = RandomizeUtil::randIndexSelp(nodep, isRandIndex);
+        if (!selp) return false;
+        AstSFormatF* const arrayp = newIndexedArrayp(nodep, selp);
+        AstNodeExpr* const indexp = selIndexp(selp)->unlinkFrBack();
+        // The offset into a fixed-size array is unsigned, even when computed as signed
+        AstNodeExpr* const smtIndexp
+            = newSmtIndexp(indexp, VN_IS(selp, CMethodHard) && indexp->isSigned());
+        nodep->replaceWith(createSolverArrDerefp(
+            nodep->fileline(), arrayp, VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr)));
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
+    // Report a random index into a non-random array not read as an integral value
+    void unsupportedStateArraySel(AstNodeExpr* selp) {
+        selp->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into a non-random array "
+                                    "selecting a non-integral value");
+        selp->user1(false);
+        editFormat(selp);
     }
 
     // Add registration regp of a variable reached through member objects
@@ -2030,16 +2102,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
         VNRelinker handle;
-        // Check if index actually references a rand variable (not just user1,
-        // which can be over-marked in sum/with expansion contexts). A
-        // std::randomize() with-clause argument carries no rand qualifier of
-        // its own but is still part of the solve.
-        bool indexIsRand = false;
-        nodep->bitp()->foreach([&](const AstNodeVarRef* vrefp) {
-            if (vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg()) {
-                indexIsRand = true;
-            }
-        });
+        const bool indexIsRand = isRandIndex(nodep->bitp());
         if (m_nestedAccessp) {
             AstNodeExpr* const bitp = nodep->bitp()->cloneTreePure(false);
             AstNodeExpr* const bitFormatp
@@ -2060,15 +2123,14 @@ class ConstraintExprVisitor final : public VNVisitor {
                 return;
             }
         }
-        if (indexIsRand) {
+        if (indexIsRand && !nodep->fromp()->user1()) {
+            unsupportedStateArraySel(nodep);
+        } else if (indexIsRand) {
             // Index depends on rand variable -- keep as SMT symbol.
             // The offset from the low bound is unsigned, even when computed as signed
             AstNodeExpr* const indexp = newSmtIndexp(nodep->bitp()->unlinkFrBack(&handle), false);
             handle.relink(indexp);
-            AstNodeExpr* const fromp = nodep->fromp();
-            AstSFormatF* const newp = editSMT(
-                nodep, fromp->user1() ? fromp : newConstArrayp(nodep, fromp, indexp->width()),
-                indexp);
+            AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
             renameArrayExpr(newp);
         } else {
             // Index is constant or non-rand -- format as hex literal.
@@ -2136,8 +2198,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         return true;
     }
     void visit(AstMemberRef* nodep) override {
+        if (nodep->user1() && editStateArraySel(nodep)) return;
         // Check if rootVar is globalConstrained
-        if (nodep->varp()->rand().isRandomizable() && nodep->fromp()) {
+        if (nodep->user1() && nodep->varp()->rand().isRandomizable() && nodep->fromp()) {
             FileLine* const fl = nodep->fileline();
             if (m_nestedAccessp) {
                 AstSFormatF* const formatp = new AstSFormatF{fl, nodep->name(), false, nullptr};
@@ -2638,10 +2701,7 @@ class ConstraintExprVisitor final : public VNVisitor {
 
         if (nodep->method() == VCMethod::ARRAY_AT) {
             addStringNamePart(nodep->pinsp(), "%x");
-            const bool indexIsRand = nodep->pinsp()->exists([](const AstNodeVarRef* const vrefp) {
-                return vrefp->varp()->rand().isRandomizable()
-                       || vrefp->varp()->isStdRandomizeArg();
-            });
+            const bool indexIsRand = isRandIndex(nodep->pinsp());
             if (nodep->fromp()->user1()) {
                 // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
                 // only. A std::randomize() with-clause argument carries no rand qualifier of its
@@ -2714,12 +2774,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
 
             } else if (indexIsRand) {
-                AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
-                AstNodeExpr* const indexp = newSmtIndexp(pinp, pinp->isSigned());
-                AstSFormatF* const arrayp = newConstArrayp(nodep, nodep->fromp(), indexp->width());
-                nodep->replaceWith(createSolverArrDerefp(
-                    fl, arrayp, VN_AS(iterateSubtreeReturnEdits(indexp), NodeExpr)));
-                VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                unsupportedStateArraySel(nodep);
             } else {
                 nodep->user1(false);
                 UASSERT_OBJ(editFormat(nodep), nodep,
