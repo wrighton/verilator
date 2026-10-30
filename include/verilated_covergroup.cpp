@@ -822,9 +822,27 @@ static void _vl_cov_warn_ignored(const char* file, int line, const std::string& 
 
 void VlCoverpoint::sizedFinish(VlCovBinKind kind, QData count, bool positive, uint32_t limit,
                                const char* name, const char* file, int line, int col,
-                               bool single) {
+                               VlCovBinGrouping grouping) {
     ValueData& data = *m_valuesp;
     assert(!data.m_frozen);
+    if (grouping == VlCovBinGrouping::Values) {
+        // The bins of a 'with' filter keeping every value, each once, in value order
+        ValueData::With& with = data.m_with;
+        with = ValueData::With{};
+        with.m_grouping = grouping;
+        with.m_limit = std::min(limit, UINT32_MAX - m_total);
+        with.m_values = ValueData::Value{data.positionWords()};
+        for (ValueData::SizedElement& element : data.m_sizedElements) {
+            with.m_kept.push_back({std::move(element.m_lo), std::move(element.m_hi), {}});
+        }
+        data.normalize(with.m_kept);
+        for (const ValueData::Range& range : with.m_kept) {
+            data.countValues(range.m_lo, range.m_hi, with.m_values);
+        }
+        with.m_full = data.compare(with.m_values, data.toPosition(with.m_limit)) > 0;
+        withFinish(kind, count, positive, name, file, line, col);
+        return;
+    }
     data.m_sized.emplace_back();
     ValueData::Sized& sized = data.m_sized.back();
     sized.m_kind = kind;
@@ -872,8 +890,9 @@ void VlCoverpoint::sizedFinish(VlCovBinKind kind, QData count, bool positive, ui
     m_counts.resize(m_total, 0);
     m_crossIdx.resize(m_total, -1);
     data.m_values.resize(m_total);
-    addNamer(kind, sized.m_count, single ? VlCovBinNaming::Single : VlCovBinNaming::Array, name,
-             file, line, col);
+    addNamer(kind, sized.m_count,
+             grouping == VlCovBinGrouping::Single ? VlCovBinNaming::Single : VlCovBinNaming::Array,
+             name, file, line, col);
     // Give each bin the values of its positions, for exclusions and cross selections
     size_t element = 0;
     ValueData::Value first{data.positionWords()};  // First position of bin k
@@ -1050,7 +1069,8 @@ void VlCoverpoint::withFinish(VlCovBinKind kind, QData count, bool positive, con
         for (ValueData::Range& range : kept) {
             data.m_sizedElements.push_back({std::move(range.m_lo), std::move(range.m_hi), {}});
         }
-        sizedFinish(kind, count, positive, with.m_limit, name, file, line, col, false);
+        sizedFinish(kind, count, positive, with.m_limit, name, file, line, col,
+                    VlCovBinGrouping::Fixed);
         return;
     }
     data.m_sized.emplace_back();
