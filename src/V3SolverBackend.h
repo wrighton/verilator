@@ -27,6 +27,7 @@
 
 #include "V3Ast.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -130,6 +131,16 @@ public:
     // Class randomize(): add statements that must follow the solver result,
     // after the front end has emitted the assignment that evaluates it
     virtual void addAfterClassSolve(AstClass* classp, AstFunc* randomizep) = 0;
+    // Complete class solver lowering after both result and basic-randomization assignments,
+    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand.
+    virtual void finishClassRandomize(AstClass* classp, AstFunc* randomizep,
+                                      const AstFunc* basicRandomizep)
+        = 0;
+    // Ensure backend-required related classes are lowered before an inline site. The callback
+    // remains front-end-owned so its visitor context is restored across nested class lowering.
+    virtual void prepareInlineRandomize(AstClass* classp,
+                                        const std::function<void(AstClass*)>& lowerClass)
+        = 0;
     // randomize() with {...} called by nodep: lower the captured constraints
     // into randomizeFuncp, and assign its return value from the solver result
     // and basicRandomizeCallp (__VBasicRand()). thisVarp is the captured
@@ -144,6 +155,8 @@ public:
     virtual AstNodeExpr* lowerStdRandomizeWith(AstNodeFTaskRef* nodep, AstFunc* randomizeFuncp,
                                                AstNode* capturedTreep, AstVar* stdrandp)
         = 0;
+    // Complete std::randomize solver lowering after its result assignment, before rollback.
+    virtual void finishStdRandomizeWith(AstFunc* randomizep, AstVar* stdrandp) = 0;
     // randomize(null): add the constraint check to funcp, and return its result
     virtual AstNodeExpr* lowerCheckOnly(AstClass* classp, AstFunc* funcp) = 0;
 };
