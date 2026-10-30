@@ -399,6 +399,10 @@ private:
                 // Now substitute property reference with property body
                 nodep->replaceWith(propExprp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                // Only as the whole property of an assertion, not of another property
+                if (VN_IS(propExprp->backp(), NodeCoverOrAssert)) {
+                    V3AssertCommon::reducePlainAlways(propExprp);
+                }
                 return propExprp;
             }
         }
