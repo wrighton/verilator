@@ -8929,9 +8929,10 @@ class WidthVisitor final : public VNVisitor {
                     = portIfacep ? AstNode::computeCastable(portDTypep, pinDTypep, pinp,
                                                             /* checkIfaceArgCompat */ true)
                                  : VCastable{VCastable::UNSUPPORTED};
-                const bool matchingRefDTypes = portIfacep
-                                                   ? ifaceCastable.isSameish()
-                                                   : similarDTypeRecurse(portDTypep, pinDTypep);
+                const bool matchingRefDTypes
+                    = portIfacep ? ifaceCastable.isSameish()
+                                 : (similarDTypeRecurse(portDTypep, pinDTypep)
+                                    || packedEquivalentDType(portDTypep, pinDTypep));
                 const bool pinIsNull = VN_IS(pinp, Const) && VN_AS(pinp, Const)->num().isNull();
                 if ((portp->isRef() || portp->isConstRef()) && !matchingRefDTypes) {
                     if (portIfacep) {
@@ -10514,6 +10515,27 @@ class WidthVisitor final : public VNVisitor {
     static bool similarDTypeRecurse(const AstNodeDType* const node1p,
                                     const AstNodeDType* const node2p) {
         return node1p->skipRefp()->similarDType(node2p->skipRefp());
+    }
+    // Return the element type of a packed type of IEEE 1800-2023 6.22.2 c), else nullptr
+    static const AstNodeDType* packedElementDTypep(const AstNodeDType* dtypep) {
+        while (const AstPackArrayDType* const arrayp = VN_CAST(dtypep, PackArrayDType)) {
+            dtypep = arrayp->subDTypep()->skipRefp();
+        }
+        if (const AstBasicDType* const basicp = VN_CAST(dtypep, BasicDType)) {
+            return basicp->isIntegralOrPacked() ? basicp : nullptr;
+        }
+        const AstNodeUOrStructDType* const structp = VN_CAST(dtypep, NodeUOrStructDType);
+        return structp && structp->packed() ? structp : nullptr;
+    }
+    // Return true if both types are packed and equivalent (IEEE 1800-2023 6.22.2 c)
+    static bool packedEquivalentDType(const AstNodeDType* node1p, const AstNodeDType* node2p) {
+        // Packed arrays, structures, unions and integral built-in types, but not enums, are
+        // equivalent with the same width, both 2-state or 4-state, and the same signedness
+        const AstNodeDType* const elem1p = packedElementDTypep(node1p);
+        const AstNodeDType* const elem2p = packedElementDTypep(node2p);
+        return elem1p && elem2p && node1p->width() == node2p->width()
+               && elem1p->isFourstate() == elem2p->isFourstate()
+               && node1p->isSigned() == node2p->isSigned();
     }
     void iterateCheckFileDesc(AstNode* parentp, AstNode* underp, Stage stage) {
         UASSERT_OBJ(stage == BOTH, parentp, "Bad call");
