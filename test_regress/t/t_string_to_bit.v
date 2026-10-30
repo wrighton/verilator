@@ -24,6 +24,7 @@ module t (
   typedef logic [31:0] logic_t;
   typedef bit [55:0] quad_t;
   typedef bit [87:0] wide_t;
+  typedef bit [47:0] medium_bits_t;
 
   bit_t bdata[4];
   bit_t ldata[4];
@@ -74,7 +75,7 @@ module t (
     if (88'(str2) != 88'h696c6c7472756e63617465) $stop;
     if (200'(str1) != {152'h0, 48'h6d656469756d}) $stop;
     if (int'(str1) != 32'h6469756d) $stop;
-    if (real'(str1) != real'(48'h6d656469756d)) $stop;
+    if (real'(medium_bits_t'(str1)) != real'(48'h6d656469756d)) $stop;
     if (logic_t'(str1) != 32'h6469756d) $stop;
   end
 
