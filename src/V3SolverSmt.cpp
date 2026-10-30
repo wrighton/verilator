@@ -1074,10 +1074,9 @@ class ConstraintExprVisitor final : public VNVisitor {
 
     void createWriteVarForClassFields(AstClass* const elemClassp, const std::string& smtName,
                                       AstVar* const iterVarp, const bool isUnpackedClassRefArray,
-                                      AstNodeModule* const classOrPackagep, AstVar* const varp,
+                                      AstNodeExpr* const arrayRefp,
                                       AstIf* const ifNonNullp) const {
-        FileLine* const fl = varp->fileline();
-        AstNodeModule* const varClassp = VN_AS(varp->user2p(), NodeModule);
+        FileLine* const fl = arrayRefp->fileline();
         const std::string idxFmt
             = isUnpackedClassRefArray ? "%0x" : keyHexFormat(iterVarp->dtypep()->skipRefp());
 
@@ -1090,8 +1089,12 @@ class ConstraintExprVisitor final : public VNVisitor {
                 if (VN_IS(memberDtp, ClassRefDType) || memberDtp->isNonPackedArray()) continue;
                 const int memberWidth = memberDtp->width();
 
-                AstVarRef* const arrayWrRefp = new AstVarRef{fl, varClassp, varp, VAccess::WRITE};
-                arrayWrRefp->classOrPackagep(classOrPackagep);
+                AstNodeExpr* const arrayWrRefp = arrayRefp->cloneTree(false);
+                if (AstVarRef* const varRefp = VN_CAST(arrayWrRefp, VarRef)) {
+                    varRefp->access(VAccess::WRITE);
+                } else {
+                    VN_AS(arrayWrRefp, MemberRef)->access(VAccess::WRITE);
+                }
                 AstNodeExpr* const atWritep
                     = newSel(fl, arrayWrRefp, new AstVarRef{fl, iterVarp, VAccess::READ});
                 AstMemberRef* const memberRefp = new AstMemberRef{fl, atWritep, memberVarp};
@@ -1115,12 +1118,11 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     void createSolverArrayHandle(AstVar* const varp, AstClassRefDType* elemClassRefDtp,
-                                 AstNodeModule* const classOrPackagep,
-                                 const bool isUnpackedClassRefArray,
+                                 AstNodeExpr* const arrayRefp, const bool isUnpackedClassRefArray,
                                  const std::string& smtName) const {
+        // arrayRefp is the array of this or of a member object, consumed
         FileLine* const fl = varp->fileline();
         AstClass* const elemClassp = elemClassRefDtp->classp();
-        AstNodeModule* const varClassp = VN_AS(varp->user2p(), NodeModule);
 
         AstVar* const iterVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vi"),
                                             varp->findUInt32DType()};
@@ -1141,8 +1143,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             new AstCExpr{fl, AstCExpr::Pure{}, "\"" + smtName + "\""}};
         clearp->dtypeSetVoid();
         AstNodeStmt* const stmtsp = clearp->makeStmt();
-        stmtsp->addNext(
-            new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}});
+        AstNodeStmt* const walkp
+            = new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}};
 
         AstNodeExpr* sizep;
         if (isUnpackedClassRefArray) {
@@ -1150,35 +1152,32 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = VN_AS(varp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
             sizep = new AstConst{fl, static_cast<uint32_t>(arraySize)};
         } else {
-            AstVarRef* const arraySizeRefp = new AstVarRef{fl, varClassp, varp, VAccess::READ};
-            arraySizeRefp->classOrPackagep(classOrPackagep);
             AstCMethodHard* const dynSizep
-                = new AstCMethodHard{fl, arraySizeRefp, VCMethod::DYN_SIZE, nullptr};
+                = new AstCMethodHard{fl, arrayRefp->cloneTree(false), VCMethod::DYN_SIZE, nullptr};
             dynSizep->dtypeSetUInt32();
             sizep = dynSizep;
         }
 
         AstLoop* const loopp = new AstLoop{fl};
-        stmtsp->addNext(loopp);
         loopp->addStmtsp(new AstLoopTest{
             fl, loopp, new AstLt{fl, new AstVarRef{fl, iterVarp, VAccess::READ}, sizep}});
 
-        AstVarRef* const arrayReadRefp = new AstVarRef{fl, varClassp, varp, VAccess::READ};
-        arrayReadRefp->classOrPackagep(classOrPackagep);
         AstNodeExpr* const atReadp
-            = newSel(fl, arrayReadRefp, new AstVarRef{fl, idxVarp, VAccess::READ});
+            = newSel(fl, arrayRefp->cloneTree(false), new AstVarRef{fl, idxVarp, VAccess::READ});
         AstIf* const ifNonNullp
             = new AstIf{fl, new AstNeq{fl, atReadp, new AstConst{fl, AstConst::Null{}}}, nullptr};
         loopp->addStmtsp(ifNonNullp);
 
         createWriteVarForClassFields(elemClassp, smtName, idxVarp, isUnpackedClassRefArray,
-                                     classOrPackagep, varp, ifNonNullp);
+                                     arrayRefp, ifNonNullp);
 
         loopp->addStmtsp(new AstAssign{
             fl, new AstVarRef{fl, iterVarp, VAccess::WRITE},
             new AstAdd{fl, new AstConst{fl, 1}, new AstVarRef{fl, iterVarp, VAccess::READ}}});
 
-        varp->user3(true);
+        // Not basic-randomized, unless the array is of a member object, which may also be
+        // randomized on its own
+        if (VN_IS(arrayRefp, VarRef)) varp->user3(true);
         AstBegin* initp = m_inlineInitBlockp;
         if (!initp) {
             UASSERT_OBJ(m_memberrefInitTaskp, varp, "No randomize() to register array in");
@@ -1190,15 +1189,25 @@ class ConstraintExprVisitor final : public VNVisitor {
             idxVarp->funcLocal(true);
             initp->addDeclsp(idxVarp);
             AstCMethodHard* const firstp
-                = new AstCMethodHard{fl, arrayReadRefp->cloneTree(false), VCMethod::ASSOC_FIRST,
+                = new AstCMethodHard{fl, arrayRefp->cloneTree(false), VCMethod::ASSOC_FIRST,
                                      new AstVarRef{fl, idxVarp, VAccess::READWRITE}};
             firstp->dtypeSetInt();
             AstCMethodHard* const nextp = firstp->cloneTree(false);
             nextp->method(VCMethod::ASSOC_NEXT);
-            initp->addStmtsp(firstp->makeStmt());
+            walkp->addNext(firstp->makeStmt());
             loopp->addStmtsp(nextp->makeStmt());
         }
+        walkp->addNext(loopp);
+        // The objects of an array of a member object reached through a null handle are not
+        // registered; a constraint reading them fails as it reads through the null handle
+        AstNodeExpr* pathp = nullptr;
+        if (AstNodeExpr* const handlesp = newReadHandlesNonNullp(arrayRefp, pathp)) {
+            stmtsp->addNext(new AstIf{fl, handlesp, walkp});
+        } else {
+            stmtsp->addNext(walkp);
+        }
         initp->addStmtsp(stmtsp);
+        VL_DO_DANGLING(arrayRefp->deleteTree(), arrayRefp);
     }
 
     void createSolverVarHandle(AstVar* const varp, const bool structSelOrCMeth,
@@ -1607,6 +1616,18 @@ class ConstraintExprVisitor final : public VNVisitor {
             // For global constraints, delete nodep after processing
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
 
+            if (isClassRefArray && !m_nestedAccessp) {
+                AstNodeExpr* arrayRefp = memberRefp;
+                if (!arrayRefp) {
+                    AstVarRef* const varRefp = new AstVarRef{
+                        varp->fileline(), VN_AS(varp->user2p(), NodeModule), varp, VAccess::READ};
+                    varRefp->classOrPackagep(classOrPackagep);
+                    arrayRefp = varRefp;
+                }
+                createSolverArrayHandle(varp, elemClassRefDtp, arrayRefp, isUnpackedClassRefArray,
+                                        smtName);
+                return;
+            }
             // A foreign static is registered in this class's randomize(), where its rand_mode,
             // held by its own class, is applied on each call
             AstNodeModule* const classp
@@ -1621,9 +1642,6 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
                 // If randc, also emit markRandc() for cyclic tracking
                 if (varp->isRandC()) markRandc(varp, smtName, initp);
-            } else if (isClassRefArray && !memberRefp) {
-                createSolverArrayHandle(varp, elemClassRefDtp, classOrPackagep,
-                                        isUnpackedClassRefArray, smtName);
             } else {
                 createSolverVarHandle(varp, structSelOrCMeth, isGlobalConstrained, foreignStatic,
                                       randMode, memberRefp, smtName, classOrPackagep, classp,
