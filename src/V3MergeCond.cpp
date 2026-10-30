@@ -248,14 +248,17 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
     }
 
     void analyzeVarRef(AstVarRef* nodep) {
-        const VAccess access = nodep->access();
         AstVar* const varp = nodep->varp();
-        // Gather read and written variables
-        if (access.isReadOrRW()) m_propsp->m_rdVars.insert(varp);
-        if (access.isWriteOrRW()) m_propsp->m_wrVars.insert(varp);
+        analyzeAccess(varp, nodep->access());
         if (varp->isSigPublic() || varp->isWrittenByDpi() || varp->isReadByDpi()) {
             m_propsp->m_explPubRef = true;
         }
+    }
+
+    // Gather read and written variables
+    void analyzeAccess(AstVar* varp, VAccess access) {
+        if (access.isReadOrRW()) m_propsp->m_rdVars.insert(varp);
+        if (access.isWriteOrRW()) m_propsp->m_wrVars.insert(varp);
     }
 
     void checkProperties(AstNode* nodep) {
@@ -310,6 +313,10 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
             analyzeStmt(stmtp, /*tryCondMatch:*/ !singletonListStart);
         } else if (AstVarRef* const vrefp = VN_CAST(nodep, VarRef)) {
             analyzeVarRef(vrefp);
+        } else if (AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
+            // Through a class handle or virtual interface, may be a variable also referenced
+            analyzeAccess(memberRefp->varp(), memberRefp->access());
+            analyzeNode(nodep);
         } else {
             analyzeNode(nodep);
         }
