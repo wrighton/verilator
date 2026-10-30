@@ -1,0 +1,34 @@
+%Error: t/t_stream_real_bad.v:19:10: Stream operand of type 'real' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                   : ... note: In instance 't'
+   19 |     b = {>>{r}};   
+      |          ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_stream_real_bad.v:20:10: Stream operand of type 'real' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                   : ... note: In instance 't'
+   20 |     b = {<<8{rt}};   
+      |          ^~
+%Error: t/t_stream_real_bad.v:21:10: Stream operand of type 'real$[0:1]' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                   : ... note: In instance 't'
+   21 |     b = {>>{ra}};   
+      |          ^~
+%Error: t/t_stream_real_bad.v:22:10: Stream operand of type 'real$[$]' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                   : ... note: In instance 't'
+   22 |     b = {>>{rq}};   
+      |          ^~
+%Error: t/t_stream_real_bad.v:23:11: Stream operand of type 'real$[]' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                   : ... note: In instance 't'
+   23 |     bq = {>>{rd}};   
+      |           ^~
+%Error: t/t_stream_real_bad.v:24:10: Stream operand of type 'real$[0:1]' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                   : ... note: In instance 't'
+   24 |     b = {>>{rta}};   
+      |          ^~
+%Error: t/t_stream_real_bad.v:25:6: Stream operand of type 'real$[0:1]' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                  : ... note: In instance 't'
+   25 |     {>>{ra}} = b;   
+      |      ^~
+%Error: t/t_stream_real_bad.v:26:6: Stream operand of type 'real' is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)
+                                  : ... note: In instance 't'
+   26 |     {>>{r}} = b;   
+      |      ^~
+%Error: Exiting due to
