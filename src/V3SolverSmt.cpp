@@ -3389,6 +3389,7 @@ class SolverSmtLowering final : public V3SolverLowering {
     struct DistBucket final {
         AstNodeExpr* rangep;  // A single value or an InsideRange
         AstNodeExpr* weightExprp;  // Effective 64-bit weight (range weight scaled by size)
+        AstNodeExpr* itemWeightp;  // The item's own weight, in the AstDist
     };
 
     // Non-zero-weight buckets with each weight extended to 64 bits.
@@ -3420,7 +3421,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                     weightExprp = new AstMul{fl, weightExprp, rangeSizep};
                 }
             }
-            buckets.push_back({ditemp->rangep(), weightExprp});
+            buckets.push_back({ditemp->rangep(), weightExprp, ditemp->weightp()});
         }
         return buckets;
     }
@@ -3438,14 +3439,23 @@ class SolverSmtLowering final : public V3SolverLowering {
         return eqp;
     }
 
-    // Hard constraint that the dist value stays inside the union of its ranges
-    // (IEEE 1800-2023 18.5.3: values outside the set must never appear).
+    // Hard constraint that the dist value is in a range with a nonzero weight.
     AstConstraintExpr* buildDistMembership(AstDist* distp,
                                            const std::vector<DistBucket>& buckets) {
+        // IEEE 1800-2023 18.5.3: values outside the set never appear, and a weight of zero is
+        // a constraint, also when it is only known at runtime (or solved, if it is random).
         FileLine* const fl = distp->fileline();
         AstNodeExpr* unionExprp = nullptr;
         for (const auto& bucket : buckets) {
-            AstNodeExpr* const memberp = newDistMembershipTerm(distp, bucket.rangep);
+            AstNodeExpr* memberp = newDistMembershipTerm(distp, bucket.rangep);
+            if (!VN_IS(bucket.itemWeightp, Const)) {
+                AstNodeExpr* const weightp = bucket.itemWeightp->cloneTreePure(false);
+                AstNeq* const nzp = new AstNeq{
+                    fl, weightp, new AstConst{fl, AstConst::WidthedValue{}, weightp->width(), 0}};
+                nzp->user1(true);
+                memberp = new AstLogAnd{fl, memberp, nzp};
+                memberp->user1(true);
+            }
             if (!unionExprp) {
                 unionExprp = memberp;
             } else {
@@ -3594,38 +3604,10 @@ class SolverSmtLowering final : public V3SolverLowering {
         return new AstConst{fl, AstConst::BitTrue{}, distBoundRefsRandVar(nodep)};
     }
 
-    // Membership union of the dist set, with runtime-zero weights excluded.
-    AstConstraintExpr* buildFrozenMembership(AstDist* distp,
-                                             const std::vector<DistBucket>& buckets) {
-        FileLine* const fl = distp->fileline();
-        AstNodeExpr* unionExprp = nullptr;
-        for (const auto& bucket : buckets) {
-            AstNodeExpr* termp = newDistMembershipTerm(distp, bucket.rangep);
-            // A weight that is zero only at runtime excludes the bucket's values too.
-            const bool runtimeWeight
-                = bucket.weightExprp->exists([](const AstNodeVarRef*) { return true; });
-            if (runtimeWeight) {
-                AstNeq* const nzp = new AstNeq{fl, bucket.weightExprp->cloneTreePure(false),
-                                               new AstConst{fl, AstConst::Unsized64{}, 0}};
-                nzp->user1(true);
-                termp = new AstLogAnd{fl, termp, nzp};
-                termp->user1(true);
-            }
-            if (unionExprp) {
-                unionExprp = new AstLogOr{fl, unionExprp, termp};
-                unionExprp->user1(true);
-            } else {
-                unionExprp = termp;
-            }
-        }
-        return new AstConstraintExpr{fl, unionExprp};
-    }
-
-    // Weighted chain while the dist value can still be freshly drawn, membership
-    // once it is frozen; membership only when it can never be re-drawn.
+    // Weighted chain, gated on the dist value still being drawable; nullptr if it never is.
     AstNodeConstraintItem* gateFrozenDist(AstNodeConstraintItem* chainp, AstDist* distp,
-                                          const std::vector<DistBucket>& buckets,
                                           AstVar* randModeVarp) {
+        // Once frozen, the hard membership alone constrains the value
         FileLine* const fl = distp->fileline();
         AstNodeExpr* gatep = newDistGate(distp->exprp(), randModeVarp, fl);
         if (VN_IS(gatep, Const)) {
@@ -3633,11 +3615,10 @@ class SolverSmtLowering final : public V3SolverLowering {
             VL_DO_DANGLING(pushDeletep(gatep), gatep);
             if (drawable) return chainp;
             VL_DO_DANGLING(pushDeletep(chainp), chainp);
-            return buildFrozenMembership(distp, buckets);
+            return nullptr;
         }
         // A constraint 'if' condition is boolean, and the gate may be a wider mode word
-        return new AstConstraintIf{fl, new AstRedOr{fl, gatep}, chainp,
-                                   buildFrozenMembership(distp, buckets)};
+        return new AstConstraintIf{fl, new AstRedOr{fl, gatep}, chainp, nullptr};
     }
 
     AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp) {
@@ -3850,12 +3831,12 @@ class SolverSmtLowering final : public V3SolverLowering {
             AstNodeConstraintItem* chainp
                 = buildWeightedBucketChain(distp, buckets, bucketVarp, cumSums);
 
-            chainp = gateFrozenDist(chainp, distp, buckets, randModeVarp);
+            chainp = gateFrozenDist(chainp, distp, randModeVarp);
 
-            constrExprp->replaceWith(chainp);
-            VL_DO_DANGLING(pushDeletep(constrExprp), constrExprp);
             // Hard membership precedes the soft bucket chain in the constraint list.
-            chainp->addHereThisAsNext(membershipp);
+            constrExprp->replaceWith(membershipp);
+            VL_DO_DANGLING(pushDeletep(constrExprp), constrExprp);
+            if (chainp) membershipp->addNextHere(chainp);
 
             // Clean up nodes used only as clone templates (never inserted into tree)
             for (auto& bucket : buckets) {
