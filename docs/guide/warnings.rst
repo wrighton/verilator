@@ -116,9 +116,10 @@ List Of Warnings
 
 .. option:: ALWNEVER
 
-   Warning that an `always @*` statement has no variables being read,
-   therefore the event list is empty, and as there are no events to wake
-   the process up, the always will never execute.
+   Warning that an `always @*` statement has no variables being read
+   (variables read only by event controls or wait statements in it do not
+   count), therefore the event list is empty, and as there are no events to
+   wake the process up, the always will never execute.
 
    Faulty example:
 
