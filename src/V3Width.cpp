@@ -12170,17 +12170,26 @@ public:
                                << srcDTypep->subDTypep()->widthStream()
                                << " bits) (IEEE 1800-2023 11.4.14)");
             }
+            const bool dynamic = VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType);
+            const bool fixedTarget = VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
+                                     || lowerAsFixedAggregate(lhsDTypeSkippedRefp);
+            // V3Const streams a dynamically sized operand as into a queue
+            const bool asQueue
+                = dynamic && VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
+                  && lhsDTypeSkippedRefp->subDTypep()->skipRefp()->isIntegralOrPacked();
+            if (fixedTarget && dynamic && !asQueue) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: Stream of a dynamically sized array into "
+                                  << lhsDTypeSkippedRefp->prettyDTypeNameQ());
+            }
             const bool packedToDynamic = (VN_IS(lhsDTypeSkippedRefp, DynArrayDType)
                                           || VN_IS(lhsDTypeSkippedRefp, QueueDType))
                                          && lhsDTypeSkippedRefp->subDTypep()->isIntegralOrPacked()
                                          && !VN_IS(streamp->dtypep(), StreamDType);
-            if (packedToDynamic || VN_IS(lhsDTypeSkippedRefp, UnpackArrayDType)
-                || lowerAsFixedAggregate(lhsDTypeSkippedRefp)) {
+            if ((packedToDynamic || fixedTarget) && !asQueue) {
                 FileLine* const flp = streamp->fileline();
                 AstNodeExpr* srcp = streamp->unlinkFrBack();
-                const AstNodeDType* const operandDTypep = streamp->lhsp()->dtypep()->skipRefp();
-                if (VN_IS(operandDTypep, UnpackArrayDType)
-                    && !lowerAsFixedAggregate(operandDTypep)) {
+                if (VN_IS(srcDTypep, UnpackArrayDType) && !lowerAsFixedAggregate(srcDTypep)) {
                     // Convert an unpacked array operand to the target through its packed value
                     packIfUnpacked(streamp->lhsp());
                     streamp->dtypeFrom(streamp->lhsp());
