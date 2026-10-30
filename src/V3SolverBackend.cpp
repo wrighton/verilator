@@ -101,3 +101,10 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
     }
     return nullptr;
 }
+
+bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
+    AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+    if (!dtypep->isNonPackedArray()) return false;
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+    return VN_IS(dtypep, ClassRefDType);
+}

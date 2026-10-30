@@ -27,6 +27,7 @@
 
 #include "V3Ast.h"
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -52,6 +53,12 @@ union RandomizeMode final {
     };
     uint64_t asUQuad;  // Representation as int to be stored in nodep->user*
 };
+
+// A constraint made by cloning the constraint of an object, or of the objects of an array
+struct ClonedConstraint final {
+    AstNodeExpr* objp;  // The object, or object array, it was cloned for
+};
+using ClonedConstraints = std::map<const AstConstraint*, ClonedConstraint>;
 
 // The rand_mode/constraint_mode state arrays created by the front end
 class RandModeVars final {
@@ -84,6 +91,15 @@ public:
 };
 
 //######################################################################
+// Helpers shared by the randomize front end and the back-ends
+
+class RandomizeUtil final {
+public:
+    // Whether varp is an unpacked array of class handles
+    static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
+};
+
+//######################################################################
 // Lowering of the randomize sites of one V3Randomize pass, created by
 // V3SolverBackend::newLowering()
 
@@ -93,14 +109,17 @@ protected:
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
     const RandModeVars& m_modeVars;  // rand_mode/constraint_mode state arrays
+    const ClonedConstraints& m_cloneObjps;  // Constraints cloned from objects
     VNDeleter& m_deleter;  // Deferred deletion of nodes removed by the back-end
 
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                     const RandModeVars& modeVars, VNDeleter& deleter)
+                     const RandModeVars& modeVars, const ClonedConstraints& cloneObjps,
+                     VNDeleter& deleter)
         : m_memberMap{memberMap}
         , m_uniqueNames{uniqueNames}
         , m_modeVars{modeVars}
+        , m_cloneObjps{cloneObjps}
         , m_deleter{deleter} {}
 
     // METHODS
@@ -165,7 +184,7 @@ public:
     // Lowering for one V3Randomize pass, sharing the given state with the front end
     virtual std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
-                VNDeleter& deleter) const VL_MT_DISABLED
+                const ClonedConstraints& cloneObjps, VNDeleter& deleter) const VL_MT_DISABLED
         = 0;
 };
 

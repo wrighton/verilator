@@ -217,6 +217,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
     bool m_inStdWith = false;  // True when inside a 'with {}' clause
     std::set<AstNodeVarRef*> m_staticRefs;  // References to static variables under `with` clauses
     AstWith* m_withp = nullptr;  // Current 'with' constraint node
+    ClonedConstraints& m_cloneObjps;  // Constraints made by cloning
 
     // METHODS
     // Mark all rand variables in IS_RANDOMIZED_GLOBAL classes as globalConstrained
@@ -392,8 +393,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
         return cloneConstrp;
     }
-    // Add a cloned constraint to targetClassp
-    void addClonedConstraint(AstClass* targetClassp, AstConstraint* cloneConstrp) {
+    // Add a constraint cloned for the object (or object array) objp to targetClassp
+    void addClonedConstraint(AstClass* targetClassp, AstConstraint* cloneConstrp,
+                             AstNodeExpr* objp) {
+        m_cloneObjps.emplace(cloneConstrp, ClonedConstraint{objp->cloneTree(false)});
         targetClassp->addMembersp(cloneConstrp);
         // Immediately iterate to set user1 marks
         iterateConst(cloneConstrp);
@@ -412,10 +415,13 @@ class RandomizeMarkVisitor final : public VNVisitor {
     // Process a single constraint during nested constraint cloning
     void processNestedConstraint(AstConstraint* const constrp, AstVarRef* rootVarRefp,
                                  const std::vector<AstVar*>& newPath, AstClass* targetClassp) {
+        // A clone the object's class made from its own rand objects is cloned again directly
+        // from them, with the path to them for its rand_mode() gate
+        if (m_cloneObjps.count(constrp)) return;
         AstNodeExpr* const objp = buildMemberRefChain(rootVarRefp, newPath);
         if (AstConstraint* const cloneConstrp = cloneObjectConstraint(
                 constrp, objp, clonePathPrefix(rootVarRefp, newPath), targetClassp)) {
-            addClonedConstraint(targetClassp, cloneConstrp);
+            addClonedConstraint(targetClassp, cloneConstrp, objp);
         }
         VL_DO_DANGLING(objp->deleteTree(), objp);
     }
@@ -504,7 +510,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             AstNodeConstraintItem* const itemsp = cloneConstrp->itemsp()->unlinkFrBackWithNext();
             cloneConstrp->addItemsp(new AstConstraintForeach{
                 fl, new AstForeachHeader{fl, arrRefp->cloneTree(false), idxVarp}, itemsp});
-            addClonedConstraint(targetClassp, cloneConstrp);
+            addClonedConstraint(targetClassp, cloneConstrp, arrRefp);
         }
     }
 
@@ -948,7 +954,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit RandomizeMarkVisitor(AstNode* nodep) {
+    RandomizeMarkVisitor(AstNode* nodep, ClonedConstraints& cloneObjps)
+        : m_cloneObjps{cloneObjps} {
         iterateConst(nodep);
         markAllDerived();
         setPackageRefs();
@@ -2191,8 +2198,12 @@ class RandomizeVisitor final : public VNVisitor {
                     = new AstVarRef{memberVarp->fileline(), classp, memberVarp, VAccess::WRITE};
                 AstNodeStmt* const stmtp = newRandStmtsp(fl, refp, randcVarp, basicFvarp);
                 if (!refp->backp()) VL_DO_DANGLING(refp->deleteTree(), refp);
-                basicRandomizep->addStmtsp(
-                    new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), stmtp, false});
+                AstNodeStmt* blockp
+                    = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), stmtp, false};
+                // Elements check the array's rand_mode themselves, unless they are objects
+                if (RandomizeUtil::isClassHandleArray(memberVarp))
+                    blockp = wrapIfRandMode(nodep, memberVarp, blockp);
+                basicRandomizep->addStmtsp(blockp);
             }
         });
     }
@@ -2872,10 +2883,10 @@ class RandomizeVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit RandomizeVisitor(AstNetlist* nodep)
+    RandomizeVisitor(AstNetlist* nodep, const ClonedConstraints& cloneObjps)
         : m_inlineUniqueNames{"__Vrandwith"}
         , m_solverp{v3Global.solverBackendp()->newLowering(m_memberMap, m_uniqueNames, m_modeVars,
-                                                           deleter())} {
+                                                           cloneObjps, deleter())} {
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.
         // Runs before any class is lowered. Only a randomized class counts, and
@@ -2909,8 +2920,11 @@ public:
 void V3Randomize::randomizeNetlist(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     {
-        const RandomizeMarkVisitor markVisitor{nodep};
-        const RandomizeVisitor randomizeVisitor{nodep};
+        // Keyed by constraints, which are not deleted until RandomizeVisitor's end
+        ClonedConstraints cloneObjps;
+        const RandomizeMarkVisitor markVisitor{nodep, cloneObjps};
+        const RandomizeVisitor randomizeVisitor{nodep, cloneObjps};
+        for (const auto& it : cloneObjps) it.second.objp->deleteTree();
     }
     V3Global::dumpCheckGlobalTree("randomize", 0, dumpTreeEitherLevel() >= 3);
 }
