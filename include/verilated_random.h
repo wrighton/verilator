@@ -499,7 +499,10 @@ public:
                             void>::type
     write_var(T& var, int width, const std::string& name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
-        if (m_vars.find(name) != m_vars.end()) return;
+        // A variable reached through class handle members is registered by each randomize(),
+        // where a handle assigned another object can give it another address
+        const auto it = m_vars.find(name);
+        if (it != m_vars.end() && it->second->datap(0) == &var) return;
         // TODO: make_unique once VlRandomizer is per-instance not per-ref
         m_vars[name]
             = std::make_shared<const VlRandomVar>(name, width, &var, dimension, randmodeIdx);
