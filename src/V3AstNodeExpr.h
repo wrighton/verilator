@@ -2150,6 +2150,7 @@ public:
     bool cleanOut() const override { V3ERROR_NA_RETURN(""); }
     int instrCount() const override { V3ERROR_NA_RETURN(0); }
     bool isStrong() const { return m_isStrong; }
+    bool isPlainAlways() const;
     bool isMultiCycleSva() const override { return true; }
 };
 class AstRand final : public AstNodeExpr {

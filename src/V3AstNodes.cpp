@@ -3703,6 +3703,11 @@ void AstPropAlways::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isStrong);
     dumpJsonGen(str);
 }
+bool AstPropAlways::isPlainAlways() const {
+    // A weak always [0:$], as 'always p'
+    const AstConst* const loConstp = VN_CAST(loBoundp(), Const);
+    return !isStrong() && loConstp && loConstp->isZero() && VN_IS(hiBoundp(), Unbounded);
+}
 void AstPropSpec::dump(std::ostream& str) const {
     Super::dump(str);
     if (propStrength() != VPropStrength::DEFAULT) {

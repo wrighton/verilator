@@ -245,6 +245,15 @@ void V3AssertCommon::checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) {
     for (AstDelay* const delayp : delayps) checkSvaCycleDelay(delayp, instp);
 }
 
+void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
+    // Equivalent when the property is attempted at every tick (IEEE 1800-2023 16.12.11).
+    // Unlike under always, p may then contain property operators.
+    AstPropAlways* const alwaysp = VN_CAST(specp->propp(), PropAlways);
+    if (!alwaysp || !alwaysp->isPlainAlways()) return;
+    alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
+    VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,

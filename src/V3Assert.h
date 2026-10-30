@@ -42,6 +42,8 @@ public:
     // Check the cycle delays of a sequence or property instance, after its formal arguments are
     // replaced with the actual arguments (IEEE 1800-2023 16.8), reporting errors on instp
     static void checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Reduce a whole property 'always p' to p
+    static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
 };
 
 class V3Assert final {

@@ -1985,7 +1985,9 @@ class WidthVisitor final : public VNVisitor {
                     }
                 });
             }
-            if (hasPropertyOp) {
+            // The whole property is reduced to its operand, see visit(AstPropSpec*)
+            const bool wholeAlways = VN_IS(nodep->backp(), PropSpec) && nodep->isPlainAlways();
+            if (hasPropertyOp && !wholeAlways) {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported: property/sequence operator inside always"
                               " (IEEE 1800-2023 16.12.11)");
@@ -7500,17 +7502,11 @@ class WidthVisitor final : public VNVisitor {
                 untilp->replaceWith(new AstConst{untilp->fileline(), AstConst::BitFalse{}});
                 VL_DO_DANGLING(pushDeletep(untilp), untilp);
             }
-            AstPropAlways* const alwaysp = VN_CAST(nodep->propp(), PropAlways);
-            if (alwaysp && VN_IS(alwaysp->hiBoundp(), Unbounded) && !alwaysp->isStrong()
-                && VN_IS(alwaysp->loBoundp(), Const)
-                && VN_AS(alwaysp->loBoundp(), Const)->isZero()) {
-                // A whole property always [0:$] p, e.g. `always p`, is reduced to p, as is
-                // equivalent when the property is attempted at every tick. Unlike under
-                // always, p may then contain property operators.
-                alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
-                VL_DO_DANGLING(pushDeletep(alwaysp), alwaysp);
-            }
             iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);
+            // A whole property 'always p' is reduced to p, once its bounds are constant. The
+            // whole property of a property declaration is reduced only where it is instanced as
+            // a whole property.
+            if (!m_propertyp) V3AssertCommon::reducePlainAlways(nodep);
             userIterateAndNext(nodep->sensesp(), nullptr);
             if (nodep->disablep()) {
                 iterateCheckBool(nodep, "Disable", nodep->disablep(),
