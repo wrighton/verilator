@@ -1,0 +1,5 @@
+%Error: t/t_constraint_func_call_order_bad.v:20:21: Circular dependency between random variables passed to functions in constraints (IEEE 1800-2023 18.5.11): 'y'
+   20 |   constraint c_x {x == Funcs::f(y);}
+      |                     ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
