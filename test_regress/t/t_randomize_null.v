@@ -95,6 +95,123 @@ class Cb;
   endfunction
 endclass
 
+// Rand containers: the current elements and sizes are checked
+class Containers;
+  rand bit [3:0] q[$];
+  rand bit [4:0] u[3];
+  rand bit [5:0] d[];
+  rand bit [2:0] len;
+  constraint c_q {foreach (q[i]) q[i] < 8;}
+  constraint c_u {u.sum() with (int'(item)) < 40;}
+  constraint c_d {
+    d.size() == int'(len);
+    foreach (d[i]) d[i] != 6'h3f;
+  }
+endclass
+
+// Elements added after construction are checked too
+class Assoc;
+  rand bit [6:0] a[int];
+  rand bit [6:0] s[string];
+  rand int w[*];
+  constraint c_a {foreach (a[k]) a[k] > 1;}
+  constraint c_s {foreach (s[k]) s[k] > 1;}
+  function new;
+    a[1] = 5;
+  endfunction
+endclass
+
+class DerivedContainers extends Containers;
+  rand bit [3:0] e;
+  constraint c_e {foreach (q[i]) q[i] != e;}
+endclass
+
+// IEEE 1800-2023 18.11.1: the constraints of rand member objects are checked too
+class Inner;
+  rand int x;
+  int pre_count;
+  int post_count;
+  constraint c_in {x > 0;}
+  function void pre_randomize;
+    pre_count = pre_count + 1;
+  endfunction
+  function void post_randomize;
+    post_count = post_count + 1;
+  endfunction
+endclass
+
+class Outer;
+  rand Inner inner;
+  rand Inner arr[2];
+  rand Inner darr[];
+  rand Inner q[$];
+  rand Inner m[string];
+  rand bit [3:0] len;
+  constraint c {
+    len < 8;
+    inner.x < 10;
+  }
+  function new;
+    inner = new;
+    foreach (arr[i]) arr[i] = new;
+    darr = new[2];
+    foreach (darr[i]) darr[i] = new;
+    q.push_back(null);
+    q[0] = new;
+    m["a"] = new;
+  endfunction
+endclass
+
+// pre_randomize of member objects runs before, post_randomize after the whole check
+class CbOuter;
+  rand Inner inner;
+  int lim = 1;
+  constraint c {
+    lim > 0;
+    inner.x < 10;
+  }
+  function new(Inner i = null);
+    if (i == null) i = new;
+    inner = i;
+  endfunction
+endclass
+
+class FixInner extends Inner;
+  function void pre_randomize;
+    super.pre_randomize();
+    x = 1;
+  endfunction
+endclass
+
+// A member object of a derived class is checked with the derived constraints
+class DerivedInner extends Inner;
+  constraint c_derived {x != 7;}
+endclass
+
+class BaseHolder;
+  rand Inner h;
+endclass
+
+class OuterOuter;
+  rand Outer o;
+  function new;
+    o = new;
+  endfunction
+endclass
+
+// Arrays with only a size constraint, of the class and of a rand member object
+class SizeOnly;
+  rand bit [3:0] q[];
+  constraint c_size {q.size() == 2;}
+endclass
+
+class SizeOnlyHolder;
+  rand SizeOnly s;
+  function new;
+    s = new;
+  endfunction
+endclass
+
 module t;
   A a;
   Multi m;
@@ -285,6 +402,206 @@ module t;
     `checkd(i, 0);
     `checkd(cb.pre_count, 2);
     `checkd(cb.post_count, 1);
+
+    // 8. Rand containers: elements and sizes are pinned, values untouched.
+    begin
+      automatic Containers c = new;
+      c.q = '{1, 2, 3};
+      c.u = '{1, 2, 3};
+      c.len = 2;
+      c.d = new[2];
+      c.d[0] = 1;
+      c.d[1] = 2;
+      i = c.randomize(null);
+      `checkd(i, 1);
+      c.q[1] = 9;
+      i = c.randomize(null);
+      `checkd(i, 0);
+      `checkd(c.q[1], 9);
+      c.q[1] = 2;
+      c.u[1] = 31;
+      c.u[2] = 31;
+      i = c.randomize(null);
+      `checkd(i, 0);
+      c.u[1] = 2;
+      c.u[2] = 3;
+      c.d[1] = 6'h3f;
+      i = c.randomize(null);
+      `checkd(i, 0);
+      c.d[1] = 2;
+      c.len = 3;
+      i = c.randomize(null);
+      `checkd(i, 0);
+      `checkd(c.d.size(), 2);
+      c.len = 2;
+      i = c.randomize(null);
+      `checkd(i, 1);
+      `checkd(c.q.size(), 3);
+      `checkd(c.q[2], 3);
+      `checkd(c.u[0], 1);
+      `checkd(c.d[1], 2);
+    end
+
+    // 9. Derived class: base containers with derived constraints.
+    begin
+      automatic DerivedContainers dc = new;
+      dc.q = '{1, 2};
+      dc.e = 3;
+      i = dc.randomize(null);
+      `checkd(i, 1);
+      dc.e = 2;
+      i = dc.randomize(null);
+      `checkd(i, 0);
+      dc.e = 3;
+      dc.q.push_back(8);
+      i = dc.randomize(null);
+      `checkd(i, 0);
+    end
+
+    // 10. Rand member objects: own constraints, nested objects and arrays of objects.
+    begin
+      automatic Outer o = new;
+      automatic OuterOuter oo = new;
+      o.inner.x = 5;
+      o.arr[0].x = 1;
+      o.arr[1].x = 2;
+      o.darr[0].x = 3;
+      o.darr[1].x = 4;
+      o.q[0].x = 6;
+      o.m["a"].x = 7;
+      o.len = 3;
+      i = o.randomize(null);
+      `checkd(i, 1);
+      `checkd(o.inner.x, 5);
+      `checkd(o.darr[1].x, 4);
+      `checkd(o.darr[1].pre_count, 1);
+      `checkd(o.darr[1].post_count, 1);
+      o.inner.x = 15;  // Outer's constraint on the member
+      i = o.randomize(null);
+      `checkd(i, 0);
+      o.inner.x = -5;  // Inner's own constraint, solved with Outer's
+      i = o.randomize(null);
+      `checkd(i, 0);
+      o.inner.x = 5;
+      o.arr[1].x = 0;
+      i = o.randomize(null);
+      `checkd(i, 0);
+      o.arr[1].x = 2;
+      o.darr[0].x = 0;
+      i = o.randomize(null);
+      `checkd(i, 0);
+      `checkd(o.darr[0].x, 0);
+      o.darr[0].x = 3;
+      o.q[0].x = -1;
+      i = o.randomize(null);
+      `checkd(i, 0);
+      o.q[0].x = 6;
+      o.m["a"].x = 0;
+      i = o.randomize(null);
+      `checkd(i, 0);
+      o.m["a"].x = 1;
+      o.darr[0] = null;  // Null element is skipped
+      o.arr[1] = null;
+      i = o.randomize(null);
+      `checkd(i, 1);
+      o.arr[0].x = 0;
+      o.arr.rand_mode(0);  // Inactive member objects are not checked
+      i = o.randomize(null);
+      `checkd(i, 1);
+      oo.o.inner.x = 1;
+      foreach (oo.o.arr[k]) oo.o.arr[k].x = 1;
+      foreach (oo.o.darr[k]) oo.o.darr[k].x = 1;
+      oo.o.q[0].x = 1;
+      oo.o.m["a"].x = 1;
+      i = oo.randomize(null);
+      `checkd(i, 1);
+      oo.o.darr[1].x = -1;
+      i = oo.randomize(null);
+      `checkd(i, 0);
+      oo.o.darr[1].x = 1;
+      oo.o.inner.x = 10;
+      i = oo.randomize(null);
+      `checkd(i, 0);
+    end
+
+    // 11. Associative array keys added after construction, unconstrained wildcard array.
+    begin
+      automatic Assoc as = new;
+      as.w[3] = 4;
+      i = as.randomize(null);
+      `checkd(i, 1);
+      as.a[1] = 0;
+      i = as.randomize(null);
+      `checkd(i, 0);
+      as.a[1] = 5;
+      as.a[-7] = 0;
+      i = as.randomize(null);
+      `checkd(i, 0);
+      as.a[-7] = 9;
+      as.s["key"] = 2;
+      i = as.randomize(null);
+      `checkd(i, 1);
+      as.s["other"] = 1;
+      i = as.randomize(null);
+      `checkd(i, 0);
+      `checkd(as.s["other"], 1);
+    end
+
+    // 12. Callbacks of member objects (IEEE 1800-2023 18.6.2, 18.6.3).
+    begin
+      automatic CbOuter co = new;
+      automatic FixInner fix = new;
+      automatic CbOuter cofix = new(fix);
+      co.inner.x = 5;
+      co.lim = 0;  // Outer object fails, member object passes: no post_randomize
+      i = co.randomize(null);
+      `checkd(i, 0);
+      `checkd(co.inner.pre_count, 1);
+      `checkd(co.inner.post_count, 0);
+      co.lim = 1;
+      i = co.randomize(null);
+      `checkd(i, 1);
+      `checkd(co.inner.pre_count, 2);
+      `checkd(co.inner.post_count, 1);
+      fix.x = 15;  // Violates CbOuter's constraint until the member's pre_randomize runs
+      i = cofix.randomize(null);
+      `checkd(i, 1);
+      `checkd(fix.x, 1);
+    end
+
+    // 13. Member object of a derived class.
+    begin
+      automatic BaseHolder bh = new;
+      automatic DerivedInner di = new;
+      bh.h = di;
+      di.x = 6;
+      i = bh.randomize(null);
+      `checkd(i, 1);
+      di.x = 7;
+      i = bh.randomize(null);
+      `checkd(i, 0);
+    end
+
+    // 14. Arrays with only a size constraint, of the class and of a rand member object.
+    begin
+      automatic SizeOnly so = new;
+      automatic SizeOnlyHolder sh = new;
+      i = so.randomize();
+      `checkd(i, 1);
+      i = so.randomize(null);
+      `checkd(i, 1);
+      so.q = new[5];
+      i = so.randomize(null);
+      `checkd(i, 0);
+      i = sh.randomize();
+      `checkd(i, 1);
+      `checkd(sh.s.q.size(), 2);
+      i = sh.randomize(null);
+      `checkd(i, 1);
+      sh.s.q = new[5];
+      i = sh.randomize(null);
+      `checkd(i, 0);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
