@@ -53,7 +53,6 @@ class Cls;
   rand bit [3:0] src;
   rand bit [3:0] tgt;
   rand bit is_amo;
-  // verilator lint_off CONSTRAINTIGN
   extern function int f_init(int d);
   function int f_assign(int d);
     Policy policy;
@@ -104,7 +103,6 @@ class Cls;
   constraint c_unused {b_unused == f_unused(b_init);}
   constraint c_lparam {b_lparam == f_lparam(b_init);}
   constraint c_amo {if (f_init(32'(src)) == 32'(tgt)) is_amo == 0;}
-  // verilator lint_on CONSTRAINTIGN
 endclass
 
 function int Cls::f_init(int d);
