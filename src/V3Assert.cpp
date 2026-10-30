@@ -258,6 +258,7 @@ class AssertDeFutureVisitor final : public VNVisitor {
     std::map<AstVar*, AstVar*> m_delayedVars;  // Old to delayed variable mapping
     // STATE - for current visit position (use VL_RESTORER)
     bool m_inFuture = false;  // Inside a future
+    bool m_inDisable = false;  // Inside a disable condition
     bool m_unsupported = false;  // Printed unsupported
 
     // METHODS
@@ -282,7 +283,20 @@ class AssertDeFutureVisitor final : public VNVisitor {
         return varp;
     }
     // VISITORS
+    void visit(AstPropSpec* nodep) override {
+        iterateAndNextNull(nodep->sensesp());
+        {
+            VL_RESTORER(m_inDisable);
+            m_inDisable = true;
+            iterateAndNextNull(nodep->disablep());
+        }
+        iterateAndNextNull(nodep->propp());
+        iterateAndNextNull(nodep->matchCountp());
+    }
     void visit(AstFuture* nodep) override {
+        // A disable condition is not a property or sequence expression, so leave a future value
+        // function there for AssertVisitor to reject (IEEE 1800-2023 16.9.4)
+        if (m_inDisable) return;
         VL_RESTORER(m_inFuture);
         m_inFuture = true;
         iterateChildren(nodep);
@@ -344,7 +358,7 @@ public:
         // Only concurrent assertions, which have a PropSpec, are lowered (IEEE 1800-2023 16.9.4)
         AstPropSpec* const specp = VN_AS(nodep, PropSpec);
         // UINFOTREE(9, nodep, "", "defuture-in");
-        visit(nodep);  // Nodep may get deleted
+        visit(specp);
         // UINFOTREE(9, nodep, "", "defuture-ou");
         // The attempt checked at a tick is the one from the previous tick, so disable the
         // first tick, which has no previous tick and no delayed values
