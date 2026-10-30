@@ -395,9 +395,12 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const namep
             = fromp ? buildNamePrefix(fl, fromp) : new AstConst{fl, AstConst::String{}, ""};
 
-        if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) {
+        // A member of a member object chain (e.g. 'r.c.x' in a global constraint) is
+        // registered with its dotted path, as a struct member is
+        if (VN_IS(nodep, StructSel)
+            || (VN_IS(nodep, MemberRef) && (VN_IS(fromp, VarRef) || VN_IS(fromp, MemberRef)))) {
             return new AstConcatN{fl, namep,
-                                  new AstConst{fl, AstConst::String{}, "." + selp->name()}};
+                                  new AstConst{fl, AstConst::String{}, "." + nodep->name()}};
         } else if (VN_IS(nodep, MemberRef)) {
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Nested array element access in global constraint");
