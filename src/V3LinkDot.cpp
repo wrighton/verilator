@@ -4652,10 +4652,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (!start) m_ds.m_dotPos = DP_MEMBER;
                     if (!m_currentWithp) {
                         UASSERT_OBJ(m_randMethodCallp, nodep, "Expected to be under randomize()");
-                        // This will start failing once complex expressions are allowed on the LHS
-                        // of randomize() with args
-                        UASSERT_OBJ(VN_IS(m_randMethodCallp->fromp(), VarRef), m_randMethodCallp,
-                                    "Expected simple randomize target");
                         // A ParseRef is used here so that the dot RHS gets resolved
                         AstMemberRef* const newp = new AstMemberRef{
                             nodep->fileline(), m_randMethodCallp->fromp()->cloneTree(false),

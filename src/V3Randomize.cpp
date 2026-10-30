@@ -42,6 +42,7 @@
 #include "V3Error.h"
 #include "V3FileLine.h"
 #include "V3Global.h"
+#include "V3LinkLValue.h"
 #include "V3MemberMap.h"
 #include "V3SolverBackend.h"
 #include "V3UniqueNames.h"
@@ -436,12 +437,14 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     // Get randomized variables from (std::)randomize() arguments
     // and mark AstNodeModule nodes in which they are defined
-    void handleRandomizeArgument(AstNodeExpr* exprp, AstVar* const varp, const bool stdRandomize) {
+    void handleRandomizeArgument(AstNodeExpr* exprp, const AstNodeExpr* const fromp,
+                                 const bool stdRandomize) {
         // IEEE 1800-2023 18.11: "Arguments are limited to the names of properties
         // of the calling object; expressions are not allowed."
         // However, for compatibility with other simulators, we support complex
         // expressions like obj.member[idx].field in inline randomize().
-        while (exprp) {
+        // Stop at the target object, 'fromp' if a method call.
+        while (exprp && !(fromp && V3Randomize::isRandomizeTarget(exprp, fromp))) {
             AstVar* randVarp = nullptr;
             if (AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
                 randVarp = memberRefp->varp();
@@ -465,7 +468,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 exprp->v3fatalSrc("Unexpected expression type in randomize() argument");
             }
             UASSERT_OBJ(randVarp, exprp, "No rand variable found");
-            if (randVarp == varp) return;
             AstNode* backp = randVarp;
             while (backp && !VN_IS(backp, NodeModule)) backp = backp->backp();
             if (stdRandomize) {
@@ -708,16 +710,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 continue;
             }
             classp->user1(IS_RANDOMIZED_INLINE);
-            AstVar* fromVarp = nullptr;  // If nodep is a method call, this is its receiver
-            if (AstMethodCall* methodCallp = VN_CAST(nodep, MethodCall)) {
-                if (AstMemberRef* const memberRefp = VN_CAST(methodCallp->fromp(), MemberRef)) {
-                    fromVarp = memberRefp->varp();
-                } else {
-                    AstVarRef* const varrefp = VN_AS(methodCallp->fromp(), VarRef);
-                    fromVarp = varrefp->varp();
-                }
-            }
-            handleRandomizeArgument(argp->exprp(), fromVarp, false);
+            const AstMethodCall* const methodCallp = VN_CAST(nodep, MethodCall);
+            handleRandomizeArgument(argp->exprp(), methodCallp ? methodCallp->fromp() : nullptr,
+                                    false);
         }
         // Re-mark members after the class became inline-randomized above.
         if (classp && classp->user1() == IS_RANDOMIZED_INLINE) markMembers(classp);
@@ -1929,7 +1924,7 @@ class RandomizeVisitor final : public VNVisitor {
         if (AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
             AstMemberRef* const newMemberRefp = new AstMemberRef{
                 exprp->fileline(), memberRefp->fromp()->cloneTree(false), modeVarp};
-            newMemberRefp->foreach([access](AstVarRef* varrefp) { varrefp->access(access); });
+            V3LinkLValue::linkLValueSet(newMemberRefp, access);  // Not array indices
             return newMemberRefp;
         }
         UASSERT_OBJ(VN_IS(exprp, VarRef), exprp, "Should be a VarRef");
@@ -1941,6 +1936,8 @@ class RandomizeVisitor final : public VNVisitor {
             return memberRefp->fromp();
         } else if (AstMethodCall* const methodCallp = VN_CAST(exprp, MethodCall)) {
             return methodCallp->fromp();
+        } else if (AstArraySel* const arraySelp = VN_CAST(exprp, ArraySel)) {
+            return arraySelp->fromp();
         }
         return nullptr;
     }
@@ -2002,6 +1999,12 @@ class RandomizeVisitor final : public VNVisitor {
                     commonp = firstVarRefp;
                     continue;
                 }
+            } else if (AstArraySel* const thisSelp = VN_CAST(*thisIt, ArraySel)) {
+                // Only the copies of the target that V3LinkDot made hold an ArraySel
+                UASSERT_OBJ(thisSelp->bitp()->sameTree(VN_AS(*otherIt, ArraySel)->bitp()),
+                            thisSelp, "Copies of the randomize() target should match");
+                commonp = thisSelp;
+                continue;
             }
             break;
         }
@@ -2864,4 +2867,27 @@ AstFunc* V3Randomize::newSRandomFunc(VMemberMap& memberMap, AstClass* nodep) {
         funcp->addStmtsp(cstmtp);
     }
     return funcp;
+}
+
+bool V3Randomize::isRandomizeTarget(const AstNodeExpr* exprp, const AstNodeExpr* fromp) {
+    // V3LinkDot copied the target into each argument, which is an lvalue, so a
+    // sameTree() would fail on the access. Compare the selected objects instead.
+    while (exprp->type() == fromp->type()) {
+        if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
+            return refp->varp() == VN_AS(fromp, VarRef)->varp();
+        } else if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+            const AstMemberRef* const fromSelp = VN_AS(fromp, MemberRef);
+            if (selp->varp() != fromSelp->varp()) return false;
+            exprp = selp->fromp();
+            fromp = fromSelp->fromp();
+        } else if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+            const AstArraySel* const fromSelp = VN_AS(fromp, ArraySel);
+            if (!selp->bitp()->sameTree(fromSelp->bitp())) return false;
+            exprp = selp->fromp();
+            fromp = fromSelp->fromp();
+        } else {
+            return false;
+        }
+    }
+    return false;
 }
