@@ -738,9 +738,9 @@ void VlRandomVar::emitElement(std::ostream& s, int /*j*/) const { s << ' ' << m_
 // Serialize the current runtime value as an SMT-LIB binary literal. Used by
 // randomize(null) to pin a var via `(assert (= var #b...))`. Binary (#b)
 // rather than hex (#x) sidesteps SMT-LIB's hex-width-multiple-of-4 rule.
-void VlRandomVar::emitConcreteValue(std::ostream& s) const {
+void VlRandomVar::emitConcreteValue(std::ostream& s, int j) const {
     const int w = width();
-    const void* const dp = datap(0);
+    const void* const dp = datap(j);
     s << "#b";
     for (int i = w - 1; i >= 0; --i) {
         int bit = 0;
@@ -1047,12 +1047,17 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
         os << "(declare-fun " << var.first << " () ";
         var.second->emitType(os);
         os << ")\n";
-        // Pin each var to its current value
+        // Pin each var, or each array element, to its current value
         if (pinCurrent) {
-            assert(var.second->dimension() == 0);
-            os << "(assert (= " << var.first << ' ';
-            var.second->emitConcreteValue(os);
-            os << "))\n";
+            const int elements
+                = var.second->dimension() ? var.second->totalWidth() / var.second->width() : 1;
+            for (int j = 0; j < elements; ++j) {
+                os << "(assert (=";
+                var.second->emitElement(os, j);
+                os << ' ';
+                var.second->emitConcreteValue(os, j);
+                os << "))\n";
+            }
         }
     }
 }
