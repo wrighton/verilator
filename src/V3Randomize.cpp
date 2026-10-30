@@ -266,13 +266,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 if (!varp) continue;
                 // If member is randomizable and of class type, mark its class
                 if (varp->rand().isRandomizable()) {
-                    const AstNodeDType* const varDtypep = varp->dtypep()->skipRefp();
-                    const AstClassRefDType* classRefp = VN_CAST(varDtypep, ClassRefDType);
-                    if (!classRefp) {
-                        const AstNodeDType* subDTypep = varDtypep->subDTypep();
-                        if (subDTypep) subDTypep = subDTypep->skipRefp();
-                        classRefp = VN_CAST(subDTypep, ClassRefDType);
-                    }
+                    // Also the elements of arrays of any dimension
+                    const AstClassRefDType* const classRefp = VN_CAST(
+                        RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
                     if (classRefp) {
                         AstClass* const rclassp = classRefp->classp();
                         if (!rclassp->user1()) {
