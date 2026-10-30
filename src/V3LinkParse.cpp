@@ -1342,10 +1342,10 @@ class LinkParseVisitor final : public VNVisitor {
             nodep->addMembersp(funcp);
             for (const string& varname : {"covered_bins"s, "total_bins"s}) {
                 AstVar* const varp = new AstVar{nodep->fileline(), VVarType::MEMBER, varname,
-                                                nodep->findStringDType()};
+                                                nodep->findIntDType()};
                 varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
                 varp->funcLocal(true);
-                varp->direction(VDirection::INPUT);
+                varp->direction(VDirection::REF);
                 varp->valuep(new AstVarRef{nodep->fileline(), defaultVarp, VAccess::READ});
                 funcp->addDeclsp(varp);
             }
