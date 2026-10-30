@@ -3960,12 +3960,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
         m_ds.init(m_curSymp);
         iterateNull(nodep);
     }
-    static const AstNodeDType* getExprDTypep(const AstNodeExpr* selp) {
+    // Return the data type of a randomize() target, nullptr if unsupported or deferred
+    const AstNodeDType* getExprDTypep(const AstNodeExpr* selp) {
         while (const AstNodePreSel* const sp = VN_CAST(selp, NodePreSel)) selp = sp->fromp();
         if (const AstMemberRef* const memberRefp = VN_CAST(selp, MemberRef)) {
             if (const AstNodeDType* dtypep = getExprDTypep(memberRefp->fromp())) {
                 if (const AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType)) {
                     const AstClass* const classp = classRefp->classp();
+                    if (m_statep->forPrimary() && hasUnresolvedBase(classp)) {
+                        // Inherited members are unknown until V3Param specializes the base
+                        m_ds.m_unresolvedClass = true;
+                        return nullptr;
+                    }
                     const bool found = classp->existsMember(
                         [&dtypep, name = selp->name()](const AstClass*, const AstVar* nodep) {
                             dtypep = nodep->childDTypep();
@@ -3984,6 +3990,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
             return varRefp->varp()->childDTypep()->elemDTypep();
         }
         return nullptr;
+    }
+    // Whether a base class of 'classp' is not yet specialized
+    static bool hasUnresolvedBase(const AstClass* classp) {
+        while (const AstClassExtends* const cextp = classp->extendsp()) {
+            classp = cextp->classOrNullp();
+            if (!classp) return true;
+        }
+        return false;
     }
     // Introduce implicit parameters for modules with generic interfaces
     void addImplicitParametersOfGenericIface(AstCell* const nodep) {
@@ -5502,7 +5516,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     } else {
                         fromDtp = getExprDTypep(nodep->fromp());
                     }
-                    if (!fromDtp) {
+                    if (!fromDtp && !m_ds.m_unresolvedClass) {
                         if (nodep->withp()) {
                             nodep->v3warn(
                                 E_UNSUPPORTED,
