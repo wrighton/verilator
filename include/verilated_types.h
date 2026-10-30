@@ -437,7 +437,7 @@ class VlMailboxMessage final {
     };
     template <typename T_Value>
     struct TypedValue final : Value {
-        const T_Value m_value;
+        const T_Value m_value;  // Message value
         explicit TypedValue(const T_Value& value)
             : m_value{value} {}
     };
