@@ -3271,6 +3271,27 @@ class SolverSmtLowering final : public V3SolverLowering {
         setp->dtypeSetVoid();
         ftaskp->addStmtsp(setp->makeStmt());
     }
+    // Skip the elements with rand_mode off in a constraint cloned from the objects of an array
+    void skipInactiveElems(AstConstraint* const constrp, AstBegin* const holderp) {
+        // The object of an inactive element is not randomized (IEEE 1800-2023 18.8), so its
+        // constraints do not apply. Such a clone is a foreach over the array, already lowered
+        // to setup statements in holderp, which are skipped for those elements.
+        const auto it = m_cloneObjps.find(constrp);
+        if (it == m_cloneObjps.end()) return;
+        AstMemberRef* const selp = VN_CAST(it->second.objp, MemberRef);
+        AstVar* const modeVarp
+            = m_elemModes.modeVarp(selp ? selp->varp() : VN_AS(it->second.objp, VarRef)->varp());
+        if (!modeVarp) return;
+        AstForeach* const foreachp = VN_AS(VN_AS(holderp->declsp(), Begin)->stmtsp(), Foreach);
+        FileLine* const fl = foreachp->fileline();
+        AstVarRef* const idxRefp
+            = new AstVarRef{fl, VN_AS(foreachp->headerp()->elementsp(), Var), VAccess::READ};
+        AstNodeExpr* const offp = RandomizeUtil::newElemModeOffp(
+            RandomizeUtil::newMemberRefp(fl, selp ? selp->fromp() : nullptr, modeVarp), idxRefp);
+        VL_DO_DANGLING(idxRefp->deleteTree(), idxRefp);
+        AstNodeStmt* const bodyp = foreachp->bodyp()->unlinkFrBackWithNext();
+        foreachp->addBodyp(new AstIf{fl, new AstNot{fl, offp}, bodyp});
+    }
     // Statements making the solver keep the array's elements with rand_mode off unchanged
     AstNodeStmt* newElemModePinsp(AstVar* const arrVarp, AstVar* const modeVarp,
                                   AstVar* const genp, AstNodeExpr* const objp,
@@ -4311,6 +4332,7 @@ public:
                         classp,        m_memberMap,  holderp->declsp(), nullptr,
                         genp,          randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
                         m_uniqueNames, randomizep,   &sizeArrays,       prepareArraysTaskp};
+                    if (holderp->declsp()) skipInactiveElems(constrp, holderp);
                     SmtUtil::replaceWithLowered(holderp);
                 }
             });
