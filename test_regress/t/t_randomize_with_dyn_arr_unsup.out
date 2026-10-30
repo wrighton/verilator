@@ -1,5 +1,11 @@
-%Error-UNSUPPORTED: t/t_randomize_with_dyn_arr_unsup.v:30:21: Unsupported: Randomization of an index to a non-random variable
-   30 |             x == arr[bit'(foo)];
-      |                     ^
+%Error-UNSUPPORTED: t/t_randomize_with_dyn_arr_unsup.v:26:33: Unsupported: Randomized index into a non-random array of non-integral elements
+   26 |     void'(c.randomize() with {us[idx].a == 3;});
+      |                                 ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_randomize_with_dyn_arr_unsup.v:27:35: Unsupported: Randomized index into a non-random array of non-integral elements
+   27 |     void'(c.randomize() with {objs[idx] == null;});
+      |                                   ^
+%Error-UNSUPPORTED: t/t_randomize_with_dyn_arr_unsup.v:28:32: Unsupported: Randomized index into a non-random array of non-integral elements
+   28 |     void'(c.randomize() with {m[idx][1] > 0;});
+      |                                ^
 %Error: Exiting due to
