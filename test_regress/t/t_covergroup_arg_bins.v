@@ -59,6 +59,34 @@ module t;
     endfunction
   endclass
 
+  // Arrays of a bin for each value, once each, named by value (IEEE 1800-2023 19.5)
+  covergroup cg_array(int lo, int hi) with function sample (int v, bit w, bit [64:0] wide);
+    cp: coverpoint v {
+      bins arr[] = {[lo : hi], hi + 5, lo};
+      ignore_bins ign = {lo + 1};
+    }
+    // Of --coverage-max-bins 16: 16 values are kept, 17 ignored
+    cp_max: coverpoint v {
+      bins max[] = {[lo : lo + 15]};
+    }
+    cp_big: coverpoint v {
+      bins big[] = {[lo : lo + 16]};
+    }
+    // An ignore array, which excludes its values from the bins of an array
+    cp_ign: coverpoint v {
+      bins all[] = {[lo : hi]};
+      ignore_bins ign[] = {lo, hi};
+    }
+    // Values wider than 64 bits
+    cp_wide: coverpoint wide {
+      bins warr[] = {[{1'b1, 64'(lo)} : {1'b1, 64'(hi)}]};
+    }
+    cw: coverpoint w;
+    x: cross cp, cw{
+      bins top = binsof (cp.arr) intersect {9};
+    }
+  endgroup
+
   cg inst;
   cg other;
   Cls obj;
@@ -88,6 +116,30 @@ module t;
     obj.m_value = 3;
     obj.cg_embedded.sample();
     `checkr(obj.cg_embedded.get_inst_coverage(), 50.0);
+
+    begin
+      automatic cg_array arr_inst = new(2, 4);  // arr[2], arr[4], and arr[9]; 3 is ignored
+      automatic cg_array arr_other = new(10, 12);  // arr[10], arr[12], and arr[17]
+      arr_inst.sample(2, 0, {1'b1, 64'd3});
+      arr_inst.sample(9, 1, 0);
+      arr_inst.sample(4, 1, 0);
+      `checkr(arr_inst.cp.get_inst_coverage(), 100.0);
+      `checkr(arr_inst.cp_wide.get_inst_coverage(), 100.0 / 3);
+      // top, and the 4 automatic bins of arr[2] and arr[4]
+      `checkr(arr_inst.x.get_inst_coverage(), 100.0 * (3.0 / 5));
+      `checkr(arr_inst.cp_max.get_inst_coverage(), 100.0 * (3.0 / 16));
+      `checkr(arr_inst.cp_ign.get_inst_coverage(), 0.0);  // only all[3], of 3, is a bin
+      arr_inst.sample(3, 0, 0);
+      `checkr(arr_inst.cp_ign.get_inst_coverage(), 100.0);
+      arr_other.sample(12, 0, 0);
+      `checkr(arr_other.cp.get_inst_coverage(), 100.0 / 3);
+    end
+    begin
+      automatic cg_array arr_neg = new(-3, -1);  // arr[-3], arr[-1], and arr[4]
+      arr_neg.sample(-3, 0, 0);
+      arr_neg.sample(-2, 0, 0);
+      `checkr(arr_neg.cp.get_inst_coverage(), 100.0 / 3);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
