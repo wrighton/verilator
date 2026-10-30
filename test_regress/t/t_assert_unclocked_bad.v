@@ -22,4 +22,9 @@ module t;
   assert property ((a |-> b) iff (a |-> b));
   assert property ((a #-# b) iff (a #-# b));
   cover property (a);
+  assert property (a ##1 b);
+  sequence s;
+    a ##1 b;
+  endsequence
+  always @(s) $display("s");
 endmodule

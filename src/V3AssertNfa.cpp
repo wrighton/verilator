@@ -3540,7 +3540,12 @@ class AssertNfaVisitor final : public VNVisitor {
                 return;
             }
         }
-        if (!sensesp) return;
+        if (!sensesp) {
+            // V3AssertPre reports the missing clock (IEEE 1800-2023 16.16), but cannot lower the
+            // multi-cycle body
+            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
+            return;
+        }
         AstSenTree* senTreep = new AstSenTree{propp->fileline(), sensesp->cloneTree(true)};
         AstNodeExpr* const disableExprp = propp->disablep();
 
