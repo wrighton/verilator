@@ -296,6 +296,10 @@ class AssertElabVisitor final : public VNVisitor {
 
         outerSpecp->replaceWith(propSpecp);
         VL_DO_DANGLING(pushDeletep(outerSpecp), outerSpecp);
+        // Only as the whole property of an assertion, not of another property
+        if (VN_IS(propSpecp->backp(), NodeCoverOrAssert)) {
+            V3AssertCommon::reducePlainAlways(propSpecp);
+        }
     }
     void inlineNestedProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
         AstPropSpec* const specp = cloneProperty(schemaRefp, propp);
