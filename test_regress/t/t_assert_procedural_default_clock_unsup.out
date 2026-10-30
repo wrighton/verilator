@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_assert_procedural_default_clock_unsup.v:19:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                                                    : ... note: In instance 't'
+   19 |     assert property (a |-> b);
+      |     ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_procedural_default_clock_unsup.v:20:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                                                    : ... note: In instance 't'
+   20 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
+%Error-UNSUPPORTED: t/t_assert_procedural_default_clock_unsup.v:25:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                                                    : ... note: In instance 't'
+   25 |     assert property (a |-> b);
+      |     ^~~~~~
+%Error-UNSUPPORTED: t/t_assert_procedural_default_clock_unsup.v:26:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                                                    : ... note: In instance 't'
+   26 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
+%Error: Exiting due to
