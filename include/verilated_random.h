@@ -28,6 +28,7 @@
 
 #include "verilated.h"
 
+#include <atomic>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
@@ -250,6 +251,25 @@ public:
 };
 
 class VlSolverSession;
+
+//=============================================================================
+// The randomize() calls of objects with rand class handles in progress on this thread. An object
+// of a cycle of rand handles keeps the stamp of the outermost call that randomized it, so it is
+// randomized once in that call, however many handles reach it.
+class VlRandomizeCall final {
+    static std::atomic<uint64_t> s_calls;  // Outermost calls begun, on any thread
+    static thread_local uint32_t s_depth;  // Calls in progress
+    // Stamp of this thread's outermost call, unique over threads, so another thread's call
+    // does not take an object as randomized
+    static thread_local uint64_t s_stamp;
+
+public:
+    static void enter() VL_MT_SAFE {
+        if (!s_depth++) s_stamp = s_calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    static void exit() VL_MT_SAFE { --s_depth; }
+    static uint64_t stamp() VL_MT_SAFE { return s_stamp; }
+};
 
 //=============================================================================
 // Object holding constraints and variable references.
