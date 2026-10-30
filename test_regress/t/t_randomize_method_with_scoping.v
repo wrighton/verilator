@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: 2024 Antmicro Ltd
 // SPDX-License-Identifier: CC0-1.0
 
+typedef class LaterTarget;
+typedef class LaterPTarget;
+
 class c1;
       rand int c1_f;
 endclass
@@ -184,6 +187,34 @@ class ParamCls #(
   endfunction
 endclass
 
+// Target class defined after the call, inheriting the names the caller also declares
+class LaterBase;
+  rand int m_v;
+  rand int m_w;
+endclass
+class LaterPBase #(int N = 1);
+  rand int m_p;
+endclass
+class LaterCaller;
+  int m_v = 5;
+  int m_w = 6;
+  int m_p = 7;
+  function int doit(LaterTarget t, LaterPTarget pt);
+    doit = t.randomize() with { m_v == local::m_v; this.m_w == local::m_w + 1; };
+    if (t.m_v != 5) $stop;
+    if (t.m_w != 7) $stop;
+    t.m_v = 1;
+    doit &= t.randomize(m_w);
+    if (t.m_v != 1) $stop;
+    doit &= pt.randomize() with { m_p == local::m_p; };
+    if (pt.m_p != 7) $stop;
+  endfunction
+endclass
+class LaterTarget extends LaterBase;
+endclass
+class LaterPTarget extends LaterPBase #(2);
+endclass
+
 module t;
   SubC obj = new;
   LocalExt lext = new;
@@ -231,11 +262,15 @@ module t;
     if (pc.self_cast(30) != 1) $stop;
     if (pc.x != 1) $stop;  // 33 truncated to 5 bits
   end
+  LaterCaller lc = new;
+  LaterTarget lt = new;
+  LaterPTarget lpt = new;
 
   initial begin
     if (obj.doit != 1) $stop;
     if (lext.doit() != 2) $stop;
     check_local_hier();
+    if (lc.doit(lt, lpt) != 1) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
