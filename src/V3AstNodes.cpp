@@ -1295,10 +1295,15 @@ void AstClocking::dumpJson(std::ostream& str) const {
 }
 AstVar* AstClocking::ensureEventp(bool childDType) {
     if (!eventp()) {
+        // An unnamed clocking block is a default or a global one, at most one of each per scope.
+        // Its event needs a name, else V3Begin names it after the enclosing generate block.
+        const std::string name = !m_name.empty() ? m_name
+                                 : m_isGlobal    ? "__Vclocking_global"
+                                                 : "__Vclocking_default";
         AstVar* const evp
-            = childDType ? new AstVar{fileline(), VVarType::MODULETEMP, m_name, VFlagChildDType{},
+            = childDType ? new AstVar{fileline(), VVarType::MODULETEMP, name, VFlagChildDType{},
                                       new AstBasicDType{fileline(), VBasicDTypeKwd::EVENT}}
-                         : new AstVar{fileline(), VVarType::MODULETEMP, m_name,
+                         : new AstVar{fileline(), VVarType::MODULETEMP, name,
                                       findBasicDType(VBasicDTypeKwd::EVENT)};
         evp->lifetime(VLifetime::STATIC_EXPLICIT);
         eventp(evp);
