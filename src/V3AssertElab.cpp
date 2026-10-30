@@ -235,6 +235,10 @@ class AssertElabVisitor final : public VNVisitor {
 
         outerSpecp->replaceWith(propSpecp);
         VL_DO_DANGLING(pushDeletep(outerSpecp), outerSpecp);
+        // Only as the whole property of an assertion, not of another property
+        if (VN_IS(propSpecp->backp(), NodeCoverOrAssert)) {
+            V3AssertCommon::reducePlainAlways(propSpecp);
+        }
     }
     // True if an actual argument of schemaRefp contains a property instance
     static bool hasPropertyArg(const AstSchemaRef* schemaRefp) {
@@ -266,7 +270,18 @@ class AssertElabVisitor final : public VNVisitor {
     static bool isInlinableMultiCycle(const AstSchemaRef* schemaRefp, const AstPropSpec* specp) {
         return specp->propStrength() == VPropStrength::DEFAULT && !hasPropertyArg(schemaRefp)
                && !isUnderSequenceOperator(schemaRefp)
-               && !specp->exists([](const AstExprStmt*) { return true; });
+               && !specp->exists([](const AstExprStmt*) { return true; })
+               && !isAlwaysOverPropertyOps(specp);
+    }
+    // True if a property body is an 'always' of a property, only supported as a whole property
+    static bool isAlwaysOverPropertyOps(const AstPropSpec* specp) {
+        // As V3Width reports for the same property written out (IEEE 1800-2023 16.12.11)
+        const AstPropAlways* const alwaysp = VN_CAST(specp->propp(), PropAlways);
+        return alwaysp && alwaysp->propp()->exists([](const AstNode* np) {
+            const AstNodeExpr* const exprp = VN_CAST(np, NodeExpr);
+            return (exprp && exprp->isMultiCycleSva()) || VN_IS(np, Implication)
+                   || VN_IS(np, Until) || VN_IS(np, PropSpec);
+        });
     }
     void inlineNestedProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
         AstPropSpec* const specp = cloneProperty(schemaRefp, propp);
