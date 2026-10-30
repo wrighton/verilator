@@ -25,6 +25,8 @@
 
 #include "verilated.h"
 
+#include <algorithm>
+#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -2148,6 +2150,13 @@ static double _vl_cov_calculate(double weighted, double weights, int32_t weight)
     return weighted / weights;
 }
 
+// A number of bins as the 'int' argument of get_coverage() or get_inst_coverage()
+static IData _vl_cov_bins(double count) VL_PURE {
+    // Saturated, as a sum over many instances may not fit
+    return static_cast<IData>(
+        std::min(count, static_cast<double>(std::numeric_limits<int32_t>::max())));
+}
+
 // IEEE 1800-2023 19.7: a weight shall be non-negative.  A negative constant is rejected when
 // verilating; a weight that is negative only at run time is reported as it is loaded, and
 // counts as zero, so that coverage stays within 0..100.
@@ -2199,8 +2208,8 @@ double VlCoverpointIf::coverage(IData& covered, IData& total) const {
     double coveredBins = 0.0;
     double totalBins = 0.0;
     coverageParts(coveredBins, totalBins);
-    covered = static_cast<IData>(coveredBins);
-    total = static_cast<IData>(totalBins);
+    covered = _vl_cov_bins(coveredBins);
+    total = _vl_cov_bins(totalBins);
     loadWeight();
     return _vl_cov_calculate(100.0 * coveredBins, totalBins, m_weight);
 }
@@ -2218,24 +2227,28 @@ void VlCovergroupInst::loadWeight() {
     m_weight = _vl_cov_load_weight("option.weight", m_loadedWeight, m_fileline);
 }
 
-std::pair<double, double> VlCovergroupInst::coverageSums() const {
-    double weighted = 0.0;
-    double weights = 0.0;
+VlCovSums VlCovergroupInst::coverageSums() const {
+    VlCovSums sums;
     for (const auto& itemp : m_items) {
         double covered = 0.0;
         double total = 0.0;
         itemp->coverageParts(covered, total);
-        if (total == 0.0) continue;  // No bins: excluded from both sums
-        weighted += itemp->weight() * (covered / total);
-        weights += itemp->weight();
+        sums.coveredBins += covered;
+        sums.totalBins += total;
+        if (total == 0.0) continue;  // No bins: excluded from both weighted sums
+        sums.weighted += itemp->weight() * (covered / total);
+        sums.weights += itemp->weight();
     }
-    return {100.0 * weighted, weights};
+    sums.weighted *= 100.0;
+    return sums;
 }
 
-double VlCovergroupInst::coverage() {
+double VlCovergroupInst::coverage(IData& covered, IData& total) {
     loadWeight();
-    const std::pair<double, double> sums = coverageSums();
-    return _vl_cov_calculate(sums.first, sums.second, m_weight);
+    const VlCovSums sums = coverageSums();
+    covered = _vl_cov_bins(sums.coveredBins);
+    total = _vl_cov_bins(sums.totalBins);
+    return _vl_cov_calculate(sums.weighted, sums.weights, m_weight);
 }
 
 void VlCovergroupInst::mergeInto(VlCovMergedItems& items) const {
@@ -2294,9 +2307,8 @@ void VlCovMergedItem::coverageParts(const VlCovMergedItem& other, double& covere
     total = static_cast<double>(numTotal);
 }
 
-std::pair<double, double> VlCovMergedItems::coverageSums(const VlCovMergedItems& other) const {
-    double weighted = 0.0;
-    double weights = 0.0;
+VlCovSums VlCovMergedItems::coverageSums(const VlCovMergedItems& other) const {
+    VlCovSums sums;
     const auto sumItem = [&](const VlCovMergedItem* ap, const VlCovMergedItem* bp) {
         double covered = 0.0;
         double total = 0.0;
@@ -2306,12 +2318,15 @@ std::pair<double, double> VlCovMergedItems::coverageSums(const VlCovMergedItems&
         } else {
             itemr.coverageParts(covered, total);
         }
-        if (total == 0.0) return;  // No bins: excluded from both sums
-        weighted += itemr.typeWeight() * (covered / total);
-        weights += itemr.typeWeight();
+        sums.coveredBins += covered;
+        sums.totalBins += total;
+        if (total == 0.0) return;  // No bins: excluded from both weighted sums
+        sums.weighted += itemr.typeWeight() * (covered / total);
+        sums.weights += itemr.typeWeight();
     };
     _vl_cov_union_walk(m_items, other.m_items, sumItem);
-    return {100.0 * weighted, weights};
+    sums.weighted *= 100.0;
+    return sums;
 }
 
 double VlCovMergedItems::coverage(const std::string& name, const VlCovMergedItems& other,
@@ -2327,8 +2342,8 @@ double VlCovMergedItems::coverage(const std::string& name, const VlCovMergedItem
     } else {
         item.coverageParts(otherIt->second, coveredBins, totalBins);
     }
-    covered = static_cast<IData>(coveredBins);
-    total = static_cast<IData>(totalBins);
+    covered = _vl_cov_bins(coveredBins);
+    total = _vl_cov_bins(totalBins);
     return _vl_cov_calculate(100.0 * coveredBins, totalBins, item.typeWeight());
 }
 
@@ -2350,17 +2365,19 @@ VlCovergroupInst* VlCovergroupType::newInstance(bool mayMerge) {
 void VlCovergroupType::foldResidue(VlCovergroupInst* instp) {
     // Merged type coverage needs the dead instance's bins themselves
     if (m_mayMerge) instp->mergeInto(m_mergedRetired);
-    const std::pair<double, double> sums = instp->coverageSums();
+    const VlCovSums sums = instp->coverageSums();
+    m_retired.coveredBins += sums.coveredBins;
+    m_retired.totalBins += sums.totalBins;
     // Nothing coverable: excluded from both sums, so it moves neither the mean
     // nor the denominator.  Never-sampled is different: it has bins, none hit,
     // and folds as 0%.
-    if (sums.second == 0.0) return;
+    if (sums.weights == 0.0) return;
     // The same weighted average of the items as get_inst_coverage(), so that a live
     // instance and the same instance one delta after death never disagree.  With the
     // weight last loaded: the object that lent option.weight is gone, and nothing may
     // be reported here, as this can run after ~VerilatedContext (see ~VlCovRegistry).
     const int32_t weight = instp->weight();
-    m_retired.sumCoverage += weight * (sums.first / sums.second);
+    m_retired.sumCoverage += weight * (sums.weighted / sums.weights);
     m_retired.sumWeight += weight;
     ++m_retired.count;
 }
@@ -2414,8 +2431,8 @@ VlCovMergedItems VlCovergroupType::mergeLive() const {
     return live;
 }
 
-double VlCovergroupType::coverage(IData typeWeight, bool mergeInstances,
-                                  VlFileLineDebug fileline) {
+double VlCovergroupType::coverage(IData typeWeight, bool mergeInstances, VlFileLineDebug fileline,
+                                  IData& covered, IData& total) {
     if (typeWeight != m_loadedTypeWeight) {  // Only a new value, as in loadWeight()
         m_loadedTypeWeight = typeWeight;
         m_typeWeight = _vl_cov_load_weight("type_option.weight", typeWeight, fileline);
@@ -2423,20 +2440,28 @@ double VlCovergroupType::coverage(IData typeWeight, bool mergeInstances,
     if (mergeInstances) {
         // The union of the bins of every instance, including those that have died, kept in
         // m_mergedRetired, so merged with the live ones' as read, not copied
-        const std::pair<double, double> sums = mergeLive().coverageSums(m_mergedRetired);
-        return _vl_cov_calculate(sums.first, sums.second, m_typeWeight);
+        const VlCovSums sums = mergeLive().coverageSums(m_mergedRetired);
+        covered = _vl_cov_bins(sums.coveredBins);
+        total = _vl_cov_bins(sums.totalBins);
+        return _vl_cov_calculate(sums.weighted, sums.weights, m_typeWeight);
     }
     // Instances that have died still count: their contribution is the residue
     double sumCoverage = m_retired.sumCoverage;
     double sumWeight = m_retired.sumWeight;
+    double coveredBins = m_retired.coveredBins;
+    double totalBins = m_retired.totalBins;
     for (const auto& instp : m_insts) {
         if (instp->retained()) continue;  // Already folded into the residue
         instp->loadWeight();
-        const std::pair<double, double> sums = instp->coverageSums();
-        if (sums.second == 0.0) continue;  // A covergroup without coverage does not contribute
-        sumCoverage += instp->weight() * (sums.first / sums.second);
+        const VlCovSums sums = instp->coverageSums();
+        coveredBins += sums.coveredBins;
+        totalBins += sums.totalBins;
+        if (sums.weights == 0.0) continue;  // A covergroup without coverage does not contribute
+        sumCoverage += instp->weight() * (sums.weighted / sums.weights);
         sumWeight += instp->weight();
     }
+    covered = _vl_cov_bins(coveredBins);
+    total = _vl_cov_bins(totalBins);
     return _vl_cov_calculate(sumCoverage, sumWeight, m_typeWeight);
 }
 
@@ -2489,9 +2514,10 @@ VlCovergroupInst* VlCovRegistry::newCovergroupInst(const char* typeName, bool ma
 }
 
 double VlCovRegistry::typeCoverage(const char* typeName, IData typeWeight, bool mergeInstances,
-                                   VlFileLineDebug fileline) {
+                                   VlFileLineDebug fileline, IData& covered, IData& total) {
     // Also for a type never instantiated, whose node then remembers type_option.weight
-    return findOrCreateType(typeName)->coverage(typeWeight, mergeInstances, fileline);
+    return findOrCreateType(typeName)->coverage(typeWeight, mergeInstances, fileline, covered,
+                                                total);
 }
 
 // A covergroup object can outlive the registry: models must be destroyed before

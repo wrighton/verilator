@@ -988,7 +988,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_ADD_SINGLE_NAMER,        "addSingleNamer",         false,  CLEAN,  false,      "r+", "") \
     macro(COVERGROUP_ATTACH,                  "attach",                 false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_CLEAR_HIT_LIST,          "clearHitList",           false,  CLEAN,  false,      "", "") \
-    macro(COVERGROUP_COVERAGE,                "coverage",               false,  CLEAN,  false,      "", "") \
+    macro(COVERGROUP_COVERAGE,                "coverage",               false,  CLEAN,  false,      "ww", "") \
     macro(COVERGROUP_CROSS_WITH_BEGIN,        "withBegin",              false,  CLEAN,  false,      "r+", "") \
     macro(COVERGROUP_CROSS_WITH_END,          "withEnd",                false,  CLEAN,  false,      "", "") \
     macro(COVERGROUP_CROSS_WITH_TEST,         "withTest",               false,  CLEAN,  false,      "r", "") \
@@ -998,7 +998,6 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_INCREMENT_BIN,           "incrementBin",           false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_INIT,                    "init",                   false,  CLEAN,  false,      "r+", "") \
     macro(COVERGROUP_INST_P,                  "p",                      PURE,   CLEAN,  false,      "", "") \
-    macro(COVERGROUP_ITEM_COVERAGE,           "coverage",               false,  CLEAN,  false,      "ww", "") \
     macro(COVERGROUP_LEND_WEIGHT,             "lendWeight",             false,  CLEAN,  false,      "rr", "") \
     macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "rww", "") \
     macro(COVERGROUP_RECORD_HIT,              "recordHit",              false,  CLEAN,  false,      "r", "") \
@@ -1024,7 +1023,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_TRANSITION_SAMPLE,       "transitionSample",       false,  CLEAN,  false,      "rr", "") \
     macro(COVERGROUP_TRANSITION_SAMPLE_W,     "transitionSampleW",      false,  CLEAN,  false,      "rr", "") \
     macro(COVERGROUP_TRANSITION_TABLE,        "transitionTable",        false,  CLEAN,  false,      "r", "") \
-    macro(COVERGROUP_TYPE_COVERAGE,           "typeCoverage",           false,  CLEAN,  false,      "rrrr", "") \
+    macro(COVERGROUP_TYPE_COVERAGE,           "typeCoverage",           false,  CLEAN,  false,      "rrrrww", "") \
     macro(COVERGROUP_TYPE_WEIGHT,             "typeWeight",             false,  CLEAN,  false,      "r", "") \
     macro(COVERGROUP_VALUE_EXCLUDED,          "valueExcluded",          PURE,   CLEAN,  false,      "r", "") \
     macro(COVERGROUP_VALUE_EXCLUDED_W,        "valueExcludedW",         PURE,   CLEAN,  false,      "r", "") \
