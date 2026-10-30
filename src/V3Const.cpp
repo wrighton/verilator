@@ -954,6 +954,7 @@ class ConstVisitor final : public VNVisitor {
     bool m_hasJumpDelay = false;  // JumpGo or Delay under this loop
     bool m_hasLoopTest = false;  // Contains AstLoopTest
     bool m_underRecFunc = false;  // Under a recursive function
+    const AstNodeBiop* m_bitwiseFromLogicp = nullptr;  // And/Or just converted from LogAnd/LogOr
     AstNodeModule* m_modp = nullptr;  // Current module
     const AstArraySel* m_selp = nullptr;  // Current select
     const AstScope* m_scopep = nullptr;  // Current scope
@@ -2132,6 +2133,22 @@ class ConstVisitor final : public VNVisitor {
     }
     void replaceWLhsBool(AstNodeBiop* nodep) { replaceWChildBool(nodep, nodep->lhsp()); }
     void replaceWRhsBool(AstNodeBiop* nodep) { replaceWChildBool(nodep, nodep->rhsp()); }
+    // Replace a LogAnd/LogOr with the equivalent And/Or
+    void replaceLogicWithBitwise(AstNodeBiop* nodep) {
+        AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
+        AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+        FileLine* const flp = nodep->fileline();
+        AstNodeBiop* const newp = VN_IS(nodep, LogAnd)
+                                      ? static_cast<AstNodeBiop*>(new AstAnd{flp, lhsp, rhsp})
+                                      : new AstOr{flp, lhsp, rhsp};
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        // The iterator revisits newp next to apply its rules (the conversion is only done in
+        // the global pass, where no LogAnd/LogOr is visited by a direct iterate()). Its
+        // operands are already simplified, so tell iterateBitwiseOperands not to walk them
+        // again, which on a long chain of operators would be quadratic.
+        m_bitwiseFromLogicp = newp;
+    }
     void replaceAsv(AstNodeBiop* nodep) {
         // BIASV(CONSTa, BIASV(CONSTb, c)) -> BIASV( BIASV_CONSTED(a,b), c)
         // BIASV(SAMEa,  BIASV(SAMEb, c))  -> BIASV( BIASV(SAMEa,SAMEb), c)
@@ -3437,6 +3454,24 @@ class ConstVisitor final : public VNVisitor {
         }
     }
 
+    // Iterate the operands of an And/Or, unless it was just converted from a LogAnd/LogOr
+    void iterateBitwiseOperands(AstNodeBiop* nodep) {
+        if (!m_bitwiseFromLogicp) {
+            iterateChildren(nodep);
+            return;
+        }
+        UASSERT_OBJ(nodep == m_bitwiseFromLogicp, nodep, "Converted node not visited next");
+        m_bitwiseFromLogicp = nullptr;
+    }
+    void visit(AstAnd* nodep) override {
+        iterateBitwiseOperands(nodep);
+        visitGen(nodep);
+    }
+    void visit(AstOr* nodep) override {
+        iterateBitwiseOperands(nodep);
+        visitGen(nodep);
+    }
+
     void visit(AstCAwait* nodep) override {
         m_hasJumpDelay = true;
         iterateChildren(nodep);
@@ -4374,8 +4409,10 @@ class ConstVisitor final : public VNVisitor {
     //  TREE_SKIP_VISIT("AstNODETYPE")    # Rename normal visit to visitGen and don't iterate
     //-----
     // clang-format off
+    TREE_SKIP_VISIT("And");
     TREE_SKIP_VISIT("ArraySel");
     TREE_SKIP_VISIT("CAwait");
+    TREE_SKIP_VISIT("Or");
 
     //-----
     //  "AstNODETYPE {             # bracket not paren
@@ -4640,8 +4677,8 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstOneHot{$lhsp.width1}",          "replaceWLhs(nodep)");
     TREEOPV("AstOneHot0{$lhsp.width1}",         "replaceNum(nodep,1)");
     // Binary AND/OR is faster than logical and/or (usually)
-    TREEOPV("AstLogAnd{matchBiopToBitwise(nodep)}", "AstAnd{$lhsp,$rhsp}");
-    TREEOPV("AstLogOr {matchBiopToBitwise(nodep)}", "AstOr{$lhsp,$rhsp}");
+    TREEOPV("AstLogAnd{matchBiopToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
+    TREEOPV("AstLogOr {matchBiopToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
     TREEOPV("AstLogNot{$lhsp.width1}",  "AstNot{$lhsp}");
     // CONCAT(CONCAT({a},{b}),{c}) -> CONCAT({a},CONCAT({b},{c}))
     // CONCAT({const},CONCAT({const},{c})) -> CONCAT((constifiedCONC{const|const},{c}))
