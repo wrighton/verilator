@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2025 PlanV GmbH
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 // Simple test for global constraints with 2-level nesting: Top -> Mid -> Inner
 
 class Inner;
@@ -100,6 +105,32 @@ module t_constraint_global_random_simple;
       $display("ERROR: m_only_topConstrained_val should be 5, got %0d",
                t.m_mid.m_inner.m_only_topConstrained_val);
       $stop;
+    end
+
+    // Test: randomize() solves the member objects the handles refer to at the call
+    begin
+      automatic Inner old_inner;
+      automatic Inner new_inner = new;
+      // Replaced member objects, with no other reference to the replaced objects
+      t.m_mid = new(20);
+      success = t.randomize();
+      `checkd(success, 1);
+      `checkd(t.m_mid.m_x, 20);
+      `checkd(t.m_mid.m_inner.m_only_topConstrained_val, 5);
+      // Replaced, then restored member object
+      old_inner = t.m_mid.m_inner;
+      old_inner.m_only_topConstrained_val = 0;
+      t.m_mid.m_inner = new_inner;
+      success = t.randomize();
+      `checkd(success, 1);
+      `checkd(new_inner.m_only_topConstrained_val, 5);
+      `checkd(old_inner.m_only_topConstrained_val, 0);
+      t.m_mid.m_inner = old_inner;
+      new_inner.m_only_topConstrained_val = 0;
+      success = t.randomize();
+      `checkd(success, 1);
+      `checkd(old_inner.m_only_topConstrained_val, 5);
+      `checkd(new_inner.m_only_topConstrained_val, 0);
     end
 
     $write("*-* All Finished *-*\n");
