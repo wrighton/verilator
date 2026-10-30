@@ -4551,11 +4551,9 @@ class SolverSmtLowering final : public V3SolverLowering {
         return pinp->makeStmt();
     }
 
-    void addFrozenSizePin(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
-                          AstVar* const genp, AstVar* const randModeVarp,
-                          const AstMemberRef* const mselp = nullptr) {
-        const RandomizeMode rmode = {.asUQuad = arrVarp->user1()};
-        if (!rmode.usesMode) return;
+    // Assign the current size of a size-constrained array to its size variable
+    AstAssign* newSizeVarAssign(FileLine* const fl, AstVar* const arrVarp,
+                                const AstMemberRef* const mselp = nullptr) const {
         AstVar* const sizeVarp = sizeVarOf(arrVarp, mselp);
         const VCMethod sizeMethod = VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)
                                         ? VCMethod::ASSOC_SIZE
@@ -4563,8 +4561,15 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstCMethodHard* const currentSizep = new AstCMethodHard{
             fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::READ), sizeMethod};
         currentSizep->dtypep(sizeVarp->dtypep());
-        randomizep->addStmtsp(
-            new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE), currentSizep});
+        return new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE),
+                             currentSizep};
+    }
+    void addFrozenSizePin(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
+                          AstVar* const genp, AstVar* const randModeVarp,
+                          const AstMemberRef* const mselp = nullptr) {
+        const RandomizeMode rmode = {.asUQuad = arrVarp->user1()};
+        if (!rmode.usesMode) return;
+        randomizep->addStmtsp(newSizeVarAssign(fl, arrVarp, mselp));
         AstNodeExpr* const modep = newModeBitRead(arrVarp, mselp, randModeVarp, fl);
         randomizep->addStmtsp(
             new AstIf{fl, new AstLogNot{fl, modep}, newPinSizeVariable(fl, arrVarp, genp, mselp)});
@@ -5496,6 +5501,22 @@ public:
         FileLine* const fl = classp->fileline();
         AstVar* const classGenp = SmtUtil::getRandomGenerator(classp);
         if (!classGenp) return new AstConst{fl, AstConst::WidthedValue{}, 32, 1};
+        // Register the variables as new() and randomize() do, so arrays have their current
+        // elements, and set the size variables the solver checks array sizes with
+        VInsertionSet<AstVar*> sizedArrays;
+        for (AstClass* cp = classp; cp; cp = cp->extendsp() ? cp->extendsp()->classp() : nullptr) {
+            copyVariableRegistrations(VN_AS(m_memberMap.findMember(cp, "new"), Func), funcp);
+            for (AstVar* const arrVarp : m_sizeConstrainedArrays[cp]) sizedArrays.insert(arrVarp);
+        }
+        // Arrays with only a size constraint, and arrays of member objects, also have one
+        MemberArrays memberArrays;
+        addResizedArrays(classp, sizedArrays, memberArrays);
+        for (AstVar* const arrVarp : sizedArrays) funcp->addStmtsp(newSizeVarAssign(fl, arrVarp));
+        for (const auto& pathMsel : memberArrays) {
+            const AstMemberRef* const mselp = pathMsel.second;
+            funcp->addStmtsp(newSizeVarAssign(fl, mselp->varp(), mselp));
+        }
+        copyVariableRegistrations(VN_AS(m_memberMap.findMember(classp, "randomize"), Func), funcp);
         AstNodeModule* const genModp = VN_AS(classGenp->user2p(), NodeModule);
         funcp->addStmtsp(implementConstraintsClear(fl, classGenp));
         AstTask* const setupAllTaskp = SmtUtil::getCreateConstraintSetupFunc(classp, m_memberMap);
