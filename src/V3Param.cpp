@@ -1516,6 +1516,141 @@ class ParamProcessor final {
         any_overridesr = true;
     }
 
+    // Return a parameter's value widthed to the parameter's type, or nullptr if not computable
+    static AstConst* newWidthedParamValue(AstVar* modvarp, AstNode* valuep, AstPin* paramsp,
+                                          const AstNodeModule* srcModp) {
+        // References in the value to other parameters take this cell's pin values or defaults
+        AstVar* const cloneVarp = modvarp->cloneTree(false);
+        bool cloneVarpUnresolved = false;
+        if (AstNode* const oldValuep = cloneVarp->valuep()) {
+            oldValuep->unlinkFrBack();
+            VL_DO_DANGLING(oldValuep->deleteTree(), oldValuep);
+        }
+        cloneVarp->valuep(valuep->cloneTree(false));
+        if (AstNodeDType* const origDTypep = modvarp->subDTypep()) {
+            // Attach clone under cloneVarp so the root has a back pointer.
+            if (cloneVarp->childDTypep()) cloneVarp->childDTypep()->unlinkFrBack()->deleteTree();
+            cloneVarp->childDTypep(origDTypep->cloneTree(false));
+            cloneVarp->dtypep(nullptr);
+            // Inline param refs so widthing doesn't touch the template (#7411).
+            constexpr int maxSubstIters = 1000;
+            for (int it = 0; it < maxSubstIters; ++it) {
+                bool any = false;
+                cloneVarp->foreach([&](AstVarRef* varrefp) {
+                    AstVar* const targetp = varrefp->varp();
+                    AstNode* replacep = nullptr;
+                    for (AstPin* const pp : VNList<AstPin>{paramsp}) {
+                        if (pp->modVarp() == targetp) {
+                            // A pattern or array override names the value too
+                            if (VN_IS(pp->exprp(), Const) || VN_IS(pp->exprp(), Pattern)
+                                || VN_IS(pp->exprp(), ConsArray)) {
+                                replacep = pp->exprp()->cloneTree(false);
+                            }
+                            break;
+                        }
+                    }
+                    if (!replacep && targetp->valuep()) {
+                        replacep = targetp->valuep()->cloneTree(false);
+                    }
+                    // An inlined pattern takes the type of its parameter
+                    AstPattern* const patp = VN_CAST(replacep, Pattern);
+                    if (patp && !patp->childDTypep() && targetp->childDTypep()) {
+                        patp->childDTypep(targetp->childDTypep()->cloneTree(false));
+                    }
+                    if (replacep) {
+                        varrefp->replaceWith(replacep);
+                        VL_DO_DANGLING(varrefp->deleteTree(), varrefp);
+                        any = true;
+                    }
+                });
+                // Replace RefDType to a ParamTypeDType with pin override
+                // or the paramtype's default so constify below does not
+                // reach into the template.  Collect then replace in
+                // reverse so descendants aren't freed early.
+                std::vector<std::pair<AstRefDType*, AstNodeDType*>> toReplace;
+                cloneVarp->foreach([&](AstRefDType* refp) {
+                    AstParamTypeDType* const ptdp = VN_CAST(refp->refDTypep(), ParamTypeDType);
+                    if (!ptdp) return;
+                    AstPin* overridePinp = nullptr;
+                    for (AstPin* const pp : VNList<AstPin>{paramsp}) {
+                        if (pp->modPTypep() == ptdp) {
+                            overridePinp = pp;
+                            break;
+                        }
+                    }
+                    AstNodeDType* const substp = overridePinp
+                                                     ? VN_CAST(overridePinp->exprp(), NodeDType)
+                                                     : ptdp->subDTypep();
+                    if (substp) toReplace.emplace_back(refp, substp);
+                });
+                for (auto it = toReplace.rbegin(); it != toReplace.rend(); ++it) {
+                    AstRefDType* const refp = it->first;
+                    refp->replaceWith(it->second->cloneTree(false));
+                    VL_DO_DANGLING(refp->deleteTree(), refp);
+                    any = true;
+                }
+                if (!any) break;
+            }
+            // Skip the widthing constify if anything left can't be evaluated here: a
+            // reference, as to a variable or around a cycle, an unresolved type
+            // parameter, or a type or enum item of the template
+            cloneVarp->foreach([&](AstNode* np) {
+                if (VN_IS(np, VarRef)) {
+                    cloneVarpUnresolved = true;
+                    return;
+                }
+                if (AstEnumItemRef* const itemRefp = VN_CAST(np, EnumItemRef)) {
+                    if (V3LinkDotIfaceCapture::findOwnerModule(itemRefp->itemp()) == srcModp) {
+                        cloneVarpUnresolved = true;
+                    }
+                    return;
+                }
+                AstRefDType* const refp = VN_CAST(np, RefDType);
+                if (!refp) return;
+                if (VN_IS(refp->refDTypep(), ParamTypeDType)) {
+                    UINFO(5, "  newWidthedParamValue: unresolved "
+                             "(unresolved RefDType->ParamTypeDType) pin="
+                                 << modvarp->prettyNameQ());
+                    cloneVarpUnresolved = true;
+                }
+                // A type declared in the template must not be widthed there
+                if (V3LinkDotIfaceCapture::findOwnerModule(refp->typedefp()) == srcModp
+                    || V3LinkDotIfaceCapture::findOwnerModule(refp->refDTypep()) == srcModp) {
+                    cloneVarpUnresolved = true;
+                }
+            });
+        }
+        AstConst* resultp = nullptr;
+        if (!cloneVarpUnresolved) {
+            V3Const::constifyParamsEdit(cloneVarp);
+            cleanTwoStateParamValue(cloneVarp);
+            if (AstConst* const widthedp = VN_CAST(cloneVarp->valuep(), Const)) {
+                // Stamp the port's type so equal values hash the same.
+                if (cloneVarp->dtypep()) widthedp->dtypep(cloneVarp->dtypep());
+                widthedp->unlinkFrBack();
+                resultp = widthedp;
+            }
+        }
+        VL_DO_DANGLING(cloneVarp->deleteTree(), cloneVarp);
+        return resultp;
+    }
+    // Return whether a default can be evaluated for a cell before its template is elaborated
+    static bool defaultEvaluable(AstVar* modvarp) {
+        // An untyped parameter would take the type of the pin's value. The default must name
+        // only parameters of packages, which a pin can't override, folded here in their own
+        // context, and no function, which may have side effects, nor a reference not resolved.
+        if (modvarp->untypedParam()) return false;
+        return !modvarp->valuep()->exists([&](AstNode* np) {
+            if (AstVarRef* const refp = VN_CAST(np, VarRef)) {
+                AstVar* const varp = refp->varp();
+                if (!varp->isParam() || !VN_IS(refp->classOrPackagep(), Package)) return true;
+                V3Const::constifyParamsEdit(varp);
+                return !VN_IS(varp->valuep(), Const);
+            }
+            return VN_IS(np, NodeFTaskRef) || VN_IS(np, Dot);
+        });
+    }
+
     // Name the specialization by a value pin, or prepare a type pin, noting in
     // overridingTypePinsr whether it differs from the default
     void cellPinCleanup(AstNode* nodep, AstPin* pinp, AstPin* paramsp, AstNodeModule* srcModp,
@@ -1569,123 +1704,15 @@ class ParamProcessor final {
                 AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
                 // Width the pin to the port's type so equal values hash the same (#5479).
                 AstConst* normedNamep = nullptr;
+                AstConst* defaultp = nullptr;
                 if (exprp && !exprp->num().isDouble() && !exprp->num().isString()) {
-                    AstVar* cloneVarp = modvarp->cloneTree(false);
-                    bool cloneVarpUnresolved = false;
-                    if (AstNode* const oldValuep = cloneVarp->valuep()) {
-                        oldValuep->unlinkFrBack();
-                        VL_DO_DANGLING(oldValuep->deleteTree(), oldValuep);
+                    normedNamep = newWidthedParamValue(modvarp, exprp, paramsp, srcModp);
+                    // A default not yet folded, e.g. naming a package parameter, is evaluated
+                    // for this cell, so a pin of the same value keeps the default specialization
+                    if (normedNamep && !origp && modvarp->valuep() && defaultEvaluable(modvarp)) {
+                        defaultp
+                            = newWidthedParamValue(modvarp, modvarp->valuep(), paramsp, srcModp);
                     }
-                    cloneVarp->valuep(exprp->cloneTree(false));
-                    if (AstNodeDType* const origDTypep = modvarp->subDTypep()) {
-                        // Attach clone under cloneVarp so the root has a back pointer.
-                        if (cloneVarp->childDTypep())
-                            cloneVarp->childDTypep()->unlinkFrBack()->deleteTree();
-                        cloneVarp->childDTypep(origDTypep->cloneTree(false));
-                        cloneVarp->dtypep(nullptr);
-                        // Inline param refs so widthing doesn't touch the template (#7411).
-                        constexpr int maxSubstIters = 1000;
-                        for (int it = 0; it < maxSubstIters; ++it) {
-                            bool any = false;
-                            cloneVarp->foreach([&](AstVarRef* varrefp) {
-                                AstVar* const targetp = varrefp->varp();
-                                AstNode* replacep = nullptr;
-                                for (AstPin* const pp : VNList<AstPin>{paramsp}) {
-                                    if (pp->modVarp() == targetp) {
-                                        // A pattern or array override names the value too
-                                        if (VN_IS(pp->exprp(), Const)
-                                            || VN_IS(pp->exprp(), Pattern)
-                                            || VN_IS(pp->exprp(), ConsArray)) {
-                                            replacep = pp->exprp()->cloneTree(false);
-                                        }
-                                        break;
-                                    }
-                                }
-                                if (!replacep && targetp->valuep()) {
-                                    replacep = targetp->valuep()->cloneTree(false);
-                                }
-                                // An inlined pattern takes the type of its parameter
-                                AstPattern* const patp = VN_CAST(replacep, Pattern);
-                                if (patp && !patp->childDTypep() && targetp->childDTypep()) {
-                                    patp->childDTypep(targetp->childDTypep()->cloneTree(false));
-                                }
-                                if (replacep) {
-                                    varrefp->replaceWith(replacep);
-                                    VL_DO_DANGLING(varrefp->deleteTree(), varrefp);
-                                    any = true;
-                                }
-                            });
-                            // Replace RefDType to a ParamTypeDType with pin override
-                            // or the paramtype's default so constify below does not
-                            // reach into the template.  Collect then replace in
-                            // reverse so descendants aren't freed early.
-                            std::vector<std::pair<AstRefDType*, AstNodeDType*>> toReplace;
-                            cloneVarp->foreach([&](AstRefDType* refp) {
-                                AstParamTypeDType* const ptdp
-                                    = VN_CAST(refp->refDTypep(), ParamTypeDType);
-                                if (!ptdp) return;
-                                AstPin* overridePinp = nullptr;
-                                for (AstPin* const pp : VNList<AstPin>{paramsp}) {
-                                    if (pp->modPTypep() == ptdp) {
-                                        overridePinp = pp;
-                                        break;
-                                    }
-                                }
-                                AstNodeDType* const substp
-                                    = overridePinp ? VN_CAST(overridePinp->exprp(), NodeDType)
-                                                   : ptdp->subDTypep();
-                                if (substp) toReplace.emplace_back(refp, substp);
-                            });
-                            for (auto it = toReplace.rbegin(); it != toReplace.rend(); ++it) {
-                                AstRefDType* const refp = it->first;
-                                refp->replaceWith(it->second->cloneTree(false));
-                                VL_DO_DANGLING(refp->deleteTree(), refp);
-                                any = true;
-                            }
-                            if (!any) break;
-                        }
-                        // Skip the widthing constify if anything left can't be evaluated here: a
-                        // reference, as to a variable or around a cycle, an unresolved type
-                        // parameter, or a type or enum item of the template
-                        cloneVarp->foreach([&](AstNode* np) {
-                            if (VN_IS(np, VarRef)) {
-                                cloneVarpUnresolved = true;
-                                return;
-                            }
-                            if (AstEnumItemRef* const itemRefp = VN_CAST(np, EnumItemRef)) {
-                                if (V3LinkDotIfaceCapture::findOwnerModule(itemRefp->itemp())
-                                    == srcModp) {
-                                    cloneVarpUnresolved = true;
-                                }
-                                return;
-                            }
-                            AstRefDType* const refp = VN_CAST(np, RefDType);
-                            if (!refp) return;
-                            if (VN_IS(refp->refDTypep(), ParamTypeDType)) {
-                                UINFO(5, "  cellPinCleanup: skip normedNamep "
-                                         "(unresolved RefDType->ParamTypeDType) pin="
-                                             << pinp->prettyNameQ());
-                                cloneVarpUnresolved = true;
-                            }
-                            // A type declared in the template must not be widthed there
-                            if (V3LinkDotIfaceCapture::findOwnerModule(refp->typedefp()) == srcModp
-                                || V3LinkDotIfaceCapture::findOwnerModule(refp->refDTypep())
-                                       == srcModp) {
-                                cloneVarpUnresolved = true;
-                            }
-                        });
-                    }
-                    if (!cloneVarpUnresolved) {
-                        V3Const::constifyParamsEdit(cloneVarp);
-                        cleanTwoStateParamValue(cloneVarp);
-                        if (AstConst* const widthedp = VN_CAST(cloneVarp->valuep(), Const)) {
-                            // Stamp the port's type so equal values hash the same.
-                            if (cloneVarp->dtypep()) widthedp->dtypep(cloneVarp->dtypep());
-                            widthedp->unlinkFrBack();
-                            normedNamep = widthedp;
-                        }
-                    }
-                    VL_DO_DANGLING(cloneVarp->deleteTree(), cloneVarp);
                 }
                 AstConst* const namingExprp = normedNamep ? normedNamep : exprp;
                 if (!exprp) {
@@ -1699,11 +1726,13 @@ class ParamProcessor final {
                     pinExprp->replaceWith(new AstConst{pinp->fileline(), AstConst::WidthedValue{},
                                                        modvarp->width(), 0});
                     VL_DO_DANGLING(pinExprp->deleteTree(), pinExprp);
-                } else if (origp
-                           && (exprp->sameTree(origp)
-                               || (exprp->num().width() == origp->num().width()
-                                   && ParameterizedHierBlocks::areSame(exprp, origp))
-                               || paramConstsEqualAtMaxWidth(exprp, origp))) {
+                } else if (defaultp
+                               ? normedNamep->num().isCaseEq(defaultp->num())
+                               : origp
+                                     && (exprp->sameTree(origp)
+                                         || (exprp->num().width() == origp->num().width()
+                                             && ParameterizedHierBlocks::areSame(exprp, origp))
+                                         || paramConstsEqualAtMaxWidth(exprp, origp))) {
                     // Setting parameter to its default value.  Just ignore it.
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
@@ -1720,6 +1749,7 @@ class ParamProcessor final {
                     any_overridesr = true;
                 }
                 if (normedNamep) VL_DO_DANGLING(normedNamep->deleteTree(), normedNamep);
+                if (defaultp) VL_DO_DANGLING(defaultp->deleteTree(), defaultp);
             }
         } else if (AstParamTypeDType* const modvarp = pinp->modPTypep()) {
             // Resolve the pin and declared type through arbitrary dtype wrappers
