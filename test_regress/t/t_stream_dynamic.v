@@ -265,11 +265,63 @@ module t;
     `checkh(q70[1], {s80[9:0], 60'h0});
   endtask
 
+  // Dynamically sized operand into fixed-size unpacked arrays
+  task test5;
+    int q[$];
+    byte dyn8[];
+    int up3[3];
+    int up4[4];
+    int desc[4:2];
+    int asc[1:3];
+    bit [14:0] up15[2];
+    bit [94:0] up95[2];
+    bit [23:0] up24[2];
+
+    q.push_back(1);
+    q.push_back(2);
+    q.push_back(3);
+    up3 = {>>{q}};
+    `checkp(up3, "'{'h1, 'h2, 'h3}");
+    // A narrower stream is zero-filled on the right
+    up4 = '{9, 9, 9, 9};
+    up4 = {>>{q}};
+    `checkp(up4, "'{'h1, 'h2, 'h3, 'h0}");
+    up3 = {<<8{q}};
+    `checkp(up3, "'{'h3000000, 'h2000000, 'h1000000}");
+    desc = {>>{q}};
+    `checkh(desc[4], 1);
+    `checkh(desc[3], 2);
+    `checkh(desc[2], 3);
+    asc = {<<{q}};
+    `checkh(asc[1], 32'hc0000000);
+    `checkh(asc[2], 32'h40000000);
+    `checkh(asc[3], 32'h80000000);
+    up95 = '{'1, '1};
+    up95 = {>>{q}};
+    `checkh(up95[0], 95'h0_80000001_00000001);
+    `checkh(up95[1], 95'h40000000_00000000_00000000);
+
+    dyn8 = new[3] ('{8'h12, 8'h34, 8'h56});
+    up15 = {>>{dyn8}};
+    `checkh(up15[0], 15'h091a);
+    `checkh(up15[1], 15'h1580);
+
+    // A longer stream is truncated on the right, also within an element
+    q.push_back(4);
+    up3 = {>>{q}};
+    `checkp(up3, "'{'h1, 'h2, 'h3}");
+    q = '{32'h11223344, 32'h55667788};
+    up24 = {>>{q}};
+    `checkh(up24[0], 24'h112233);
+    `checkh(up24[1], 24'h445566);
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
     test4();
+    test5();
     $write("*-* All Finished *-*\n");
     $finish;
   end

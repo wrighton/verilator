@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_stream_dynamic_unsup.v:19:8: Unsupported: Stream of a dynamically sized array into 'int$[0:1][0:2]'
+                                                   : ... note: In instance 't'
+   19 |     md = {>>{q}};
+      |        ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_stream_dynamic_unsup.v:20:7: Unsupported: Stream of a dynamically sized array into 'struct t.s_t'
+                                                   : ... note: In instance 't'
+   20 |     s = {>>{q}};
+      |       ^
+%Error-UNSUPPORTED: t/t_stream_dynamic_unsup.v:21:8: Unsupported: Stream of a dynamically sized array into 'struct t.s_t$[0:1]'
+                                                   : ... note: In instance 't'
+   21 |     sa = {<<8{q}};
+      |        ^
+%Error: Exiting due to
