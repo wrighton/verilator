@@ -123,6 +123,10 @@ public:
     // Read reference to member varp of objp, or of 'this' if objp is nullptr
     static AstNodeExpr* newMemberRefp(FileLine* fl, AstNodeExpr* objp,
                                       AstVar* varp) VL_MT_DISABLED;
+    // Return the random index select into a non-random array that exprp reads through
+    static AstNodeExpr*
+    randIndexSelp(AstNodeExpr* exprp,
+                  bool (*isRandIndexp)(const AstNodeExpr* indexp)) VL_MT_DISABLED;
 };
 
 //######################################################################
