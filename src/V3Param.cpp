@@ -477,37 +477,30 @@ class ParamProcessor final {
             }
             key += "}";
         } else if (const AstClassRefDType* const classRefp = VN_CAST(nodep, ClassRefDType)) {
-            // For parameterized class types, use the original class name (without specialization
-            // suffix) plus the actual type parameter values. This ensures equivalent class types
-            // get the same string representation regardless of which AST node is used.
-            if (classRefp->classp()) {
-                const string& className = classRefp->classp()->name();
-                const string& origName = classRefp->classp()->origName();
-                const bool isSpecialized = (className != origName);
-                UINFO(9, "paramValueString ClassRefDType: name="
-                             << className << " origName=" << origName
-                             << " isSpecialized=" << isSpecialized
-                             << " hasParams=" << (classRefp->paramsp() ? "Y" : "N")
-                             << " classHasGParam=" << classRefp->classp()->hasGParam());
-
-                if (classRefp->paramsp()) {
-                    // ClassRefDType should have been deparameterized (paramsp
-                    // consumed) before cellPinCleanup calls paramValueString.
-                    classRefp->v3fatalSrc(  // LCOV_EXCL_LINE
+            // ClassRefDType should have been deparameterized (paramsp consumed) before
+            // cellPinCleanup calls paramValueString, and classp() set, as unresolved class
+            // references would have errored in LinkDot.
+            UASSERT_OBJ(!classRefp->paramsp(), classRefp,
                         "ClassRefDType still has paramsp in paramValueString");
-                } else if (isSpecialized) {
-                    // Already specialized class (e.g., c1__Tz1_TBz1) - use full name
-                    // This ensures different specializations are distinguished
-                    key = className;
-                } else {
-                    // Unspecialized class with no params - use origName
-                    key = origName;
+            UASSERT_OBJ(classRefp->classp(), classRefp,
+                        "ClassRefDType has null classp in paramValueString");
+            // By the name of the class, which for a specialization holds its parameter values,
+            // qualified by the scopes declaring it, as classes of the same name may be declared
+            // in different packages, classes, or modules
+            key = classRefp->classp()->name();
+            // This searches back over the earlier members of each scope, but is not worth
+            // a cache per class, which V3Param would need to keep up to date as it clones and
+            // deletes classes and their scopes.
+            for (const AstNode* outerp = classRefp->classp()->aboveLoopp();;
+                 outerp = outerp->aboveLoopp()) {
+                // Separated as by $typename, as a package and a module may have the same name
+                if (VN_IS(outerp, Package) || VN_IS(outerp, Class)) {
+                    key = outerp->name() + "::" + key;
+                } else if (VN_IS(outerp, NodeModule) || VN_IS(outerp, GenBlock)) {
+                    key = outerp->name() + "." + key;
                 }
-            } else {
-                // classp() should always be set; unresolved class refs
-                // would have errored in LinkDot.
-                classRefp->v3fatalSrc(  // LCOV_EXCL_LINE
-                    "ClassRefDType has null classp in paramValueString");
+                // A class is declared in a design unit, maybe $unit, and those are not nested
+                if (VN_IS(outerp, NodeModule) && !VN_IS(outerp, Class)) break;
             }
         } else if (const AstUnpackArrayDType* const dtypep = VN_CAST(nodep, UnpackArrayDType)) {
             // Name containers by their elements as above, not by prettyDTypeName(), which names
