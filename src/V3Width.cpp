@@ -8720,14 +8720,30 @@ class WidthVisitor final : public VNVisitor {
     static bool refsUntypedFormal(const AstNode* nodep) {
         return nodep->exists([](const AstVarRef* refp) { return isUntypedFormal(refp->varp()); });
     }
-    // True if a property selects from or takes an edge of an untyped formal argument
+    // True if a reference to an untyped formal argument is an operand that an operator types
+    static bool typedOperandUntypedFormal(const AstVarRef* refp) {
+        // Logical and sequence operators take any operand as a boolean or a sequence. $past has
+        // the type of its operand, so look through it.
+        const AstNode* abovep = refp->firstAbovep();
+        while (VN_IS(abovep, Past)) abovep = abovep->firstAbovep();
+        const AstNodeExpr* const parentp = VN_CAST(abovep, NodeExpr);
+        return isUntypedFormal(refp->varp())
+               && (VN_IS(parentp, NodeUniop) || VN_IS(parentp, NodeBiop)
+                   || VN_IS(parentp, NodeTriop) || VN_IS(parentp, NodeQuadop))
+               && !isLogicalOperator(parentp) && !parentp->isMultiCycleSva();
+    }
+    // True if a property uses an untyped formal argument where its type matters
     bool needsTypedFormals(const AstNodeSchema* taskp) {
-        // Also through another property. Such a formal can only be typed with the actual argument
-        // (IEEE 1800-2023 16.8, 16.12).
+        // That is in a select, an edge, or as an operand of an operator, also through another
+        // property. Such a formal can only be typed with the actual argument (IEEE 1800-2023
+        // 16.8, 16.12).
         if (!VN_IS(taskp, Property)) return false;
         const auto pair = m_needsTypedFormals.emplace(taskp, false);
         if (!pair.second) return pair.first->second;
         const bool needs = taskp->exists([&](const AstNode* np) {
+            if (const AstVarRef* const refp = VN_CAST(np, VarRef)) {
+                return typedOperandUntypedFormal(refp);
+            }
             if (const AstNodePreSel* const selp = VN_CAST(np, NodePreSel)) {
                 return refsUntypedFormal(selp->fromp());
             }
