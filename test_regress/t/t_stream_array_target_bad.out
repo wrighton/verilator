@@ -11,8 +11,4 @@
                                           : ... note: In instance 't'
    15 |     ra2 = {>>{w128}};
       |         ^
-%Error: t/t_stream_array_target_bad.v:16:14: Stream assignment to an array of 'real', which is not a bit-stream type (IEEE 1800-2023 6.24.3)
-                                           : ... note: In instance 't'
-   16 |     {>>{rq}} = w128;
-      |              ^
 %Error: Exiting due to

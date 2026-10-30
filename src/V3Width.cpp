@@ -1229,7 +1229,22 @@ class WidthVisitor final : public VNVisitor {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             m_streamConcat = true;
-            iterateCheckSelf(nodep, "LHS", nodep->lhsp(), SELF, BOTH);
+            userIterateAndNext(nodep->lhsp(), WidthVP{SELF, PRELIM}.p());
+            // A real, or an array of them, is not a bit-stream type, though V3Const streams the
+            // bits of real structure members
+            const AstNodeDType* elemDtypep = nodep->lhsp()->dtypep()->skipRefp();
+            while (elemDtypep->isNonPackedArray()) {
+                elemDtypep = elemDtypep->subDTypep()->skipRefp();
+            }
+            if (elemDtypep->isDouble()) {
+                nodep->v3error("Stream operand of type "
+                               << nodep->lhsp()->dtypep()->prettyDTypeNameQ()
+                               << " is not a bit-stream type (IEEE 1800-2023 6.24.3, 11.4.14)");
+                AstNode* const oldp = nodep->lhsp();
+                oldp->replaceWith(new AstConst{oldp->fileline(), AstConst::BitFalse{}});
+                VL_DO_DANGLING(pushDeletep(oldp), oldp);
+            }
+            iterateCheckSelf(nodep, "LHS", nodep->lhsp(), SELF, FINAL);
             m_streamConcat = false;
             iterateCheckSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
             V3Const::constifyParamsEdit(nodep->rhsp());  // rhsp may change
