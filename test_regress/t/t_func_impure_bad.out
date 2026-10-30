@@ -1,14 +1,20 @@
-%Error-IMPURE: t/t_func_impure_bad.v:11:8: Unsupported: External variable referenced by non-inlined function/task: 't.foo'
-   11 |   task foo;
+%Error-IMPURE: t/t_func_impure_bad.v:19:8: Unsupported: External variable referenced by non-inlined function/task: 't.foo'
+   19 |   task foo;
       |        ^~~
-               t/t_func_impure_bad.v:13:5: ... Location of the external reference: 't.sig'
-   13 |     sig = '1;
+               t/t_func_impure_bad.v:21:5: ... Location of the external reference: 't.sig'
+   21 |     sig = '1;
       |     ^~~
                ... For error description see https://verilator.org/warn/IMPURE?v=latest
-%Error-IMPURE: t/t_func_impure_bad.v:20:8: Unsupported: External variable referenced by non-inlined function/task: 't.baz'
-   20 |   task baz;
+%Error-IMPURE: t/t_func_impure_bad.v:28:8: Unsupported: External variable referenced by non-inlined function/task: 't.baz'
+   28 |   task baz;
       |        ^~~
-               t/t_func_impure_bad.v:17:5: ... Location of the external reference: 't.sig'
-   17 |     sig = '1;
+               t/t_func_impure_bad.v:25:5: ... Location of the external reference: 't.sig'
+   25 |     sig = '1;
       |     ^~~
+%Error-IMPURE: t/t_func_impure_bad.v:42:8: Unsupported: External variable referenced by non-inlined function/task: 't.qux'
+   42 |   task qux(Cls h, output int o);
+      |        ^~~
+               t/t_func_impure_bad.v:10:12: ... Location of the external reference: 'm'
+   10 |     return m * 2;
+      |            ^
 %Error: Exiting due to
