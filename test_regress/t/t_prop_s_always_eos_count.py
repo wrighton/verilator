@@ -13,7 +13,7 @@ test.scenarios('vlt')  # UNOPTTHREADS in vltmt due to many small assertion state
 
 # Keep running after an assertion failure so all unfinished strong-property
 # attempts can execute their action block at end of simulation.
-test.compile(verilator_flags2=['--assert', '--no-stop-fail'])
+test.compile(verilator_flags2=['--assert', '--no-stop-fail', '--timing'])
 test.execute(expect_filename=test.golden_filename)
 
 test.passes()
