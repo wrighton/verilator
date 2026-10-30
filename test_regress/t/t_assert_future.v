@@ -29,15 +29,19 @@ module t (
 
   int count_changing_gclk;
   assert property (@(posedge clk) $changing_gclk(a)) count_changing_gclk = count_changing_gclk + 1;
+  else;
 
   int count_falling_gclk;
   assert property (@(posedge clk) $falling_gclk(a)) count_falling_gclk = count_falling_gclk + 1;
+  else;
 
   int count_future_gclk;  // Counts changes
   assert property (@(posedge clk) $future_gclk(a) != a) count_future_gclk = count_future_gclk + 1;
+  else;
 
   int count_rising_gclk;
   assert property (@(posedge clk) $rising_gclk(a)) count_rising_gclk = count_rising_gclk + 1;
+  else;
 
   int count_not_steady_gclk;  // Counts changes
   assert property (@(posedge clk) $steady_gclk(a))
