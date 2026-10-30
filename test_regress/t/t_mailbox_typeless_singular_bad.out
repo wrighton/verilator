@@ -1,0 +1,14 @@
+%Error: t/t_mailbox_typeless_singular_bad.v:18:11: Typeless mailbox message must be of a singular type, not 'int$[0:1]' (IEEE 1800-2023 15.4.3)
+                                                 : ... note: In instance 't'
+   18 |     m.put(arr);   
+      |           ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_mailbox_typeless_singular_bad.v:19:21: Typeless mailbox message must be of a singular type, not 'struct $unit::st_t' (IEEE 1800-2023 15.4.3)
+                                                 : ... note: In instance 't'
+   19 |     void'(m.try_put(st));   
+      |                     ^~
+%Error: t/t_mailbox_typeless_singular_bad.v:20:11: Typeless mailbox message must be of a singular type, not 'int$[$]' (IEEE 1800-2023 15.4.3)
+                                                 : ... note: In instance 't'
+   20 |     m.get(q);   
+      |           ^
+%Error: Exiting due to
