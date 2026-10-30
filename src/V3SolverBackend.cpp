@@ -102,9 +102,41 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
     return nullptr;
 }
 
+AstVar* ElemRandModes::modeVarp(AstVar* arrVarp) {
+    if (!m_arrays.count(arrVarp)) return nullptr;
+    AstVar*& modeVarp = m_modeVars[arrVarp];
+    if (modeVarp) return modeVarp;
+    // Keyed by element offset, kept across resizes, holding 1 for the elements with
+    // rand_mode off
+    FileLine* const fl = arrVarp->fileline();
+    if (!m_dtypep) {
+        m_dtypep = new AstAssocArrayDType{fl, arrVarp->findBitDType(), arrVarp->findUInt32DType()};
+        m_dtypep->dtypep(m_dtypep);
+        v3Global.rootp()->typeTablep()->addTypesp(m_dtypep);
+    }
+    AstClass* const classp = VN_AS(arrVarp->user2p(), Class);
+    modeVarp = new AstVar{fl, VVarType::MEMBER, "__Vrandmode__" + arrVarp->name(), m_dtypep};
+    modeVarp->user2p(classp);
+    classp->addMembersp(modeVarp);
+    return modeVarp;
+}
+
 bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
     AstNodeDType* dtypep = varp->dtypep()->skipRefp();
     if (!dtypep->isNonPackedArray()) return false;
     while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
     return VN_IS(dtypep, ClassRefDType);
+}
+
+AstNodeExpr* RandomizeUtil::newElemModeOffp(AstNodeExpr* const modesp, AstNodeExpr* const indexp) {
+    AstCMethodHard* const atp = new AstCMethodHard{indexp->fileline(), modesp, VCMethod::ARRAY_AT,
+                                                   indexp->cloneTree(false)};
+    atp->dtypeSetBit();
+    return atp;
+}
+
+AstNodeExpr* RandomizeUtil::newMemberRefp(FileLine* const fl, AstNodeExpr* const objp,
+                                          AstVar* const varp) {
+    if (objp) return new AstMemberRef{fl, objp->cloneTreePure(false), varp};
+    return new AstVarRef{fl, VN_AS(varp->user2p(), Class), varp, VAccess::READ};
 }

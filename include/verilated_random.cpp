@@ -971,7 +971,11 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
-    const std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    // pin_frozen() constraints of the variables registered by now
+    for (const auto& pin : m_frozenPins) {
+        if (m_vars.count(pin.first)) uniqueExprs.push_back(pin.second);
+    }
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
@@ -1789,6 +1793,7 @@ void VlRandomizer::clearConstraints() {
     m_solveBefore.clear();
     m_softConstraints.clear();
     m_uniqueArrays.clear();  // Re-registered by constraint setup
+    m_frozenPins.clear();  // Likewise re-added
     // Keep m_vars for class member randomization
 }
 

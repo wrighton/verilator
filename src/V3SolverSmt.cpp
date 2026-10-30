@@ -59,6 +59,27 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 //######################################################################
 // Helpers shared by the lowering visitors
 
+// SMT constant with the value of nodep
+static AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
+    return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
+                           nodep};
+}
+
+// Call f on each field that the solver registers for an element object of class classp
+template <typename T_Func>
+static void foreachSolverElemField(const AstClass* classp, T_Func f) {
+    for (const AstClass* cp = classp; cp;
+         cp = cp->extendsp() ? cp->extendsp()->classp() : nullptr) {
+        for (AstNode* const mnodep : cp->memberspList()) {
+            AstVar* const memberVarp = VN_CAST(mnodep, Var);
+            if (!memberVarp || !memberVarp->rand().isRandomizable()) continue;
+            const AstNodeDType* const memberDtp = memberVarp->dtypep()->skipRefp();
+            if (VN_IS(memberDtp, ClassRefDType) || memberDtp->isNonPackedArray()) continue;
+            f(memberVarp);
+        }
+    }
+}
+
 // Whether the handles on the path objp have rand_mode on (if modes) and are not null (if
 // nonNull), nullptr if nothing to check
 static AstNodeExpr* newHandlesActivep(AstNodeExpr* objp, bool modes, bool nonNull) {
@@ -528,10 +549,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         return nullptr;
     }
 
-    AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
-        return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
-                               nodep};
-    }
     bool editFormat(AstNodeExpr* nodep) {
         if (nodep->user1()) return false;
         // Replace computable expression with SMT constant
@@ -945,59 +962,51 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeStmt* enablesp = nullptr;  // While activep, written back
         AstNodeStmt* disablesp = nullptr;  // Otherwise not
 
-        for (const AstClass* cp = elemClassp; cp;
-             cp = cp->extendsp() ? cp->extendsp()->classp() : nullptr) {
-            for (AstNode* const mnodep : cp->memberspList()) {
-                AstVar* const memberVarp = VN_CAST(mnodep, Var);
-                if (!memberVarp || !memberVarp->rand().isRandomizable()) continue;
-                AstNodeDType* const memberDtp = memberVarp->dtypep()->skipRefp();
-                if (VN_IS(memberDtp, ClassRefDType) || memberDtp->isNonPackedArray()) continue;
-                const int memberWidth = memberDtp->width();
+        foreachSolverElemField(elemClassp, [&](AstVar* const memberVarp) {
+            const int memberWidth = memberVarp->dtypep()->skipRefp()->width();
 
-                AstNodeExpr* const arrayWrRefp = arrayRefp->cloneTree(false);
-                if (AstVarRef* const varRefp = VN_CAST(arrayWrRefp, VarRef)) {
-                    varRefp->access(VAccess::WRITE);
-                } else {
-                    VN_AS(arrayWrRefp, MemberRef)->access(VAccess::WRITE);
-                }
-                AstNodeExpr* atWritep;
-                if (isUnpackedClassRefArray) {
-                    atWritep = new AstArraySel{fl, arrayWrRefp,
-                                               new AstVarRef{fl, iterVarp, VAccess::READ}};
-                } else {
-                    atWritep = new AstCMethodHard{fl, arrayWrRefp, VCMethod::ARRAY_AT_WRITE,
-                                                  new AstVarRef{fl, iterVarp, VAccess::READ}};
-                }
-                atWritep->dtypep(elemClassRefDtp);
-                AstMemberRef* const memberRefp = new AstMemberRef{fl, atWritep, memberVarp};
-
-                AstCMethodHard* const writeVarp
-                    = new AstCMethodHard{fl,
-                                         new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule),
-                                                       m_genp, VAccess::READWRITE},
-                                         VCMethod::RANDOMIZER_WRITE_VAR};
-                writeVarp->dtypeSetVoid();
-                writeVarp->addPinsp(memberRefp);
-                writeVarp->addPinsp(
-                    new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(memberWidth)});
-                AstSFormatF* const namep
-                    = new AstSFormatF{fl, smtName + "." + idxFmt + "." + memberVarp->name(), false,
-                                      new AstVarRef{fl, iterVarp, VAccess::READ}};
-                if (activep) {
-                    AstCMethodHard* const enablep = new AstCMethodHard{
-                        fl, writeVarp->fromp()->cloneTree(false),
-                        VCMethod::RANDOMIZER_CLEAR_VAR_DISABLED, namep->cloneTree(false)};
-                    enablep->dtypeSetVoid();
-                    AstCMethodHard* const disablep = enablep->cloneTree(false);
-                    disablep->method(VCMethod::RANDOMIZER_SET_VAR_DISABLED);
-                    enablesp = AstNode::addNext(enablesp, enablep->makeStmt());
-                    disablesp = AstNode::addNext(disablesp, disablep->makeStmt());
-                }
-                writeVarp->addPinsp(namep);
-                writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0ULL});
-                ifNonNullp->addThensp(writeVarp->makeStmt());
+            AstNodeExpr* const arrayWrRefp = arrayRefp->cloneTree(false);
+            if (AstVarRef* const varRefp = VN_CAST(arrayWrRefp, VarRef)) {
+                varRefp->access(VAccess::WRITE);
+            } else {
+                VN_AS(arrayWrRefp, MemberRef)->access(VAccess::WRITE);
             }
-        }
+            AstNodeExpr* atWritep;
+            if (isUnpackedClassRefArray) {
+                atWritep
+                    = new AstArraySel{fl, arrayWrRefp, new AstVarRef{fl, iterVarp, VAccess::READ}};
+            } else {
+                atWritep = new AstCMethodHard{fl, arrayWrRefp, VCMethod::ARRAY_AT_WRITE,
+                                              new AstVarRef{fl, iterVarp, VAccess::READ}};
+            }
+            atWritep->dtypep(elemClassRefDtp);
+            AstMemberRef* const memberRefp = new AstMemberRef{fl, atWritep, memberVarp};
+
+            AstCMethodHard* const writeVarp = new AstCMethodHard{
+                fl,
+                new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_WRITE_VAR};
+            writeVarp->dtypeSetVoid();
+            writeVarp->addPinsp(memberRefp);
+            writeVarp->addPinsp(
+                new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(memberWidth)});
+            AstSFormatF* const namep
+                = new AstSFormatF{fl, smtName + "." + idxFmt + "." + memberVarp->name(), false,
+                                  new AstVarRef{fl, iterVarp, VAccess::READ}};
+            if (activep) {
+                AstCMethodHard* const enablep = new AstCMethodHard{
+                    fl, writeVarp->fromp()->cloneTree(false),
+                    VCMethod::RANDOMIZER_CLEAR_VAR_DISABLED, namep->cloneTree(false)};
+                enablep->dtypeSetVoid();
+                AstCMethodHard* const disablep = enablep->cloneTree(false);
+                disablep->method(VCMethod::RANDOMIZER_SET_VAR_DISABLED);
+                enablesp = AstNode::addNext(enablesp, enablep->makeStmt());
+                disablesp = AstNode::addNext(disablesp, disablep->makeStmt());
+            }
+            writeVarp->addPinsp(namep);
+            writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0ULL});
+            ifNonNullp->addThensp(writeVarp->makeStmt());
+        });
         // The fields of the objects of an inactive array are not written back
         if (enablesp) {
             ifNonNullp->addThensp(new AstIf{fl, activep->cloneTree(false), enablesp, disablesp});
@@ -3138,6 +3147,8 @@ class SolverSmtLowering final : public V3SolverLowering {
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
+    std::unordered_set<const AstClass*> m_elemModePinPath;  // Classes newClassElemModePinsp is in
+    V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Array element loop indices
 
     // METHODS
     AstVar* getStaticRandModeVar(AstClass* const classp) {
@@ -3259,6 +3270,109 @@ class SolverSmtLowering final : public V3SolverLowering {
                           VAccess::READ}};
         setp->dtypeSetVoid();
         ftaskp->addStmtsp(setp->makeStmt());
+    }
+    // Statements making the solver keep the array's elements with rand_mode off unchanged
+    AstNodeStmt* newElemModePinsp(AstVar* const arrVarp, AstVar* const modeVarp,
+                                  AstVar* const genp, AstNodeExpr* const objp,
+                                  const std::string& prefix) {
+        FileLine* const fl = arrVarp->fileline();
+        const std::string name = prefix + arrVarp->name();
+        AstVar* const idxVarp = new AstVar{fl, VVarType::VAR, m_randArrayUniqueNames.get(""),
+                                           arrVarp->findUInt32DType()};
+        // Offset of the element, as used by the solver
+        AstNodeExpr* offsetp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        AstNodeExpr* elemp;
+        const AstUnpackArrayDType* const unpackDtp
+            = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
+        if (unpackDtp) {
+            offsetp = new AstSub{fl, offsetp,
+                                 new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
+            offsetp->dtypeSetUInt32();
+            elemp = new AstArraySel{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp),
+                                    offsetp->cloneTree(false)};
+        } else {
+            elemp = new AstCMethodHard{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp),
+                                       VCMethod::ARRAY_AT, offsetp->cloneTree(false)};
+        }
+        elemp->dtypep(arrVarp->dtypep()->skipRefp()->subDTypep());
+        // Pin solver term termFmt (formatted with the offset) of variable varFmt to valuep
+        const auto newPinp = [&](const std::string& varFmt, const std::string& termFmt,
+                                 AstNodeExpr* valuep) {
+            AstCMethodHard* const pinp = new AstCMethodHard{
+                fl, new AstVarRef{fl, VN_AS(genp->user2p(), NodeModule), genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_PIN_FROZEN,
+                new AstSFormatF{fl, varFmt, false,
+                                varFmt == name ? nullptr : offsetp->cloneTree(false)}};
+            pinp->addPinsp(new AstSFormatF{
+                fl, "(__Vbv (= " + termFmt + " %s))", false,
+                AstNode::addNext(offsetp->cloneTree(false), getConstFormat(valuep))});
+            pinp->dtypeSetVoid();
+            return pinp->makeStmt();
+        };
+        AstNodeStmt* pinsp = nullptr;
+        if (const AstClassRefDType* const classRefp
+            = VN_CAST(elemp->dtypep()->skipRefp(), ClassRefDType)) {
+            // Each field registered by createWriteVarForClassFields
+            const std::string elemFmt = name + "." + (unpackDtp ? "%0x" : "%8x") + ".";
+            foreachSolverElemField(classRefp->classp(), [&](AstVar* const memberVarp) {
+                const std::string fieldFmt = elemFmt + memberVarp->name();
+                pinsp = AstNode::addNextNull(
+                    pinsp, newPinp(fieldFmt, fieldFmt,
+                                   new AstMemberRef{fl, elemp->cloneTree(false), memberVarp}));
+            });
+            pinsp
+                = new AstIf{fl, new AstNeq{fl, elemp, new AstConst{fl, AstConst::Null{}}}, pinsp};
+        } else {
+            pinsp = newPinp(name, "(select " + name + " #x%8x)", elemp);
+        }
+        AstIf* const ifp
+            = new AstIf{fl,
+                        RandomizeUtil::newElemModeOffp(
+                            RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp),
+                        pinsp};
+        VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
+        // In a block, so the loop variable is moved out of an enclosing 'if'
+        return new AstBegin{
+            fl, m_uniqueNames.get("__VrandBlock"),
+            new AstForeach{
+                fl,
+                new AstForeachHeader{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp), idxVarp},
+                ifp},
+            false};
+    }
+    // Statements pinning the elements with rand_mode off in the arrays of classp
+    AstNodeStmt* newClassElemModePinsp(AstClass* const classp, AstVar* const genp,
+                                       AstNodeExpr* const objp = nullptr,
+                                       const std::string& prefix = "") {
+        // Also those of its rand objects, as their constraints may be solved together with
+        // classp's (IEEE 1800-2023 18.5.9). objp reaches classp, nullptr for 'this', and
+        // prefix is classp's solver variable name prefix.
+        if (m_elemModes.empty()) return nullptr;
+        AstNodeStmt* stmtsp = nullptr;
+        m_elemModePinPath.insert(classp);  // Against cycles of rand objects
+        classp->foreachMember([&](AstClass*, AstVar* const varp) {
+            if (AstVar* const modeVarp = m_elemModes.modeVarp(varp)) {
+                stmtsp = AstNode::addNextNull(
+                    stmtsp, newElemModePinsp(varp, modeVarp, genp, objp, prefix));
+            }
+            if (!varp->isRand()) return;
+            const AstClassRefDType* const classRefp
+                = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+            if (!classRefp || m_elemModePinPath.count(classRefp->classp())) return;
+            FileLine* const fl = varp->fileline();
+            AstNodeExpr* const subObjp = RandomizeUtil::newMemberRefp(fl, objp, varp);
+            if (AstNodeStmt* const subStmtsp = newClassElemModePinsp(
+                    classRefp->classp(), genp, subObjp, prefix + varp->name() + ".")) {
+                stmtsp = AstNode::addNextNull(
+                    stmtsp, new AstIf{fl,
+                                      new AstNeq{fl, subObjp->cloneTree(false),
+                                                 new AstConst{fl, AstConst::Null{}}},
+                                      subStmtsp});
+            }
+            VL_DO_DANGLING(subObjp->deleteTree(), subObjp);
+        });
+        m_elemModePinPath.erase(classp);
+        return stmtsp;
     }
     AstNodeStmt* wrapIfConstraintMode(AstClass* classp, AstConstraint* const constrp,
                                       AstNodeStmt* stmtp) {
@@ -4095,9 +4209,9 @@ class SolverSmtLowering final : public V3SolverLowering {
 public:
     // CONSTRUCTORS
     SolverSmtLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                      const RandModeVars& modeVars, const ClonedConstraints& cloneObjps,
-                      VNDeleter& deleter)
-        : V3SolverLowering{memberMap, uniqueNames, modeVars, cloneObjps, deleter} {}
+                      const RandModeVars& modeVars, ElemRandModes& elemModes,
+                      const ClonedConstraints& cloneObjps, VNDeleter& deleter)
+        : V3SolverLowering{memberMap, uniqueNames, modeVars, elemModes, cloneObjps, deleter} {}
     ~SolverSmtLowering() override = default;
 
     // V3SolverLowering
@@ -4231,6 +4345,9 @@ public:
                             setupTaskRefp->classOrPackagep(classp);
                             setupAllTaskp->addStmtsp(setupTaskRefp->makeStmt());
                         });
+                }
+                if (AstNodeStmt* const pinsp = newClassElemModePinsp(nodep, genp)) {
+                    setupAllTaskp->addStmtsp(pinsp);
                 }
             }
             // For derived classes: clone write_var calls from parent's randomize()
@@ -4376,6 +4493,12 @@ public:
         AstBegin* const setupBlockp
             = new AstBegin{nodep->fileline(), "__Vsetup_constraints", holderp, true};
         randomizeFuncp->addStmtsp(setupBlockp);
+        // With a class generator the class setup above added them
+        if (!classGenp) {
+            if (AstNodeStmt* const pinsp = newClassElemModePinsp(classp, localGenp)) {
+                randomizeFuncp->addStmtsp(pinsp);
+            }
+        }
 
         // Pre-scan captured tree for .size on dynamic/assoc arrays and replace
         // with size variables, using shared createOrGetSizeVar helper.
@@ -4531,6 +4654,8 @@ public:
                     new AstAssign{fl, new AstVarRef{fl, localGenp, VAccess::WRITE},
                                   new AstVarRef{fl, VN_AS(classGenp->user2p(), NodeModule),
                                                 classGenp, VAccess::READ}});
+            } else if (AstNodeStmt* const pinsp = newClassElemModePinsp(classp, localGenp)) {
+                randomizeFuncp->addStmtsp(pinsp);
             }
 
             // Refresh array element tables after resize, on localGenp -- AFTER the
@@ -4703,13 +4828,12 @@ public:
 //######################################################################
 // V3SolverSmt class functions
 
-std::unique_ptr<V3SolverLowering> V3SolverSmt::newLowering(VMemberMap& memberMap,
-                                                           V3UniqueNames& uniqueNames,
-                                                           const RandModeVars& modeVars,
-                                                           const ClonedConstraints& cloneObjps,
-                                                           VNDeleter& deleter) const {
+std::unique_ptr<V3SolverLowering>
+V3SolverSmt::newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
+                         const RandModeVars& modeVars, ElemRandModes& elemModes,
+                         const ClonedConstraints& cloneObjps, VNDeleter& deleter) const {
     return std::unique_ptr<V3SolverLowering>{
-        new SolverSmtLowering{memberMap, uniqueNames, modeVars, cloneObjps, deleter}};
+        new SolverSmtLowering{memberMap, uniqueNames, modeVars, elemModes, cloneObjps, deleter}};
 }
 
 std::vector<std::string> V3SolverSmt::runtimeCFlags() const {
