@@ -1803,7 +1803,10 @@ static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDTyp
         if (fromNumericable) return VCastable::ENUM_EXPLICIT;
     } else if (VN_IS(toDtp, QueueDType)
                && (VN_IS(fromDtp, BasicDType) || VN_IS(fromDtp, StreamDType))) {
-        return VCastable::COMPATIBLE;
+        // The elements are taken from the bits, so must be of a bit-stream type (6.24.3)
+        const AstNodeDType* const elemDtp = toDtp->subDTypep()->skipRefp();
+        if (elemDtp->isDouble()) return VCastable::INCOMPATIBLE;
+        if (elemDtp->isIntegralOrPacked()) return VCastable::COMPATIBLE;
     } else if (VN_IS(toDtp, ClassRefDType) && VN_IS(fromConstp, Const)) {
         if (fromConstp->isNull()) return VCastable::COMPATIBLE;
     } else if (VN_IS(toDtp, ClassRefDType) && VN_IS(fromDtp, ClassRefDType)) {

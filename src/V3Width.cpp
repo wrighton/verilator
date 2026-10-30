@@ -3545,6 +3545,10 @@ class WidthVisitor final : public VNVisitor {
                     // Can just remove cast, but need extend placeholder
                     // so we can avoid warning message
                 }
+            } else if (VN_IS(toDtp, QueueDType)
+                       && !toDtp->subDTypep()->skipRefp()->isIntegralOrPacked()) {
+                // Can just remove cast, as only an equivalent queue or dynamic array is
+                // compatible here
             } else if (VN_IS(toDtp, QueueDType)) {
                 if (VN_IS(fromDtp, BasicDType)) {
                     AstNodeExpr* fromp = nodep->fromp()->unlinkFrBack();
