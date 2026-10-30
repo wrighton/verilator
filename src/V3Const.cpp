@@ -2701,7 +2701,8 @@ class ConstVisitor final : public VNVisitor {
             if (lowerAsFixedAggregate(srcDTypep)) {
                 srcp = packFixedAggregate(srcp);
             } else if (VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)) {
-                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)) {
+                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)
+                    || VN_IS(dstDTypep, UnpackArrayDType)) {
                     int srcElementBits = 0;
                     if (const AstNodeDType* const elemDtp = srcDTypep->subDTypep()) {
                         srcElementBits = elemDtp->width();
@@ -2901,7 +2902,8 @@ class ConstVisitor final : public VNVisitor {
                 srcp = packedp;
             } else if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)
                         || VN_IS(srcDTypep, UnpackArrayDType))) {
-                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)) {
+                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)
+                    || VN_IS(dstDTypep, UnpackArrayDType)) {
                     int blockSize = 1;
                     if (const AstConst* const constp = VN_CAST(streamp->rhsp(), Const)) {
                         blockSize = constp->toSInt();
