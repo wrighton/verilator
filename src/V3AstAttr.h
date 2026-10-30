@@ -533,6 +533,7 @@ public:
         RANDOM_GENERATOR,
         RANDOM_STDGENERATOR,
         COVERGROUP_INSTHANDLE,
+        MAILBOX_MESSAGE,
         // Unsigned and two state; fundamental types
         UINT32,
         UINT64,
@@ -573,6 +574,7 @@ public:
                                                       "VlRandomizer",
                                                       "VlStdRandomizer",
                                                       "VlCovInstHandle",
+                                                      "VlMailboxMessage",
                                                       "IData",
                                                       "QData",
                                                       "LOGIC_IMPLICIT",
@@ -618,6 +620,7 @@ public:
                                                       "%E-rand-gen",
                                                       "%E-stdrand-gen",
                                                       "%E-cg-insthandle",
+                                                      "%E-mbx-msg",
                                                       "IData",
                                                       "QData",
                                                       "%E-logic-implct",
@@ -665,6 +668,7 @@ public:
         case RANDOM_GENERATOR: return 0;  // opaque
         case RANDOM_STDGENERATOR: return 0;  // opaque
         case COVERGROUP_INSTHANDLE: return 0;  // opaque
+        case MAILBOX_MESSAGE: return 64;  // opaque, nonzero for width checks of queue elements
         case UINT32: return 32;
         case UINT64: return 64;
         default: return 0;
@@ -709,7 +713,8 @@ public:
                 || m_e == DELAY_SCHEDULER || m_e == TRIGGER_SCHEDULER
                 || m_e == DYNAMIC_TRIGGER_SCHEDULER || m_e == NBA_GENERIC_QUEUE || m_e == FORK_SYNC
                 || m_e == PROCESS_REFERENCE || m_e == RANDOM_GENERATOR
-                || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE || m_e == DOUBLE
+                || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE
+                || m_e == MAILBOX_MESSAGE || m_e == DOUBLE
                 || m_e == UNTYPED);
     }
     bool isCHandle() const VL_MT_SAFE { return m_e == CHANDLE; }
@@ -804,6 +809,7 @@ public:
             /* RANDOM_GENERATOR:          */ "",  // Should not be traced
             /* RANDOM_STD_GENERATOR:      */ "",  // Should not be traced
             /* COVERGROUP_INSTHANDLE:     */ "",  // Should not be traced
+            /* MAILBOX_MESSAGE:           */ "",  // Should not be traced
             /* UINT32:                    */ "BIT",
             /* UINT64:                    */ "BIT",
             /* LOGIC_IMPLICIT:            */ "",  // Should not be traced

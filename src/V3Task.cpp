@@ -480,6 +480,7 @@ class TaskVisitor final : public VNVisitor {
     // STATE - across all visitors
     DpiCFuncs m_dpiNames;  // Map of all created DPI functions
     std::map<std::string, const AstStructDType*> m_dpiStructs;  // C names of DPI structures
+    std::map<const AstEnumDType*, size_t> m_enumNumbers;  // Unique numbers of enum types
     VDouble0 m_statInlines;  // Statistic tracking
     VDouble0 m_statGetters;  // Statistic tracking
     VDouble0 m_statHierDpisWithCosts;  // Statistic tracking
@@ -627,6 +628,47 @@ class TaskVisitor final : public VNVisitor {
             }
             changeAtWriteRecurse(cMethodp->fromp());
         }
+    }
+
+    // Wrap a typeless mailbox message argument with the name of its type
+    void addMailboxMessageType(AstArg* argp, const AstVar* portp) {
+        AstNodeExpr* const pinp = argp->exprp();
+        const AstNodeDType* const dtypep = pinp->dtypep()->skipRefToEnump();
+        // Already a message when a mailbox subclass passes it on
+        if (dtypep->basicp() && dtypep->basicp()->isMailboxMessage()) return;
+        pinp->unlinkFrBack();
+        // Equivalent types have the same name (IEEE 1800-2023 6.22.2). Messages are singular
+        // (checked by V3Width), so the name is the canonical packed type, the enum declaration
+        // or the declared name. Classes with the same name differ in their C++ type, which the
+        // runtime also checks.
+        string typeName = dtypep->prettyDTypeName(false);
+        if (const AstEnumDType* const enump = VN_CAST(dtypep, EnumDType)) {
+            typeName += " #"
+                        + std::to_string(
+                            m_enumNumbers.emplace(enump, m_enumNumbers.size()).first->second);
+        } else if (dtypep->isIntegralOrPacked()) {
+            typeName = string{dtypep->isFourstate() ? "logic" : "bit"}
+                       + (dtypep->isSigned() ? " signed" : "") + "["
+                       + std::to_string(dtypep->width() - 1) + ":0]";
+        }
+        typeName
+            = "\"" + V3OutFormatter::quoteNameControls(VIdProtect::protect(typeName)) + "\", ";
+        AstCExpr* const newp = new AstCExpr{pinp->fileline()};
+        if (portp->isRef()) {
+            newp->add("VlMailboxMessage::ref(" + typeName);
+            newp->add(pinp);
+            newp->add(", \""
+                      + V3OutFormatter::quoteNameControls(
+                          VIdProtect::protect(pinp->fileline()->filename()))
+                      + "\", " + std::to_string(pinp->fileline()->lineno()) + ").lvalue()");
+        } else {
+            newp->add("VlMailboxMessage::val(" + typeName + std::to_string(dtypep->width())
+                      + ", ");
+            newp->add(pinp);
+            newp->add(")");
+        }
+        newp->dtypeFrom(portp);
+        argp->exprp(newp);
     }
 
     void connectPort(const AstNodeFTaskRef* refp, AstVar* portp, AstArg* argp, AstNode* beginp,
@@ -864,6 +906,9 @@ class TaskVisitor final : public VNVisitor {
                 AstVar* const portp = itr.first;
                 AstArg* const argp = itr.second;
                 connectPort(refp, portp, argp, beginp, false);
+                if (portp->basicp() && portp->basicp()->isMailboxMessage()) {
+                    addMailboxMessageType(argp, portp);
+                }
             }
         }
         // First argument is symbol table, then output if a function

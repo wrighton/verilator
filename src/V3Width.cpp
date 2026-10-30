@@ -8922,6 +8922,19 @@ class WidthVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(pinp), pinp);
                     pinp = newp;
                 }
+                if (portp->basicp() && portp->basicp()->isMailboxMessage()) {
+                    // Typeless mailbox message of any singular type, V3Task adds its type.
+                    // Not iterateCheckSelf, which would convert a real to an integer.
+                    iterateCheck(nodep, "Function Argument", pinp, SELF, FINAL, pinp->dtypep(),
+                                 EXTEND_EXP);
+                    const AstNodeDType* const msgDTypep = argp->exprp()->dtypep();
+                    if (msgDTypep->skipRefp()->isAggregateType()) {
+                        argp->v3error("Typeless mailbox message must be of a singular type, not "
+                                      << msgDTypep->prettyDTypeNameQ()
+                                      << " (IEEE 1800-2023 15.4.3)");
+                    }
+                    continue;
+                }
                 const AstNodeDType* const pinDTypep = pinp->dtypep()->skipRefToEnump();
                 const AstIfaceRefDType* const portIfacep
                     = VN_CAST(portDTypep->elemDTypep(true), IfaceRefDType);

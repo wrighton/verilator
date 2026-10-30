@@ -452,6 +452,25 @@ VlRNG& VlProcess::currentRng() VL_MT_SAFE {
 }
 
 //===========================================================================
+// VlMailboxMessage:: Methods
+
+VlMailboxMessage& VlMailboxMessage::operator=(const VlMailboxMessage& that) {
+    if (!m_varp) {
+        m_typeName = that.m_typeName;
+        m_valuep = that.m_valuep;
+        return *this;
+    }
+    if (VL_UNLIKELY(!match(*this, that))) {
+        const std::string msg = "Typeless mailbox message of type '"s + that.m_typeName
+                                + "' does not match the type of the variable, '" + m_typeName
+                                + "' (IEEE 1800-2023 15.4.9)";
+        VL_FATAL_MT(m_filename, m_lineno, "", msg.c_str());
+    }
+    m_receivep(m_varp, *that.m_valuep);
+    return *this;
+}
+
+//===========================================================================
 // Random -- Mostly called at init time, so not inline.
 
 static std::pair<uint64_t, uint64_t> vl_splitmix64(uint64_t x) VL_PURE {

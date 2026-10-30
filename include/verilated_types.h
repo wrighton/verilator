@@ -426,6 +426,101 @@ public:
 
 inline std::string VL_TO_STRING(const VlProcessRef&) { return std::string("process"); }
 
+//===================================================================
+/// Verilog typeless mailbox message (IEEE 1800-2023 15.4.9). Holds a message value of any
+/// type, or refers to the variable that receives a message.
+
+class VlMailboxMessage final {
+    // TYPES
+    struct Value VL_NOT_FINAL {
+        virtual ~Value() = default;
+    };
+    template <typename T_Value>
+    struct TypedValue final : Value {
+        const T_Value m_value;
+        explicit TypedValue(const T_Value& value)
+            : m_value{value} {}
+    };
+    // Integral values of every width up to 64 bits are stored as QData
+    template <typename T_Value>
+    using Stored =
+        typename std::conditional<std::is_integral<T_Value>::value, QData, T_Value>::type;
+
+    // MEMBERS
+    const char* m_typeName = "";  // Type name, the same for equivalent types
+    std::shared_ptr<const Value> m_valuep;  // Message value
+    void* m_varp = nullptr;  // Variable that receives a message
+    const char* m_filename = "";  // Source location of the receiving call
+    int m_lineno = 0;  // Source location of the receiving call
+    bool (*m_receivep)(void* varp, const Value& value) = nullptr;  // Assigns m_varp if not null
+
+    // METHODS
+    template <typename T_Var>
+    static bool receive(void* varp, const Value& value) {
+        // The type check guards against different C++ types with the same type name
+        const auto* const typedp = dynamic_cast<const TypedValue<Stored<T_Var>>*>(&value);
+        if (typedp && varp) *static_cast<T_Var*>(varp) = static_cast<T_Var>(typedp->m_value);
+        return typedp;
+    }
+    // Clear the bits above width, the message expression may not be clean
+    template <typename T_Value>
+    static QData clean(const T_Value& value, int width, std::true_type) {
+        return static_cast<QData>(value) & VL_MASK_Q(width);
+    }
+    template <std::size_t N_Words>
+    static VlWide<N_Words> clean(VlWide<N_Words> value, int width, std::false_type) {
+        value[N_Words - 1] &= VL_MASK_E(width);
+        return value;
+    }
+    template <typename T_Value>
+    static const T_Value& clean(const T_Value& value, int, std::false_type) {
+        return value;
+    }
+
+public:
+    // CONSTRUCTORS
+    VlMailboxMessage() = default;
+    VlMailboxMessage(const VlMailboxMessage&) = default;
+    // Message of a put() or try_put()
+    template <typename T_Value>
+    static VlMailboxMessage val(const char* typeName, int width, const T_Value& value) {
+        VlMailboxMessage msg;
+        msg.m_typeName = typeName;
+        msg.m_valuep = std::make_shared<const TypedValue<Stored<T_Value>>>(
+            clean(value, width, std::is_integral<T_Value>{}));
+        return msg;
+    }
+    // Variable of a get(), try_get(), peek() or try_peek()
+    template <typename T_Var>
+    static VlMailboxMessage ref(const char* typeName, T_Var& var, const char* filename,
+                                int lineno) {
+        VlMailboxMessage msg;
+        msg.m_typeName = typeName;
+        msg.m_varp = &var;
+        msg.m_filename = filename;
+        msg.m_lineno = lineno;
+        msg.m_receivep = &receive<T_Var>;
+        return msg;
+    }
+    // Pass a temporary from ref() as a ref argument
+    VlMailboxMessage& lvalue() { return *this; }
+    // Store a message, or receive a message into the referred variable
+    VlMailboxMessage& operator=(const VlMailboxMessage& that);
+    // Whether the variable can receive the message (IEEE 1800-2023 15.4.9)
+    static bool match(const VlMailboxMessage& var, const VlMailboxMessage& msg) {
+        return !std::strcmp(var.m_typeName, msg.m_typeName)
+               && var.m_receivep(nullptr, *msg.m_valuep);
+    }
+    // Parameterized mailbox messages always match
+    template <typename T_Var, typename T_Value>
+    static bool match(const T_Var&, const T_Value&) {
+        return true;
+    }
+    const char* typeName() const { return m_typeName; }
+};
+
+inline std::string VL_TO_STRING(const VlMailboxMessage& obj) { return obj.typeName(); }
+
 // Use process RNG if in a process, else thread RNG (IEEE 1800-2023 18.14)
 inline uint64_t vl_rand64() VL_MT_SAFE { return VlRNG::vl_current_rng_rand64(); }
 

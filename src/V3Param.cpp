@@ -2075,6 +2075,12 @@ class ParamProcessor final {
         }
     }
 
+    // True if modp is the mailbox class of the std package
+    bool isStdMailbox(const AstNodeModule* modp) {
+        const AstPackage* const stdp = v3Global.rootp()->stdPackagep();
+        return stdp && m_memberMap.findMember(stdp, "mailbox") == modp;
+    }
+
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides) {
         // Returns new or reused module
@@ -2202,6 +2208,13 @@ class ParamProcessor final {
 
         for (AstNode* const stmtp : newModp->stmtspList()) {
             if (AstParamTypeDType* dtypep = VN_CAST(stmtp, ParamTypeDType)) {
+                if (VN_IS(dtypep->skipRefOrNullp(), VoidDType) && isStdMailbox(srcModp)) {
+                    // A mailbox without a message type is typeless (IEEE 1800-2023 15.4.9)
+                    UASSERT_OBJ(!dtypep->dtypep(), dtypep, "Type parameter already resolved");
+                    m_deleter.pushDeletep(dtypep->childDTypep()->unlinkFrBack());
+                    dtypep->childDTypep(
+                        new AstBasicDType{dtypep->fileline(), VBasicDTypeKwd::MAILBOX_MESSAGE});
+                }
                 if (VN_IS(dtypep->skipRefOrNullp(), VoidDType)) {
                     nodep->v3error(
                         "Class parameter type without default value is never given value"

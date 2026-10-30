@@ -556,6 +556,9 @@ public:
     bool isCovergroupInstHandle() const VL_MT_SAFE {
         return keyword() == VBasicDTypeKwd::COVERGROUP_INSTHANDLE;
     }
+    bool isMailboxMessage() const VL_MT_SAFE {
+        return keyword() == VBasicDTypeKwd::MAILBOX_MESSAGE;
+    }
     bool isOpaque() const VL_MT_SAFE { return keyword().isOpaque(); }
     bool isString() const VL_MT_STABLE { return keyword().isString(); }
     bool isZeroInit() const { return keyword().isZeroInit(); }
