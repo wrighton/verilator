@@ -1803,6 +1803,16 @@ void VlRandomizer::clearAll() {
     m_randcConstraintHash = 0;
 }
 
+void VlRandomizer::clear_elem_vars(const std::string& arrayName) {
+    // Registered as "<arrayName>.<index>.<field>", and again for the objects the array holds
+    // at each randomize(), so objects that were removed or replaced are not referenced
+    const std::string prefix = arrayName + ".";
+    auto it = m_vars.lower_bound(prefix);
+    while (it != m_vars.end() && it->first.compare(0, prefix.size(), prefix) == 0) {
+        it = m_vars.erase(it);
+    }
+}
+
 void VlRandomizer::markRandc(const std::string& name) { m_randcVarNames.insert(name); }
 
 void VlRandomizer::solveBefore(const std::string& beforeName, const std::string& afterName) {
