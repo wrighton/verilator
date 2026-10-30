@@ -30,6 +30,7 @@ module t (
   else --passsDec;
 
   assert property (@(negedge clk) not toggle) ++passsInc;
+  else;
   cover property (@(negedge clk) not toggle) ++passsInc;
 
   int inc2 = 0;

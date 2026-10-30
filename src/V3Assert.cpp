@@ -1075,12 +1075,16 @@ class AssertVisitor final : public VNVisitor {
             } else {
                 ++m_statAsNotImm;
             }
-            if (!passsp && !failsp)
+            if (!failsp)
                 failsp = newFireAssertUnchecked(
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
             if (obsDeferred) {
                 if (passsp) passsp = newObservedDeferredAction(flp, passsp);
-                if (failsp) failsp = newObservedDeferredAction(flp, failsp);
+                // The empty block of an 'else' null statement has nothing to defer
+                const AstBegin* const nullElsep = VN_CAST(failsp, Begin);
+                if (failsp && !(nullElsep && nullElsep->implied() && !nullElsep->stmtsp())) {
+                    failsp = newObservedDeferredAction(flp, failsp);
+                }
             }
         } else {
             nodep->v3fatalSrc("Unknown node type");
