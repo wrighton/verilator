@@ -2888,6 +2888,7 @@ class AssertNfaVisitor final : public VNVisitor {
     SvaNfaLowering* m_loweringp = nullptr;  // NFA-to-hardware lowering engine
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
     AstAlways* m_alwaysp = nullptr;  // Enclosing always, for a procedural assertion
+    AstSenItem* m_alwaysClockp = nullptr;  // Clock inferred from m_alwaysp
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
 
@@ -3285,17 +3286,6 @@ class AssertNfaVisitor final : public VNVisitor {
         return propp;
     }
 
-    // Clock inferred from an always procedure with one event (IEEE 1800-2023 16.14.6)
-    static AstSenItem* inferredClock(const AstAlways* alwaysp) {
-        // An edge event none of whose variables is used in the procedure body
-        AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
-        if (!itemp || !itemp->edgeType().anEdge()) return nullptr;
-        const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
-            return alwaysp->stmtsp()->existsAndNext(
-                [&](const AstVarRef* refp) { return refp->varp() == clkRefp->varp(); });
-        });
-        return usedInBody ? nullptr : itemp;
-    }
     // True if a statement in an always procedure is under a condition or loop
     static bool isUnderProceduralCondition(const AstNode* nodep) {
         for (const AstNode* abovep = nodep->aboveLoopp(); !VN_IS(abovep, Always);
@@ -3340,9 +3330,10 @@ class AssertNfaVisitor final : public VNVisitor {
         // disable iff, no assertion control
         const bool isSeqEvent = coverp && coverp->isSeqEvent();
         const bool countMatches = countsMatches(assertp);
-        // Inherit module defaults (IEEE 14.12, 16.15) when assertion has none.
-        if (!propp->sensesp() && m_defaultClockingp) {
-            propp->addSensesp(m_defaultClockingp->sentreep()->sensesp()->cloneTree(true));
+        // Inherit module defaults (IEEE 14.12, 16.15) when assertion has none. A clock inferred
+        // from the always procedure takes precedence over default clocking (IEEE 1800-2023 16.16).
+        if (!propp->sensesp() && m_defaultClockingp && !m_alwaysClockp) {
+            propp->sensesp(m_defaultClockingp->sentreep()->sensesp()->cloneTree(true));
         }
         if (!propp->disablep() && m_defaultDisablep && !isSeqEvent) {
             propp->disablep(m_defaultDisablep->condp()->cloneTreePure(true));
@@ -3365,7 +3356,7 @@ class AssertNfaVisitor final : public VNVisitor {
                 replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
                 return;
             }
-            sensesp = inferredClock(m_alwaysp);
+            sensesp = m_alwaysClockp;
             if (!sensesp) {
                 assertp->v3error("Concurrent assertion has no clock (IEEE 1800-2023 16.16)\n"
                                  << assertp->warnMore()
@@ -3465,7 +3456,9 @@ class AssertNfaVisitor final : public VNVisitor {
     }
     void visit(AstAlways* nodep) override {
         VL_RESTORER(m_alwaysp);
+        VL_RESTORER(m_alwaysClockp);
         m_alwaysp = nodep;
+        m_alwaysClockp = V3AssertCommon::inferredClock(nodep);
         iterateChildren(nodep);
     }
     void visit(AstClocking* nodep) override {
