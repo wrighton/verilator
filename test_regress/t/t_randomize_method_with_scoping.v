@@ -121,13 +121,30 @@ class LocalExt extends LocalBase;
   endfunction
 endclass
 
+class RandX;
+  rand int x;
+endclass
+
+module sub_v;
+  int v = 3;
+endmodule
+
 module t;
   SubC obj = new;
   LocalExt lext = new;
+  sub_v u ();
+
+  // A hierarchical reference after 'local::', in a task
+  task automatic check_local_hier();
+    RandX r = new;
+    if (r.randomize() with { x == local::u.v; } != 1) $stop;
+    if (r.x != 3) $stop;
+  endtask
 
   initial begin
     if (obj.doit != 1) $stop;
     if (lext.doit() != 2) $stop;
+    check_local_hier();
     $write("*-* All Finished *-*\n");
     $finish;
   end
