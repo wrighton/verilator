@@ -56,8 +56,6 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // ######################################################################
 // General file-level definitions
 
-static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
-
 using ActiveSet = std::unordered_set<const AstClass*>;
 
 // ######################################################################
@@ -2364,26 +2362,30 @@ class RandomizeVisitor final : public VNVisitor {
         AstFunc* const basicRandomizep
             = V3Randomize::newRandomizeFunc(m_memberMap, nodep, BASIC_RANDOMIZE_FUNC_NAME);
         addBasicRandomizeBody(basicRandomizep, nodep, randModeVarp);
-        // A basicFirst owner basic-randomizes first, then the solver overrides the
-        // constrained leaves, so a globally-constrained leaf (not user3) is still
-        // basic-randomized when its type is randomized standalone.
         AstVarRef* const fvarRefp = new AstVarRef{fl, fvarp, VAccess::WRITE};
-        randomizep->addStmtsp(new AstAssign{
-            fl, fvarRefp, basicFirst ? new AstFuncRef{fl, basicRandomizep} : beginValp});
+        if (m_solverp->basicInClassSolve(nodep)) {
+            randomizep->addStmtsp(new AstAssign{fl, fvarRefp, beginValp});
+        } else {
+            // A basicFirst owner basic-randomizes first, then the solver overrides the
+            // constrained leaves, so a globally-constrained leaf (not user3) is still
+            // basic-randomized when its type is randomized standalone.
+            randomizep->addStmtsp(new AstAssign{
+                fl, fvarRefp, basicFirst ? new AstFuncRef{fl, basicRandomizep} : beginValp});
 
-        // Back-end statements after the solver result; emit them after whichever
-        // assignment below holds the solver call.
-        if (!basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
+            // Back-end statements after the solver result; emit them after whichever
+            // assignment below holds the solver call.
+            if (!basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
 
-        AstVarRef* const fvarRefReadp = fvarRefp->cloneTree(false);
-        fvarRefReadp->access(VAccess::READ);
+            AstVarRef* const fvarRefReadp = fvarRefp->cloneTree(false);
+            fvarRefReadp->access(VAccess::READ);
 
-        AstNodeExpr* const secondHalfp
-            = basicFirst ? beginValp : new AstFuncRef{fl, basicRandomizep};
-        randomizep->addStmtsp(new AstAssign{fl, fvarRefp->cloneTree(false),
-                                            new AstAnd{fl, fvarRefReadp, secondHalfp}});
+            AstNodeExpr* const secondHalfp
+                = basicFirst ? beginValp : new AstFuncRef{fl, basicRandomizep};
+            randomizep->addStmtsp(new AstAssign{fl, fvarRefp->cloneTree(false),
+                                                new AstAnd{fl, fvarRefReadp, secondHalfp}});
 
-        if (basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
+            if (basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
+        }
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         AstNodeStmt* postp = nullptr;
