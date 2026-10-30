@@ -643,22 +643,41 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
     }
 
-    // Extract return expression from a simple function body, or nullptr if too complex.
-    // Uses foreach to walk all assigns regardless of body organization (JumpBlock nesting etc.).
-    // Takes the last assignment to the return variable -- the first is the initializer.
-    AstNodeExpr* extractReturnExpr(AstFunc* funcp) {
+    // Extract return expression from a simple function body, or nullptr if too complex
+    AstNodeExpr* extractReturnExpr(const AstNodeFTaskRef* refp, AstFunc* funcp) {
+        // Uses foreach to walk all assigns regardless of body organization (JumpBlock etc.)
         AstVar* const retVarp = funcp->fvarp();
         if (!retVarp) return nullptr;
         AstNodeExpr* retExprp = nullptr;
-        int assignCount = 0;
-        funcp->foreach([&](AstAssign* assignp) {
-            AstVarRef* const lhsp = VN_CAST(assignp->lhsp(), VarRef);
-            if (!lhsp || lhsp->varp() != retVarp) return;
-            retExprp = assignp->rhsp();
-            ++assignCount;
+        int retWrites = 0;
+        funcp->foreach([&](AstNodeAssign* assignp) {
+            // Skip the initializer of an automatic function's return value
+            if (VN_IS(assignp->rhsp(), CReset)) return;
+            if (!assignp->lhsp()->exists(
+                    [&](const AstNodeVarRef* vrefp) { return vrefp->varp() == retVarp; })) {
+                return;
+            }
+            ++retWrites;
+            retExprp = VN_IS(assignp->lhsp(), VarRef) ? assignp->rhsp() : nullptr;
         });
-        // Simple function: initializer + return (2) or just return (1)
-        if (assignCount > 2 || !retExprp) return nullptr;
+        // Simple function: a single assignment of the whole return value
+        if (retWrites != 1 || !retExprp) return nullptr;
+        std::set<const AstVar*> writtenVarps;
+        funcp->foreach([&](const AstNodeVarRef* vrefp) {
+            if (vrefp->access().isWriteOrRW()) writtenVarps.emplace(vrefp->varp());
+        });
+        // The inlined copy is evaluated in the constraint, where the ports read the arguments.
+        // Written variables (including all automatic locals, which are initialized), and
+        // members of another object than the one randomized, do not have the value the
+        // function would see.
+        const bool otherObject = VN_IS(refp, MethodCall);
+        if (retExprp->exists([&](const AstNodeVarRef* vrefp) {
+                const AstVar* const varp = vrefp->varp();
+                return writtenVarps.count(varp)
+                       || (otherObject && varp->isClassMember() && !varp->lifetime().isStatic());
+            })) {
+            return nullptr;
+        }
         return retExprp;
     }
 
@@ -2830,7 +2849,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             return;
         }
 
-        AstNodeExpr* const retExprp = extractReturnExpr(funcp);
+        AstNodeExpr* const retExprp = extractReturnExpr(nodep, funcp);
         if (!retExprp) {
             nodep->v3warn(CONSTRAINTIGN,
                           "Unsupported: complex function in constraint, treating as state");

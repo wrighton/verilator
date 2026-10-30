@@ -13,7 +13,13 @@ class Cls;
     else return m + 1;
   endfunction
 
+  function bit [7:0] local_func(bit [7:0] m);
+    bit [7:0] t = m + 1;
+    return t;
+  endfunction
+
   constraint c {x <= complex_func(y);}
+  constraint c_local {x != local_func(y);}
 endclass
 
 module t;
