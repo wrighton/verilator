@@ -38,5 +38,29 @@ module t;
     $display("%0d", st.sav);  // BAD
     $display("%0d", st.ssv);  // OK: static
     $display("%0d", st.si);  // OK: static
+    $display("%0d", abt.blk.bv);  // BAD
+    $display("%0d", abt.blk.bs);  // OK: static
+    $display("%0d", ta.f.a);  // BAD
+    $display("%0d", ta.f.s);  // OK: static
   end
+
+  task automatic abt(input int ai);
+    begin : blk
+      int bv;
+      static int bs;
+      bv = ai;
+      bs = ai;
+    end
+  endtask
+
+  task automatic ta(input int ai);
+    fork : f
+      int a;
+      static int s;
+      begin
+        a = ai;
+        s = ai;
+      end
+    join
+  endtask
 endmodule
