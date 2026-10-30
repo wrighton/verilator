@@ -2127,6 +2127,10 @@ class ConstraintExprVisitor final : public VNVisitor {
             nodep->unlinkFrBack();
         } else if (m_wantSingle) {
             AstNodeExpr* const itemp = editSingle(fl, nodep->bodyp());
+            if (!itemp) {  // All items were ignored with a warning
+                VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+                return;
+            }
             AstVar* const textVarp = newTextVarp(nodep);
             AstNodeStmt* const bodyp
                 = prependDistPreamble(nodep, newTermAppendp(fl, textVarp, itemp));
@@ -2143,11 +2147,16 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = SmtUtil::newItemsHolderp(fl, nodep->bodyp()->unlinkFrBackWithNext());
             m_foreachBodyp = holderp;
             AstNodeStmt* const bodyp = prependDistPreamble(nodep, holderp);
-            nodep->replaceWith(
-                new AstBegin{fl, m_uniqueNames.get("__VrandBlock"),
-                             new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp}, true});
+            AstBegin* const blockp
+                = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"),
+                               new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp}, true};
+            nodep->replaceWith(blockp);
             iterateAndNextNull(holderp->declsp());
-            SmtUtil::replaceWithLowered(holderp);
+            if (!holderp->declsp()) {  // All items were ignored with a warning
+                VL_DO_DANGLING(pushDeletep(blockp->unlinkFrBack()), blockp);
+            } else {
+                SmtUtil::replaceWithLowered(holderp);
+            }
         }
         UASSERT_OBJ(!nodep->user3p(), nodep, "Dist bucket preamble not injected into foreach");
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
@@ -2155,6 +2164,17 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstConstraintBefore* nodep) override {
         // Generate solveBefore() calls for each (lhs, rhs) variable pair.
         // Do NOT iterate children -- these are variable references, not constraint expressions.
+        if (m_wantSingle) {
+            // IEEE 1800-2023 A.1.10 allows solve-before only as a constraint_block_item.
+            // Some simulators accept it nested, Verilator inside foreach, but a conditional
+            // is lowered to a single expression with no place for the ordering. Ignoring it
+            // only changes the distribution of solutions (18.5.9).
+            nodep->v3warn(CONSTRAINTIGN, "Ignoring solve-before inside conditional constraint;"
+                                         " IEEE 1800-2023 A.1.10 allows it only directly in"
+                                         " a constraint block");
+            VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+            return;
+        }
         FileLine* const fl = nodep->fileline();
         AstNodeModule* const genModp = VN_AS(m_genp->user2p(), NodeModule);
 
