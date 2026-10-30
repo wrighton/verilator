@@ -99,6 +99,7 @@ private:
     AstSenItem* m_senip = nullptr;  // Last sensitivity
     // Reset each always:
     AstSenItem* m_seniAlwaysp = nullptr;  // Last sensitivity in always
+    AstSenItem* m_seniInferredp = nullptr;  // Clock inferred from that always
     // Reset each assertion:
     AstNodeExpr* m_disablep = nullptr;  // Last disable
     AstIf* m_disableSeqIfp = nullptr;  // Used for handling disable iff in sequences
@@ -268,7 +269,11 @@ private:
         AstSenTree* newp = nullptr;
         AstSenItem* senip = m_senip;
         bool fromAlways = false;
-        if (!senip && m_defaultClockingp) senip = m_defaultClockingp->sentreep()->sensesp();
+        // A clock inferred from the always procedure takes precedence over default clocking
+        // (IEEE 1800-2023 16.9.3, 16.16)
+        if (!senip && m_defaultClockingp && !m_seniInferredp) {
+            senip = m_defaultClockingp->sentreep()->sensesp();
+        }
         if (!senip) {
             senip = m_seniAlwaysp;
             fromAlways = true;
@@ -915,8 +920,10 @@ private:
         }
     }
     void visit(AstAlways* nodep) override {
+        VL_RESTORER(m_seniInferredp);
         iterateAndNextNull(nodep->sentreep());
         if (nodep->sentreep()) m_seniAlwaysp = nodep->sentreep()->sensesp();
+        m_seniInferredp = V3AssertCommon::inferredClock(nodep);
         iterateAndNextNull(nodep->stmtsp());
         m_seniAlwaysp = nullptr;
     }

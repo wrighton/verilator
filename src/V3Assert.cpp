@@ -245,6 +245,27 @@ void V3AssertCommon::checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) {
     for (AstDelay* const delayp : delayps) checkSvaCycleDelay(delayp, instp);
 }
 
+AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
+    // A single edge event none of whose variables is used in the procedure body. A use in an
+    // event, as in the clock that assertion lowering gives a sampled value function, is ignored.
+    AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
+    if (!itemp || itemp->nextp() || !itemp->edgeType().anEdge() || !alwaysp->stmtsp()) {
+        return nullptr;
+    }
+    const auto inEvent = [alwaysp](const AstNode* nodep) {
+        for (; nodep != alwaysp; nodep = nodep->aboveLoopp()) {
+            if (VN_IS(nodep, SenItem)) return true;
+        }
+        return false;
+    };
+    const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
+        return alwaysp->stmtsp()->existsAndNext([&](const AstVarRef* refp) {
+            return refp->varp() == clkRefp->varp() && !inEvent(refp);
+        });
+    });
+    return usedInBody ? nullptr : itemp;
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,

@@ -42,6 +42,8 @@ public:
     // Check the cycle delays of a sequence or property instance, after its formal arguments are
     // replaced with the actual arguments (IEEE 1800-2023 16.8), reporting errors on instp
     static void checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
+    static AstSenItem* inferredClock(const AstAlways* alwaysp) VL_MT_DISABLED;
 };
 
 class V3Assert final {
