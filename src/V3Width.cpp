@@ -10907,7 +10907,7 @@ class WidthVisitor final : public VNVisitor {
                 // Note the check uses the expected size, not the child's subDTypep as we want the
                 // child node's width to end up correct for the assignment (etc)
                 widthCheckSized(parentp, side, VN_AS(underp, NodeExpr), expDTypep, extendRule,
-                                warnOn);
+                                warnOn, rhsAccess);
             } else if (!VN_IS(parentp, Eq) && !VN_IS(parentp, Neq)
                        && !VN_IS(expDTypep->skipRefp(), IfaceRefDType)
                        && VN_IS(underp->dtypep()->skipRefp(), IfaceRefDType)) {
@@ -10958,7 +10958,8 @@ class WidthVisitor final : public VNVisitor {
     void
     widthCheckSized(AstNode* parentp, const char* side,
                     AstNodeExpr* underp,  // Node to be checked or have typecast added in front of
-                    AstNodeDType* expDTypep, ExtendRule extendRule, bool warnOn = true) {
+                    AstNodeDType* expDTypep, ExtendRule extendRule, bool warnOn = true,
+                    VAccess access = VAccess::READ) {
         // Issue warnings on sized number width mismatches, then do appropriate size extension
         // Generally iterateCheck is what is wanted instead of this
         // UINFO(9,"wchk "<<side<<endl<<"  "<<parentp<<endl<<"  "<<underp<<endl<<"
@@ -11031,11 +11032,15 @@ class WidthVisitor final : public VNVisitor {
                 } else if (pinp && pinp->modVarp()->direction() != VDirection::INPUT) {
                     // V3Inst::pinReconnectSimple must deal
                     UINFO(5, "pinInSizeMismatch: " << pinp);
-                } else if ((assignp || VN_IS(parentp, Cast) || VN_IS(parentp, CastSize))
+                } else if ((assignp || pinp || VN_IS(parentp, Var) || VN_IS(parentp, Cast)
+                            || VN_IS(parentp, CastSize)
+                            || (VN_IS(parentp, NodeFTaskRef) && access.isReadOnly()))
                            && VN_IS(underp, NodeStream) && expWidth > underp->width()) {
                     // IEEE 1800-2023 11.4.14: When assigning a stream to a wider fixed-size
                     // target, also as cast (IEEE 1800-2023 6.24.1), widen by filling zero bits on
                     // the right. That is, left-justify the stream bits within the target width.
+                    // Also for initializers, input ports and input arguments, which are
+                    // assignment-like (10.8).
                     // Build: ShiftL(Extend(stream, expWidth), expWidth - streamWidth)
                     UINFO(5, "Widen NodeStream RHS with left-justify per 11.4.14");
                     VNRelinker linker;
