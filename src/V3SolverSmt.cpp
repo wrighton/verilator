@@ -127,6 +127,77 @@ public:
 };
 
 //######################################################################
+// Constraint item calling a function with random arguments (IEEE 1800-2023 18.5.11)
+
+struct ConstraintFuncCall final {
+    FileLine* fileline;  // Location of the constraint item
+    std::set<std::string> argNames;  // Solver names of the random function arguments
+    std::set<std::string> otherNames;  // Solver names of the item's other random variables
+};
+
+//######################################################################
+// Solve rounds for functions called in constraints (IEEE 1800-2023 18.5.11)
+
+class ConstraintFuncRounds final {
+    // Random variables passed to a function are solved before the other random variables of
+    // the constraint item calling it. Each function argument is solved in the round after the
+    // latest round of the arguments it depends on, then fixed; the final round solves the rest.
+    static constexpr int VISITING = -1;  // Round of a variable whose round is being computed
+    std::map<std::string, std::vector<const ConstraintFuncCall*>>
+        m_callsUsing;  // Variable -> items using it outside of function arguments
+    std::map<std::string, int> m_rounds;  // Function argument -> its round
+    int m_lastRound = 0;  // Final round, 0 if no rounds are needed
+    bool m_circular = false;  // Found a circular dependency
+
+    int roundOf(const std::string& name, const ConstraintFuncCall& call) {
+        const auto pair = m_rounds.emplace(name, VISITING);
+        if (!pair.second) {
+            if (pair.first->second == VISITING) {
+                m_circular = true;
+                call.fileline->v3error("Circular dependency between random variables passed to "
+                                       "functions in constraints (IEEE 1800-2023 18.5.11): '"
+                                       << name << "'");
+            }
+            return pair.first->second;
+        }
+        int round = 0;
+        for (const ConstraintFuncCall* const callp : m_callsUsing[name]) {
+            for (const std::string& argName : callp->argNames) {
+                round = std::max(round, roundOf(argName, *callp) + 1);
+            }
+        }
+        pair.first->second = round;
+        return round;
+    }
+
+public:
+    explicit ConstraintFuncRounds(const std::vector<ConstraintFuncCall>& calls) {
+        for (const ConstraintFuncCall& call : calls) {
+            for (const std::string& name : call.otherNames) {
+                // A function argument used directly in the same item is solved first as well
+                if (!call.argNames.count(name)) m_callsUsing[name].push_back(&call);
+            }
+        }
+        for (const ConstraintFuncCall& call : calls) {
+            for (const std::string& name : call.argNames) {
+                m_lastRound = std::max(m_lastRound, roundOf(name, call) + 1);
+            }
+        }
+        if (m_circular) m_lastRound = 0;
+    }
+    int lastRound() const { return m_lastRound; }
+    // C++ initializer list of each function argument and its round
+    std::string roundList() const {
+        std::string list;
+        for (const auto& pair : m_rounds) {
+            list += (list.empty() ? "{{\"" : ", {\"") + pair.first + "\", "
+                    + std::to_string(pair.second) + "}";
+        }
+        return list + "}";
+    }
+};
+
+//######################################################################
 // Visitor that turns constraints into template strings for solvers
 
 class ConstraintExprVisitor final : public VNVisitor {
@@ -171,6 +242,10 @@ class ConstraintExprVisitor final : public VNVisitor {
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
     // constraint items either move their expressions into one or never iterate them.
     std::set<std::string>* m_constraintVarsp = nullptr;
+    bool m_inFuncArg = false;  // Registering the random variables of a function argument
+    std::set<std::string> m_funcArgNames;  // Random function arguments in the current item
+    std::set<std::string> m_itemVarNames;  // Other random variables in the current item
+    std::vector<ConstraintFuncCall> m_funcCalls;  // Items calling functions with random arguments
 
     class NestedAccessPath final {
         AstMemberRef* m_topNestedArrayMemberRefp
@@ -681,6 +756,37 @@ class ConstraintExprVisitor final : public VNVisitor {
         return retExprp;
     }
 
+    // Register the random variables in a function call's arguments, false if unsupported
+    bool addFuncArgVars(const AstNodeFTaskRef* nodep) {
+        std::vector<AstNodeExpr*> leafps;
+        bool supported = true;
+        // A call depends on random variables only through its arguments
+        nodep->argsp()->foreachAndNext([&](AstNodeVarRef* refp) {
+            // A member of a random object, or of the object randomized by 'randomize() with',
+            // is random if declared rand
+            AstNodeExpr* leafp = refp;
+            bool random = refp->user1();
+            while (AstMemberRef* const selp = VN_CAST(leafp->backp(), MemberRef)) {
+                leafp = selp;
+                random |= selp->user1();
+            }
+            if (const AstMemberRef* const selp = VN_CAST(leafp, MemberRef)) {
+                random &= selp->varp()->rand().isRandomizable();
+            }
+            if (!random) return;
+            // Only an integral variable can be solved on its own before the call
+            supported &= leafp->dtypep()->skipRefp()->isIntegralOrPacked();
+            leafps.push_back(leafp);
+        });
+        if (!supported) return false;
+        VL_RESTORER(m_inFuncArg);
+        m_inFuncArg = true;
+        for (AstNodeExpr* const leafp : leafps) {
+            pushDeletep(iterateSubtreeReturnEdits(leafp->cloneTreePure(false)));
+        }
+        return true;
+    }
+
     // Bottom-up user1 propagation on inlined expression tree
     void propagateUser1InlineRecurse(AstNodeExpr* nodep) {
         if (VN_IS(nodep, NodeVarRef)) {
@@ -689,6 +795,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         if (VN_IS(nodep, Const)) {
             nodep->user1(false);
+            return;
+        }
+        if (const AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef)) {
+            // A call depends on random variables only through its arguments
+            bool anyArg = false;
+            for (AstNode* argp = refp->argsp(); argp; argp = argp->nextp()) {
+                AstNodeExpr* const exprp = VN_AS(argp, Arg)->exprp();
+                propagateUser1InlineRecurse(exprp);
+                anyArg |= exprp->user1();
+            }
+            nodep->user1(anyArg);
             return;
         }
         int anyChild = false;  // Used as bool
@@ -1242,6 +1359,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeModule* const classOrPackagep = nodep->classOrPackagep();
         const RandomizeMode randMode = {.asUQuad = varp->user1()};
         if (!randMode.usesMode && editFormat(nodep)) return;
+        (m_inFuncArg ? m_funcArgNames : m_itemVarNames).insert(smtName);
 
         AstEnumDType* enumDtp = VN_CAST(nodep->dtypep()->skipRefToEnump(), EnumDType);
         if (enumDtp
@@ -2461,8 +2579,30 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         callp->addPinsp(
             new AstCExpr{nodep->fileline(), AstCExpr::Pure{}, "\"" + prettyText + "\""});
-        nodep->replaceWith(callp->makeStmt());
+        AstNodeStmt* stmtp = callp->makeStmt();
+        if (!m_funcArgNames.empty()) {
+            // Add the constraint once the arguments of its function calls are solved
+            m_funcCalls.push_back({nodep->fileline(), m_funcArgNames, m_itemVarNames});
+            AstCMethodHard* const readyp = new AstCMethodHard{
+                nodep->fileline(),
+                new AstVarRef{nodep->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
+                              VAccess::READ},
+                VCMethod::RANDOMIZER_FUNC_ARGS_READY, newNameListp(nodep->fileline())};
+            readyp->dtypeSetBit();
+            stmtp = new AstIf{nodep->fileline(), readyp, stmtp};
+        }
+        m_funcArgNames.clear();
+        m_itemVarNames.clear();
+        nodep->replaceWith(stmtp);
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
+    }
+    // C++ initializer list of the current item's function argument names
+    AstCExpr* newNameListp(FileLine* fl) const {
+        std::string list;
+        for (const std::string& name : m_funcArgNames) {
+            list += (list.empty() ? "{\"" : ", \"") + name + "\"";
+        }
+        return new AstCExpr{fl, AstCExpr::Pure{}, list + "}"};
     }
     void visit(AstCMethodHard* nodep) override {
         if (editFormat(nodep)) return;
@@ -2851,10 +2991,15 @@ class ConstraintExprVisitor final : public VNVisitor {
 
         AstNodeExpr* const retExprp = extractReturnExpr(nodep, funcp);
         if (!retExprp) {
-            nodep->v3warn(CONSTRAINTIGN,
-                          "Unsupported: complex function in constraint, treating as state");
+            // IEEE 1800-2023 18.5.11: The random arguments are solved before the constraint,
+            // which then uses the call's result as state
+            if (!addFuncArgVars(nodep)) {
+                nodep->v3warn(CONSTRAINTIGN,
+                              "Unsupported: function argument in constraint using a random "
+                              "variable of non-integral type, treating as state");
+            }
             nodep->user1(false);
-            if (editFormat(nodep)) return;
+            editFormat(nodep);
             return;
         }
 
@@ -3022,6 +3167,8 @@ public:
         }
         iterateAndNextNull(nodep);
     }
+    // Constraint items calling functions with random arguments
+    const std::vector<ConstraintFuncCall>& funcCalls() const { return m_funcCalls; }
 };
 
 //######################################################################
@@ -3033,6 +3180,23 @@ class SolverSmtLowering final : public V3SolverLowering {
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
+    std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
+    std::map<const AstConstraint*, std::vector<ConstraintFuncCall>>
+        m_constraintFuncCalls;  // Items of each constraint calling functions with random args
+    // How lowerClassRandomize solved a class
+    struct ClassSolve final {
+        AstNodeStmt* roundsFirstp = nullptr;  // First statement of the solve, if any
+        AstVar* genp = nullptr;  // Randomizer of the class
+    };
+    std::map<const AstClass*, ClassSolve> m_classSolves;  // Per class
+    // The solve lowerStdRandomizeWith added, for finishStdRandomizeWith
+    struct StdFuncRounds final {
+        AstNodeStmt* firstp = nullptr;  // First statement of the solve
+        std::vector<ConstraintFuncCall> calls;  // Items calling functions with random args
+    };
+    std::map<const AstFunc*, StdFuncRounds> m_stdFuncRounds;  // Per std::randomize() function
+    // Calls in the constraints of derived classes, from prepareInlineRandomize
+    std::map<const AstClass*, std::vector<ConstraintFuncCall>> m_inlineDerivedCalls;
 
     // METHODS
     AstVar* getStaticRandModeVar(AstClass* const classp) {
@@ -3927,6 +4091,8 @@ class SolverSmtLowering final : public V3SolverLowering {
 
     static void copyVariableRegistrations(AstFunc* const sourcep, AstFunc* const targetp) {
         for (AstNodeStmt* const stmtp : sourcep->stmtspList()) {
+            // Function-call solve rounds start with the constraint clearing
+            if (VN_IS(stmtp, Loop)) break;
             bool hasRegistration = false;
             bool foundClearConstraints = false;
             // stmtp is possibly begin containing a few statements
@@ -3943,6 +4109,109 @@ class SolverSmtLowering final : public V3SolverLowering {
             if (hasRegistration) targetp->addStmtsp(stmtp->cloneTree(false));
             if (foundClearConstraints) break;
         }
+    }
+
+    // Function calls with random arguments in the constraints of a class and its bases
+    std::vector<ConstraintFuncCall> classFuncCalls(AstClass* const classp) {
+        std::vector<ConstraintFuncCall> calls;
+        classp->foreachMember([&](AstClass*, AstConstraint* const constrp) {
+            const std::vector<ConstraintFuncCall>& constrCalls = m_constraintFuncCalls[constrp];
+            calls.insert(calls.end(), constrCalls.begin(), constrCalls.end());
+        });
+        return calls;
+    }
+    // Function calls with random arguments in the constraints of a class's derived classes
+    std::vector<ConstraintFuncCall>
+    derivedFuncCalls(AstClass* const classp, const std::function<void(AstClass*)>& lowerClass) {
+        // The constraint setup is virtual, so 'randomize() with' through a base class handle
+        // adds the constraints of the object's class
+        std::vector<ConstraintFuncCall> calls;
+        for (AstClass* const derivedp : m_derivedClasses[classp]) {
+            if (derivedp->user1()) {
+                // Lower its constraints first; that resets the per-class written variables
+                VL_RESTORER_COPY(m_writtenVars);
+                lowerClass(derivedp);
+            }
+            for (AstNode* itemp = derivedp->membersp(); itemp; itemp = itemp->nextp()) {
+                if (const AstConstraint* const constrp = VN_CAST(itemp, Constraint)) {
+                    const std::vector<ConstraintFuncCall>& constrCalls
+                        = m_constraintFuncCalls[constrp];
+                    calls.insert(calls.end(), constrCalls.begin(), constrCalls.end());
+                }
+            }
+            const std::vector<ConstraintFuncCall> deeperCalls
+                = derivedFuncCalls(derivedp, lowerClass);
+            calls.insert(calls.end(), deeperCalls.begin(), deeperCalls.end());
+        }
+        return calls;
+    }
+
+    // Repeat the statements from firstp on in rounds that solve function arguments first
+    static void addFuncRounds(AstFunc* const funcp, AstNodeStmt* const firstp, AstVar* const genp,
+                              AstVar* const solveGenp, AstVar* const okVarp,
+                              const AstFunc* const basicFuncp,
+                              const std::vector<ConstraintFuncCall>& calls,
+                              AstNodeStmt* const roundSetupp = nullptr) {
+        const ConstraintFuncRounds rounds{calls};
+        if (!rounds.lastRound()) {
+            if (roundSetupp) VL_DO_DANGLING(roundSetupp->deleteTree(), roundSetupp);
+            return;
+        }
+        FileLine* const fl = funcp->fileline();
+        AstNodeModule* const genModp = VN_CAST(genp->user2p(), NodeModule);
+        AstLoop* const loopp = new AstLoop{fl, roundSetupp};
+        // Declarations are not statements, so stay outside of the loop
+        if (firstp) loopp->addStmtsp(firstp->unlinkFrBackWithNext());
+        // Basic randomization, which also randomizes member objects and calls their
+        // pre/post_randomize, happens once, in the final round
+        std::vector<std::pair<AstNode*, AstFuncRef*>> basicCalls;  // Statement and call
+        for (AstNode* stmtp = loopp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            stmtp->foreach([&](AstFuncRef* refp) {
+                if (refp->taskp() == basicFuncp) basicCalls.emplace_back(stmtp, refp);
+            });
+        }
+        AstVar* const basicOkVarp = basicCalls.empty()
+                                        ? nullptr
+                                        : new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_round_ok",
+                                                     funcp->findBasicDType(VBasicDTypeKwd::BIT)};
+        if (basicOkVarp) {
+            basicOkVarp->funcLocal(true);
+            funcp->addDeclsp(basicOkVarp);
+            funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE},
+                                           new AstConst{fl, AstConst::BitTrue{}}});
+        }
+        for (const auto& stmtCall : basicCalls) {
+            AstFuncRef* const refp = stmtCall.second;
+            refp->replaceWith(new AstVarRef{fl, basicOkVarp, VAccess::READ});
+            AstCMethodHard* const finalp
+                = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READ},
+                                     VCMethod::RANDOMIZER_FUNC_ROUND_FINAL};
+            finalp->dtypeSetBit();
+            stmtCall.first->addHereThisAsNext(new AstIf{
+                fl, finalp,
+                new AstAssign{fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, refp}});
+        }
+        // Stop at a failing round: the later rounds have its constraints too
+        AstCMethodHard* const nextRoundp = new AstCMethodHard{
+            fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_FUNC_ROUND_NEXT,
+            new AstVarRef{fl, VN_CAST(solveGenp->user2p(), NodeModule), solveGenp, VAccess::READ}};
+        nextRoundp->dtypeSetBit();
+        loopp->addStmtsp(new AstLoopTest{
+            fl, loopp, new AstLogAnd{fl, new AstVarRef{fl, okVarp, VAccess::READ}, nextRoundp}});
+        AstCMethodHard* const startp
+            = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+                                 VCMethod::RANDOMIZER_FUNC_ROUND_START,
+                                 new AstConst{fl, static_cast<uint32_t>(rounds.lastRound())}};
+        startp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, rounds.roundList()});
+        startp->dtypeSetVoid();
+        funcp->addStmtsp(startp->makeStmt());
+        funcp->addStmtsp(loopp);
+        AstCMethodHard* const endp
+            = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+                                 VCMethod::RANDOMIZER_FUNC_ROUND_END};
+        endp->dtypeSetVoid();
+        funcp->addStmtsp(endp->makeStmt());
     }
 
     static AstCExpr* newSolverCallp(AstVar* const genp) {
@@ -3991,7 +4260,12 @@ public:
     // CONSTRUCTORS
     SolverSmtLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
                       const RandModeVars& modeVars, VNDeleter& deleter)
-        : V3SolverLowering{memberMap, uniqueNames, modeVars, deleter} {}
+        : V3SolverLowering{memberMap, uniqueNames, modeVars, deleter} {
+        v3Global.rootp()->foreach([&](AstClass* const classp) {
+            if (classp->extendsp())
+                m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
+        });
+    }
     ~SolverSmtLowering() override = default;
 
     // V3SolverLowering
@@ -4049,6 +4323,7 @@ public:
         m_distNum = 0;
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* beginValp = nullptr;
+        AstNodeStmt* roundsFirstp = nullptr;  // First statement of the solve
         AstVar* genp = SmtUtil::getRandomGenerator(nodep);
         if (genp) {
             // Phase 1: Process all constraints (create tasks, run ConstraintExprVisitor)
@@ -4078,10 +4353,13 @@ public:
                     AstBegin* const holderp = SmtUtil::newItemsHolderp(
                         constrp->fileline(), constrp->itemsp()->unlinkFrBackWithNext());
                     taskp->addStmtsp(wrapIfConstraintMode(nodep, constrp, holderp));
-                    ConstraintExprVisitor{
+                    const ConstraintExprVisitor exprVisitor{
                         classp,        m_memberMap,  holderp->declsp(), nullptr,
                         genp,          randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
                         m_uniqueNames, randomizep,   &sizeArrays,       prepareArraysTaskp};
+                    std::vector<ConstraintFuncCall>& calls = m_constraintFuncCalls[constrp];
+                    const std::vector<ConstraintFuncCall>& newCalls = exprVisitor.funcCalls();
+                    calls.insert(calls.end(), newCalls.begin(), newCalls.end());
                     SmtUtil::replaceWithLowered(holderp);
                 }
             });
@@ -4133,7 +4411,8 @@ public:
                         = parentClassp->extendsp() ? parentClassp->extendsp()->classp() : nullptr;
                 }
             }
-            randomizep->addStmtsp(implementConstraintsClear(fl, genp));
+            roundsFirstp = implementConstraintsClear(fl, genp);
+            randomizep->addStmtsp(roundsFirstp);
 
             const auto sizeArraysIt = m_sizeConstrainedArrays.find(nodep);
             if (sizeArraysIt != m_sizeConstrainedArrays.end()) {
@@ -4199,7 +4478,15 @@ public:
         }
 
         addUpdateRandVarsBody(nodep, randomizep);
+        m_classSolves[nodep] = ClassSolve{roundsFirstp, genp};
         return beginValp;
+    }
+    void finishClassRandomize(AstClass* nodep, AstFunc* randomizep,
+                              const AstFunc* basicRandomizep) override {
+        const ClassSolve& solve = m_classSolves[nodep];
+        if (!solve.roundsFirstp) return;
+        addFuncRounds(randomizep, solve.roundsFirstp, solve.genp, solve.genp, randomizep->fvarp(),
+                      basicRandomizep, classFuncCalls(nodep));
     }
     void addAfterClassSolve(AstClass* nodep, AstFunc* randomizep) override {
         const auto sizeArraysIt = m_sizeConstrainedArrays.find(nodep);
@@ -4218,11 +4505,19 @@ public:
                               AstNode* capturedTreep, const AstVar* thisVarp,
                               AstNodeExpr* basicRandomizeFuncCallp) override {
         AstVar* const classGenp = SmtUtil::getRandomGenerator(classp);
+        std::vector<ConstraintFuncCall> calls = std::move(m_inlineDerivedCalls[classp]);
+        m_inlineDerivedCalls.erase(classp);
+        // __VBasicRand, for repeating it in rounds
+        AstFunc* const basicRandomizeFuncp
+            = VN_AS(VN_AS(basicRandomizeFuncCallp, FuncRef)->taskp(), Func);
         AstVar* const localGenp
             = new AstVar{nodep->fileline(), VVarType::BLOCKTEMP, "randomizer",
                          classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)};
         localGenp->funcLocal(true);
 
+        // Last statement before the solve, which starts with registering the arrays' elements
+        AstNode* const solveAfterp
+            = randomizeFuncp->stmtsp() ? randomizeFuncp->stmtsp()->lastp() : nullptr;
         // Add constraints clearing code
         if (classGenp) {
             // Clone write_var calls from main randomize() for path-connected variables
@@ -4345,7 +4640,7 @@ public:
         // class-level size-constrained arrays.
         VInsertionSet<AstVar*> allSizeArrays;
         expandUniqueElementList(holderp->declsp());
-        ConstraintExprVisitor{
+        const ConstraintExprVisitor exprVisitor{
             classp,        m_memberMap,  holderp->declsp(), setupBlockp,
             localGenp,     randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
             m_uniqueNames, nullptr,      &allSizeArrays};
@@ -4545,28 +4840,55 @@ public:
                 randomizeFuncp->addStmtsp(ifp);
             }
         }
+        {
+            // The class's constraints were set up in the class's generator, which holds the
+            // rounds and is copied into this call's generator
+            const std::vector<ConstraintFuncCall> classCalls = classFuncCalls(classp);
+            calls.insert(calls.end(), classCalls.begin(), classCalls.end());
+            const std::vector<ConstraintFuncCall>& newCalls = exprVisitor.funcCalls();
+            calls.insert(calls.end(), newCalls.begin(), newCalls.end());
+            addFuncRounds(
+                randomizeFuncp,
+                solveAfterp ? VN_AS(solveAfterp->nextp(), NodeStmt) : randomizeFuncp->stmtsp(),
+                classGenp ? classGenp : localGenp, localGenp, retVarp, basicRandomizeFuncp, calls,
+                classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
+        }
     }
     AstNodeExpr* lowerStdRandomizeWith(AstNodeFTaskRef* nodep, AstFunc* randomizeFuncp,
                                        AstNode* capturedTreep, AstVar* stdrandp) override {
         FileLine* const fl = nodep->fileline();
         // Clear old constraints and variables for std::randomize with clause
-        randomizeFuncp->addStmtsp(
-            implementConstraintsClearAll(randomizeFuncp->fileline(), stdrandp));
+        AstNodeStmt* const roundsFirstp
+            = implementConstraintsClearAll(randomizeFuncp->fileline(), stdrandp);
+        randomizeFuncp->addStmtsp(roundsFirstp);
         AstBegin* const holderp = SmtUtil::newItemsHolderp(fl, capturedTreep);
         AstBegin* const setupBlockp = new AstBegin{fl, "__Vsetup_constraints", holderp, true};
         randomizeFuncp->addStmtsp(setupBlockp);
-        {
-            expandUniqueElementList(holderp->declsp());
-            ConstraintExprVisitor{
-                nullptr, m_memberMap,   holderp->declsp(),     setupBlockp,   stdrandp,
-                nullptr, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, nullptr};
-            SmtUtil::replaceWithLowered(holderp);
-        }
+        expandUniqueElementList(holderp->declsp());
+        const ConstraintExprVisitor exprVisitor{
+            nullptr, m_memberMap,   holderp->declsp(),     setupBlockp,   stdrandp,
+            nullptr, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, nullptr};
+        SmtUtil::replaceWithLowered(holderp);
+        m_stdFuncRounds[randomizeFuncp] = StdFuncRounds{roundsFirstp, exprVisitor.funcCalls()};
         AstCExpr* const solverCallp = new AstCExpr{fl};
         solverCallp->dtypeSetBit();
         solverCallp->add(new AstVarRef{fl, stdrandp, VAccess::READWRITE});
         solverCallp->add(".next()");
         return solverCallp;
+    }
+    void finishStdRandomizeWith(AstFunc* randomizep, AstVar* stdrandp) override {
+        const auto it = m_stdFuncRounds.find(randomizep);
+        UASSERT_OBJ(it != m_stdFuncRounds.end(), randomizep, "Missing std::randomize lowering");
+        addFuncRounds(randomizep, it->second.firstp, stdrandp, stdrandp, randomizep->fvarp(),
+                      nullptr, it->second.calls);
+        m_stdFuncRounds.erase(it);
+    }
+    void prepareInlineRandomize(AstClass* classp,
+                                const std::function<void(AstClass*)>& lowerClass) override {
+        // Lowering the derived classes can lower a nested 'randomize() with' of the same class,
+        // which takes its entry, so get the calls before the entry
+        std::vector<ConstraintFuncCall> calls = derivedFuncCalls(classp, lowerClass);
+        m_inlineDerivedCalls[classp] = std::move(calls);
     }
     AstNodeExpr* lowerCheckOnly(AstClass* classp, AstFunc* funcp) override {
         FileLine* const fl = classp->fileline();

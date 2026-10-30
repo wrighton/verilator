@@ -926,6 +926,8 @@ static uint64_t readVarValueU64(const void* datap, int width) {
 }
 
 void VlRandomizer::recordRandcValues() {
+    // Only the final function-call solve round picks the values
+    if (funcPreRound()) return;
     for (const auto& name : m_randcVarNames) {
         const auto varIt = m_vars.find(name);
         if (varIt == m_vars.end()) continue;
@@ -975,7 +977,8 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
-    if (!m_randcVarNames.empty()) {
+    // An earlier function-call solve round has fewer constraints, not changed ones
+    if (!m_randcVarNames.empty() && !funcPreRound()) {
         const size_t currentHash = hashConstraints(uniqueExprs);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
         if (currentHash != m_randcConstraintHash) {
@@ -986,6 +989,13 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
 
     // Reseeded from outside, so everything cached came from the old seed.
     if (m_ug2.rngReseeds != rngr.reseeds()) m_ug2 = Unigen2State{};
+
+    // Fix the function arguments solved in earlier rounds (IEEE 1800-2023 18.5.11)
+    for (const FuncArgRound& argRound : m_funcArgRounds) {
+        if (argRound.round < m_funcRound && !argRound.pin.empty()) {
+            m_constraints.push_back(argRound.pin);
+        }
+    }
 
     // Pinned vars make phase ordering moot; skip phased path in check-only.
     bool result;
@@ -1804,6 +1814,41 @@ void VlRandomizer::clearAll() {
 }
 
 void VlRandomizer::markRandc(const std::string& name) { m_randcVarNames.insert(name); }
+
+void VlRandomizer::func_round_start(int lastRound,
+                                    std::initializer_list<std::pair<const char*, int>> argRounds) {
+    m_funcArgRounds.clear();
+    for (const auto& argRound : argRounds) {
+        m_funcArgRounds.push_back({argRound.first, argRound.second, ""});
+    }
+    m_funcRound = 0;
+    m_funcRoundLast = lastRound;
+}
+
+bool VlRandomizer::func_round_next(const VlRandomizer& solvedr) {
+    // Take the values now: code after the solve may randomize the variables again
+    for (FuncArgRound& argRound : m_funcArgRounds) {
+        if (argRound.round != m_funcRound) continue;
+        // An argument of a derived class's constraint is not a variable of this object
+        const auto it = solvedr.m_vars.find(argRound.name);
+        if (it == solvedr.m_vars.end()) continue;
+        std::ostringstream os;
+        os << "(__Vbv (= " << argRound.name << ' ';
+        it->second->emitConcreteValue(os);
+        os << "))";
+        argRound.pin = os.str();
+    }
+    return ++m_funcRound <= m_funcRoundLast;
+}
+
+bool VlRandomizer::func_args_ready(std::initializer_list<const char*> names) const {
+    for (const char* const name : names) {
+        for (const FuncArgRound& argRound : m_funcArgRounds) {
+            if (argRound.name == name && argRound.round >= m_funcRound) return false;
+        }
+    }
+    return true;
+}
 
 void VlRandomizer::solveBefore(const std::string& beforeName, const std::string& afterName) {
     m_solveBefore.emplace_back(beforeName, afterName);

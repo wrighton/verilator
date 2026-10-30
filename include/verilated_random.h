@@ -283,6 +283,16 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
     bool m_checkOnly = false;  // Set for randomize(null)
+    // Function argument variable solved in an earlier round (IEEE 1800-2023 18.5.11)
+    struct FuncArgRound final {
+        std::string name;  // Solver name of the variable
+        int round;  // Solve round that solves it
+        std::string pin;  // Constraint fixing its solved value, once its round is over
+    };
+    std::vector<FuncArgRound> m_funcArgRounds;  // Function argument variables
+    int m_funcRound = 0;  // Current solve round
+    int m_funcRoundLast = 0;  // Final solve round
+    bool funcPreRound() const { return m_funcRound < m_funcRoundLast; }
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -963,6 +973,20 @@ public:
     void disable_soft(const std::string& varName);
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
+    // Start solving in rounds, fixing each function argument variable after its round
+    void func_round_start(int lastRound,
+                          std::initializer_list<std::pair<const char*, int>> argRounds);
+    // Fix the values solved by solvedr, and advance to the next round; false after the last
+    bool func_round_next(const VlRandomizer& solvedr);
+    // Whether solving the final round
+    bool func_round_final() const { return !funcPreRound(); }
+    // Stop solving in rounds
+    void func_round_end() {
+        m_funcArgRounds.clear();
+        m_funcRound = m_funcRoundLast = 0;
+    }
+    // Whether the function argument variables are solved, so the call can be evaluated
+    bool func_args_ready(std::initializer_list<const char*> names) const;
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void solveBefore(const std::string& beforeName,
                      const std::string& afterName);  // Register solve-before ordering

@@ -1014,10 +1014,11 @@ class CaptureVisitor final : public VNVisitor {
             iterateChildren(nodep);
             return;
         }
+        iterateChildren(nodep);
         AstClass* const classp = VN_CAST(nodep->taskp()->user2p(), Class);
         if ((classp == m_callerp) && VN_IS(m_callerp, Class)) {
             AstArg* const argsp = nodep->argsp();
-            if (argsp) argsp->unlinkFrBack();  // TODO: should this be unlinkFrBackWithNext?
+            if (argsp) argsp->unlinkFrBackWithNext();
             AstVar* const thisp = importThisp(nodep->fileline());
             AstVarRef* const thisRefp = new AstVarRef{
                 nodep->fileline(), thisp, nodep->isPure() ? VAccess::READ : VAccess::READWRITE};
@@ -1026,6 +1027,7 @@ class CaptureVisitor final : public VNVisitor {
                 = new AstMethodCall{nodep->fileline(), thisRefp, thisp->name(), argsp};
             methodCallp->taskp(nodep->taskp());
             methodCallp->dtypep(nodep->dtypep());
+            methodCallp->user1(nodep->user1());
             nodep->replaceWith(methodCallp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             m_ignore.emplace(methodCallp);
@@ -2377,6 +2379,7 @@ class RandomizeVisitor final : public VNVisitor {
                                             new AstAnd{fl, fvarRefReadp, secondHalfp}});
 
         if (basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
+        m_solverp->finishClassRandomize(nodep, randomizep, basicRandomizep);
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         AstNodeStmt* postp = nullptr;
@@ -2620,6 +2623,7 @@ class RandomizeVisitor final : public VNVisitor {
                     = new AstAnd{fl, new AstVarRef{fl, fvarp, VAccess::READ}, solverCallp};
                 randomizeFuncp->addStmtsp(
                     new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE}, andExprp});
+                m_solverp->finishStdRandomizeWith(randomizeFuncp, stdrandp);
                 if (restoreStmtsp) {
                     randomizeFuncp->addStmtsp(
                         new AstIf{fl, new AstLogNot{fl, new AstVarRef{fl, fvarp, VAccess::READ}},
@@ -2671,6 +2675,9 @@ class RandomizeVisitor final : public VNVisitor {
             // nesting-dependent state variables
             iterate(classp);
         }
+
+        m_solverp->prepareInlineRandomize(classp,
+                                          [this](AstClass* const relatedp) { iterate(relatedp); });
 
         AstFunc* const randomizeFuncp = V3Randomize::newRandomizeFunc(
             m_memberMap, classp, m_inlineUniqueNames.get(nodep), false);

@@ -1,9 +1,9 @@
-%Warning-CONSTRAINTIGN: t/t_constraint_func_call_unsup.v:21:22: Unsupported: complex function in constraint, treating as state
-   21 |   constraint c {x <= complex_func(y);}
-      |                      ^~~~~~~~~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_func_call_unsup.v:28:28: Unsupported: function argument in constraint using a random variable of non-integral type, treating as state
+   28 |   constraint c_array {x <= array_func(arr);}
+      |                            ^~~~~~~~~~
                         ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
                         ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
-%Warning-CONSTRAINTIGN: t/t_constraint_func_call_unsup.v:22:28: Unsupported: complex function in constraint, treating as state
-   22 |   constraint c_local {x != local_func(y);}
-      |                            ^~~~~~~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_func_call_unsup.v:29:29: Unsupported: function argument in constraint using a random variable of non-integral type, treating as state
+   29 |   constraint c_struct {z != struct_func(pair);}
+      |                             ^~~~~~~~~~~
 %Error: Exiting due to
