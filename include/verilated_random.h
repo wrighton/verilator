@@ -974,6 +974,8 @@ public:
     std::string null_read(const std::string& name, const std::string& smtName);
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
+    // Unregister the fields of the objects in a class handle array
+    void clear_elem_vars(const std::string& arrayName);
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void solveBefore(const std::string& beforeName,
                      const std::string& afterName);  // Register solve-before ordering

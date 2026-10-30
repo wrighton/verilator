@@ -1074,8 +1074,16 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                  m_uniqueNames.get("__Vk"), assocDtp->keyDTypep()}
                                     : iterVarp;
 
-        AstNodeStmt* const stmtsp
-            = new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}};
+        // Registered at each randomize(), as the array may hold other objects, after its
+        // previous registration is cleared
+        AstCMethodHard* const clearp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_CLEAR_ELEM_VARS,
+            new AstCExpr{fl, AstCExpr::Pure{}, "\"" + smtName + "\""}};
+        clearp->dtypeSetVoid();
+        AstNodeStmt* const stmtsp = clearp->makeStmt();
+        stmtsp->addNext(
+            new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}});
 
         AstNodeExpr* sizep;
         if (isUnpackedClassRefArray) {
@@ -1114,9 +1122,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         varp->user3(true);
         AstBegin* initp = m_inlineInitBlockp;
         if (!initp) {
-            AstNodeFTask* const taskp = VN_AS(m_memberMap.findMember(varClassp, "new"), NodeFTask);
-            UASSERT_OBJ(taskp, varClassp, "No new() in class");
-            initp = newInitBlockp(taskp);
+            UASSERT_OBJ(m_memberrefInitTaskp, varp, "No randomize() to register array in");
+            initp = newInitBlockp(m_memberrefInitTaskp);
         }
         // At the beginning, so declared before referenced
         initp->addDeclsp(iterVarp);
@@ -1501,11 +1508,28 @@ class ConstraintExprVisitor final : public VNVisitor {
             = createVarExprp(nodep, randMode, smtName, isGlobalConstrained, memberRefp, varp);
         relinker.relink(exprp);
 
+        bool isClassRefArray = false;
+        bool isUnpackedClassRefArray = false;
+        AstClassRefDType* elemClassRefDtp = nullptr;
+        {
+            AstNodeDType* varDtp = varp->dtypep()->skipRefp();
+            if (varDtp->isNonPackedArray()) {
+                AstNodeDType* const elemDtp = varDtp->subDTypep()->skipRefp();
+                elemClassRefDtp = VN_CAST(elemDtp, ClassRefDType);
+                if (elemClassRefDtp) {
+                    isClassRefArray = true;
+                    isUnpackedClassRefArray = VN_IS(varDtp, UnpackArrayDType);
+                }
+            }
+        }
+
         // Global / inline / class-level member-select refs key on the full path
         // (so same-type sub-objects c1.x, c2.x stay distinct), and a foreign static
         // is registered in each class using it; a plain class-level variable keys
         // on user3(). Inline 'with' dedups per function (own solver).
-        const bool perClass = isGlobalConstrained || memberRefp || foreignStatic;
+        // The objects of a handle array are registered by each class's randomize().
+        const bool perClass
+            = isGlobalConstrained || memberRefp || foreignStatic || isClassRefArray;
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
                                                        : varp->user3();
@@ -1518,21 +1542,6 @@ class ConstraintExprVisitor final : public VNVisitor {
                 m_writtenVars.insert(smtName);
             // For global constraints, delete nodep after processing
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
-
-            bool isClassRefArray = false;
-            bool isUnpackedClassRefArray = false;
-            AstClassRefDType* elemClassRefDtp = nullptr;
-            {
-                AstNodeDType* varDtp = varp->dtypep()->skipRefp();
-                if (varDtp->isNonPackedArray()) {
-                    AstNodeDType* const elemDtp = varDtp->subDTypep()->skipRefp();
-                    elemClassRefDtp = VN_CAST(elemDtp, ClassRefDType);
-                    if (elemClassRefDtp) {
-                        isClassRefArray = true;
-                        isUnpackedClassRefArray = VN_IS(varDtp, UnpackArrayDType);
-                    }
-                }
-            }
 
             // A foreign static is registered in this class's randomize(), where its rand_mode,
             // held by its own class, is applied on each call
@@ -2938,10 +2947,21 @@ class ConstraintExprVisitor final : public VNVisitor {
             for (AstNode* const elemp : nodep->headerp()->elementspList()) {
                 if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
             }
-            AstBegin* const holderp
-                = SmtUtil::newItemsHolderp(fl, nodep->bodyp()->unlinkFrBackWithNext());
+            // A body under one condition of state, as the null check of an element whose
+            // object's constraints are cloned (see cloneElementConstraints), skips elements at
+            // run time, so its items are solved as outside a condition
+            AstNode* itemsp = nodep->bodyp()->unlinkFrBackWithNext();
+            AstNodeExpr* stateCondp = nullptr;
+            AstConstraintIf* const ifp = VN_CAST(itemsp, ConstraintIf);
+            if (ifp && !ifp->nextp() && !ifp->elsesp() && !ifp->condp()->user1()) {
+                stateCondp = ifp->condp()->unlinkFrBack();
+                itemsp = ifp->thensp()->unlinkFrBackWithNext();
+                VL_DO_DANGLING(ifp->deleteTree(), ifp);
+            }
+            AstBegin* const holderp = SmtUtil::newItemsHolderp(fl, itemsp);
             m_foreachBodyp = holderp;
-            AstNodeStmt* const bodyp = prependDistPreamble(nodep, holderp);
+            AstNodeStmt* bodyp = prependDistPreamble(nodep, holderp);
+            if (stateCondp) bodyp = new AstIf{fl, stateCondp, bodyp};
             AstNodeStmt* loopp = new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp};
             if (AstNodeExpr* const handlesp = newHandlesNonNullp(arrayp)) {
                 loopp = new AstIf{fl, handlesp, loopp, newNullReadFailp(fl, arrayp)};

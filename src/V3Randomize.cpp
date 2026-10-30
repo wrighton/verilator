@@ -249,6 +249,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     BaseToDerivedMap m_baseToDerivedMap;  // Mapping from base classes to classes that extend them
     BaseToDerivedMap m_allDerivedMap;  // As m_baseToDerivedMap, but complete before traversal
+    // Classes and constraints of which constraint_mode is set for an object, also before
+    // traversal
+    std::unordered_set<const AstClass*> m_modedClassps;
+    std::unordered_set<const AstConstraint*> m_modedConstrps;
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp;  // Current module
@@ -413,7 +417,16 @@ class RandomizeMarkVisitor final : public VNVisitor {
         for (AstVar* pathMemberVarp : newPath) {
             pathPrefix += GLOBAL_CONSTRAINT_SEPARATOR + pathMemberVarp->name();
         }
-
+        AstNodeExpr* const objp = buildMemberRefChain(rootVarRefp, newPath);
+        if (AstConstraint* const cloneConstrp
+            = cloneObjectConstraint(constrp, objp, pathPrefix, targetClassp)) {
+            addClonedConstraint(targetClassp, cloneConstrp);
+        }
+        VL_DO_DANGLING(objp->deleteTree(), objp);
+    }
+    // Clone constraint constrp of the object objp, nullptr if targetClassp already has the clone
+    AstConstraint* cloneObjectConstraint(AstConstraint* const constrp, AstNodeExpr* objp,
+                                         const std::string& pathPrefix, AstClass* targetClassp) {
         const std::string newName = pathPrefix + GLOBAL_CONSTRAINT_SEPARATOR + constrp->name();
 
         // Check if this constraint already exists in the target class
@@ -424,7 +437,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 isDuplicate = true;
             }
         });
-        if (isDuplicate) return;
+        if (isDuplicate) return nullptr;
 
         AstConstraint* const cloneConstrp = constrp->cloneTree(false);
         cloneConstrp->name(newName);
@@ -436,9 +449,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
             if (AstVarRef* const varRefp = VN_CAST(exprp, VarRef)) {
                 if (!varRefp->varp()->isClassMember() || varRefp->varp()->lifetime().isStatic())
                     return;
-                AstNodeExpr* const chainp = buildMemberRefChain(rootVarRefp, newPath);
-                AstMemberRef* const finalRefp
-                    = new AstMemberRef{varRefp->fileline(), chainp, varRefp->varp()};
+                AstMemberRef* const finalRefp = new AstMemberRef{
+                    varRefp->fileline(), objp->cloneTree(false), varRefp->varp()};
                 finalRefp->user2p(m_classp);
                 varRefp->replaceWith(finalRefp);
                 VL_DO_DANGLING(pushDeletep(varRefp), varRefp);
@@ -450,11 +462,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         });
         for (AstFuncRef* funcRefp : funcRefps) {
-            AstNodeExpr* const chainp = buildMemberRefChain(rootVarRefp, newPath);
             AstArg* const argsp
                 = funcRefp->argsp() ? funcRefp->argsp()->unlinkFrBackWithNext() : nullptr;
-            AstMethodCall* const callp
-                = new AstMethodCall{funcRefp->fileline(), chainp, funcRefp->name(), argsp};
+            AstMethodCall* const callp = new AstMethodCall{
+                funcRefp->fileline(), objp->cloneTree(false), funcRefp->name(), argsp};
             callp->taskp(funcRefp->taskp());
             callp->classOrPackagep(funcRefp->classOrPackagep());
             callp->dtypep(funcRefp->dtypep());
@@ -462,14 +473,137 @@ class RandomizeMarkVisitor final : public VNVisitor {
             funcRefp->replaceWith(callp);
             VL_DO_DANGLING(pushDeletep(funcRefp), funcRefp);
         }
-        funcRefps.clear();
-
-        // Add constraint directly to the target class
+        return cloneConstrp;
+    }
+    // Add a cloned constraint to targetClassp
+    void addClonedConstraint(AstClass* targetClassp, AstConstraint* cloneConstrp) {
         targetClassp->addMembersp(cloneConstrp);
         // Immediately iterate to set user1 marks, as a constraint of the target class
         VL_RESTORER(m_classp);
         m_classp = targetClassp;
         iterateConst(cloneConstrp);
+    }
+
+    // Whether classp, or a class derived from it, declares a constraint named in names
+    bool declaresConstraint(const AstClass* classp,
+                            const std::unordered_set<std::string>& names) const {
+        bool declares = derivedOverrides(classp, names);
+        for (const AstNode* itemp = classp->membersp(); itemp; itemp = itemp->nextp())
+            declares |= VN_IS(itemp, Constraint) && names.count(itemp->name());
+        return declares;
+    }
+    // Whether a class derived from classp overrides a constraint named in names
+    bool derivedOverrides(const AstClass* classp,
+                          const std::unordered_set<std::string>& names) const {
+        bool overrides = false;
+        if (m_allDerivedMap.count(classp)) {
+            for (const AstClass* const derivedp : m_allDerivedMap.at(classp))
+                overrides |= declaresConstraint(derivedp, names);
+        }
+        return overrides;
+    }
+    // Whether a constraint of constrps, or an object of classp, a class it extends or one
+    // extending it, has its constraint mode set
+    bool hierarchyModed(const AstClass* classp,
+                        const std::vector<AstConstraint*>& constrps) const {
+        bool moded = derivedModed(classp);
+        for (const AstConstraint* const constrp : constrps)
+            moded |= m_modedConstrps.count(constrp);
+        for (const AstClass* basep = classp; basep;
+             basep = basep->extendsp() ? basep->extendsp()->classp() : nullptr)
+            moded |= m_modedClassps.count(basep);
+        return moded;
+    }
+    bool derivedModed(const AstClass* classp) const {
+        bool moded = false;
+        if (m_allDerivedMap.count(classp)) {
+            for (const AstClass* const derivedp : m_allDerivedMap.at(classp))
+                moded |= m_modedClassps.count(derivedp) || derivedModed(derivedp);
+        }
+        return moded;
+    }
+    // Clone the constraints of the objects in rand handle array arrVarp into targetClassp
+    void cloneElementConstraints(AstClass* ownerClassp, AstVar* arrVarp, AstClass* targetClassp) {
+        // An array referenced by targetClassp's constraints is solved by targetClassp, not by
+        // randomize() of each object, so the objects' constraints are solved there too
+        // (IEEE 1800-2023 18.5.8), applied to each element by a foreach.
+        const AstNodeDType* const arrDtp = arrVarp->dtypep()->skipRefp();
+        if (!VN_IS(arrDtp, DynArrayDType) && !VN_IS(arrDtp, QueueDType)) return;
+        const AstClassRefDType* const elemDtp
+            = VN_CAST(arrDtp->subDTypep()->skipRefp(), ClassRefDType);
+        if (!elemDtp) return;
+        // Not counting the size, which is a separate solver variable
+        const bool referenced
+            = targetClassp->existsMember([&](const AstClass*, const AstConstraint* constrp) {
+                  return constrp->exists([&](const AstVarRef* refp) {
+                      const AstCMethodHard* const methodp = VN_CAST(refp->backp(), CMethodHard);
+                      return refp->varp() == arrVarp
+                             && !(methodp && methodp->method() == VCMethod::DYN_SIZE);
+                  });
+              });
+        if (!referenced) return;
+        // A constraint of a derived class overrides the one of the same name of a base class
+        // (IEEE 1800-2023 18.5.2), which is visited first
+        std::vector<AstConstraint*> constrps;
+        std::map<std::string, size_t> nameIndex;
+        elemDtp->classp()->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+            const auto pair = nameIndex.emplace(constrp->name(), constrps.size());
+            if (pair.second) {
+                constrps.push_back(constrp);
+            } else {
+                constrps[pair.first->second] = constrp;
+            }
+        });
+        // An object's constraints are those of its own class (IEEE 1800-2023 18.5.2), with its
+        // own constraint modes (18.9), which constraints cloned from the declared class would not
+        // follow where a derived class overrides one or a mode is set, so then none are, and the
+        // objects' constraints stay unsolved, as before. A derived class's other constraints
+        // are not cloned.
+        std::unordered_set<std::string> names;
+        for (const AstConstraint* const constrp : constrps) names.emplace(constrp->name());
+        if (derivedOverrides(elemDtp->classp(), names)
+            || hierarchyModed(elemDtp->classp(), constrps)) {
+            return;
+        }
+        FileLine* const fl = arrVarp->fileline();
+        const auto cloneConstraint = [&](AstConstraint* const constrp) {
+            // Rand fields that are arrays or objects are not solver variables of the elements
+            // (see createWriteVarForClassFields), so constraints on them stay ignored. This
+            // includes the constraints the element class has cloned from its own rand objects.
+            if (!constrp->itemsp() || constrp->exists([](const AstVarRef* refp) {
+                    const AstVar* const varp = refp->varp();
+                    const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+                    return varp->isClassMember() && varp->rand().isRandomizable()
+                           && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
+                })) {
+                return;
+            }
+            AstVar* const idxVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, "__Vi", arrVarp->findIntDType()};
+            AstVarRef* const elemArrRefp = new AstVarRef{fl, ownerClassp, arrVarp, VAccess::READ};
+            AstVarRef* const elemIdxRefp = new AstVarRef{fl, idxVarp, VAccess::READ};
+            AstNodeExpr* const elemp
+                = VN_IS(arrDtp, DynArrayDType)
+                      ? static_cast<AstNodeExpr*>(new AstDynArraySel{fl, elemArrRefp, elemIdxRefp})
+                      : new AstQueueSel{fl, elemArrRefp, elemIdxRefp};
+            elemp->dtypep(arrDtp->subDTypep());
+            AstConstraint* const cloneConstrp
+                = cloneObjectConstraint(constrp, elemp, arrVarp->name(), targetClassp);
+            if (!cloneConstrp) {
+                VL_DO_DANGLING(elemp->deleteTree(), elemp);
+                VL_DO_DANGLING(idxVarp->deleteTree(), idxVarp);
+                return;
+            }
+            AstNodeConstraintItem* const itemsp = cloneConstrp->itemsp()->unlinkFrBackWithNext();
+            AstVarRef* const arrRefp = new AstVarRef{fl, ownerClassp, arrVarp, VAccess::READ};
+            // A null element has no object, so no constraints (IEEE 1800-2023 18.4)
+            AstNeq* const nonNullp = new AstNeq{fl, elemp, new AstConst{fl, AstConst::Null{}}};
+            cloneConstrp->addItemsp(
+                new AstConstraintForeach{fl, new AstForeachHeader{fl, arrRefp, idxVarp},
+                                         new AstConstraintIf{fl, nonNullp, itemsp, nullptr}});
+            addClonedConstraint(targetClassp, cloneConstrp);
+        };
+        for (AstConstraint* const constrp : constrps) cloneConstraint(constrp);
     }
 
     // Clone constraints from nested rand class members.
@@ -739,7 +873,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 if (!memberVarp->rand().isRandomizable()) return;
                 const AstNodeDType* const dtypep = memberVarp->dtypep()->skipRefp();
                 const AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType);
-                if (!classRefp || !classRefp->classp()) return;
+                if (!classRefp) {
+                    cloneElementConstraints(containingClassp, memberVarp, classp);
+                    return;
+                }
                 AstClass* const memberClassp = classRefp->classp();
                 if (memberClassp->user1() != IS_RANDOMIZED_GLOBAL) return;
                 memberVarp->globalConstrained(true);
@@ -893,6 +1030,29 @@ class RandomizeMarkVisitor final : public VNVisitor {
         if (!m_constraintExprGenp && !m_inStdWith) return;
         nodep->user1(anyOpRandDependent(nodep));
     }
+    void visit(AstEq* nodep) override { visitCompare(nodep); }
+    void visit(AstNeq* nodep) override { visitCompare(nodep); }
+    // Whether a variable holds class handles, alone or in an array
+    static bool isHandleVar(const AstVar* varp) {
+        const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+        while (VN_IS(dtypep, NodeArrayDType) || VN_IS(dtypep, DynArrayDType)
+               || VN_IS(dtypep, QueueDType) || VN_IS(dtypep, AssocArrayDType)) {
+            dtypep = dtypep->subDTypep()->skipRefp();
+        }
+        return VN_IS(dtypep, ClassRefDType);
+    }
+    // As randomize() does not assign class handles, a comparison of handles reads state,
+    // unless it reads another random value, as a random index selecting a handle
+    void visitCompare(AstNodeBiop* nodep) {
+        visit(static_cast<AstNodeExpr*>(nodep));
+        if ((VN_IS(nodep->lhsp()->dtypep()->skipRefp(), ClassRefDType)
+             || VN_IS(nodep->rhsp()->dtypep()->skipRefp(), ClassRefDType))
+            && !nodep->exists([](const AstNodeVarRef* refp) {
+                   return refp->varp()->rand().isRandomizable() && !isHandleVar(refp->varp());
+               })) {
+            nodep->user1(false);
+        }
+    }
     void visit(AstArg* nodep) override {
         iterateChildrenConst(nodep);
         if (!m_constraintExprGenp && !m_inStdWith) return;
@@ -913,6 +1073,22 @@ public:
         nodep->foreach([&](AstClass* classp) {
             if (const AstClassExtends* const extendsp = classp->extendsp()) {
                 m_allDerivedMap[extendsp->classp()].insert(classp);
+            }
+            // constraint_mode() of 'this', called in its class
+            classp->foreach([&](const AstNodeFTaskRef* refp) {
+                if (refp->name() == "constraint_mode" && !VN_IS(refp, MethodCall)) {
+                    m_modedClassps.emplace(classp);
+                }
+            });
+        });
+        // As are the constraints and objects of constraint_mode() calls
+        nodep->foreach([&](const AstMethodCall* callp) {
+            if (callp->name() != "constraint_mode") return;
+            if (const AstConstraintRef* const refp = VN_CAST(callp->fromp(), ConstraintRef)) {
+                m_modedConstrps.emplace(refp->constrp());
+            } else if (const AstClassRefDType* const classRefp
+                       = VN_CAST(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)) {
+                m_modedClassps.emplace(classRefp->classp());
             }
         });
         iterateConst(nodep);
