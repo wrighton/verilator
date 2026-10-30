@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:13:5: Unsupported: unbounded 'always' in a negated property
+                                                          : ... note: In instance 't'
+   13 |     always a;
+      |     ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:30:41: Unsupported: multi-cycle body in a nested property instance
+                                                           : ... note: In instance 't'
+   30 |   assert property (@(posedge clk) d |-> p_impl);
+      |                                         ^~~~~~
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:19:5: Unsupported: multi-cycle body in a nested property instance
+                                                          : ... note: In instance 't'
+   19 |     p_impl;
+      |     ^~~~~~
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:32:41: Unsupported: multi-cycle body in a nested property instance
+                                                           : ... note: In instance 't'
+   32 |   assert property (@(posedge clk) d |-> p_until);
+      |                                         ^~~~~~~
+%Error-UNSUPPORTED: t/t_property_always_named_unsup.v:33:41: Unsupported: multi-cycle body in a nested property instance
+                                                           : ... note: In instance 't'
+   33 |   assert property (@(posedge clk) d |-> p_seq);
+      |                                         ^~~~~
+%Error: Exiting due to
