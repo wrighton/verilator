@@ -14,7 +14,6 @@ module t;
     rq = {>>{w128}};
     ra = {>>{w128}};
     ra2 = {>>{w128}};
-    {>>{rq}} = w128;
     {>>{chq}} = w128;
   end
 endmodule
