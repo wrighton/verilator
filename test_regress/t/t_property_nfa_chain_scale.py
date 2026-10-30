@@ -31,8 +31,7 @@ def const_seconds(steps):
         f.write(f"  assert property (@(posedge clk) c throughout ({seq}));\n")
         f.write("endmodule\n")
     test.compile(verilator_flags2=["--stats"], make_main=False, verilator_make_gmake=False)
-    with open(test.stats, "r", encoding="utf8") as fh:  # Not file_contents, which caches
-        stats = fh.read()
+    stats = test.file_contents(test.stats)
     times = re.findall(r'Stage, Elapsed time \(sec\), \d+_const\S*\s+(\S+)', stats)
     if not times:
         test.error("Const time not found in " + test.stats)
