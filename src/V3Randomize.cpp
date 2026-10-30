@@ -342,14 +342,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
         return exprp;
     }
 
-    // Process a single constraint during nested constraint cloning
-    void processNestedConstraint(AstConstraint* const constrp, AstVarRef* rootVarRefp,
-                                 const std::vector<AstVar*>& newPath, AstClass* targetClassp) {
-        std::string pathPrefix = rootVarRefp->name();
-        for (AstVar* pathMemberVarp : newPath) {
-            pathPrefix += GLOBAL_CONSTRAINT_SEPARATOR + pathMemberVarp->name();
-        }
-
+    // Clone constraint constrp of the object objp, nullptr if targetClassp already has the clone
+    AstConstraint* cloneObjectConstraint(AstConstraint* const constrp, AstNodeExpr* objp,
+                                         const std::string& pathPrefix, AstClass* targetClassp) {
         const std::string newName = pathPrefix + GLOBAL_CONSTRAINT_SEPARATOR + constrp->name();
 
         // Check if this constraint already exists in the target class
@@ -360,7 +355,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 isDuplicate = true;
             }
         });
-        if (isDuplicate) return;
+        if (isDuplicate) return nullptr;
 
         AstConstraint* const cloneConstrp = constrp->cloneTree(false);
         cloneConstrp->name(newName);
@@ -371,9 +366,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
         cloneConstrp->foreach([&](AstNodeExpr* exprp) {
             if (AstVarRef* const varRefp = VN_CAST(exprp, VarRef)) {
                 if (!varRefp->varp()->isClassMember()) return;
-                AstNodeExpr* const chainp = buildMemberRefChain(rootVarRefp, newPath);
-                AstMemberRef* const finalRefp
-                    = new AstMemberRef{varRefp->fileline(), chainp, varRefp->varp()};
+                AstMemberRef* const finalRefp = new AstMemberRef{
+                    varRefp->fileline(), objp->cloneTree(false), varRefp->varp()};
                 finalRefp->user2p(m_classp);
                 varRefp->replaceWith(finalRefp);
                 VL_DO_DANGLING(pushDeletep(varRefp), varRefp);
@@ -385,11 +379,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         });
         for (AstFuncRef* funcRefp : funcRefps) {
-            AstNodeExpr* const chainp = buildMemberRefChain(rootVarRefp, newPath);
             AstArg* const argsp
                 = funcRefp->argsp() ? funcRefp->argsp()->unlinkFrBackWithNext() : nullptr;
-            AstMethodCall* const callp
-                = new AstMethodCall{funcRefp->fileline(), chainp, funcRefp->name(), argsp};
+            AstMethodCall* const callp = new AstMethodCall{
+                funcRefp->fileline(), objp->cloneTree(false), funcRefp->name(), argsp};
             callp->taskp(funcRefp->taskp());
             callp->classOrPackagep(funcRefp->classOrPackagep());
             callp->dtypep(funcRefp->dtypep());
@@ -397,12 +390,94 @@ class RandomizeMarkVisitor final : public VNVisitor {
             funcRefp->replaceWith(callp);
             VL_DO_DANGLING(pushDeletep(funcRefp), funcRefp);
         }
-        funcRefps.clear();
-
-        // Add constraint directly to the target class
+        return cloneConstrp;
+    }
+    // Add a cloned constraint to targetClassp
+    void addClonedConstraint(AstClass* targetClassp, AstConstraint* cloneConstrp) {
         targetClassp->addMembersp(cloneConstrp);
         // Immediately iterate to set user1 marks
         iterateConst(cloneConstrp);
+    }
+
+    // Process a single constraint during nested constraint cloning
+    void processNestedConstraint(AstConstraint* const constrp, AstVarRef* rootVarRefp,
+                                 const std::vector<AstVar*>& newPath, AstClass* targetClassp) {
+        std::string pathPrefix = rootVarRefp->name();
+        for (AstVar* pathMemberVarp : newPath) {
+            pathPrefix += GLOBAL_CONSTRAINT_SEPARATOR + pathMemberVarp->name();
+        }
+        AstNodeExpr* const objp = buildMemberRefChain(rootVarRefp, newPath);
+        if (AstConstraint* const cloneConstrp
+            = cloneObjectConstraint(constrp, objp, pathPrefix, targetClassp)) {
+            addClonedConstraint(targetClassp, cloneConstrp);
+        }
+        VL_DO_DANGLING(objp->deleteTree(), objp);
+    }
+
+    // Clone the constraints of the objects in rand handle array arrVarp into targetClassp
+    void cloneElementConstraints(AstClass* ownerClassp, AstVar* arrVarp, AstClass* targetClassp) {
+        // An array referenced by targetClassp's constraints is solved by targetClassp, not by
+        // randomize() of each object, so the objects' constraints are solved there too
+        // (IEEE 1800-2023 18.5.8), applied to each element by a foreach.
+        const AstNodeDType* const arrDtp = arrVarp->dtypep()->skipRefp();
+        if (!VN_IS(arrDtp, DynArrayDType) && !VN_IS(arrDtp, QueueDType)) return;
+        const AstClassRefDType* const elemDtp
+            = VN_CAST(arrDtp->subDTypep()->skipRefp(), ClassRefDType);
+        if (!elemDtp) return;
+        // Not counting the size, which is a separate solver variable
+        const bool referenced
+            = targetClassp->existsMember([&](const AstClass*, const AstConstraint* constrp) {
+                  return constrp->exists([&](const AstVarRef* refp) {
+                      const AstCMethodHard* const methodp = VN_CAST(refp->backp(), CMethodHard);
+                      return refp->varp() == arrVarp
+                             && !(methodp && methodp->method() == VCMethod::DYN_SIZE);
+                  });
+              });
+        if (!referenced) return;
+        // A constraint of a derived class overrides the one of the same name of a base class
+        // (IEEE 1800-2023 18.5.2), which is visited first
+        std::vector<AstConstraint*> constrps;
+        std::map<std::string, size_t> nameIndex;
+        elemDtp->classp()->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
+            const auto pair = nameIndex.emplace(constrp->name(), constrps.size());
+            if (pair.second) {
+                constrps.push_back(constrp);
+            } else {
+                constrps[pair.first->second] = constrp;
+            }
+        });
+        FileLine* const fl = arrVarp->fileline();
+        for (AstConstraint* const constrp : constrps) {
+            // Rand fields that are arrays or objects are not solver variables of the elements
+            // (see createWriteVarForClassFields), so constraints on them stay ignored. This
+            // includes the constraints the element class has cloned from its own rand objects.
+            if (!constrp->itemsp() || constrp->exists([](const AstVarRef* refp) {
+                    const AstVar* const varp = refp->varp();
+                    const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+                    return varp->isClassMember() && varp->rand().isRandomizable()
+                           && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
+                })) {
+                continue;
+            }
+            AstVar* const idxVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, "__Vi", arrVarp->findIntDType()};
+            AstCMethodHard* const elemp = new AstCMethodHard{
+                fl, new AstVarRef{fl, ownerClassp, arrVarp, VAccess::READ}, VCMethod::ARRAY_AT,
+                new AstVarRef{fl, idxVarp, VAccess::READ}};
+            elemp->dtypep(arrDtp->subDTypep());
+            AstConstraint* const cloneConstrp
+                = cloneObjectConstraint(constrp, elemp, arrVarp->name(), targetClassp);
+            VL_DO_DANGLING(elemp->deleteTree(), elemp);
+            if (!cloneConstrp) {
+                VL_DO_DANGLING(idxVarp->deleteTree(), idxVarp);
+                continue;
+            }
+            AstNodeConstraintItem* const itemsp = cloneConstrp->itemsp()->unlinkFrBackWithNext();
+            AstVarRef* const arrRefp = new AstVarRef{fl, ownerClassp, arrVarp, VAccess::READ};
+            cloneConstrp->addItemsp(
+                new AstConstraintForeach{fl, new AstForeachHeader{fl, arrRefp, idxVarp}, itemsp});
+            addClonedConstraint(targetClassp, cloneConstrp);
+        }
     }
 
     // Clone constraints from nested rand class members.
@@ -654,11 +729,14 @@ class RandomizeMarkVisitor final : public VNVisitor {
             if (!classp->user1()) classp->user1(IS_RANDOMIZED);
             markMembers(classp);
             // Clone constraints from all IS_RANDOMIZED_GLOBAL members
-            classp->foreachMember([&](AstClass* const, AstVar* const memberVarp) {
+            classp->foreachMember([&](AstClass* const ownerClassp, AstVar* const memberVarp) {
                 if (!memberVarp->rand().isRandomizable()) return;
                 const AstNodeDType* const dtypep = memberVarp->dtypep()->skipRefp();
                 const AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType);
-                if (!classRefp || !classRefp->classp()) return;
+                if (!classRefp) {
+                    cloneElementConstraints(ownerClassp, memberVarp, classp);
+                    return;
+                }
                 AstClass* const memberClassp = classRefp->classp();
                 if (memberClassp->user1() != IS_RANDOMIZED_GLOBAL) return;
                 memberVarp->globalConstrained(true);
