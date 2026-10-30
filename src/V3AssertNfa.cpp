@@ -1819,6 +1819,15 @@ class SvaNfaLowering final {
         if (!ap) return bp;
         return new AstLogOr{flp, ap, bp};
     }
+    // Balanced OR of the terms in [beginIt, endIt), or nullptr if none.
+    static AstNodeExpr* newOrTree(FileLine* flp, std::vector<AstNodeExpr*>::const_iterator beginIt,
+                                  std::vector<AstNodeExpr*>::const_iterator endIt) {
+        // A term per NFA step: a left-deep chain would make V3Const quadratic
+        if (beginIt == endIt) return nullptr;
+        if (endIt - beginIt == 1) return *beginIt;
+        const auto midIt = beginIt + (endIt - beginIt) / 2;
+        return new AstLogOr{flp, newOrTree(flp, beginIt, midIt), newOrTree(flp, midIt, endIt)};
+    }
     static AstNodeExpr* addCountp(FileLine* const flp, AstNodeExpr* const totalCountp,
                                   AstNodeExpr* const contributionp,
                                   AstNodeExpr* const enablep = nullptr) {
@@ -2295,6 +2304,7 @@ class SvaNfaLowering final {
 
     // Phase 3b: Throughout-drop and ring-wide abort rejection.
     void computeThroughoutReject(LowerCtx& c, SignalSet& sigs, const bool needThreadFailCount) {
+        std::vector<AstNodeExpr*> rejectps;  // Terms of throughoutRejectp
         for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
             const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
             const auto& conds = vtxp->m_throughoutConds;
@@ -2352,9 +2362,9 @@ class SvaNfaLowering final {
                         = addCountp(c.flp, sigs.threadFailCountp, matchContributionp);
                 }
             }
-            sigs.throughoutRejectp = orExprs(c.flp, sigs.throughoutRejectp,
-                                             new AstLogAnd{c.flp, stateExprp, rejectCondp});
+            rejectps.push_back(new AstLogAnd{c.flp, stateExprp, rejectCondp});
         }
+        sigs.throughoutRejectp = newOrTree(c.flp, rejectps.cbegin(), rejectps.cend());
     }
 
     SignalSet computeSignals(LowerCtx& c, const bool needThreadFailCount,
@@ -2366,6 +2376,7 @@ class SvaNfaLowering final {
         // Phase 3a: required-step rejection.
         // Builder only sets m_rejectOnFail on non-clocked Links with m_condp
         // or m_condVtxp, and the source always has a resolved stateSig.
+        std::vector<AstNodeExpr*> failps;  // Terms of requiredStepRejectp
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
             if (!tedgep->m_rejectOnFail) continue;
             const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
@@ -2392,9 +2403,9 @@ class SvaNfaLowering final {
                     c.flp, sigs.threadFailCountp,
                     new AstExtend{c.flp, rawFailp->cloneTreePure(false), m_u32DTypep->width()});
             }
-            AstNodeExpr* const failp = gateNotKill(c, rawFailp);
-            sigs.requiredStepRejectp = orExprs(c.flp, sigs.requiredStepRejectp, failp);
+            failps.push_back(gateNotKill(c, rawFailp));
         }
+        sigs.requiredStepRejectp = newOrTree(c.flp, failps.cbegin(), failps.cend());
 
         computeThroughoutReject(c, sigs, needThroughoutThreadFailCount);
         if (sigs.threadFailCountp) {
