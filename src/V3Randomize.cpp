@@ -654,7 +654,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             if (!classp->user1()) classp->user1(IS_RANDOMIZED);
             markMembers(classp);
             // Clone constraints from all IS_RANDOMIZED_GLOBAL members
-            classp->foreachMember([&](AstClass* const, AstVar* const memberVarp) {
+            classp->foreachMember([&](AstClass* const ownerClassp, AstVar* const memberVarp) {
                 if (!memberVarp->rand().isRandomizable()) return;
                 const AstNodeDType* const dtypep = memberVarp->dtypep()->skipRefp();
                 const AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType);
@@ -663,8 +663,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 if (memberClassp->user1() != IS_RANDOMIZED_GLOBAL) return;
                 memberVarp->globalConstrained(true);
                 // Clone constraints from this IS_RANDOMIZED_GLOBAL member class
+                // The member may be inherited, so reference it through its declaring class
                 AstVarRef* rootVarRefp
-                    = new AstVarRef{nodep->fileline(), classp, memberVarp, VAccess::READ};
+                    = new AstVarRef{nodep->fileline(), ownerClassp, memberVarp, VAccess::READ};
                 std::vector<AstVar*> emptyPath;
                 memberClassp->foreachMember([&](AstClass* const, AstConstraint* const constrp) {
                     processNestedConstraint(constrp, rootVarRefp, emptyPath, classp);
