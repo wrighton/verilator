@@ -56,6 +56,14 @@
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
+// SMT name of a variable reference or of a member select chain rooted at one
+static std::string buildMemberPath(const AstNodeExpr* const exprp) {
+    if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) return refp->name();
+    const AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef);
+    UASSERT_OBJ(memberSelp, exprp, "Unexpected node type in MemberRef chain");
+    return buildMemberPath(memberSelp->fromp()) + "." + memberSelp->name();
+}
+
 //######################################################################
 // Helpers shared by the lowering visitors
 
@@ -337,19 +345,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
     }
 
-    // Build full path for a MemberRef chain (e.g., "obj.l2.l3.l4")
-    std::string buildMemberPath(const AstMemberRef* const memberRefp) {
-        const AstNode* fromp = memberRefp->fromp();
-        if (const AstVarRef* const refp = VN_CAST(fromp, VarRef)) {
-            // Base case: reached root VarRef
-            return refp->name() + "." + memberRefp->name();
-        } else if (const AstMemberRef* const fromRefp = VN_CAST(fromp, MemberRef)) {
-            // Recursive case: build path from outer levels
-            return buildMemberPath(fromRefp) + "." + memberRefp->name();
-        }
-        memberRefp->v3fatalSrc("Unexpected node type in MemberRef chain");
-        return "";
-    }
     // C++ initializer list of the recorded symbols
     static std::string constraintVarsList(const std::set<std::string>& vars) {
         std::string list = "{";
@@ -3012,10 +3007,15 @@ class SolverSmtLowering final : public V3SolverLowering {
     // STATE
     int m_distNum = 0;  // Dist bucket variable counter within a class for var naming
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
+    // m_writtenVars of each class, with those of its base classes
+    std::map<const AstClass*, std::set<std::string>> m_classWrittenVars;
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
+    std::map<const AstVar*, AstVar*> m_memberSizeVars;  // Size variables of member arrays
+    // Arrays of member objects, by SMT name, each with its member select
+    using MemberArrays = std::map<std::string, const AstMemberRef*>;
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
-    // Arrays each constraint sizes
-    std::map<const AstConstraint*, std::set<AstVar*>> m_constraintSizedArrays;
+    // SMT names of the arrays each constraint sizes
+    std::map<const AstConstraint*, std::set<std::string>> m_constraintSizedArrays;
     // How lowerClassRandomize solved a class
     struct ClassSolve final {
         bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
@@ -3185,15 +3185,39 @@ class SolverSmtLowering final : public V3SolverLowering {
         if (!sizeVarp) {
             // Declared next to the array, so every class constraining the array's size
             // (e.g. sibling classes extending the array's class) shares it
-            AstClass* const classp = VN_AS(arrVarp->user2p(), Class);
-            sizeVarp = new AstVar{fl, VVarType::MEMBER, "__V" + arrVarp->name() + "_size",
-                                  signed32DTypep};
-            classp->addMembersp(sizeVarp);
-            m_memberMap.insert(classp, sizeVarp);
-            sizeVarp->user2p(classp);
+            sizeVarp = newSizeVar(VN_AS(arrVarp->user2p(), Class),
+                                  "__V" + arrVarp->name() + "_size", fl, signed32DTypep);
             arrVarp->user4p(sizeVarp);
         }
         return sizeVarp;
+    }
+    // Create a size variable member of classp
+    AstVar* newSizeVar(AstClass* const classp, const std::string& name, FileLine* const fl,
+                       AstNodeDType* const signed32DTypep) {
+        AstVar* const sizeVarp = new AstVar{fl, VVarType::MEMBER, name, signed32DTypep};
+        classp->addMembersp(sizeVarp);
+        m_memberMap.insert(classp, sizeVarp);
+        sizeVarp->user2p(classp);
+        return sizeVarp;
+    }
+    // Get or create the size variable of an array sized through a member select
+    AstVar* createOrGetMemberSizeVar(AstVar* const arrVarp, FileLine* const fl,
+                                     AstNodeDType* const signed32DTypep) {
+        // Separate from the array's direct size variable (createOrGetSizeVar), which is
+        // registered once (AstVar::user3), in the constructor of the array's class
+        AstVar*& sizeVarp = m_memberSizeVars[arrVarp];
+        if (!sizeVarp) {
+            sizeVarp = newSizeVar(VN_AS(arrVarp->user2p(), Class),
+                                  "__V" + arrVarp->name() + "_msize", fl, signed32DTypep);
+        }
+        return sizeVarp;
+    }
+    // Size variable of arrVarp, accessed through member select mselp if not null
+    AstVar* sizeVarOf(AstVar* const arrVarp, const AstMemberRef* const mselp) const {
+        if (!mselp) return VN_AS(arrVarp->user4p(), Var);
+        const auto it = m_memberSizeVars.find(arrVarp);
+        UASSERT_OBJ(it != m_memberSizeVars.end(), arrVarp, "Member array without size variable");
+        return it->second;
     }
     // Build a size >= 0 constraint expression (signed int size must be non-negative).
     // Returns a new AstConstraintExpr with user1 bits set for solver visibility.
@@ -3820,9 +3844,23 @@ class SolverSmtLowering final : public V3SolverLowering {
         return false;
     }
 
+    // Reference varp in the object of member select mselp, or in this object without mselp
+    static AstNodeExpr* newSiblingRefp(FileLine* const fl, AstVar* const varp,
+                                       const AstMemberRef* const mselp, const VAccess access) {
+        if (!mselp) return new AstVarRef{fl, VN_AS(varp->user2p(), NodeModule), varp, access};
+        AstMemberRef* const selp
+            = new AstMemberRef{fl, mselp->fromp()->cloneTreePure(false), varp};
+        selp->access(access);
+        selp->foreach([access](AstVarRef* const refp) { refp->access(access); });
+        return selp;
+    }
+    // SMT name of varp in the object of member select mselp, or in this object without mselp
+    static std::string siblingSmtName(const AstVar* const varp, const AstMemberRef* const mselp) {
+        return mselp ? buildMemberPath(mselp->fromp()) + "." + varp->name() : varp->name();
+    }
     // Add write_var calls for each array element after resizing it with array-size constraint
     void addArrayElemRefresh(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
-                             AstVar* const genp) {
+                             AstVar* const genp, const AstMemberRef* const mselp = nullptr) {
         AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
         // Array elements of class data type are passed to the solver as separate
         // variables, so passing the original array variable is redundant, because it
@@ -3840,66 +3878,60 @@ class SolverSmtLowering final : public V3SolverLowering {
                                  VCMethod::RANDOMIZER_WRITE_VAR};
         methodp->dtypeSetVoid();
 
-        AstNodeModule* const classp = VN_AS(arrVarp->user2p(), NodeModule);
-        AstVarRef* const varRefp = new AstVarRef{fl, classp, arrVarp, VAccess::WRITE};
-        varRefp->classOrPackagep(classp);
-        methodp->addPinsp(varRefp);
+        methodp->addPinsp(newSiblingRefp(fl, arrVarp, mselp, VAccess::WRITE));
 
         const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
 
         methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
-        AstNodeExpr* const varnamep
-            = new AstCExpr{fl, AstCExpr::Pure{}, "\"" + arrVarp->name() + "\"", arrVarp->width()};
+        AstNodeExpr* const varnamep = new AstCExpr{
+            fl, AstCExpr::Pure{}, "\"" + siblingSmtName(arrVarp, mselp) + "\"", arrVarp->width()};
         varnamep->dtypep(arrVarp->dtypep());
         methodp->addPinsp(varnamep);
         methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, unpackedDims});
         const RandomizeMode rmode = {.asUQuad = arrVarp->user1()};
-        if (rmode.usesMode) {
+        // A member object array is already registered, with its rand_mode, by the constraints
+        if (rmode.usesMode && !mselp) {
             methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, rmode.index});
         }
 
         randomizep->addStmtsp(methodp->makeStmt());
     }
 
-    AstNodeStmt* newPinSizeVariable(FileLine* const fl, AstVar* const arrVarp,
-                                    AstVar* const genp) {
+    AstNodeStmt* newPinSizeVariable(FileLine* const fl, AstVar* const arrVarp, AstVar* const genp,
+                                    const AstMemberRef* const mselp = nullptr) {
         AstNodeModule* const genModp = VN_AS(genp->user2p(), NodeModule);
-        AstVar* const sizeVarp = VN_AS(arrVarp->user4p(), Var);
+        AstVar* const sizeVarp = sizeVarOf(arrVarp, mselp);
         AstCMethodHard* const pinp
             = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
                                  VCMethod::RANDOMIZER_PIN_VAR};
         pinp->dtypeSetVoid();
-        AstCExpr* const namep = new AstCExpr{fl, AstCExpr::Pure{}, "\"" + sizeVarp->name() + "\""};
+        AstCExpr* const namep
+            = new AstCExpr{fl, AstCExpr::Pure{}, "\"" + siblingSmtName(sizeVarp, mselp) + "\""};
         namep->dtypeSetUInt32();
         pinp->addPinsp(namep);
         pinp->addPinsp(
             new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(sizeVarp->width())});
-        // sizeVarp may live in a base class when the constrained array is inherited; route the
-        // reference through its declaring class so V3Scope can resolve it.
-        AstVarRef* const sizeVarRefp = new AstVarRef{fl, sizeVarp, VAccess::READ};
-        sizeVarRefp->classOrPackagep(VN_AS(sizeVarp->user2p(), NodeModule));
-        pinp->addPinsp(sizeVarRefp);
+        pinp->addPinsp(newSiblingRefp(fl, sizeVarp, mselp, VAccess::READ));
         return pinp->makeStmt();
     }
 
     void addFrozenSizePin(FileLine* const fl, AstVar* const arrVarp, AstFunc* const randomizep,
-                          AstVar* const genp, AstVar* const randModeVarp) {
+                          AstVar* const genp, AstVar* const randModeVarp,
+                          const AstMemberRef* const mselp = nullptr) {
         const RandomizeMode rmode = {.asUQuad = arrVarp->user1()};
         if (!rmode.usesMode) return;
-        AstVar* const sizeVarp = VN_AS(arrVarp->user4p(), Var);
-        AstNodeModule* const arrClassp = VN_AS(arrVarp->user2p(), NodeModule);
-        AstNodeModule* const sizeClassp = VN_AS(sizeVarp->user2p(), NodeModule);
-        AstVarRef* const sizeWritep = new AstVarRef{fl, sizeClassp, sizeVarp, VAccess::WRITE};
+        AstVar* const sizeVarp = sizeVarOf(arrVarp, mselp);
         const VCMethod sizeMethod = VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)
                                         ? VCMethod::ASSOC_SIZE
                                         : VCMethod::DYN_SIZE;
         AstCMethodHard* const currentSizep = new AstCMethodHard{
-            fl, new AstVarRef{fl, arrClassp, arrVarp, VAccess::READ}, sizeMethod};
+            fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::READ), sizeMethod};
         currentSizep->dtypep(sizeVarp->dtypep());
-        randomizep->addStmtsp(new AstAssign{fl, sizeWritep, currentSizep});
-        AstNodeExpr* const modep = newModeBitRead(arrVarp, nullptr, randModeVarp, fl);
         randomizep->addStmtsp(
-            new AstIf{fl, new AstLogNot{fl, modep}, newPinSizeVariable(fl, arrVarp, genp)});
+            new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE), currentSizep});
+        AstNodeExpr* const modep = newModeBitRead(arrVarp, mselp, randModeVarp, fl);
+        randomizep->addStmtsp(
+            new AstIf{fl, new AstLogNot{fl, modep}, newPinSizeVariable(fl, arrVarp, genp, mselp)});
     }
 
     void collectSizeConstrainedArrays(AstClass* classp,
@@ -3913,26 +3945,37 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
     }
 
-    // Add the arrays that the class constraints resize to arrVars
-    void addResizedArrays(AstClass* const classp, VInsertionSet<AstVar*>& arrVars) {
+    // Add the arrays that the class constraints resize to arrVars and memberArrays
+    void addResizedArrays(AstClass* const classp, VInsertionSet<AstVar*>& arrVars,
+                          MemberArrays& memberArrays) {
         const AstTask* const resizeAllTaskp
             = VN_AS(m_memberMap.findMember(classp, "__Vresize_constrained_arrays"), Task);
         if (!resizeAllTaskp) return;
-        // Each constraint's resize task holds only DYN_RESIZE calls on the array VarRef
+        // Each constraint's resize task holds only DYN_RESIZE calls on the array VarRef,
+        // or on the member select of an array in a member object
         resizeAllTaskp->foreach([&](const AstTaskRef* const refp) {
             refp->taskp()->foreach([&](const AstCMethodHard* const resizep) {
-                arrVars.insert(VN_AS(resizep->fromp(), VarRef)->varp());
+                if (const AstMemberRef* const mselp = VN_CAST(resizep->fromp(), MemberRef)) {
+                    memberArrays.emplace(buildMemberPath(mselp), mselp);
+                } else {
+                    arrVars.insert(VN_AS(resizep->fromp(), VarRef)->varp());
+                }
             });
         });
     }
-    // Pin the sizes of the disabled arrays among arrVars
-    void addFrozenSizePins(const VInsertionSet<AstVar*>& arrVars, AstFunc* const randomizep,
-                           AstVar* const genp, AstVar* const randModeVarp) {
+    // Pin the sizes of the disabled arrays among arrVars and memberArrays
+    void addFrozenSizePins(const VInsertionSet<AstVar*>& arrVars, const MemberArrays& memberArrays,
+                           AstFunc* const randomizep, AstVar* const genp,
+                           AstVar* const randModeVarp) {
         // A disabled array keeps its current size. Pin its size proxy before solving so
         // an incompatible size constraint fails instead of resizing the frozen array.
         FileLine* const fl = randomizep->fileline();
         for (AstVar* const arrVarp : arrVars) {
             addFrozenSizePin(fl, arrVarp, randomizep, genp, randModeVarp);
+        }
+        for (const auto& pathMsel : memberArrays) {
+            const AstMemberRef* const mselp = pathMsel.second;
+            addFrozenSizePin(fl, mselp->varp(), randomizep, genp, randModeVarp, mselp);
         }
     }
 
@@ -3980,16 +4023,28 @@ class SolverSmtLowering final : public V3SolverLowering {
     void addConstraintRebuild(AstFunc* const randomizep, AstVar* const setupGenp,
                               AstVar* const solveGenp, const VInsertionSet<AstVar*>& sizeArrayVars,
                               const VInsertionSet<AstVar*>& resizedArrayVars,
+                              const MemberArrays& memberArrays,
+                              const std::set<std::string>& writtenVars,
                               AstNodeStmt* const setupStmtsp) {
         FileLine* const fl = randomizep->fileline();
         for (AstVar* const arrVarp : sizeArrayVars) {
             addArrayElemRefresh(fl, arrVarp, randomizep, setupGenp);
+        }
+        // Member object arrays are registered when constraints use their elements
+        for (const auto& pathMsel : memberArrays) {
+            if (!writtenVars.count(pathMsel.first)) continue;
+            const AstMemberRef* const mselp = pathMsel.second;
+            addArrayElemRefresh(fl, mselp->varp(), randomizep, setupGenp, mselp);
         }
         randomizep->addStmtsp(implementConstraintsClear(fl, setupGenp));
         randomizep->addStmtsp(setupStmtsp);
         // The arrays are resized once, so their sizes must not change in the final solve
         for (AstVar* const arrVarp : resizedArrayVars) {
             randomizep->addStmtsp(newPinSizeVariable(fl, arrVarp, solveGenp));
+        }
+        for (const auto& pathMsel : memberArrays) {
+            const AstMemberRef* const mselp = pathMsel.second;
+            randomizep->addStmtsp(newPinSizeVariable(fl, mselp->varp(), solveGenp, mselp));
         }
     }
 
@@ -4013,16 +4068,29 @@ public:
             && (nodep->method() == VCMethod::ASSOC_SIZE
                 || nodep->method() == VCMethod::DYN_SIZE)) {
             AstClass* const classp = VN_AS(modp, Class);
-            AstVarRef* const queueVarRefp = VN_CAST(nodep->fromp(), VarRef);
-            if (!queueVarRefp) {
-                // Warning from ConstraintExprVisitor will be thrown
-                return;
-            }
-            AstVar* const queueVarp = queueVarRefp->varp();
-            AstVar* const sizeVarp = createOrGetSizeVar(queueVarp, fl, nodep->findIntDType());
+            // The array is a member of this class, or of a rand member object (global
+            // constraints, IEEE 1800-2023 18.5.8) reached through a member select chain
+            AstNodeExpr* const arrayp = nodep->fromp();
+            AstMemberRef* const memberSelp = VN_CAST(arrayp, MemberRef);
+            AstNodeExpr* rootp = arrayp;
+            while (AstMemberRef* const selp = VN_CAST(rootp, MemberRef)) rootp = selp->fromp();
+            // Warning from ConstraintExprVisitor will be thrown
+            if (!VN_IS(rootp, VarRef)) return;
+            AstVar* const queueVarp
+                = memberSelp ? memberSelp->varp() : VN_AS(arrayp, VarRef)->varp();
+            // The size of an associative array is not randomized (IEEE 1800-2023 18.4)
+            if (memberSelp && VN_IS(queueVarp->dtypep()->skipRefp(), AssocArrayDType)) return;
+            AstVar* const sizeVarp
+                = memberSelp ? createOrGetMemberSizeVar(queueVarp, fl, nodep->findIntDType())
+                             : createOrGetSizeVar(queueVarp, fl, nodep->findIntDType());
+            const auto newSizeRefp = [&]() -> AstNodeExpr* {
+                if (memberSelp) return buildMemberRefExprp(memberSelp, sizeVarp);
+                return new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp,
+                                     VAccess::READ};
+            };
             // Each constraint sizing the array resizes it and guards its size, so
             // constraint_mode(0) leaves the array unchanged only when all are off
-            if (m_constraintSizedArrays[constrp].insert(queueVarp).second) {
+            if (m_constraintSizedArrays[constrp].insert(buildMemberPath(arrayp)).second) {
                 // Associative arrays have no resize(); only generate resize
                 // for dynamic arrays and queues
                 if (!VN_IS(queueVarp->dtypep()->skipRefp(), AssocArrayDType)) {
@@ -4031,22 +4099,19 @@ public:
                         resizerTaskp = newResizeConstrainedArrayTask(classp, constrp->name());
                         constrp->user3p(resizerTaskp);
                     }
-                    AstVarRef* const sizeVarRefp = new AstVarRef{
-                        fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
                     AstCMethodHard* const resizep = new AstCMethodHard{
-                        fl, nodep->fromp()->unlinkFrBack(), VCMethod::DYN_RESIZE, sizeVarRefp};
+                        fl, arrayp->unlinkFrBack(), VCMethod::DYN_RESIZE, newSizeRefp()};
                     resizep->dtypep(nodep->findVoidDType());
                     resizerTaskp->addStmtsp(new AstStmtExpr{fl, resizep});
                 }
 
                 // Since size variable is signed int, we need additional constraint
                 // to make sure it is always >= 0.
-                constrp->addItemsp(createSizeGteZeroConstraint(fl, sizeVarp));
+                constrp->addItemsp(createSizeGteZeroConstraint(fl, sizeVarp, memberSelp));
             }
-            AstVarRef* const sizeVarRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule),
-                                                         sizeVarp, VAccess::READ};
-            sizeVarRefp->user1(true);
-            nodep->replaceWith(sizeVarRefp);
+            AstNodeExpr* const sizeRefp = newSizeRefp();
+            sizeRefp->user1(true);
+            nodep->replaceWith(sizeRefp);
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         }
     }
@@ -4131,10 +4196,17 @@ public:
             // and save every array that has is size-constrained array to generate
             // array element refresh later
             VInsertionSet<AstVar*> sizeArrayVars;
+            std::set<std::string>& writtenVars = m_classWrittenVars[nodep];
+            writtenVars = m_writtenVars;
             if (nodep->extendsp()) {
                 AstClass* parentClassp = nodep->extendsp()->classp();
                 collectSizeConstrainedArrays(parentClassp, sizeArrayVars);
                 while (parentClassp) {
+                    // Inherited constraints were lowered, and their variables registered, there
+                    const auto writtenIt = m_classWrittenVars.find(parentClassp);
+                    if (writtenIt != m_classWrittenVars.end()) {
+                        writtenVars.insert(writtenIt->second.begin(), writtenIt->second.end());
+                    }
                     AstFunc* const parentRandomizep
                         = VN_CAST(m_memberMap.findMember(parentClassp, "randomize"), Func);
                     if (parentRandomizep) copyVariableRegistrations(parentRandomizep, randomizep);
@@ -4167,10 +4239,12 @@ public:
             randomizep->addStmtsp(setupTaskRefp->makeStmt());
 
             VInsertionSet<AstVar*> pinnedArrays = sizeArrayVars;
-            addResizedArrays(nodep, pinnedArrays);
-            addFrozenSizePins(pinnedArrays, randomizep, genp, randModeVarp);
+            MemberArrays memberArrays;
+            addResizedArrays(nodep, pinnedArrays, memberArrays);
+            addFrozenSizePins(pinnedArrays, memberArrays, randomizep, genp, randModeVarp);
 
-            sizePhase = !sizeArrayVars.empty();
+            // A member object array is randomized with the outer object, after its resize
+            sizePhase = !sizeArrayVars.empty() || !memberArrays.empty();
             if (sizePhase) {
                 AstVar* const sizeOkVarp = addSizeSolvep(randomizep, genp);
                 if (AstTask* const resizeAllTaskp
@@ -4186,6 +4260,7 @@ public:
                 randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
                                                     new AstFuncRef{fl, basicRandomizep}});
                 addConstraintRebuild(randomizep, genp, genp, sizeArrayVars, pinnedArrays,
+                                     memberArrays, writtenVars,
                                      (new AstTaskRef{fl, setupAllTaskp})->makeStmt());
 
                 AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
@@ -4296,6 +4371,7 @@ public:
             resizeStmtsp = (new AstTaskRef{nodep->fileline(), resizeAllTaskp})->makeStmt();
         }
         VInsertionSet<AstVar*> inlineSizedArrays;  // Arrays of classp this with-block resizes
+        MemberArrays memberArrays;  // Arrays of member objects this call resizes
         {
             std::vector<AstCMethodHard*> sizeMethodps;
             capturedTreep->foreachAndNext([&](AstCMethodHard* methodp) {
@@ -4333,14 +4409,24 @@ public:
                 // Do not randomize associative array size (IEEE 18.4)
                 if (VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)) continue;
                 FileLine* const fl = methodp->fileline();
-                AstVar* const sizeVarp = createOrGetSizeVar(arrVarp, fl, methodp->findIntDType());
+                // An array of a rand member object has the size variable of the class
+                // constraints reaching it, and is resized by each with-block sizing it.
+                // The size of an array of another object is a state value.
+                const bool viaMember = VN_IS(rootExprp, MemberRef);
+                if (viaMember && !rootExprp->user1()) continue;
+                const std::string memberPath = viaMember ? buildMemberPath(rootExprp) : "";
+                AstVar* const sizeVarp
+                    = viaMember ? createOrGetMemberSizeVar(arrVarp, fl, methodp->findIntDType())
+                                : createOrGetSizeVar(arrVarp, fl, methodp->findIntDType());
                 // arrVarp and sizeVarp may live in a base class when the
                 // array is inherited; route VarRefs through their declaring
                 // class so V3Scope can resolve them.
-                // Each with-block sizing the array resizes it, even if another created sizeVarp.
-                // An array of a held object is resized each time, as other paths may reach it.
-                if (!VN_IS(rootExprp, VarRef) || inlineSizedArrays.insert(arrVarp)) {
+                // Each with-block sizing the array resizes it, even if another created sizeVarp
+                if (viaMember ? !memberArrays.count(memberPath)
+                              : inlineSizedArrays.insert(arrVarp)) {
                     AstNodeExpr* const resizeVarRefp = buildMemberRefExprp(rootExprp, arrVarp);
+                    if (viaMember)
+                        memberArrays.emplace(memberPath, VN_AS(resizeVarRefp, MemberRef));
                     AstNodeExpr* const sizeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
                     // Append size >= 0 constraint so ConstraintExprVisitor processes it
                     capturedTreep->addNext(createSizeGteZeroConstraint(fl, sizeVarp, rootExprp));
@@ -4383,13 +4469,14 @@ public:
         // Arrays resized by the class constraints also need their sizes solved first and
         // pinned; their elements are not re-registered unless constrained as above
         VInsertionSet<AstVar*> pinnedArrays = allSizeArrays;
-        addResizedArrays(classp, pinnedArrays);
-        const bool needsSizePhase = !pinnedArrays.empty();
+        addResizedArrays(classp, pinnedArrays, memberArrays);
+        // Arrays of member objects are resized only in the size phase
+        const bool needsSizePhase = !pinnedArrays.empty() || !memberArrays.empty();
         AstVar* const retVarp = randomizeFuncp->fvarp();
         // Arrays whose size this call solves; each is pinned when frozen and for the final solve
         VInsertionSet<AstVar*> sizedArrays = pinnedArrays;
         sizedArrays.insert(inlineSizedArrays.begin(), inlineSizedArrays.end());
-        addFrozenSizePins(sizedArrays, randomizeFuncp, localGenp, randModeVarp);
+        addFrozenSizePins(sizedArrays, memberArrays, randomizeFuncp, localGenp, randModeVarp);
 
         if (needsSizePhase) {
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
@@ -4449,6 +4536,14 @@ public:
             // once-ever registration (AstVar::user3()) does not re-run on the second
             // lowering pass below, so it is redone here by hand, same as the
             // class-level pattern above.
+            // The with-block re-registers the member object arrays it uses below; those
+            // the class constraints use are registered again here
+            const std::set<std::string>& classWrittenVars = m_classWrittenVars[classp];
+            for (const auto& pathMsel : memberArrays) {
+                if (!classWrittenVars.count(pathMsel.first)) continue;
+                const AstMemberRef* const mselp = pathMsel.second;
+                addArrayElemRefresh(fl, mselp->varp(), randomizeFuncp, localGenp, mselp);
+            }
             for (AstVar* const arrVarp : pinnedArrays) {
                 // The size var itself needs write_var'ing here too, unconditionally:
                 // the pin below always references it by name, but nothing else in
@@ -4542,6 +4637,11 @@ public:
             // Pin the sizes so the final solve can't move them
             for (AstVar* const arrVarp : sizedArrays) {
                 randomizeFuncp->addStmtsp(newPinSizeVariable(fl, arrVarp, localGenp));
+            }
+
+            for (const auto& pathMsel : memberArrays) {
+                const AstMemberRef* const mselp = pathMsel.second;
+                randomizeFuncp->addStmtsp(newPinSizeVariable(fl, mselp->varp(), localGenp, mselp));
             }
 
             // Final solve: element values with sizes pinned
