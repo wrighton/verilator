@@ -164,6 +164,8 @@ private:
             m_stackSize = 0;
             m_callMax = 0;
             m_inCFunc = true;
+            // A call back to it while counting (mutual recursion) adds no cost
+            nodep->user2(1);
             const VisitBase vb{this, nodep};
             iterateChildrenConst(nodep);
             nodep->user2(m_stackSize + m_callMax + 1);
