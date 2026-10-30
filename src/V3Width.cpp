@@ -12256,7 +12256,8 @@ public:
                 nodep->lhsp(dstp);
                 nodep->rhsp(new AstCvtPackedToArray{srcp->fileline(), srcp, lhsStreamDTypep});
                 nodep->dtypeFrom(dstp);
-            } else if (VN_IS(rhsDTypep, UnpackArrayDType)) {
+            } else if (VN_IS(rhsDTypep, UnpackArrayDType) && !lowerAsFixedAggregate(rhsDTypep)) {
+                // V3Const packs an array of unpacked structures
                 AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
                 nodep->rhsp(new AstCvtArrayToPacked{rhsp->fileline(), rhsp, streamp->dtypep()});
             }
