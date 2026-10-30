@@ -8933,6 +8933,13 @@ class WidthVisitor final : public VNVisitor {
                                                    ? ifaceCastable.isSameish()
                                                    : similarDTypeRecurse(portDTypep, pinDTypep);
                 const bool pinIsNull = VN_IS(pinp, Const) && VN_AS(pinp, Const)->num().isNull();
+                const AstCvtPackString* const cvtp = VN_CAST(pinp, CvtPackString);
+                if (cvtp && portp->isWritable() && !portp->isRef()
+                    && isStringToIntegral(portDTypep, cvtp->lhsp()->dtypep())) {
+                    // Converted to the string formal above, but a written value converts back
+                    stringToIntegralError(pinp, cvtp->lhsp()->dtypep(), false);
+                    continue;
+                }
                 if ((portp->isRef() || portp->isConstRef()) && !matchingRefDTypes) {
                     if (portIfacep) {
                         pinp->v3error("Ref virtual interface argument "
@@ -10793,6 +10800,23 @@ class WidthVisitor final : public VNVisitor {
         }
     }
 
+    // Whether a string value converts to an integral type
+    static bool isStringToIntegral(const AstNodeDType* fromDtp, const AstNodeDType* toDtp) {
+        // Unlike a string literal, a string converts to an integral type only by a cast
+        // (IEEE 1800-2023 6.16)
+        return VN_IS(fromDtp->skipRefp(), BasicDType) && fromDtp->isString()
+               && toDtp->skipRefp()->isIntegralOrPacked();
+    }
+    // Report a string value converted to an integral type
+    static void stringToIntegralError(const AstNode* nodep, const AstNodeDType* toDtp,
+                                      bool isRead) {
+        // A written string goes to a variable, which a cast cannot convert
+        nodep->v3error("Illegal implicit conversion to "
+                       << toDtp->prettyDTypeNameQ() << " from 'string' (IEEE 1800-2023 6.16)"
+                       << (isRead ? "\n" + nodep->warnMore()
+                                        + "... Suggest use a static cast, or string method atoi()"
+                                  : ""));
+    }
     AstNode* iterateCheck(AstNode* parentp, const char* side, AstNode* underp, Determ determ,
                           Stage stage, AstNodeDType* expDTypep, ExtendRule extendRule,
                           bool warnOn = true, StreamUse streamUse = STREAM_USE_NONE,
@@ -10812,6 +10836,11 @@ class WidthVisitor final : public VNVisitor {
                 underp = convertUnpackedOrder(exprp, expDTypep);
             }
         }
+        // An output argument's value flows from expDTypep to underp, an inout's both ways
+        const bool readsString
+            = rhsAccess.isReadOrRW() && isStringToIntegral(underp->dtypep(), expDTypep);
+        const bool writesString
+            = rhsAccess.isWriteOrRW() && isStringToIntegral(expDTypep, underp->dtypep());
         if (VN_IS(underp, NodeDType)) {  // Note the node itself, not node's data type
             // Must be near top of these checks as underp->dtypep() will look normal
             underp->v3error(ucfirst(parentp->prettyOperatorName())
@@ -10833,6 +10862,10 @@ class WidthVisitor final : public VNVisitor {
                 = underp;  // Need FINAL on children; otherwise splice would block it
             spliceCvtS(VN_AS(underp, NodeExpr), true, expDTypep->width());  // Round RHS
             underp = userIterateSubtreeReturnEdits(oldp, WidthVP{SELF, FINAL, childStreamUse}.p());
+        } else if (readsString || writesString) {
+            stringToIntegralError(underp, readsString ? expDTypep : underp->dtypep(), readsString);
+            underp
+                = userIterateSubtreeReturnEdits(underp, WidthVP{SELF, FINAL, childStreamUse}.p());
         } else if (expDTypep->isString() && !underp->dtypep()->isString()) {
             AstNode* const oldp
                 = underp;  // Need FINAL on children; otherwise splice would block it
