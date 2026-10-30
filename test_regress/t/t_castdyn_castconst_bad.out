@@ -14,4 +14,16 @@
                                                     : ... note: In instance 't'
    22 |     i = $cast(b, o);   
       |         ^~~~~
+%Warning-CASTCONST: t/t_castdyn_castconst_bad.v:30:9: $cast will always return zero as 'real' is not castable from 'string'
+                                                    : ... note: In instance 't'
+   30 |     i = $cast(r, s);   
+      |         ^~~~~
+%Warning-CASTCONST: t/t_castdyn_castconst_bad.v:31:9: $cast will always return zero as 'string' is not castable from 'real'
+                                                    : ... note: In instance 't'
+   31 |     i = $cast(s, r);   
+      |         ^~~~~
+%Warning-CASTCONST: t/t_castdyn_castconst_bad.v:32:5: $cast will always return zero as 'real' is not castable from 'string'
+                                                    : ... note: In instance 't'
+   32 |     $cast(r, s);   
+      |     ^~~~~
 %Error: Exiting due to
