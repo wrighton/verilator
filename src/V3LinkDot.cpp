@@ -5550,7 +5550,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         {
             m_ds.init(m_curSymp);
             if (nodep->name() == "randomize" && (nodep->argsp() || nodep->withp())) {
-                m_randMethodCallp = nodep;
                 const AstNodeDType* fromDtp = nodep->fromp()->dtypep();
                 if (!fromDtp) {
                     if (const AstNodeVarRef* const varRefp = VN_CAST(nodep->fromp(), NodeVarRef)) {
@@ -5580,20 +5579,27 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     } else {
                         const AstClassRefDType* const classDtp
                             = VN_CAST(resolvedDtp, ClassRefDType);
-                        if (!classDtp)
+                        if (!classDtp) {
                             nodep->v3error("'randomize() with' on a non-class-instance "
                                            << fromDtp->prettyNameQ());
-                        else if (m_statep->forPrimary()
-                                 && m_extendsParam.count(classDtp->classp())) {
-                            // Inherited members are unavailable until the base class is
-                            // specialized. Defer lookup rather than incorrectly binding names in
-                            // the caller.
-                            m_ds.m_unresolvedClass = true;
                         } else {
-                            m_randSymp = m_statep->getNodeSym(classDtp->classp());
+                            // A target class later in the netlist has not imported its
+                            // inherited members yet. Import before setting m_randMethodCallp,
+                            // as the class body is not under this call.
+                            classExtendImport(classDtp->classp());
+                            if (m_statep->forPrimary()
+                                && m_extendsParam.count(classDtp->classp())) {
+                                // Inherited members are unavailable until the base class is
+                                // specialized. Defer lookup rather than incorrectly binding
+                                // names in the caller.
+                                m_ds.m_unresolvedClass = true;
+                            } else {
+                                m_randSymp = m_statep->getNodeSym(classDtp->classp());
+                            }
                         }
                     }
                 }
+                m_randMethodCallp = nodep;
             }
             iterateChildren(nodep);
         }
