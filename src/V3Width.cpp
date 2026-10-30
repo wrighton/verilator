@@ -3340,6 +3340,14 @@ class WidthVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    // Return a constant result of $cast
+    static AstConst* newCastResultp(FileLine* fl, bool value) {
+        // An int, but unsized like the AstCastDynamic it replaces, so it is a boolean without a
+        // width warning
+        V3Number num{fl, 32, value, false};
+        num.isSigned(true);
+        return new AstConst{fl, num};
+    }
     void visit(AstCastDynamic* nodep) override {
         userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
         AstNodeDType* const toDtp = nodep->top()->dtypep()->skipRefToEnump();
@@ -3365,8 +3373,8 @@ class WidthVisitor final : public VNVisitor {
                 new AstExprStmt{fl,
                                 new AstAssign{fl_novalue, nodep->top()->unlinkFrBack(),
                                               nodep->fromp()->unlinkFrBack()},
-                                new AstConst{fl, AstConst::Signed32{}, 1}},
-                new AstConst{fl, AstConst::Signed32{}, 0}};
+                                newCastResultp(fl, true)},
+                newCastResultp(fl, false)};
         } else if ((castable.isSameish() || castable.isCompatible())
                    // Unsupported: the static cast below has no lowering for unpacked arrays
                    && !VN_IS(toDtp, UnpackArrayDType)) {
@@ -3379,14 +3387,14 @@ class WidthVisitor final : public VNVisitor {
                 fl,
                 new AstAssign{fl, nodep->top()->unlinkFrBack(),
                               new AstCast{fl, nodep->fromp()->unlinkFrBack(), toDtp}},
-                new AstConst{fl, AstConst::Signed32{}, 1}};
+                newCastResultp(fl, true)};
         } else if (castable == VCastable::INCOMPATIBLE) {
-            newp = new AstConst{fl, 0};
+            newp = newCastResultp(fl, false);
             nodep->v3warn(CASTCONST, "$cast will always return zero as "
                                          << toDtp->prettyDTypeNameQ() << " is not castable from "
                                          << fromDtp->prettyDTypeNameQ());
         } else {
-            newp = new AstConst{fl, 0};
+            newp = newCastResultp(fl, false);
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: $cast to "
                                              << toDtp->prettyDTypeNameQ() << " from "
                                              << fromDtp->prettyDTypeNameQ() << '\n'

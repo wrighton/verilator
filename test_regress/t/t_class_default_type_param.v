@@ -31,9 +31,7 @@ module t;
   initial begin
     imp = new;
     // verilator lint_off CASTCONST
-    // verilator lint_off WIDTHTRUNC
     if (!$cast(exp, imp)) begin
-      // verilator lint_on WIDTHTRUNC
       // verilator lint_on CASTCONST
       $display("WRONG_TYPE");
       $fatal;
