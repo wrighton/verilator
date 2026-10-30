@@ -6995,6 +6995,9 @@ class WidthVisitor final : public VNVisitor {
         if (keyDTypep->skipRefp()->isIntegralOrPacked() && patp->keyExprp()) {
             userIterate(patp->keyExprp(), WidthVP{keyDTypep, PRELIM}.p());
             keySigned = patp->keyExprp()->isSigned();
+            // An enum key, like an enum index, needs an enum value (IEEE 1800-2023 6.19.3)
+            checkEnum(patp->keyExprp(), patp, keyDTypep, patp->keyExprp()->dtypep(),
+                      patp->keyExprp());
             const int width = std::max(patp->keyExprp()->width(), keyDTypep->width());
             AstNodeDType* const contextDTypep
                 = keyDTypep->findBitOrLogicDType(width, width, keyDTypep->numeric(), true);
