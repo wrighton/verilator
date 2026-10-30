@@ -64,9 +64,21 @@ module t (
     }
   endgroup
 
+  // Bins of a dead instance kept to merge, for type_option.merge_instances.
+  covergroup cg_merge;
+    type_option.merge_instances = 1;
+    cp: coverpoint v {
+      bins b0 = {0};
+      bins b1 = {1};
+      bins b2 = {2};
+      bins b3 = {3};
+    }
+  endgroup
+
   cg_slot a, b, c, d, e, f;
   cg_fold g;
   cg_none h;
+  cg_merge m;
 
   // Every handle below is read through `checkalive before being dropped: a
   // handle written and never read is localized and dies in its creating edge.
@@ -178,6 +190,13 @@ module t (
 
         // cg_none: created and never sampled.
         h = new;
+
+        // cg_merge: 3 of 4 bins.
+        m = new;
+        for (int i = 0; i < 3; ++i) begin
+          v = i[1:0];
+          m.sample();
+        end
       end
 
       2: begin
@@ -199,9 +218,13 @@ module t (
         g = null;
         `checkalive(h);
         h = null;
+        `checkalive(m);
+        m = null;
       end
 
       4: begin
+        int covered_bins;
+        int total_bins;
         `checkd(slot_live(), 3);
         `checkd(slot_retired(), 1);
 
@@ -209,6 +232,16 @@ module t (
         // the free reads destroyed vectors and reports garbage or 0, not 50%.
         `checkd(fold_retired(), 1);
         `checkd(fold_retired_cov_x100(), 5000);
+        // The bins of a dead instance still count in get_coverage()'s arguments, as in its
+        // coverage
+        `checkr(cg_fold::get_coverage(covered_bins, total_bins), 50.0);
+        `checkd(covered_bins, 2);
+        `checkd(total_bins, 4);
+        covered_bins = -1;
+        total_bins = -1;
+        `checkr(cg_merge::get_coverage(covered_bins, total_bins), 75.0);
+        `checkd(covered_bins, 3);
+        `checkd(total_bins, 4);
 
         // A never-sampled instance counts as 0%, per IEEE 1800-2023 19.11.3.
         // Pinned here so a change is visible.
