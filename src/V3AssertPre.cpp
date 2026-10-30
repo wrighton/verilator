@@ -439,7 +439,7 @@ private:
         m_clockingp = nodep;
         UINFO(8, "   CLOCKING" << nodep);
         if (nodep->isDefault()) {
-            if (m_defaultClockingp) {
+            if (m_defaultClockingp && m_defaultClockingp != nodep) {
                 nodep->v3error("Only one default clocking block allowed per module"
                                " (IEEE 1800-2023 14.12)");
             } else {
@@ -1850,8 +1850,9 @@ private:
         VL_RESTORER(m_modp);
         if (!VN_IS(nodep, Class)) {
             // A class nested in a module is in the scope of the module's default clocking
-            m_defaultClockingp = nullptr;
-            m_defaultClkEvtVarp = nullptr;
+            m_defaultClockingp = V3AssertCommon::moduleDefaultClockingp(nodep);
+            m_defaultClkEvtVarp
+                = m_defaultClockingp ? m_defaultClockingp->ensureEventp() : nullptr;
         }
         m_defaultDisablep = nodep->defaultDisablep();
         m_modp = nodep;

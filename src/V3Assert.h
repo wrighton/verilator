@@ -27,6 +27,8 @@
 class V3AssertCommon final {
 public:
     static void collectDefaultDisable(AstNetlist* nodep) VL_MT_DISABLED;
+    // The default clocking declared directly in a module, or nullptr
+    static AstClocking* moduleDefaultClockingp(const AstNodeModule* modp) VL_MT_DISABLED;
     static void lowerSequenceEvents(AstNetlist* nodep) VL_MT_DISABLED;
     static string assertCtlGetCall(const char* query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;

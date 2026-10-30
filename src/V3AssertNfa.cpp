@@ -3623,7 +3623,9 @@ class AssertNfaVisitor final : public VNVisitor {
         VL_RESTORER(m_defaultDisablep);
         m_modp = nodep;
         // A class nested in a module is in the scope of the module's default clocking
-        if (!VN_IS(nodep, Class)) m_defaultClockingp = nullptr;
+        if (!VN_IS(nodep, Class)) {
+            m_defaultClockingp = V3AssertCommon::moduleDefaultClockingp(nodep);
+        }
         m_defaultDisablep = nodep->defaultDisablep();
         SvaNfaLowering lowering{nodep};
         m_loweringp = &lowering;

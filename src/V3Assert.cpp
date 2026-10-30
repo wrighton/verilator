@@ -151,6 +151,15 @@ void V3AssertCommon::collectDefaultDisable(AstNetlist* nodep) {
     { DefaultDisablePropagateVisitor{nodep}; }
 }
 
+AstClocking* V3AssertCommon::moduleDefaultClockingp(const AstNodeModule* modp) {
+    // It applies to the whole module, also to items before its declaration (IEEE 1800-2023 14.12)
+    for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+        AstClocking* const clockingp = VN_CAST(stmtp, Clocking);
+        if (clockingp && clockingp->isDefault()) return clockingp;
+    }
+    return nullptr;
+}
+
 void V3AssertCommon::lowerSequenceEvents(AstNetlist* nodep) {
     { SeqEventLowerVisitor{nodep}; }
     V3Global::dumpCheckGlobalTree("assertseqevent", 0, dumpTreeEitherLevel() >= 3);
