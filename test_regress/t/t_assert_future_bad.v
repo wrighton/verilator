@@ -36,6 +36,32 @@ module t (
     assert final ($changing_gclk(a));
   end
 
+  // A disable condition is not a property or sequence expression
+  assert property (@(posedge clk) disable iff ($future_gclk(a)) a);
+  cover property (@(posedge clk) disable iff ($rising_gclk(a)) a);
+  assert property (@(posedge clk) disable iff ($falling_gclk(a)) a |-> ##1 a);
+
+  property p_disable;
+    @(posedge clk) disable iff ($steady_gclk(a)) a;
+  endproperty
+  assert property (p_disable);
+
+  sub u_sub (.a(a), .clk(clk));
+
   initial $stop;
+
+endmodule
+
+module sub (
+    input a,
+    input clk
+);
+
+  global clocking @(posedge clk);
+  endclocking
+
+  default disable iff ($changing_gclk(a));
+
+  assert property (@(posedge clk) a);
 
 endmodule

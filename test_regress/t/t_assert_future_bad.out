@@ -39,4 +39,24 @@
                                      : ... note: In instance 't'
    36 |     assert final ($changing_gclk(a));
       |                   ^~~~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:40:48: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   40 |   assert property (@(posedge clk) disable iff ($future_gclk(a)) a);
+      |                                                ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:41:47: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   41 |   cover property (@(posedge clk) disable iff ($rising_gclk(a)) a);
+      |                                               ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:42:48: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   42 |   assert property (@(posedge clk) disable iff ($falling_gclk(a)) a |-> ##1 a);
+      |                                                ^~~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:45:33: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   45 |     @(posedge clk) disable iff ($steady_gclk(a)) a;
+      |                                 ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:63:24: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't.u_sub'
+   63 |   default disable iff ($changing_gclk(a));
+      |                        ^~~~~~~~~~~~~~
 %Error: Exiting due to
