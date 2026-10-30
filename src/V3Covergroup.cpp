@@ -4174,27 +4174,52 @@ class FunctionalCoverageVisitor final : public VNVisitor {
 
         // get_inst_coverage(): the average of the coverpoints and crosses, weighted by their
         // option.weight (IEEE 1800-2023 19.11).  The instance node holds their runtimes.
+        // Its arguments, covered_bins and total_bins (19.8), which the LRM does not define for a
+        // covergroup, whose coverage has no integer numerator and denominator, are given the
+        // sums of those of the items.
         AstFunc* const getInstCoveragep
             = VN_AS(m_memberMap.findMember(m_covergroupp, "get_inst_coverage"), Func);
         FileLine* const instFl = getInstCoveragep->fileline();
         AstCMethodHard* const instCallp = instanceCall(instFl, VCMethod::COVERGROUP_COVERAGE);
+        addBinArgPins(instCallp, getInstCoveragep);
         instCallp->dtypeSetDouble();
         generateInstCoverage(getInstCoveragep, instCallp,
-                             m_cgMayMerge ? typeCoverageCall(instFl) : nullptr);
+                             m_cgMayMerge ? typeCoverageCall(getInstCoveragep) : nullptr);
 
         // get_coverage(): the average of the covergroup's instances, weighted by their
         // option.weight, or with type_option.merge_instances, the coverage of the union of their
         // bins (IEEE 1800-2023 19.11.3).  Static, so the registry finds the instances.
+        // Its arguments are given the sums of those of the instances' items, or of the merged
+        // items.
         AstFunc* const getCoveragep
             = VN_AS(m_memberMap.findMember(m_covergroupp, "get_coverage"), Func);
         FileLine* const typeFl = getCoveragep->fileline();
         getCoveragep->addStmtsp(
             new AstAssign{typeFl, new AstVarRef{typeFl, getCoveragep->fvarp(), VAccess::WRITE},
-                          typeCoverageCall(typeFl)});
+                          typeCoverageCall(getCoveragep)});
     }
 
-    // The registry call computing the covergroup's type coverage, per its type options
-    AstCMethodHard* typeCoverageCall(FileLine* fl) {
+    // The covered_bins and total_bins arguments of get_coverage() or get_inst_coverage() 'funcp'
+    static std::pair<AstVar*, AstVar*> binArgs(AstFunc* funcp) {
+        std::vector<AstVar*> argps;
+        for (AstNode* const declp : funcp->declspList()) {
+            if (AstVar* const argp = VN_CAST(declp, Var)) argps.push_back(argp);
+        }
+        UASSERT_OBJ(argps.size() == 2, funcp, "Coverage method without its two arguments");
+        return {argps[0], argps[1]};
+    }
+
+    // Add to 'callp' the arguments of 'funcp' it assigns the covered bins and all bins
+    static void addBinArgPins(AstCMethodHard* callp, AstFunc* funcp) {
+        FileLine* const fl = callp->fileline();
+        const std::pair<AstVar*, AstVar*> argps = binArgs(funcp);
+        callp->addPinsp(new AstVarRef{fl, argps.first, VAccess::WRITE});
+        callp->addPinsp(new AstVarRef{fl, argps.second, VAccess::WRITE});
+    }
+
+    // Registry call computing the type coverage in get_coverage() or get_inst_coverage() 'funcp'
+    AstCMethodHard* typeCoverageCall(AstFunc* funcp) {
+        FileLine* const fl = funcp->fileline();
         AstCExpr* const registryp = ctext(fl, "vlSymsp->_vm_contextp__->covergroupRegistryp()");
         registryp->dtypeSetVoid();  // Opaque receiver; only ever the 'fromp' of the call below
         AstCMethodHard* const callp
@@ -4203,6 +4228,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         callp->addPinsp(newOptionSel(fl, optionVar(true), "weight", VAccess::READ));
         callp->addPinsp(newOptionSel(fl, optionVar(true), "merge_instances", VAccess::READ));
         callp->addPinsp(fileLineDebug(m_covergroupp->fileline()));
+        addBinArgPins(callp, funcp);
         callp->usePtr(true);
         callp->dtypeSetDouble();
         return callp;
@@ -4234,16 +4260,9 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         // The calculation also assigns its covered bins and all its bins to the optional ref
         // arguments, covered_bins and total_bins (19.8), or their defaults
         FileLine* const fl = funcp->fileline();
-        std::vector<AstVar*> argps;  // covered_bins and total_bins
-        for (AstNode* const declp : funcp->declspList()) {
-            AstVar* const argp = VN_CAST(declp, Var);
-            if (argp && argp->isIO() && !argp->isFuncReturn()) argps.push_back(argp);
-        }
-        UASSERT_OBJ(argps.size() == 2, funcp, "get_inst_coverage() without its two arguments");
-        AstVar* const coveredp = argps[0];
-        AstVar* const totalp = argps[1];
         if (!varp) {
-            for (AstVar* const binsp : {coveredp, totalp}) {
+            const std::pair<AstVar*, AstVar*> argps = binArgs(funcp);
+            for (AstVar* const binsp : {argps.first, argps.second}) {
                 funcp->addStmtsp(
                     new AstAssign{fl, new AstVarRef{fl, binsp, VAccess::WRITE},
                                   new AstConst{fl, AstConst::DTyped{}, binsp->dtypep()}});
@@ -4251,16 +4270,14 @@ class FunctionalCoverageVisitor final : public VNVisitor {
             generateInstCoverage(funcp, new AstConst{fl, AstConst::RealDouble{}, 0.0}, nullptr);
             return;
         }
-        AstCMethodHard* const instp = itemCall(fl, varp, VCMethod::COVERGROUP_ITEM_COVERAGE,
-                                               {new AstVarRef{fl, coveredp, VAccess::WRITE},
-                                                new AstVarRef{fl, totalp, VAccess::WRITE}});
+        AstCMethodHard* const instp = itemCall(fl, varp, VCMethod::COVERGROUP_COVERAGE);
+        addBinArgPins(instp, funcp);
         instp->dtypeSetDouble();
         AstCMethodHard* mergedp = nullptr;
         if (m_cgMayMerge) {
             mergedp = instanceCall(fl, VCMethod::COVERGROUP_MERGED_COVERAGE);
             mergedp->addPinsp(memberRef(fl, varp));
-            mergedp->addPinsp(new AstVarRef{fl, coveredp, VAccess::WRITE});
-            mergedp->addPinsp(new AstVarRef{fl, totalp, VAccess::WRITE});
+            addBinArgPins(mergedp, funcp);
             mergedp->dtypeSetDouble();
         }
         generateInstCoverage(funcp, instp, mergedp);

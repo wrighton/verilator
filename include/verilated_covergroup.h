@@ -586,6 +586,18 @@ public:
 class VlCovergroupType;
 
 //=============================================================================
+// VlCovSums
+/// Sums over the items of a covergroup instance, or its type's merged items, for its coverage
+
+struct VlCovSums final {
+    /// Sigma of each item's weight times its coverage (0..100), of the items with bins
+    double weighted = 0.0;
+    double weights = 0.0;  ///< Sigma of those items' weights
+    double coveredBins = 0.0;  ///< Sigma of every item's covered bins
+    double totalBins = 0.0;  ///< Sigma of every item's bins
+};
+
+//=============================================================================
 // VlCovergroupInst
 /// One covergroup instance: owns the coverpoint/cross runtimes created by one
 /// SV 'new'.  The generated class holds borrowed pointers to them, so the bins
@@ -679,13 +691,13 @@ public:
     // pointers into this node's bin counts (VM_COVERAGE); see retire().
     bool retained() const { return m_retained; }
     /// IEEE 1800-2023 19.11 sums over the items whose coverage has a nonzero
-    /// denominator: {the sum of each item's option.weight times its coverage
-    /// (0..100), the sum of those weights}.
-    std::pair<double, double> coverageSums() const;
+    /// denominator, and the bins of all the items; see VlCovSums.
+    VlCovSums coverageSums() const;
     /// Merge the items into 'items', the covergroup type's items merged over the instances
     void mergeInto(VlCovMergedItems& items) const;
-    /// Instance coverage, as returned by get_inst_coverage(), in 0..100.
-    double coverage();
+    /// Instance coverage, as returned by get_inst_coverage(), in 0..100; and the covered bins
+    /// and all the bins of its items, which get_inst_coverage() assigns its arguments.
+    double coverage(IData& covered, IData& total);
     /// Coverage of 'itemp', an item of this instance, with the instances of the type merged;
     /// see VlCovergroupType::mergedCoverage()
     double mergedCoverage(const VlCoverpointIf* itemp, IData& covered, IData& total) const;
@@ -700,6 +712,8 @@ struct VlCovRetiredAvg final {
     uint64_t count = 0;  // Retired instances that contributed (nonzero denominator)
     double sumCoverage = 0.0;  // Sigma of per-instance weight * coverage (0..100)
     double sumWeight = 0.0;  // Sigma of per-instance weight
+    double coveredBins = 0.0;  // Sigma of per-instance covered bins, of every retired instance
+    double totalBins = 0.0;  // Sigma of per-instance bins, of every retired instance
 };
 
 //=============================================================================
@@ -745,7 +759,7 @@ public:
     /// Sums as VlCovergroupInst::coverageSums(), of these items and those of 'other' merged,
     /// with each item weighted by its type_option.weight (IEEE 1800-2023 19.7.1).  Without
     /// merging them into a copy, as 'other', those of the instances that have died, may be large.
-    std::pair<double, double> coverageSums(const VlCovMergedItems& other) const;
+    VlCovSums coverageSums(const VlCovMergedItems& other) const;
     /// Coverage of the item 'name', which these items have, merged with that of 'other', in
     /// 0..100.  Without bins, 0, or 100 if its type_option.weight is 0 (IEEE 1800-2023 19.11.1).
     /// Also its merged bins that are covered, and all its merged bins.
@@ -799,8 +813,10 @@ public:
     /// instance's coverage, weighted by its option.weight; else the coverage of the union
     /// of the instances' bins, with each item weighted by its type_option.weight.
     /// typeWeight is type_option.weight, which decides the result when no instance or item
-    /// contributes; like option.weight, it is checked as it is loaded.
-    double coverage(IData typeWeight, bool mergeInstances, VlFileLineDebug fileline);
+    /// contributes; like option.weight, it is checked as it is loaded.  Also the covered bins
+    /// and all the bins it is computed from: of every instance's items, or the merged items.
+    double coverage(IData typeWeight, bool mergeInstances, VlFileLineDebug fileline,
+                    IData& covered, IData& total);
     /// Coverage of the item 'name' with the instances merged, as a union of their bins, which
     /// is the item's get_coverage() with type_option.merge_instances (IEEE 1800-2023 19.11.3),
     /// in 0..100.  The bins of the instances that have died count if the type may merge them.
@@ -858,7 +874,7 @@ public:
     /// VlCovergroupType::coverage().  typeWeight is its type_option.weight, and
     /// mergeInstances its type_option.merge_instances.
     double typeCoverage(const char* typeName, IData typeWeight, bool mergeInstances,
-                        VlFileLineDebug fileline);
+                        VlFileLineDebug fileline, IData& covered, IData& total);
 
     // ---- introspection (see VlCovergroupType) ----
     // typeName is the obfuscated generated name, so a test using these under
