@@ -163,6 +163,74 @@ module t (
     `checkd(total_bins, -1);
   end
 
+  // A covergroup's coverage, a weighted average of percentages, has no integer numerator and
+  // denominator; its optional arguments are given the sums of those of its coverpoints and
+  // crosses, also of an item of weight zero (IEEE 1800-2023 19.8, 19.11)
+  covergroup cg_sums with function sample (bit [1:0] v);
+    cp: coverpoint v;
+    cq: coverpoint v {
+      option.weight = 0;
+      bins a = {0};
+      bins b = {1};
+      bins c = {2};
+      ignore_bins i = {3};
+    }
+  endgroup
+  initial begin
+    automatic int covered_bins = -1;
+    automatic int total_bins = -1;
+    automatic cg_sums sums1 = new;
+    automatic cg_sums sums2 = new;
+    for (int i = 0; i < 2; ++i) sums1.sample(2'(i));
+    sums2.sample(3);
+    `checkp(sums1.get_inst_coverage(covered_bins, total_bins), "50.00");
+    `checkd(covered_bins, 4);  // cp 2 of 4, cq 2 of 3
+    `checkd(total_bins, 7);
+    covered_bins = -1;
+    total_bins = -1;
+    `checkp(sums2.get_inst_coverage(covered_bins, total_bins), "25.00");
+    `checkd(covered_bins, 1);
+    `checkd(total_bins, 7);
+    // Type coverage, of every instance
+    `checkp(cg_sums::get_coverage(covered_bins, total_bins), "37.50");
+    `checkd(covered_bins, 5);
+    `checkd(total_bins, 14);
+    covered_bins = -1;
+    total_bins = -1;
+    `checkp(sums1.get_coverage(covered_bins, total_bins), "37.50");
+    `checkd(covered_bins, 5);
+    `checkd(total_bins, 14);
+  end
+
+  // With the instances merged, those of the merged items
+  covergroup cg_sums_merged with function sample (bit [1:0] v);
+    type_option.merge_instances = 1;
+    cp: coverpoint v;
+  endgroup
+  initial begin
+    automatic int covered_bins = -1;
+    automatic int total_bins = -1;
+    automatic cg_sums_merged merged1 = new;
+    automatic cg_sums_merged merged2 = new;
+    merged1.sample(0);
+    merged2.sample(1);
+    merged2.sample(2);
+    `checkp(merged1.get_inst_coverage(covered_bins, total_bins), "75.00");
+    `checkd(covered_bins, 3);
+    `checkd(total_bins, 4);
+    merged1.option.get_inst_coverage = 1;
+    covered_bins = -1;
+    total_bins = -1;
+    `checkp(merged1.get_inst_coverage(covered_bins, total_bins), "25.00");
+    `checkd(covered_bins, 1);
+    `checkd(total_bins, 4);
+    covered_bins = -1;
+    total_bins = -1;
+    `checkp(cg_sums_merged::get_coverage(covered_bins, total_bins), "75.00");
+    `checkd(covered_bins, 3);
+    `checkd(total_bins, 4);
+  end
+
   // An item without bins, none having a value of the coverpoint, does not count: 0, or 100 if
   // its weight is zero (IEEE 1800-2023 19.11.1)
   covergroup cg_no_bins with function sample (bit [3:0] v);
