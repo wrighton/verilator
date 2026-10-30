@@ -360,6 +360,71 @@ module t;
       end
     end
 
+    begin  // Associative arrays to splice, in index order (IEEE 1800-2023 7.8)
+      int q[$];
+      int aa[int];
+      for (int i = 5; i >= 0; --i) aa[i * 7] = i * 3 + 1;
+      q = {q, aa};
+      `checkh(q.size, 6);
+      `checkh(q[0], 'h1);
+      `checkh(q[5], 'h10);
+      aa.delete(14);
+      q = {100, aa, q[0]};
+      `checkh(q.size, 7);
+      `checkh(q[0], 'h64);
+      `checkh(q[3], 'ha);
+      `checkh(q[6], 'h1);
+      q = {aa};
+      `checkh(q.size, 5);
+      `checkh(q[2], 'ha);
+      aa.delete();
+      q = {aa, 5, aa};
+      `checkh(q.size, 1);
+      `checkh(q[0], 'h5);
+    end
+    begin  // An associative array of strings into a dynamic array
+      bit [6:0] d[];
+      bit [6:0] sa[string];
+      sa["b"] = 7'h22;
+      sa["a"] = 7'h11;
+      sa["c"] = 7'h33;
+      d = {sa, d};
+      `checkh(d.size, 3);
+      `checkh(d[0], 7'h11);
+      `checkh(d[2], 7'h33);
+    end
+    begin  // A wildcard associative array of wide values
+      logic [64:0] wq[$];
+      logic [64:0] wa[*];
+      wa[2] = {1'b1, 64'h1};
+      wa[1] = 65'h0_ffff_ffff_ffff_ffff;
+      wq = {wq, wa};
+      `checkh(wq.size, 2);
+      `checkh(wq[0], 65'h0_ffff_ffff_ffff_ffff);
+      `checkh(wq[1], {1'b1, 64'h1});
+    end
+    begin  // Associative arrays of class handles
+      Base bq[$];
+      Base ba[int];
+      Sub sa[int];
+      ba[5] = new(5);
+      sa[2] = new(2);
+      sa[1] = new(1);
+      bq = {ba, bq, sa};
+      `checkh(bq.size, 3);
+      `checkh(bq[0].v, 5);
+      `checkh(bq[1].v, 1);
+      `checkh(bq[2].v, 2);
+      sa.delete();
+      begin
+        Sub sw[*];
+        sw[3] = new(3);
+        bq = {bq, sw};
+        `checkh(bq.size, 4);
+        `checkh(bq[3].v, 3);
+      end
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end

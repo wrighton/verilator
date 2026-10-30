@@ -7173,9 +7173,10 @@ class WidthVisitor final : public VNVisitor {
         // An element if assignable to the element type, else an array of such elements
         // (IEEE 1800-2023 10.10)
         const bool isElement = AstNode::computeCastable(elemDtp, valueDtp, nullptr).isAssignable();
+        const bool valueIsArray
+            = valueDtp->isNonPackedArray() || VN_IS(valueDtp, WildcardArrayDType);
         if (!isElement && isNeverAssignable(elemDtp, valueDtp)
-            && (!valueDtp->isNonPackedArray()
-                || isNeverAssignable(elemDtp, valueDtp->subDTypep()))) {
+            && (!valueIsArray || isNeverAssignable(elemDtp, valueDtp->subDTypep()))) {
             valuep->v3error("Unpacked array concatenation item is neither an element nor"
                             " an array of elements of its target (IEEE 1800-2023 10.10)"
                             << warnDTypes(valuep, elemDtp, valuep->dtypep(), "Element", "Item"));

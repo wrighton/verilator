@@ -41,6 +41,8 @@
 #include <type_traits>
 #include <utility>
 
+template <typename T_Key, typename T_Value>
+class VlAssocArray;
 class VlClass;
 template <typename T_Class>
 class VlClassRef;
@@ -644,6 +646,11 @@ private:
     void append(const VlUnpacked<T_Value, N_Depth>& rhs) {
         for (std::size_t i = 0; i < N_Depth; ++i) m_deque.push_back(rhs[i]);
     }
+    // An associative array gives its values in foreach order (IEEE 1800-2023 10.10, 7.8)
+    template <typename T_Key>
+    void append(const VlAssocArray<T_Key, T_Value>& rhs) {
+        for (const auto& item : rhs) m_deque.push_back(item.second);
+    }
     template <typename T_Subclass, size_t N_RhsMaxSize,
               typename = typename std::enable_if<
                   std::is_convertible<VlClassRef<T_Subclass>, T_Value>::value>::type>
@@ -655,6 +662,12 @@ private:
                   std::is_convertible<VlClassRef<T_Subclass>, T_Value>::value>::type>
     void append(const VlUnpacked<VlClassRef<T_Subclass>, N_Depth>& rhs) {
         for (std::size_t i = 0; i < N_Depth; ++i) m_deque.push_back(rhs[i]);
+    }
+    template <typename T_Key, typename T_Subclass,
+              typename = typename std::enable_if<
+                  std::is_convertible<VlClassRef<T_Subclass>, T_Value>::value>::type>
+    void append(const VlAssocArray<T_Key, VlClassRef<T_Subclass>>& rhs) {
+        for (const auto& item : rhs) m_deque.push_back(item.second);
     }
     // An element given as another kind of array, e.g. a fixed-size array in a queue of queues
     template <typename T_Arg,
