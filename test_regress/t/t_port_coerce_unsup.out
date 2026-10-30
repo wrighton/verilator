@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_port_coerce_unsup.v:32:31: Unsupported tristate construct: hierarchical driver of non-interface tri signal: 'd'
+                                                 : ... note: In instance 't'
+   32 |   drv_if i (.clk(clk), .d(t.u.d));
+      |                               ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_port_coerce_unsup.v:21:17: Unsupported tristate construct (in graph; not converted): VAR 'd'
+                                                 : ... note: In instance 't.u'
+   21 |     input logic d,
+      |                 ^
+%Error: Exiting due to
