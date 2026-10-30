@@ -6489,9 +6489,11 @@ simple_immediate_assertion_statement<nodeStmtp>:    // ==IEEE: simple_immediate_
                 assertOrAssume '(' expr ')' stmt %prec prLOWER_THAN_ELSE
                         { $$ = new AstAssert{$<fl>1, $3, $5, nullptr, VAssertType::SIMPLE_IMMEDIATE, $1}; }
         |       assertOrAssume '(' expr ')'           yELSE stmt
-                        { $$ = new AstAssert{$<fl>1, $3, nullptr, $6, VAssertType::SIMPLE_IMMEDIATE, $1}; }
+                        { $$ = new AstAssert{$<fl>1, $3, nullptr, V3ParseGrammar::elseAction($5, $6),
+                                             VAssertType::SIMPLE_IMMEDIATE, $1}; }
         |       assertOrAssume '(' expr ')' stmt yELSE stmt
-                        { $$ = new AstAssert{$<fl>1, $3, $5, $7, VAssertType::SIMPLE_IMMEDIATE, $1}; }
+                        { $$ = new AstAssert{$<fl>1, $3, $5, V3ParseGrammar::elseAction($6, $7),
+                                             VAssertType::SIMPLE_IMMEDIATE, $1}; }
         //                      // IEEE: simple_immediate_cover_statement
         |       yCOVER '(' expr ')' stmt                { $$ = new AstCover{$1, $3, $5, VAssertType::SIMPLE_IMMEDIATE}; }
         ;
@@ -6514,9 +6516,11 @@ deferred_immediate_assertion_statement<nodeStmtp>:  // ==IEEE: deferred_immediat
                 assertOrAssume final_zero '(' expr ')' stmt %prec prLOWER_THAN_ELSE
                         { $$ = new AstAssert{$<fl>1, $4, $6, nullptr, $2, $1}; }
         |       assertOrAssume final_zero '(' expr ')'           yELSE stmt
-                        { $$ = new AstAssert{$<fl>1, $4, nullptr, $7, $2, $1}; }
+                        { $$ = new AstAssert{$<fl>1, $4, nullptr, V3ParseGrammar::elseAction($6, $7),
+                                             $2, $1}; }
         |       assertOrAssume final_zero '(' expr ')' stmt yELSE stmt
-                        { $$ = new AstAssert{$<fl>1, $4, $6, $8, $2, $1}; }
+                        { $$ = new AstAssert{$<fl>1, $4, $6, V3ParseGrammar::elseAction($7, $8),
+                                             $2, $1}; }
         //                      // IEEE: deferred_immediate_cover_statement
         |       yCOVER final_zero '(' expr ')' stmt     { $$ = new AstCover{$1, $4, $6, $2}; }
         ;
@@ -6538,9 +6542,11 @@ concurrent_assertion_statement<nodeStmtp>:  // ==IEEE: concurrent_assertion_stat
                 assertOrAssume yPROPERTY '(' property_spec ')' stmt %prec prLOWER_THAN_ELSE
                         { $$ = new AstAssert{$<fl>1, $4, $6, nullptr, VAssertType::CONCURRENT, $1}; }
         |       assertOrAssume yPROPERTY '(' property_spec ')' stmt yELSE stmt
-                        { $$ = new AstAssert{$<fl>1, $4, $6, $8, VAssertType::CONCURRENT, $1}; }
+                        { $$ = new AstAssert{$<fl>1, $4, $6, V3ParseGrammar::elseAction($7, $8),
+                                             VAssertType::CONCURRENT, $1}; }
         |       assertOrAssume yPROPERTY '(' property_spec ')' yELSE stmt
-                        { $$ = new AstAssert{$<fl>1, $4, nullptr, $7, VAssertType::CONCURRENT, $1}; }
+                        { $$ = new AstAssert{$<fl>1, $4, nullptr, V3ParseGrammar::elseAction($6, $7),
+                                             VAssertType::CONCURRENT, $1}; }
         //                      // IEEE: cover_property_statement
         |       yCOVER yPROPERTY '(' property_spec ')' stmt
                         { $$ = new AstCover{$1, $4, $6, VAssertType::CONCURRENT}; }

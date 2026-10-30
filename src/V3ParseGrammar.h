@@ -319,6 +319,13 @@ public:
         m_varDecl = VVarType::VAR;
     }
 
+    // The fail action of an assertion's 'else' at 'fl'
+    static AstNodeStmt* elseAction(FileLine* fl, AstNodeStmt* stmtp) {
+        // A null statement is an empty block, as unlike no 'else' it has no default $error
+        // (IEEE 1800-2023 16.3)
+        return stmtp ? stmtp : new AstBegin{fl, "", nullptr, true};
+    }
+
     // Wrap each statement in the given list in an AstForkItem
     static AstForkItem* wrapInForkItems(AstNodeStmt* stmtsp) {
         AstForkItem* resp = nullptr;
