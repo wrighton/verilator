@@ -3,24 +3,40 @@
    12 |     void'(randomize(y));
       |                     ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_randomize_inline_var_ctl_bad.v:26:44: 'randomize()' argument must be a variable contained in 'foo'
+%Error: t/t_randomize_inline_var_ctl_bad.v:21:23: 'randomize()' argument must be a variable contained in 'f'
                                                 : ... note: In instance 't'
-   26 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
+   21 |     void'(f.randomize(f));
+      |                       ^
+%Error: t/t_randomize_inline_var_ctl_bad.v:32:44: 'randomize()' argument must be a variable contained in 'foo'
+                                                : ... note: In instance 't'
+   32 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
       |                                            ^
-%Error: t/t_randomize_inline_var_ctl_bad.v:26:51: 'randomize()' argument must be a variable contained in 'foo'
+%Error: t/t_randomize_inline_var_ctl_bad.v:32:51: 'randomize()' argument must be a variable contained in 'foo'
                                                 : ... note: In instance 't'
-   26 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
+   32 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
       |                                                   ^
-%Error: t/t_randomize_inline_var_ctl_bad.v:26:57: 'randomize()' argument must be a variable contained in 'foo'
+%Error: t/t_randomize_inline_var_ctl_bad.v:32:57: 'randomize()' argument must be a variable contained in 'foo'
                                                 : ... note: In instance 't'
-   26 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
+   32 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
       |                                                         ^
-%Error: t/t_randomize_inline_var_ctl_bad.v:26:64: 'randomize()' argument must be a variable contained in 'foo'
+%Error: t/t_randomize_inline_var_ctl_bad.v:32:64: 'randomize()' argument must be a variable contained in 'foo'
                                                 : ... note: In instance 't'
-   26 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
+   32 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
       |                                                                ^~
-%Error: t/t_randomize_inline_var_ctl_bad.v:26:35: Cannot pass more arguments to 'randomize(null)'
+%Error: t/t_randomize_inline_var_ctl_bad.v:32:35: Cannot pass more arguments to 'randomize(null)'
                                                 : ... note: In instance 't'
-   26 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
+   32 |     void'(foo.randomize(x, foo.x, null, qux.x, bar.y, 0 + 1, x ** 2));
       |                                   ^~~~
+%Error: t/t_randomize_inline_var_ctl_bad.v:34:25: 'randomize()' argument must be a variable contained in 'foo'
+                                                : ... note: In instance 't'
+   34 |     void'(foo.randomize(foo));
+      |                         ^~~
+%Error: t/t_randomize_inline_var_ctl_bad.v:35:30: 'randomize()' argument must be a variable contained in 'Foo'
+                                                : ... note: In instance 't'
+   35 |     void'(bar.f.randomize(bar.f));
+      |                              ^
+%Error: t/t_randomize_inline_var_ctl_bad.v:36:33: 'randomize()' argument must be a variable contained in 'Foo'
+                                                : ... note: In instance 't'
+   36 |     void'(foos[1].randomize(foos[1]));
+      |                                 ^
 %Error: Exiting due to
