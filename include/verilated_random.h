@@ -88,9 +88,8 @@ public:
     // for scalars, "(select arr idx...)" for array element j). Used by BSAT
     // to query/re-assert one whole element's value, not a single bit.
     virtual void emitElement(std::ostream& s, int j) const;
-    // Emit the current runtime value as an SMT bit-vector literal (#b...).
-    // Used by randomize(null) to pin a var to its existing value.
-    virtual void emitConcreteValue(std::ostream& s) const;
+    // Emit the current runtime value of element j (see emitElement) as an SMT literal
+    void emitConcreteValue(std::ostream& s, int j) const;
     virtual int totalWidth() const;
     mutable std::shared_ptr<const ArrayInfoMap> m_arrVarsRefp;
     void setArrayInfo(const std::shared_ptr<const ArrayInfoMap>& arrVarsRefp) const {
