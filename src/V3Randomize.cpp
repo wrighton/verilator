@@ -256,6 +256,13 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         }
     }
+    // Whether an array index depends on a variable being randomized, by its marks
+    static bool isMarkedRandIndex(const AstNodeExpr* indexp) {
+        // Not isRandIndex: std::randomize() arguments get their own variables only later
+        return indexp->exists([](const AstNode* const nodep) {
+            return (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) && nodep->user1();
+        });
+    }
     // Check if a variable is listed in std::randomize() arguments
     bool isVarInStdRandomizeArgs(const AstVar* varp) const {
         if (!m_inStdWith || !m_stdRandCallp) return false;
@@ -932,6 +939,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
             nodep->user1(true);
             // Mark parent object for constraint expression visitor
             if (VN_IS(nodep->fromp(), VarRef)) nodep->fromp()->user1(true);
+        } else if (RandomizeUtil::randIndexSelp(nodep->fromp(), isMarkedRandIndex)) {
+            // A member of an element of a non-random array selected by a random index
+            nodep->user1(true);
         }
 
         if (m_withp) {
