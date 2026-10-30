@@ -1608,7 +1608,7 @@ class RandomizeVisitor final : public VNVisitor {
                         fl,
                         new AstSub{fl, tempRefp,
                                    new AstConst{fl, static_cast<uint32_t>(aryDTypep->lo())}},
-                        new AstConst{fl, 0}, V3Number::log2b(aryDTypep->hi()) + 1}};
+                        new AstConst{fl, 0}, V3Number::log2b(aryDTypep->elementsConst() - 1) + 1}};
             } else if (VN_IS(tempDTypep, AssocArrayDType)) {
                 tempElementp = new AstAssocSel{fl, tempExprp, tempRefp};
             } else if (VN_IS(tempDTypep, QueueDType)) {
