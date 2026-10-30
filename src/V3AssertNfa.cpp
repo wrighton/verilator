@@ -342,6 +342,9 @@ class SvaNfaBuilder final {
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
+    // Negated: a strong obligation pending at end-of-simulation makes the property hold
+    // (IEEE 1800-2023 16.12.3)
+    bool m_isNegated = false;
     // IEEE 1800-2023 16.14.3 cover sequence: each end-of-match fires the action,
     // not just the first. Builder builds parallel-branch (no first-match-wins)
     // topology when true. Default false preserves cover_property semantics.
@@ -906,7 +909,7 @@ class SvaNfaBuilder final {
         // not flagged; an attempt whose final tick coincides with $finish is still
         // flagged, matching the strong reference. Weak always[m:n] is not marked.
         VL_RESTORER(m_markStrongPending);
-        m_markStrongPending = nodep->isStrong() && !m_noEosFailure;
+        m_markStrongPending = nodep->isStrong() && !m_noEosFailure && !m_isNegated;
         // Check the first in-window tick, then reuse a guarded fixed-delay ring
         // for the remaining ticks instead of creating one state per cycle.
         SvaStateVertex* currentp = addDelayChain(entryVtxp, lo, flp);
@@ -1504,7 +1507,7 @@ class SvaNfaBuilder final {
         SvaStateVertex* const waitCp = scopedCreateVertex();
         SvaStateVertex* const waitRp = scopedCreateVertex();
         waitCp->m_isUnbounded = true;
-        waitRp->m_strongPending = nodep->isStrong() && !m_noEosFailure;
+        waitRp->m_strongPending = nodep->isStrong() && !m_noEosFailure && !m_isNegated;
 
         // Entry and back-loop Links carry no condition; throughout-folding still applies.
         guardedLink(entryVtxp, waitCp, flp);
@@ -1700,11 +1703,13 @@ public:
     }
 
     SvaNfaBuilder(SvaGraph& graph, AstNodeModule* modp, V3UniqueNames& propTempNames,
-                  bool isCoverSeq = false, bool isSeqEvent = false, bool noEosFailure = false)
+                  bool isCoverSeq = false, bool isSeqEvent = false, bool noEosFailure = false,
+                  bool isNegated = false)
         : m_graph{graph}
         , m_modp{modp}
         , m_propTempNames{propTempNames}
         , m_noEosFailure{noEosFailure}
+        , m_isNegated{isNegated}
         , m_isCoverSeq{isCoverSeq}
         , m_isSeqEvent{isSeqEvent} {}
 
@@ -2826,6 +2831,37 @@ public:
         V3Stats::addStatSum("Assertions, NFA delay ring edge visits", m_statDelayRingEdgeVisits);
     }
 
+    // Return the statements run by an assertion failing at end of simulation
+    AstNodeStmt* newFinalFailp(AstNodeCoverOrAssert* assertp) {
+        FileLine* const flp = assertp->fileline();
+        // The fail action replaces the default error (IEEE 1800-2023 16.14.1), unless it has a
+        // timing control, which could not resume in a final block (IEEE 1800-2023 9.2.3)
+        AstNodeStmt* const failsp = VN_AS(assertp, Assert)->failsp();
+        const bool hasTimingControl = failsp && failsp->existsAndNext([](const AstNode* np) {
+            return np->isTimingControl();
+        });
+        AstNodeStmt* stmtsp;
+        if (failsp && !hasTimingControl) {
+            stmtsp = failsp->cloneTree(true);
+            // An NBA, legal in an action block, executes as a blocking assignment in a final
+            // block, so FINALDLY does not apply
+            stmtsp->foreachAndNext([](AstAssignDly* const dlyp) {
+                FileLine* const newfl = new FileLine{dlyp->fileline()};
+                newfl->warnOff(V3ErrorCode::FINALDLY, true);
+                dlyp->fileline(newfl);
+            });
+        } else {
+            // V3Assert turns the DT_ERROR display into the standard "Assertion failed in %m"
+            AstDisplay* const dispp
+                = new AstDisplay{flp, VDisplayType::DT_ERROR, "", nullptr, nullptr};
+            dispp->fmtp()->timeunit(m_modp->timeunit());
+            stmtsp = dispp;
+            if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
+        }
+        // Like a failure during simulation, subject to $assertcontrol FailOff
+        return newIfAssertFailOn(stmtsp, assertp->directive(), assertp->userType());
+    }
+
     // Lower NFA graph to synthesizable AstAlways blocks and raw result signals.
     // Links are combinational; Edges are registered (NBA).
     SignalSet lower(AstNodeCoverOrAssert* const assertp, SvaGraph& graph,
@@ -3004,8 +3040,7 @@ public:
         // Strong s_always[m:n] end-of-simulation liveness: if any in-window state
         // is still set at $finish, the universal-quantifier window never completed
         // (IEEE 1800-2023 16.12.11 strong semantics). Fire the assertion failure
-        // from a final block; V3Assert turns the DT_ERROR display into the standard
-        // "Assertion failed in %m" message.
+        // from a final block.
         // pending = |{strong state registers, strong delay live counts != 0};
         AstNodeExpr* pendingp = nullptr;
         for (int i = 0; i < N; ++i) {
@@ -3029,19 +3064,7 @@ public:
             AstCExpr* const assertOnp
                 = new AstCExpr{flp, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()", 1};
             AstNodeExpr* const condp = new AstLogAnd{flp, assertOnp, pendingp};
-            // The action block belongs to the directive (IEEE 1800-2023 16.14.6)
-            AstNodeStmt* firep;
-            AstAssert* const assertNodep = VN_CAST(assertp, Assert);
-            if (AstNodeStmt* const failsp = assertNodep ? assertNodep->failsp() : nullptr) {
-                firep = failsp->cloneTree(true);
-            } else {
-                AstDisplay* const dispp
-                    = new AstDisplay{flp, VDisplayType::DT_ERROR, "", nullptr, nullptr};
-                dispp->fmtp()->timeunit(m_modp->timeunit());
-                firep = dispp;
-                if (v3Global.opt.stopFail()) firep->addNext(new AstStop{flp, false});
-            }
-            m_modp->addStmtsp(new AstFinal{flp, new AstIf{flp, condp, firep}});
+            m_modp->addStmtsp(new AstFinal{flp, new AstIf{flp, condp, newFinalFailp(assertp)}});
         }
 
         // Clear userp on every vertex before vertexData is destroyed.
@@ -3630,6 +3653,7 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         AstCover* const coverp = VN_CAST(assertp, Cover);
+        AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
         const bool isCoverSeq = coverp && coverp->isCoverSeq();
         // A sequence event control is not an assertion directive; no default
         // disable iff, no assertion control
@@ -3655,16 +3679,14 @@ class AssertNfaVisitor final : public VNVisitor {
             m_sampledValueClockp = senTreep;
             iterate(propp->propp());
             // The final block clones the action block, so resolve its clocks while in scope
-            if (AstAssert* const ap = VN_CAST(assertp, Assert)) {
-                iterateAndNextNull(ap->failsp());
-            }
+            if (assertAssertp) iterateAndNextNull(assertAssertp->failsp());
         }
 
         FileLine* const flp = assertp->fileline();
 
         SvaGraph graph;
-        SvaNfaBuilder builder{graph,      m_modp,     m_propTempNames,
-                              isCoverSeq, isSeqEvent, coverp != nullptr};
+        SvaNfaBuilder builder{
+            graph, m_modp, m_propTempNames, isCoverSeq, isSeqEvent, coverp != nullptr, negated};
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
@@ -3694,7 +3716,6 @@ class AssertNfaVisitor final : public VNVisitor {
             return;
         }
 
-        AstAssert* const assertAssertp = VN_CAST(assertp, Assert);
         const bool splitImplicationPasssp = splitsImplicationPasssp(assertp, parts);
         const bool needMatch = assertAssertp && assertAssertp->passsp()
                                && (!parts.hasImplication || splitImplicationPasssp);
