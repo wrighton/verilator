@@ -4,27 +4,20 @@
 // SPDX-FileCopyrightText: 2026 Antmicro
 // SPDX-License-Identifier: CC0-1.0
 
-typedef struct {
-  int a;
-  int b;
-} us_t;
-
 class Obj;
 endclass
 
 class C;
   rand int idx;
-  us_t us[] = '{'{1, 2}, '{3, 4}};
   Obj objs[2];
-  int unsigned m[3][2];
+  Obj qobjs[$];
 endclass
 
 module t;
   C c;
   initial begin
     c = new;
-    void'(c.randomize() with {us[idx].a == 3;});
     void'(c.randomize() with {objs[idx] == null;});
-    void'(c.randomize() with {m[idx][1] > 0;});
+    void'(c.randomize() with {qobjs[idx] == null;});
   end
 endmodule
