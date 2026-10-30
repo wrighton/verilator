@@ -1009,8 +1009,16 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                  m_uniqueNames.get("__Vk"), assocDtp->keyDTypep()}
                                     : iterVarp;
 
-        AstNodeStmt* const stmtsp
-            = new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}};
+        // Registered at each randomize(), as the array may hold other objects, after its
+        // previous registration is cleared
+        AstCMethodHard* const clearp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_CLEAR_ELEM_VARS,
+            new AstCExpr{fl, AstCExpr::Pure{}, "\"" + smtName + "\""}};
+        clearp->dtypeSetVoid();
+        AstNodeStmt* const stmtsp = clearp->makeStmt();
+        stmtsp->addNext(
+            new AstAssign{fl, new AstVarRef{fl, iterVarp, VAccess::WRITE}, new AstConst{fl, 0}});
 
         AstNodeExpr* sizep;
         if (isUnpackedClassRefArray) {
@@ -1049,9 +1057,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         varp->user3(true);
         AstBegin* initp = m_inlineInitBlockp;
         if (!initp) {
-            AstNodeFTask* const taskp = VN_AS(m_memberMap.findMember(varClassp, "new"), NodeFTask);
-            UASSERT_OBJ(taskp, varClassp, "No new() in class");
-            initp = newInitBlockp(taskp);
+            UASSERT_OBJ(m_memberrefInitTaskp, varp, "No randomize() to register array in");
+            initp = newInitBlockp(m_memberrefInitTaskp);
         }
         // At the beginning, so declared before referenced
         initp->addDeclsp(iterVarp);
@@ -1378,11 +1385,27 @@ class ConstraintExprVisitor final : public VNVisitor {
             = createVarExprp(nodep, randMode, smtName, isGlobalConstrained, memberRefp, varp);
         relinker.relink(exprp);
 
+        bool isClassRefArray = false;
+        bool isUnpackedClassRefArray = false;
+        AstClassRefDType* elemClassRefDtp = nullptr;
+        {
+            AstNodeDType* varDtp = varp->dtypep()->skipRefp();
+            if (varDtp->isNonPackedArray()) {
+                AstNodeDType* const elemDtp = varDtp->subDTypep()->skipRefp();
+                elemClassRefDtp = VN_CAST(elemDtp, ClassRefDType);
+                if (elemClassRefDtp) {
+                    isClassRefArray = true;
+                    isUnpackedClassRefArray = VN_IS(varDtp, UnpackArrayDType);
+                }
+            }
+        }
+
         // Global / inline / class-level member-select refs key on the full path
         // (so same-type sub-objects c1.x, c2.x stay distinct), and a foreign static
         // is registered in each class using it; a plain class-level variable keys
         // on user3(). Inline 'with' dedups per function (own solver).
-        const bool perClass = isGlobalConstrained || memberRefp || foreignStatic;
+        // The objects of a handle array are registered by each class's randomize().
+        const bool perClass = isGlobalConstrained || memberRefp || foreignStatic || isClassRefArray;
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
                                                        : varp->user3();
@@ -1395,21 +1418,6 @@ class ConstraintExprVisitor final : public VNVisitor {
                 m_writtenVars.insert(smtName);
             // For global constraints, delete nodep after processing
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
-
-            bool isClassRefArray = false;
-            bool isUnpackedClassRefArray = false;
-            AstClassRefDType* elemClassRefDtp = nullptr;
-            {
-                AstNodeDType* varDtp = varp->dtypep()->skipRefp();
-                if (varDtp->isNonPackedArray()) {
-                    AstNodeDType* const elemDtp = varDtp->subDTypep()->skipRefp();
-                    elemClassRefDtp = VN_CAST(elemDtp, ClassRefDType);
-                    if (elemClassRefDtp) {
-                        isClassRefArray = true;
-                        isUnpackedClassRefArray = VN_IS(varDtp, UnpackArrayDType);
-                    }
-                }
-            }
 
             // A foreign static is registered in this class's randomize(), where its rand_mode,
             // held by its own class, is applied on each call
