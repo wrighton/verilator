@@ -2280,6 +2280,27 @@ class TaskVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(vscp->unlinkFrBack()), vscp);
                 }
             }
+            // Calls to a non-inlined function only need its ports and purity, so free the rest of
+            // its body now rather than at the end of the visitor (replaceGetterCall still needs a
+            // getter's body). The visitor follows no other pointer into it except as kept below.
+            if (noInline && !getterVarRefp(nodep)) {
+                // Clear first, as a cached value may be stale or provisional (within recursion)
+                VIsCached::clearCacheTree();
+                const bool pure = nodep->isPure();
+                AstNode* const impurep = m_statep->checkImpure(nodep);
+                for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
+                    nextp = stmtp->nextp();
+                    if (VN_IS(stmtp, Var)) continue;
+                    // Keep the impure reference, IMPURE warnings on callers may show it
+                    if (impurep
+                        && stmtp->exists([&](const AstVarRef* refp) { return refp == impurep; })) {
+                        pushDeletep(impurep->unlinkFrBack());
+                    }
+                    VL_DO_DANGLING(stmtp->unlinkFrBack()->deleteTree(), stmtp);
+                }
+                // A call computes its purity from the body, so keep an impure function impure
+                if (!pure) nodep->addStmtsp(new AstCStmt{nodep->fileline()});
+            }
             // Just push for deletion, as other references to func may
             // remain until visitor exits
             nodep->unlinkFrBack();
