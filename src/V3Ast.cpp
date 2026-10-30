@@ -1796,7 +1796,15 @@ static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDTyp
     if (toBaseDtp == fromBaseDtp) return VCastable::COMPATIBLE;
 
     if (toNumericable) {
-        if (fromNumericable) return VCastable::COMPATIBLE;
+        if (fromNumericable) {
+            // A string and a real are neither assignment compatible nor both bit-stream types
+            // (IEEE 1800-2023 6.24.1, 6.24.3)
+            if ((toBaseDtp->isString() && fromBaseDtp->isDouble())
+                || (toBaseDtp->isDouble() && fromBaseDtp->isString())) {
+                return VCastable::INCOMPATIBLE;
+            }
+            return VCastable::COMPATIBLE;
+        }
     } else if (VN_IS(toBaseDtp, EnumDType)) {
         if (VN_IS(fromBaseDtp, EnumDType) && toDtp->sameTree(fromDtp))
             return VCastable::ENUM_IMPLICIT;
