@@ -5056,13 +5056,6 @@ class WidthVisitor final : public VNVisitor {
         } else {
             // Pretty 'item.member', which is no SystemVerilog identifier
             const string methodName = nodep->name() + "__DOT__" + member;
-            if (member == "get_inst_coverage" && callp && callp->argsp()) {
-                // The covered and total bins (19.8), which the copy would never assign
-                callp->argsp()->v3warn(E_UNSUPPORTED,
-                                       "Unsupported: arguments of 'get_inst_coverage' of "
-                                       "coverpoint or cross "
-                                           << nodep->prettyNameQ());
-            }
             if (member == "get_inst_coverage" && !itemp->instCoveragep()) {
                 AstFunc* const funcp
                     = VN_AS(m_memberMap.findMember(classp, member), Func)->cloneTree(false);

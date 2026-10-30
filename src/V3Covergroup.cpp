@@ -4231,17 +4231,36 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     void generateItemCoverage(const AstNodeFuncCovItem* itemp, AstVar* varp) {
         AstFunc* const funcp = itemp->instCoveragep();
         if (!funcp) return;
+        // The calculation also assigns its covered bins and all its bins to the optional ref
+        // arguments, covered_bins and total_bins (19.8), or their defaults
         FileLine* const fl = funcp->fileline();
+        std::vector<AstVar*> argps;  // covered_bins and total_bins
+        for (AstNode* const declp : funcp->declspList()) {
+            AstVar* const argp = VN_CAST(declp, Var);
+            if (argp && argp->isIO() && !argp->isFuncReturn()) argps.push_back(argp);
+        }
+        UASSERT_OBJ(argps.size() == 2, funcp, "get_inst_coverage() without its two arguments");
+        AstVar* const coveredp = argps[0];
+        AstVar* const totalp = argps[1];
         if (!varp) {
+            for (AstVar* const binsp : {coveredp, totalp}) {
+                funcp->addStmtsp(
+                    new AstAssign{fl, new AstVarRef{fl, binsp, VAccess::WRITE},
+                                  new AstConst{fl, AstConst::DTyped{}, binsp->dtypep()}});
+            }
             generateInstCoverage(funcp, new AstConst{fl, AstConst::RealDouble{}, 0.0}, nullptr);
             return;
         }
-        AstCMethodHard* const instp = itemCall(fl, varp, VCMethod::COVERGROUP_COVERAGE);
+        AstCMethodHard* const instp = itemCall(fl, varp, VCMethod::COVERGROUP_ITEM_COVERAGE,
+                                               {new AstVarRef{fl, coveredp, VAccess::WRITE},
+                                                new AstVarRef{fl, totalp, VAccess::WRITE}});
         instp->dtypeSetDouble();
         AstCMethodHard* mergedp = nullptr;
         if (m_cgMayMerge) {
             mergedp = instanceCall(fl, VCMethod::COVERGROUP_MERGED_COVERAGE);
             mergedp->addPinsp(memberRef(fl, varp));
+            mergedp->addPinsp(new AstVarRef{fl, coveredp, VAccess::WRITE});
+            mergedp->addPinsp(new AstVarRef{fl, totalp, VAccess::WRITE});
             mergedp->dtypeSetDouble();
         }
         generateInstCoverage(funcp, instp, mergedp);

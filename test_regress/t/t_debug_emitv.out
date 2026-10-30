@@ -1037,13 +1037,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1100,13 +1100,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1162,13 +1162,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1226,13 +1226,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1315,13 +1315,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1412,13 +1412,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1497,13 +1497,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1615,13 +1615,13 @@ class Cls;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1674,13 +1674,13 @@ class Cls;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
