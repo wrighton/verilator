@@ -315,6 +315,14 @@ class AssertDeFutureVisitor final : public VNVisitor {
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    void visit(AstPExpr* nodep) override {
+        // V3AssertPre lowered this operator to a forked process, which cannot be evaluated one
+        // tick late; the rest of the visit then only strips the future value functions
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported: future sampled value function in a property"
+                                     " with this temporal operator");
+        m_unsupported = true;
+        iterateChildren(nodep);
+    }
     void visit(AstNodeFTaskRef* nodep) override { unsupported(nodep); }
     void visit(AstMethodCall* nodep) override { unsupported(nodep); }
     void visit(AstNode* nodep) override {
