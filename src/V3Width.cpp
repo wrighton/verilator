@@ -5995,7 +5995,7 @@ class WidthVisitor final : public VNVisitor {
                 argp->v3warn(E_UNSUPPORTED,
                              "Unsupported: Non-variable expression as 'randomize()' argument");
                 VL_DO_DANGLING(argp->unlinkFrBack()->deleteTree(), argp);
-            } else if (exprp) {
+            } else if (exprp && exprp != argp->exprp()) {
                 // The passed in variable is MemberRef'ected from the MethodCall target
             } else if (classp->existsMember([&](const AstClass*, const AstVar* memberVarp) {
                            return memberVarp == randVarp;
