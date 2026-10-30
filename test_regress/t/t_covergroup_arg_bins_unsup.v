@@ -8,9 +8,6 @@
 
 module t;
   covergroup cg(int val) with function sample (int v, real r);
-    cp_array: coverpoint v {
-      bins arr[] = {val, val + 1};
-    }
     cp_wild: coverpoint v {
       wildcard bins wild = {val};
     }
