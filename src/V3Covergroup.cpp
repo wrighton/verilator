@@ -341,7 +341,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     // Names of the transition sequence states, as a bin may hold several sequences
     V3UniqueNames m_seqposNames{"__Vseqpos"};
     VDouble0 m_statTransitionTables;  // Statistic tracking
-    // Single bins whose values the constructor computes; see constructedValues()
+    // Bins, or arrays of a bin per value, whose values the constructor computes; see
+    // constructedValues()
     std::set<const AstCoverBin*> m_constructedValueBins;
     std::vector<AstNodeExpr*> m_detachedValues;  // Array-bin values m_cpBins refers to
     std::set<AstCoverCross*>
@@ -683,8 +684,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
 
     // True for bins whose values the covergroup constructor computes
     bool isConstructedBins(const AstCoverBin* binp) const {
-        // A sized array, bins of the values a 'with' filter keeps, or a bin of values known only
-        // then.
+        // A sized array, bins of the values a 'with' filter keeps, or a bin or array without a
+        // size of values known only then.
         return isSizedArray(binp) || binWith(binp) || m_constructedValueBins.count(binp);
     }
 
@@ -788,9 +789,9 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                 continue;
             }
             if (!isSizedArray(binp) && !binWith(binp) && constructedValues(binp)) {
-                // Only a single bin of an integral coverpoint has values the constructor
-                // computes
-                if (!integral || binp->isArray() || binp->isWildcard() || binp->transp()) {
+                // Only a bin, or array of a bin per value, of an integral coverpoint has values
+                // the constructor computes
+                if (!integral || binp->isWildcard() || binp->transp()) {
                     binp->v3warn(E_UNSUPPORTED, "Unsupported: covergroup argument or instance"
                                                 " constant value in this kind of bin");
                     dropBins(coverpointp, binp);
@@ -2050,12 +2051,20 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         args.push_back(ctext(fl, quoted(VIdProtect::protectIf(fl->filename(), prot))));
         args.push_back(cnum(fl, static_cast<uint32_t>(fl->lineno())));
         args.push_back(cnum(fl, static_cast<uint32_t>(fl->firstColumn())));
-        if (!withp) args.push_back(cnum(fl, !binp->isArray()));
+        if (!withp) args.push_back(binGrouping(binp));
         m_constructorp->addStmtsp(
             itemCall(fl, cpVarp,
                      withp ? VCMethod::COVERGROUP_WITH_FINISH : VCMethod::COVERGROUP_SIZED_FINISH,
                      args)
                 ->makeStmt());
+    }
+
+    // The VlCovBinGrouping argument of the bins 'binp' whose values the constructor computes
+    static AstCExpr* binGrouping(const AstCoverBin* binp) {
+        const string grouping = !binp->isArray()     ? "Single"
+                                : binp->arraySizep() ? "Fixed"
+                                                     : "Values";
+        return ctext(binp->fileline(), "VlCovBinGrouping::" + grouping);
     }
 
     // Emit the constructor code evaluating the 'with' filter of 'binp' for each of its candidate
@@ -2078,13 +2087,10 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                             AstNodeExpr* exprp, const string& prefix) {
         FileLine* const fl = withp->fileline();
         const bool wide = exprp->isWide();
-        const string grouping = !binp->isArray()     ? "Single"
-                                : binp->arraySizep() ? "Fixed"
-                                                     : "Values";
-        m_constructorp->addStmtsp(itemCall(fl, cpVarp, VCMethod::COVERGROUP_WITH_BEGIN,
-                                           {ctext(fl, "VlCovBinGrouping::" + grouping),
-                                            cnum(fl, v3Global.opt.coverageMaxBins())})
-                                      ->makeStmt());
+        m_constructorp->addStmtsp(
+            itemCall(fl, cpVarp, VCMethod::COVERGROUP_WITH_BEGIN,
+                     {binGrouping(binp), cnum(fl, v3Global.opt.coverageMaxBins())})
+                ->makeStmt());
         // The candidates count in the coverpoint's width, and the filter reads each as 'item',
         // of the coverpoint's type, so that a filter changing 'item' cannot change the loop
         AstNodeDType* const valueDTypep = exprp->dtypep();
