@@ -965,6 +965,8 @@ public:
     void clearAll();  // Clear both constraints and variables
     // Unregister the fields of the objects in a class handle array
     void clear_elem_vars(const std::string& arrayName);
+    // Unregister a variable
+    void clear_var(const std::string& name) { m_vars.erase(name); }
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     void solveBefore(const std::string& beforeName,
                      const std::string& afterName);  // Register solve-before ordering
