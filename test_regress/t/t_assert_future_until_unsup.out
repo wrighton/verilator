@@ -1,0 +1,30 @@
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:15:37: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) a until $rising_gclk(b));
+      |                                     ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:16:51: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   16 |   assert property (@(posedge clk) $future_gclk(a) until_with b);
+      |                                                   ^~~~~~~~~~
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:17:37: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   17 |   assert property (@(posedge clk) a s_until $falling_gclk(b));
+      |                                     ^~~~~~~
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:18:37: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   18 |   assert property (@(posedge clk) a s_until_with $changing_gclk(b));
+      |                                     ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:19:41: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   19 |   assert property (@(posedge clk) a |-> s_eventually $steady_gclk(b));
+      |                                         ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:20:55: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   20 |   assert property (@(posedge clk) $rising_gclk(a) |-> s_eventually b);
+      |                                                       ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_assert_future_until_unsup.v:21:42: Unsupported: future sampled value function in a property with this temporal operator
+                                                         : ... note: In instance 't'
+   21 |   assert property (@(posedge clk) a [=2] |-> $future_gclk(b));
+      |                                          ^~~
+%Error: Exiting due to
