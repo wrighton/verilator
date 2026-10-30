@@ -188,4 +188,20 @@
                                    : ... note: In instance 't'
    80 |   int sx[s_t] = '{'{1, 4'bx} : 31};
       |                   ^~
+%Error-ENUMVALUE: t/t_pattern_key_bad.v:88:42: Implicit conversion to enum 'enum t.e_t' from 'bit[31:0]' (IEEE 1800-2023 6.19.3)
+                                             : ... note: In instance 't'
+                                             : ... Suggest use enum's mnemonic, or static cast
+   88 |   int eint[e_t] = '{E0: 40, e_t'(1): 41, 3: 42, 5: 43, default: 44};
+      |                                          ^
+                  ... For error description see https://verilator.org/warn/ENUMVALUE?v=latest
+%Error-ENUMVALUE: t/t_pattern_key_bad.v:88:49: Implicit conversion to enum 'enum t.e_t' from 'bit[31:0]' (IEEE 1800-2023 6.19.3)
+                                             : ... note: In instance 't'
+                                             : ... Suggest use enum's mnemonic, or static cast
+   88 |   int eint[e_t] = '{E0: 40, e_t'(1): 41, 3: 42, 5: 43, default: 44};
+      |                                                 ^
+%Error-ENUMVALUE: t/t_pattern_key_bad.v:89:23: Implicit conversion to enum 'enum t.e_t' from 'enum t.f_t' (IEEE 1800-2023 6.19.3)
+                                             : ... note: In instance 't'
+                                             : ... Suggest use enum's mnemonic, or static cast
+   89 |   int eother[e_t] = '{F0: 45};
+      |                       ^~
 %Error: Exiting due to
