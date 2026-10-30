@@ -79,6 +79,56 @@ public:
 };
 
 //######################################################################
+// Variables read by statements, for an implicit sensitivity list
+
+class WidthCommitReadsVisitor final : public VNVisitorConst {
+    // STATE
+    std::vector<std::pair<AstNodeExpr*, const AstVar*>> m_reads;  // Read expression, its variable
+    std::set<const AstVar*> m_locals;  // Variables declared in the statements
+
+    // VISITORS
+    void visit(AstVar* nodep) override { m_locals.insert(nodep); }
+    void visit(AstNodeVarRef* nodep) override {
+        // The process queue of a disable by name is not a value the statements read
+        if (nodep->access().isReadOrRW() && !nodep->varp()->processQueue()) {
+            m_reads.emplace_back(nodep, nodep->varp());
+        }
+    }
+    // A member of a handle is read as a whole, e.g. a signal of a virtual interface
+    void visit(AstMemberRef* nodep) override {
+        const AstNode* basep = nodep->fromp();
+        while (const AstMemberRef* const memberRefp = VN_CAST(basep, MemberRef)) {
+            basep = memberRefp->fromp();
+        }
+        const AstNodeVarRef* const baseRefp = VN_CAST(basep, NodeVarRef);
+        if (!baseRefp) {
+            iterateChildrenConst(nodep);
+        } else if (nodep->access().isReadOrRW()) {
+            m_reads.emplace_back(nodep, baseRefp->varp());
+        }
+    }
+    // What only nested event or wait expressions read is not included
+    void visit(AstSenTree*) override {}
+    void visit(AstWait* nodep) override { iterateAndNextConstNull(nodep->stmtsp()); }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+    // CONSTRUCTORS
+    explicit WidthCommitReadsVisitor(AstNode* stmtsp) { iterateAndNextConstNull(stmtsp); }
+
+public:
+    // Variables and members the statements read, other than of their own variables
+    static std::vector<AstNodeExpr*> apply(AstNode* stmtsp) {
+        // IEEE 1800-2023 9.4.2.2. Duplicates are left to V3Const.
+        const WidthCommitReadsVisitor visitor{stmtsp};
+        std::vector<AstNodeExpr*> readps;
+        for (const auto& read : visitor.m_reads) {
+            if (!visitor.m_locals.count(read.second)) readps.push_back(read.first);
+        }
+        return readps;
+    }
+};
+
+//######################################################################
 // Now that all widthing is complete,
 // Copy all width() to widthMin().  V3Const expects this
 
@@ -324,17 +374,46 @@ private:
             }
         }
     }
+    // Replace an '@*' by change events on what the statements read; false if they read nothing.
+    bool makeImplicitSenses(AstSenTree* sentreep, AstNode* stmtsp) {
+        AstSenItem* sensesp = nullptr;
+        for (AstNodeExpr* const readp : WidthCommitReadsVisitor::apply(stmtsp)) {
+            AstNodeExpr* const senp = readp->cloneTree(false);
+            if (AstNodeVarRef* const refp = VN_CAST(senp, NodeVarRef)) {
+                refp->access(VAccess::READ);
+            } else {
+                VN_AS(senp, MemberRef)->access(VAccess::READ);
+            }
+            sensesp = AstNode::addNext(
+                sensesp, new AstSenItem{readp->fileline(), VEdgeType::ET_CHANGED, senp});
+        }
+        if (!sensesp) return false;
+        pushDeletep(sentreep->sensesp()->unlinkFrBack());
+        sentreep->addSensesp(sensesp);
+        return true;
+    }
+
     void visit(AstAlways* nodep) override {
         // As have not optimized SenTrees yet, an 'always .*' will be on first and only SenItem
         if (nodep->sentreep() && nodep->sentreep()->sensesp()
             && nodep->sentreep()->sensesp()->isComboStar()) {
-            const bool noReads = nodep->forall(
-                [&](const AstNodeVarRef* refp) { return !refp->access().isReadOrRW(); });
+            // Combinational without a timing control, else waiting on what it reads
+            const bool timing
+                = nodep->exists([](const AstNode* np) { return np->isTimingControl(); });
+            bool noReads;
+            if (timing) {
+                noReads = !makeImplicitSenses(nodep->sentreep(), nodep->stmtsp());
+            } else {
+                noReads = nodep->forall(
+                    [&](const AstNodeVarRef* refp) { return !refp->access().isReadOrRW(); });
+            }
             if (noReads) {
                 nodep->v3warn(ALWNEVER, "'always @*' will never execute as expression list is "
                                         "empty (no variables read)\n"
                                             << nodep->warnMore()
-                                            << "... Suggest use 'always_comb'");
+                                            << (timing ? "... Suggest use an explicit "
+                                                         "sensitivity list"
+                                                       : "... Suggest use 'always_comb'"));
                 VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
                 return;
             }
@@ -371,6 +450,13 @@ private:
         VL_RESTORER(m_taskRefWarn);
         // fork..join_any is allowed to call tasks, and UVM does this
         if (!nodep->isTimingControl()) m_taskRefWarn = false;
+        iterateChildren(nodep);
+        editDType(nodep);
+    }
+    void visit(AstEventControl* nodep) override {
+        if (nodep->sentreep()->sensesp()->isComboStar()) {
+            makeImplicitSenses(nodep->sentreep(), nodep->stmtsp());
+        }
         iterateChildren(nodep);
         editDType(nodep);
     }
