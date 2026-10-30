@@ -1,0 +1,10 @@
+%Error: t/t_cast_real_string_bad.v:13:13: Incompatible types to static cast to 'real' from 'string'
+                                        : ... note: In instance 't'
+   13 |     r = real'(s);
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_real_string_bad.v:14:15: Incompatible types to static cast to 'real' from 'string'
+                                        : ... note: In instance 't'
+   14 |     r = real_t'(s);
+      |               ^
+%Error: Exiting due to
