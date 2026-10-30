@@ -763,8 +763,8 @@ class AssertVisitor final : public VNVisitor {
     bool m_inRestrict = false;  // True inside restrict assertion
     AstNodeStmt* m_passsp = nullptr;  // Current pass statement
     AstNodeStmt* m_failsp = nullptr;  // Current fail statement
+    bool m_inPExprFinal = false;  // Under the end-of-simulation part of a property expression
     AstNodeCoverOrAssert* m_assertp = nullptr;  // Current assertion
-    AstFinal* m_finalp = nullptr;  // Current final block
     VDouble0 m_statLiftedCaseExprs;  // Count of purified case expressions
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
@@ -1067,12 +1067,9 @@ class AssertVisitor final : public VNVisitor {
             AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
             forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
-                if (!m_finalp) {
-                    m_finalp = new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()};
-                    m_modp->addStmtsp(m_finalp);
-                } else {
-                    m_finalp->addStmtsp(finalp->unlinkFrBack());
-                }
+                // A final block of its own, so an action suspending in it, by a task it calls,
+                // does not stop the end-of-simulation checks of other assertions
+                m_modp->addStmtsp(new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()});
             }
             VL_DO_DANGLING2(pushDeletep(pexprp), pexprp, propp);
             return forkp;
@@ -1935,8 +1932,17 @@ class AssertVisitor final : public VNVisitor {
             stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
                                        nodep->vacuous());
         } else if (!nodep->pass() && m_failsp) {
-            stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
-                                       : m_failsp;
+            // The end-of-simulation part runs in a final block of its own, where a timing
+            // control could not resume (IEEE 1800-2023 9.2.3), so the default error is reported
+            // there instead of an action with one
+            if (m_inPExprFinal && m_failsp->existsAndNext([](const AstNode* np) {
+                    return np->isTimingControl();
+                })) {
+                stmtsp = newFireAssertUnchecked(nodep, "");
+            } else {
+                stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
+                                           : m_failsp;
+            }
             stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
         }
         if (stmtsp) {
@@ -1956,7 +1962,10 @@ class AssertVisitor final : public VNVisitor {
         if (m_inRestrict) {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
         } else {
-            iterateChildren(nodep);
+            iterateAndNextNull(nodep->bodyp());
+            VL_RESTORER(m_inPExprFinal);
+            m_inPExprFinal = true;
+            iterateAndNextNull(nodep->finalp());
         }
     }
 
@@ -2203,7 +2212,6 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_obsReactivep);
         VL_RESTORER(m_modPastNum);
         VL_RESTORER(m_modStrobeNum);
-        VL_RESTORER(m_finalp);
         VL_RESTORER_CLEAR(m_modExpr2Sen2DelayedAlwaysp);
         VL_RESTORER_CLEAR(m_modExpr2Sen2DefaultDelayedAlwaysp);
         VL_RESTORER_CLEAR(m_delayedAlways2TickTimep);
@@ -2216,7 +2224,6 @@ class AssertVisitor final : public VNVisitor {
         m_obsEventp = nullptr;
         m_obsReactivep = nullptr;
         m_modStrobeNum = 0;
-        m_finalp = nullptr;
         iterateChildren(nodep);
     }
     void visit(AstAlways* nodep) override {

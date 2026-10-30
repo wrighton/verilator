@@ -80,6 +80,26 @@ module t (
   // The default action carries the same per-attempt multiplicity.
   assert property (@(posedge clk) s_always[1: 3] 1'b1);
 
+  // An NBA in the fail action is legal; in the final block it executes as blocking.
+  bit eos_nba = 0;
+  assert property (@(posedge clk) s_always[1: 3] 1'b1)
+  else begin
+    eos_nba <= 1;
+    $display("EOS_NBA=%0d", eos_nba);
+  end
+
+  // Strong until, pending at $finish, runs its fail action too.
+  assert property (@(posedge clk) (cyc == 1) |=> (1'b1 s_until (cyc > 20)))
+  else $display("EOS_UNTIL");
+
+  // Pending strong attempts at $finish (start 8 and 9) make a negated property hold.
+  assert property (@(posedge clk) not (s_always[1: 3] cyc >= 9))
+  else $display("EOS_NOT_BAD");
+  assert property (@(posedge clk) (cyc == 1) |=> not (1'b1 s_until (cyc > 20)))
+  else $display("EOS_NOT_UNTIL_BAD");
+  assert property (@(posedge clk) not ((s_always[300: 300] 1'b1) or(s_always[300: 300] 1'b1)))
+  else $display("EOS_NOT_OR_BAD");
+
   always @(negedge clk) begin
     if (cyc == 9) abort_now = 1;
     if (cyc == 10) disable_now = 1;

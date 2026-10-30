@@ -1,0 +1,40 @@
+[25] PLAIN
+[25] PLAIN
+[25] WAIT
+[25] WAIT
+[25] PLAIN
+[25] PLAIN
+[25] OTHER_PLAIN
+[25] OTHER_PLAIN
+[26] DELAY
+[26] DELAY
+[26] TASK
+[26] TASK
+[26] TASK
+[26] TASK
+[26] DELAYED
+[26] DELAYED
+[35] EVENT
+[35] EVENT
+*-* All Finished *-*
+[55] %Error: t_prop_s_always_eos_timing.v:28: Assertion failed in top.t
+[55] %Error: t_prop_s_always_eos_timing.v:33: Assertion failed in top.t
+[55] PLAIN
+[55] OTHER_PLAIN
+[55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
+[55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
+[55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
+[55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
+[55] %Error: t_prop_s_always_eos_timing.v:69: Assertion failed in top.t.__VassertBlock___1
+[55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] %Error: t_prop_s_always_eos_timing.v:73: Assertion failed in top.t.__VassertBlock___3
+[55] UNTIL_PLAIN
+[55] UNTIL_PLAIN
+[55] UNTIL_PLAIN
+[55] UNTIL_PLAIN
+[55] UNTIL_PLAIN
+[55] PLAIN
+[55] WAIT
