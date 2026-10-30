@@ -437,9 +437,10 @@ public:
     // CONSTRUCTORS
     explicit TimingSuspendableVisitor(AstNetlist* nodep) {
         iterate(nodep);
-        m_suspGraph.removeTransitiveEdges();
-        m_procGraph.removeTransitiveEdges();
-        // Opaque DPI calls may introduce cycles, so add them after transitive pruning.
+        // Propagation is linear in the graph size. Do not remove transitive edges: process
+        // flags stop at T_ALLOCS_PROC vertices, so a direct call edge is not implied by
+        // another path through a fork branch.
+        // Opaque DPI calls may introduce cycles. Propagation handles these as well.
         for (AstCFunc* const dpiExportp : m_dpiExports) {
             new V3GraphEdge{&m_suspGraph, getSuspendDepVtx(dpiExportp), getSuspendDepVtx(nodep),
                             P_CALL};
