@@ -54,6 +54,7 @@ class UnknownVisitor final : public VNVisitor {
     // Cleared on Netlist
     //  AstSel::user()          -> bool.  Set true if already processed
     //  AstArraySel::user()     -> bool.  Set true if already processed
+    //  AstSliceSel::user()     -> bool.  Set true if already processed
     //  AstNode::user2p()       -> AstIf* Inserted if assignment for conditional
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
@@ -458,8 +459,41 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
 
-    // visit(AstSliceSel) not needed as its bounds are constant and checked
-    // in V3Width.
+    void visit(AstSliceSel* nodep) override {
+        iterateChildren(nodep);
+        if (nodep->user1SetOnce()) return;
+        // A slice not entirely within the array is treated as an invalid index
+        // (IEEE 1800-2023 7.4.6), for both reads and writes
+        FileLine* const fl = nodep->fileline();
+        const AstUnpackArrayDType* const adtypep
+            = VN_AS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
+        AstConst* const maxLsbp = new AstConst{
+            fl, AstConst::WidthedValue{}, nodep->lsbp()->width(),
+            static_cast<uint32_t>(adtypep->elementsConst() - nodep->declRange().elements())};
+        AstNodeExpr* lsbp = V3Const::constifyEdit(nodep->lsbp()->unlinkFrBack());
+        AstNodeExpr* condp = nullptr;
+        if (isStaticlyGte(maxLsbp, lsbp)) {
+            VL_DO_DANGLING(maxLsbp->deleteTree(), maxLsbp);
+        } else {
+            AstNodeExpr* const indexp = newExprStmtOrClone(lsbp);
+            condp = new AstGte{fl, maxLsbp, lsbp};
+            lsbp = indexp;
+        }
+        // The position is within the array when used, so it fits in 32 bits
+        if (lsbp->width() > 32) lsbp = new AstSel{fl, lsbp, 0, 32};
+        nodep->lsbp(lsbp);
+        if (!condp) return;
+        const AstNodeVarRef* const varrefp = VN_CAST(nodep->fromp()->baseFromp(true), NodeVarRef);
+        if (varrefp && varrefp->access().isWriteOrRW()) {
+            replaceBoundLvalue(nodep, condp);
+        } else {
+            // Reading an invalid slice gives the initial value of a variable of its type
+            VNRelinker replaceHandle;
+            nodep->unlinkFrBack(&replaceHandle);
+            AstVarRef* const defaultp = new AstVarRef{fl, createAddTemp(nodep), VAccess::READ};
+            replaceHandle.relink(new AstCond{fl, condp, nodep, defaultp});
+        }
+    }
 
     void visit(AstArraySel* nodep) override {
         iterateChildren(nodep);
