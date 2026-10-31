@@ -202,6 +202,7 @@ module t (/*AUTOARG*/
     if (|downto_32[48:40]) $write("");
     if (|downto_32[55+:3]) $write("");
     if (|downto_32[60-:7]) $write("");
+    if (array[i1+:2] == array[1:2]) $write("");
     if (the_ifaces[2].ifsig) $write("");
     #1 $write("After #1 delay");
     wait(clk == 1) $write("After wait(clk == 1)");

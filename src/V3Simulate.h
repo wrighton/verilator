@@ -1456,16 +1456,21 @@ private:
         if (m_checkOnly || !optimizable()) return;
         // Fetch the base constant array
         if (const AstConsArray* const consp = VN_CAST(fetchValueNull(nodep->fromp()), ConsArray)) {
-            const VNumRange& sliceRange = nodep->declRange();
-            const uint32_t sliceElements = sliceRange.elements();
-            const int sliceLo = sliceRange.lo();
+            const uint32_t sliceElements = nodep->declRange().elements();
+            const V3Number& lsbNum = fetchConst(nodep->lsbp())->num();
             // Use this node's dtype for the slice array
             AstNodeDType* const dtypep = nodep->dtypep()->skipRefp();
             AstConsArray* const newConsp = new AstConsArray{nodep->fileline(), dtypep};
             // Copy slice elements in ascending order
             for (uint32_t idx = 0; idx < sliceElements; ++idx) {
-                const uint32_t baseIdx = sliceLo + idx;
-                newConsp->valuep(idx, consp->valuep(baseIdx)->cloneTree(false));
+                AstNodeExpr* const itemp
+                    = lsbNum.fitsInUInt() ? consp->valuep(lsbNum.toUInt() + idx) : nullptr;
+                if (!itemp) {
+                    VL_DO_DANGLING(newConsp->deleteTree(), newConsp);
+                    clearOptimizable(nodep, "Slice select out of range");
+                    return;
+                }
+                newConsp->valuep(idx, itemp->cloneTree(false));
             }
             // Assign the new constant array and track it for later deletion
             setValue(nodep, newConsp);

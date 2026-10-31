@@ -1660,13 +1660,31 @@ class WidthVisitor final : public VNVisitor {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, BOTH}.p());
-            //
-            // Array indices are always constant
+            iterateCheckSizedSelf(nodep, "Slice position", nodep->lsbp(), SELF, BOTH);
+            if (nodep->lsbp()->width() < 32) {
+                // Extend, so that later bound checks can compare with any array size
+                widthCheckSized(nodep, "Slice position", nodep->lsbp(),
+                                nodep->findBitOrLogicDType(32, 32,
+                                                           nodep->lsbp()->dtypep()->numeric(),
+                                                           nodep->lsbp()->isFourstateOrNoDtype()),
+                                EXTEND_LHS, false);
+            }
             const AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefp();
             const AstUnpackArrayDType* const adtypep = VN_CAST(fromDtp, UnpackArrayDType);
             if (!adtypep) {
                 UINFO(1, "    Related dtype: " << fromDtp);
                 nodep->v3fatalSrc("Packed array reference exceeds dimension of array");
+            }
+            const bool ifaceArray
+                = VN_IS(nodep->fromp(), ConsArray) && isIfaceArrayDType(nodep->fromp()->dtypep());
+            if (ifaceArray) {
+                // Instances are selected at elaboration, so error if the position is variable
+                V3Const::constifyParamsEdit(nodep->lsbp());  // May relink pointed to node
+                if (const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const)) {
+                    const int lsb = lsbConstp->toSInt();
+                    nodep->declRange() = VNumRange{lsb + nodep->declRange().elements() - 1, lsb,
+                                                   nodep->declRange().ascending()};
+                }
             }
             // Build new array Dtype based on the original's base type, but with new bounds
             AstNodeDType* const newDtp
@@ -1686,9 +1704,16 @@ class WidthVisitor final : public VNVisitor {
                 if ((declRange.hi() > adtypep->declRange().hi())
                     || declRange.lo() < adtypep->declRange().lo()) {
                     // Other simulators warn too
-                    nodep->v3error("Slice selection index '" << declRange << "'"
-                                                             << " outside data type's '"
-                                                             << adtypep->declRange() << "'");
+                    if (VN_IS(nodep->lsbp(), Const)) {
+                        nodep->v3error("Slice selection index '" << declRange << "'"
+                                                                 << " outside data type's '"
+                                                                 << adtypep->declRange() << "'");
+                    } else {
+                        nodep->v3error("Slice selection of "
+                                       << declRange.elements()
+                                       << " elements wider than data type's '"
+                                       << adtypep->declRange() << "'");
+                    }
                     // Replaced by a placeholder value, so no element is out of range later, which
                     // is erroring as its default, so it is not cast
                     AstConst* const defaultp
@@ -1705,7 +1730,7 @@ class WidthVisitor final : public VNVisitor {
                 }
             }
             // A slice of a whole array of interfaces is the array of the selected elements
-            if (VN_IS(nodep->fromp(), ConsArray) && isIfaceArrayDType(nodep->fromp()->dtypep())) {
+            if (ifaceArray) {
                 AstConsArray* const fromp = VN_AS(nodep->fromp(), ConsArray);
                 AstConsArray* const newp = new AstConsArray{nodep->fileline(), newDtp};
                 const VNumRange range = nodep->declRange();

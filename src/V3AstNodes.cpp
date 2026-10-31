@@ -1408,11 +1408,13 @@ void AstConsArray::spliceValues(uint64_t index, AstNodeExpr* arrayp) {
         // Element 'n' from the left of 'arrayp', counted from its lo
         const int srcIndex = srcp->declRange().ascending() ? n : elements - 1 - n;
         AstNodeExpr* elemp;
+        const AstSliceSel* const slicep = VN_CAST(arrayp, SliceSel);
+        const AstConst* const lsbConstp = slicep ? VN_CAST(slicep->lsbp(), Const) : nullptr;
         if (const AstConsArray* const consp = VN_CAST(arrayp, ConsArray)) {
             elemp = consp->valuep(srcIndex)->cloneTree(false);
-        } else if (AstSliceSel* const slicep = VN_CAST(arrayp, SliceSel)) {
+        } else if (lsbConstp) {
             elemp = new AstArraySel{arrayp->fileline(), slicep->fromp()->cloneTreePure(false),
-                                    slicep->declRange().lo() + srcIndex};
+                                    lsbConstp->toSInt() + srcIndex};
         } else {
             elemp = new AstArraySel{arrayp->fileline(), arrayp->cloneTreePure(false), srcIndex};
         }

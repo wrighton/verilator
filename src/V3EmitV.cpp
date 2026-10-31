@@ -1109,7 +1109,13 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstSliceSel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
-        puts(cvtToStr(nodep->declRange()));
+        if (VN_IS(nodep->lsbp(), Const)) {
+            puts(cvtToStr(nodep->declRange()));
+        } else {
+            puts("[");
+            iterateAndNextConstNull(nodep->lsbp());
+            puts(" +: " + cvtToStr(nodep->declRange().elements()) + "]");
+        }
     }
     void visit(AstThisRef* /*nodep*/) override { puts("this"); }
     void visit(AstTypedef* nodep) override {

@@ -5485,12 +5485,16 @@ public:
 class AstSliceSel final : public AstNodeTriop {
     // Multiple array element extraction
     // @astgen alias op1 := fromp
-    VNumRange m_declRange;  // Range of the 'from' array if isRanged() is set, else invalid
+    // @astgen alias op2 := lsbp // Index into 'from' of the lowest selected element
+    // Range of the selected elements; its index i is element lsbp() + i - lo() of 'from'
+    VNumRange m_declRange;
+
 public:
-    AstSliceSel(FileLine* fl, AstNodeExpr* fromp, const VNumRange& declRange)
-        : ASTGEN_SUPER_SliceSel(fl, fromp,
-                                new AstConst(fl, declRange.lo()),  // Need () constructor
-                                new AstConst(fl, declRange.elements()))  // Need () constructor
+    AstSliceSel(FileLine* fl, AstNodeExpr* fromp, const VNumRange& declRange,
+                AstNodeExpr* lsbp = nullptr)
+        : ASTGEN_SUPER_SliceSel(
+              fl, fromp, lsbp ? lsbp : new AstConst(fl, declRange.lo()),  // Need () constructor
+              new AstConst(fl, declRange.elements()))  // Need () constructor
         , m_declRange{declRange} {}
     ASTGEN_MEMBERS_AstSliceSel;
     void dump(std::ostream& str) const override;

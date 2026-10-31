@@ -112,12 +112,22 @@ class SliceVisitor final : public VNVisitor {
                                cloneAndSel(snodep->elsep(), elements, elemIdx, needPure)};
         } else if (const AstSliceSel* const snodep = VN_CAST(nodep, SliceSel)) {
             UINFO(9, "  cloneSliceSel(" << elements << "," << elemIdx << ") " << nodep);
-            const int leOffset = (snodep->declRange().lo()
-                                  + (!snodep->declRange().ascending()
-                                         ? snodep->declRange().elements() - 1 - elemIdx
-                                         : elemIdx));
-            newp = new AstArraySel{nodep->fileline(), snodep->fromp()->cloneTree(false, needPure),
-                                   leOffset};
+            // Offset from the lowest selected element
+            const int offset = !snodep->declRange().ascending()
+                                   ? snodep->declRange().elements() - 1 - elemIdx
+                                   : elemIdx;
+            AstNodeExpr* const fromp = snodep->fromp()->cloneTree(false, needPure);
+            if (const AstConst* const lsbConstp = VN_CAST(snodep->lsbp(), Const)) {
+                newp = new AstArraySel{nodep->fileline(), fromp, lsbConstp->toSInt() + offset};
+            } else {
+                AstNodeExpr* const lsbp = snodep->lsbp()->cloneTree(false, needPure);
+                AstNodeExpr* const indexp
+                    = new AstAdd{nodep->fileline(), lsbp,
+                                 new AstConst{nodep->fileline(), AstConst::WidthedValue{},
+                                              lsbp->width(), static_cast<uint32_t>(offset)}};
+                indexp->dtypeFrom(lsbp);
+                newp = new AstArraySel{nodep->fileline(), fromp, indexp};
+            }
         } else if (const AstSampled* const snodep = VN_CAST(nodep, Sampled)) {
             UINFO(9, "  cloneSliceSel(" << elements << "," << elemIdx << ") " << nodep);
             AstNodeExpr* const exprp = VN_AS(snodep->exprp(), NodeExpr);
@@ -300,11 +310,9 @@ class SliceVisitor final : public VNVisitor {
         // VlUnpacked::slice<N_Out>(loIdx), as DYN_SLICE already does for Queues.
         iterateChildren(nodep);
         AstNodeExpr* const fromp = nodep->fromp()->unlinkFrBack();
-        AstConst* const lop = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, 32,
-                                           static_cast<uint32_t>(nodep->declRange().lo())};
         AstCMethodHard* const newp
             = new AstCMethodHard{nodep->fileline(), fromp, VCMethod::ARRAY_SLICE};
-        newp->addPinsp(lop);
+        newp->addPinsp(nodep->lsbp()->unlinkFrBack());
         newp->dtypeFrom(nodep);  // Reuse the already-correct sliced array dtype
         newp->didWidth(true);
         newp->protect(false);
