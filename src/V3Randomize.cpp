@@ -863,7 +863,6 @@ class CaptureVisitor final : public VNVisitor {
     std::map<const AstVar*, AstVar*> m_varCloneMap;  // Map original var nodes to their clones
     std::set<AstNode*> m_ignore;  // Nodes to ignore for capturing
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
-    bool m_staticContext = false;  // True when capturing from a static function context
 
     // METHODS
 
@@ -936,17 +935,16 @@ class CaptureVisitor final : public VNVisitor {
         if (varIsParam) return CaptureMode::CAP_VALUE;
         // Static var in function (will not be inlined, because it's in class)
         if (callerIsClass && varIsFuncLocal) return CaptureMode::CAP_VALUE;
-        // Static class members in static context don't need 'this' capture;
-        // V3Class will move both the function and the member to __Vclpkg
-        if (m_staticContext && callerIsClass && varIsFieldOfCaller
-            && varRefp->varp()->lifetime().isStatic())
-            return CaptureMode::CAP_NO;
-        if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
-        // Static member of a different class: V3Width replaces AstMemberRef with a bare
-        // AstVarRef (classOrPackagep set). Capture current value as a function argument.
-        if (callerIsClass && varClassp && !varIsFieldOfCaller
-            && varRefp->varp()->lifetime().isStatic())
+        if (varClassp && varRefp->varp()->lifetime().isStatic()) {
+            // A static member is not reached through 'this'. One of the class the randomize
+            // function is created in, or of a base, is referenced directly, which keeps the
+            // object's static rand members random (IEEE 1800-2023 18.4). Any other is captured
+            // by value.
+            const AstClass* const funcClassp = m_targetp ? m_targetp : callerClassp;
+            if (AstClass::isClassExtendedFrom(funcClassp, varClassp)) return CaptureMode::CAP_NO;
             return CaptureMode::CAP_VALUE;
+        }
+        if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
         UASSERT_OBJ(!callerIsClass, varRefp, "Invalid reference?");
         return CaptureMode::CAP_VALUE;
     }
@@ -1068,11 +1066,9 @@ class CaptureVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
-    explicit CaptureVisitor(AstNode* const nodep, AstNodeModule* callerp, AstClass* const targetp,
-                            bool staticContext = false)
+    explicit CaptureVisitor(AstNode* const nodep, AstNodeModule* callerp, AstClass* const targetp)
         : m_callerp{callerp}
-        , m_targetp{targetp}
-        , m_staticContext{staticContext} {
+        , m_targetp{targetp} {
         iterateAndNextNull(nodep);
     }
 
@@ -2610,8 +2606,7 @@ class RandomizeVisitor final : public VNVisitor {
             if (basicStmtsp) randomizeFuncp->addStmtsp(basicStmtsp);
             if (withp) {
                 FileLine* const fl = nodep->fileline();
-                withCapturep = std::make_unique<CaptureVisitor>(withp->exprp(), m_modp, nullptr,
-                                                                inStaticContext);
+                withCapturep = std::make_unique<CaptureVisitor>(withp->exprp(), m_modp, nullptr);
                 withCapturep->addFunctionArguments(randomizeFuncp);
                 AstNodeExpr* const solverCallp = m_solverp->lowerStdRandomizeWith(
                     nodep, randomizeFuncp, withp->exprp()->unlinkFrBackWithNext(), stdrandp);
