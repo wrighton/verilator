@@ -217,6 +217,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
     bool m_inStdWith = false;  // True when inside a 'with {}' clause
     std::set<AstNodeVarRef*> m_staticRefs;  // References to static variables under `with` clauses
     AstWith* m_withp = nullptr;  // Current 'with' constraint node
+    AstClass* m_withClassp = nullptr;  // Class of obj in the current obj.randomize() with
 
     // METHODS
     // Mark all rand variables in IS_RANDOMIZED_GLOBAL classes as globalConstrained
@@ -746,8 +747,17 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
         if (nodep->varp()->lifetime().isStatic()) m_staticRefs.emplace(nodep);
 
+        // In obj.randomize() with, linking made obj's members MemberRefs of the LambdaArgRef,
+        // and V3Width turned the static ones into VarRefs of obj's class. Any other reference
+        // names a variable in the caller's scope (IEEE 1800-2023 18.7), which is a state value
+        // even if declared rand.
+        const bool callerVar = m_withClassp
+                               && !(nodep->varp()->lifetime().isStatic()
+                                    && AstClass::isClassExtendedFrom(
+                                        m_withClassp, VN_CAST(nodep->classOrPackagep(), Class)));
         // Mark as randomizable if: rand-declared, or listed in std::randomize() args
-        if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)) {
+        if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)
+            && !callerVar) {
             nodep->user1(true);
         } else if (isVarInStdRandomizeArgs(nodep->varp())) {
             nodep->user1(true);
@@ -800,7 +810,11 @@ class RandomizeMarkVisitor final : public VNVisitor {
     }
     void visit(AstWith* nodep) override {
         VL_RESTORER(m_withp);
+        VL_RESTORER(m_withClassp);
         m_withp = nodep;
+        if (const AstMethodCall* const callp = VN_CAST(nodep->backp(), MethodCall)) {
+            m_withClassp = VN_AS(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)->classp();
+        }
         if (m_stdRandCallp && nodep == m_stdRandCallp->withp()) m_inStdWith = true;
         iterateChildrenConst(nodep);
         m_inStdWith = false;
@@ -976,7 +990,8 @@ class CaptureVisitor final : public VNVisitor {
     void captureRefByThis(AstNodeVarRef* nodep, CaptureMode /*capModeFlags*/) {
         AstVar* const thisp = importThisp(nodep->fileline());
         AstVarRef* const thisRefp = new AstVarRef{nodep->fileline(), thisp, nodep->access()};
-        thisRefp->user1(true);
+        // A caller variable is not the object's, even when the classes match
+        thisRefp->user1(nodep->user1());
         m_ignore.emplace(thisRefp);
         AstMemberRef* const memberRefp
             = new AstMemberRef{nodep->fileline(), thisRefp, nodep->varp()};
