@@ -65,11 +65,14 @@ class LocalizeVisitor final : public VNVisitor {
         // Don't want to malloc/free the backing store all the time
         if (nodep->varp()->basicp() && nodep->varp()->basicp()->isNbaGenericQueue()) return false;
         if (VN_IS(nodep->dtypep()->skipRefp(), ClosurePoolDType)) return false;
-        // Do not localize strings. They result in unnecessary initialization
-        // and bloated code size due to destructor calls when unused.
+        // Do not localize strings used in hot code. They result in unnecessary initialization
+        // and bloated code size due to destructor calls when unused. In cold code this cost
+        // is negligible, and localizing avoids a model member per string temporary.
         // TODO: Local variables should be pushed into the narrowest scope rather
         // than emitted at the top of the function. See discussion in #6969.
-        if (nodep->dtypep()->skipRefp()->isString()) return false;
+        if (nodep->dtypep()->skipRefp()->isString() && existsNonSlow(m_accessors(nodep))) {
+            return false;
+        }
         // Variables used in super constructor call can't be localized, because
         // in C++ there is no way to declare them before base class constructor call
         return ((!nodep->user1()  // Not marked as not optimizable, or ...
@@ -78,6 +81,13 @@ class LocalizeVisitor final : public VNVisitor {
                      && m_accessors(nodep).size() == 1))
                 // and under size limit
                 && nodep->varp()->dtypep()->widthTotalBytes() <= v3Global.opt.localizeMaxSize());
+    }
+
+    static bool existsNonSlow(const std::unordered_set<AstCFunc*>& funcps) {
+        for (const AstCFunc* const funcp : funcps) {
+            if (!funcp->slow()) return true;
+        }
+        return false;
     }
 
     static bool existsNonLeaf(const std::unordered_set<AstCFunc*>& funcps) {
