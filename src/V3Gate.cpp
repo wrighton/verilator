@@ -38,6 +38,10 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 constexpr uint32_t GATE_DEDUP_MAX_DEPTH = 20;
+// Graph edge weight of a read in a loop, as it may be evaluated many times. An edge weight
+// at least this marks a read in a loop, assuming fewer reads outside loops of a variable by
+// one logic block.
+constexpr int GATE_LOOP_READ_WEIGHT = 1 << 10;
 
 //######################################################################
 // Gate graph classes
@@ -207,6 +211,7 @@ class GateBuildVisitor final : public VNVisitorConst {
     bool m_inStaticActive = false;  // Underneath static active
     bool m_inInitialActive = false;  // Underneath initial active
     bool m_inSenItem = false;  // Underneath AstSenItem; any varrefs are clocks
+    bool m_inLoop = false;  // Underneath AstLoop
 
     // METHODS
     void checkNode(AstNode* nodep) {
@@ -304,10 +309,17 @@ class GateBuildVisitor final : public VNVisitorConst {
             }
         }
 
-        // We use weight of one; if we ref the var more than once, when we simplify,
-        // the weight will increase
+        // We use weight of one, or GATE_LOOP_READ_WEIGHT for a read in a loop; if we ref
+        // the var more than once, when we simplify, the weights are added
         if (nodep->access().isWriteOrRW()) m_graphp->addEdge(m_logicVertexp, vVtxp, 1);
-        if (nodep->access().isReadOrRW()) m_graphp->addEdge(vVtxp, m_logicVertexp, 1);
+        if (nodep->access().isReadOrRW()) {
+            m_graphp->addEdge(vVtxp, m_logicVertexp, m_inLoop ? GATE_LOOP_READ_WEIGHT : 1);
+        }
+    }
+    void visit(AstLoop* nodep) override {
+        VL_RESTORER(m_inLoop);
+        m_inLoop = true;
+        iterateChildrenConst(nodep);
     }
     void visit(AstConcat* nodep) override {
         UASSERT_OBJ(!(VN_IS(nodep->backp(), NodeAssign)
@@ -599,7 +611,8 @@ class GateInline final {
         // Don't inline on first round if reads more than one variable
         if (nReads > 1 && !allowMultiIn) return false;
         // Reads multiple variables, or is expensive to compute.
-        // Inline if used only once, ignoring slow code, or dead code that can be deleted.
+        // Inline if used only once, outside loops, ignoring slow code, or dead code that can be
+        // deleted.
         int n = 0;
         for (V3GraphEdge& edge : vVtxp->outEdges()) {
             const GateLogicVertex* const dstVtxp = edge.top()->as<GateLogicVertex>();
@@ -776,11 +789,14 @@ class GateInline final {
 
                 recordSubstitution(vscp, substp, dstVtxp->nodep());
 
+                // If the replaced read was in a loop, so are the new reads
+                const int weight
+                    = edgep->weight() >= GATE_LOOP_READ_WEIGHT ? GATE_LOOP_READ_WEIGHT : 1;
                 // If the new replacement referred to a signal,
                 // Correct the graph to point to this new generating variable
                 for (AstVarScope* const newVscp : okVisitor.readVscps()) {
                     GateVarVertex* const varvertexp = m_graph.makeVarVertex(newVscp);
-                    m_graph.addEdge(varvertexp, dstVtxp, 1);
+                    m_graph.addEdge(varvertexp, dstVtxp, weight);
                     // Propagate clock attribute onto generating node
                     varvertexp->propagateAttrFrom(vVtxp);
                 }
