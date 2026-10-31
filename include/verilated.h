@@ -1071,8 +1071,8 @@ constexpr uint32_t VL_IFACEREF_NO_PARENT = ~0U;
 
 // One interface reference, consumed by VerilatedScope::ifaceRefsInsertFromTable()
 struct VlIfaceRefTableEntry final {
-    uint32_t ptrOffset;  // offsetof of the referred-to __Vscopep_* member within the Syms object
-    // offsetof of the enclosing scope's __Vscopep_* member, or VL_IFACEREF_NO_PARENT
+    uint32_t ptrOffset;  // offsetof of the referred-to scope pointer within the Syms object
+    // offsetof of the enclosing scope's pointer, or VL_IFACEREF_NO_PARENT
     uint32_t parentPtrOffset;
     const char* namep;  // Name of the reference port
     // Path below the name selected by topIndex, which is prepended at construction
@@ -1084,7 +1084,9 @@ struct VlIfaceRefTableEntry final {
 // One scope, consumed by VerilatedScope::scopesConstructFromTable(); replaces
 // per-scope 'new VerilatedScope{...}' statements, which compiles faster at scale.
 struct VlScopeTableEntry final {
-    size_t ptrOffset;  // offsetof of the target __Vscopep_* member within the Syms object
+    // offsetof of the target scope pointer (a __Vscopep_* member or a __Vscopesp element)
+    // within the Syms object
+    size_t ptrOffset;
     const char* namep;  // Scope suffix name (protected), string literal
     const char* identp;  // Identifier with escapes removed (protected)
     const char* defnamep;  // Definition name (SCOPE_MODULE only), else "<null>"
