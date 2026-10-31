@@ -29,13 +29,15 @@
 
 //######################################################################
 // Set user4p in all CFunc, Var, and coverage declarations to point to the
-// containing AstNodeModule, and number the explicitly constructed members
+// containing AstNodeModule, and number the members that may be in named structs
 
 class EmitCParentModule final {
 public:
     struct MemberData final {
-        size_t index = 0;  // Index of an explicitly constructed member
+        // Index of an explicitly constructed member, or of a nameable trivially constructible one
+        size_t index = 0;
         size_t count = 0;  // Number of explicitly constructed members in a module
+        size_t trivialCount = 0;  // Number of nameable trivially constructible members in a module
     };
 
 private:
@@ -44,7 +46,7 @@ private:
     //   AstVar::user4p()            AstNodeModule* Parent module pointer
     //   AstNodeCoverDecl::user4p()  AstNodeModule* Parent module pointer
     //   AstVar::user3u()            MemberData* with serial member index
-    //   AstNodeModule::user3u()     MemberData* with serial member count
+    //   AstNodeModule::user3u()     MemberData* with serial member counts
     const VNUser4InUse user4InUse;
     const VNUser3InUse user3InUse;
     VNUser3Allocator<AstNode, MemberData> m_members;  // Immutable after serial setup
@@ -319,6 +321,21 @@ public:
         // meaning a runtime C++ constructor/destructor invocation is needed
         return !varp->isTriviallyConstructible();
     }
+    // Return whether a member is trivially constructible and may be in named structs
+    static bool isNameableTrivial(const AstVar* varp) VL_MT_STABLE {
+        // Classes keep anonymous structs, as the named structs of a derived class would hide
+        // those of its base class. User code accesses public members by name.
+        const AstNodeModule* const modp = EmitCParentModule::get(varp);
+        return modp && !VN_IS(modp, Class) && varp->isModelState() && !varp->isPrimaryIO()
+               && varp->isTriviallyConstructible() && !varp->isSigPublic();
+    }
+    // Return whether the nameable trivially constructible members of a module are in named structs
+    static bool hasNamedTrivialGroups(const AstNodeModule* modp) VL_MT_STABLE {
+        // Anonymous structs are simpler, but GCC 11 finds a member of an anonymous struct by
+        // searching all members of the class, which makes member access slow in large classes
+        const size_t lim = v3Global.opt.compLimitMembers();
+        return lim && EmitCParentModule::data(modp).trivialCount > lim * lim;
+    }
     // Name to access a module member as
     static std::string varName(const AstVar* varp) VL_MT_STABLE {
         const std::string name = varp->nameProtect();
@@ -330,6 +347,14 @@ public:
             const EmitCMemberGroups groups{
                 EmitCParentModule::data(EmitCParentModule::get(varp)).count};
             return "__Vnontrivs." + groups.namedPath(EmitCParentModule::data(varp).index) + name;
+        }
+        // Trivially constructible variables may live in nested named structs
+        if (isNameableTrivial(varp)) {
+            const AstNodeModule* const modp = EmitCParentModule::get(varp);
+            if (hasNamedTrivialGroups(modp)) {
+                const EmitCMemberGroups groups{EmitCParentModule::data(modp).trivialCount};
+                return groups.namedPath(EmitCParentModule::data(varp).index) + name;
+            }
         }
         // Otherwise they should be available in the local scope where emitted
         return name;
