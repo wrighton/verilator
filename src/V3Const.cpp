@@ -954,6 +954,9 @@ class ConstVisitor final : public VNVisitor {
     bool m_hasJumpDelay = false;  // JumpGo or Delay under this loop
     bool m_hasLoopTest = false;  // Contains AstLoopTest
     bool m_underRecFunc = false;  // Under a recursive function
+    // Cond made by the last ifSameAssign transform. Its operands are simplified and its values
+    // gate trees, which later edits keep. Deletes are deferred, so no other node gets its address.
+    const AstCond* m_ifSameAssignCondp = nullptr;
     AstNodeModule* m_modp = nullptr;  // Current module
     const AstArraySel* m_selp = nullptr;  // Current select
     const AstScope* m_scopep = nullptr;  // Current scope
@@ -976,6 +979,8 @@ class ConstVisitor final : public VNVisitor {
     // and every key looked up is an AstEnumItem.
     std::unordered_set<const AstEnumItem*> m_recursingEnumItems;
     std::unordered_set<AstJumpBlock*> m_usedJumpBlocks;  // JumpBlocks used by some JumpGo
+    const AstIf* m_tailIfp = nullptr;  // Innermost If whose branches end m_tailBlockp
+    const AstJumpBlock* m_tailBlockp = nullptr;  // JumpBlock ended by m_tailIfp's branches
 
     // METHODS
 
@@ -1271,7 +1276,7 @@ class ConstVisitor final : public VNVisitor {
         return true;
     }
 
-    bool matchCondCond(const AstCond* nodep) {
+    bool matchCondCond(AstCond* nodep) {
         // Same condition on either leg of a condition means that
         // expression is either always true or always false
         if (VN_IS(nodep->backp(), Cond)) return false;  // Was checked when visited parent
@@ -1282,38 +1287,44 @@ class ConstVisitor final : public VNVisitor {
         matchCondCondRecurse(nodep, truesp /*ref*/, falsesp /*ref*/);
         return false;  // Can optimize further
     }
-    void matchCondCondRecurse(const AstCond* nodep, std::vector<AstNodeExpr*>& truesp,
+    void matchCondCondRecurse(AstCond* nodep, std::vector<AstNodeExpr*>& truesp,
                               std::vector<AstNodeExpr*>& falsesp) {
         // Avoid O(n^2) compares
         // Could reduce cost with hash table, but seems unlikely to be worth cost
         if (truesp.size() > 4 || falsesp.size() > 4) return;
         if (!nodep->condp()->isPure()) return;
-        bool replaced = false;
+        // A sub-Cond whose condition is known is replaced by its selected branch at once, as
+        // the operands of a Cond made by ifSameAssign are not visited again, see visit(AstCond)
+        AstNodeExpr* keepp = nullptr;
         for (const AstNodeExpr* condp : truesp) {
-            if (replaced) break;
             if (!operandsSame(nodep->condp(), condp)) continue;
-            UINFO(9, "COND(c, CONDb(c, tt, tf), f) -> CONDb(1, tt, tf) " << nodep);
-            replaceNum(nodep->condp(), 1);
-            replaced = true;
-            ++m_statCondExprRedundant;
+            UINFO(9, "COND(c, CONDb(c, tt, tf), f) -> COND(c, tt, f) " << nodep);
+            keepp = nodep->thenp();
+            break;
         }
         for (const AstNodeExpr* condp : falsesp) {
-            if (replaced) break;
+            if (keepp) break;
             if (!operandsSame(nodep->condp(), condp)) continue;
-            UINFO(9, "COND(c, t, CONDb(c, ft, ff)) -> CONDb(0, ft, ff) " << nodep);
-            replaceZero(nodep->condp());
-            replaced = true;
+            UINFO(9, "COND(c, t, CONDb(c, ft, ff)) -> COND(c, t, ff) " << nodep);
+            keepp = nodep->elsep();
+        }
+        if (keepp) {
             ++m_statCondExprRedundant;
+            replaceWChild(nodep, keepp);
+            if (AstCond* const subCondp = VN_CAST(keepp, Cond)) {
+                matchCondCondRecurse(subCondp, truesp /*ref*/, falsesp /*ref*/);
+            }
+            return;
         }
-        if (const AstCond* subCondp = VN_CAST(nodep->thenp(), Cond)) {
-            if (!replaced) truesp.emplace_back(nodep->condp());
+        if (AstCond* const subCondp = VN_CAST(nodep->thenp(), Cond)) {
+            truesp.emplace_back(nodep->condp());
             matchCondCondRecurse(subCondp, truesp /*ref*/, falsesp /*ref*/);
-            if (!replaced) truesp.pop_back();
+            truesp.pop_back();
         }
-        if (const AstCond* subCondp = VN_CAST(nodep->elsep(), Cond)) {
-            if (!replaced) falsesp.emplace_back(nodep->condp());
+        if (AstCond* const subCondp = VN_CAST(nodep->elsep(), Cond)) {
+            falsesp.emplace_back(nodep->condp());
             matchCondCondRecurse(subCondp, truesp /*ref*/, falsesp /*ref*/);
-            if (!replaced) falsesp.pop_back();
+            falsesp.pop_back();
         }
     }
     void matchIfCondCond(const AstIf* nodep) {
@@ -1861,7 +1872,12 @@ class ConstVisitor final : public VNVisitor {
         if (!thensp->timingControlp()->sameGateTree(elsesp->timingControlp())) return false;
         if (!thensp->lhsp()->sameGateTree(elsesp->lhsp())) return false;
         if (!thensp->rhsp()->gateTree()) return false;
-        if (!elsesp->rhsp()->gateTree()) return false;
+        // On an if/else chain, the else is the Cond the last transform made from the IF below,
+        // whose values are known gate trees. Walking them again on every level is quadratic.
+        AstNodeExpr* const elseGatep = elsesp->rhsp() == m_ifSameAssignCondp
+                                           ? m_ifSameAssignCondp->condp()
+                                           : elsesp->rhsp();
+        if (!elseGatep->gateTree()) return false;
         // Must not create an expression with unpacked array type
         if (VN_IS(thensp->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)) return false;
         if (VN_IS(elsesp->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)) return false;
@@ -3473,6 +3489,13 @@ class ConstVisitor final : public VNVisitor {
         }
     }
 
+    void visit(AstCond* nodep) override {
+        // The iterator revisits a Cond made by ifSameAssign next, with its statement. Its
+        // operands are already simplified, and walking them again on every level of an if/else
+        // chain would be quadratic.
+        visitGen(nodep, nodep != m_ifSameAssignCondp);
+    }
+
     void visit(AstCAwait* nodep) override {
         m_hasJumpDelay = true;
         iterateChildren(nodep);
@@ -3907,7 +3930,16 @@ class ConstVisitor final : public VNVisitor {
     }
 
     void visit(AstIf* nodep) override {
-        iterateChildren(nodep);
+        {
+            VL_RESTORER(m_tailIfp);
+            VL_RESTORER(m_tailBlockp);
+            // For visit(AstJumpGo): the branches of an If last in its list end what the If
+            // ends. Tracked down the tree, as walking up from each JumpGo would be quadratic.
+            const AstNode* const abovep = nodep->nextp() ? nullptr : nodep->abovep();
+            if (!abovep || abovep != m_tailIfp) m_tailBlockp = VN_CAST(abovep, JumpBlock);
+            m_tailIfp = m_tailBlockp ? nodep : nullptr;
+            iterateChildren(nodep);
+        }
         if (m_doNConst) {
             if (const AstConst* const constp = VN_CAST(nodep->condp(), Const)) {
                 AstNode* keepp = nullptr;
@@ -3998,9 +4030,11 @@ class ConstVisitor final : public VNVisitor {
                 AstNodeExpr* const condp = nodep->condp()->unlinkFrBack();
                 AstNodeExpr* const truep = thensp->rhsp()->unlinkFrBack();
                 AstNodeExpr* const falsep = elsesp->rhsp()->unlinkFrBack();
-                thensp->rhsp(new AstCond{truep->fileline(), condp, truep, falsep});
+                AstCond* const newp = new AstCond{truep->fileline(), condp, truep, falsep};
+                thensp->rhsp(newp);
                 nodep->replaceWith(thensp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                m_ifSameAssignCondp = newp;  // See visit(AstCond)
             } else if (false  // Disabled, as vpm assertions are faster
                               // without due to short-circuiting
                        && operandIfIf(nodep)) {
@@ -4358,17 +4392,15 @@ class ConstVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nextp->unlinkFrBackWithNext()), nextp);
         }
 
-        // JumpGo as last statement in target JumpBlock (including last in a last sub-list),
-        // is a no-op, remove it.
+        // JumpGo as last statement in target JumpBlock (including last in a last sub-list of
+        // an 'if' when doing expensive, see visit(AstIf)), is a no-op, remove it.
+        // TODO: it would be enough if the sub-list was not a branch.
         if (!nodep->nextp()) {
-            for (AstNode* abovep = nodep->abovep(); abovep; abovep = abovep->abovep()) {
-                if (abovep == nodep->blockp()) {
-                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
-                    return;
-                }
-                // Stop if not doing expensive, or if the above node is not the last in its list,
-                // ... or if it's not an 'if' TODO: it would be enough if it was not a branch.
-                if (!m_doExpensive || abovep->nextp() || !VN_IS(abovep, If)) break;
+            const AstNode* const abovep = nodep->abovep();
+            if (abovep == nodep->blockp()
+                || (m_doExpensive && abovep == m_tailIfp && m_tailBlockp == nodep->blockp())) {
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
             }
         }
         // Mark JumpBlock as used
@@ -4401,7 +4433,9 @@ class ConstVisitor final : public VNVisitor {
 
     //-----
     // Below lines are magic expressions processed by astgen
-    //  TREE_SKIP_VISIT("AstNODETYPE")    # Rename normal visit to visitGen and don't iterate
+    //  TREE_SKIP_VISIT("AstNODETYPE")    # Rename normal visit to visitGen and don't iterate,
+    //                                    # or for short-circuited types, to visitGen with a
+    //                                    # bool argument saying whether to iterate
     //-----
     // clang-format off
     TREE_SKIP_VISIT("ArraySel");
@@ -4409,6 +4443,7 @@ class ConstVisitor final : public VNVisitor {
     TREE_SKIP_VISIT("CAwait");
     TREE_SKIP_VISIT("DynArraySel");
     TREE_SKIP_VISIT("QueueSel");
+    TREE_SKIP_VISIT("Cond");
     TREE_SKIP_VISIT("WildcardSel");
 
     //-----
