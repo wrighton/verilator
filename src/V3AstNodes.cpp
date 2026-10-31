@@ -964,11 +964,8 @@ bool AstCMethodHard::getPurity() {
     for (AstNodeExpr* const argp : pinspList()) {
         if (!argp->isPure()) return false;
     }
-    if (withp()) {
-        for (AstNode* const itemp : withp()->exprpList()) {
-            if (!itemp->isPure()) return false;
-        }
-    }
+    // Every node of the 'with' body, as its statements ignore their children
+    if (withp() && !withp()->isPure()) return false;
     return true;
 }
 int AstCMethodHard::instrCount() const {
@@ -5060,6 +5057,13 @@ void AstWith::dumpJson(std::ostream& str) const {
         dumpJsonStr(str, "restrictedNames", joined);
     }
     dumpJsonGen(str);
+}
+bool AstWith::isPure() {
+    // Check every node, as statements in the body (AstCReturn after V3Task) ignore their children
+    for (AstNode* const itemp : exprpList()) {
+        if (itemp->exists([](AstNode* nodep) { return !nodep->isPure(); })) return false;
+    }
+    return true;
 }
 void AstWithParse::dump(std::ostream& str) const {
     Super::dump(str);
