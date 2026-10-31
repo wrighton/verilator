@@ -1967,7 +1967,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     void visit(AstMemberRef* nodep) override {
         // Check if rootVar is globalConstrained
-        if (nodep->varp()->rand().isRandomizable() && nodep->fromp()) {
+        if (nodep->user1() && nodep->varp()->rand().isRandomizable() && nodep->fromp()) {
             FileLine* const fl = nodep->fileline();
             if (m_nestedAccessp) {
                 AstSFormatF* const formatp = new AstSFormatF{fl, nodep->name(), false, nullptr};
