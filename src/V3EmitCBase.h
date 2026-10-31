@@ -124,6 +124,13 @@ public:
     }
     // Return C++ class name for a module/class object
     static string prefixNameProtect(const AstNode* nodep) VL_MT_STABLE;
+    // Forward declaration of a class, guarded so it is declared once per translation unit
+    static string fwdClassDecl(const string& className) {
+        // Each use of a class walks all its redeclarations in clang, so repeating the
+        // declaration in each of thousands of headers is quadratic
+        const string guard = "VL_FWD_" + className;
+        return "#ifndef " + guard + "\n#define " + guard + "\nclass " + className + ";\n#endif\n";
+    }
 };
 
 //######################################################################
@@ -356,7 +363,7 @@ public:
                         continue;  // Forward declaration is not necessary
                     }
                     if (usep->useType().containsAny(VUseType::INT_FWD_CLASS)) {
-                        action("class " + EmitCUtil::prefixNameProtect(usep) + ";\n");
+                        action(EmitCUtil::fwdClassDecl(EmitCUtil::prefixNameProtect(usep)));
                     }
                 }
             }
