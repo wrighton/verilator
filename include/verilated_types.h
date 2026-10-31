@@ -610,9 +610,6 @@ class VlClassRef;
 template <typename T_Value, size_t N_MaxSize = 0>
 class VlQueue final {
 private:
-    template <typename U_Value, size_t M_MaxSize>
-    friend class VlQueue;
-
     // TYPES
     using Deque = std::deque<T_Value>;
 
@@ -638,7 +635,7 @@ private:
     void append(const T_Value& value) { m_deque.push_back(value); }
     template <size_t N_RhsMaxSize>
     void append(const VlQueue<T_Value, N_RhsMaxSize>& rhs) {
-        for (const T_Value& value : rhs.m_deque) m_deque.push_back(value);
+        for (const T_Value& value : rhs.privateDeque()) m_deque.push_back(value);
     }
     template <std::size_t N_Depth>
     void append(const VlUnpacked<T_Value, N_Depth>& rhs) {
@@ -648,7 +645,7 @@ private:
               typename = typename std::enable_if<
                   std::is_convertible<VlClassRef<T_Subclass>, T_Value>::value>::type>
     void append(const VlQueue<VlClassRef<T_Subclass>, N_RhsMaxSize>& rhs) {
-        for (const VlClassRef<T_Subclass>& value : rhs.m_deque) m_deque.push_back(value);
+        for (const VlClassRef<T_Subclass>& value : rhs.privateDeque()) m_deque.push_back(value);
     }
     template <typename T_Subclass, std::size_t N_Depth,
               typename = typename std::enable_if<
@@ -727,6 +724,7 @@ public:
     T_Value& atDefault() { return m_defaultValue; }
     const T_Value& atDefault() const { return m_defaultValue; }
     const Deque& privateDeque() const { return m_deque; }
+    Deque& privateDeque() { return m_deque; }
 
     // Size. Verilog: function int size(), or int num()
     int size() const { return m_deque.size(); }
@@ -2175,9 +2173,8 @@ inline bool operator==(const T* lhsp, VlNull) {
 template <typename T_Class>
 class VlClassRef final {
 private:
-    // TYPES
-    template <typename T_OtherClass>
-    friend class VlClassRef;  // Needed for template copy/move assignments
+    // No friend template of VlClassRef (nor in VlQueue): each instantiation would redeclare it,
+    // and clang walks all redeclarations on each use, quadratic with many classes
 
     // MEMBERS
     T_Class* m_objp = nullptr;  // Object pointed to
@@ -2238,13 +2235,13 @@ public:
     // cppcheck-suppress noExplicitConstructor
     template <typename T_OtherClass>
     VlClassRef(const VlClassRef<T_OtherClass>& copied)
-        : m_objp{copied.m_objp} {
+        : m_objp{copied.privateObjp()} {
         refCountInc();
     }
     // cppcheck-suppress noExplicitConstructor
     template <typename T_OtherClass>
     VlClassRef(VlClassRef<T_OtherClass>&& moved)
-        : m_objp{std::exchange(moved.m_objp, nullptr)} {}
+        : m_objp{moved.privateRelease()} {}
     ~VlClassRef() { refCountDec(); }
 
     // METHODS
@@ -2264,17 +2261,17 @@ public:
     }
     template <typename T_OtherClass>
     VlClassRef& operator=(const VlClassRef<T_OtherClass>& copied) {
-        if (m_objp == copied.m_objp) return *this;
+        if (m_objp == copied.privateObjp()) return *this;
         refCountDec();
-        m_objp = copied.m_objp;
+        m_objp = copied.privateObjp();
         refCountInc();
         return *this;
     }
     template <typename T_OtherClass>
     VlClassRef& operator=(VlClassRef<T_OtherClass>&& moved) {
-        if (m_objp == moved.m_objp) return *this;
+        if (m_objp == moved.privateObjp()) return *this;
         refCountDec();
-        m_objp = std::exchange(moved.m_objp, nullptr);
+        m_objp = moved.privateRelease();
         return *this;
     }
     // Assign with nullptr
@@ -2297,6 +2294,10 @@ public:
         result.m_objp = dynamic_cast<T_Class*>(clonedp);
         return result;
     }
+    // Internal object pointer, for handles of other classes
+    T_Class* privateObjp() const { return m_objp; }
+    // Internal release of the object without changing its reference count, for moves
+    T_Class* privateRelease() { return std::exchange(m_objp, nullptr); }
     // Dereference operators
     T_Class& operator*() const { return *m_objp; }
     T_Class* operator->() const { return m_objp; }
@@ -2305,15 +2306,15 @@ public:
     // In SV A == B iff both are handles to the same object (IEEE 1800-2023 8.4)
     template <typename T_OtherClass>
     bool operator==(const VlClassRef<T_OtherClass>& rhs) const {
-        return m_objp == rhs.m_objp;
+        return m_objp == rhs.privateObjp();
     };
     template <typename T_OtherClass>
     bool operator!=(const VlClassRef<T_OtherClass>& rhs) const {
-        return m_objp != rhs.m_objp;
+        return m_objp != rhs.privateObjp();
     };
     template <typename T_OtherClass>
     bool operator<(const VlClassRef<T_OtherClass>& rhs) const {
-        return m_objp < rhs.m_objp;
+        return m_objp < rhs.privateObjp();
     };
 };
 
@@ -2416,17 +2417,17 @@ inline T VL_NULL_CHECK(T t, const char* filename, int linenum) {
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(const VlQueue<VlClassRef<T_Subclass>>& that)
-    : m_deque{that.m_deque.begin(), that.m_deque.end()}
-    , m_defaultValue{that.m_defaultValue} {
+    : m_deque{that.privateDeque().begin(), that.privateDeque().end()}
+    , m_defaultValue{that.atDefault()} {
     applyBound();
 }
 
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(VlQueue<VlClassRef<T_Subclass>>&& that)
-    : m_deque{std::make_move_iterator(that.m_deque.begin()),
-              std::make_move_iterator(that.m_deque.end())}
-    , m_defaultValue{std::move(that.m_defaultValue)} {
+    : m_deque{std::make_move_iterator(that.privateDeque().begin()),
+              std::make_move_iterator(that.privateDeque().end())}
+    , m_defaultValue{std::move(that.atDefault())} {
     applyBound();
 }
 
