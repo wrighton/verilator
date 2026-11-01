@@ -1296,7 +1296,10 @@ Summary:
    function will be inlined if possible.
 
    This allows functions that are called only once or twice to be inlined even
-   if they exceed the small function threshold. The default is 200.
+   if they exceed the small function threshold. The default is 200. This
+   does not apply to a function that must remain in the model regardless,
+   e.g. because it is also called as a method of another class object, as
+   inlining it would only add copies.
 
    See also :vlopt:`--inline-cfuncs` and :vlopt:`-fno-inline-cfuncs`.
 
