@@ -89,7 +89,8 @@ static AstCFunc* splitCheckCreateNewSubFunc(AstCFunc* ofuncp) {
     AstScope* const scopep = ofuncp->scopep();
     AstCFunc* const subFuncp = new AstCFunc{ofuncp->fileline(), name, scopep};
     scopep->addBlocksp(subFuncp);
-    subFuncp->dontCombine(true);
+    // Combinable if the original is, so instances of a module share the parts of their code
+    subFuncp->dontCombine(ofuncp->dontCombine());
     subFuncp->isStatic(ofuncp->isStatic());
     subFuncp->isLoose(true);
     subFuncp->slow(ofuncp->slow());
