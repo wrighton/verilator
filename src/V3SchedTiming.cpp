@@ -311,7 +311,7 @@ class TransformForksVisitor final : public VNVisitor {
         callp->dtypeSetVoid();
         // If we're in a class, add a vlSymsp arg
         if (m_inClass) {
-            newfuncp->addStmtsp(new AstCStmt{flp, "VL_KEEP_THIS;"});
+            newfuncp->addStmtsp(new AstCStmt{flp, "VL_KEEP_THIS;", VCStmtType::KEEP_THIS});
             newfuncp->argTypes(EmitCUtil::symClassVar());
             callp->argTypes("vlSymsp");
         }

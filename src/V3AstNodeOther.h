@@ -574,6 +574,7 @@ class AstCFunc final : public AstNode {
     bool m_keepIfEmpty : 1;  // Keep declaration and definition separate, even if empty
     bool m_slow : 1;  // Slow routine, called once or just at init time
     bool m_funcPublic : 1;  // From user public task/function
+    bool m_fromFTask : 1;  // From user task/function, other than a DPI import
     bool m_isConstructor : 1;  // Is C class constructor
     bool m_isDestructor : 1;  // Is C class destructor
     bool m_isMethod : 1;  // Is inside a class definition
@@ -611,6 +612,7 @@ public:
         m_keepIfEmpty = false;
         m_slow = false;
         m_funcPublic = false;
+        m_fromFTask = false;
         m_isConstructor = false;
         m_isDestructor = false;
         m_isMethod = true;
@@ -669,6 +671,8 @@ public:
     void slow(bool flag) { m_slow = flag; }
     bool funcPublic() const { return m_funcPublic; }
     void funcPublic(bool flag) { m_funcPublic = flag; }
+    bool fromFTask() const { return m_fromFTask; }
+    void fromFTask(bool flag) { m_fromFTask = flag; }
     void argTypes(const string& str) { m_argTypes = str; }
     string argTypes() const { return m_argTypes; }
     void ifdef(const string& str) { m_ifdef = str; }

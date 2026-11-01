@@ -1257,6 +1257,7 @@ public:
     enum en : uint8_t {
         NONE,  // Unknown or not applicable
         CTOR_VAR_RESET_CALL,
+        KEEP_THIS,  // VL_KEEP_THIS, keeping 'this' alive while a coroutine runs
         _ENUM_MAX  // Leave last
     };
 
@@ -1278,7 +1279,7 @@ public:
         : m_e(static_cast<en>(_e)) {}  // Need () or GCC 4.8 false warning
     constexpr operator en() const { return m_e; }
     const char* ascii() const VL_PURE {
-        static constexpr const char* const names[] = {"none", "ctor_var_reset_call"};
+        static constexpr const char* const names[] = {"none", "ctor_var_reset_call", "keep_this"};
         return names[m_e];
     }
     bool isNone() const { return m_e == NONE; }

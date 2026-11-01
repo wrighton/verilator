@@ -1,6 +1,6 @@
 // -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
-// DESCRIPTION: Verilator: Outline parts of large coroutines into sub-functions
+// DESCRIPTION: Verilator: Outline parts of large functions into sub-functions
 //
 // Code available from: https://verilator.org
 //
@@ -19,21 +19,25 @@
 // compiler needs for a coroutine grow much faster than its size. V3Sched splits a large
 // process only between its top level statements, so when most of a coroutine is inside one
 // statement, such as the branches of an 'if' that call inlined tasks, the coroutine stays as
-// large as the whole process. This pass moves parts of such statements into sub-functions,
-// until each is no larger than --output-split-cfuncs.
+// large as the whole process. A task or function that is not inlined is emitted as one C++
+// function, which V3Sched does not split at all, and C++ compilers also need super-linear time
+// for very large functions. This pass moves parts of such functions into sub-functions, until
+// each is no larger than --output-split-cfuncs.
 //
-// For each coroutine:
+// For each coroutine, and each function made from a task or function, other than public ones:
 //  1. Analysis: one traversal records the size of each statement in nodes, and whether it can
-//     move into another function: it cannot if it jumps out of itself, or tests the condition
-//     of a loop around it.
-//  2. Decision: for each top level statement larger than the limit, take the statement lists
-//     directly under it. Their statements larger than the limit stay in place, and the same
-//     is done in each of them first. The consecutive movable statements in between form runs.
-//     Starting with the largest run, runs are cut into groups no larger than the limit to
-//     move, until the statement is within the limit. Moved statements are within the limit,
-//     so groups never nest, and new functions need no further splitting.
+//     move into another function: it cannot if it jumps out of itself, tests the condition
+//     of a loop around it, contains user C++ text, which may use C++ locals or return, or
+//     must stay in the function itself (VL_KEEP_THIS, the super.new call of a constructor).
+//  2. Decision: if the function is larger than the limit, take its statement list. Its
+//     statements larger than the limit stay in place, and the same is done first in each of
+//     them, with the statement lists directly under it. The consecutive movable statements in
+//     between form runs. Starting with the largest run, runs are cut into groups no larger
+//     than the limit to move, until the function or statement is within the limit. Moved
+//     statements are within the limit, so groups never nest, and new functions need no
+//     further splitting.
 //  3. Rewrite: each group moves into a new function, called in its place, with co_await if it
-//     suspends. Local variables of the coroutine that the group references are passed by
+//     suspends. Local variables of the function that the group references are passed by
 //     reference. This runs before V3Localize, while most variables are module variables, so
 //     only the arguments and locals of tasks that are not inlined need passing.
 //
@@ -56,7 +60,7 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
-// Pass to a new function the local variables of the coroutine that its statements reference
+// Pass to a new function the local variables of the function that its statements reference
 
 class OutlineArgsVisitor final : public VNVisitor {
     // STATE
@@ -113,17 +117,17 @@ public:
 };
 
 //######################################################################
-// Outline parts of large coroutines
+// Outline parts of large functions
 
 class OutlineVisitor final : public VNVisitor {
     // NODE STATE
-    //  AstNodeStmt::user1p()  -> StmtInfo. Analysis of statement in the current coroutine
+    //  AstNodeStmt::user1p()  -> StmtInfo. Analysis of statement in the current function
     const VNUser1InUse m_user1InUse;
 
     // TYPES
     struct StmtInfo final {
         size_t m_size = 0;  // Number of nodes in the statement
-        int m_depth = 0;  // Nesting depth of the statement in the coroutine
+        int m_depth = 0;  // Nesting depth of the statement in the function
         bool m_movable = false;  // Can move into another function
     };
     struct StmtRange final {
@@ -135,8 +139,8 @@ class OutlineVisitor final : public VNVisitor {
     // STATE
     AstUser1Allocator<AstNodeStmt, StmtInfo> m_info;
     const size_t m_limit = static_cast<size_t>(v3Global.opt.outputSplitCFuncs());
-    AstCFunc* m_funcp = nullptr;  // Current coroutine
-    size_t m_funcNum = 0;  // Number of functions outlined from the current coroutine
+    AstCFunc* m_funcp = nullptr;  // Current function
+    size_t m_funcNum = 0;  // Number of functions outlined from the current function
     std::vector<StmtRange> m_groups;  // Statements to move, each group into a new function
     size_t m_count = 0;  // Number of nodes analyzed
     int m_depth = 0;  // Nesting depth of the statement being analyzed
@@ -177,7 +181,6 @@ class OutlineVisitor final : public VNVisitor {
     }
     // Choose statements under 'stmtp' to move until it is within the limit, return its size left
     size_t reduce(AstNodeStmt* stmtp) {
-        size_t size = m_info(stmtp).m_size;
         std::vector<AstNode*> listps;  // Statement lists directly under 'stmtp'
         if (AstNodeIf* const ifp = VN_CAST(stmtp, NodeIf)) {
             listps = {ifp->thensp(), ifp->elsesp()};
@@ -186,6 +189,10 @@ class OutlineVisitor final : public VNVisitor {
         } else if (AstJumpBlock* const blockp = VN_CAST(stmtp, JumpBlock)) {
             listps = {blockp->stmtsp()};
         }
+        return reduceLists(m_info(stmtp).m_size, listps);
+    }
+    // Choose statements in 'listps' to move until 'size' is within the limit, return size left
+    size_t reduceLists(size_t size, const std::vector<AstNode*>& listps) {
         std::vector<StmtRange> runs;  // Runs of movable statements no larger than the limit
         std::vector<AstNodeStmt*> largeps;  // Statements larger than the limit
         for (AstNode* const listp : listps) {
@@ -235,12 +242,19 @@ class OutlineVisitor final : public VNVisitor {
         subFuncp->isStatic(m_funcp->isStatic());
         subFuncp->isLoose(m_funcp->isLoose());
         subFuncp->slow(m_funcp->slow());
-        if (m_funcp->needProcess()) subFuncp->setNeedProcess();
         subFuncp->addStmtsp(firstp);
+        // Take the process of the function, which makes one if a call needs it, else each new
+        // function would make its own
+        if (m_funcp->needProcess() || firstp->existsAndNext([](const AstNodeCCall* callp) {
+                return callp->funcp()->needProcess();
+            })) {
+            subFuncp->setNeedProcess();
+        }
         AstCCall* const callp = new AstCCall{flp, subFuncp};
         callp->dtypeSetVoid();
-        if (VN_IS(scopep->modp(), Class)) {
-            subFuncp->argTypes(EmitCUtil::symClassVar());
+        // Not all class methods take vlSymsp, and DPI exports, which are static, take it
+        if (m_funcp->argTypes() == EmitCUtil::symClassVar()) {
+            subFuncp->argTypes(m_funcp->argTypes());
             callp->argTypes("vlSymsp");
         }
 
@@ -263,10 +277,7 @@ class OutlineVisitor final : public VNVisitor {
         m_count = 0;
         m_targetDepth = std::numeric_limits<int>::max();
         iterateAndNextNull(funcp->stmtsp());
-        for (AstNode* nodep = funcp->stmtsp(); nodep; nodep = nodep->nextp()) {
-            AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt);  // Else a declaration
-            if (stmtp && m_info(stmtp).m_size > m_limit) reduce(stmtp);
-        }
+        reduceLists(m_count, {funcp->stmtsp()});
         for (const StmtRange& group : m_groups) outline(group.m_firstp, group.m_lastp);
         m_groups.clear();
     }
@@ -277,6 +288,29 @@ class OutlineVisitor final : public VNVisitor {
     void visit(AstLoopTest* nodep) override { analyze(nodep, m_info(nodep->loopp()).m_depth); }
     // Returns from the coroutine, so no statement containing it can move
     void visit(AstFinishFork* nodep) override { analyze(nodep, 0); }
+    // VL_KEEP_THIS stays in the function
+    void visit(AstCStmt* nodep) override {
+        // It keeps 'this' alive until the coroutine ends
+        analyze(nodep,
+                nodep->stmtType() == VCStmtType::KEEP_THIS ? 0 : std::numeric_limits<int>::max());
+    }
+    // The super.new call of a constructor stays in the function
+    void visit(AstStmtExpr* nodep) override {
+        // EmitC looks for it in the statements of the constructor, to initialize the base class
+        analyze(nodep, VN_IS(nodep->exprp(), CNew) ? 0 : std::numeric_limits<int>::max());
+    }
+    // User C++ text stays in the function
+    void visit(AstCStmtUser* nodep) override {
+        // It may use C++ locals declared by other user text, or return
+        analyze(nodep, 0);
+    }
+    // User C++ text stays in the function
+    void visit(AstCExprUser* nodep) override {
+        // It may use C++ locals declared by other user text
+        m_targetDepth = 0;
+        ++m_count;
+        iterateChildren(nodep);
+    }
     void visit(AstNode* nodep) override {
         ++m_count;
         iterateChildren(nodep);
@@ -284,7 +318,7 @@ class OutlineVisitor final : public VNVisitor {
 
     // CONSTRUCTORS
     explicit OutlineVisitor(AstNetlist* netlistp) {
-        // Gather the coroutines first, as outlining adds functions
+        // Gather the functions first, as outlining adds functions
         std::vector<AstCFunc*> funcps;
         for (AstNode* modp = netlistp->modulesp(); modp; modp = modp->nextp()) {
             for (AstNode* nodep = VN_AS(modp, NodeModule)->stmtsp(); nodep;
@@ -294,7 +328,10 @@ class OutlineVisitor final : public VNVisitor {
                 if (!scopep) continue;
                 for (AstNode* blockp = scopep->blocksp(); blockp; blockp = blockp->nextp()) {
                     AstCFunc* const funcp = VN_AS(blockp, CFunc);
-                    if (funcp->isCoroutine()) funcps.push_back(funcp);
+                    // Public functions return with a C++ 'return', and the C++ types of their
+                    // arguments differ from those of their variables
+                    if (funcp->funcPublic()) continue;
+                    if (funcp->isCoroutine() || funcp->fromFTask()) funcps.push_back(funcp);
                 }
             }
         }

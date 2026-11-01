@@ -508,7 +508,7 @@ static void process() {
         // --MODULE OPTIMIZATIONS--------------
 
         if (!v3Global.opt.serializeOnly()) {
-            // Outline parts of large coroutines.  Must be before Localize.
+            // Outline parts of large functions.  Must be before Localize.
             if (!v3Global.opt.lintOnly() && v3Global.opt.outputSplitCFuncs()) {
                 V3Outline::outlineAll(v3Global.rootp());
             }
