@@ -110,6 +110,9 @@ class TaskStateVisitor final : public VNVisitor {
     //   AstNodeFTask::user3p   // AstScope* this FTask is under
     //   AstNodeFTask::user4p   // GraphFTaskVertex* this FTask is under
     //   AstVar::user4p         // GraphFTaskVertex* this variable is declared in
+    //   AstNodeFTaskRef::user4 // bool. Call in initial continuous assignment, not inlined
+    //  Temporary in isInitial:
+    //   AstVarScope::user1     // bool. Written
     const VNUser3InUse m_inuser3;
     const VNUser4InUse m_inuser4;
 
@@ -124,6 +127,10 @@ class TaskStateVisitor final : public VNVisitor {
     V3Graph m_callGraph;  // Task call graph
     TaskBaseVertex* m_curVxp;  // Current vertex we're adding to
     std::vector<AstInitialAutomatic*> m_initialps;  // Initial blocks to move
+    // Calls in continuous assignments, with the assignment
+    std::vector<std::pair<AstNodeProcedure*, AstNodeFTaskRef*>> m_assignCalls;
+    AstNodeProcedure* m_assignp = nullptr;  // Current continuous assignment
+    VDouble0 m_statInitCalls;  // Statistic tracking
     bool m_underPortVar = false;  // Visiting under a port AstVar; any expression there
                                   // is a default value, evaluated at call sites only
     // Instances of each interface
@@ -183,6 +190,7 @@ public:
     }
     // Returns pointer to node that makes the given FTask impure
     AstNode* checkImpure(AstNodeFTask* nodep) { return getFTaskVertex(nodep)->impureNode(); }
+    static bool initCall(const AstNodeFTaskRef* nodep) { return nodep->user4(); }
 
 private:
     TaskFTaskVertex* getFTaskVertex(AstNodeFTask* nodep) {
@@ -211,6 +219,72 @@ private:
                 }
             }
         }
+    }
+
+    // Mark calls of impure functions in initial continuous assignments not to be inlined
+    void decideInitCalls() {
+        // Impure functions are inlined so scheduling sees what they read and write, which code
+        // run once at initialization does not need. Calls of pure functions are left as they
+        // are, so when inlined they still fold to constants.
+        const AstNodeProcedure* checkedp = nullptr;  // Assignment 'initial' is for
+        bool initial = false;
+        for (const auto& pair : m_assignCalls) {
+            TaskFTaskVertex* const ftVtxp = getFTaskVertex(pair.second->taskp());
+            if (ftVtxp->pure() || ftVtxp->noInline()) continue;
+            if (pair.first != checkedp) {
+                checkedp = pair.first;
+                initial = isInitial(checkedp);
+            }
+            if (!initial) continue;
+            pair.second->user4(true);
+            ftVtxp->needsNonInlineCFunc(true);
+            ++m_statInitCalls;
+        }
+    }
+
+    // Whether the continuous assignment is initial, approximating V3ActiveTop
+    bool isInitial(const AstNodeProcedure* nodep) {
+        // V3ActiveTop makes it initial if it writes each variable before reading it. Check
+        // this as if the calls were inlined, as calls not inlined hide what the function reads.
+        const VNUser1InUse user1InUse;
+        return writesBeforeReads(nodep->stmtsp(), false);
+    }
+
+    // Whether the statements write each variable before reading it
+    bool writesBeforeReads(const AstNode* stmtsp, bool callee) {
+        for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            if (!stmtp->forall([&](const AstNode* np) { return writeBeforeRead(np, callee); })) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Whether the node, visited in pre-order, reads nothing not yet written
+    bool writeBeforeRead(const AstNode* np, bool callee) {
+        // Check in the called functions too, as if inlined, except those not inlined anyway,
+        // as their calls already hide what they do. The functions may write only static
+        // variables of functions besides their own: V3ActiveTop must see writes to variables
+        // the assignment reads later, and V3Delayed handles nonblocking assignments and
+        // nonblocking event triggers only when inlined.
+        if (const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
+            return getFTaskVertex(refp->taskp())->noInline()
+                   || writesBeforeReads(refp->taskp()->stmtsp(), true);
+        }
+        if (VN_IS(np, AssignDly)) return false;
+        const AstFireEvent* const firep = VN_CAST(np, FireEvent);
+        if (firep && firep->isDelayed()) return false;
+        const AstVarRef* const vrefp = VN_CAST(np, VarRef);
+        if (!vrefp) return true;
+        const AstVar* const varp = vrefp->varp();
+        // Variables of the called function become temporaries written first
+        if (varp->user4u().toGraphVertex() != m_curVxp) return true;
+        if (vrefp->access().isWriteOrRW()) {
+            // Static variables of functions are normally accessed only by calling them
+            if (callee && !varp->isFuncLocalSticky()) return false;
+            if (vrefp->access().isWriteOnly()) vrefp->varScopep()->user1(true);
+        }
+        return vrefp->varScopep()->user1();
     }
 
     void decideInlining() {
@@ -242,6 +316,12 @@ private:
     }
 
     // VISITORS
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER(m_assignp);
+        const AstAlways* const alwaysp = VN_CAST(nodep, Always);
+        if (alwaysp && alwaysp->keyword() == VAlwaysKwd::CONT_ASSIGN) m_assignp = nodep;
+        iterateChildren(nodep);
+    }
     void visit(AstScope* nodep) override {
         // Each FTask is unique per-scope, so AstNodeFTaskRefs do not need
         // pointers to what scope the FTask is to be invoked under.
@@ -275,6 +355,10 @@ private:
         new TaskEdge{&m_callGraph, m_curVxp, taskVtxp};
         // The copy of every instance may be called through a virtual interface (see below)
         if (isVirtualIfaceMethodCall(nodep)) m_vifTaskps.insert(nodep->taskp());
+        // As decideInlining, other functions must be inlined
+        if (m_assignp && nodep->taskp()->verilogFunction() && !nodep->taskp()->taskPublic()) {
+            m_assignCalls.emplace_back(m_assignp, nodep);
+        }
         // Do we have to disable inlining the function?
         const V3TaskConnects tconnects = V3Task::taskConnects(nodep, nodep->taskp()->declsp());
         if (!taskVtxp->noInline()) {  // Else short-circuit below
@@ -378,9 +462,13 @@ public:
         m_callGraph.removeRedundantEdgesSum(&TaskEdge::followAlwaysTrue);
         propagateImpureReason();
         decideInlining();
+        decideInitCalls();
         if (dumpGraphLevel()) m_callGraph.dumpDotFilePrefixed("task_call");
     }
-    ~TaskStateVisitor() override = default;
+    ~TaskStateVisitor() override {
+        V3Stats::addStat("Optimizations, Function calls in initial assignments not inlined",
+                         m_statInitCalls);
+    }
     VL_UNCOPYABLE(TaskStateVisitor);
 };
 
@@ -2168,7 +2256,8 @@ class TaskVisitor final : public VNVisitor {
         AstNodeStmt* beginp;
         AstCNew* cnewp = nullptr;
         if (m_statep->ftaskNoInline(nodep->taskp())
-            || TaskStateVisitor::isVirtualIfaceMethodCall(nodep)) {
+            || TaskStateVisitor::isVirtualIfaceMethodCall(nodep)
+            || TaskStateVisitor::initCall(nodep)) {
             processArgs(nodep);
             // This may share VarScope's with a public task, if any.  Yuk.
             beginp = createNonInlinedFTask(nodep, outvscp, cnewp /*ref*/);
