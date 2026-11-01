@@ -2417,7 +2417,8 @@ inline T VL_NULL_CHECK(T t, const char* filename, int linenum) {
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(const VlQueue<VlClassRef<T_Subclass>>& that)
-    : m_deque{that.privateDeque().begin(), that.privateDeque().end()}
+    : m_deque{that.privateDeque().begin(),  // lintok-begin-on-ref
+              that.privateDeque().end()}  // lintok-begin-on-ref
     , m_defaultValue{that.atDefault()} {
     applyBound();
 }
@@ -2425,8 +2426,8 @@ VlQueue<T_Value, N_MaxSize>::VlQueue(const VlQueue<VlClassRef<T_Subclass>>& that
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(VlQueue<VlClassRef<T_Subclass>>&& that)
-    : m_deque{std::make_move_iterator(that.privateDeque().begin()),
-              std::make_move_iterator(that.privateDeque().end())}
+    : m_deque{std::make_move_iterator(that.privateDeque().begin()),  // lintok-begin-on-ref
+              std::make_move_iterator(that.privateDeque().end())}  // lintok-begin-on-ref
     , m_defaultValue{std::move(that.atDefault())} {
     applyBound();
 }
