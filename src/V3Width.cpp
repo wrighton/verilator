@@ -1652,6 +1652,8 @@ class WidthVisitor final : public VNVisitor {
                 = VN_AS(nodep->fromp()->dtypep()->skipRefp(), AssocArrayDType);
             iterateCheckTyped(nodep, "Associative select", nodep->bitp(), adtypep->keyDTypep(),
                               BOTH);
+            checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8)", nodep->bitp(),
+                             adtypep->keyDTypep());
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }
@@ -5821,6 +5823,8 @@ class WidthVisitor final : public VNVisitor {
         iterateCheck(nodep, "index", index_exprp, CONTEXT_DET, FINAL, adtypep->keyDTypep(),
                      EXTEND_EXP);
         VL_DANGLING(index_exprp);  // May have been edited
+        checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8)",
+                         nodep->argsp()->exprp(), adtypep->keyDTypep());
         return nodep->argsp()->exprp();
     }
     AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep,
