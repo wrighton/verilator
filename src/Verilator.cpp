@@ -518,7 +518,8 @@ static void process() {
 
         if (!v3Global.opt.serializeOnly()) {
             // Outline parts of large functions.  Must be before Localize.
-            if (!v3Global.opt.lintOnly() && v3Global.opt.fOutline()) {
+            if (!v3Global.opt.lintOnly() && v3Global.opt.fOutline()
+                && v3Global.opt.outputSplitCFuncs()) {
                 V3Outline::outlineAll(v3Global.rootp());
             }
 
