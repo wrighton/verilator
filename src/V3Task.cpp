@@ -1724,6 +1724,7 @@ class TaskVisitor final : public VNVisitor {
         cfuncp->dontCombine(!nodep->dpiImport());
         cfuncp->entryPoint(!nodep->dpiImport());
         cfuncp->funcPublic(nodep->taskPublic());
+        cfuncp->fromFTask(!nodep->dpiImport());
         cfuncp->dpiContext(nodep->dpiContext());
         cfuncp->dpiExportImpl(nodep->dpiExport());
         cfuncp->dpiImportWrapper(nodep->dpiImport());

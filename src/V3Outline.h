@@ -1,6 +1,6 @@
 // -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
-// DESCRIPTION: Verilator: Outline parts of large coroutines into sub-functions
+// DESCRIPTION: Verilator: Outline parts of large functions into sub-functions
 //
 // Code available from: https://verilator.org
 //
