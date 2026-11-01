@@ -871,21 +871,13 @@ class WidthVisitor final : public VNVisitor {
         if (AstNodeExpr* const newp = newConsDynArrayOrQueue(nodep->fileline(), vdtypep)) {
             // IEEE 1800-2023 10.10 requires looking at argument data type
             // to determine if value or push
-            userIterateAndNext(nodep->lhsp(), WidthVP{vdtypep, PRELIM}.p());
-            userIterateAndNext(nodep->rhsp(), WidthVP{vdtypep, PRELIM}.p());
+            iterateConcatItem(nodep->lhsp(), vdtypep);
+            iterateConcatItem(nodep->rhsp(), vdtypep);
             newp->dtypeFrom(vdtypep);
             addConsItem(newp, nodep->lhsp()->unlinkFrBack());
             addConsItem(newp, nodep->rhsp()->unlinkFrBack());
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
-        }
-        if (VN_IS(vdtypep, UnpackArrayDType)) {
-            AstPattern* const newp = new AstPattern{nodep->fileline(), nullptr};
-            patConcatConvertRecurse(newp, nodep);
-            nodep->replaceWith(newp);
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            userIterate(newp, m_vup);
             return;
         }
 
@@ -1123,24 +1115,23 @@ class WidthVisitor final : public VNVisitor {
                                                      << vdtypep->prettyDTypeNameQ()
                                                      << " data type");
                 }
-                if (VN_IS(nodep->srcp(), Concat)) {
-                    // Convert to concat directly, and visit(AstConst) will convert.
-                    // Don't iterate lhsp as SELF, the potential Concat below needs
-                    // the adtypep passed down to recognize the QueueDType
-                    userIterateAndNext(nodep->srcp(), WidthVP{vdtypep, BOTH}.p());
-                    nodep->replaceWith(nodep->srcp()->unlinkFrBack());
+                // An unpacked array concatenation, as in visit(AstConcat), of one item that may
+                // itself be a concatenation
+                if (AstNodeExpr* const consp
+                    = newConsDynArrayOrQueue(nodep->fileline(), vdtypep)) {
+                    iterateConcatItem(nodep->srcp(), vdtypep);
+                    consp->dtypeFrom(vdtypep);
+                    addConsItem(consp, nodep->srcp()->unlinkFrBack());
+                    nodep->replaceWith(consp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
-                    return;
-                } else {  // int a[] = {lhs} -> same as '{lhs}
-                    AstPattern* const newp = new AstPattern{
-                        nodep->fileline(),
-                        new AstPatternItem{nodep->srcp()->fileline(),
-                                           nodep->srcp()->unlinkFrBack(), nullptr, nullptr}};
-                    nodep->replaceWith(newp);
-                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
-                    userIterate(newp, m_vup);
                     return;
                 }
+                AstPattern* const newp = new AstPattern{nodep->fileline(), nullptr};
+                patConcatConvertRecurse(newp, nodep->srcp());
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                userIterate(newp, m_vup);
+                return;
             }
             if (VN_IS(vdtypep, AssocArrayDType)) {
                 nodep->v3warn(E_UNSUPPORTED, "Unsupported: Replication to form "
@@ -7159,6 +7150,20 @@ class WidthVisitor final : public VNVisitor {
             }
         }
         return AstNode::computeCastable(toDtp, fromDtp, nullptr) == VCastable::INCOMPATIBLE;
+    }
+    // Width an item of a concatenation forming dynamic array or queue 'arrayDtp'
+    void iterateConcatItem(AstNodeExpr* itemp, AstNodeDType* arrayDtp) {
+        // A nested concatenation is an element, as an item cannot be an unpacked array
+        // concatenation (IEEE 1800-2023 10.10.3). An assignment pattern is an element if the
+        // element type is a structure or array data type, else an array of elements.
+        AstNodeDType* const elemDtp = arrayDtp->subDTypep();
+        const AstNodeDType* const elemSkipp = elemDtp->skipRefp();
+        const bool isElement
+            = VN_IS(itemp, Replicate)
+              || (VN_IS(itemp, Pattern)
+                  && (VN_IS(elemSkipp, NodeUOrStructDType) || VN_IS(elemSkipp, PackArrayDType)
+                      || elemSkipp->isNonPackedArray()));
+        userIterateAndNext(itemp, WidthVP{isElement ? elemDtp : arrayDtp, PRELIM}.p());
     }
     // Add 'valuep' to a dynamic array or queue constructor: as one element, or as an array whose
     // elements are spliced in. A constructor being spliced (e.g. a concatenation's left operand)
