@@ -1,0 +1,17 @@
+initial t.u1
+initial t.u2
+initial t.u3
+resumed t.u1
+resumed again t.u1
+resumed t.u2
+resumed again t.u2
+resumed t.u3
+resumed again t.u3
+same
+parts
+same
+parts
+*-* All Finished *-*
+final t.u1 dis_a=0 dis_b=1
+final t.u2 dis_a=0 dis_b=1
+final t.u3 dis_a=0 dis_b=1

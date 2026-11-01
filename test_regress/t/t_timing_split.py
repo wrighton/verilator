@@ -26,8 +26,9 @@ def check_splits():
         test.error("No Syms__*__1 split file found")
 
 
+# Without -fno-combine the identical parts are combined into too few functions to split files
 test.compile(timing_loop=True,
-             verilator_flags2=["--timing --output-split-cfuncs 1 -CFLAGS -Werror"])
+             verilator_flags2=["--timing --output-split-cfuncs 1 -fno-combine -CFLAGS -Werror"])
 
 test.execute()
 

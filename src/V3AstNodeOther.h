@@ -660,6 +660,7 @@ public:
         const AstCFunc* const asamep = VN_DBG_AS(samep, CFunc);
         return ((rtnTypeVoid() == asamep->rtnTypeVoid()) && (argTypes() == asamep->argTypes())
                 && isLoose() == asamep->isLoose() && voidSelf() == asamep->voidSelf()
+                && needsVlProcess() == asamep->needsVlProcess()
                 && (!(dpiImportPrototype() || dpiExportImpl()) || name() == asamep->name()));
     }
     //
