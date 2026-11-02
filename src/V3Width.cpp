@@ -419,6 +419,8 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_writtenInputps;  // Input net ports written by a reference
     std::unordered_set<const AstVar*> m_procWrittenps;  // Those written other than continuously
     std::unordered_set<const AstVar*> m_foreachVars;  // Loop variables of enclosing foreaches
+    std::unordered_set<const AstVar*>
+        m_valueConnectedPortps;  // Ports connected to value expressions
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -12331,6 +12333,12 @@ class WidthVisitor final : public VNVisitor {
         // A select of a multi-dimensional packed array has an unfolded index expression
         return VN_CAST(V3Const::constifyEdit(indexp), Const);
     }
+    // Mark a written input port connection written, by the port collapsing with its nets
+    static void linkCollapsedWrite(AstNode* const exprp) {
+        // Not a write through a modport of the nets (see readOnlyModport)
+        exprp->foreach([](AstVarXRef* const refp) { refp->readOnlyModport(false); });
+        V3LinkLValue::linkLValueSet(exprp);
+    }
     // Whether an inout port connection could be the expression, adding the nets in it
     static bool coercibleConn(AstNode* exprp, std::vector<AstVar*>& netps) {
         if (AstSel* const selp = VN_CAST(exprp, Sel)) {
@@ -12405,8 +12413,8 @@ public:
                 } else if (const AstPull* const pullp = VN_CAST(np, Pull)) {
                     pullp->lhsp()->foreach(
                         [&](const AstNodeVarRef* refp) { drivenps.emplace(refp->varp()); });
-                } else if (const AstMemberRef* const memberRefp = VN_CAST(np, MemberRef)) {
-                    if (memberRefp->access().isWriteOrRW()) drivenps.emplace(memberRefp->varp());
+                } else if (const AstMemberRef* const selp = VN_CAST(np, MemberRef)) {
+                    if (selp->access().isWriteOrRW()) drivenps.emplace(selp->varp());
                 } else if (AstCell* const cellp = VN_CAST(np, Cell)) {
                     // Unconnected inputs may be driven by `unconnected_drive
                     const bool pulled = !cellp->modp()->unconnectedDrive().isDefault();
