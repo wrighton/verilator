@@ -414,6 +414,8 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_set<AstVar*> m_aliasedVars;  // Variables referenced in alias
     std::unordered_set<const AstVar*> m_curModVars;  // Variables declared in current module
     std::unordered_set<AstVar*> m_coercedPortps;  // Input net ports driven inside module
+    std::unordered_set<const AstVar*> m_writtenInputps;  // Input net ports written by a reference
+    std::unordered_set<const AstVar*> m_procWrittenps;  // Those written other than continuously
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -4182,15 +4184,17 @@ class WidthVisitor final : public VNVisitor {
             const bool netPort = nodep->varp()->isNetOrNetPort();
             const bool contAssign = VN_IS(m_writerp, AssignW);
             const bool pinConn = VN_IS(m_writerp, Pin);
+            const bool contDriver = contAssign || pinConn || VN_IS(m_writerp, ClockingItem);
+            if (netPort) {
+                m_writtenInputps.emplace(nodep->varp());
+                if (!contDriver) m_procWrittenps.emplace(nodep->varp());
+            }
             if (!(hierRef && netPort && (contAssign || pinConn))) {
                 nodep->v3warn(ASSIGNIN,
                               "Assigning to input/const variable: " << nodep->prettyNameQ());
                 // A net input port driven inside its module is coerced to inout, so the
                 // driver also reaches the connected net (IEEE 1800-2023 23.3.3.1)
-                if (!hierRef && netPort
-                    && (contAssign || pinConn || VN_IS(m_writerp, ClockingItem))) {
-                    m_coercedPortps.emplace(nodep->varp());
-                }
+                if (!hierRef && netPort && contDriver) m_coercedPortps.emplace(nodep->varp());
             }
         } else if (nodep->access().isWriteOrRW() && nodep->varp()->isConst() && !m_paramsOnly
                    && (!m_ftaskp || !m_ftaskp->isConstructor())
@@ -4781,6 +4785,11 @@ class WidthVisitor final : public VNVisitor {
                     if (!varp->didWidth()) userIterate(varp, nullptr);
                     AstIface* const ifacep = adtypep->ifaceViaCellp();
                     varp->sensIfacep(ifacep);
+                    if (nodep->access().isWriteOrRW() && varp->direction() == VDirection::INPUT
+                        && varp->isNetOrNetPort()) {
+                        m_writtenInputps.emplace(varp);
+                        m_procWrittenps.emplace(varp);
+                    }
                     // Member of a non-virtual interface reference, e.g. an element selected
                     // from a whole array of interfaces: reference it through the interface,
                     // as V3LinkDot does for 'iface.member'
@@ -12115,6 +12124,25 @@ class WidthVisitor final : public VNVisitor {
         m_vup = vup;
         iterateChildrenBackwardsConst(nodep);
     }
+    // The net that is the expression or a constant select of it, or nullptr
+    static AstVar* selectedNetp(AstNodeExpr* exprp, std::vector<std::pair<int, int>>& ranges) {
+        // The selected index ranges are appended from the net outwards
+        AstVar* netp = nullptr;
+        if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+            netp = lsbp ? selectedNetp(selp->fromp(), ranges) : nullptr;
+            if (netp) ranges.emplace_back(lsbp->toSInt(), lsbp->toSInt() + selp->width() - 1);
+            return netp;
+        }
+        if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+            const AstConst* const bitp = VN_CAST(selp->bitp(), Const);
+            netp = bitp ? selectedNetp(selp->fromp(), ranges) : nullptr;
+            if (netp) ranges.emplace_back(bitp->toSInt(), bitp->toSInt());
+            return netp;
+        }
+        const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+        return refp && refp->varp()->isNetOrNetPort() ? refp->varp() : nullptr;
+    }
     // Whether an inout port connection could be the expression, adding the nets in it
     static bool coercibleConn(AstNode* exprp, std::vector<AstVar*>& netps) {
         if (AstSel* const selp = VN_CAST(exprp, Sel)) {
@@ -12130,6 +12158,9 @@ class WidthVisitor final : public VNVisitor {
         }
         AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
         if (!refp || !refp->varp()->isNetOrNetPort()) return false;
+        // V3Tristate resolves a hierarchical reference only into an interface, other nets
+        // are instead driven from the port by coercePorts if they have no other driver
+        if (VN_IS(refp, VarXRef) && !VN_IS(findParentModule(refp->varp()), Iface)) return false;
         netps.push_back(refp->varp());
         return true;
     }
@@ -12153,25 +12184,63 @@ public:
         m_splitIfaceArrayVarps.clear();
         return nodep;
     }
-    // Coerce input ports driven inside their module to inout (IEEE 1800-2023 23.3.3.1)
+    // Coerce written input ports to inout, or make them drive their connections
     void coercePorts(AstNetlist* netlistp) {
+        // A port driven inside its module may be coerced to inout (IEEE 1800-2023 23.3.3.1).
         // Done once all connections are typed, then they are connected like inout ports.
         // A port is not coerced, and ASSIGNIN is then the warning the LRM requires, if it is
         // a top-level port, has a type V3Tristate does not resolve, or has a connection an
         // inout cannot take (e.g. a variable, a constant, or a net needing extension).
         // A port connected to an input port of the parent drives that port as well, so it is
         // coerced only if that port is. With errors the run stops after V3Width anyway.
-        if (m_coercedPortps.empty() || V3Error::errorCount()) return;
-        // Pins are gathered here, not on every pin visit, as coercion is rarely needed
+        // Any other written input net port (e.g. written procedurally, or with a connection an
+        // inout cannot take) then drives the nets connected to it that have no other driver.
+        if (m_writtenInputps.empty() || V3Error::errorCount()) return;
+        // Gathered here, not on every visit, as coercion is rarely needed
         std::unordered_map<const AstVar*, std::vector<AstPin*>> pinps;
+        std::vector<std::pair<AstCell*, AstPin*>> writtenPinps;  // Of written ports, in order
         std::unordered_set<const AstVar*> topPortps;
+        std::unordered_set<const AstVar*> drivenps;  // Variables with a driver
+        std::unordered_set<const AstNode*> forcedRefps;  // Lvalues of force and release
         for (AstNode* modp = netlistp->modulesp(); modp; modp = modp->nextp()) {
-            modp->foreach([&](AstPin* pinp) { pinps[pinp->modVarp()].push_back(pinp); });
-            if (VN_AS(modp, NodeModule)->isTop()) {
-                modp->foreach([&](const AstVar* varp) {
-                    if (varp->isIO()) topPortps.emplace(varp);
-                });
-            }
+            const bool isTop = VN_AS(modp, NodeModule)->isTop();
+            // Pre-order, so a force is seen before the references in it
+            modp->foreach([&](AstNode* np) {
+                if (const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
+                    if (refp->access().isWriteOrRW() && !forcedRefps.count(refp)) {
+                        drivenps.emplace(refp->varp());
+                    }
+                } else if (VN_IS(np, AssignForce) || VN_IS(np, Release)) {
+                    AstNode* const lhsp = VN_IS(np, Release) ? VN_AS(np, Release)->lhsp()
+                                                             : VN_AS(np, AssignForce)->lhsp();
+                    lhsp->foreach([&](const AstNodeVarRef* refp) { forcedRefps.emplace(refp); });
+                } else if (const AstPull* const pullp = VN_CAST(np, Pull)) {
+                    pullp->lhsp()->foreach(
+                        [&](const AstNodeVarRef* refp) { drivenps.emplace(refp->varp()); });
+                } else if (const AstMemberRef* const memberRefp = VN_CAST(np, MemberRef)) {
+                    if (memberRefp->access().isWriteOrRW()) drivenps.emplace(memberRefp->varp());
+                } else if (AstCell* const cellp = VN_CAST(np, Cell)) {
+                    // Unconnected inputs may be driven by `unconnected_drive
+                    const bool pulled = !cellp->modp()->unconnectedDrive().isDefault();
+                    for (AstPin* pinp = cellp->pinsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
+                        pinps[pinp->modVarp()].push_back(pinp);
+                        if (m_writtenInputps.count(pinp->modVarp())) {
+                            writtenPinps.emplace_back(cellp, pinp);
+                        }
+                        if ((pinp->exprp() || pulled) && pinp->modVarp()->isNonOutput()) {
+                            drivenps.emplace(pinp->modVarp());
+                        }
+                    }
+                } else if (const AstVar* const varp = VN_CAST(np, Var)) {
+                    const bool topPort = isTop && varp->isIO();
+                    if (topPort) topPortps.emplace(varp);
+                    // Driven from outside the model, or pulled
+                    if (topPort || varp->isSigUserRWPublic() || varp->isPullup()
+                        || varp->isPulldown()) {
+                        drivenps.emplace(varp);
+                    }
+                }
+            });
         }
         // Candidates, with the parent input ports each connects to
         std::unordered_map<AstVar*, std::vector<AstVar*>> parentps;
@@ -12183,7 +12252,9 @@ public:
             todo.pop_back();
             const auto pair = parentps.emplace(varp, std::vector<AstVar*>{});
             if (!pair.second) continue;
-            bool ok = !topPortps.count(varp) && varp->dtypep()->skipRefp()->isIntegralOrPacked();
+            // V3Tristate cannot resolve a procedural driver
+            bool ok = !topPortps.count(varp) && !m_procWrittenps.count(varp)
+                      && varp->dtypep()->skipRefp()->isIntegralOrPacked();
             for (AstPin* const pinp : pinps[varp]) {
                 std::vector<AstVar*> netps;
                 if (pinp->exprp() && !coercibleConn(pinp->exprp(), netps)) ok = false;
@@ -12222,9 +12293,69 @@ public:
                 // Now written, as is e.g. a top-level inout connected
                 std::vector<AstVar*> netps;
                 coercibleConn(pinp->exprp(), netps);
-                for (AstVar* const netp : netps) netp->icoMaybeWritten(true);
+                for (AstVar* const netp : netps) {
+                    netp->icoMaybeWritten(true);
+                    drivenps.emplace(netp);
+                }  // LCOV_EXCL_LINE
             }
         }  // LCOV_EXCL_LINE
+        driveConnections(writtenPinps, drivenps);
+    }
+    // Make written input ports not coerced drive the connected nets with no other driver
+    void driveConnections(const std::vector<std::pair<AstCell*, AstPin*>>& cellPinps,
+                          const std::unordered_set<const AstVar*>& drivenps) {
+        // The port and the net collapse into one net (IEEE 1800-2023 23.3.3.7), so with no
+        // other driver of the net, the port drives it, with all its writes, also through a
+        // virtual interface or hierarchical reference. Otherwise the net drives the port.
+        // Two such ports on the same bits would both drive them, and neither would see the
+        // other's writes, so these keep their connection driving the port.
+        struct Conn final {
+            AstCell* cellp;
+            AstPin* pinp;
+            AstVar* netp;
+            std::vector<std::pair<int, int>> ranges;  // Selected, from the net outwards
+            bool overlapped;
+        };
+        std::vector<Conn> conns;
+        std::unordered_map<const AstVar*, std::vector<size_t>> netConns;  // Indices into conns
+        for (const auto& cellPin : cellPinps) {
+            AstPin* const pinp = cellPin.second;
+            if (pinp->modVarp()->direction() != VDirection::INPUT) continue;  // Coerced
+            Conn conn{cellPin.first, pinp, nullptr, {}, false};
+            AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
+            conn.netp = exprp ? selectedNetp(exprp, conn.ranges) : nullptr;
+            if (!conn.netp || drivenps.count(conn.netp)) continue;
+            // Quadratic only in the ports written on one net, which are few
+            for (const size_t i : netConns[conn.netp]) {
+                if (rangesOverlap(conns[i].ranges, conn.ranges)) {
+                    conns[i].overlapped = true;
+                    conn.overlapped = true;
+                }
+            }  // LCOV_EXCL_LINE
+            netConns[conn.netp].push_back(conns.size());
+            conns.push_back(conn);
+        }
+        for (const Conn& conn : conns) {
+            if (conn.overlapped) continue;
+            AstNodeExpr* const exprp = VN_AS(conn.pinp->exprp(), NodeExpr)->unlinkFrBack();
+            V3LinkLValue::linkLValueSet(exprp);
+            conn.netp->icoMaybeWritten(true);
+            conn.netp->isContinuously(true);
+            FileLine* const flp = exprp->fileline();
+            AstVarXRef* const rhsp
+                = new AstVarXRef{flp, conn.pinp->modVarp(), conn.cellp->name(), VAccess::READ};
+            conn.cellp->addNextHere(new AstAlways{new AstAssignW{flp, exprp, rhsp}});
+        }  // LCOV_EXCL_LINE
+    }
+    // Whether constant selects of a net, as from selectedNetp, may share bits
+    static bool rangesOverlap(const std::vector<std::pair<int, int>>& ap,
+                              const std::vector<std::pair<int, int>>& bp) {
+        for (size_t i = 0; i < ap.size() && i < bp.size(); ++i) {
+            if (ap[i].second < bp[i].first || bp[i].second < ap[i].first) return false;
+            // A partial overlap makes the inner selects incomparable
+            if (ap[i] != bp[i]) return true;
+        }
+        return true;
     }
     static bool lowerAsFixedAggregate(const AstNodeDType* const dtypep) {
         return dtypep->isStreamableFixedAggregate() && dtypep->containsUnpackedStruct();
