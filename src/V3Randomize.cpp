@@ -1136,6 +1136,7 @@ class RandomizeVisitor final : public VNVisitor {
     AstConstraint* m_constraintp = nullptr;  // Current constraint
     // Per-handle-type pre/post virtual wrapper presence
     std::map<AstClass*, std::pair<bool, bool>> m_prePostWrap;
+    std::unordered_set<const AstClass*> m_globalOwnerClassps;  // Classes solving sub-objects
     ActiveSet m_activeClasses;  // Classes currently building randomize()
     RandModeVars m_modeVars;  // Static rand_mode/constraint_mode state vars per class
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
@@ -2334,9 +2335,7 @@ class RandomizeVisitor final : public VNVisitor {
         UINFO(9, "Define randomize() for " << nodep);
         nodep->baseMostClassp()->needRNG(true);
 
-        // Detect global-constraint ownership BEFORE the constraint items are
-        // unlinked into setup tasks below (after that the member-selects are gone).
-        const bool basicFirst = classOwnsGlobalConstraint(nodep);
+        const bool basicFirst = m_globalOwnerClassps.count(nodep);
 
         FileLine* const fl = nodep->fileline();
         AstFunc* const randomizep = V3Randomize::newRandomizeFunc(m_memberMap, nodep);
@@ -2768,6 +2767,8 @@ public:
         // is skipped so its own members are still basic-randomized.
         nodep->foreach([&](AstClass* const classp) {
             if (!classp->user1()) return;
+            // Before any class unlinks the member-selects of the constraints it shares
+            if (classOwnsGlobalConstraint(classp)) m_globalOwnerClassps.insert(classp);
             classp->foreachMember([&](AstClass* const ownerClassp, AstConstraint* const constrp) {
                 constrp->foreach([&](AstMemberRef* const memberRefp) {
                     AstVar* const varp = memberRefp->varp();
