@@ -9,8 +9,13 @@
 
 import vltest_bootstrap
 
-test.scenarios('linter')
+test.scenarios('simulator')
 
-test.lint(fails=test.vlt_all, expect_filename=test.golden_filename)
+test.compile(timing_loop=True, verilator_flags2=['--timing'])
+
+# A top-level port is not driven from a connected port
+test.file_grep(test.obj_dir + "/" + test.vm_prefix + ".h", r'VL_IN8\(&tin,')
+
+test.execute()
 
 test.passes()
