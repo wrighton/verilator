@@ -1853,7 +1853,7 @@ class RandomizeVisitor final : public VNVisitor {
         m_memberMap.insert(classp, taskp);
         return taskp;
     }
-    // Populate nested callback task body: calls pre/post_randomize on nested rand class members
+    // Populate nested callback task body: calls pre/post_randomize on globally constrained members
     void populateNestedCallbackTask(AstTask* const callbackTaskp, AstClass* const classp,
                                     const string& cbName) {
         FileLine* const fl = classp->fileline();
@@ -1864,6 +1864,8 @@ class RandomizeVisitor final : public VNVisitor {
             if (!classRefp) return;
             AstClass* const memberClassp = classRefp->classp();
             if (memberClassp == classp) return;  // Avoid self-reference
+            // Others are randomized by member.randomize(), which calls their callbacks
+            if (!memberVarp->globalConstrained()) return;
 
             // Force-visit member class if not yet processed
             if (memberClassp->user1()) {
