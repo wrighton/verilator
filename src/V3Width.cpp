@@ -12129,13 +12129,13 @@ class WidthVisitor final : public VNVisitor {
         // The selected index ranges are appended from the net outwards
         AstVar* netp = nullptr;
         if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
-            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+            const AstConst* const lsbp = foldedConstp(selp->lsbp());
             netp = lsbp ? selectedNetp(selp->fromp(), ranges) : nullptr;
             if (netp) ranges.emplace_back(lsbp->toSInt(), lsbp->toSInt() + selp->width() - 1);
             return netp;
         }
         if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
-            const AstConst* const bitp = VN_CAST(selp->bitp(), Const);
+            const AstConst* const bitp = foldedConstp(selp->bitp());
             netp = bitp ? selectedNetp(selp->fromp(), ranges) : nullptr;
             if (netp) ranges.emplace_back(bitp->toSInt(), bitp->toSInt());
             return netp;
@@ -12143,10 +12143,15 @@ class WidthVisitor final : public VNVisitor {
         const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
         return refp && refp->varp()->isNetOrNetPort() ? refp->varp() : nullptr;
     }
+    // The index expression folded, if it is a constant, else nullptr
+    static const AstConst* foldedConstp(AstNodeExpr* indexp) {
+        // A select of a multi-dimensional packed array has an unfolded index expression
+        return VN_CAST(V3Const::constifyEdit(indexp), Const);
+    }
     // Whether an inout port connection could be the expression, adding the nets in it
     static bool coercibleConn(AstNode* exprp, std::vector<AstVar*>& netps) {
         if (AstSel* const selp = VN_CAST(exprp, Sel)) {
-            return VN_IS(selp->lsbp(), Const) && coercibleConn(selp->fromp(), netps);
+            return foldedConstp(selp->lsbp()) && coercibleConn(selp->fromp(), netps);
         }
         if (AstConcat* const catp = VN_CAST(exprp, Concat)) {
             return coercibleConn(catp->lhsp(), netps) && coercibleConn(catp->rhsp(), netps);
