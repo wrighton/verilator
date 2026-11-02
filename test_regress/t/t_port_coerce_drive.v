@@ -64,6 +64,16 @@ interface cb_if (
   endclocking
 endinterface
 
+// Driven only by a clocking block, connected only to local nets
+interface cbl_if (
+    input logic clk,
+    input logic d
+);
+  clocking cb @(posedge clk);
+    output d;
+  endclocking
+endinterface
+
 interface var_if (
     input var logic v
 );
@@ -121,8 +131,12 @@ module wrapper (
     input logic [1:0] w_out_credit[2],
     input logic w_out_credit_valid[2],
     input logic w_in_cb,
+    input logic [3:0][1:0][7:0] w_pk_data,
+    input logic [3:0][1:0] w_pk_valid,
     output logic [7:0] sum
 );
+  logic [3:0][1:0] pk_copy;
+  assign pk_copy = w_pk_valid;
   core u_core (
       .clk,
       .in_data(w_in_data),
@@ -143,6 +157,20 @@ endmodule
 module harness;
   virtual dvc_if tx_vifs[2][2];
   virtual dvc_if rx_vifs[2];
+  virtual dvc_if pk_vifs[4][2];
+  // Selects of multi-dimensional packed ports
+  for (genvar i = 0; i < 4; i++) begin : g_pi
+    for (genvar j = 0; j < 2; j++) begin : g_pj
+      dvc_if u_pk (
+          .data(wrapper.w_pk_data[i][j]),
+          .valid(wrapper.w_pk_valid[i][j]),
+          .credit(),
+          .credit_valid(),
+          .clk(wrapper.clk)
+      );
+      initial pk_vifs[i][j] = u_pk;
+    end
+  end
   for (genvar i = 0; i < 2; i++) begin : g_i
     for (genvar j = 0; j < 2; j++) begin : g_j
       dvc_if u_tx (
@@ -232,6 +260,8 @@ module t (
       .w_out_credit(),
       .w_out_credit_valid(),
       .w_in_cb(),
+      .w_pk_data(),
+      .w_pk_valid(),
       .sum(sum)
   );
 
@@ -255,6 +285,22 @@ module t (
       .credit_valid(),
       .clk(clk)
   );
+  // Clocking block drive into a select of a multi-dimensional packed net,
+  // coerced to inout to resolve with another driver
+  wire [1:0][1:0] wm;
+  logic men = 0;
+  assign wm[1][0] = men ? 1'b0 : 1'bz;
+  cbl_if u_cbm (
+      .clk(clk),
+      .d(wm[1][0])
+  );
+  // Selects of ascending ranges
+  // verilator lint_off ASCRANGE
+  wire [0:3] wasc;
+  wire [0:3][1:0] wasc2;
+  // verilator lint_on ASCRANGE
+  pif u_asc (.v(wasc[1]));
+  pif u_asc2 (.v(wasc2[1][0]));
   // Interface array, element connections
   wire [1:0] wa;
   pif u_a[1:0] (.v(wa));
@@ -372,9 +418,15 @@ module t (
     `checkh(rx[0].vif.valid, 1'b0);
 
     txc.vif.valid <= 1'b1;
+    u_wrap.u_h.pk_vifs[2][1].data <= 8'h5a;
+    u_wrap.u_h.pk_vifs[2][1].valid <= 1'b1;
+    u_wrap.u_h.pk_vifs[0][0].data <= 8'ha5;
     u_cr.v = 1'b1;
     u_wrap.u_h.u_cb.cb.d <= 1'b1;
     u_dv.tx_cb.valid <= 1'b1;
+    u_cbm.cb.d <= 1'b1;
+    u_asc.v = 1'b1;
+    u_asc2.v = 1'b1;
     u_a[0].v = 1'b1;
     u_a[1].v <= 1'b0;
     u_i.set(1'b1);
@@ -404,10 +456,21 @@ module t (
     vvar.v = 1'b1;
     repeat (2) @(posedge clk);
     `checkh(wc, 1'b1);
+    `checkh(u_wrap.w_pk_valid[2][1], 1'b1);
+    `checkh(u_wrap.pk_copy[2][1], 1'b1);
+    if (u_wrap.w_pk_valid[2][0] === 1'b1 || u_wrap.w_pk_valid[1][1] === 1'b1) `stop;
+    `checkh(u_wrap.w_pk_data[2][1], 8'h5a);
+    `checkh(u_wrap.w_pk_data[0][0], 8'ha5);
+    if (u_wrap.w_pk_data[2][0] === 8'h5a || u_wrap.w_pk_data[0][1] === 8'ha5) `stop;
     `checkh(wc_cr[1], 1'b1);
     `checkh(u_wrap.w_in_cb, 1'b1);
     `checkh(u_wrap.u_core.in_cb, 1'b1);
     `checkh(wv, 1'b1);
+    `checkh(wm[1][0], 1'b1);
+    `checkh(wasc[1], 1'b1);
+    if (wasc[0] === 1'b1 || wasc[2] === 1'b1) `stop;
+    `checkh(wasc2[1][0], 1'b1);
+    if (wasc2[1][1] === 1'b1 || wasc2[0][0] === 1'b1) `stop;
     `checkh(wa, 2'b01);
     `checkh(wi[1], 1'b1);
     `checkh(wx[0], 1'b1);
