@@ -4782,8 +4782,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         UINFO(9, indent() << " cell -> iface varref " << foundp->nodep());
                         AstNodeExpr* newp;
                         if (m_ds.m_dotText != "") {
-                            newp = new AstVarXRef{nodep->fileline(), ifaceRefVarp, m_ds.m_dotText,
-                                                  VAccess::READ};
+                            AstVarXRef* const xrefp = new AstVarXRef{
+                                nodep->fileline(), ifaceRefVarp, m_ds.m_dotText, VAccess::READ};
+                            xrefp->containsGenBlock(m_ds.m_genBlk);
+                            newp = xrefp;
                             if (m_ds.m_unresolvedCell && m_ds.m_unlinkedScopep) {
                                 newp = new AstUnlinkedRef{nodep->fileline(), newp, newp->name(),
                                                           m_ds.m_unlinkedScopep->unlinkFrBack()};
