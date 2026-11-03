@@ -64,6 +64,10 @@ class VSymEnt final {
     bool m_exported = true;  // Allow importing
     bool m_imported = false;  // Was imported
     bool m_wildImported = false;  // Was imported on lookup through a wildcard import
+    bool m_importAmbiguous = false;  // Wildcard imported, but a different item of the same name
+                                     // was also wildcard imported (IEEE 1800-2023 26.3)
+    bool m_hidesWildcard = false;  // Declaration hides a wildcard imported item of the same name
+    bool m_checkWildConflicts = true;  // Track names wildcard imported from multiple packages
 #ifdef VL_DEBUG
     VL_DEFINE_DEBUG_FUNCTIONS;
 #else
@@ -159,6 +163,9 @@ public:
     void exported(bool flag) { m_exported = flag; }
     bool imported() const { return m_imported; }
     void imported(bool flag) { m_imported = flag; }
+    bool importAmbiguous() const { return m_importAmbiguous; }
+    bool hidesWildcard() const { return m_hidesWildcard; }
+    void hidesWildcard(bool flag) { m_hidesWildcard = flag; }
     VSymEnt* insert(const string& name, VSymEnt* entp) {
         UINFO(9, "     SymInsert se" << cvtToHex(this) << " '" << name << "' se" << cvtToHex(entp)
                                      << "  " << entp->nodep());
@@ -211,10 +218,25 @@ public:
             if (pkgIt != pkgNameMapr.end() && pkgIt->second->exported()) {
                 VSymEnt* const symp = insert(name, newImportedSymbol(pkgIt->second));
                 symp->m_wildImported = true;
+                for (const VSymEnt* const otherp : m_wildImportps) {
+                    checkWildImport(otherp, name, symp);
+                }
                 return symp;
             }
         }
         return nullptr;
+    }
+    // Whether name is, or on lookup would be, imported here through a wildcard import
+    bool wildImportable(const string& name) const {
+        const IdNameMap& nameMapr = idNameMap();
+        const auto it = nameMapr.find(name);
+        if (it != nameMapr.end()) return it->second->m_wildImported;
+        for (const VSymEnt* const pkgSymp : m_wildImportps) {
+            const IdNameMap& pkgNameMapr = pkgSymp->idNameMap();
+            const auto pkgIt = pkgNameMapr.find(name);
+            if (pkgIt != pkgNameMapr.end() && pkgIt->second->exported()) return true;
+        }
+        return false;
     }
     static bool checkSimilarname(const AstNode* nodep) {
         // Only declarations that can contribute a name to the netlist handed
@@ -295,11 +317,25 @@ private:
         symp->imported(true);
         return symp;
     }
+    // Update entry symp for name being also wildcard imported from package pkgSymp
+    void checkWildImport(const VSymEnt* pkgSymp, const string& name, VSymEnt* symp) const {
+        const IdNameMap& pkgNameMapr = pkgSymp->idNameMap();
+        const auto it = pkgNameMapr.find(name);
+        if (it == pkgNameMapr.end() || !it->second->exported()) return;
+        if (m_checkWildConflicts && it->second->nodep() != symp->nodep()) {
+            symp->m_importAmbiguous = true;
+        }
+    }
     void addWildImport(const VSymEnt* pkgSymp) {
         // Repeated imports of a package would only slow lookups that miss
         if (std::find(m_wildImportps.begin(), m_wildImportps.end(), pkgSymp)
-            == m_wildImportps.end()) {
-            m_wildImportps.push_back(pkgSymp);
+            != m_wildImportps.end()) {
+            return;
+        }
+        m_wildImportps.push_back(pkgSymp);
+        // Names imported by earlier lookups are not looked up again
+        for (const auto& itr : idNameMap()) {
+            if (itr.second->m_wildImported) checkWildImport(pkgSymp, itr.first, itr.second);
         }
     }
     void importOneSymbol(const string& name, const VSymEnt* srcp, bool honorExport) {
@@ -311,7 +347,7 @@ private:
             reinsert(name, newImportedSymbol(srcp));
         }
     }
-    void exportOneSymbol(const string& name, const VSymEnt* srcp) {
+    void exportOneSymbol(const string& name, const VSymEnt* srcp, bool wildcard) {
         // Export the declaration srcp, importing it if a wildcard import makes it a candidate,
         // through any package, per IEEE 1800-2023 26.6. Exporting a name that is not imported
         // is reported by V3LinkDot.
@@ -330,6 +366,12 @@ private:
                 VSymEnt* const symp = newImportedSymbol(srcp);
                 symp->exported(true);
                 reinsert(name, symp);
+                // A wildcard export, unlike a named one, does not pick this package's item
+                if (wildcard) {
+                    for (const VSymEnt* const otherp : m_wildImportps) {
+                        checkWildImport(otherp, name, symp);
+                    }
+                }
                 return;
             }
         }
@@ -351,13 +393,17 @@ public:
             if (!haveExterns.count(itr.first)) importOneSymbol(itr.first, itr.second, false);
         }
     }
-    void importFromPackage(const VSymEnt* srcp, const string& id_or_star) {
-        // Import tokens from source symbol table into this symbol table
+    void importFromPackage(const VSymEnt* srcp, const string& id_or_star,
+                           bool checkWildConflicts) {
+        // Import tokens from source symbol table into this symbol table.
+        // If !checkWildConflicts, a name wildcard imported from several packages is taken from
+        // the first one, without marking it ambiguous.
         if (id_or_star != "*") {
             const IdNameMap& srcNameMapr = srcp->idNameMap();
             const auto it = srcNameMapr.find(id_or_star);
             if (it != srcNameMapr.end()) importOneSymbol(it->first, it->second, true);
         } else {
+            if (!checkWildConflicts) m_checkWildConflicts = false;
             addWildImport(srcp);  // Symbols are imported on lookup, see findIdFlat
         }
     }
@@ -366,9 +412,9 @@ public:
         const IdNameMap& srcNameMapr = srcp->idNameMap();
         if (id_or_star != "*") {
             const auto it = vlstd::as_const(srcNameMapr).find(id_or_star);
-            if (it != srcNameMapr.end()) exportOneSymbol(it->first, it->second);
+            if (it != srcNameMapr.end()) exportOneSymbol(it->first, it->second, false);
         } else {
-            for (const auto& itr : srcNameMapr) exportOneSymbol(itr.first, itr.second);
+            for (const auto& itr : srcNameMapr) exportOneSymbol(itr.first, itr.second, true);
         }
     }
     void exportStarStar() {
