@@ -106,7 +106,7 @@ test.file_grep(logfile, r'Solver died or replied unreadably')
 logfile = test.obj_dir + '/sim_ug2_estimate.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=model_trunc TAMPER_AT=8 ')
+             'TAMPER=model_trunc TAMPER_AT=12 ')
 test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A value the sampler can't parse while it measures the solution space.
