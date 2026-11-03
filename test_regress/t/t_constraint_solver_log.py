@@ -22,4 +22,15 @@ test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
 
+# Each command and reply is logged whole, however the pipe split it
+longest = 0
+with open(solver_log, encoding="utf8") as fh:
+    for line in fh:
+        if line.startswith(("  (assert", "< ((")):
+            longest = max(longest, len(line))
+            if line.count("(") != line.count(")"):
+                test.error("Solver log breaks a line: " + line[:60])
+if longest <= 4096:
+    test.error("No logged line is longer than a pipe buffer")
+
 test.passes()

@@ -117,6 +117,8 @@ class VlRProcess final : private std::streambuf, public std::iostream {
     bool m_logTried = false;  // Log file name looked up, at the first start
     std::unique_ptr<std::ofstream> m_logfp;  // Log file stream
     uint64_t m_logLastTime = ~0ULL;  // Last timestamp for logfile
+    std::string m_logLinePrefix;  // Prefix of the last log line, unfinished if m_logLineOpen
+    bool m_logLineOpen = false;  // Last logged text did not end its line
 
 public:
     typedef std::streambuf::traits_type traits_type;
@@ -282,7 +284,7 @@ public:
             return false;
         }
 
-        log("", "# Open: "s + cmd[0]);
+        log("", "# Open: "s + cmd[0] + "\n");
         const pid_t pid = fork();
         if (VL_UNLIKELY(pid < 0)) {
             perror("VlRProcess::open: fork");
@@ -366,7 +368,7 @@ public:
         si.hStdError = stderrInheritable ? stderrInheritable : fd_stdout_wr;
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
-        log("", "# Open: "s + cmd[0]);
+        log("", "# Open: "s + cmd[0] + "\n");
         const BOOL procOk
             = CreateProcessA(nullptr, &cmdline[0], nullptr, nullptr, TRUE /* inherit */,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -422,18 +424,26 @@ private:
     }
     void log(const std::string& prefix, const std::string& text) {
         if (VL_LIKELY(!m_logfp.get()) || text.empty()) return;
-        if (m_logLastTime != Verilated::threadContextp()->time()) {
+        // Pipe buffers end anywhere, so continue an unfinished line of the same direction
+        // rather than breaking it (inside a token, unreadable by a solver)
+        if (m_logLineOpen && prefix != m_logLinePrefix) {
+            *m_logfp << '\n';
+            m_logLineOpen = false;
+        }
+        if (!m_logLineOpen && m_logLastTime != Verilated::threadContextp()->time()) {
             m_logLastTime = Verilated::threadContextp()->time();
             *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString() << "]\n";
         }
+        m_logLinePrefix = prefix;
         std::size_t startPos = 0;
-        while (1) {
+        while (startPos < text.length()) {
+            if (!m_logLineOpen) *m_logfp << prefix;
             const std::size_t endPos = text.find('\n', startPos);
-            if (endPos == std::string::npos) break;
-            *m_logfp << prefix << text.substr(startPos, endPos - startPos) << '\n';
-            startPos = endPos + 1;
+            m_logLineOpen = endPos == std::string::npos;
+            const std::size_t lineEnd = m_logLineOpen ? text.length() : endPos + 1;
+            *m_logfp << text.substr(startPos, lineEnd - startPos);
+            startPos = lineEnd;
         }
-        if (startPos < text.length()) *m_logfp << prefix << text.substr(startPos) << '\n';
     }
 };
 
