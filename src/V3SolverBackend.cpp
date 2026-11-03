@@ -121,6 +121,17 @@ AstVar* ElemRandModes::modeVarp(AstVar* arrVarp) {
     return modeVarp;
 }
 
+AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstVar* const arrVarp,
+                                           AstNodeExpr* const idxp) {
+    const AstUnpackArrayDType* const unpackDtp
+        = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
+    if (!unpackDtp) return idxp;
+    AstNodeExpr* const offsetp
+        = new AstSub{fl, idxp, new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
+    offsetp->dtypeSetUInt32();
+    return offsetp;
+}
+
 bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
     AstNodeDType* dtypep = varp->dtypep()->skipRefp();
     if (!dtypep->isNonPackedArray()) return false;

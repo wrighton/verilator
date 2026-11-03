@@ -116,6 +116,10 @@ public:
 
 class RandomizeUtil final {
 public:
+    // Offset of the element at declared index idxp of array arrVarp, as selects and the solver
+    // use
+    static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstVar* arrVarp,
+                                       AstNodeExpr* idxp) VL_MT_DISABLED;
     // Whether varp is an unpacked array of class handles
     static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
     // Whether the array element at indexp has rand_mode off, given the array's modesp
