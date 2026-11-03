@@ -1305,27 +1305,33 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         if (m_nestedAccessp) { VL_DO_DANGLING(delete m_nestedAccessp, m_nestedAccessp); }
     }
-    // Build popcount expansion: (x & 1) + ((x & 2) >> 1) + ...
-    // argp is consumed; caller must clone if reusing.
+    // Build the number of set bits of argp (consumed) as a narrow sum
     AstNodeExpr* buildCountOnesExpansion(FileLine* fl, AstNodeExpr* argp) {
-        const V3Number numOne{fl, argp->width(), 1};
-        AstNodeExpr* sump = new AstAnd{fl, argp, new AstConst{fl, numOne}};
-        sump->user1(true);
-        for (int i = 1; i < argp->width(); i++) {
-            V3Number numBitMask{fl, argp->width(), 0};
-            numBitMask.setBit(i, 1);
-            AstAnd* const andp
-                = new AstAnd{fl, argp->cloneTreePure(false), new AstConst{fl, numBitMask}};
-            andp->user1(true);
-            AstShiftR* const shiftp
-                = new AstShiftR{fl, andp,
-                                new AstConst{fl, AstConst::WidthedValue{}, argp->width(),
-                                             static_cast<uint32_t>(i)}};
-            shiftp->user1(true);
-            sump = new AstAdd{fl, sump, shiftp};
-            sump->user1(true);
+        // Sum the bits pairwise in a balanced tree, each adder only as wide as its sum.
+        // A chain of full-width adds is very slow to solve: z3 takes a minute on a
+        // 128-bit $countones(x) inside {...}, against milliseconds for the tree.
+        std::vector<AstNodeExpr*> sums;
+        sums.reserve(argp->width());
+        for (int i = 0; i < argp->width(); ++i) {
+            sums.push_back(new AstSel{fl, i ? argp->cloneTreePure(false) : argp, i, 1});
+            sums.back()->user1(true);
         }
-        return sump;
+        while (sums.size() > 1) {
+            std::vector<AstNodeExpr*> nextSums;
+            for (size_t i = 0; i + 1 < sums.size(); i += 2) {
+                const int width = std::max(sums[i]->width(), sums[i + 1]->width()) + 1;
+                AstNodeExpr* const lhsp = new AstExtend{fl, sums[i], width};
+                AstNodeExpr* const rhsp = new AstExtend{fl, sums[i + 1], width};
+                AstNodeExpr* const addp = new AstAdd{fl, lhsp, rhsp};
+                lhsp->user1(true);
+                rhsp->user1(true);
+                addp->user1(true);
+                nextSums.push_back(addp);
+            }
+            if (sums.size() % 2) nextSums.push_back(sums.back());
+            sums.swap(nextSums);
+        }
+        return sums[0];
     }
 
     void visit(AstCountOnes* nodep) override {
