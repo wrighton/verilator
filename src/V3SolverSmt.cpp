@@ -157,7 +157,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
     uint32_t* m_uniqueConstraintIdp = nullptr;  // Current ID of unique call
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
-    std::vector<AstVar*> m_rangeConstrainedEnums;  // Enums that are already range-constrained
+    std::set<std::string> m_rangeConstrainedEnums;  // Solver names of range-constrained enums
     // First expression found under an inside index
     AstNode* m_firstExpressionInsideIndexp = nullptr;
     AstBegin* m_foreachBodyp = nullptr;  // Holder of the body of the innermost constraint-foreach
@@ -265,7 +265,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         std::string constraint = "(__Vbv (or";
         for (AstEnumItem* const itemp : enumDtp->itemspList()) {
             const AstConst* const vconstp = VN_AS(itemp->valuep(), Const);
-            constraint += " (= " + smtName + " (_ bv" + cvtToStr(vconstp->toUInt()) + " "
+            if (vconstp->num().isFourState()) continue;  // The solver can't produce X/Z
+            constraint += " (= " + smtName + " (_ bv" + vconstp->num().toDecimalU() + " "
                           + cvtToStr(width) + "))";
         }
         constraint += "))";
@@ -1224,22 +1225,22 @@ class ConstraintExprVisitor final : public VNVisitor {
         const RandomizeMode randMode = {.asUQuad = varp->user1()};
         if (!randMode.usesMode && editFormat(nodep)) return;
 
-        AstEnumDType* enumDtp = VN_CAST(nodep->dtypep()->skipRefToEnump(), EnumDType);
-        if (enumDtp
-            && (std::find(m_rangeConstrainedEnums.begin(), m_rangeConstrainedEnums.end(), varp)
-                == m_rangeConstrainedEnums.end())) {
+        // The selected member's type and solver name, so 'obj.e' is restricted too
+        // (IEEE 1800-2023 18.4). A nested array access has no fixed solver name.
+        AstEnumDType* const enumDtp
+            = m_nestedAccessp ? nullptr : VN_CAST(varp->dtypep()->skipRefToEnump(), EnumDType);
+        if (enumDtp && m_rangeConstrainedEnums.emplace(smtName).second) {
             AstVar* genVarp = m_genp;
             if (m_classp && m_classp->user3p()) genVarp = VN_AS(m_classp->user3p(), Var);
             UASSERT_OBJ(genVarp, nodep, "No 'randomize' variable in m_genp or m_classp");
             AstNodeExpr* enumRangeExprp
-                = createEnumConstraint(nodep->fileline(), varp->name(), enumDtp, genVarp);
+                = createEnumConstraint(nodep->fileline(), smtName, enumDtp, genVarp);
             AstBegin* targetp = m_inlineInitBlockp;
             if (!targetp) {
                 targetp
                     = newInitBlockp(SmtUtil::getCreateConstraintSetupFunc(m_classp, m_memberMap));
             }
             targetp->addStmtsp(enumRangeExprp->makeStmt());
-            m_rangeConstrainedEnums.push_back(varp);
         }
 
         VNRelinker relinker;
