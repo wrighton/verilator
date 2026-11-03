@@ -206,7 +206,7 @@ module t;
     sol.bw[1] = 65'h1_0000_0000_0000_0123;
     sol.a[1].v = 8'h23;
     sol.a[1].u = 8'h24;
-    sol.af[3].v = 8'h25;
+    sol.af[3].v = 8'h00;  // Violates c_v, which is not used while af[3] is off
     sol.af[3].d = 8'h26;
     sol.b[1].rand_mode(0);
     sol.bf[3].rand_mode(0);
@@ -222,7 +222,7 @@ module t;
       `checkh(sol.bw[1], 65'h1_0000_0000_0000_0123);
       `checkh(sol.a[1].v, 8'h23);
       `checkh(sol.a[1].u, 8'h24);
-      `checkh(sol.af[3].v, 8'h25);
+      `checkh(sol.af[3].v, 8'h00);
       `checkh(sol.af[3].d, 8'h26);
       if (sol.af[2].d <= sol.af[2].v) `stop;
       // Off elements are state variables of the constraints
