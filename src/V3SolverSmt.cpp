@@ -3305,8 +3305,6 @@ class SolverSmtLowering final : public V3SolverLowering {
         const bool isSigned = distp->exprp()->isSigned();
         AstNodeExpr* const distExprGtep = distp->exprp()->cloneTreePure(false);
         AstNodeExpr* const distExprLtep = distp->exprp()->cloneTreePure(false);
-        distExprGtep->user1(true);
-        distExprLtep->user1(true);
         AstNodeExpr* const gep
             = isSigned ? static_cast<AstNodeExpr*>(
                              new AstGteS{fl, distExprGtep, irp->lhsp()->cloneTreePure(false)})
@@ -3370,7 +3368,6 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         FileLine* const fl = distp->fileline();
         AstNodeExpr* const eqExprp = distp->exprp()->cloneTreePure(false);
-        eqExprp->user1(true);
         AstNodeExpr* const eqp = new AstEq{fl, eqExprp, rangep->cloneTreePure(false)};
         eqp->user1(true);
         return eqp;
@@ -3579,7 +3576,6 @@ class SolverSmtLowering final : public V3SolverLowering {
     AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp) {
         FileLine* const fl = distp->fileline();
         AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
-        distExprCopyp->user1(true);
         const int distWidth = distp->exprp()->width();
         const AstConst* const lopCp = VN_CAST(irp->lhsp(), Const);
         const AstConst* const hipCp = VN_CAST(irp->rhsp(), Const);
@@ -3628,7 +3624,6 @@ class SolverSmtLowering final : public V3SolverLowering {
                 constraintExprp = newUniformRangePick(distp, irp);
             } else {
                 AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
-                distExprCopyp->user1(true);
                 constraintExprp
                     = new AstEq{fl, distExprCopyp, buckets[i].rangep->cloneTreePure(false)};
                 constraintExprp->user1(true);
