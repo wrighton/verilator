@@ -102,6 +102,18 @@ class ArrDerived2 extends ArrBase;
   constraint c_d2 {foreach (a[i]) a[i].v != 7'd19;}
 endclass
 
+// Over 16 objects: the element index in the solver names is not padded
+class Big;
+  rand Sub s[17];
+  constraint c_g {
+    s[1].x == 5'd7;
+    s[16].x == 5'd9;
+  }
+  function new();
+    foreach (s[i]) s[i] = new;
+  endfunction
+endclass
+
 module t;
   task automatic check_items(Item items[$], int above, int below);
     foreach (items[i]) begin
@@ -213,7 +225,17 @@ module t;
     end
   endtask
 
+  task automatic test_big;
+    Big b = new;
+    int randomize_result;
+    randomize_result = b.randomize();
+    `checkd(randomize_result, 1);
+    `checkd(b.s[1].x, 5'd7);
+    `checkd(b.s[16].x, 5'd9);
+  endtask
+
   initial begin
+    test_big();
     test_dyn();
     test_queue();
     test_realloc();
