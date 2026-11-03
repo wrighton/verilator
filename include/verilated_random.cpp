@@ -31,20 +31,16 @@
 #include <streambuf>
 #include <tuple>
 
-// Diversity (scalar rand vars): tie each free bit to a random target via a
-//   boolean assumption literal, then force the bits with (check-sat-assuming).
-//   If UNSAT, (get-unsat-assumptions) names the literals clashing with the
-//   feasible hard+soft base; drop one per round and recheck until SAT, which
-//   keeps the maximal set of bits compatible with the constraints. Only these
-//   private literals are assumed (never user constraints), and assumptions are
-//   ephemeral, so hard/soft/randc semantics are untouched and rounds need no
-//   push/pop or re-asserting. The surviving assumptions steer each free bit
-//   from the random target, spreading a wide range uniformly (fixing the
-//   boundary bias under `value < (1<<N)`, issue #7563) while keeping run-to-run
-//   diversity on tightly coupled bits. Array/queue rand vars skip pinning
-//   (per-element ranges aren't power-of-2 boundaries) and use the XOR rounds.
+// Diversity: tie each variable, array element, or part of one, to a random target via
+//   a boolean assumption literal, then force them with (check-sat-assuming). If
+//   UNSAT, (get-unsat-assumptions) names the literals clashing with the feasible
+//   hard+soft base; drop one per round and recheck until SAT. Only these private
+//   literals are assumed (never user constraints), and assumptions are ephemeral,
+//   so hard/soft/randc semantics are untouched and rounds need no push/pop or
+//   re-asserting. See solveDiversity.
 #define _VL_SOLVER_HASH_LEN 1
-#define _VL_SOLVER_HASH_LEN_TOTAL 4
+static constexpr int diversityMaxChecks = 512;  // Most solver checks to spread one solution
+static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
 
 // clang-format off
 #if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
@@ -560,7 +556,7 @@ static bool readSExpr(std::istream& is, std::string& outr) {
 // Solver session lifecycle
 
 // With +verilator+rand+sampler+solver the solver's model is the random result, so
-// Verilator's own sampling (UniGen2 cells, diversity pins and XOR rounds) is skipped.
+// Verilator's own sampling (UniGen2 cells and diversity pins) is skipped.
 static bool solverSamples() {
     return Verilated::threadContextp()->randSampler() == VerilatedRandSampler::SAMPLER_SOLVER;
 }
@@ -1091,7 +1087,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     for (int attempt = 0; attempt < (hasRandc ? 2 : 1); ++attempt) {
         os << "(set-option :produce-models true)\n";
         if (!solverSamples()) {
-            // Lets the scalar pin path learn which free-bit assumptions conflict.
+            // Lets the diversity pins learn which assumptions conflict.
             os << "(set-option :produce-unsat-assumptions true)\n";
         } else if (!m_checkOnly) {
             // Check-only results are not random, so leave the random state alone
@@ -1138,12 +1134,25 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     return false;  // Should not reach here
 }
 
+static constexpr uint64_t ug2MaxBits = 1024;  // Most solver variable bits to sample with UniGen2
+
 // Enumerate one cell of the solution space, and cache the solutions in m_ug2.loThreshWitnesses.
 // The next call with the same constraint set will drain the cache before running the full
 // mechanism again.
 bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
                            const std::vector<std::string>& uniqueExprs) VL_REQUIRES(sess.m_mutex) {
     if (!m_softConstraints.empty()) return false;
+    // Its XORs span every bit, which gets slow to solve (about a minute per call at 16k
+    // bits) while the large-space cells it can afford are poorly spread, so wide problems
+    // use the flat path
+    uint64_t bits = 0;
+    for (const auto& var : m_vars) {
+        const uint64_t elements = var.second->dimension()
+                                      ? var.second->countMatchingElements(m_arr_vars, var.first)
+                                      : 1;
+        bits += elements * var.second->width();
+    }
+    if (bits > ug2MaxBits) return false;
 
     const size_t currentHash = hashConstraints(uniqueExprs);
     // Params and batch are computed for specific constraint set, so drop them
@@ -1431,78 +1440,180 @@ bool VlRandomizer::generateSamples(VlSolverSession& sess, VlRNG& rngr) VL_REQUIR
     return false;  // LCOV_EXCL_LINE
 }
 
-void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
-    bool hasArray = false;
+void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
+                                  const std::set<std::string>* fixedp) VL_REQUIRES(sess.m_mutex) {
+    // Tie each variable or array element to a random value via an assumption literal and
+    // drop the literals that conflict with the constraints. Dropped terms that can still
+    // change together are split in halves that are tied again, down to single bits, so
+    // free bits come out uniform and the surviving literals steer constrained ones
+    // (value < N, #7563). A term that cannot (equal to another variable, or a solved
+    // size) costs one check rather than one per bit, and wide data needs no per-bit
+    // literal or XOR constraint. Variables in fixedp are already pinned, so skipped.
+    // The solver checks are bounded. When several wide parts of an element conflict and
+    // the first one cannot change while the others keep their values, the element is
+    // left as it is: it is likely one of a few constants, which random parts never fit,
+    // so splitting would cost a check per part down to single bits. Past
+    // diversityMaxChecks checks the literals kept so far are the result.
+    std::iostream& os = sess.os();
+    const auto emitTerm = [&](const PinTerm& term) {
+        const bool whole = term.width == term.varp->width();
+        if (!whole) os << " ((_ extract " << term.lsb + term.width - 1 << ' ' << term.lsb << ')';
+        term.varp->emitElement(os, term.elem);
+        if (!whole) os << ')';
+    };
+    std::vector<PinTerm> terms;
     for (const auto& var : m_vars) {
-        if (var.second->dimension() > 0) {
-            hasArray = true;
-            break;
+        if (fixedp && fixedp->count(var.first)) continue;
+        const int width = var.second->width();
+        for (int j = 0; j < var.second->totalWidth() / width; ++j) {
+            terms.push_back({var.second.get(), j, 0, width, static_cast<int>(terms.size())});
         }
     }
-    if (hasArray) {
-        solveDiversityXor(rngr, sess);
-    } else {
-        solveDiversityPins(rngr, sess);
+    std::string keep;  // Surviving literals
+    int lits = 0;  // Literals declared so far
+    int checksLeft = diversityMaxChecks;
+    bool settled = true;  // The last check was satisfied, so its model satisfies keep
+    std::vector<bool> dropped;
+    while (!terms.empty()) {
+        for (size_t k = 0; k < terms.size(); ++k) {
+            os << "(declare-fun a" << lits + k << " () Bool)\n";
+            os << "(assert (= a" << lits + k << " (=";
+            emitTerm(terms[k]);
+            os << " #b";
+            IData bits = 0;
+            for (int b = 0; b < terms[k].width; ++b) {
+                if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
+                os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
+            }
+            os << ")))\n";
+        }
+        settled = assumeDropping(sess, keep, lits, terms, dropped, checksLeft);
+        if (!settled) break;
+        std::vector<PinTerm> conflicted;
+        for (size_t k = 0; k < terms.size(); ++k) {
+            const PinTerm& term = terms[k];
+            if (!dropped[k]) {
+                keep += " a" + std::to_string(lits + k);
+            } else if (term.width > 1) {
+                conflicted.push_back(term);
+            }
+        }
+        lits += terms.size();
+        terms.clear();
+        if (conflicted.empty()) break;
+        // Which conflicted terms can differ from the last model's values at all
+        os << "(get-value (";
+        for (const PinTerm& term : conflicted) emitTerm(term);
+        os << "))\n";
+        std::vector<std::string> values;
+        if (!readValues(sess, values) || values.size() != conflicted.size()) return;
+        for (size_t k = 0; k < conflicted.size(); ++k) {
+            os << "(declare-fun a" << lits + k << " () Bool)\n";
+            os << "(assert (= a" << lits + k << " (not (=";
+            emitTerm(conflicted[k]);
+            os << ' ' << values[k] << "))))\n";
+        }
+        settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft);
+        if (!settled) break;
+        lits += conflicted.size();
+        std::map<int, std::vector<size_t>> changeable;  // Parts able to change, per element
+        for (size_t k = 0; k < conflicted.size(); ++k) {
+            if (!dropped[k]) changeable[conflicted[k].root].push_back(k);
+        }
+        std::set<int> stopped;  // Elements that are one of a few constants
+        for (const auto& it : changeable) {
+            const std::vector<size_t>& parts = it.second;
+            if (checksLeft <= 0) break;
+            if (conflicted[parts[0]].width <= diversityWideBits || parts.size() < 2) continue;
+            std::string assumed = keep;
+            for (size_t i = 0; i < parts.size(); ++i, ++lits) {
+                os << "(declare-fun a" << lits << " () Bool)\n";
+                os << "(assert (= a" << lits << (i ? " (=" : " (not (=");
+                emitTerm(conflicted[parts[i]]);
+                os << ' ' << values[parts[i]] << (i ? ")))\n" : "))))\n");
+                assumed += " a" + std::to_string(lits);
+            }
+            os << "(check-sat-assuming (" << assumed << "))\n";
+            --checksLeft;
+            const VlSolverStatus status = sess.readStatus();
+            settled = status == VlSolverStatus::SAT;
+            if (status == VlSolverStatus::UNSAT) stopped.insert(it.first);
+        }
+        for (size_t k = 0; k < conflicted.size(); ++k) {
+            if (dropped[k]) continue;
+            const PinTerm& term = conflicted[k];
+            if (stopped.count(term.root)) continue;
+            const int step = (term.width + 1) / 2;
+            for (int lsb = 0; lsb < term.width; lsb += step) {
+                const int width = std::min(step, term.width - lsb);
+                terms.push_back({term.varp, term.elem, term.lsb + lsb, width, term.root});
+            }
+        }
     }
+    if (!settled) {
+        // Out of checks, or the solver failed (and then likely fails this check too)
+        os << "(check-sat-assuming (" << keep << "))\n";
+        if (sess.readStatus() != VlSolverStatus::SAT) return;
+    }
+    applyModel(sess);
 }
 
-void VlRandomizer::solveDiversityPins(VlRNG& rngr, VlSolverSession& sess)
-    VL_REQUIRES(sess.m_mutex) {
+bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
+                                  const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
+                                  int& checksLeftr) VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
-    // Tie each free bit to a random target via an assumption literal;
-    // drop one conflicting literal per round until compatible
-    int npins = 0;
-    for (const auto& var : m_vars) {
-        const int w = var.second->totalWidth();
-        for (int b = 0; b < w; ++b) {
-            const bool target = (VL_RANDOM_RNG_I(rngr) & 1);
-            os << "(declare-fun a" << npins << " () Bool)\n";
-            os << "(assert (= a" << npins << " (=";
-            var.second->emitExtract(os, b);
-            os << " #b" << (target ? '1' : '0') << ")))\n";
-            ++npins;
-        }
-    }
-    std::vector<bool> dropped(npins, false);
-    for (int round = 0; round <= npins; ++round) {
-        os << "(check-sat-assuming (";
-        for (int k = 0; k < npins; ++k) {
-            if (!dropped[k]) os << " a" << k;
+    droppedr.assign(terms.size(), false);
+    while (checksLeftr-- > 0) {
+        os << "(check-sat-assuming (" << keep;
+        for (size_t k = 0; k < terms.size(); ++k) {
+            if (!droppedr[k]) os << " a" << first + k;
         }
         os << "))\n";
         const VlSolverStatus status = sess.readStatus();
-        if (status == VlSolverStatus::SAT) {
-            applyModel(sess);
-            return;
+        if (status == VlSolverStatus::SAT) return true;
+        // Unknown or failure: the solution already written stands
+        if (status != VlSolverStatus::UNSAT) return false;
+        // Drop the narrowest term of the core: wide data rarely causes the conflict.
+        // The core only names active literals; ones before first are kept literals.
+        int pick = -1;
+        for (const int idx : readUnsatAssumptions(sess)) {
+            const int k = idx - first;
+            if (k < 0 || k >= static_cast<int>(terms.size()) || droppedr[k]) continue;
+            if (pick < 0 || terms[k].width < terms[pick].width) pick = k;
         }
-        // Unknown or failure: the base solution already written stands
-        if (status != VlSolverStatus::UNSAT) return;
-        // get-unsat-assumptions only echoes still-active literals,
-        // so the first in-range index is a live conflicting bit.
-        const std::vector<int> core = readUnsatAssumptions(sess);
-        bool droppedOne = false;
-        for (const int idx : core) {
-            if (idx < npins) {
-                dropped[idx] = true;
-                droppedOne = true;
-                break;
-            }
-        }
-        if (!droppedOne) return;
+        if (pick < 0) return false;
+        droppedr[pick] = true;
     }
+    return false;
 }
 
-void VlRandomizer::solveDiversityXor(VlRNG& rngr, VlSolverSession& sess)
+bool VlRandomizer::readValues(VlSolverSession& sess, std::vector<std::string>& valuesr)
     VL_REQUIRES(sess.m_mutex) {
-    std::iostream& os = sess.os();
-    for (int i = 0; i < _VL_SOLVER_HASH_LEN_TOTAL; ++i) {
-        os << "(assert ";
-        randomConstraint(os, rngr, _VL_SOLVER_HASH_LEN);
-        os << ")\n";
-        os << "\n(check-sat)\n";
-        if (sess.readStatus() != VlSolverStatus::SAT) break;
-        if (!applyModel(sess)) break;
+    std::string reply;
+    if (!sess.readSExpr(reply)) return false;
+    if (isSolverError(reply)) {
+        warnSolverReply(reply);
+        return false;
     }
+    // Each value is the last token directly inside its (term value) pair
+    int depth = 0;
+    std::string token;
+    std::string last;
+    for (const char c : reply) {
+        if (c != '(' && c != ')' && !std::isspace(static_cast<unsigned char>(c))) {
+            token += c;
+            continue;
+        }
+        if (depth == 2 && !token.empty()) last = token;
+        token.clear();
+        if (c == '(') {
+            if (++depth == 2) last.clear();
+        } else if (c == ')' && depth-- == 2) {
+            if (!validSMTNum(last)) return false;
+            valuesr.push_back(last);
+        }
+    }
+    return true;
 }
 
 // Re-add softs highest-priority first, dropping incompatible ones.
@@ -1894,7 +2005,11 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
         const bool isFinalPhase = (phase == layers.size() - 1);
 
         os << "(set-option :produce-models true)\n";
-        if (solverSamples()) emitSolverSeed(os, rngr);
+        if (solverSamples()) {
+            emitSolverSeed(os, rngr);
+        } else if (isFinalPhase) {
+            os << "(set-option :produce-unsat-assumptions true)\n";
+        }
         os << "(set-logic " << logicp << ")\n";
         emitDefines(os);
         emitDeclares(os, false);
@@ -1921,7 +2036,12 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
 
         if (isFinalPhase) {
             if (!applyModel(sess)) return false;
-            if (!solverSamples()) solveDiversityXor(rngr, sess);
+            if (!solverSamples()) {
+                std::set<std::string> fixed;  // Variables of the earlier layers
+                for (size_t i = 0; i < phase; ++i)
+                    fixed.insert(layers[i].begin(), layers[i].end());
+                solveDiversity(rngr, sess, &fixed);
+            }
             // Record solved randc values for future exclusion
             recordRandcValues();
         } else {

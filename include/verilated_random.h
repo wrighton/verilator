@@ -361,9 +361,23 @@ class VlRandomizer VL_NOT_FINAL {
     };
     Unigen2State m_ug2;
 
-    void solveDiversity(VlRNG& rngr, VlSolverSession& sess);
-    void solveDiversityPins(VlRNG& rngr, VlSolverSession& sess);
-    void solveDiversityXor(VlRNG& rngr, VlSolverSession& sess);
+    // Bits [lsb, lsb + width) of element elem of a variable, steered by solveDiversity
+    struct PinTerm final {
+        const VlRandomVar* varp;  // Variable
+        int elem;  // Element index, as for emitElement
+        int lsb;  // Lowest bit
+        int width;  // Number of bits
+        int root;  // Index of the whole variable or element it is part of
+    };
+    // Move the solution towards random values the constraints allow
+    void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
+                        const std::set<std::string>* fixedp = nullptr);
+    // Assume literals a<first>... (one per term) with keep, dropping conflicting ones until SAT
+    bool assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
+                        const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
+                        int& checksLeftr);
+    // Values of a (get-value) reply, in order
+    bool readValues(VlSolverSession& sess, std::vector<std::string>& valuesr);
     // Layers of solve...before variables in dependency order
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
     const char* phasedLogic() const;
