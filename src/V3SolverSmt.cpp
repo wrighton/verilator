@@ -3388,26 +3388,45 @@ class SolverSmtLowering final : public V3SolverLowering {
         setp->dtypeSetVoid();
         ftaskp->addStmtsp(setp->makeStmt());
     }
-    // Skip the elements with rand_mode off in a constraint cloned from the objects of an array
+    // Element at offset offsetp of array arrVarp of objp, or of 'this' if objp is nullptr
+    static AstNodeExpr* newElemp(FileLine* const fl, AstNodeExpr* const objp,
+                                 AstVar* const arrVarp, AstNodeExpr* const offsetp) {
+        AstNodeExpr* const arrp = RandomizeUtil::newMemberRefp(fl, objp, arrVarp);
+        AstNodeExpr* const elemp
+            = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType)
+                  ? static_cast<AstNodeExpr*>(new AstArraySel{fl, arrp, offsetp})
+                  : new AstCMethodHard{fl, arrp, VCMethod::ARRAY_AT, offsetp};
+        elemp->dtypep(arrVarp->dtypep()->skipRefp()->subDTypep());
+        return elemp;
+    }
+    // Skip the elements without a randomized object in a constraint cloned for an array
     void skipInactiveElems(AstConstraint* const constrp, AstBegin* const holderp) {
-        // The object of an inactive element is not randomized (IEEE 1800-2023 18.8), so its
-        // constraints do not apply. Such a clone is a foreach over the array, already lowered
-        // to setup statements in holderp, which are skipped for those elements.
+        // A null element has no object (IEEE 1800-2023 18.4), and the object of an element
+        // with rand_mode off is not randomized (18.8), so their constraints do not apply. Such a
+        // clone is a foreach over the array, already lowered to setup statements in holderp,
+        // which are skipped for those elements.
         const auto it = m_cloneObjps.find(constrp);
         if (it == m_cloneObjps.end()) return;
         AstMemberRef* const selp = VN_CAST(it->second.objp, MemberRef);
-        AstVar* const modeVarp
-            = m_elemModes.modeVarp(selp ? selp->varp() : VN_AS(it->second.objp, VarRef)->varp());
-        if (!modeVarp) return;
+        AstVar* const arrVarp = selp ? selp->varp() : VN_AS(it->second.objp, VarRef)->varp();
+        if (VN_IS(arrVarp->dtypep()->skipRefp(), ClassRefDType)) return;  // Cloned for an object
+        AstNodeExpr* const objp = selp ? selp->fromp() : nullptr;
         AstForeach* const foreachp = VN_AS(VN_AS(holderp->declsp(), Begin)->stmtsp(), Foreach);
         FileLine* const fl = foreachp->fileline();
-        AstVarRef* const idxRefp
-            = new AstVarRef{fl, VN_AS(foreachp->headerp()->elementsp(), Var), VAccess::READ};
-        AstNodeExpr* const offp = RandomizeUtil::newElemModeOffp(
-            RandomizeUtil::newMemberRefp(fl, selp ? selp->fromp() : nullptr, modeVarp), idxRefp);
-        VL_DO_DANGLING(idxRefp->deleteTree(), idxRefp);
+        AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+            fl, arrVarp,
+            new AstVarRef{fl, VN_AS(foreachp->headerp()->elementsp(), Var), VAccess::READ});
+        AstNodeExpr* condp = new AstNeq{fl, newElemp(fl, objp, arrVarp, offsetp->cloneTree(false)),
+                                        new AstConst{fl, AstConst::Null{}}};
+        if (AstVar* const modeVarp = m_elemModes.modeVarp(arrVarp)) {
+            condp = new AstLogAnd{
+                fl, condp,
+                new AstNot{fl, RandomizeUtil::newElemModeOffp(
+                                   RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp)}};
+        }
+        VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
         AstNodeStmt* const bodyp = foreachp->bodyp()->unlinkFrBackWithNext();
-        foreachp->addBodyp(new AstIf{fl, new AstNot{fl, offp}, bodyp});
+        foreachp->addBodyp(new AstIf{fl, condp, bodyp});
     }
     // Statements making the solver keep the array's elements with rand_mode off unchanged
     AstNodeStmt* newElemModePinsp(AstVar* const arrVarp, AstVar* const modeVarp,
@@ -3418,21 +3437,10 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstVar* const idxVarp = new AstVar{fl, VVarType::VAR, m_randArrayUniqueNames.get(""),
                                            arrVarp->findUInt32DType()};
         // Offset of the element, as used by the solver
-        AstNodeExpr* offsetp = new AstVarRef{fl, idxVarp, VAccess::READ};
-        AstNodeExpr* elemp;
-        const AstUnpackArrayDType* const unpackDtp
-            = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
-        if (unpackDtp) {
-            offsetp = new AstSub{fl, offsetp,
-                                 new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
-            offsetp->dtypeSetUInt32();
-            elemp = new AstArraySel{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp),
-                                    offsetp->cloneTree(false)};
-        } else {
-            elemp = new AstCMethodHard{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp),
-                                       VCMethod::ARRAY_AT, offsetp->cloneTree(false)};
-        }
-        elemp->dtypep(arrVarp->dtypep()->skipRefp()->subDTypep());
+        AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+            fl, arrVarp, new AstVarRef{fl, idxVarp, VAccess::READ});
+        AstNodeExpr* const elemp = newElemp(fl, objp, arrVarp, offsetp->cloneTree(false));
+        const bool unpacked = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
         // Pin solver term termFmt (formatted with the offset) of variable varFmt to valuep
         const auto newPinp = [&](const std::string& varFmt, const std::string& termFmt,
                                  AstNodeExpr* valuep) {
@@ -3451,7 +3459,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         if (const AstClassRefDType* const classRefp
             = VN_CAST(elemp->dtypep()->skipRefp(), ClassRefDType)) {
             // Each field registered by createWriteVarForClassFields
-            const std::string elemFmt = name + "." + (unpackDtp ? "%0x" : "%8x") + ".";
+            const std::string elemFmt = name + "." + (unpacked ? "%0x" : "%8x") + ".";
             foreachSolverElemField(classRefp->classp(), [&](AstVar* const memberVarp) {
                 const std::string fieldFmt = elemFmt + memberVarp->name();
                 pinsp = AstNode::addNextNull(
