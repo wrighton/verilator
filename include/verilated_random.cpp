@@ -117,6 +117,8 @@ class VlRProcess final : private std::streambuf, public std::iostream {
     bool m_logTried = false;  // Log file name looked up, at the first start
     std::unique_ptr<std::ofstream> m_logfp;  // Log file stream
     uint64_t m_logLastTime = ~0ULL;  // Last timestamp for logfile
+    std::string m_logLinePrefix;  // Prefix of the last logged line
+    bool m_logLineOpen = false;  // Last logged line has no newline yet
 
 public:
     typedef std::streambuf::traits_type traits_type;
@@ -253,6 +255,7 @@ public:
             m_logTried = true;
             logOpen();
         }
+        log("", "# Open: "s + cmd[0]);
 #ifdef _VL_SOLVER_PIPE_UNIX
         int fd_stdin[2];  // Can't use std::array
         int fd_stdout[2];  // Can't use std::array
@@ -282,7 +285,6 @@ public:
             return false;
         }
 
-        log("", "# Open: "s + cmd[0]);
         const pid_t pid = fork();
         if (VL_UNLIKELY(pid < 0)) {
             perror("VlRProcess::open: fork");
@@ -366,7 +368,6 @@ public:
         si.hStdError = stderrInheritable ? stderrInheritable : fd_stdout_wr;
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
-        log("", "# Open: "s + cmd[0]);
         const BOOL procOk
             = CreateProcessA(nullptr, &cmdline[0], nullptr, nullptr, TRUE /* inherit */,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -420,20 +421,28 @@ private:
         }
         *m_logfp << "# Verilator solver log\n";
     }
+    // Commands and replies are logged one I/O buffer at a time, and a buffer may end within
+    // a line, so a logged line ends only at its own newline, or where text with a different
+    // prefix follows
     void log(const std::string& prefix, const std::string& text) {
         if (VL_LIKELY(!m_logfp.get()) || text.empty()) return;
-        if (m_logLastTime != Verilated::threadContextp()->time()) {
-            m_logLastTime = Verilated::threadContextp()->time();
-            *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString() << "]\n";
+        if (m_logLineOpen && prefix != m_logLinePrefix) {
+            *m_logfp << '\n';
+            m_logLineOpen = false;
         }
-        std::size_t startPos = 0;
-        while (1) {
-            const std::size_t endPos = text.find('\n', startPos);
-            if (endPos == std::string::npos) break;
-            *m_logfp << prefix << text.substr(startPos, endPos - startPos) << '\n';
-            startPos = endPos + 1;
+        m_logLinePrefix = prefix;
+        for (const char c : text) {
+            if (!m_logLineOpen) {
+                if (m_logLastTime != Verilated::threadContextp()->time()) {
+                    m_logLastTime = Verilated::threadContextp()->time();
+                    *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString()
+                             << "]\n";
+                }
+                *m_logfp << prefix;
+            }
+            m_logfp->put(c);
+            m_logLineOpen = c != '\n';
         }
-        if (startPos < text.length()) *m_logfp << prefix << text.substr(startPos) << '\n';
     }
 };
 
