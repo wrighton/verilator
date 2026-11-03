@@ -73,8 +73,10 @@ endclass
 class HolderFA;
   rand Item u[3:1];
   rand Item m[int];
+  rand Item big[17];
   function new();
     foreach (u[i]) u[i] = new;
+    foreach (big[i]) big[i] = new;
     m[5] = new;
     m[9] = new;
   endfunction
@@ -86,6 +88,7 @@ class OuterFA;
   constraint c_fa {
     foreach (h.u[i]) h.u[i].v > 7'd100;
     foreach (h.m[k]) h.m[k].v < 7'd10;
+    h.big[1].v > 7'd100;  // Over 16 objects: the index in the solver names is not padded
   }
   function new();
     h = new;
@@ -230,6 +233,7 @@ module t;
       `checkd(randomize_result, 1);
       foreach (of.h.u[i]) `checkd(of.h.u[i].v > 7'd100, 1'b1);
       foreach (of.h.m[k]) `checkd(of.h.m[k].v < 7'd10, 1'b1);
+      `checkd(of.h.big[1].v > 7'd100, 1'b1);
       // Array of a member object referenced only in randomize() with
       randomize_result = of.randomize() with {foreach (g.a[i]) g.a[i].v < 7'd20;};
       `checkd(randomize_result, 1);
