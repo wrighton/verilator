@@ -88,4 +88,43 @@ module t;
     dynRealA = dynPackA;
     dynPackA = dynRealA;
   end
+
+  // Expressions other than variables
+  class Holder;
+    int assocByteA[byte];
+    real dynRealA[];
+  endclass
+  typedef byte bytes_t[];
+  function automatic bytes_t getBytes();
+    return '{1, 2};
+  endfunction
+  Holder holder;
+  initial begin
+    holder = new;
+    assocIntA = holder.assocByteA;
+    holder.dynRealA = dynIntA;
+    dynIntA = getBytes();
+    holder.dynRealA = nonAggregate;
+    nonAggregate = holder.dynRealA;
+    {nonAggregate, unpackedA[0]} = holder.dynRealA;
+    {nonAggregate, unpackedA[0]} = getBytes();
+    {nonAggregate, unpackedA[0]} = dynIntA;
+  end
+  real realU[2];
+  int intU[4];
+  initial realU = intU[0:1];
+
+  // Port connections other than variables
+  typedef struct {
+    int m[2];
+  } portHolder_t;
+  portHolder_t portHolder;
+  int portRows[2][2];
+  sub u_sel (.p(portRows[0]));
+  sub u_mem (.p(portHolder.m));
+endmodule
+
+module sub (
+    input logic [31:0] p[2]
+);
 endmodule
