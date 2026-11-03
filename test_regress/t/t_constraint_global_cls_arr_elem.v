@@ -11,7 +11,8 @@
 
 // An array of rand objects referenced by the constraints of its container: the objects'
 // own constraints are solved together with the container's (IEEE 1800-2023 18.5.8), for
-// the objects the array holds at each randomize()
+// the objects the array holds at each randomize(), for fixed-size and dynamic arrays and
+// queues
 
 class ItemBase;
   rand bit [14:0] u;
@@ -100,6 +101,23 @@ endclass
 
 class ArrDerived2 extends ArrBase;
   constraint c_d2 {foreach (a[i]) a[i].v != 7'd19;}
+endclass
+
+// Fixed-size arrays: constant index, foreach, ranges not starting at 0
+class Fixed;
+  rand Item a[2];
+  rand Item b[1:2];
+  rand Item c[3:1];
+  constraint c_g {
+    a[1].v > 7'd16;
+    foreach (b[i]) b[i].v > 7'd16;
+    c[1].v > 7'd16;
+  }
+  function new();
+    foreach (a[i]) a[i] = new;
+    foreach (b[i]) b[i] = new;
+    foreach (c[i]) c[i] = new;
+  endfunction
 endclass
 
 // Over 16 objects: the element index in the solver names is not padded
@@ -225,6 +243,17 @@ module t;
     end
   endtask
 
+  task automatic test_fixed;
+    Fixed f = new;
+    int randomize_result;
+    repeat (10) begin
+      randomize_result = f.randomize();
+      `checkd(randomize_result, 1);
+      check_items('{f.a[0], f.c[2], f.c[3]}, 0, 128);
+      check_items('{f.a[1], f.b[1], f.b[2], f.c[1]}, 16, 128);
+    end
+  endtask
+
   task automatic test_big;
     Big b = new;
     int randomize_result;
@@ -235,6 +264,7 @@ module t;
   endtask
 
   initial begin
+    test_fixed();
     test_big();
     test_dyn();
     test_queue();
