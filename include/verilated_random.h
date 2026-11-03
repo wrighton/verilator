@@ -366,6 +366,8 @@ class VlRandomizer VL_NOT_FINAL {
     void solveDiversityXor(VlRNG& rngr, VlSolverSession& sess);
     // Layers of solve...before variables in dependency order
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
+    // SMT logic for a flat or UniGen2 session
+    const char* solverLogic() const;
     const char* phasedLogic() const;
     bool nextPhased(VlRNG& rngr, VlSolverSession& sess,
                     const std::vector<std::string>& uniqueExprs);

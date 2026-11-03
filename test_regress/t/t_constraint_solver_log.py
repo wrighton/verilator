@@ -21,5 +21,7 @@ solver_log = test.obj_dir + "/solver.log"
 test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
+# Without array variables the solver gets QF_BV, which z3 solves incrementally faster
+test.file_grep(solver_log, r'\(set-logic QF_BV\)')
 
 test.passes()
