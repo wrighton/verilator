@@ -120,6 +120,23 @@ class Fixed;
   endfunction
 endclass
 
+// Null elements have no object, so no constraints
+class Partial;
+  rand Item a[3];
+  rand Item d[];
+  constraint c_g {
+    a[0].v > 7'd16;
+    d[0].v > 7'd16;
+  }
+  function new();
+    a[0] = new;
+    a[2] = new;
+    d = new[3];
+    d[0] = new;
+    d[2] = new;
+  endfunction
+endclass
+
 // Over 16 objects: the element index in the solver names is not padded
 class Big;
   rand Sub s[17];
@@ -254,6 +271,17 @@ module t;
     end
   endtask
 
+  task automatic test_partial;
+    Partial pa = new;
+    int randomize_result;
+    repeat (5) begin
+      randomize_result = pa.randomize();
+      `checkd(randomize_result, 1);
+      check_items('{pa.a[0], pa.d[0]}, 16, 128);
+      check_items('{pa.a[2], pa.d[2]}, 0, 128);
+    end
+  endtask
+
   task automatic test_big;
     Big b = new;
     int randomize_result;
@@ -265,6 +293,7 @@ module t;
 
   initial begin
     test_fixed();
+    test_partial();
     test_big();
     test_dyn();
     test_queue();
