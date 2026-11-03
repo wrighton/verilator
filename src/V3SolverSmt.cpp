@@ -87,13 +87,6 @@ public:
         return setupAllTaskp;
     }
 
-    // Look through unpacked array dimensions to the element type
-    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
-        return dtypep;
-    }
-
     // Whether dtypep is, or contains anywhere through unpacked array/struct
     // nesting, a real value. A packed struct can't hold one (IEEE disallows
     // real as a packed-struct member), so it's never worth descending into.
@@ -157,7 +150,6 @@ class ConstraintExprVisitor final : public VNVisitor {
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
     uint32_t* m_uniqueConstraintIdp = nullptr;  // Current ID of unique call
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
-    std::set<std::string> m_rangeConstrainedEnums;  // Solver names of range-constrained enums
     // First expression found under an inside index
     AstNode* m_firstExpressionInsideIndexp = nullptr;
     AstBegin* m_foreachBodyp = nullptr;  // Holder of the body of the innermost constraint-foreach
@@ -257,28 +249,6 @@ class ConstraintExprVisitor final : public VNVisitor {
     };
     NestedAccessPath* m_nestedAccessp = nullptr;  // Indicates state of nested access
 
-    // Emit enum range hard constraint for a single variable
-    AstNodeExpr* createEnumConstraint(FileLine* const fl, const std::string& smtName,
-                                      AstEnumDType* const enumDtp, AstVar* const genVarp) {
-        AstNodeModule* const genModp = VN_AS(genVarp->user2p(), NodeModule);
-        const int width = enumDtp->width();
-        std::string constraint = "(__Vbv (or";
-        for (AstEnumItem* const itemp : enumDtp->itemspList()) {
-            const AstConst* const vconstp = VN_AS(itemp->valuep(), Const);
-            if (vconstp->num().isFourState()) continue;  // The solver can't produce X/Z
-            constraint += " (= " + smtName + " (_ bv" + vconstp->num().toDecimalU() + " "
-                          + cvtToStr(width) + "))";
-        }
-        constraint += "))";
-        AstCMethodHard* const callp = new AstCMethodHard{
-            fl, new AstVarRef{fl, genModp, genVarp, VAccess::READWRITE}, VCMethod::RANDOMIZER_HARD,
-            new AstConst{fl, AstConst::String{}, constraint}};
-        // hard() pin layout is asserted in EmitCFunc: the variable list is always pin 2
-        callp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "{\"" + smtName + "\"}"});
-        callp->dtypeSetVoid();
-        return callp;
-    };
-
     // Routes nested sub-objects with static rand vars when the outer class has none.
     AstVar* findStaticRandModeVarMember(AstClass* classp) const {
         while (true) {
@@ -326,7 +296,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     // IEEE 1800-2023 18.4: all rand members of a rand unpacked struct are solved
     // concurrently, so unreferenced rand members must still reach the solver.
     static void markStructConstrainedRandRecurse(AstNodeDType* const dtypep) {
-        AstStructDType* const structp = VN_CAST(SmtUtil::arrayElementDTypep(dtypep), StructDType);
+        AstStructDType* const structp
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
         if (!structp || structp->packed()) return;
         structp->markConstrainedRand(true);
         for (AstMemberDType* const memberp : structp->memberspList()) {
@@ -1048,7 +1019,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             varRefp->classOrPackagep(classOrPackagep);
             methodp->addPinsp(varRefp);
         }
-        const size_t width = SmtUtil::arrayElementDTypep(varp->dtypep())->width();
+        const size_t width = RandomizeUtil::arrayElementDTypep(varp->dtypep())->width();
         methodp->addPinsp(new AstConst{varp->fileline(), AstConst::Unsized64{}, width});
         AstNodeExpr* const varnamep = new AstCExpr{varp->fileline(), AstCExpr::Pure{},
                                                    "\"" + smtName + "\"", varp->width()};
@@ -1224,24 +1195,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeModule* const classOrPackagep = nodep->classOrPackagep();
         const RandomizeMode randMode = {.asUQuad = varp->user1()};
         if (!randMode.usesMode && editFormat(nodep)) return;
-
-        // The selected member's type and solver name, so 'obj.e' is restricted too
-        // (IEEE 1800-2023 18.4). A nested array access has no fixed solver name.
-        AstEnumDType* const enumDtp
-            = m_nestedAccessp ? nullptr : VN_CAST(varp->dtypep()->skipRefToEnump(), EnumDType);
-        if (enumDtp && m_rangeConstrainedEnums.emplace(smtName).second) {
-            AstVar* genVarp = m_genp;
-            if (m_classp && m_classp->user3p()) genVarp = VN_AS(m_classp->user3p(), Var);
-            UASSERT_OBJ(genVarp, nodep, "No 'randomize' variable in m_genp or m_classp");
-            AstNodeExpr* enumRangeExprp
-                = createEnumConstraint(nodep->fileline(), smtName, enumDtp, genVarp);
-            AstBegin* targetp = m_inlineInitBlockp;
-            if (!targetp) {
-                targetp
-                    = newInitBlockp(SmtUtil::getCreateConstraintSetupFunc(m_classp, m_memberMap));
-            }
-            targetp->addStmtsp(enumRangeExprp->makeStmt());
-        }
 
         VNRelinker relinker;
         nodep->unlinkFrBack(&relinker);
@@ -3839,7 +3792,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         varRefp->classOrPackagep(classp);
         methodp->addPinsp(varRefp);
 
-        const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
+        const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
 
         methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
         AstNodeExpr* const varnamep
@@ -4468,7 +4421,7 @@ public:
                     dimension = dims.second;
                 }
 
-                const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
+                const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
                 methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
                 AstNodeExpr* const varnamep = new AstCExpr{
                     fl, AstCExpr::Pure{}, "\"" + arrVarp->name() + "\"", arrVarp->width()};

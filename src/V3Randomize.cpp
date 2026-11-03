@@ -2787,12 +2787,45 @@ public:
 //######################################################################
 // Randomize method class functions
 
+// Restrict each solver variable of enum type, or array of enums, to the enum's values
+static void addEnumDomains(AstNetlist* nodep) {
+    // At each registration, after lowering, so registrations made or copied anywhere are
+    // covered: members reached through handles, elements of arrays, fields of object-array
+    // elements (IEEE 1800-2023 18.4). Enum fields of unpacked structs are not covered.
+    std::vector<AstCMethodHard*> writeVarps;
+    nodep->foreach([&](AstCMethodHard* const methodp) {
+        if (methodp->method() == VCMethod::RANDOMIZER_WRITE_VAR) writeVarps.push_back(methodp);
+    });
+    for (AstCMethodHard* const writeVarp : writeVarps) {
+        const AstEnumDType* const enumDtp
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(writeVarp->pinsp()->dtypep()), EnumDType);
+        if (!enumDtp) continue;
+        std::string domain = "(or";
+        for (const AstEnumItem* const itemp : enumDtp->itemspList()) {
+            const V3Number& num = VN_AS(itemp->valuep(), Const)->num();
+            if (num.isFourState()) continue;  // The solver can't produce X/Z
+            domain
+                += " (= __Ve (_ bv" + num.toDecimalU() + " " + cvtToStr(enumDtp->width()) + "))";
+        }
+        domain += ")";
+        FileLine* const fl = writeVarp->fileline();
+        AstNode* const namep = writeVarp->pinsp()->nextp()->nextp();  // After variable, width
+        AstCMethodHard* const domainp = new AstCMethodHard{
+            fl, writeVarp->fromp()->cloneTreePure(false), VCMethod::RANDOMIZER_ENUM_DOMAIN,
+            VN_AS(namep, NodeExpr)->cloneTreePure(false)};
+        domainp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "\"" + domain + "\""});
+        domainp->dtypeSetVoid();
+        VN_AS(writeVarp->backp(), StmtExpr)->addNextHere(domainp->makeStmt());
+    }
+}
+
 void V3Randomize::randomizeNetlist(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     {
         const RandomizeMarkVisitor markVisitor{nodep};
         const RandomizeVisitor randomizeVisitor{nodep};
     }
+    addEnumDomains(nodep);
     V3Global::dumpCheckGlobalTree("randomize", 0, dumpTreeEitherLevel() >= 3);
 }
 

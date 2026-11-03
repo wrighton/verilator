@@ -101,3 +101,12 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
     }
     return nullptr;
 }
+
+//######################################################################
+// RandomizeUtil implementation
+
+AstNodeDType* RandomizeUtil::arrayElementDTypep(AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefToEnump();
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefToEnump();
+    return dtypep;
+}
