@@ -18,8 +18,19 @@ test.compile()
 
 solver_log = test.obj_dir + "/solver.log"
 
-test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
+test.execute(
+    all_run_flags=['+verilator+rand+sampler+default', '+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
+
+# The solver log is the output under test: each command and reply is one whole line
+test.file_grep(solver_log, r'^# Open: \S+\n  ; sampler: default$')
+test.file_grep(solver_log, r'^  \(assert .* w #b0{19999}\)+$')
+test.file_grep(solver_log, r'^< \(\(w #b[01]{19999}\)\)$')
+# One whole command per bit of w
+test.file_grep_count(solver_log,
+                     r'^  \(assert \(= __Va\d+ \(= \(\(_ extract \d+ \d+\) w\) #b[01]\)\)\)$',
+                     19999)
+test.file_grep(solver_log, r'^  \(reset\)\n\Z')
 
 test.passes()
