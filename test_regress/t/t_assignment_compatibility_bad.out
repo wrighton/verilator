@@ -5,7 +5,7 @@
    35 |   logic unpackedF[3] = unpackedA;
       |                        ^~~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assignment_compatibility_bad.v:36:31: Assignment between 2-state and 4-state types requires equivalent element types (IEEE 1800-2023 6.22.2, 7.6)
+%Error: t/t_assignment_compatibility_bad.v:36:31: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
                                                 : ... note: In instance 't'
                                                 : ... Left-hand data type: 'bit$[0:1]' (2-state)
                                                 : ... Right-hand data type: 'logic$[0:1]' (4-state)
@@ -177,4 +177,70 @@
                                                 : ... Right-hand data type: 'real$[]'
    89 |     dynPackA = dynRealA;
       |              ^
+%Error: t/t_assignment_compatibility_bad.v:104:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[int]'
+                                                 : ... Right-hand data type: 'int$[byte]'
+  104 |     assocIntA = holder.assocByteA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:105:21: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[]'
+                                                 : ... Right-hand data type: 'int$[]'
+  105 |     holder.dynRealA = dynIntA;
+      |                     ^
+%Error: t/t_assignment_compatibility_bad.v:106:13: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[]'
+                                                 : ... Right-hand data type: 'byte$[]'
+  106 |     dynIntA = getBytes();
+      |             ^
+%Error: t/t_assignment_compatibility_bad.v:107:21: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[]' (2-state)
+                                                 : ... Right-hand data type: 'logic' (4-state)
+  107 |     holder.dynRealA = nonAggregate;
+      |                     ^
+%Error: t/t_assignment_compatibility_bad.v:108:18: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic' (4-state)
+                                                 : ... Right-hand data type: 'real$[]' (2-state)
+  108 |     nonAggregate = holder.dynRealA;
+      |                  ^
+%Error: t/t_assignment_compatibility_bad.v:109:34: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic[1:0]' (4-state)
+                                                 : ... Right-hand data type: 'real$[]' (2-state)
+  109 |     {nonAggregate, unpackedA[0]} = holder.dynRealA;
+      |                                  ^
+%Error: t/t_assignment_compatibility_bad.v:110:34: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic[1:0]' (4-state)
+                                                 : ... Right-hand data type: 'byte$[]' (2-state)
+  110 |     {nonAggregate, unpackedA[0]} = getBytes();
+      |                                  ^
+%Error: t/t_assignment_compatibility_bad.v:111:34: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic[1:0]' (4-state)
+                                                 : ... Right-hand data type: 'int$[]' (2-state)
+  111 |     {nonAggregate, unpackedA[0]} = dynIntA;
+      |                                  ^
+%Error: t/t_assignment_compatibility_bad.v:115:17: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[0:1]'
+                                                 : ... Right-hand data type: 'int$[0:1]'
+  115 |   initial realU = intU[0:1];
+      |                 ^
+%Error: t/t_assignment_compatibility_bad.v:123:15: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Pin data type: 'logic[31:0]$[0:1]' (4-state)
+                                                 : ... Expression data type: 'int$[0:1]' (2-state)
+  123 |   sub u_sel (.p(portRows[0]));
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:124:15: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Pin data type: 'logic[31:0]$[0:1]' (4-state)
+                                                 : ... Expression data type: 'int$[0:1]' (2-state)
+  124 |   sub u_mem (.p(portHolder.m));
+      |               ^
 %Error: Exiting due to

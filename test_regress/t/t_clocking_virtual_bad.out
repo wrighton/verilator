@@ -1,7 +1,7 @@
-%Error: t/t_clocking_virtual_bad.v:22:17: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+%Error: t/t_clocking_virtual_bad.v:22:17: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
                                         : ... note: In instance 't'
-                                        : ... Left-hand data type: 'logic' (4-state)
-                                        : ... Right-hand data type: 'logic$[]' (2-state)
+                                        : ... Left-hand data type: 'logic'
+                                        : ... Right-hand data type: 'logic$[]'
    22 |     mod1.cb.out <= data;
       |                 ^~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
