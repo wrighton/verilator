@@ -14,6 +14,8 @@ test.scenarios('simulator')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
+test.timeout(20 if not test.have_dev_asan else 60)
+
 test.compile()
 
 test.execute()
