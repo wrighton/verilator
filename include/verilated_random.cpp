@@ -1444,11 +1444,11 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                                   const std::set<std::string>* fixedp) VL_REQUIRES(sess.m_mutex) {
     // Tie each variable or array element to a random value via an assumption literal and
     // drop the literals that conflict with the constraints. Dropped terms that can still
-    // change together are split in halves that are tied again, down to single bits, so
-    // free bits come out uniform and the surviving literals steer constrained ones
-    // (value < N, #7563). A term that cannot (equal to another variable, or a solved
-    // size) costs one check rather than one per bit, and wide data needs no per-bit
-    // literal or XOR constraint. Variables in fixedp are already pinned, so skipped.
+    // change are split in halves that are tied again, down to single bits, so free bits
+    // come out uniform and the surviving literals steer constrained ones (value < N,
+    // #7563). A term that cannot (equal to another variable, or a solved size) costs a
+    // check or two rather than one per bit, and wide data needs no per-bit literal or
+    // XOR constraint. Variables in fixedp are already pinned, so skipped.
     // The solver checks are bounded. When several wide parts of an element conflict and
     // the first one cannot change while the others keep their values, the element is
     // left as it is: it is likely one of a few constants, which random parts never fit,
@@ -1513,8 +1513,20 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             emitTerm(conflicted[k]);
             os << ' ' << values[k] << "))))\n";
         }
-        settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft);
+        std::vector<bool> guessed;
+        settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
         if (!settled) break;
+        // A term dropped as a guess may still change on its own, which would leave its
+        // bits unspread, so check it alone
+        for (size_t k = 0; k < conflicted.size() && checksLeft > 0; ++k) {
+            if (!guessed[k]) continue;
+            os << "(check-sat-assuming (" << keep << " a" << lits + k << "))\n";
+            --checksLeft;
+            const VlSolverStatus status = sess.readStatus();
+            settled = status == VlSolverStatus::SAT;
+            if (settled) dropped[k] = false;
+            if (!settled && status != VlSolverStatus::UNSAT) break;
+        }
         lits += conflicted.size();
         std::map<int, std::vector<size_t>> changeable;  // Parts able to change, per element
         for (size_t k = 0; k < conflicted.size(); ++k) {
@@ -1560,9 +1572,11 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
 
 bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
                                   const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
-                                  int& checksLeftr) VL_REQUIRES(sess.m_mutex) {
+                                  int& checksLeftr, std::vector<bool>* guessedp)
+    VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     droppedr.assign(terms.size(), false);
+    if (guessedp) guessedp->assign(terms.size(), false);
     while (checksLeftr-- > 0) {
         os << "(check-sat-assuming (" << keep;
         for (size_t k = 0; k < terms.size(); ++k) {
@@ -1575,14 +1589,18 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         if (status != VlSolverStatus::UNSAT) return false;
         // Drop the narrowest term of the core: wide data rarely causes the conflict.
         // The core only names active literals; ones before first are kept literals.
+        // A core need not be minimal, so a pick among several is only a guess.
         int pick = -1;
+        int candidates = 0;
         for (const int idx : readUnsatAssumptions(sess)) {
             const int k = idx - first;
             if (k < 0 || k >= static_cast<int>(terms.size()) || droppedr[k]) continue;
+            ++candidates;
             if (pick < 0 || terms[k].width < terms[pick].width) pick = k;
         }
         if (pick < 0) return false;
         droppedr[pick] = true;
+        if (guessedp && candidates > 1) (*guessedp)[pick] = true;
     }
     return false;
 }
