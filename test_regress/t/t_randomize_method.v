@@ -27,6 +27,13 @@ typedef enum bit [15:0] {
   FOUR = 13
 } Enum;
 
+// Values above 64 bits
+typedef enum logic [64:0] {
+  W0 = 65'h1_0000_0000_0000_0003,
+  W1 = 65'h0_8000_0000_0000_0001,
+  W2 = 65'h5
+} WideEnum;
+
 typedef struct packed {
   int a;
   bit b;
@@ -107,6 +114,8 @@ class OtherCls;
   rand logic [31:0] y;
   rand logic [23:0] z;
   rand StructUnpacked str;
+  rand WideEnum we;
+  rand WideEnum wa[2];
 
   function new;
     v = 0;
@@ -187,6 +196,8 @@ module t;
       if (!(other.str.j.s.c inside {ONE, TWO, THREE, FOUR})) $stop;
       if (!(other.str.j.y inside {ONE, TWO, THREE, FOUR})) $stop;
       if (!(other.str.k inside {ONE, TWO, THREE, FOUR})) $stop;
+      if (!(other.we inside {W0, W1, W2})) $stop;
+      foreach (other.wa[i]) if (!(other.wa[i] inside {W0, W1, W2})) $stop;
       if (derived1.i.e != 0) $stop;
       if (derived1.k != 0) $stop;
       if (other.v != 0) $stop;
@@ -216,6 +227,8 @@ module t;
     `check_rand(other, other.str.j.s.b);
     `check_rand(other, other.str.j.s.c);
     `check_rand(other, other.str.k);
+    `check_rand(other, other.we);
+    `check_rand(other, other.wa[1]);
     `check_rand(der_int, der_int.a);
     `check_rand(der_contain, der_contain.cls1.a);
     `check_rand(der_contain, der_contain.a);
