@@ -70,6 +70,8 @@ public:
 // A constraint made by cloning the constraint of an object, or of the objects of an array
 struct ClonedConstraint final {
     AstNodeExpr* objp;  // The object, or object array, it was cloned for
+    AstConstraint* origp;  // The constraint it was cloned from
+    AstConstraintIf* elemIfp;  // For an array, the constraint on a non-null element, else null
 };
 using ClonedConstraints = std::map<const AstConstraint*, ClonedConstraint>;
 

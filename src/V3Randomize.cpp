@@ -249,10 +249,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     BaseToDerivedMap m_baseToDerivedMap;  // Mapping from base classes to classes that extend them
     BaseToDerivedMap m_allDerivedMap;  // As m_baseToDerivedMap, but complete before traversal
-    // Classes and constraints of which constraint_mode is set for an object, also before
-    // traversal
+    // Classes of which constraint_mode is set for an object, also before traversal
     std::unordered_set<const AstClass*> m_modedClassps;
-    std::unordered_set<const AstConstraint*> m_modedConstrps;
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp;  // Current module
@@ -428,7 +426,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         AstNodeExpr* const objp = buildMemberRefChain(rootVarRefp, newPath);
         if (AstConstraint* const cloneConstrp = cloneObjectConstraint(
                 constrp, objp, clonePathPrefix(rootVarRefp, newPath), targetClassp)) {
-            addClonedConstraint(targetClassp, cloneConstrp, objp);
+            addClonedConstraint(targetClassp, cloneConstrp, constrp, objp);
         }
         VL_DO_DANGLING(objp->deleteTree(), objp);
     }
@@ -485,8 +483,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
     }
     // Add a constraint cloned for the object (or object array) objp to targetClassp
     void addClonedConstraint(AstClass* targetClassp, AstConstraint* cloneConstrp,
-                             AstNodeExpr* objp) {
-        m_cloneObjps.emplace(cloneConstrp, ClonedConstraint{objp->cloneTree(false)});
+                             AstConstraint* origp, AstNodeExpr* objp,
+                             AstConstraintIf* elemIfp = nullptr) {
+        m_cloneObjps.emplace(cloneConstrp,
+                             ClonedConstraint{objp->cloneTree(false), origp, elemIfp});
         targetClassp->addMembersp(cloneConstrp);
         // Immediately iterate to set user1 marks, as a constraint of the target class
         VL_RESTORER(m_classp);
@@ -520,18 +520,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 overrides |= declaresConstraint(derivedp, names);
         }
         return overrides;
-    }
-    // Whether a constraint of constrps, or an object of classp, a class it extends or one
-    // extending it, has its constraint mode set
-    bool hierarchyModed(const AstClass* classp,
-                        const std::vector<AstConstraint*>& constrps) const {
-        bool moded = derivedModed(classp);
-        for (const AstConstraint* const constrp : constrps)
-            moded |= m_modedConstrps.count(constrp);
-        for (const AstClass* basep = classp; basep;
-             basep = basep->extendsp() ? basep->extendsp()->classp() : nullptr)
-            moded |= m_modedClassps.count(basep);
-        return moded;
     }
     bool derivedModed(const AstClass* classp) const {
         bool moded = false;
@@ -598,16 +586,13 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         });
         // An object's constraints are those of its own class (IEEE 1800-2023 18.5.2), with its
-        // own constraint modes (18.9), which constraints cloned from the declared class would not
-        // follow where a derived class overrides one or a mode is set, so then none are, and the
-        // objects' constraints stay unsolved, as before. A derived class's other constraints
-        // are not cloned.
+        // own constraint modes (18.9). A clone has the mode of its constraint in each element's
+        // object, but constraints cloned from the declared class would not follow a derived class
+        // overriding one or setting a mode, so then none are, and the objects' constraints stay
+        // unsolved, as before. A derived class's other constraints are not cloned.
         std::unordered_set<std::string> names;
         for (const AstConstraint* const constrp : constrps) names.emplace(constrp->name());
-        if (derivedOverrides(elemDtp->classp(), names)
-            || hierarchyModed(elemDtp->classp(), constrps)) {
-            return;
-        }
+        if (derivedOverrides(elemDtp->classp(), names) || derivedModed(elemDtp->classp())) return;
         FileLine* const fl = arrVarp->fileline();
         const auto cloneConstraint = [&](AstConstraint* const constrp) {
             // Rand fields that are arrays or objects are not solver variables of the elements
@@ -640,9 +625,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
             AstNodeConstraintItem* const itemsp = cloneConstrp->itemsp()->unlinkFrBackWithNext();
             // A null element has no object, so no constraints (IEEE 1800-2023 18.4)
             AstNeq* const nonNullp = new AstNeq{fl, elemp, new AstConst{fl, AstConst::Null{}}};
+            AstConstraintIf* const elemIfp = new AstConstraintIf{fl, nonNullp, itemsp, nullptr};
             AstNodeConstraintItem* clonedp = new AstConstraintForeach{
-                fl, new AstForeachHeader{fl, arrRefp->cloneTree(false), idxVarp},
-                new AstConstraintIf{fl, nonNullp, itemsp, nullptr}};
+                fl, new AstForeachHeader{fl, arrRefp->cloneTree(false), idxVarp}, elemIfp};
             // Nor has the array of a member object reached through a null handle
             AstNodeExpr* pathNonNullp = nullptr;
             for (const AstMemberRef* refp = VN_CAST(arrRefp, MemberRef); refp;
@@ -653,7 +638,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
             if (pathNonNullp) clonedp = new AstConstraintIf{fl, pathNonNullp, clonedp, nullptr};
             cloneConstrp->addItemsp(clonedp);
-            addClonedConstraint(targetClassp, cloneConstrp, arrRefp);
+            addClonedConstraint(targetClassp, cloneConstrp, constrp, arrRefp, elemIfp);
         };
         for (AstConstraint* const constrp : constrps) cloneConstraint(constrp);
     }
@@ -1152,13 +1137,11 @@ public:
                 }
             });
         });
-        // As are the constraints and objects of constraint_mode() calls
+        // As are the objects of constraint_mode() calls
         nodep->foreach([&](const AstMethodCall* callp) {
-            if (callp->name() != "constraint_mode") return;
-            if (const AstConstraintRef* const refp = VN_CAST(callp->fromp(), ConstraintRef)) {
-                m_modedConstrps.emplace(refp->constrp());
-            } else if (const AstClassRefDType* const classRefp
-                       = VN_CAST(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)) {
+            if (callp->name() != "constraint_mode" || VN_IS(callp->fromp(), ConstraintRef)) return;
+            if (const AstClassRefDType* const classRefp
+                = VN_CAST(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)) {
                 m_modedClassps.emplace(classRefp->classp());
             }
         });

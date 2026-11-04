@@ -4523,8 +4523,63 @@ class SolverSmtLowering final : public V3SolverLowering {
         setp->dtypeSetVoid();
         ftaskp->addStmtsp(setp->makeStmt());
     }
+    // Read of the constraint_mode() of constraint constrp of objp, nullptr if never set
+    AstNodeExpr* newObjConstraintModep(AstNodeExpr* const objp, AstConstraint* const constrp) {
+        const RandomizeMode mode = {.asUQuad = constrp->user1()};
+        if (!mode.usesMode) return nullptr;
+        FileLine* const fl = objp->fileline();
+        AstClass* const classp = VN_AS(objp->dtypep()->skipRefp(), ClassRefDType)->classp();
+        AstNodeExpr* modesp;
+        if (constrp->isStatic()) {
+            AstVar* const modeVarp = getStaticConstraintModeVar(classp);
+            modesp = new AstVarRef{fl, VN_AS(modeVarp->user2p(), NodeModule), modeVarp,
+                                   VAccess::READ};
+        } else {
+            AstVar* const modeVarp = getConstraintModeVar(classp);
+            modesp = new AstMemberRef{fl, objp->cloneTree(false), modeVarp};
+            modesp->dtypep(modeVarp->dtypep());
+        }
+        AstDynArraySel* const atp = new AstDynArraySel{fl, modesp, new AstConst{fl, mode.index}};
+        atp->dtypeSetUInt32();
+        if (constrp->isStatic()) return atp;
+        // Through a null handle, as on: the read through it fails, see newNullCheckedReadp, and
+        // a constraint cloned for it is guarded
+        AstNodeExpr* const nullp = newPathNullp(objp);
+        AstLogOr* const orp = new AstLogOr{fl, nullp, atp};
+        orp->dtypeSetBit();
+        return orp;
+    }
+    // Whether a handle on the member path objp is null, outermost first
+    static AstNodeExpr* newPathNullp(AstNodeExpr* const objp) {
+        FileLine* const fl = objp->fileline();
+        AstMemberRef* const selp = VN_CAST(objp, MemberRef);
+        AstEq* const eqp
+            = new AstEq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+        eqp->dtypeSetBit();
+        if (!selp) return eqp;
+        AstLogOr* const orp = new AstLogOr{fl, newPathNullp(selp->fromp()), eqp};
+        orp->dtypeSetBit();
+        return orp;
+    }
     AstNodeStmt* wrapIfConstraintMode(AstClass* classp, AstConstraint* const constrp,
                                       AstNodeStmt* stmtp) {
+        const auto it = m_cloneObjps.find(constrp);
+        if (it != m_cloneObjps.end()) {
+            // A clone has the mode of the constraint it was cloned from, in the object it was
+            // cloned for (IEEE 1800-2023 18.9), not one of the object constraining it; for the
+            // objects of an array, that of each element's object
+            const ClonedConstraint& clone = it->second;
+            if (AstConstraintIf* const elemIfp = clone.elemIfp) {
+                AstNodeExpr* const elemp = VN_AS(elemIfp->condp(), Neq)->lhsp();
+                if (AstNodeExpr* const modep = newObjConstraintModep(elemp, clone.origp)) {
+                    AstNodeExpr* const condp = elemIfp->condp()->unlinkFrBack();
+                    elemIfp->condp(new AstLogAnd{condp->fileline(), condp, modep});
+                }
+                return stmtp;
+            }
+            AstNodeExpr* const modep = newObjConstraintModep(clone.objp, clone.origp);
+            return modep ? new AstIf{stmtp->fileline(), modep, stmtp} : stmtp;
+        }
         const RandomizeMode rmode = {.asUQuad = constrp->user1()};
         AstVar* const modeVarp = constrp->isStatic() ? getStaticConstraintModeVar(classp)
                                                      : getConstraintModeVar(classp);
