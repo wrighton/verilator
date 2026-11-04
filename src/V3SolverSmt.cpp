@@ -193,13 +193,6 @@ public:
         return setupAllTaskp;
     }
 
-    // Look through unpacked array dimensions to the element type
-    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
-        return dtypep;
-    }
-
     // Whether dtypep is, or contains anywhere through unpacked array/struct
     // nesting, a real value. A packed struct can't hold one (IEEE disallows
     // real as a packed-struct member), so it's never worth descending into.
@@ -418,7 +411,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     // IEEE 1800-2023 18.4: all rand members of a rand unpacked struct are solved
     // concurrently, so unreferenced rand members must still reach the solver.
     static void markStructConstrainedRandRecurse(AstNodeDType* const dtypep) {
-        AstStructDType* const structp = VN_CAST(SmtUtil::arrayElementDTypep(dtypep), StructDType);
+        AstStructDType* const structp
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
         if (!structp || structp->packed()) return;
         structp->markConstrainedRand(true);
         for (AstMemberDType* const memberp : structp->memberspList()) {
@@ -510,6 +504,34 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (selName.empty()) return namep;
         return new AstConcatN{fl, namep, new AstConst{fl, AstConst::String{}, "." + selName}};
     }
+    // Array and index of element select selp, a NodeSel or ARRAY_AT, else nullptr
+    static AstNodeExpr* elemSelFromp(const AstNode* selp, AstNodeExpr*& indexpr) {
+        if (const AstNodeSel* const nodeSelp = VN_CAST(selp, NodeSel)) {
+            indexpr = nodeSelp->bitp();
+            return nodeSelp->fromp();
+        }
+        const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
+        if (!atp) return nullptr;
+        UASSERT_OBJ(atp->method() == VCMethod::ARRAY_AT, atp, "Unexpected method in a select");
+        indexpr = atp->pinsp();
+        return atp->fromp();
+    }
+    // Solver name of element select selp (see elemSelFromp), nullptr if unsupported
+    AstNodeExpr* buildArraySelNameExpr(FileLine* fl, const AstNodeExpr* selp) {
+        AstNodeExpr* indexp = nullptr;
+        AstNodeExpr* const fromp = elemSelFromp(selp, indexp);
+        AstNodeExpr* fromIndexp = nullptr;
+        AstNodeExpr* prefixp = nullptr;  // Name of the array
+        if (elemSelFromp(fromp, fromIndexp)) {
+            prefixp = buildArraySelNameExpr(fl, fromp);  // Of a multi-dimensional array
+        } else if (const AstVarRef* const vp = VN_CAST(fromp, VarRef)) {
+            prefixp = new AstConst{fl, AstConst::String{}, vp->name()};
+        } else if (const AstMemberRef* const mp = VN_CAST(fromp, MemberRef)) {
+            prefixp = new AstConst{fl, AstConst::String{}, buildMemberPath(mp)};
+        }
+        if (!prefixp) return nullptr;
+        return newElementNamep(fl, prefixp, indexp);
+    }
 
     // Helper: get fromp from MemberRef or StructSel
     static AstNodeExpr* getSelFromp(const AstNodeExpr* exprp) {
@@ -530,16 +552,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             const std::string selName = exprp->name();
             // Check if fromp chain contains ArraySel (e.g., cfg[i].w)
             if (const AstArraySel* const arrSelp = VN_CAST(selFromp, ArraySel)) {
-                std::string baseName;
-                if (const AstVarRef* const vp = VN_CAST(arrSelp->fromp(), VarRef)) {
-                    baseName = vp->name();
-                } else if (const AstMemberRef* const memberRefp
-                           = VN_CAST(arrSelp->fromp(), MemberRef)) {
-                    baseName = buildMemberPath(memberRefp);
-                }
-                if (baseName.empty()) return nullptr;
-                return newElementNamep(fl, new AstConst{fl, AstConst::String{}, baseName},
-                                       arrSelp->bitp());
+                return buildArraySelNameExpr(fl, arrSelp);
             }
             // Static member path (obj.field)
             if (const AstVarRef* const vp = VN_CAST(selFromp, VarRef)) {
@@ -554,18 +567,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (VN_IS(exprp, CMethodHard)) return buildPathExpr(fl, exprp, "");
         const AstNodeSel* selp = VN_CAST(exprp, ArraySel);
         if (!selp) selp = VN_CAST(exprp, AssocSel);
-        if (selp) {
-            // arr[i] -> dynamic name
-            std::string baseName;
-            if (const AstVarRef* const vp = VN_CAST(selp->fromp(), VarRef)) {
-                baseName = vp->name();
-            } else if (const AstMemberRef* const memberRefp = VN_CAST(selp->fromp(), MemberRef)) {
-                baseName = buildMemberPath(memberRefp);
-            }
-            if (baseName.empty()) return nullptr;
-            return newElementNamep(fl, new AstConst{fl, AstConst::String{}, baseName},
-                                   selp->bitp());
-        }
+        if (selp) return buildArraySelNameExpr(fl, selp);  // arr[i] -> dynamic name
         // Packed struct member: SEL(ARRAYSEL(...)) -- bit select on array element.
         // Solver registers the whole element, so promote to array element level.
         if (const AstSel* const bitSelp = VN_CAST(exprp, Sel)) {
@@ -1271,7 +1273,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             varRefp->classOrPackagep(classOrPackagep);
             methodp->addPinsp(varRefp);
         }
-        const size_t width = SmtUtil::arrayElementDTypep(varp->dtypep())->width();
+        const size_t width = RandomizeUtil::arrayElementDTypep(varp->dtypep())->width();
         methodp->addPinsp(new AstConst{varp->fileline(), AstConst::Unsized64{}, width});
         AstNodeExpr* const varnamep = new AstCExpr{varp->fileline(), AstCExpr::Pure{},
                                                    "\"" + smtName + "\"", varp->width()};
@@ -2108,7 +2110,9 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
-        const bool objectElem = VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType);
+        // Of an array of objects, or of arrays of them
+        const bool objectElem
+            = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
         const bool indexIsRand = isRandIndex(nodep->bitp());
         if (m_nestedAccessp) {
@@ -2119,8 +2123,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                       : new AstSFormatF{bitp->fileline(), objectElem ? "%0x" : "%x", false, bitp};
             AstSFormatF* const herep
                 = new AstSFormatF{nodep->fileline(), "%s.%s", false, bitFormatp};
+            const AstSub* const subp = VN_CAST(bitp, Sub);
             if (AstSel* const selp = VN_CAST(bitp, Sel)) {
                 m_nestedAccessp->addVarNamePart(herep, selp->fromp()->name());
+            } else if (subp && VN_IS(subp->lhsp(), VarRef) && VN_IS(subp->rhsp(), Const)) {
+                // A variable index into an array with a nonzero low bound
+                m_nestedAccessp->addVarNamePart(herep,
+                                                subp->lhsp()->name() + "-" + subp->rhsp()->name());
             } else {
                 m_nestedAccessp->addVarNamePart(herep, bitp->name());
             }
@@ -3421,18 +3430,24 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstNodeExpr* const objp = selp ? selp->fromp() : nullptr;
         AstForeach* const foreachp = VN_AS(VN_AS(holderp->declsp(), Begin)->stmtsp(), Foreach);
         FileLine* const fl = foreachp->fileline();
-        AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
-            fl, arrVarp,
-            new AstVarRef{fl, VN_AS(foreachp->headerp()->elementsp(), Var), VAccess::READ});
-        AstNodeExpr* condp = new AstNeq{fl, newElemp(fl, objp, arrVarp, offsetp->cloneTree(false)),
-                                        new AstConst{fl, AstConst::Null{}}};
+        std::vector<AstVar*> idxVarps;
+        for (AstNode* nodep = foreachp->headerp()->elementsp(); nodep; nodep = nodep->nextp()) {
+            idxVarps.push_back(VN_AS(nodep, Var));
+        }
+        AstNodeExpr* const elemp = RandomizeUtil::newElemSelp(
+            fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp), idxVarps);
+        AstNodeExpr* condp
+            = new AstNeq{fl, elemp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
         if (AstVar* const modeVarp = m_elemModes.modeVarp(arrVarp)) {
+            // Only the elements of a one-dimensional array have their own rand_mode()
+            AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+                fl, arrVarp->dtypep(), new AstVarRef{fl, idxVarps[0], VAccess::READ});
             condp = new AstLogAnd{
                 fl, condp,
                 new AstNot{fl, RandomizeUtil::newElemModeOffp(
                                    RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp)}};
+            VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
         }
-        AstNodeExpr* const elemp = newElemp(fl, objp, arrVarp, offsetp);
         if (AstNodeExpr* const modep = newObjConstraintModep(elemp, it->second.origp)) {
             condp = new AstLogAnd{fl, condp, modep};
         }
@@ -3450,7 +3465,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                                            arrVarp->findUInt32DType()};
         // Offset of the element, as used by the solver
         AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
-            fl, arrVarp, new AstVarRef{fl, idxVarp, VAccess::READ});
+            fl, arrVarp->dtypep(), new AstVarRef{fl, idxVarp, VAccess::READ});
         AstNodeExpr* const elemp = newElemp(fl, objp, arrVarp, offsetp->cloneTree(false));
         const bool unpacked = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
         // Pin solver term termFmt (formatted with the offset) of variable varFmt to valuep
@@ -4264,7 +4279,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         varRefp->classOrPackagep(classp);
         methodp->addPinsp(varRefp);
 
-        const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
+        const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
 
         methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
         AstNodeExpr* const varnamep
@@ -4915,7 +4930,7 @@ public:
                     dimension = dims.second;
                 }
 
-                const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
+                const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
                 methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
                 AstNodeExpr* const varnamep = new AstCExpr{
                     fl, AstCExpr::Pure{}, "\"" + arrVarp->name() + "\"", arrVarp->width()};
