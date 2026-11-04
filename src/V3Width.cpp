@@ -9145,15 +9145,23 @@ class WidthVisitor final : public VNVisitor {
         UASSERT_OBJ(nodep->isClocked(), nodep, "Invalid edge");
         // Optimize concat/replicate senitems; this has to be done here at the latest, otherwise we
         // emit WIDTHCONCAT if there are unsized constants
-        if (VN_IS(nodep->sensp(), Concat) || VN_IS(nodep->sensp(), Replicate)) {
-            auto* const concatOrReplp = VN_CAST(nodep->sensp(), NodeBiop);
-            auto* const rhsp = concatOrReplp->rhsp()->unlinkFrBack();
+        AstNodeExpr* const condp = nodep->condp();  // 'iff' condition, kept on new senitems
+        if (AstReplicate* const replp = VN_CAST(nodep->sensp(), Replicate)) {
+            // A replication changes, and has the least significant bit, of its operand
+            AstNodeExpr* const srcp = replp->srcp()->unlinkFrBack();
+            if (condp) condp->unlinkFrBack();
+            nodep->replaceWith(new AstSenItem{srcp->fileline(), nodep->edgeType(), srcp, condp});
+            VL_DO_DANGLING(nodep->deleteTree(), nodep);
+        } else if (AstConcat* const concatp = VN_CAST(nodep->sensp(), Concat)) {
+            AstNodeExpr* const rhsp = concatp->rhsp()->unlinkFrBack();
             if (nodep->edgeType() == VEdgeType::ET_CHANGED) {
                 // If it's ET_CHANGED, split concatenations into multiple senitems
-                auto* const lhsp = concatOrReplp->lhsp()->unlinkFrBack();
-                nodep->addNextHere(new AstSenItem{lhsp->fileline(), nodep->edgeType(), lhsp});
-            }  // Else only use the RHS
-            nodep->replaceWith(new AstSenItem{rhsp->fileline(), nodep->edgeType(), rhsp});
+                AstNodeExpr* const lhsp = concatp->lhsp()->unlinkFrBack();
+                nodep->addNextHere(new AstSenItem{lhsp->fileline(), nodep->edgeType(), lhsp,
+                                                  condp ? condp->cloneTreePure(false) : nullptr});
+            }  // Else only use the RHS, which has the least significant bit
+            if (condp) condp->unlinkFrBack();
+            nodep->replaceWith(new AstSenItem{rhsp->fileline(), nodep->edgeType(), rhsp, condp});
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else {
             userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
