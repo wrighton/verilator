@@ -492,6 +492,12 @@ public:
     // Clear disabled state for a variable
     void clear_var_disabled(const std::string& name) { m_disabledVars.erase(name); }
 
+    // Drop the registered members of the elements of struct array name, so registering its
+    // current elements does not keep members of elements that were removed or reallocated
+    void clear_struct_arr(const std::string& name) {
+        m_vars.erase(m_vars.lower_bound(name + "."), m_vars.lower_bound(name + "/"));
+    }
+
     // ---  write_var to register variables  ---
     // Register scalar variable (non-struct, basic type)
     template <typename T>
@@ -535,6 +541,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     write_var(VlQueue<T, N_MaxSize>& var, int width, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        clear_struct_arr(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
     // Register unpacked array of non-struct types
@@ -561,6 +568,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     write_var(VlUnpacked<T, N_Depth>& var, int /*width*/, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        clear_struct_arr(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
 
@@ -589,6 +597,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T_Value>::value, void>::type
     write_var(VlAssocArray<T_Key, T_Value>& var, int /*width*/, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        clear_struct_arr(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
 
