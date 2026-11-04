@@ -8853,6 +8853,7 @@ class WidthVisitor final : public VNVisitor {
                          && !VN_IS(pinp, SFormatF)  // Already generates a string
                          && !VN_IS(portp->dtypep(), UnpackArrayDType)  // Unpacked array must match
                          && !portp->isDpiOpenArray()  // As must DPI open array
+                         && !portp->isRef() && !portp->isConstRef()  // As must a ref
                          && !(VN_IS(pinp, VarRef) && VN_AS(pinp, VarRef)->varp()->basicp()
                               && VN_AS(pinp, VarRef)->varp()->basicp()->keyword()
                                      == VBasicDTypeKwd::STRING)) {
@@ -8880,8 +8881,10 @@ class WidthVisitor final : public VNVisitor {
                 if (!pinp) continue;  // Argument error we'll find later
                 // Change data types based on above accept completion
                 if (nodep->taskp()->dpiImport()) checkUnpackedArrayArgs(portp, pinp);
-                // Not to a DPI open array, which takes the type of its actual
-                if (portp->isDouble() && !portp->isDpiOpenArray()) {
+                // Not to a DPI open array, which takes the type of its actual, nor to a ref,
+                // which must match it
+                if (portp->isDouble() && !portp->isDpiOpenArray() && !portp->isRef()
+                    && !portp->isConstRef()) {
                     VL_DO_DANGLING(spliceCvtD(pinp), pinp);
                 }
             }

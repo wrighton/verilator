@@ -7,6 +7,8 @@
 // verilog_format: off
 `define stop $stop
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkr(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got=%f exp=%f\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 class MyInt;
@@ -31,6 +33,27 @@ class Cls;
 endclass
 
 typedef struct {MyInt arr[2][][$];} struct_t;
+
+class Opaque;
+  string s;
+  real r;
+endclass
+
+task automatic append_x(ref string s);
+  s = {s, "x"};
+endtask
+
+function automatic string get_str(const ref string s);
+  return s;
+endfunction
+
+task automatic add_half(ref real r);
+  r = r + 0.5;
+endtask
+
+function automatic real get_real(const ref real r);
+  return r;
+endfunction
 
 module t;
   int a, b;
@@ -88,6 +111,26 @@ module t;
     b = cls.get_val_set_2(st.arr[1][2][0].x);
     `checkh(st.arr[1][2][0].x, 2);
     `checkh(b, 5);
+
+    // Opaque types, elements of arrays and class members
+    begin
+      automatic Opaque op = new;
+      automatic string sa[2] = '{"a", "b"};
+      automatic real ra[2] = '{1.0, 2.0};
+      append_x(sa[1]);
+      `checks(sa[1], "bx");
+      `checks(get_str(sa[1]), "bx");
+      op.s = "c";
+      append_x(op.s);
+      `checks(op.s, "cx");
+      add_half(ra[0]);
+      `checkr(ra[0], 1.5);
+      op.r = 3.0;
+      add_half(op.r);
+      `checkr(op.r, 3.5);
+      `checkr(get_real(ra[0]), 1.5);
+      `checkr(get_real(op.r), 3.5);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
