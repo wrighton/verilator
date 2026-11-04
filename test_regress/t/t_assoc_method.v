@@ -79,6 +79,8 @@ module t;
     qi = points_q.unique_index();
     `checkh(qi.size, 3);
 
+    qv = q.unique with (item.index > 11);  // item.index is each element's index
+    `checkp(qv, "'{'h1, 'h2}");
     points_qv = points_q.unique(p) with (p.x);
     `checkh(points_qv.size, 2);
     qi = points_q.unique_index (p) with (p.x + p.y);

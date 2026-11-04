@@ -600,6 +600,22 @@ public:
 template <typename T_Class>
 class VlClassRef;
 
+// Return index of the first element with the smallest (or largest) 'with' value
+template <typename T_Array, typename T_Func>
+IData vl_with_extreme_index(const T_Array& array, IData size, T_Func with_func, bool largest) {
+    // 'array' is not empty; 'with_func' gets each element's index and value
+    IData bestIndex = 0;
+    auto bestValue = with_func(0, array[0]);
+    for (IData i = 1; i < size; ++i) {
+        const auto value = with_func(i, array[i]);
+        if (largest ? bestValue < value : value < bestValue) {
+            bestIndex = i;
+            bestValue = value;
+        }
+    }
+    return bestIndex;
+}
+
 //===================================================================
 // Verilog queue and dynamic array container
 // There are no multithreaded locks on this; the base variable must
@@ -906,9 +922,10 @@ public:
     template <typename T_Func>
     VlQueue unique(T_Func with_func) const {
         VlQueue out;
+        IData index = 0;
         std::set<decltype(with_func(0, m_deque[0]))> saw;
         for (const auto& i : m_deque) {
-            const auto i_mapped = with_func(0, i);
+            const auto i_mapped = with_func(index++, i);
             const auto it = saw.find(i_mapped);
             if (it == saw.end()) {
                 saw.insert(it, i_mapped);
@@ -1025,11 +1042,7 @@ public:
     template <typename T_Func>
     VlQueue min(T_Func with_func) const {
         if (m_deque.empty()) return VlQueue{};
-        const auto it = std::min_element(m_deque.cbegin(), m_deque.cend(),
-                                         [&with_func](const T_Value& a, const T_Value& b) {
-                                             return with_func(0, a) < with_func(0, b);
-                                         });
-        return VlQueue{*it};
+        return VlQueue{m_deque[vl_with_extreme_index(m_deque, m_deque.size(), with_func, false)]};
     }
     VlQueue max() const {
         if (m_deque.empty()) return VlQueue{};
@@ -1039,11 +1052,7 @@ public:
     template <typename T_Func>
     VlQueue max(T_Func with_func) const {
         if (m_deque.empty()) return VlQueue{};
-        const auto it = std::max_element(m_deque.cbegin(), m_deque.cend(),
-                                         [&with_func](const T_Value& a, const T_Value& b) {
-                                             return with_func(0, a) < with_func(0, b);
-                                         });
-        return VlQueue{*it};
+        return VlQueue{m_deque[vl_with_extreme_index(m_deque, m_deque.size(), with_func, true)]};
     }
 
     T_Value r_sum() const {
@@ -1259,11 +1268,10 @@ public:
     template <typename T_Func>
     VlQueue<T_Value> unique(T_Func with_func) const {
         VlQueue<T_Value> out;
-        T_Key default_key;
         using WithType = decltype(with_func(m_map.begin()->first, m_map.begin()->second));
         std::set<WithType> saw;
         for (const auto& i : m_map) {
-            const auto i_mapped = with_func(default_key, i.second);
+            const auto i_mapped = with_func(i.first, i.second);
             const auto it = saw.find(i_mapped);
             if (it == saw.end()) {
                 saw.insert(it, i_mapped);
@@ -1703,9 +1711,10 @@ public:
     template <typename T_Func>
     VlQueue<T_Value> unique(T_Func with_func) const {
         VlQueue<T_Value> out;
-        std::set<T_Value> saw;
+        IData index = 0;
+        std::set<decltype(with_func(0, m_storage[0]))> saw;
         for (const auto& i : m_storage) {
-            const auto i_mapped = with_func(0, i);
+            const auto i_mapped = with_func(index++, i);
             const auto it = saw.find(i_mapped);
             if (it == saw.end()) {
                 saw.insert(it, i_mapped);
@@ -1732,7 +1741,7 @@ public:
     VlQueue<T_Key> unique_index(T_Func with_func) const {
         VlQueue<T_Key> out;
         IData index = 0;
-        std::set<T_Value> saw;
+        std::set<decltype(with_func(0, m_storage[0]))> saw;
         for (const auto& i : m_storage) {
             const auto i_mapped = with_func(index, i);
             auto it = saw.find(i_mapped);
@@ -1812,11 +1821,8 @@ public:
     }
     template <typename T_Func>
     VlQueue<T_Value> min(T_Func with_func) const {
-        const auto it = std::min_element(std::begin(m_storage), std::end(m_storage),
-                                         [&with_func](const IData& a, const IData& b) {
-                                             return with_func(0, a) < with_func(0, b);
-                                         });
-        return VlQueue<T_Value>{*it};
+        return VlQueue<T_Value>{
+            m_storage[vl_with_extreme_index(m_storage, N_Depth, with_func, false)]};
     }
     VlQueue<T_Value> max() const {
         const auto it = std::max_element(std::begin(m_storage), std::end(m_storage));
@@ -1824,11 +1830,8 @@ public:
     }
     template <typename T_Func>
     VlQueue<T_Value> max(T_Func with_func) const {
-        const auto it = std::max_element(std::begin(m_storage), std::end(m_storage),
-                                         [&with_func](const IData& a, const IData& b) {
-                                             return with_func(0, a) < with_func(0, b);
-                                         });
-        return VlQueue<T_Value>{*it};
+        return VlQueue<T_Value>{
+            m_storage[vl_with_extreme_index(m_storage, N_Depth, with_func, true)]};
     }
 
     T_Value r_sum() const {
@@ -1840,7 +1843,7 @@ public:
     WithFuncReturnType<T_Func> r_sum(T_Func with_func) const {
         WithFuncReturnType<T_Func> out
             = WithFuncReturnType<T_Func>(0);  // Type must have assignment operator
-        for (const auto& i : m_storage) out += with_func(0, i);
+        for (IData i = 0; i < N_Depth; ++i) out += with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_product() const {
@@ -1851,7 +1854,7 @@ public:
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_product(T_Func with_func) const {
         WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(1);
-        for (const auto& i : m_storage) out *= with_func(0, i);
+        for (IData i = 0; i < N_Depth; ++i) out *= with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_and() const {
@@ -1863,7 +1866,7 @@ public:
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_and(T_Func with_func) const {
         WithFuncReturnType<T_Func> out = ~WithFuncReturnType<T_Func>(0);
-        for (const auto& i : m_storage) out &= with_func(0, i);
+        for (IData i = 0; i < N_Depth; ++i) out &= with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_or() const {
@@ -1874,7 +1877,7 @@ public:
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_or(T_Func with_func) const {
         WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
-        for (const auto& i : m_storage) out |= with_func(0, i);
+        for (IData i = 0; i < N_Depth; ++i) out |= with_func(i, m_storage[i]);
         return out;
     }
     T_Value r_xor() const {
@@ -1885,7 +1888,7 @@ public:
     template <typename T_Func>
     WithFuncReturnType<T_Func> r_xor(T_Func with_func) const {
         WithFuncReturnType<T_Func> out = WithFuncReturnType<T_Func>(0);
-        for (const auto& i : m_storage) out ^= with_func(0, i);
+        for (IData i = 0; i < N_Depth; ++i) out ^= with_func(i, m_storage[i]);
         return out;
     }
 
