@@ -22,94 +22,99 @@
                                         : ... Item data type: 'int$[1:3]' (2-state)
    25 |     A9_logic = {A3, 4, 5, A3, 6};
       |                           ^~
-%Error: t/t_unpacked_concat_bad2.v:40:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:28:13: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'logic[7:0]' (4-state)
+                                        : ... Item data type: 'string$[$]' (2-state)
+   28 |       s1 = {sq};   
+      |             ^~
+%Error: t/t_unpacked_concat_bad2.v:44:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other'
-   40 |     cq = {cq, o};
+   44 |     cq = {cq, o};
       |               ^
-%Error: t/t_unpacked_concat_bad2.v:41:11: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:45:11: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other'
-   41 |     cd = {o, cd};
+   45 |     cd = {o, cd};
       |           ^
-%Error: t/t_unpacked_concat_bad2.v:42:12: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:46:12: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other'
-   42 |     cq = '{o};
+   46 |     cq = '{o};
       |            ^
-%Error: t/t_unpacked_concat_bad2.v:52:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:56:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other$[$]'
-   52 |     cq = {cq, oq};
+   56 |     cq = {cq, oq};
       |               ^~
-%Error: t/t_unpacked_concat_bad2.v:53:11: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:57:11: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other$[]'
-   53 |     cq = {od, cq};
+   57 |     cq = {od, cq};
       |           ^~
-%Error: t/t_unpacked_concat_bad2.v:54:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:58:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other$[0:1]'
-   54 |     cq = {cq, ou};
+   58 |     cq = {cq, ou};
       |               ^~
-%Error: t/t_unpacked_concat_bad2.v:55:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:59:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other$[$:2]'
-   55 |     cq = {cq, ob};
+   59 |     cq = {cq, ob};
       |               ^~
-%Error: t/t_unpacked_concat_bad2.v:64:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
-                                        : ... Element data type: 'int'
-                                        : ... Item data type: 'class Cls'
-   64 |     iq = {iq, c};
-      |               ^
-%Error: t/t_unpacked_concat_bad2.v:65:11: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
-                                        : ... Element data type: 'int'
-                                        : ... Item data type: 'class Cls'
-   65 |     id = {c, id};
-      |           ^
-%Error: t/t_unpacked_concat_bad2.v:66:12: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
-                                        : ... Element data type: 'int'
-                                        : ... Item data type: 'class Cls'
-   66 |     iq = '{c};
-      |            ^
-%Error: t/t_unpacked_concat_bad2.v:67:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
-                                        : ... Element data type: 'class Cls'
-                                        : ... Item data type: 'bit[31:0]'
-   67 |     cq = {cq, 5};
-      |               ^
 %Error: t/t_unpacked_concat_bad2.v:68:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'int'
+                                        : ... Item data type: 'class Cls'
+   68 |     iq = {iq, c};
+      |               ^
+%Error: t/t_unpacked_concat_bad2.v:69:11: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'int'
+                                        : ... Item data type: 'class Cls'
+   69 |     id = {c, id};
+      |           ^
+%Error: t/t_unpacked_concat_bad2.v:70:12: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'int'
+                                        : ... Item data type: 'class Cls'
+   70 |     iq = '{c};
+      |            ^
+%Error: t/t_unpacked_concat_bad2.v:71:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'class Cls'
+                                        : ... Item data type: 'bit[31:0]'
+   71 |     cq = {cq, 5};
+      |               ^
+%Error: t/t_unpacked_concat_bad2.v:72:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'int'
                                         : ... Item data type: 'class Cls$[$]'
-   68 |     iq = {iq, cq};
+   72 |     iq = {iq, cq};
       |               ^~
-%Error: t/t_unpacked_concat_bad2.v:69:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:73:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'int$[$]'
-   69 |     cq = {cq, iq};
+   73 |     cq = {cq, iq};
       |               ^~
-%Error: t/t_unpacked_concat_bad2.v:80:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:84:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other'
-   80 |     tq = {tq, o};
+   84 |     tq = {tq, o};
       |               ^
-%Error: t/t_unpacked_concat_bad2.v:81:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:85:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls'
                                         : ... Item data type: 'class Other$[$]'
-   81 |     tq = {tq, oq};
+   85 |     tq = {tq, oq};
       |               ^~
-%Error: t/t_unpacked_concat_bad2.v:90:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:94:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'int$[$]'
                                         : ... Item data type: 'class Cls'
-   90 |     qq = {qq, c};
+   94 |     qq = {qq, c};
       |               ^
-%Error: t/t_unpacked_concat_bad2.v:91:12: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:95:12: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'int$[$]'
                                         : ... Item data type: 'class Cls'
-   91 |     qq = '{c};
+   95 |     qq = '{c};
       |            ^
-%Error: t/t_unpacked_concat_bad2.v:92:17: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+%Error: t/t_unpacked_concat_bad2.v:96:17: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
                                         : ... Element data type: 'class Cls$[$]'
                                         : ... Item data type: 'int$[$]'
-   92 |     cqq = {cqq, iq};
+   96 |     cqq = {cqq, iq};
       |                 ^~
 %Error: Exiting due to
