@@ -3324,6 +3324,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     int m_modportNum = 0;  // Uniqueify modport numbers
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
+    bool m_inGenBlock = false;  // True if in generate block
     const AstWith* m_currentWithp = nullptr;  // Enclosing 'with' (nullptr if none)
     std::set<std::string>
         m_restrictedNamesUsed;  // Names from current 'with (id_list)' that resolved into target
@@ -4224,6 +4225,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // Placeholder pin the parser makes for an empty '#()', to signal
                     // the user did type the '#()'. No further use, deleting.
                     VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                } else if (m_statep->forPrimary() && m_inGenBlock && m_cellp
+                           && m_pinSymp == m_statep->getNodeSym(m_cellp->modp())) {
+                    // The instance may be in a generate block that is not elaborated, where
+                    // it is legal (IEEE 1800-2023 27.4, 27.5), so check again after V3Param
                     return;
                 } else {
                     const std::string suggest
@@ -5973,6 +5979,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstGenBlock* nodep) override {
+        VL_RESTORER(m_inGenBlock);
+        m_inGenBlock = true;
         LINKDOT_VISIT_START();
         UINFO(5, indent() << "visit " << nodep);
         checkNoDot(nodep);

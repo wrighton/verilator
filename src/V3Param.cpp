@@ -641,9 +641,8 @@ class ParamProcessor final {
                 UASSERT_OBJ(cloneiter != clonemapp->end(), pinp,
                             "Couldn't find pin in clone list");
                 pinp->modPTypep(VN_AS(cloneiter->second, ParamTypeDType));
-            } else {
-                pinp->v3fatalSrc("Not linked?");
             }
+            // Else not found in the module, so reported by V3LinkDot::linkDotParamed
         }
     }
     void relinkPinsByName(AstPin* startpinp, AstNodeModule* modp) {
@@ -1807,17 +1806,16 @@ class ParamProcessor final {
                     overridingTypePinsr.emplace(pinp);  // Named once every pin is prepared
                 }
             }
-        } else {
-            pinp->v3fatalSrc("Parameter not found in sub-module: Param "
-                             << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
         }
+        // Else not found in the module, so reported by V3LinkDot::linkDotParamed
     }
 
     void cellInterfaceCleanup(AstPin* pinsp, AstNodeModule* srcModp, string& longnamer,
                               bool& any_overridesr, IfaceRefRefs& ifaceRefRefs) {
         for (AstPin* const pinp : VNList<AstPin>{pinsp}) {
             const AstVar* const modvarp = pinp->modVarp();
-            if (modvarp && VN_IS(arraySubDTypeDeepp(modvarp->subDTypep()), IfaceGenericDType)) {
+            // Not found in the module is reported by V3LinkDot::linkDotParamed
+            if (!modvarp || VN_IS(arraySubDTypeDeepp(modvarp->subDTypep()), IfaceGenericDType)) {
                 continue;
             }
             if (modvarp->isIfaceRef()) {
@@ -2218,10 +2216,14 @@ class ParamProcessor final {
 
         genericInterfaceVarSetup(paramsp, pinsp);
 
-        // Detach the parameters from the cell; they're not relevant any longer. Defer deletion
-        // because m_cellps in ParamVisitor may still contain references below a parameter pin.
-        if (paramsp) {
-            VL_DO_DANGLING(m_deleter.pushDeletep(paramsp->unlinkFrBackWithNext()), paramsp);
+        // Detach the parameters from the cell; they're not relevant any longer. Keep any not
+        // found in the module, reported by V3LinkDot::linkDotParamed. Defer deletion because
+        // m_cellps in ParamVisitor may still contain references below a parameter pin.
+        for (AstPin *nextp, *pinp = paramsp; pinp; pinp = nextp) {
+            nextp = VN_AS(pinp->nextp(), Pin);
+            if (pinp->modVarp() || pinp->modPTypep()) {
+                VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+            }
         }
         return newModp;
     }
