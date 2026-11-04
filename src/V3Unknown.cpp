@@ -148,6 +148,20 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
 
+    // Return the select of a part of 'nodep', or nullptr
+    static AstNodeExpr* selectOfp(AstNodeExpr* nodep) {
+        AstNode* const backp = nodep->backp();
+        const AstNode* fromp = nullptr;
+        if (const AstNodeSel* const selp = VN_CAST(backp, NodeSel)) {
+            fromp = selp->fromp();
+        } else if (const AstSel* const selp = VN_CAST(backp, Sel)) {
+            fromp = selp->fromp();
+        } else if (const AstStructSel* const selp = VN_CAST(backp, StructSel)) {
+            fromp = selp->fromp();
+        }
+        return fromp == nodep ? VN_AS(backp, NodeExpr) : nullptr;
+    }
+
     AstVar* createAddTemp(const AstNodeExpr* const nodep) {
         AstVar* const varp = new AstVar{nodep->fileline(), VVarType::XTEMP,
                                         m_xrandNames->get(nodep), nodep->dtypep()};
@@ -518,37 +532,50 @@ class UnknownVisitor final : public VNVisitor {
             }
             nodep->bitp(newIndexTrunc(newExprStmtOrClone(bitp), declElements));
             AstNodeExpr* condp = new AstGte{nodep->fileline(), declElementsp, bitp};
+            // The value read: this element, or for an element of an outer dimension, the
+            // element, or struct member or bits of it, selected. Not a class member, which is
+            // not part of the array's value.
+            AstNodeExpr* readp = nodep;
+            if (!lvalue) {
+                while (AstNodeExpr* const abovep = selectOfp(readp)) {
+                    // The condition below would skip an impure index; V3LiftExpr lifts them
+                    // out of statements
+                    if (!abovep->isPure()) break;
+                    readp = abovep;
+                }
+            }
             // Note below has null backp(); the Edit function knows how to deal with that.
-            const AstNodeDType* const nodeDtp = nodep->dtypep()->skipRefp();
+            const AstNodeDType* const readDtp = readp->dtypep()->skipRefp();
             if (!lvalue
                 // Making a scalar would break if we're making an array
-                && VN_IS(nodeDtp, BasicDType)
+                && (readDtp->isIntegralOrPacked() || VN_IS(readDtp, BasicDType))
                 // An event has no value to read instead
-                && !nodeDtp->isEvent()) {
+                && !readDtp->isEvent()) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
-                nodep->unlinkFrBack(&replaceHandle);
+                readp->unlinkFrBack(&replaceHandle);
                 // TODO make a tieoff function that takes AstNode and returns typed value
-                V3Number xnum{nodep, nodep->width()};
-                if (nodeDtp->isDouble()) {
-                    xnum = V3Number{nodep, V3Number::Double{}, 0.0};
-                } else if (nodeDtp->isString()) {
-                    xnum = V3Number{nodep, V3Number::String{}, ""};
+                V3Number xnum{readp, readp->width()};
+                if (readDtp->isDouble()) {
+                    xnum = V3Number{readp, V3Number::Double{}, 0.0};
+                } else if (readDtp->isString()) {
+                    xnum = V3Number{readp, V3Number::String{}, ""};
                 } else {
-                    if (nodeDtp->isFourstate()) {
+                    if (readDtp->isFourstate()) {
                         xnum.setAllBitsX();
                     } else {
                         xnum.setAllBits0();
                     }
                 }
-                AstNode* const newp = new AstCond{nodep->fileline(), condp, nodep,
-                                                  new AstConst{nodep->fileline(), xnum}};
+                AstNode* const newp = new AstCond{readp->fileline(), condp, readp,
+                                                  new AstConst{readp->fileline(), xnum}};
                 UINFOTREE(9, newp, "", "_new");
                 // Link in conditional, can blow away temp xor
                 replaceHandle.relink(newp);
-                // Added X's, tristate them too
-                iterate(newp);
-            } else if (!lvalue) {  // Mid-multidimension read, just use zero
+                // Added X's, tristate them too. An ancestor's Cond is visited when iteration
+                // continues with it, after the ancestor's own visit, which has not finished.
+                if (readp == nodep) iterate(newp);
+            } else if (!lvalue) {  // Read of an aggregate, just use zero
                 // ARRAYSEL(...) -> ARRAYSEL(COND(LT(bit<maxbit), bit, 0))
                 VNRelinker replaceHandle;
                 AstNodeExpr* const asBitp = nodep->bitp()->unlinkFrBack(&replaceHandle);
