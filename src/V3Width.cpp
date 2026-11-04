@@ -6838,11 +6838,15 @@ class WidthVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(elemDefaultp), elemDefaultp);
         return valuep;
     }
-    // Return dtypep as an unpacked array if its elements are of type elemDtp, else nullptr.
-    static const AstUnpackArrayDType* spliceArrayDTypep(const AstNodeDType* dtypep,
-                                                        const AstNodeDType* elemDtp) {
-        const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
-        return arrayp && arrayp->subDTypep()->similarDType(elemDtp) ? arrayp : nullptr;
+    // Return dtypep if an unpacked array, queue or dynamic array of elemDtp, else nullptr
+    static const AstNodeDType* elemArrayDTypep(const AstNodeDType* dtypep,
+                                               const AstNodeDType* elemDtp) {
+        dtypep = dtypep->skipRefp();
+        return (VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, QueueDType)
+                || VN_IS(dtypep, DynArrayDType))
+                       && dtypep->subDTypep()->similarDType(elemDtp)
+                   ? dtypep
+                   : nullptr;
     }
     // An unpacked array concatenation, with each item an element, or an array of the elements
     // spliced in (IEEE 1800-2023 10.10)
@@ -6855,15 +6859,22 @@ class WidthVisitor final : public VNVisitor {
         for (AstPatternItem* const patp : nodep->itemspList()) {
             AstNodeExpr* const valuep = patternMemberValueIterate(patp, arrayDtp->subDTypep());
             const uint64_t index = range.ascending() ? entn : elements - 1 - entn;
+            const AstNodeDType* const itemArrayDtp
+                = elemArrayDTypep(valuep->dtypep(), arrayDtp->subDTypep());
             if (const AstUnpackArrayDType* const spliceDtp
-                = spliceArrayDTypep(valuep->dtypep(), arrayDtp->subDTypep())) {
+                = VN_CAST(itemArrayDtp, UnpackArrayDType)) {
                 entn += spliceDtp->elementsConst();
                 newp->spliceValues(index, valuep);
                 continue;
             }
             const VCastable castable = AstNode::computeCastable(
                 arrayDtp->subDTypep()->skipRefp(), valuep->dtypep()->skipRefp(), valuep);
-            if (!castable.isSameish() && !castable.isCompatible()) {
+            if (itemArrayDtp) {
+                // A queue or dynamic array of the elements, whose size is only known at run time
+                valuep->v3warn(E_UNSUPPORTED, "Unsupported: Unpacked array concatenation item"
+                                              " of dynamic size for a fixed-size target");
+                error = true;
+            } else if (!castable.isSameish() && !castable.isCompatible()) {
                 valuep->v3error("Unpacked array concatenation item is neither an element nor"
                                 " an array of elements of its target (IEEE 1800-2023 10.10)"
                                 << warnDTypes(valuep, arrayDtp->subDTypep(), valuep->dtypep(),
@@ -6912,8 +6923,8 @@ class WidthVisitor final : public VNVisitor {
                 patmap.erase(it);
                 valuep = patternMemberValueIterate(patp, arrayDtp->subDTypep());
                 // Only an unpacked array concatenation splices in arrays
-                if (const AstUnpackArrayDType* const memberDtp
-                    = spliceArrayDTypep(valuep->dtypep(), arrayDtp->subDTypep())) {
+                if (const AstNodeDType* const memberDtp
+                    = elemArrayDTypep(valuep->dtypep(), arrayDtp->subDTypep())) {
                     valuep->v3error("Assignment pattern member is an array of the elements, not"
                                     " an element (IEEE 1800-2023 10.9.1)"
                                     << warnDTypes(valuep, arrayDtp->subDTypep(), memberDtp,
@@ -7406,7 +7417,7 @@ class WidthVisitor final : public VNVisitor {
         // An array of the elements in an unpacked array concatenation is spliced in, so is
         // checked against its own type
         AstNodeDType* const expDTypep
-            = nodep->isConcat() && spliceArrayDTypep(nodep->lhssp()->dtypep(), vdtypep)
+            = nodep->isConcat() && elemArrayDTypep(nodep->lhssp()->dtypep(), vdtypep)
                   ? nodep->lhssp()->dtypep()
                   : vdtypep;
         iterateCheck(nodep, "Pattern value", nodep->lhssp(), ASSIGN, FINAL, expDTypep, EXTEND_LHS);
