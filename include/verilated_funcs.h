@@ -1792,11 +1792,13 @@ inline void VL_STREAMR_RII(int lbits, VlQueue<T>& q, IData ld, IData rd_log2) VL
 }
 
 template <std::size_t N_Words>
-inline void VL_STREAMR_RII(int lbits, VlQueue<VlWide<N_Words>>& q, IData ld,
+inline void VL_STREAMR_RII(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, IData ld,
                            IData rd_log2) VL_PURE {
+    // Left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
     q.clear();
     VlWide<N_Words> value;
-    VL_SET_WI(value, ld);
+    VL_ZERO_W(queueBits, value);
+    _vl_insert_WI(value, ld, queueBits - 1, queueBits - lbits);
     q.push_back(value);
 }
 
@@ -1869,11 +1871,13 @@ inline IData VL_STREAMR_QRI(int lbits, VlQueue<T>& q, IData rd_log2) VL_PURE {
 }
 
 template <std::size_t N_Words>
-inline void VL_STREAMR_RQI(int lbits, VlQueue<VlWide<N_Words>>& q, QData ld,
+inline void VL_STREAMR_RQI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, QData ld,
                            IData rd_log2) VL_PURE {
-    q.clear();  // Empty the queue first
+    // Left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
+    q.clear();
     VlWide<N_Words> value;
-    VL_SET_WQ(value, ld);
+    VL_ZERO_W(queueBits, value);
+    _vl_insert_WQ(value, ld, queueBits - 1, queueBits - lbits);
     q.push_back(value);
 }
 
@@ -1919,13 +1923,17 @@ inline void VL_STREAMR_RWI(int lbits, int queueBits, VlQueue<T>& q, WDataInP con
 template <std::size_t N_Words>
 inline void VL_STREAMR_RWI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q,
                            WDataInP const lwp, IData rd_log2) VL_PURE {
-    q.clear();  // Empty the queue first
-    const int numWords = VL_BITWORD_E(lbits);
-    VlWide<N_Words> value;
-    for (int ii = 0; ii < N_Words; ii++) value.at(ii) = 0;
-    for (int word = numWords - 1; word >= 0; word--) {
-        value.at(word) = lwp[word];
-        if ((word % N_Words) == 0) { q.push_back(value); }
+    // Elements take the stream from the left, the last zero-filled on the right
+    // (IEEE 1800-2023 11.4.14)
+    q.clear();
+    for (int msb = lbits - 1; msb >= 0; msb -= queueBits) {
+        const int width = std::min(queueBits, msb + 1);
+        VlWide<N_Words> bits;
+        VL_SEL_WWII(width, lbits, bits, lwp, msb - width + 1, width);
+        VlWide<N_Words> value;
+        VL_ZERO_W(queueBits, value);
+        _vl_insert_WW(value, bits, queueBits - 1, queueBits - width);
+        q.push_back(value);
     }
 }
 
