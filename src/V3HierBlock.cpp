@@ -391,7 +391,9 @@ class HierBlockUsageCollectVisitor final : public VNVisitorConst {
         if (!m_modp->hierBlock()) return;
         // Can't handle interface port on hier block
         if (nodep->isIfaceRef() && !nodep->isIfaceParent()) {
-            nodep->v3error("Modport cannot be used at the hierarchical block boundary");
+            nodep->v3error("Interface port " << nodep->prettyNameQ()
+                                             << " cannot be used at the hierarchical block"
+                                                " boundary.");
         }
         // Record overridden value parameter of this hier block
         if (nodep->isGParam() && nodep->overriddenParam()) {
