@@ -1462,7 +1462,7 @@ class RandomizeVisitor final : public VNVisitor {
         // to point to the package scope when the variable is moved by V3Class.
         modeVarp->user2p(classp);
         classp->addMembersp(modeVarp);
-        // Register so findStaticRandModeVarMember sees it through the already
+        // Register so findStaticRandModeVar sees it through the already
         // scanned member cache
         m_memberMap.insert(classp, modeVarp);
         return modeVarp;
