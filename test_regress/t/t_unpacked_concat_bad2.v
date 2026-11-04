@@ -23,6 +23,10 @@ module t;
     s2 = {s0, s3};
 
     A9_logic = {A3, 4, 5, A3, 6};
+    begin
+      string sq[$];
+      s1 = {sq};  // Queue of other elements
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
