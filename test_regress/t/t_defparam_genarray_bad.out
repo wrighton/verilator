@@ -1,0 +1,17 @@
+%Error: t/t_defparam_genarray_bad.v:15:15: In defparam in generate loop 'g', select of that loop (IEEE 1800-2023 23.10.1)
+   15 |     defparam g[1].u.P = 3;   
+      |               ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_genarray_bad.v:20:13: In defparam, instance select is not a bit select (IEEE 1800-2023 A.9.3)
+   20 |   defparam g[1:0].u.P = 2;   
+      |             ^
+%Error: t/t_defparam_genarray_bad.v:21:16: In defparam, select of 'g_if', which is not a generate loop
+   21 |   defparam g_if[0].u.P = 2;   
+      |                ^
+%Error: t/t_defparam_genarray_bad.v:22:13: In defparam, select of 'u', which is not a generate loop
+   22 |   defparam u[0].P = 2;   
+      |             ^
+%Error: t/t_defparam_genarray_bad.v:23:12: In defparam, generate loop 'g' without a select
+   23 |   defparam g.u.P = 2;   
+      |            ^
+%Error: Exiting due to

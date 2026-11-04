@@ -345,6 +345,8 @@ class ParamProcessor final {
     std::map<const AstNodeModule*, const AstPin*> m_nestedDefparamps;
     // Instance name -> original name of its module, for instances deparameterized so far
     std::unordered_map<string, string> m_instanceOrigNames;
+    std::vector<FileLine*> m_defparamsSeen;  // Locations of defparam pins, in order seen
+    std::set<const FileLine*> m_defparamsMatched;  // Locations of defparams naming an instance
     VNDeleter m_deleter;  // Used to delay deletion of nodes
     // Class default type paramater dependencies
     std::vector<std::pair<AstParamTypeDType*, int>> m_classTypeParams;
@@ -723,18 +725,22 @@ class ParamProcessor final {
     // Return if a defparam path, from the module it starts in, names the instance
     bool defParamNames(const string& path, const string& instanceName) const {
         // After the module come the generate blocks the defparam is in, without loop indices,
-        // so a defparam in a generate loop applies in each iteration
-        const size_t dotPos = path.find('.');
-        const string anchor = path.substr(0, dotPos);
-        const string relPath = path.substr(dotPos + 1);
-        if (!VString::endsWith(withoutIndices(instanceName), "." + relPath)) return false;
+        // so a defparam in a generate loop applies in each iteration. A loop index written in
+        // the path selects only that iteration.
+        std::deque<string> relNames = VString::split(path, '.');
+        const string anchor = relNames.front();
+        relNames.pop_front();
         string scope = instanceName;
-        for (size_t n = std::count(relPath.begin(), relPath.end(), '.') + 1; n; --n) {
-            scope.erase(scope.rfind('.'));
+        for (auto it = relNames.crbegin(); it != relNames.crend(); ++it) {
+            const size_t dotPos = scope.rfind('.');
+            if (dotPos == string::npos) return false;
+            const string name = scope.substr(dotPos + 1);
+            if (*it != (it->find('[') == string::npos ? withoutIndices(name) : name)) return false;
+            scope.erase(dotPos);
         }
         // Instances above are deparameterized first; the top's name is its module's
-        const auto it = m_instanceOrigNames.find(scope);
-        return (it != m_instanceOrigNames.end() ? it->second : scope) == anchor;
+        const auto origIt = m_instanceOrigNames.find(scope);
+        return (origIt != m_instanceOrigNames.end() ? origIt->second : scope) == anchor;
     }
     // Check if parameter setting during instantiation is simple enough for hierarchical Verilation
     void checkSupportedParam(AstNodeModule* modp, AstPin* pinp) const {
@@ -2544,6 +2550,14 @@ public:
     }
     void visitBaseQueued(bool flag) { m_visitBaseQueued = flag; }
 
+    // Report defparams whose path named no instance once generate loops were elaborated
+    void checkUnmatchedDefparams() {
+        // E.g. a loop index outside the loop's range. Mark each reported, to report it once.
+        for (FileLine* const flp : m_defparamsSeen) {
+            if (!m_defparamsMatched.emplace(flp).second) continue;
+            flp->v3error("In defparam, the path names no instance");
+        }
+    }
     // After an interface cell inside parentModp has been deparameterized
     // (rewired from template to clone), retarget REFDTYPEs that still
     // reference the old template's types so that $bits(iface_typedef)
@@ -2606,9 +2620,11 @@ public:
             std::set<const AstNode*> defparamParams;  // Parameters set by a defparam to this cell
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
+                m_defparamsSeen.emplace_back(pinp->fileline());
                 if (!defParamNames(pinp->paramPath(), instanceName)) {
                     VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
                 } else {
+                    m_defparamsMatched.emplace(pinp->fileline());
                     defparamParams.emplace(paramOf(pinp));
                 }
             }
@@ -3372,7 +3388,7 @@ class ParamVisitor final : public VNVisitor {
             if (!cellParamsReferenceIfacePorts(cellp)) {
                 AstNodeModule* const srcModp = cellp->modp();
                 AstNodeModule* const newModp
-                    = m_processor.nodeDeparam(cellp, srcModp, m_modp, m_modp->someInstanceName());
+                    = m_processor.nodeDeparam(cellp, srcModp, m_modp, cellScopeName(cellp));
                 // Retarget template REFDTYPEs to the clone's types.
                 if (V3LinkDotIfaceCapture::enabled() && cellp->modp() != srcModp) {
                     m_processor.retargetIfaceRefs(m_modp, cellp->name());
@@ -3691,12 +3707,19 @@ class ParamVisitor final : public VNVisitor {
         return false;
     }
 
+    // Return the hierarchical name of the scope of a cell in the current module
+    string cellScopeName(const AstCell* cellp) const {
+        // Including generate blocks, as defparam paths are matched against it
+        const auto it = m_genHierNames.find(cellp);
+        return m_modp->someInstanceName()
+               + (it != m_genHierNames.end() ? it->second : m_generateHierName);
+    }
     void deparamIfaceCellNow(AstCell* cellp) {
         if (!cellp->paramsp()) return;
         if (!VN_IS(cellp->modp(), Iface)) return;
         AstNodeModule* const srcModp = cellp->modp();
         AstNodeModule* const newModp
-            = m_processor.nodeDeparam(cellp, srcModp, m_modp, m_modp->someInstanceName());
+            = m_processor.nodeDeparam(cellp, srcModp, m_modp, cellScopeName(cellp));
         if (newModp && newModp != srcModp) {
             if (V3LinkDotIfaceCapture::enabled()) {
                 m_processor.retargetIfaceRefs(m_modp, cellp->name());
@@ -4021,6 +4044,7 @@ public:
 
         // Relies on modules already being in top-down-order
         iterate(netlistp);
+        m_processor.checkUnmatchedDefparams();
     }
     ~ParamVisitor() override = default;
     ParamProcessor& processor() { return m_processor; }
