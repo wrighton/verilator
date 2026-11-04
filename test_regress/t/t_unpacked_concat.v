@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 module t;
@@ -92,6 +93,49 @@ module t;
       `checkd(en3[0], E1);
       `checkd(en3[1], E2);
       `checkd(en3[2], E0);
+    end
+    begin  // Queues and dynamic arrays spliced in, of a size known at run time
+      typedef int int_q_t[$];
+      int q[$];
+      int d[];
+      int_q_t tq;
+      string sq[$];
+      int_q_t qq[$];
+      int i2[2];
+      int i3[3];
+      int i4d[4:1];
+      string str3[3];
+      int_q_t qa[2];
+      q = {1, 2};
+      d = new[2];
+      d[0] = 5;
+      d[1] = 6;
+      tq = q;
+      sq = {"a", "b"};
+      qq = {q, q};
+      i2 = {q};
+      `checkd(i2[0], 1);
+      `checkd(i2[1], 2);
+      i3 = {3, q};
+      `checkd(i3[0], 3);
+      `checkd(i3[2], 2);
+      i2 = {d};
+      `checkd(i2[1], 6);
+      i2 = {tq};
+      `checkd(i2[0], 1);
+      i4d = {i2, d};
+      `checkd(i4d[4], 1);
+      `checkd(i4d[3], 2);
+      `checkd(i4d[2], 5);
+      `checkd(i4d[1], 6);
+      str3 = {sq, "x"};
+      `checks(str3[0], "a");
+      `checks(str3[1], "b");
+      `checks(str3[2], "x");
+      qa = {qq};
+      `checkd(qa[1][1], 2);
+      qa = {q, q};  // Elements
+      `checkd(qa[1][0], 1);
     end
 
     s0 = 3'd1;

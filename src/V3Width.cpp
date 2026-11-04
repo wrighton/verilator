@@ -6851,38 +6851,52 @@ class WidthVisitor final : public VNVisitor {
     // An unpacked array concatenation, with each item an element, or an array of the elements
     // spliced in (IEEE 1800-2023 10.10)
     void patternConcatArray(AstPattern* nodep, AstUnpackArrayDType* arrayDtp) {
-        const VNumRange range = arrayDtp->declRange();
-        const int elements = range.elements();
-        AstConsArray* const newp = new AstConsArray{nodep->fileline(), arrayDtp};
-        int entn = 0;  // Number of elements given so far, from the left
+        // Each item, with its type if an array of the elements, else nullptr
+        std::vector<std::pair<AstNodeExpr*, const AstNodeDType*>> items;
+        bool dynamic = false;  // An item is a queue or dynamic array of the elements
         bool error = false;  // Reported an error, so the value is not complete
         for (AstPatternItem* const patp : nodep->itemspList()) {
             AstNodeExpr* const valuep = patternMemberValueIterate(patp, arrayDtp->subDTypep());
-            const uint64_t index = range.ascending() ? entn : elements - 1 - entn;
             const AstNodeDType* const itemArrayDtp
                 = elemArrayDTypep(valuep->dtypep(), arrayDtp->subDTypep());
-            if (const AstUnpackArrayDType* const spliceDtp
-                = VN_CAST(itemArrayDtp, UnpackArrayDType)) {
-                entn += spliceDtp->elementsConst();
-                newp->spliceValues(index, valuep);
+            items.emplace_back(valuep, itemArrayDtp);
+            if (itemArrayDtp) {
+                if (!VN_IS(itemArrayDtp, UnpackArrayDType)) dynamic = true;
                 continue;
             }
             const VCastable castable = AstNode::computeCastable(
                 arrayDtp->subDTypep()->skipRefp(), valuep->dtypep()->skipRefp(), valuep);
-            if (itemArrayDtp) {
-                // A queue or dynamic array of the elements, whose size is only known at run time
-                valuep->v3warn(E_UNSUPPORTED, "Unsupported: Unpacked array concatenation item"
-                                              " of dynamic size for a fixed-size target");
-                error = true;
-            } else if (!castable.isSameish() && !castable.isCompatible()) {
+            if (!castable.isSameish() && !castable.isCompatible()) {
                 valuep->v3error("Unpacked array concatenation item is neither an element nor"
                                 " an array of elements of its target (IEEE 1800-2023 10.10)"
                                 << warnDTypes(valuep, arrayDtp->subDTypep(), valuep->dtypep(),
                                               "Element", "Item"));
                 error = true;
             }
-            newp->valuep(index, valuep);
-            ++entn;
+        }
+        if (!error && dynamic) {
+            // The number of elements is only known at run time, so form a queue, and copy it to
+            // the target, which checks its size (IEEE 1800-2023 7.6)
+            AstConsQueue* const consp = new AstConsQueue{nodep->fileline()};
+            consp->dtypep(queueDTypeIndexedBy(arrayDtp->subDTypep()));
+            for (const auto& item : items) addConsItem(consp, item.first);
+            nodep->replaceWith(new AstCvtQueueToUnpack{nodep->fileline(), consp, arrayDtp});
+            return;
+        }
+        const VNumRange range = arrayDtp->declRange();
+        const int elements = range.elements();
+        AstConsArray* const newp = new AstConsArray{nodep->fileline(), arrayDtp};
+        int entn = 0;  // Number of elements given so far, from the left
+        for (const auto& item : items) {
+            const uint64_t index = range.ascending() ? entn : elements - 1 - entn;
+            if (const AstUnpackArrayDType* const spliceDtp
+                = VN_CAST(item.second, UnpackArrayDType)) {
+                entn += spliceDtp->elementsConst();
+                newp->spliceValues(index, item.first);
+            } else {
+                newp->valuep(index, item.first);
+                ++entn;
+            }
         }
         if (!error && entn != elements) {
             nodep->v3error("Unpacked array concatenation has "
