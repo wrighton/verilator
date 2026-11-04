@@ -40,7 +40,7 @@ runs = [
     ('garbage_assume', 1, 16),  # a bare word in place of the unsat assumptions
     ('garbage_model', 1, 15),  # half-valid model must not reach the variables
     ('garbage_status', 2, 15),  # a word that is not a status
-    ('garbage_status', 8, 15),  # a phased check-sat that does not answer with a status
+    ('garbage_status', 7, 15),  # a phased check-sat that does not answer with a status
     ('high_digit', 1, 15),  # a digit legal for some base but not the stated one
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter

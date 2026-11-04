@@ -1507,21 +1507,40 @@ void VlRandomizer::solveDiversityXor(VlRNG& rngr, VlSolverSession& sess)
 
 // Re-add softs highest-priority first, dropping incompatible ones.
 void VlRandomizer::relaxSoftConstraints(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
-    if (m_softConstraints.empty()) return;
+    // A soft is kept when it fits the hard constraints and the higher-priority softs kept
+    // so far; the last soft has the highest priority. A chunk of softs that fits together
+    // is kept as a whole, as each would be on its own. A chunk that conflicts is halved
+    // until the dropped soft is found alone (once its first half fits, the rest conflicts
+    // without a check), and chunks grow again while they fit. So a few dropped softs among
+    // n cost O(log n) checks each, rather than one check per soft; when most softs are
+    // dropped, it takes up to about 1.5 checks per soft.
     std::iostream& os = sess.os();
-    os << "(push 1)\n";
-    for (const auto& s : m_softConstraints) os << "(assert (= #b1 " << s << "))\n";
-    os << "(check-sat)\n";
-    const VlSolverStatus status = sess.readStatus();
-    if (status == VlSolverStatus::SAT || status == VlSolverStatus::FAIL) return;
-    os << "(pop 1)\n";
-    for (auto it = m_softConstraints.rbegin(); it != m_softConstraints.rend(); ++it) {
-        os << "(push 1)\n";
-        os << "(assert (= #b1 " << *it << "))\n";
-        os << "(check-sat)\n";
-        const VlSolverStatus probe = sess.readStatus();
-        if (probe == VlSolverStatus::FAIL) return;
-        if (probe != VlSolverStatus::SAT) os << "(pop 1)\n";
+    const size_t nsofts = m_softConstraints.size();
+    size_t chunk = nsofts;  // First try all of them
+    size_t conflictEnd = 0;  // End of the last conflicting chunk, whose rest still conflicts
+    for (size_t done = 0; done < nsofts;) {
+        chunk = std::min(chunk, nsofts - done);
+        if (done + chunk != conflictEnd) {
+            os << "(push 1)\n";
+            for (size_t i = done; i < done + chunk; ++i) {
+                os << "(assert (= #b1 " << m_softConstraints[nsofts - 1 - i] << "))\n";
+            }
+            os << "(check-sat)\n";
+            const VlSolverStatus status = sess.readStatus();
+            if (status == VlSolverStatus::FAIL) return;
+            if (status == VlSolverStatus::SAT) {
+                done += chunk;
+                chunk = done < conflictEnd ? conflictEnd - done : chunk * 2;
+                continue;
+            }
+            os << "(pop 1)\n";
+            conflictEnd = done + chunk;
+        }
+        if (chunk == 1) {
+            ++done;  // Dropped
+        } else {
+            chunk /= 2;
+        }
     }
 }
 
