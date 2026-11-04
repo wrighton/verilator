@@ -42,6 +42,53 @@ class RandDynIndexCastTest;
   }
 endclass
 
+// Indices of other widths than the 32-bit index of a dynamic array or queue
+class RandDynIndexTest;
+  rand bit [1:0] uidx;
+  rand byte sidx;
+  rand longint widx;
+  rand int unsigned dyn[];
+  rand int unsigned q[$];
+  rand int unsigned uval, sval, wval;
+
+  constraint sizes {
+    dyn.size() == 3;
+    q.size() == 4;
+  }
+  constraint indices {
+    uidx < 3;
+    sidx inside {[0 : 3]};
+    widx inside {[0 : 2]};
+  }
+  constraint values {
+    foreach (dyn[i]) dyn[i] == 100 + i;
+    foreach (q[i]) q[i] == 200 + i;
+    uval == dyn[uidx];
+    sval == q[sidx];
+    wval == dyn[widx];
+  }
+endclass
+
+// An index out of range must not select an element: a negative index must not be zero extended,
+// nor a wide index truncated, into range
+class RandDynOobTest;
+  rand byte sidx;
+  rand longint widx;
+  rand int unsigned q[$];
+  rand int unsigned sval, wval;
+
+  constraint sizes {q.size() == 256;}
+  constraint values {
+    foreach (q[i]) q[i] == i + 1;
+    sidx == -1;
+    sval == q[sidx];
+    sval != 256;  // q[255]
+    widx == 64'h1_0000_0001;
+    wval == q[widx];
+    wval != 2;  // q[1]
+  }
+endclass
+
 module t;
   initial begin
     int randomize_result;
@@ -59,6 +106,21 @@ module t;
       `checkd(randomize_result, 1);
       `checkd(cobj.dyn_value, cobj.dyn[cobj.idx]);
       `checkd(cobj.q_value, cobj.q[cobj.idx]);
+    end
+    begin
+      static RandDynIndexTest dobj = new();
+      repeat (20) begin
+        randomize_result = dobj.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(dobj.uval, 100 + 32'(dobj.uidx));
+        `checkd(dobj.sval, 200 + 32'(dobj.sidx));
+        `checkd(dobj.wval, 100 + 32'(dobj.widx));
+      end
+    end
+    begin
+      static RandDynOobTest oobj = new();
+      randomize_result = oobj.randomize();
+      `checkd(randomize_result, 1);
     end
     $write("*-* All Finished *-*\n");
     $finish;
