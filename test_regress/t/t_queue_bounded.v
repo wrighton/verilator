@@ -178,6 +178,21 @@ module t;
       `checkd(bounded_size(bq1_t'({<<{src}})), 2);
     end
 
+    begin
+      // Streams of a bounded queue into a fixed-size array
+      int bq[$:3];
+      int fa[3];
+      bq = '{1, 2};
+      fa = {>>{bq}};
+      `checkd(fa[0], 1);
+      `checkd(fa[1], 2);
+      `checkd(fa[2], 0);
+      fa = {<<int{bq}};
+      `checkd(fa[0], 2);
+      `checkd(fa[1], 1);
+      `checkd(fa[2], 0);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
