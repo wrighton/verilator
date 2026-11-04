@@ -560,11 +560,11 @@ public:
     }
 
     void visit(AstCvtArrayToArray* nodep) override {
-        if (nodep->reverse()) {
-            puts("VL_REVCLONE_Q(");
-        } else {
-            puts("VL_CLONE_Q(");
-        }
+        puts(nodep->reverse() ? "VL_REVCLONE_Q" : "VL_CLONE_Q");
+        // A bounded queue result, see AstNodeDType::cTypeRecurse
+        const AstQueueDType* const qdtypep = VN_CAST(nodep->dtypep()->skipRefp(), QueueDType);
+        if (qdtypep && qdtypep->boundp()) puts("<" + cvtToStr(qdtypep->boundConst() + 1) + ">");
+        puts("(");
         iterateAndNextConstNull(nodep->fromp());
         puts(", ");
         puts(cvtToStr(nodep->blockSize()));
