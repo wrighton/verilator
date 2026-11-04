@@ -1530,10 +1530,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (varp->user4p()) {
             bool isSizeRef = false;
             if (AstCMethodHard* const methodp = VN_CAST(nodep->backp(), CMethodHard)) {
-                if (methodp->method() == VCMethod::ASSOC_SIZE
-                    || methodp->method() == VCMethod::DYN_SIZE) {
-                    isSizeRef = true;
-                }
+                if (methodp->method() == VCMethod::DYN_SIZE) isSizeRef = true;
             }
             if (!isSizeRef && m_sizeConstrainedArraysp) { m_sizeConstrainedArraysp->insert(varp); }
         }
@@ -3863,7 +3860,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         clearp->dtypeSetVoid();
         return clearp->makeStmt();
     }
-    // Get or create a size variable for a constrained dynamic/queue/assoc array.
+    // Get or create a size variable for a constrained dynamic array or queue.
     AstVar* createOrGetSizeVar(AstVar* const arrVarp, FileLine* const fl,
                                AstNodeDType* const signed32DTypep) {
         AstVar* sizeVarp = VN_CAST(arrVarp->user4p(), Var);
@@ -4591,11 +4588,8 @@ class SolverSmtLowering final : public V3SolverLowering {
     AstAssign* newSizeVarAssign(FileLine* const fl, AstVar* const arrVarp,
                                 const AstMemberRef* const mselp = nullptr) const {
         AstVar* const sizeVarp = sizeVarOf(arrVarp, mselp);
-        const VCMethod sizeMethod = VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)
-                                        ? VCMethod::ASSOC_SIZE
-                                        : VCMethod::DYN_SIZE;
         AstCMethodHard* const currentSizep = new AstCMethodHard{
-            fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::READ), sizeMethod};
+            fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::READ), VCMethod::DYN_SIZE};
         currentSizep->dtypep(sizeVarp->dtypep());
         return new AstAssign{fl, newSiblingRefp(fl, sizeVarp, mselp, VAccess::WRITE),
                              currentSizep};
@@ -4852,9 +4846,10 @@ public:
                                AstCMethodHard* nodep) override {
         // Replace '.size()' of a constrained array with a solver size variable
         FileLine* const fl = nodep->fileline();
+        // The size of an associative array is not random (IEEE 1800-2023 18.4), so it stays
+        // a state value
         if (nodep->fromp()->user1() && !SmtUtil::isSolveBeforeItem(nodep)
-            && (nodep->method() == VCMethod::ASSOC_SIZE
-                || nodep->method() == VCMethod::DYN_SIZE)) {
+            && nodep->method() == VCMethod::DYN_SIZE) {
             AstClass* const classp = VN_AS(modp, Class);
             // The array is a member of this class, or of a rand member object (global
             // constraints, IEEE 1800-2023 18.5.8) reached through a member select chain
@@ -4866,8 +4861,6 @@ public:
             if (!VN_IS(rootp, VarRef)) return;
             AstVar* const queueVarp
                 = memberSelp ? memberSelp->varp() : VN_AS(arrayp, VarRef)->varp();
-            // The size of an associative array is not randomized (IEEE 1800-2023 18.4)
-            if (memberSelp && VN_IS(queueVarp->dtypep()->skipRefp(), AssocArrayDType)) return;
             AstVar* const sizeVarp
                 = memberSelp ? createOrGetMemberSizeVar(queueVarp, fl, nodep->findIntDType())
                              : createOrGetSizeVar(queueVarp, fl, nodep->findIntDType());
@@ -4879,19 +4872,15 @@ public:
             // Each constraint sizing the array resizes it and guards its size, so
             // constraint_mode(0) leaves the array unchanged only when all are off
             if (m_constraintSizedArrays[constrp].insert(buildMemberPath(arrayp)).second) {
-                // Associative arrays have no resize(); only generate resize
-                // for dynamic arrays and queues
-                if (!VN_IS(queueVarp->dtypep()->skipRefp(), AssocArrayDType)) {
-                    AstTask* resizerTaskp = VN_AS(constrp->user3p(), Task);
-                    if (!resizerTaskp) {
-                        resizerTaskp = newResizeConstrainedArrayTask(classp, constrp->name());
-                        constrp->user3p(resizerTaskp);
-                    }
-                    AstCMethodHard* const resizep = new AstCMethodHard{
-                        fl, arrayp->unlinkFrBack(), VCMethod::DYN_RESIZE, newSizeRefp()};
-                    resizep->dtypep(nodep->findVoidDType());
-                    resizerTaskp->addStmtsp(new AstStmtExpr{fl, resizep});
+                AstTask* resizerTaskp = VN_AS(constrp->user3p(), Task);
+                if (!resizerTaskp) {
+                    resizerTaskp = newResizeConstrainedArrayTask(classp, constrp->name());
+                    constrp->user3p(resizerTaskp);
                 }
+                AstCMethodHard* const resizep = new AstCMethodHard{
+                    fl, arrayp->unlinkFrBack(), VCMethod::DYN_RESIZE, newSizeRefp()};
+                resizep->dtypep(nodep->findVoidDType());
+                resizerTaskp->addStmtsp(new AstStmtExpr{fl, resizep});
 
                 // Since size variable is signed int, we need additional constraint
                 // to make sure it is always >= 0.
@@ -5174,7 +5163,7 @@ public:
             }
         }
 
-        // Pre-scan captured tree for .size on dynamic/assoc arrays and replace
+        // Pre-scan captured tree for .size on dynamic arrays and queues and replace
         // with size variables, using shared createOrGetSizeVar helper.
         // After CaptureVisitor, fromp() of .size is AstMemberRef (not VarRef),
         // so extract the underlying variable from the MemberRef chain.
@@ -5190,8 +5179,8 @@ public:
         {
             std::vector<AstCMethodHard*> sizeMethodps;
             capturedTreep->foreachAndNext([&](AstCMethodHard* methodp) {
-                if ((methodp->method() == VCMethod::DYN_SIZE
-                     || methodp->method() == VCMethod::ASSOC_SIZE)
+                // Not of an associative array, whose size is not random (IEEE 1800-2023 18.4)
+                if (methodp->method() == VCMethod::DYN_SIZE
                     && !SmtUtil::isSolveBeforeItem(methodp)) {
                     sizeMethodps.push_back(methodp);
                 }
@@ -5220,10 +5209,8 @@ public:
                     arrVarp = varRefp->varp();
                 }
                 if (!arrVarp) continue;
-                // Only handle rand-declared dynamic/assoc array variables
+                // Only handle rand-declared dynamic array and queue variables
                 if (!arrVarp->rand().isRandomizable()) continue;
-                // Do not randomize associative array size (IEEE 18.4)
-                if (VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)) continue;
                 FileLine* const fl = methodp->fileline();
                 // An array of a rand member object has the size variable of the class
                 // constraints reaching it, and is resized by each with-block sizing it.
