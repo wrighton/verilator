@@ -29,6 +29,8 @@ interface Ifc;
   real r[$];
   Cls c[$];
   s_t st[int];
+  event ed[];
+  event eq[$];
 endinterface
 
 interface Out;
@@ -40,6 +42,7 @@ interface Out;
   real rfirst;
   int cfirst;
   int stfirst;
+  int edsize;
 endinterface
 
 module t;
@@ -58,6 +61,7 @@ module t;
   assign o.rfirst = i.r.size() > 0 ? i.r[0] : -1.0;
   assign o.cfirst = i.c.size() > 0 && i.c[0] != null ? i.c[0].x : -1;
   assign o.stfirst = i.st.exists(1) ? i.st[1].a : -1;
+  assign o.edsize = i.ed.size();
 
   initial begin
     vif = i;
@@ -109,6 +113,17 @@ module t;
     vif.st[1] = '{a: 11};
     #1;
     `checkd(vo.stfirst, 11);
+    vif.ed = new[2];
+    #1;
+    `checkd(vo.edsize, 2);
+    begin
+      // Needs a trigger once a method call is a write of the member
+      event e;
+      vif.eq.push_back(e);
+      vif.eq.push_back(e);
+      vif.eq.delete(0);
+      `checkd(i.eq.size(), 1);
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
