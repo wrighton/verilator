@@ -117,10 +117,18 @@ public:
 
 class RandomizeUtil final {
 public:
-    // Offset of the element at declared index idxp of array arrVarp, as selects and the solver
+    // Look through unpacked array dimensions to the element type
+    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
+    // Offset of the element at declared index idxp of array arrDtp, as selects and the solver
     // use
-    static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstVar* arrVarp,
+    static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstNodeDType* arrDtp,
                                        AstNodeExpr* idxp) VL_MT_DISABLED;
+    // Element of array arrp at declared index idxVarp
+    static AstNodeExpr* newIdxSelp(FileLine* fl, AstNodeExpr* arrp,
+                                   AstVar* idxVarp) VL_MT_DISABLED;
+    // Element of array arrp at the declared indices idxVarps, one for each dimension
+    static AstNodeExpr* newElemSelp(FileLine* fl, AstNodeExpr* arrp,
+                                    const std::vector<AstVar*>& idxVarps) VL_MT_DISABLED;
     // Whether varp is an unpacked array of class handles
     static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
     // Whether the array element at indexp has rand_mode off, given the array's modesp
