@@ -95,6 +95,22 @@ class StructCons;
   constraint c_vc {vc inside {arr[idx].q};}
 endclass
 
+// Members reached through handles that are null in some elements
+class Leaf;
+  int f;
+endclass
+
+class Node;
+  Leaf leaf;
+  Leaf leaves[2];
+endclass
+
+class Walker;
+  rand int idx;
+  Node nodes[$];
+  constraint c_idx {idx inside {[0 : 2]};}
+endclass
+
 module t;
   // Repro: queue member of a struct in a fixed array of a member object
   task automatic check_repro();
@@ -336,8 +352,38 @@ module t;
     for (int pos = 0; pos < 3; ++pos) `checkd(pick_item(pos), pos)
   endtask
 
+  task automatic check_nested_null();
+    Walker w = new;
+    int randomize_result;
+    repeat (3) begin
+      Node node = new;
+      w.nodes.push_back(node);
+    end
+    w.nodes[1].leaf = new;
+    w.nodes[1].leaf.f = 3;
+    w.nodes[2].leaf = new;
+    w.nodes[2].leaf.f = 5;
+    w.nodes[0].leaves[1] = new;
+    w.nodes[0].leaves[1].f = 7;
+    w.nodes[2].leaves[1] = new;
+    w.nodes[2].leaves[1].f = 9;
+    repeat (10) begin
+      randomize_result = w.randomize() with {nodes[idx].leaf.f == 3;};
+      `checkd(randomize_result, 1)
+      `checkd(w.idx, 1)
+      randomize_result = w.randomize() with {nodes[idx].leaves[1].f == 7;};
+      `checkd(randomize_result, 1)
+      `checkd(w.idx, 0)
+      // nodes[0].leaf is null, so its element reads as zero
+      randomize_result = w.randomize() with {nodes[idx].leaf.f != 3; nodes[idx].leaf.f != 5;};
+      `checkd(randomize_result, 1)
+      `checkd(w.idx, 0)
+    end
+  endtask
+
   initial begin
     check_repro();
+    check_nested_null();
     check_struct_cons();
     check_holder();
     check_std_randomize();
