@@ -163,14 +163,14 @@ package std;
 `endif
     endtask
 
-    static task killQueue(ref process processQueue[$]);
+    static function void killQueue(ref process processQueue[$]);
 `ifdef VERILATOR_TIMING
       repeat (processQueue.size()) begin
         process p = processQueue.pop_front();
         if (p) p.kill();
       end
 `endif
-    endtask
+    endfunction
 
     // verilog_format: off
 `ifdef VERILATOR_TIMING
