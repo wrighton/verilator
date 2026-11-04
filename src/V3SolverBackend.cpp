@@ -162,6 +162,9 @@ AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
         if (AstArraySel* const arraySelp = VN_CAST(curp, ArraySel)) {
             fromp = arraySelp->fromp();
             indexp = arraySelp->bitp();
+        } else if (AstAssocSel* const assocSelp = VN_CAST(curp, AssocSel)) {
+            fromp = assocSelp->fromp();
+            indexp = assocSelp->bitp();
         } else if (AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
             fromp = methodp->fromp();
             if (methodp->method() == VCMethod::ARRAY_AT) indexp = methodp->pinsp();
