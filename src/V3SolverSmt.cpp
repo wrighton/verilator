@@ -77,7 +77,7 @@ static bool isRandIndex(const AstNodeExpr* indexp) {
 
 // Return the index of an array element select
 static AstNodeExpr* selIndexp(AstNode* selp) {
-    if (AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) return arraySelp->bitp();
+    if (AstNodeSel* const nodeSelp = VN_CAST(selp, NodeSel)) return nodeSelp->bitp();
     return VN_AS(selp, CMethodHard)->pinsp();
 }
 
@@ -878,32 +878,44 @@ class ConstraintExprVisitor final : public VNVisitor {
         return formatp;
     }
 
-    // Return a random array index widened to the 32-bit index sort of SMT arrays
-    static AstNodeExpr* newSmtIndexp(AstNodeExpr* indexp, bool isSigned) {
-        if (indexp->width() >= 32) return indexp;
+    // Return a random array index widened to the index sort of SMT arrays
+    static AstNodeExpr* newSmtIndexp(AstNodeExpr* indexp, bool isSigned, int sortWidth = 32) {
+        if (indexp->width() >= sortWidth) return indexp;
         AstNodeExpr* extendp;
         if (isSigned) {
-            extendp = new AstExtendS{indexp->fileline(), indexp, 32};
+            extendp = new AstExtendS{indexp->fileline(), indexp, sortWidth};
         } else {
-            extendp = new AstExtend{indexp->fileline(), indexp, 32};
+            extendp = new AstExtend{indexp->fileline(), indexp, sortWidth};
         }
         extendp->user1(true);
         return extendp;
+    }
+    // Width of the SMT index sort of the array selp selects from
+    static int smtIndexWidth(AstNode* selp) {
+        if (const AstAssocSel* const assocSelp = VN_CAST(selp, AssocSel)) {
+            const AstNodeDType* const dtypep = assocSelp->fromp()->dtypep()->skipRefp();
+            return keySmtWidth(VN_AS(dtypep, AssocArrayDType)->keyDTypep()->skipRefp());
+        }
+        return std::max(32, selIndexp(selp)->width());
     }
     // Return an SMT array of the value of exprp at each element of the array selp selects
     AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp) {
         // Element i is exprp with the random index of selp replaced by i, so it may read
         // members of the array element and depend on other random variables. Elements that do
         // not exist read as zero, the default value of a 2-state type (IEEE 1800-2023 7.4.6),
-        // which also makes 'inside' a member array of a nonexistent element false. The index
+        // which also makes 'inside' a member array of a nonexistent element false, or in an
+        // associative array as its default element (7.8.6, 7.9.11). The index
         // of a fixed-size array was already truncated to the width that addresses the array,
         // as in other expressions.
         FileLine* const fl = selp->fileline();
-        AstNodeExpr* const arrayp = VN_IS(selp, ArraySel) ? VN_AS(selp, ArraySel)->fromp()
-                                                          : VN_AS(selp, CMethodHard)->fromp();
-        const int idxWidth = std::max(32, selIndexp(selp)->width());
+        AstNodeExpr* const arrayp = VN_IS(selp, CMethodHard) ? VN_AS(selp, CMethodHard)->fromp()
+                                                             : VN_AS(selp, NodeSel)->fromp();
+        const int idxWidth = smtIndexWidth(selp);
+        const AstAssocArrayDType* const assocDtp
+            = VN_CAST(arrayp->dtypep()->skipRefp(), AssocArrayDType);
         AstVar* const idxVarp
-            = new AstVar{fl, VVarType::BLOCKTEMP, "__VarrIdx", arrayp->findIntDType()};
+            = new AstVar{fl, VVarType::BLOCKTEMP, "__VarrIdx",
+                         assocDtp ? assocDtp->keyDTypep() : arrayp->findIntDType()};
         AstForeachHeader* const headerp
             = new AstForeachHeader{fl, arrayp->cloneTreePure(false), idxVarp};
         // Key is the offset from the low bound, as in ArraySel
@@ -937,18 +949,38 @@ class ConstraintExprVisitor final : public VNVisitor {
         const int width = exprp->width();
         AstCStmt* const cstmtp = new AstCStmt{fl};
         cstmtp->add("ret = \"(store \" + ret + \" \" + ");
-        cstmtp->add(getConstFormat(idxWidth > 32 ? new AstExtend{fl, posp, idxWidth} : posp));
+        cstmtp->add(
+            getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp));
         cstmtp->add(" + \" \" + ");
         cstmtp->add(iterateSubtreeReturnEdits(elemp));
         cstmtp->add(" + \")\";\n");
         AstCExpr* const cexprp = new AstCExpr{fl};
         cexprp->dtypeSetString();
-        const std::string zero
-            = (width & 3) ? "#b" + std::string(width, '0') : "#x" + std::string(width / 4, '0');
+        const bool handleElem = VN_IS(handlep->dtypep()->skipRefp(), ClassRefDType);
+        AstNodeExpr* defaultp;  // Value of an element that does not exist
+        if (assocDtp && !handleElem) {
+            // exprp with the element selp replaced by the default element
+            defaultp = exprp->cloneTreePure(false);
+            AstNode* const defaultSelp = selp->clonep();
+            AstCExpr* const atDefaultp = new AstCExpr{fl};
+            atDefaultp->add(arrayp->cloneTreePure(false));
+            atDefaultp->add(".atDefault()");
+            atDefaultp->dtypeFrom(selp);
+            if (defaultSelp == defaultp) {
+                defaultp = atDefaultp;
+            } else {
+                defaultSelp->replaceWith(atDefaultp);
+            }
+            VL_DO_DANGLING(defaultSelp->deleteTree(), defaultSelp);
+        } else {
+            defaultp = new AstConst{fl, AstConst::WidthedValue{}, width, 0};
+        }
         cexprp->add("([&]{\nstd::string ret = \"((as const (Array (_ BitVec " + cvtToStr(idxWidth)
-                    + ") (_ BitVec " + cvtToStr(width) + "))) " + zero + ")\";\n");
+                    + ") (_ BitVec " + cvtToStr(width) + "))) \" + ");
+        cexprp->add(getConstFormat(defaultp));
+        cexprp->add(" + \")\";\n");
         AstNodeStmt* bodyp = cstmtp;
-        if (VN_IS(handlep->dtypep()->skipRefp(), ClassRefDType)) {
+        if (handleElem) {
             // A null handle has no members; its element reads as zero like a nonexistent one
             AstNeq* const nonNullp = new AstNeq{fl, handlep, new AstConst{fl, AstConst::Null{}}};
             nonNullp->dtypeSetBit();
@@ -967,10 +999,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const selp = RandomizeUtil::randIndexSelp(nodep, isRandIndex);
         if (!selp) return false;
         AstSFormatF* const arrayp = newIndexedArrayp(nodep, selp);
+        const int sortWidth = smtIndexWidth(selp);
         AstNodeExpr* const indexp = selIndexp(selp)->unlinkFrBack();
         // The offset into a fixed-size array is unsigned, even when computed as signed
         AstNodeExpr* const smtIndexp
-            = newSmtIndexp(indexp, VN_IS(selp, CMethodHard) && indexp->isSigned());
+            = newSmtIndexp(indexp, VN_IS(selp, CMethodHard) && indexp->isSigned(), sortWidth);
         nodep->replaceWith(createSolverArrDerefp(
             nodep->fileline(), arrayp, VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr)));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -2032,8 +2065,6 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstAssocSel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
-        // Keep a pre-edit clone for the rand_mode hoist below.
-        AstNodeExpr* const origp = nodep->cloneTree(false);
         AstNodeExpr* const bitp = nodep->bitp();
         const AstNodeDType* const keyDtp = bitp->dtypep()->skipRefp();
         const bool keyIsPackedString = VN_IS(bitp, CvtPackString);
@@ -2042,17 +2073,18 @@ class ConstraintExprVisitor final : public VNVisitor {
         const bool elemMemberRef = VN_IS(nodep->backp(), MemberRef);
         AstAssocArrayDType* const assocDtp
             = VN_AS(nodep->fromp()->dtypep()->skipRefp(), AssocArrayDType);
-        const bool keyIsRand = keyIsIntegral && bitp->exists([](const AstNodeVarRef* const vrefp) {
-            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
-        });
+        const bool keyIsRand = keyIsIntegral && isRandIndex(bitp);
         if (keyIsRand && !nodep->fromp()->user1()) {
-            nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported: Randomized key into a non-random associative array");
+            // Not an integral value, which editFormat reads through editStateArraySel
+            unsupportedStateArraySel(nodep);
+            return;
         } else if (keyIsRand && !assocDtp->subDTypep()->skipRefp()->isIntegralOrPacked()) {
             // Such elements, or their members, are solver variables named by the key's value
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: Randomized key into an associative array "
                                          "of non-integral elements");
         }
+        // Keep a pre-edit clone for the rand_mode hoist below.
+        AstNodeExpr* const origp = nodep->cloneTree(false);
         if (VN_IS(assocDtp->subDTypep()->skipRefp(), ClassRefDType)
             && (keyIsString || keyIsPackedString || keyIsIntegral) && !elemMemberRef) {
             AstNodeExpr* const arrayp = nodep->fromp()->unlinkFrBack();
