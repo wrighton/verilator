@@ -40,6 +40,8 @@ module t;
   always @(posedge clk) begin
     automatic logic [99:0] widx = 100'(idx) << 64;
     automatic logic signed [2:0] sidx = 3'(idx - 4);
+    automatic bit [31:0] uidx = 32'hffff_fffe + 32'(idx);
+    automatic bit [39:0] uidx40 = 40'hff_ffff_fffe + 40'(idx);
     `checkh(arr8[idx + 9], 0);
     `checkh(arr8[8'(idx + 8)], 0);
     `checkh(arr8[64'(idx) + 64'h1_0000_0000], 0);
@@ -53,12 +55,20 @@ module t;
     wr8[widx + 100'(idx)] = 2;
     // verilator lint_off SELRANGE
     wr8[64'h1_0000_0000] = 3;
+    `checkh(an[32'hffff_ffff], 0);
+    `checkh(an[32'hffff_fffe], 0);
     `checkh(an[64'h1_0000_0000], 0);
     `checkh(an[3'd7], 0);
     // verilator lint_on SELRANGE
     `checkh(a12[3'd7], 7);
     `checkh(an[65'sd3], 103);
     `checkh(arr8[3'bx01], 15);  // X is 1 with --x-assign 1
+    // Adding the offset of the low bound -2 must not wrap these to a valid element
+    `checkh(an[uidx], idx >= 2 ? 98 + idx : 0);
+    `checkh(an[uidx40], idx >= 2 ? 98 + idx : 0);
+    if (idx < 2) an[uidx] = 1;
+    `checkh(an[-2], 98);
+    `checkh(an[-1], 99);
     `checkh(an[-64'sd1], 99);
     `checkh(wr8[idx], idx == 0 ? 2 : 0);
   end
