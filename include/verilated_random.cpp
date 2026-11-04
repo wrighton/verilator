@@ -578,6 +578,7 @@ class VlSolverSession final {
     State m_state VL_GUARDED_BY(m_mutex) = State::UNSTARTED;
     int m_consecFails VL_GUARDED_BY(m_mutex) = 0;  // Failed transactions in a row
     bool m_dirty VL_GUARDED_BY(m_mutex) = false;  // Transaction left the pipe out of step
+    bool m_stale VL_GUARDED_BY(m_mutex) = false;  // Replies of later commands may be queued
     std::string m_program VL_GUARDED_BY(m_mutex);  // Storage backing m_argv
     std::vector<const char*> m_argv VL_GUARDED_BY(m_mutex);  // Solver argv
     bool m_warnedRestart VL_GUARDED_BY(m_mutex) = false;
@@ -587,9 +588,16 @@ public:
     // The pipe may hold bytes of an abandoned reply, so replace the solver
     void abandon() VL_REQUIRES(m_mutex) { m_dirty = true; }
 
-    // A status the runtime cannot use fails the call, but the reply itself was
-    // complete, so the solver is left alone
-    VlSolverStatus readStatus() VL_REQUIRES(m_mutex) { return ::readStatus(m_proc); }
+    // Read a check-sat status; once one fails, so does every later read
+    VlSolverStatus readStatus() VL_REQUIRES(m_mutex) {
+        // A status the runtime cannot use fails the call. It may be the error
+        // reply to an earlier command of the batch, so the replies of the later
+        // commands are still queued; they are skipped when the transaction ends.
+        if (m_stale) return VlSolverStatus::FAIL;
+        const VlSolverStatus status = ::readStatus(m_proc);
+        m_stale = status == VlSolverStatus::FAIL;
+        return status;
+    }
     // An unreadable reply means text of it may still be queued, so it is not
     // safe to read anything more from this solver
     bool readSExpr(std::string& outr) VL_REQUIRES(m_mutex) {
@@ -619,7 +627,7 @@ public:
 
     // End a transaction; a solver left out of step or dead is replaced next time
     void end() VL_REQUIRES(m_mutex) {
-        bool healthy = !m_dirty && !m_proc.fail();
+        bool healthy = !m_dirty && !m_proc.fail() && (!m_stale || resync());
         if (healthy) {
             m_proc << "(reset)\n";
             m_proc.flush();
@@ -633,9 +641,20 @@ public:
             ++m_consecFails;
         }
         m_dirty = false;
+        m_stale = false;
     }
 
 private:
+    // Skip queued replies up to an echoed marker; false if the solver went away
+    bool resync() VL_REQUIRES(m_mutex) {
+        m_proc << "(echo \"vl_resync\")\n";
+        std::string line;
+        // z3 prints the echoed string without quotes, the SMT-LIB 2.6 response with them; the
+        // replies queued before it answer earlier commands, so cannot contain it
+        while (readLine(m_proc, line) && line.find("vl_resync") == std::string::npos) {}
+        return !m_proc.fail();
+    }
+
     // A solver that will not start is not started again
     void spawn() VL_REQUIRES(m_mutex) {
         if (m_argv.empty()) {
