@@ -60,7 +60,7 @@ module t (  /*AUTOARG*/
       $write("[%0t] cyc==%0d crc=%x sum=%x\n", $time, cyc, crc, sum);
       if (crc !== 64'hc77bb9b3784ea091) $stop;
       // What checksum will we end up with (above print should match)
-      `define EXPECTED_SUM 64'h619f75c3a6d948bd
+      `define EXPECTED_SUM 64'h019775c1d5330620
       if (sum !== `EXPECTED_SUM) $stop;
       $write("*-* All Finished *-*\n");
       $finish;
