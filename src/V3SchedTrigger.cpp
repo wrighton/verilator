@@ -428,14 +428,15 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
                                                 << dtypep->prettyDTypeNameQ() << " type");
             return;
         }
-    } else if (elemDtp != dtypep
-                   ? elemDtp->isEvent()
-                   : (!VN_IS(dtypep, PackArrayDType) && !VN_IS(dtypep, UnpackArrayDType)
-                      && !VN_IS(dtypep, NodeUOrStructDType) && !VN_IS(dtypep, ClassRefDType))) {
+    } else if (elemDtp == dtypep && !VN_IS(dtypep, PackArrayDType)
+               && !VN_IS(dtypep, UnpackArrayDType) && !VN_IS(dtypep, NodeUOrStructDType)
+               && !VN_IS(dtypep, ClassRefDType)) {
         instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
                                             << dtypep->prettyDTypeNameQ() << " type");
         return;
     }
+    // Events in a container are compared as handles, so must be assignable (shared) events
+    if (elemDtp->isEvent()) v3Global.setAssignsEvents();
 
     const auto rdInst = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::READ}; };
     const auto wrPrev = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::WRITE}; };
