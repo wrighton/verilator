@@ -6985,6 +6985,11 @@ sexpr<nodeExprp>:  // ==IEEE: sequence_expr  (The name sexpr is important as reg
         //                      // '(' sequence_expr {',' sequence_match_item } ')' [ boolean_abbrev ]
         //                      // "'(' sexpr ')' boolean_abbrev" matches "[sexpr:'(' expr ')'] boolean_abbrev" so we can drop it
         |       '(' ~p~sexpr ')'                        { $$ = $2; }
+        //                      // IEEE: '(' sequence_expr ')' with sequence_expr ::= clocking_event sequence_expr
+        //                      // and through the pexpr copy, the same for property_expr
+        //                      // Clocking event as supported by property_spec
+        |       '(' '@' '(' senitem ')' ~p~sexpr ')'    { $$ = new AstSClocked{$<fl>2, $4, $6}; }
+        |       '(' '@' senitemVar ~p~sexpr ')'         { $$ = new AstSClocked{$<fl>2, $3, $4}; }
         |       '(' ~p~sexpr ',' sequence_match_itemList ')'
                         { $$ = new AstExprStmt{$3, $4, $2}; }
         //

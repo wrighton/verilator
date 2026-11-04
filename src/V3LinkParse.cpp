@@ -1150,6 +1150,19 @@ class LinkParseVisitor final : public VNVisitor {
             VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
         }
     }
+    void visit(AstPropSpec* nodep) override {
+        cleanFileline(nodep);
+        // A parenthesized clocking event leading the property, '(' clocking_event property_expr
+        // ')' (IEEE 1800-2023 16.12), clocks the property as if not parenthesized
+        if (!nodep->sensesp()) {
+            if (AstSClocked* const clockedp = VN_CAST(nodep->propp(), SClocked)) {
+                nodep->sensesp(clockedp->sensesp()->unlinkFrBackWithNext());
+                clockedp->replaceWith(clockedp->exprp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(clockedp), clockedp);
+            }
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstClocking* nodep) override {
         cleanFileline(nodep);
         VL_RESTORER(m_defaultInSkewp);
