@@ -32,6 +32,7 @@ module t;
   int arr10[10] = '{20, 21, 22, 23, 24, 25, 26, 27, 28, 29};
   int wr8[8];
   int an[-2:5] = '{98, 99, 100, 101, 102, 103, 104, 105};
+  int a12[-4:7] = '{-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7};
   localparam int TBL[4] = '{1, 2, 3, 4};
   localparam int IDX5 = 5;
   localparam longint IDX_WIDE = 64'h1_0000_0001;
@@ -51,6 +52,17 @@ module t;
     `checkh(arr8[idx[1:0]], 10 + (idx & 3));  // A narrower index is extended
     wr8[idx + 8] = 1;
     wr8[widx + 100'(idx)] = 2;
+    // verilator lint_off SELRANGE
+    wr8[64'h1_0000_0000] = 3;
+    `checkh(an[64'h1_0000_0000], 0);
+    `checkh(an[3'd7], 0);
+    // verilator lint_on SELRANGE
+    `checkh(a12[3'd7], 7);
+    `checkh(an[65'sd3], 103);
+    // verilator lint_off SELRANGE
+    `checkh(arr8[3'bx01], 15);  // X is 1 with --x-assign 1
+    // verilator lint_on SELRANGE
+    `checkh(an[-64'sd1], 99);
     `checkh(wr8[idx], idx == 0 ? 2 : 0);
   end
 
@@ -90,6 +102,25 @@ module t;
     amin[imin - 1] = 8;
     `checkh(amin[-2147483648], 5);
     `checkh(amin[-2147483647], 7);
+  end
+
+  // A constant index wider than 32 bits into a range with a negative low bound
+  bit [3:-4] nv = 8'b1010_0110;
+  int na[-2:2] = '{10, 11, 12, 13, 14};
+  bit [7:-8] nw = 16'ha5c3;
+  initial begin
+    `checkh(nv[64'sd2], 1'b0);
+    `checkh(nv[64'sd1], 1'b1);
+    `checkh(na[64'sd0], 12);
+    `checkh(nw[64'sd0+:4], 4'h5);
+    `checkh(nw[64'sd3-:4], 4'h5);
+    `checkh(nw[64'sd7-:4], 4'ha);
+    na[64'sd1] = 21;
+    `checkh(na[1], 21);
+    nw[64'sd3-:4] = 4'h9;
+    `checkh(nw, 16'ha9c3);
+    nv[64'sd1] = 1'b0;
+    `checkh(nv, 8'b1000_0110);
   end
   // verilator lint_on WIDTH
 endmodule
