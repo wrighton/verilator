@@ -4268,6 +4268,9 @@ public:
                 AstNodeExpr* const rootExprp = methodp->fromp();
                 if (AstMemberRef* memberRefp = VN_CAST(rootExprp, MemberRef)) {
                     arrVarp = memberRefp->varp();
+                    // A non-random array is not randomized however it is reached (IEEE
+                    // 1800-2023 18.4), so its size is a state value
+                    if (!arrVarp->rand().isRandomizable()) continue;
                     while (VN_IS(memberRefp->fromp(), MemberRef)) {
                         memberRefp = VN_CAST(memberRefp->fromp(), MemberRef);
                     }
