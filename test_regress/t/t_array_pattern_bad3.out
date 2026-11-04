@@ -101,4 +101,10 @@
                                       : ... note: In instance 't'
    46 |       all_addrs = '{base_addrs[0:N-1], 32'hAA, 32'hBB};   
       |                   ^~
+%Error: t/t_array_pattern_bad3.v:50:15: Assignment pattern member is an array of the elements, not an element (IEEE 1800-2023 10.9.1)
+                                      : ... Element data type: 'int'
+                                      : ... Pattern member data type: 'int$[$]'
+                                      : ... Suggest use an unpacked array concatenation {...} to splice arrays
+   50 |       arr = '{q, '0, '1};   
+      |               ^
 %Error: Exiting due to
