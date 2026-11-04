@@ -60,6 +60,32 @@ static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
 
 using ActiveSet = std::unordered_set<const AstClass*>;
 
+// Check if two expressions select the same data, however their variables are referenced
+static bool sameSelection(const AstNode* ap, const AstNode* bp, bool withNext = false) {
+    // Not sameTree(): a std::randomize() argument is a read-write reference, and a 'with'
+    // clause reference is a read, with the class of a static variable
+    do {
+        if (!ap || !bp) return ap == bp;
+        if (ap->type() != bp->type()) return false;
+        if (const AstNodeVarRef* const refp = VN_CAST(ap, NodeVarRef)) {
+            if (refp->varp() != VN_AS(bp, NodeVarRef)->varp()) return false;
+        } else if (const AstMemberRef* const selp = VN_CAST(ap, MemberRef)) {
+            const AstMemberRef* const bselp = VN_AS(bp, MemberRef);
+            if (selp->varp() != bselp->varp() || !sameSelection(selp->fromp(), bselp->fromp())) {
+                return false;
+            }
+        } else if (!ap->isSame(bp) || !sameSelection(ap->op1p(), bp->op1p(), true)
+                   || !sameSelection(ap->op2p(), bp->op2p(), true)
+                   || !sameSelection(ap->op3p(), bp->op3p(), true)
+                   || !sameSelection(ap->op4p(), bp->op4p(), true)) {
+            return false;
+        }
+        ap = ap->nextp();
+        bp = bp->nextp();
+    } while (withNext);
+    return true;
+}
+
 // ######################################################################
 // Determines if a class is used with randomization
 
@@ -230,31 +256,12 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         }
     }
-    // Check if a variable is listed in std::randomize() arguments
-    bool isVarInStdRandomizeArgs(const AstVar* varp) const {
+    // Check if an expression in a 'with' clause is a std::randomize() argument
+    bool isStdRandomizeArg(const AstNodeExpr* exprp) const {
         if (!m_inStdWith || !m_stdRandCallp) return false;
-
+        // Only the arguments are random (IEEE 1800-2023 18.12); for arr[0], not arr[1]
         for (AstArg* const argp : m_stdRandCallp->argspList()) {
-            const AstNodeExpr* exprp = argp->exprp();
-            // Traverse through expression to find the base variable
-            while (exprp) {
-                if (const AstNodeVarRef* const varrefp = VN_CAST(exprp, NodeVarRef)) {
-                    if (varrefp->varp() == varp) return true;
-                    break;
-                }
-                if (const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
-                    if (memberRefp->varp() == varp) return true;
-                    exprp = memberRefp->fromp();
-                } else if (const AstArraySel* const arrselp = VN_CAST(exprp, ArraySel)) {
-                    exprp = arrselp->fromp();
-                } else if (const AstStructSel* const strselp = VN_CAST(exprp, StructSel)) {
-                    exprp = strselp->fromp();
-                } else if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
-                    exprp = methodp->fromp();
-                } else {
-                    break;
-                }
-            }
+            if (sameSelection(exprp, argp->exprp())) return true;
         }
         return false;
     }
@@ -749,7 +756,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         // Mark as randomizable if: rand-declared, or listed in std::randomize() args
         if (nodep->varp()->rand().isRandomizable() && !(m_inStdWith && m_stdRandCallp)) {
             nodep->user1(true);
-        } else if (isVarInStdRandomizeArgs(nodep->varp())) {
+        } else if (isStdRandomizeArg(nodep)) {
             nodep->user1(true);
         }
     }
@@ -761,7 +768,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         const bool inStdWith = m_inStdWith && m_stdRandCallp;
         if (randObject && randMember && !inStdWith) {
             nodep->user1(true);
-        } else if (inStdWith && isVarInStdRandomizeArgs(nodep->varp())) {
+        } else if (isStdRandomizeArg(nodep)) {
             nodep->user1(true);
             // Mark parent object for constraint expression visitor
             if (VN_IS(nodep->fromp(), VarRef)) nodep->fromp()->user1(true);
@@ -809,7 +816,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
     void visit(AstNodeExpr* nodep) override {
         iterateChildrenConst(nodep);
         if (!m_constraintExprGenp && !m_inStdWith) return;
-        nodep->user1((nodep->op1p() && nodep->op1p()->user1())
+        nodep->user1(isStdRandomizeArg(nodep) || (nodep->op1p() && nodep->op1p()->user1())
                      || (nodep->op2p() && nodep->op2p()->user1())
                      || (nodep->op3p() && nodep->op3p()->user1())
                      || (nodep->op4p() && nodep->op4p()->user1()));
@@ -1141,40 +1148,6 @@ class RandomizeVisitor final : public VNVisitor {
     const std::unique_ptr<V3SolverLowering> m_solverp;  // Constraint solver lowering
 
     // METHODS
-    // Check if two nodes are semantically equivalent (not pointer equality):
-    static bool isSimilarNode(const AstNodeExpr* withExprp, const AstNodeExpr* argExprp) {
-        // VarRef: compare variable pointers
-        if (VN_IS(argExprp, VarRef) && VN_IS(withExprp, VarRef)) {
-            return VN_AS(withExprp, VarRef)->varp() == VN_AS(argExprp, VarRef)->varp();
-        }
-        // MemberRef: compare object and member (obj.y)
-        if (VN_IS(argExprp, MemberRef) && VN_IS(withExprp, MemberRef)) {
-            const AstMemberRef* const withRefp = VN_AS(withExprp, MemberRef);
-            const AstMemberRef* const argRefp = VN_AS(argExprp, MemberRef);
-            if (withRefp->varp() != argRefp->varp()) return false;
-            // Recursively compare the base object expression
-            return isSimilarNode(withRefp->fromp(), argRefp->fromp());
-        }
-        // ArraySel: compare array base and index (arr[i])
-        if (VN_IS(argExprp, ArraySel) && VN_IS(withExprp, ArraySel)) {
-            const AstArraySel* const withASp = VN_AS(withExprp, ArraySel);
-            const AstArraySel* const argASp = VN_AS(argExprp, ArraySel);
-            // Before checking Sel type index, check if both are Const
-            if (VN_IS(withASp->bitp(), Const) && VN_IS(argASp->bitp(), Const)) {
-                const AstConst* const withIdxp = VN_AS(withASp->bitp(), Const);
-                const AstConst* const argIdxp = VN_AS(argASp->bitp(), Const);
-                return isSimilarNode(withASp->fromp(), argASp->fromp())
-                       && withIdxp->num().isCaseEq(argIdxp->num());
-            }
-            // Index must be Sel type, extract VarRef using fromp()
-            if (!VN_IS(withASp->bitp(), Sel) || !VN_IS(argASp->bitp(), Sel)) return false;
-            const AstNodeExpr* const withIdxp = VN_AS(withASp->bitp(), Sel)->fromp();
-            const AstNodeExpr* const argIdxp = VN_AS(argASp->bitp(), Sel)->fromp();
-            return isSimilarNode(withASp->fromp(), argASp->fromp())
-                   && isSimilarNode(withIdxp, argIdxp);
-        }
-        return false;
-    }
     AstVar* createStdRandomGenerator(AstNodeModule* const modp) {
         auto it = m_stdMap.find(modp);
         if (it == m_stdMap.end()) {
@@ -2558,7 +2531,7 @@ class RandomizeVisitor final : public VNVisitor {
                 // Replace argument occurrences in 'with' clause with __Varg* reference.
                 if (withp) {
                     withp->foreach([&](AstNodeExpr* exp) {
-                        if (isSimilarNode(exp, exprp)) {
+                        if (sameSelection(exp, exprp)) {
                             AstVarRef* const replaceVarp
                                 = new AstVarRef{exprp->fileline(), refvarp, VAccess::READWRITE};
                             exp->replaceWith(replaceVarp);
