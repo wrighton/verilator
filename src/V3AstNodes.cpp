@@ -3134,6 +3134,9 @@ AstNode* AstNodeExpr::baseFromp(bool overMembers) {
         } else if (VN_IS(nodep, CMethodHard)) {
             nodep = VN_AS(nodep, CMethodHard)->fromp();
             continue;
+        } else if (VN_IS(nodep, SliceSel)) {
+            nodep = VN_AS(nodep, SliceSel)->fromp();
+            continue;
         } else if (overMembers && VN_IS(nodep, MemberRef)) {
             nodep = VN_AS(nodep, MemberRef)->fromp();
             continue;

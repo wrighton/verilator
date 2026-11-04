@@ -200,6 +200,53 @@ module t (
     end
   end
 
+  // An element of a slice, and a stream of a slice of structures, are elements of the sliced
+  // array; a slice partly out of range is invalid as a whole, as above
+  typedef struct {byte b;} sb_t;
+  sb_t sb[1:5];
+  int el[5];
+  int ed[4:0];
+  int epos;
+  logic [15:0] epk;
+  always @(posedge clk) begin
+    if (cyc == 1) begin
+      for (int i = 1; i <= 5; ++i) begin
+        el[i-1] = i;
+        ed[i-1] = i;
+        sb[i].b = 8'(i);
+      end
+      epos = 2;
+    end else if (cyc == 2) begin
+      el[1:3][2] = 30;
+      `checkp(el, "'{'h1, 'h2, 'h1e, 'h4, 'h5}");
+      `checkd(el[2:4][4], 5);
+      el[0:2][epos] = 33;  // Variable index
+      `checkd(el[2], 33);
+      `checkd(el[1:3][epos+1], 4);
+      ed[3:1][2] = 32;  // Descending
+      ed[3:1][epos-1] = 31;
+      `checkd(ed[1], 31);
+      `checkd(ed[2], 32);
+      `checkd(ed[3], 4);
+      `checkd(ed[4:2][epos+2], 5);
+      el[0:3][1:2][1] = 34;  // Slice of a slice
+      `checkd(el[1], 34);
+      `checkd(el[0:3][1:2][2], 33);
+      {>>{sb[epos+:2]}} = 16'h1234;
+      `checkh(sb[1].b, 8'h1);
+      `checkh(sb[2].b, 8'h12);
+      `checkh(sb[3].b, 8'h34);
+      `checkh(sb[4].b, 8'h4);
+      epk = {>>{sb[epos+1+:2]}};
+      `checkh(epk, 16'h3404);
+      epos = 5;
+      {>>{sb[epos+:2]}} = 16'h5678;
+      `checkh(sb[5].b, 8'h5);
+      epk = {>>{sb[epos+:2]}};
+      `checkh(epk, 16'h0);
+    end
+  end
+
   // Combinational logic
   bit [4:0] cin[2];
   bit [4:0] cout[1:6];

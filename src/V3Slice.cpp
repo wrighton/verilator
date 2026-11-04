@@ -251,7 +251,6 @@ class SliceVisitor final : public VNVisitor {
         m_okConsArray = true;
         iterateChildren(nodep);
     }
-    void visit(AstArraySel* nodep) override { iterateOkConsArray(nodep); }
     void visit(AstCvtArrayToArray* nodep) override { iterateOkConsArray(nodep); }
     void visit(AstCvtArrayToPacked* nodep) override { iterateOkConsArray(nodep); }
     void visit(AstCvtUnpackToQueue* nodep) override { iterateOkConsArray(nodep); }
@@ -304,6 +303,30 @@ class SliceVisitor final : public VNVisitor {
     void visit(AstNeq* nodep) override { expandBiOp(nodep); }
     void visit(AstEqCase* nodep) override { expandBiOp(nodep); }
     void visit(AstNeqCase* nodep) override { expandBiOp(nodep); }
+
+    void visit(AstArraySel* nodep) override {
+        // Select an element of a slice from the sliced array, so that it can be written
+        AstSliceSel* const slicep = VN_CAST(nodep->fromp(), SliceSel);
+        if (slicep) {
+            // The index is the offset from the lowest selected element, at most as wide as
+            // needed to index the slice (V3Width), so not wider than the 32-bit position
+            FileLine* const fl = nodep->fileline();
+            AstNodeExpr* const lsbp = slicep->lsbp()->unlinkFrBack();
+            AstNodeExpr* offsetp = nodep->bitp()->unlinkFrBack();
+            UASSERT_OBJ(offsetp->width() <= lsbp->width(), nodep, "Index wider than position");
+            if (offsetp->width() < lsbp->width()) {
+                offsetp = new AstExtend{fl, offsetp, lsbp->width()};
+            }
+            AstNodeExpr* const indexp = new AstAdd{fl, lsbp, offsetp};
+            indexp->dtypeFrom(lsbp);
+            AstArraySel* const newp = new AstArraySel{fl, slicep->fromp()->unlinkFrBack(), indexp};
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            iterate(newp);  // The sliced array may be a slice too
+            return;
+        }
+        iterateOkConsArray(nodep);
+    }
 
     void visit(AstSliceSel* nodep) override {
         // Slice used as a bare value, e.g. a $display argument. Build it via
