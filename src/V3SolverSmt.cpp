@@ -2008,13 +2008,17 @@ class ConstraintExprVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(origp), origp);
         }
     }
+    // Width of an integral array index or key in the solver, that of its C++ type
+    static int keySmtWidth(const AstNodeDType* const keyDtp) {
+        const int width = keyDtp->width();
+        if (width <= 8) return 8;
+        if (width <= 16) return 16;
+        return VL_WORDS_I(width) * VL_EDATASIZE;
+    }
     // Format of an array index or key in SMT names, normalized to standard bit widths
     static std::string keyHexFormat(const AstNodeDType* const keyDtp) {
         if (!keyDtp->isIntegralOrPacked()) return "%32x";  // String key
-        const int width = keyDtp->width();
-        if (width <= 8) return "%2x";
-        if (width <= 16) return "%4x";
-        return "%" + std::to_string(VL_WORDS_I(width) * 8) + "x";
+        return "%" + std::to_string(keySmtWidth(keyDtp) / 4) + "x";
     }
     void addStringNamePart(AstNodeExpr* const indexp, const std::string& fmt = "%32x") {
         if (m_nestedAccessp) {
@@ -2038,6 +2042,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         const bool elemMemberRef = VN_IS(nodep->backp(), MemberRef);
         AstAssocArrayDType* const assocDtp
             = VN_AS(nodep->fromp()->dtypep()->skipRefp(), AssocArrayDType);
+        const bool keyIsRand = keyIsIntegral && bitp->exists([](const AstNodeVarRef* const vrefp) {
+            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+        });
+        if (keyIsRand && !nodep->fromp()->user1()) {
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: Randomized key into a non-random associative array");
+        } else if (keyIsRand && !assocDtp->subDTypep()->skipRefp()->isIntegralOrPacked()) {
+            // Such elements, or their members, are solver variables named by the key's value
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Randomized key into an associative array "
+                                         "of non-integral elements");
+        }
         if (VN_IS(assocDtp->subDTypep()->skipRefp(), ClassRefDType)
             && (keyIsString || keyIsPackedString || keyIsIntegral) && !elemMemberRef) {
             AstNodeExpr* const arrayp = nodep->fromp()->unlinkFrBack();
@@ -2077,7 +2092,18 @@ class ConstraintExprVisitor final : public VNVisitor {
             handle.relink(idxp);
             newp = editSMT(nodep, nodep->fromp(), idxp);
         } else {
-            if (keyIsIntegral) {
+            if (keyIsRand) {
+                // A random key stays an SMT expression, in the solver's key width
+                VNRelinker handle;
+                AstNodeExpr* idxp = nodep->bitp()->unlinkFrBack(&handle);
+                const int keyWidth = keySmtWidth(keyDtp);
+                if (idxp->width() < keyWidth) {
+                    idxp = new AstExtend{fl, idxp, keyWidth};
+                    idxp->user1(true);
+                }
+                handle.relink(idxp);
+                newp = editSMT(nodep, nodep->fromp(), idxp);
+            } else if (keyIsIntegral) {
                 const std::string fmt = (m_structSel ? "" : "#x") + keyHexFormat(keyDtp);
                 if (m_nestedAccessp) addStringNamePart(nodep->bitp(), fmt);
                 VNRelinker handle;
@@ -2093,7 +2119,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
         }
         if (newp && m_structSel && newp->name() == "(select %s %s)") { newp->name("%s.%s"); }
-        if (!newp || !hoistRandModeOverSelectAndMember(newp, origp)) {
+        // The element a random key selects has no current value to hold, as for ARRAY_AT
+        if (!newp || keyIsRand || !hoistRandModeOverSelectAndMember(newp, origp)) {
             VL_DO_DANGLING(origp->deleteTree(), origp);
         }
     }
