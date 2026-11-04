@@ -21,6 +21,14 @@ class Indep;
   endfunction
 endclass
 
+class Holder;
+  rand Sub s[2];
+
+  function new();
+    foreach (s[i]) s[i] = new;
+  endfunction
+endclass
+
 class Cls;
   function int randomize_gpr(Indep i);
     return (i.randomize() with {
@@ -40,5 +48,10 @@ module t;
     i = new;
 
     c.randomize_gpr(i);
+  end
+
+  initial begin
+    automatic Holder h = new;
+    void'(h.randomize() with {s[0].arr.size() == 2;});
   end
 endmodule
