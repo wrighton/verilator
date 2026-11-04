@@ -121,6 +121,12 @@ AstVar* ElemRandModes::modeVarp(AstVar* arrVarp) {
     return modeVarp;
 }
 
+AstNodeDType* RandomizeUtil::arrayElementDTypep(AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefp();
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+    return dtypep;
+}
+
 AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstVar* const arrVarp,
                                            AstNodeExpr* const idxp) {
     const AstUnpackArrayDType* const unpackDtp
