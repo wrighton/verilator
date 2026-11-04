@@ -62,13 +62,17 @@ module t;
     // verilator lint_on SELRANGE
     `checkh(a12[3'd7], 7);
     `checkh(an[65'sd3], 103);
-    `checkh(arr8[3'bx01], 15);  // X is 1 with --x-assign 1
+    `checkh(arr8[3'bx01], 0);  // An index with X selects no element
+    `checkh(an[3'bx01], 0);
     // Adding the offset of the low bound -2 must not wrap these to a valid element
     `checkh(an[uidx], idx >= 2 ? 98 + idx : 0);
     `checkh(an[uidx40], idx >= 2 ? 98 + idx : 0);
     if (idx < 2) an[uidx] = 1;
     `checkh(an[-2], 98);
     `checkh(an[-1], 99);
+    wr8[2'bx1] = 4;
+    `checkh(wr8[1], 0);
+    `checkh(wr8[3], 0);
     `checkh(an[-64'sd1], 99);
     `checkh(wr8[idx], idx == 0 ? 2 : 0);
   end
