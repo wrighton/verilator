@@ -53,4 +53,58 @@ module t;
     `checkh(wr8[idx], idx == 0 ? 2 : 0);
   end
   // verilator lint_on WIDTH
+
+  // An out-of-range index of an outer dimension reads the default of the value read
+  typedef struct {
+    int f;
+    bit [7:0] b;
+  } s_t;
+  int m2[3][4];
+  int m3[2:0][1:3][4];
+  s_t sa[1:3];
+  logic [7:0] lm[3][4];
+  typedef struct packed {bit [7:0] a;} ps_t;
+  ps_t pa[3] = '{8'h5, 8'h6, 8'h7};
+  bit [1:0][3:0] pk[2][3];
+  real rr[2][2] = '{'{1.5, 2.5}, '{3.5, 4.5}};
+  string ss[2][2] = '{'{"a", "b"}, '{"c", "d"}};
+  int calls = 0;
+  function automatic int count(int i);
+    ++calls;
+    return i;
+  endfunction
+  initial begin
+    foreach (m2[i, j]) m2[i][j] = i * 10 + j + 1;
+    foreach (m3[i, j, k]) m3[i][j][k] = i * 100 + j * 10 + k + 1;
+    foreach (sa[i]) sa[i] = '{i * 2, 8'(i + 4)};
+  end
+  always @(posedge clk) begin
+    `checkh(m2[idx + 2][1], idx == 0 ? 22 : 0);
+    `checkh(m2[1][idx + 3], idx == 0 ? 14 : 0);
+    `checkh(m2[idx + 2][1][1], idx == 0 ? 1'b1 : 1'b0);
+    `checkh(m3[idx + 2][1][0], idx == 0 ? 211 : 0);
+    `checkh(m3[0][idx + 3][1], idx == 0 ? 32 : 0);
+    `checkh(sa[idx + 3].f, idx == 0 ? 6 : 0);
+    `checkh(sa[idx + 3].b[2], idx == 0 ? 1'b1 : 1'b0);
+    if (rr[idx + 1][1] != (idx == 0 ? 4.5 : 0.0)) `stop;
+    if (ss[idx + 1][0] != (idx == 0 ? "c" : "")) `stop;
+    `checkh(arr8[m2[idx + 2][1] - 22], idx == 0 ? 10 : 0);
+    // 4-state, X is 1 with --x-assign 1
+    lm[0][1] = 8'h55;
+    lm[2][1] = 8'h66;
+    `checkh(lm[idx + 2][1], idx == 0 ? 8'h66 : 8'hff);
+    // Packed elements
+    `checkh(pa[idx + 2], idx == 0 ? 8'h7 : 8'h0);
+    pk[0][2] = 8'h34;
+    pk[1][2] = 8'h12;
+    `checkh(pk[idx + 1][2], idx == 0 ? 8'h12 : 8'h0);
+    // verilator lint_off SELRANGE
+    `checkh(m2[idx + 2][1][40], 1'b0);
+    // verilator lint_on SELRANGE
+    // An index is still evaluated when an outer one is out of range
+    `checkh(m2[count(idx + 2)][count(1)], idx == 0 ? 22 : 0);
+    `checkh(calls, 2 * (idx + 1));
+    `checkh(m2[idx + 2][$urandom_range(1, 1)], idx == 0 ? 22 : 0);
+    `checkh(m3[idx + 2][$urandom_range(1, 1)][$urandom_range(0, 0)], idx == 0 ? 211 : 0);
+  end
 endmodule
