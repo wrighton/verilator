@@ -1134,6 +1134,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         return exprp;
     }
 
+    // Whether selp is the member select of a variable captured by captureRefByThis()
+    static bool isCapturedThisSel(const AstMemberRef* selp) {
+        return VN_IS(selp->fromp(), VarRef)
+               && selp->fromp()->user1()  // Depending on a randomized variable
+               && selp->user2p()  // Pointer to containing module
+               && VN_AS(selp->user2p(), NodeModule) == selp->varp()->user2p();
+    }
+
     // VISITORS
     void visit(AstNodeVarRef* nodep) override {
         AstVar* varp = nodep->varp();
@@ -2021,10 +2029,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
         }
         // Handle MemberRef references created by captureRefByThis()
-        if (VN_IS(nodep->fromp(), VarRef)
-            && nodep->fromp()->user1()  // Depending on a randomized variable
-            && nodep->user2p()  // Pointer to containing module
-            && VN_AS(nodep->user2p(), NodeModule) == nodep->varp()->user2p()) {
+        if (isCapturedThisSel(nodep)) {
             // Convert to VarRef
             AstVarRef* const varRefp
                 = new AstVarRef{nodep->fileline(), nodep->varp(), VAccess::READ};
@@ -2212,8 +2217,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         // constraint expression, which needs an element count known at verilation time
         std::vector<std::string> smtExprs;
         for (AstNodeExpr* const itemp : nodep->rangespList()) {
-            if (AstVarRef* const varRefp = VN_CAST(itemp, VarRef)) {
-                AstVar* const varp = varRefp->varp();
+            // An array of the class, or of a member object reached through member selects
+            AstMemberRef* memberRefp = VN_CAST(itemp, MemberRef);
+            // A variable of the class itself, captured as this.x in a randomize() with
+            if (memberRefp && isCapturedThisSel(memberRefp)) memberRefp = nullptr;
+            const AstNode* rootp = itemp;
+            while (const AstMemberRef* const selp = VN_CAST(rootp, MemberRef)) {
+                rootp = selp->fromp();
+            }
+            if (VN_IS(rootp, VarRef)) {
+                AstVar* const varp = VN_IS(itemp, MemberRef) ? VN_AS(itemp, MemberRef)->varp()
+                                                             : VN_AS(itemp, VarRef)->varp();
+                const std::string smtName
+                    = memberRefp ? buildMemberPath(memberRefp) : varp->name();
                 AstNodeModule* const varModp = VN_AS(varp->user2p(), NodeModule);
                 UASSERT_OBJ(varModp, nodep, "varp has no NodeModule set");
                 AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
@@ -2277,7 +2293,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                 const bool alreadyWritten = m_inlineInitBlockp
                                                 ? m_inlineWrittenVars.count(varp->name()) > 0
                                                 : varp->user3();
-                if (!alreadyWritten) {
+                if (memberRefp) {
+                    // Registered as by a member select in any other constraint
+                    std::set<std::string> names;  // Only a hard constraint lists its names
+                    VL_RESTORER(m_constraintVarsp);
+                    m_constraintVarsp = m_wantSingle ? &m_constraintVars : &names;
+                    iterate(itemp);
+                } else if (!alreadyWritten) {
                     varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
                     if (m_inlineInitBlockp) m_inlineWrittenVars.insert(varp->name());
                     // Convert to C string
@@ -2303,7 +2325,7 @@ class ConstraintExprVisitor final : public VNVisitor {
 
                 // A solver-sized container is resized between solve passes; joining the
                 // size-constrained set gets its element table refreshed in between
-                if (varp->user4p() && m_sizeConstrainedArraysp) {
+                if (!memberRefp && varp->user4p() && m_sizeConstrainedArraysp) {
                     m_sizeConstrainedArraysp->insert(varp);
                 }
 
@@ -2313,10 +2335,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                     // Named in the text below, so the folded constraint must record it too.
                     // Visited from the if's fold, outside any constraint expression, so
                     // m_constraintVarsp is not set: add to the fold's names directly
-                    m_constraintVars.insert(varp->name());
+                    m_constraintVars.insert(smtName);
                     std::string exprStr = "(__Vbv (distinct";
                     for (uint32_t i = 0; i < staticSize; ++i) {
-                        exprStr += " (select " + varp->name() + " #x";
+                        exprStr += " (select " + smtName + " #x";
                         for (int shift = 28; shift >= 0; shift -= 4) {
                             exprStr += "0123456789abcdef"[(i >> shift) & 0xf];
                         }
@@ -2326,12 +2348,14 @@ class ConstraintExprVisitor final : public VNVisitor {
                     continue;
                 }
 
-                AstNodeExpr* const namep = new AstConst{fl, AstConst::String{}, varp->name()};
+                AstNodeExpr* const namep = new AstConst{fl, AstConst::String{}, smtName};
                 AstCMethodHard* const randUniqueCallp = new AstCMethodHard{
                     fl, genVarRefp(VAccess::READ), VCMethod::RANDOMIZER_UNIQUE, namep};
                 randUniqueCallp->dtypep(nodep->findVoidDType());
                 randUniqueCallp->addPinsp(new AstConst{fl, *m_uniqueConstraintIdp});
                 setupStmtsp = AstNode::addNext(setupStmtsp, new AstStmtExpr{fl, randUniqueCallp});
+            } else {
+                itemp->v3warn(CONSTRAINTIGN, "Unsupported: Unique constraint on this expression");
             }
         }
         ++(*m_uniqueConstraintIdp);
@@ -3048,15 +3072,13 @@ class SolverSmtLowering final : public V3SolverLowering {
             std::vector<AstNodeExpr*> exprItems;
             bool hasArrayVarRef = false;
             for (AstNodeExpr* const rp : uniquep->rangespList()) {
-                if (const AstVarRef* const vrp = VN_CAST(rp, VarRef)) {
-                    // A container's elements are made distinct by rand_unique, not pairwise
-                    const AstNodeDType* const dtypep = vrp->varp()->dtypep()->skipRefp();
-                    if (VN_IS(dtypep, NodeArrayDType) || VN_IS(dtypep, QueueDType)
-                        || VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, AssocArrayDType)
-                        || VN_IS(dtypep, WildcardArrayDType)) {
-                        hasArrayVarRef = true;
-                        continue;
-                    }
+                // A container's elements are made distinct by rand_unique, not pairwise
+                const AstNodeDType* const dtypep = rp->dtypep()->skipRefp();
+                if (VN_IS(dtypep, NodeArrayDType) || VN_IS(dtypep, QueueDType)
+                    || VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, AssocArrayDType)
+                    || VN_IS(dtypep, WildcardArrayDType)) {
+                    hasArrayVarRef = true;
+                    continue;
                 }
                 exprItems.push_back(rp);
             }
