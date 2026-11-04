@@ -448,7 +448,7 @@ module t;
                 $write("");
             end
             sum = dpi_exported(32'sh3);
-            if (((cls_arr[2'h0]) == null)) begin
+            if (((cls_arr[32'sh0]) == null)) begin
                 $write("");
             end
             if ((PP != 32'sh2)) begin
@@ -468,13 +468,13 @@ module t;
             if ((uns_int > 32'sh0)) begin
                 $write("");
             end
-            if (((usarr.marr[1'h0]) != 32'sh0)) begin
+            if (((usarr.marr[32'sh0]) != 32'sh0)) begin
                 $write("");
             end
-            if ((((arraymanyd[4'h0])[4'h0])[4'h0])[$unsigned(5'(
-                                                                (32'h4 
-                                                                 * 
-                                                                 32'sh1)))
+            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[$unsigned(5'(
+                                                                      (32'h4 
+                                                                       * 
+                                                                       32'sh1)))
                 +:4][$unsigned(4'((32'h2 * 32'sh1)))
                 +:2][2]) begin
                 $write("");
@@ -1571,14 +1571,14 @@ class Cls;
     ???? // CONSTRAINT 'array_values'
 
     ???? // CONSTRAINTBEFORE
-    (rarray[2'h0])rmember1
+    (rarray[32'sh0])rmember1
     ???? // CONSTRAINTFOREACH
 
     ???? // FOREACHHEADER
     rarrayint i;
 
     ???? // CONSTRAINTEXPR
-    ((rarray[i[1:0]]) == (rmember1 + i))covergroup __vlAnonCG_cg_in_class;
+    ((rarray[i]) == (rmember1 + i))covergroup __vlAnonCG_cg_in_class;
     @(posedge cg_clk)function new;
         cp_m: coverpoint member {
             bins one = {32'sh1};

@@ -1566,8 +1566,12 @@ class WidthVisitor final : public VNVisitor {
                         }
                     }
                 }
-                widthCheckSized(nodep, "Extract Range", nodep->bitp(), selwidthDTypep, EXTEND_EXP,
-                                false /*NOWARN*/);
+                // Never truncate the index, so V3Unknown's bounds check sees its whole value
+                // (IEEE 1800-2023 7.4.6)
+                if (nodep->bitp()->width() < selwidth) {
+                    widthCheckSized(nodep, "Extract Range", nodep->bitp(), selwidthDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                }
             }
         }
     }

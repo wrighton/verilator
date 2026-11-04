@@ -170,6 +170,14 @@ class UnknownVisitor final : public VNVisitor {
         return false;
     }
 
+    // Return array index 'bitp' truncated to the bits that address 'elements' elements
+    static AstNodeExpr* newIndexTrunc(AstNodeExpr* bitp, int elements) {
+        // V3Width keeps all bits of the index for the bounds check
+        const int width = V3Number::log2b(elements - 1) + 1;
+        if (bitp->width() <= width) return bitp;
+        return V3Const::constifyEdit(new AstSel{bitp->fileline(), bitp, 0, width});
+    }
+
     AstNodeExpr* newExprStmtOrClone(AstNodeExpr*& exprp) {
         if (!exprp->isPure()) {
             AstVar* const varp = createAddTemp(exprp);
@@ -505,16 +513,18 @@ class UnknownVisitor final : public VNVisitor {
             if (isStaticlyGte(declElementsp, bitp)) {
                 // We don't need to add a conditional; we know the existing expression is ok
                 VL_DO_DANGLING(declElementsp->deleteTree(), declElementsp);
-                nodep->bitp(bitp);
+                nodep->bitp(newIndexTrunc(bitp, declElements));
                 return;
             }
-            nodep->bitp(newExprStmtOrClone(bitp));
+            nodep->bitp(newIndexTrunc(newExprStmtOrClone(bitp), declElements));
             AstNodeExpr* condp = new AstGte{nodep->fileline(), declElementsp, bitp};
             // Note below has null backp(); the Edit function knows how to deal with that.
             const AstNodeDType* const nodeDtp = nodep->dtypep()->skipRefp();
             if (!lvalue
                 // Making a scalar would break if we're making an array
-                && VN_IS(nodeDtp, BasicDType)) {
+                && VN_IS(nodeDtp, BasicDType)
+                // An event has no value to read instead
+                && !nodeDtp->isEvent()) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
                 nodep->unlinkFrBack(&replaceHandle);

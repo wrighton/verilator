@@ -1159,19 +1159,8 @@ class RandomizeVisitor final : public VNVisitor {
         if (VN_IS(argExprp, ArraySel) && VN_IS(withExprp, ArraySel)) {
             const AstArraySel* const withASp = VN_AS(withExprp, ArraySel);
             const AstArraySel* const argASp = VN_AS(argExprp, ArraySel);
-            // Before checking Sel type index, check if both are Const
-            if (VN_IS(withASp->bitp(), Const) && VN_IS(argASp->bitp(), Const)) {
-                const AstConst* const withIdxp = VN_AS(withASp->bitp(), Const);
-                const AstConst* const argIdxp = VN_AS(argASp->bitp(), Const);
-                return isSimilarNode(withASp->fromp(), argASp->fromp())
-                       && withIdxp->num().isCaseEq(argIdxp->num());
-            }
-            // Index must be Sel type, extract VarRef using fromp()
-            if (!VN_IS(withASp->bitp(), Sel) || !VN_IS(argASp->bitp(), Sel)) return false;
-            const AstNodeExpr* const withIdxp = VN_AS(withASp->bitp(), Sel)->fromp();
-            const AstNodeExpr* const argIdxp = VN_AS(argASp->bitp(), Sel)->fromp();
             return isSimilarNode(withASp->fromp(), argASp->fromp())
-                   && isSimilarNode(withIdxp, argIdxp);
+                   && withASp->bitp()->sameTree(argASp->bitp());
         }
         return false;
     }

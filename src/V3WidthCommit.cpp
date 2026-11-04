@@ -612,7 +612,13 @@ private:
         selLifetimeCheck(nodep, nodep);
     }
     void visit(AstArraySel* nodep) override {
-        iterateChildren(nodep);
+        iterateAndNextNull(nodep->fromp());
+        {
+            // The index is read, like the index of a Sel
+            VL_RESTORER(m_underSel);
+            if (!m_contReads) m_underSel = true;
+            iterateAndNextNull(nodep->bitp());
+        }
         editDType(nodep);
         selLifetimeCheck(nodep, nodep->baseFromp(/* overMembers: */ false));
     }

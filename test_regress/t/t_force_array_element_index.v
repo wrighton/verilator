@@ -222,14 +222,11 @@ module t;
     end
     release u.m3[1][2][3];
 
-    // A 64-bit index is truncated to the array's index width, forced or not.
+    // A 64-bit index selects the same element, forced or not.
     wide = 64'd9;
     #1;
     `checkh(rdwide, 8'h19)
     force u.mem[9] = 8'h5a;
-    #1;
-    `checkh(rdwide, 8'h5a)
-    wide = 64'h1_0000_0009;  // truncates to 9, same element
     #1;
     `checkh(rdwide, 8'h5a)
     release u.mem[9];

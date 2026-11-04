@@ -3380,6 +3380,15 @@ class ConstVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
 
+    // Return element of 'consp' at constant 'indexp', or nullptr if out of range
+    static AstNodeExpr* constArrayElementp(const AstConsArray* consp, const AstConst* indexp) {
+        // An out-of-range index, also one wider than 32 bits, is left to V3Unknown
+        const V3Number& num = indexp->num();
+        const uint32_t elements
+            = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        if (!num.fitsInUInt() || num.toUInt() >= elements) return nullptr;
+        return consp->valuep(num.toUInt());
+    }
     void visit(AstArraySel* nodep) override {
         iterateAndNextNull(nodep->bitp());
         if (VN_IS(nodep->bitp(), Const)
@@ -3407,7 +3416,7 @@ class ConstVisitor final : public VNVisitor {
                 = bitp->num().isAnyXZ()
                       ? SimulateVisitor::defaultOf(nodep->fileline(), consp->dtypep()->subDTypep())
                       : nullptr;
-            AstNodeExpr* const itemp = defaultp ? defaultp : consp->valuep(bitp->toUInt());
+            AstNodeExpr* const itemp = defaultp ? defaultp : constArrayElementp(consp, bitp);
             if (VN_IS(itemp, Const)) {
                 const V3Number& num = VN_AS(itemp, Const)->num();
                 VL_DO_DANGLING(replaceNum(nodep, num), nodep);
@@ -3470,7 +3479,7 @@ class ConstVisitor final : public VNVisitor {
                                                                  consp->dtypep()->subDTypep());
                         selItemp = selDefaultp;
                     } else {
-                        selItemp = consp->valuep(constp->toSInt());
+                        selItemp = constArrayElementp(consp, constp);
                     }
                 }
             }
