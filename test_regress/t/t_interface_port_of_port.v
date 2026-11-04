@@ -100,11 +100,6 @@ module t (
       in,
       md
   );
-  logic [6:0] qa;
-  leaf la (
-      .i(ous[1].p),
-      .q(qa)
-  );
   virtual inner #(7) va;
   initial va = ous[1].p;
 
@@ -115,11 +110,8 @@ module t (
         in,
         md
     );
-    logic [6:0] qi;
-    leaf li (
-        .i(ous[g].p),
-        .q(qi)
-    );
+    virtual inner #(7) vi;
+    initial vi = ous[g].p;
   end
   virtual inner #(7) vg;
   initial vg = gen[0].og.p;
@@ -137,11 +129,10 @@ module t (
       `checkh(vt.x, in.x);
       `checkh(vu.x, in.x);
       `checkh(vm.x, in.x);
-      `checkh(qa, in.x);
       `checkh(va.x, in.x);
       `checkh(ous[1].p.x, in.x);
-      `checkh(gen[0].qi, in.x);
-      `checkh(gen[1].qi, in.x);
+      `checkh(gen[0].vi.x, in.x);
+      `checkh(gen[1].vi.x, in.x);
       `checkh(vg.x, in.x);
       `checkh(ls.v.x, in.x);
     end
