@@ -1701,12 +1701,15 @@ class ParamProcessor final {
                     VL_DO_DANGLING(pinExprp->deleteTree(), pinExprp);
                 } else if (origp
                            && (exprp->sameTree(origp)
-                               || (exprp->num().width() == origp->num().width()
-                                   && ParameterizedHierBlocks::areSame(exprp, origp))
-                               || paramConstsEqualAtMaxWidth(exprp, origp))) {
+                               || (!modvarp->untypedParam()
+                                   && ((exprp->num().width() == origp->num().width()
+                                        && ParameterizedHierBlocks::areSame(exprp, origp))
+                                       || paramConstsEqualAtMaxWidth(exprp, origp))))) {
                     // Setting parameter to its default value.  Just ignore it.
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
+                    // An untyped parameter is of the type of its value (IEEE 1800-2023
+                    // 6.20.2), so an equal value of another type is not its default.
                     UINFO(9, "cellPinCleanup: same as default " << pinp);
                 } else if (namingExprp->num().isDouble() || namingExprp->num().isString()
                            || namingExprp->num().isFourState()
