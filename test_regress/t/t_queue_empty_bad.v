@@ -21,6 +21,12 @@ module t;
 
     dpii_open_arg({});
 
+    begin
+      int iq[$];
+      iq.push_back({});
+      iq.delete({});
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
