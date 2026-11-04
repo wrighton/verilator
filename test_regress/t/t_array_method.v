@@ -137,6 +137,62 @@ module t;
       `checkh(p, 4'd1);
     end
 
+    // Index results and item.index are declared indices, not storage indices
+    begin
+      int u[1:3];
+      int d[3:1];
+      int n[-2:0];
+      typedef int u_t[1:3];
+      u_t ut;
+      int m[2:3][4];
+      int z[2];
+      static int sz[string] = '{"a": 1, "b": 2};
+      int qv[$];
+      int qi[$];
+      u = '{10, 20, 20};
+      qi = u.find_index with (item == 20);
+      `checkp(qi, "'{'h2, 'h3}");
+      qi = u.find_first_index with (item == 20);
+      `checkp(qi, "'{'h2}");
+      qi = u.find_last_index with (item == 20);
+      `checkp(qi, "'{'h3}");
+      qi = u.unique_index;
+      qi.sort;
+      `checkp(qi, "'{'h1, 'h2}");
+      qi = u.find_index with (item.index == 2);
+      `checkp(qi, "'{'h2}");
+      qv = u.find with (item.index == 1);
+      `checkp(qv, "'{'ha}");
+      qv = u.map with (item.index);
+      `checkp(qv, "'{'h1, 'h2, 'h3}");
+      d = '{10, 20, 30};
+      qi = d.find_index with (item == 30);
+      `checkp(qi, "'{'h1}");
+      n = '{5, 6, 6};
+      qi = n.find_index with (item == 6);
+      `checkp(qi, "'{'hffffffff, 'h0}");
+      qi = n.find_index with (item.index == -2);
+      `checkp(qi, "'{'hfffffffe}");
+      m[3][0] = 7;
+      qi = m.find_index with (item[0] == 7);
+      `checkp(qi, "'{'h3}");
+      // The index of an enclosing 'with'
+      qi = u.find_index (a) with (z.sum (b) with (a.index) == 4);
+      `checkp(qi, "'{'h2}");
+      qi = u.find_index (a) with (sz.sum (b) with (a.index) == 4);
+      `checkp(qi, "'{'h2}");
+      begin
+        static byte b[1:3] = '{8'd1, 8'd2, 8'd3};
+        qi = b.find_index with (item == 8'd2);
+        `checkp(qi, "'{'h2}");
+      end
+      // Through a typedef
+      ut = '{10, 20, 30};
+      qi = ut.find_index with (item == 30);
+      `checkp(qi, "'{'h3}");
+
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
