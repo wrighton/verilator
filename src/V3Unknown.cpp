@@ -162,6 +162,43 @@ class UnknownVisitor final : public VNVisitor {
         return fromp == nodep ? VN_AS(backp, NodeExpr) : nullptr;
     }
 
+    // Default value of a variable of type dtypep (IEEE 1800-2023 7.4.6), or nullptr
+    static AstNodeExpr* newDefaultp(AstNode* nodep, AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+            AstNodeExpr* const elemp = newDefaultp(nodep, arrayp->subDTypep());
+            return elemp ? new AstConsArray{nodep->fileline(), arrayp, elemp} : nullptr;
+        }
+        AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+        if (structp && !structp->packed()) {
+            AstConsStruct* const newp = new AstConsStruct{nodep->fileline(), structp};
+            for (AstMemberDType* const memberp : structp->memberspList()) {
+                AstNodeExpr* const memberValuep = newDefaultp(nodep, memberp->subDTypep());
+                if (!memberValuep) {
+                    VL_DO_DANGLING(newp->deleteTree(), newp);
+                    return nullptr;
+                }
+                newp->addItemsp(new AstConsStructItem{nodep->fileline(), memberp, memberValuep});
+            }
+            return newp;
+        }
+        // An event has no value to read instead
+        if (!(dtypep->isIntegralOrPacked() || VN_IS(dtypep, BasicDType)) || dtypep->isEvent()) {
+            return nullptr;
+        }
+        V3Number xnum{nodep, dtypep->width()};
+        if (dtypep->isDouble()) {
+            xnum = V3Number{nodep, V3Number::Double{}, 0.0};
+        } else if (dtypep->isString()) {
+            xnum = V3Number{nodep, V3Number::String{}, ""};
+        } else if (dtypep->isFourstate()) {
+            xnum.setAllBitsX();
+        } else {
+            xnum.setAllBits0();
+        }
+        return new AstConst{nodep->fileline(), xnum};
+    }
+
     AstVar* createAddTemp(const AstNodeExpr* const nodep) {
         AstVar* const varp = new AstVar{nodep->fileline(), VVarType::XTEMP,
                                         m_xrandNames->get(nodep), nodep->dtypep()};
@@ -545,37 +582,19 @@ class UnknownVisitor final : public VNVisitor {
                 }
             }
             // Note below has null backp(); the Edit function knows how to deal with that.
-            const AstNodeDType* const readDtp = readp->dtypep()->skipRefp();
-            if (!lvalue
-                // Making a scalar would break if we're making an array
-                && (readDtp->isIntegralOrPacked() || VN_IS(readDtp, BasicDType))
-                // An event has no value to read instead
-                && !readDtp->isEvent()) {
+            AstNodeExpr* const defaultp = lvalue ? nullptr : newDefaultp(readp, readp->dtypep());
+            if (defaultp) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
                 readp->unlinkFrBack(&replaceHandle);
-                // TODO make a tieoff function that takes AstNode and returns typed value
-                V3Number xnum{readp, readp->width()};
-                if (readDtp->isDouble()) {
-                    xnum = V3Number{readp, V3Number::Double{}, 0.0};
-                } else if (readDtp->isString()) {
-                    xnum = V3Number{readp, V3Number::String{}, ""};
-                } else {
-                    if (readDtp->isFourstate()) {
-                        xnum.setAllBitsX();
-                    } else {
-                        xnum.setAllBits0();
-                    }
-                }
-                AstNode* const newp = new AstCond{readp->fileline(), condp, readp,
-                                                  new AstConst{readp->fileline(), xnum}};
+                AstNode* const newp = new AstCond{readp->fileline(), condp, readp, defaultp};
                 UINFOTREE(9, newp, "", "_new");
                 // Link in conditional, can blow away temp xor
                 replaceHandle.relink(newp);
                 // Added X's, tristate them too. An ancestor's Cond is visited when iteration
                 // continues with it, after the ancestor's own visit, which has not finished.
                 if (readp == nodep) iterate(newp);
-            } else if (!lvalue) {  // Read of an aggregate, just use zero
+            } else if (!lvalue) {  // No default value, just use zero
                 // ARRAYSEL(...) -> ARRAYSEL(COND(LT(bit<maxbit), bit, 0))
                 VNRelinker replaceHandle;
                 AstNodeExpr* const asBitp = nodep->bitp()->unlinkFrBack(&replaceHandle);
