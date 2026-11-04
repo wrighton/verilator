@@ -393,6 +393,9 @@ class WidthVisitor final : public VNVisitor {
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
     const AstNode* m_writerp = nullptr;  // Assignment, release or pin whose lvalue is iterated
     const AstWith* m_withp = nullptr;  // Current 'with' statement
+    // For each item.index name in scope: its 'with' argument, and the declared index of the
+    // array's storage index 0
+    std::map<std::string, std::pair<const AstLambdaArgRef*, int>> m_withIndexes;
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     const AstNodeExpr* m_randomizeFromp = nullptr;  // Current randomize method call fromp
@@ -5246,6 +5249,10 @@ class WidthVisitor final : public VNVisitor {
         if (AstWith* const withp = nodep->withp()) {
             withp->indexArgRefp()->dtypep(indexDtp);
             withp->valueArgRefp()->dtypep(valueDtp);
+            VL_RESTORER_COPY(m_withIndexes);
+            const AstMethodCall* const callp = VN_CAST(nodep, MethodCall);
+            m_withIndexes[withp->indexArgRefp()->name()]
+                = {withp->indexArgRefp(), callp ? indexLo(callp->fromp()) : 0};
             userIterate(withp, WidthVP{returnDtp, BOTH}.p());
             withp->unlinkFrBack();
             return withp;
@@ -6169,6 +6176,34 @@ class WidthVisitor final : public VNVisitor {
         }
         v3Global.useRandomizeMethods(true);
     }
+    // Return the declared index of storage index 0 of array method receiver 'fromp'
+    static int indexLo(const AstNodeExpr* fromp) {
+        const AstUnpackArrayDType* const unpackp
+            = VN_CAST(fromp->dtypep()->skipRefp(), UnpackArrayDType);
+        return unpackp ? unpackp->lo() : 0;
+    }
+    // Return queue of storage indices 'queuep' converted to declared indices
+    AstCMethodHard* newIndexOffset(AstCMethodHard* queuep, int lo) {
+        FileLine* const fl = queuep->fileline();
+        AstNodeDType* const indexDtp = queuep->findUInt32DType();
+        AstLambdaArgRef* const indexArgp = new AstLambdaArgRef{fl, "__Vidx__DOT__index", true};
+        AstLambdaArgRef* const valueArgp = new AstLambdaArgRef{fl, "__Vidx", false};
+        AstLambdaArgRef* const valueRefp = new AstLambdaArgRef{fl, "__Vidx", false};
+        indexArgp->dtypep(indexDtp);
+        valueArgp->dtypep(indexDtp);
+        valueRefp->dtypep(indexDtp);
+        AstAdd* const addp = new AstAdd{
+            fl, valueRefp,
+            new AstConst{fl, AstConst::WidthedValue{}, 32, static_cast<uint32_t>(lo)}};
+        addp->dtypep(indexDtp);
+        AstWith* const withp = new AstWith{fl, indexArgp, valueArgp, addp};
+        withp->dtypep(indexDtp);
+        AstCMethodHard* const mapp = new AstCMethodHard{fl, queuep, VCMethod::ARRAY_MAP};
+        mapp->withp(withp);
+        mapp->dtypep(queuep->findQueueIndexDType());
+        mapp->didWidth(true);
+        return mapp;
+    }
     void methodCallUnpack(AstMethodCall* nodep, AstUnpackArrayDType* adtypep) {
         enum : uint8_t {
             UNKNOWN = 0,
@@ -6237,6 +6272,14 @@ class WidthVisitor final : public VNVisitor {
         } else if (AstCMethodHard* newp = methodCallArray(nodep, adtypep)) {
             newp->protect(false);
             newp->didWidth(true);
+            const int lo = indexLo(newp->fromp());
+            if (lo
+                && (newp->method() == VCMethod::ARRAY_FIND_INDEX
+                    || newp->method() == VCMethod::ARRAY_FIND_FIRST_INDEX
+                    || newp->method() == VCMethod::ARRAY_FIND_LAST_INDEX
+                    || newp->method() == VCMethod::ARRAY_UNIQUE_INDEX)) {
+                newp = newIndexOffset(newp, lo);
+            }
             nodep->replaceWith(newp);
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else {
@@ -9246,8 +9289,24 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstLambdaArgRef* nodep) override {
         UASSERT_OBJ(m_withp, nodep, "LambdaArgRef not underneath 'with' lambda");
+        // Visited again by the 'with' expression's final check; add the offset once
+        if (nodep->didWidthAndSet()) return;
         if (nodep->index()) {
-            nodep->dtypeFrom(m_withp->indexArgRefp());
+            // The name may be of an enclosing 'with'
+            const auto it = m_withIndexes.find(nodep->name());
+            UASSERT_OBJ(it != m_withIndexes.end(), nodep, "item.index outside its 'with'");
+            nodep->dtypeFrom(it->second.first);
+            // The lambda gets the storage index, item.index is the declared index
+            if (const int lo = it->second.second) {
+                FileLine* const fl = nodep->fileline();
+                VNRelinker relinker;
+                nodep->unlinkFrBack(&relinker);
+                AstNodeExpr* const newp = new AstAdd{
+                    fl, nodep,
+                    new AstConst{fl, AstConst::WidthedValue{}, 32, static_cast<uint32_t>(lo)}};
+                newp->dtypeFrom(nodep);
+                relinker.relink(newp);
+            }
         } else {
             nodep->dtypeFrom(m_withp->valueArgRefp());
         }

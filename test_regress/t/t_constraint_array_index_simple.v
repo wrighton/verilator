@@ -252,6 +252,20 @@ class Test24_CascadingConstraint;
   }
 endclass
 
+// Test 25: Nonzero low bound, item.index is the declared index
+class Test25_LowBound;
+  rand bit [7:0] data[1:3];
+  rand bit [7:0] desc[3:1];
+
+  constraint c {
+    data.sum() with ((item.index == 1) ? int'(item) : 0) == 5;
+    data.sum() with ((item.index == 2) ? int'(item) : 0) == 7;
+    data.sum() with ((item.index == 3) ? int'(item) : 0) == 9;
+    desc.sum() with ((item.index == 3) ? int'(item) : 0) == 4;
+    desc.sum() with (int'(item)) == 4;
+  }
+endclass
+
 module t;
   initial begin
     Test1_BasicSum t1;
@@ -278,6 +292,7 @@ module t;
     Test22_IndexPower t22;
     Test23_BoundaryElements t23;
     Test24_CascadingConstraint t24;
+    Test25_LowBound t25;
     int i;
 
     // Test: Basic sum
@@ -399,6 +414,16 @@ module t;
     t24 = new;
     i = t24.randomize();
     `checkd(i, 1)
+
+    // Test 25: Nonzero low bound
+    t25 = new;
+    i = t25.randomize();
+    `checkd(i, 1)
+    `checkd(t25.data[1], 5)
+    `checkd(t25.data[2], 7)
+    `checkd(t25.data[3], 9)
+    `checkd(t25.desc[3], 4)
+    `checkd(t25.desc[1], 0)
 
     $write("*-* All Finished *-*\n");
     $finish;
