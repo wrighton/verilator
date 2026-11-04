@@ -1033,7 +1033,18 @@ class ParamProcessor final {
         // interface, relink pins whose formals were cloned with the interface while clonep() is
         // still valid, so nested parameterized classes use the cloned interface parameters.
         if (AstIface* const newIfacep = VN_CAST(newModp, Iface)) {
-            newIfacep->foreach([](AstPin* pinp) { pinp->cloneRelinkGen(); });
+            // References to the interface itself are specialized from srcModp with srcModp's
+            // formals, as for classes below; specializing them from this clone would nest
+            // clones without bound
+            std::unordered_set<const AstPin*> selfRefPins;
+            newIfacep->foreach([&](AstIfaceRefDType* refp) {
+                if (refp->ifacep() != newIfacep) return;
+                refp->ifacep(VN_AS(srcModp, Iface));
+                for (const AstPin* const pinp : refp->paramspList()) selfRefPins.insert(pinp);
+            });
+            newIfacep->foreach([&](AstPin* pinp) {
+                if (!selfRefPins.count(pinp)) pinp->cloneRelinkGen();
+            });
         }
 
         // Mark the source module as a parameterized template now that a specialized
@@ -2257,22 +2268,11 @@ class ParamProcessor final {
                 bool allOwnParams = true;
                 for (AstPin* pinp = nodep->paramsp(); pinp && allOwnParams;
                      pinp = VN_AS(pinp->nextp(), Pin)) {
-                    if (AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType)) {
-                        if (AstParamTypeDType* const ptdp
-                            = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
-                            AstNodeModule* const ptdOwnerp
-                                = V3LinkDotIfaceCapture::findOwnerModule(ptdp);
-                            if (ptdOwnerp != m_modp) allOwnParams = false;
-                        } else {
-                            pinp->v3error(  // LCOV_EXCL_LINE
-                                "Self-referencing interface typedef "
-                                "parameter is not a type parameter of "
-                                "the enclosing interface");
-                        }
-                    } else {
-                        pinp->v3error(  // LCOV_EXCL_LINE
-                            "Self-referencing interface typedef "
-                            "parameter is not a type reference");
+                    const AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType);
+                    AstParamTypeDType* const ptdp
+                        = refp ? VN_CAST(refp->refDTypep(), ParamTypeDType) : nullptr;
+                    if (!ptdp || V3LinkDotIfaceCapture::findOwnerModule(ptdp) != m_modp) {
+                        allOwnParams = false;
                     }
                 }
                 if (allOwnParams) {
