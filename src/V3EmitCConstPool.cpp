@@ -71,12 +71,14 @@ class EmitCConstPool final : public EmitCConstInit {
             }
 
             puts("\n");
-            putns(varp, "extern ");
-            // Literal types should be constinit (no code generation needed)
-            if (varp->dtypep()->isLiteralType()) putns(varp, "VL_CONSTINIT_CXX20 ");
-            putns(varp, "const ");
-            emitVarDefn(varp);
-            putns(varp, ";\n");
+            if (!emitChunkedConstDefn(varp)) {
+                putns(varp, "extern ");
+                // Literal types should be constinit (no code generation needed)
+                if (varp->dtypep()->isLiteralType()) putns(varp, "VL_CONSTINIT_CXX20 ");
+                putns(varp, "const ");
+                emitVarDefn(varp);
+                putns(varp, ";\n");
+            }
             // Keep track of stats
             ++m_emitted[varp->valuep()->type()];
         }
