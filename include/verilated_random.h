@@ -840,11 +840,12 @@ public:
     void modifyMembers(T& obj, std::index_sequence<I...>, const std::string& baseName,
                        std::uint32_t randmodeIdx) {
         // Use the indices to access each member via std::get
+        const std::vector<std::string> names = obj.memberNames();
+        const std::vector<const char*> domains = obj.memberEnumDomains();
         (void)std::initializer_list<int>{
             (write_var(std::get<I>(obj.getMembers(obj)), obj.memberWidth()[I],
-                       (baseName + "." + obj.memberNames()[I]).c_str(), obj.memberDimension()[I],
-                       randmodeIdx),
-             0)...};
+                       (baseName + "." + names[I]).c_str(), obj.memberDimension()[I], randmodeIdx),
+             domains[I] ? enum_domain(baseName + "." + names[I], domains[I]) : void(), 0)...};
     }
 
     template <typename T, std::size_t... I>
