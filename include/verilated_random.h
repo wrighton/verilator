@@ -282,6 +282,8 @@ class VlRandomizer VL_NOT_FINAL {
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
+    // Array elements that solve-before pairs name, as variables of their solver terms
+    std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeElems;
     bool m_checkOnly = false;  // Set for randomize(null)
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
@@ -366,6 +368,8 @@ class VlRandomizer VL_NOT_FINAL {
     void solveDiversityXor(VlRNG& rngr, VlSolverSession& sess);
     // Layers of solve...before variables in dependency order
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
+    // The variable or array element a solve...before name names, nullptr if none
+    const VlRandomVar* solveBeforeVarp(const std::string& name);
     const char* phasedLogic() const;
     bool nextPhased(VlRNG& rngr, VlSolverSession& sess,
                     const std::vector<std::string>& uniqueExprs);
