@@ -1061,8 +1061,10 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(DYN_SLICE_ASSIGN,                   "sliceAssign",            false,  CLEAN,  false,      "rrr", "") \
     macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrr", "") \
     macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrr", "") \
+    macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrr", "") \
     macro(DYN_SLICE_BACK_BACK,                "sliceBackBack",          PURE,   CLEAN,  false,      "rr", "") \
     macro(DYN_SLICE_FRONT_BACK,               "sliceFrontBack",         PURE,   CLEAN,  false,      "rr", "") \
+    macro(DYN_SLICE_PLUS,                     "slicePlus",              PURE,   CLEAN,  false,      "rr", "") \
     macro(EVENT_CLEAR_FIRED,                  "clearFired",             false,  CLEAN,  false,      "", "") \
     macro(EVENT_CLEAR_TRIGGERED,              "clearTriggered",         false,  CLEAN,  false,      "", "") \
     macro(EVENT_FIRE,                         "fire",                   false,  CLEAN,  false,      "", "") \

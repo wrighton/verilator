@@ -7835,13 +7835,15 @@ class WidthVisitor final : public VNVisitor {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_BACK_BACK;
             } else if (slicep->method() == VCMethod::DYN_SLICE_FRONT_BACK) {
                 assignMethod = VCMethod::DYN_SLICE_ASSIGN_FRONT_BACK;
+            } else if (slicep->method() == VCMethod::DYN_SLICE_PLUS) {
+                assignMethod = VCMethod::DYN_SLICE_ASSIGN_PLUS;
             } else {
                 assignMethod = VCMethod::_ENUM_MAX;  // not a slice
             }
             if (assignMethod != VCMethod::_ENUM_MAX) {
                 UINFO(9, "LHS queue slice -> sliceAssign: " << nodep);
                 AstNodeExpr* const fromp = slicep->fromp()->unlinkFrBack();
-                // Collect existing slice index pins (lsb, msb)
+                // Collect existing slice index pins (lsb, msb or width)
                 AstNodeExpr* const lsbp = slicep->pinsp()->unlinkFrBack();
                 AstNodeExpr* const msbp = slicep->pinsp()->unlinkFrBack();
                 AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
