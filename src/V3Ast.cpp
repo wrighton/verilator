@@ -1262,7 +1262,7 @@ bool AstNode::gateTreeIter() const {
 }
 
 bool AstNode::sameTreeIter(const AstNode* node1p, const AstNode* node2p, bool ignNext,
-                           bool gateOnly) {
+                           bool gateOnly, SameJumpBlocks& blocks) {
     // private: Return true if the two trees are identical
     // Iterate over the list, rather than recurse, as lists might be long
     while (true) {
@@ -1274,13 +1274,31 @@ bool AstNode::sameTreeIter(const AstNode* node1p, const AstNode* node2p, bool ig
             node1p,
             "Comparison of a node with dtypep() with a node without dtypep()\n-node2=" << node2p);
         if (node1p->dtypep() && !node1p->dtypep()->similarDType(node2p->dtypep())) return false;
-        if (!node1p->sameNode(node2p) || (gateOnly && !node1p->isGateOptimizable())) return false;
-        if (!sameTreeIter(node1p->m_op1p, node2p->m_op1p, false, gateOnly)
-            || !sameTreeIter(node1p->m_op2p, node2p->m_op2p, false, gateOnly)
-            || !sameTreeIter(node1p->m_op3p, node2p->m_op3p, false, gateOnly)
-            || !sameTreeIter(node1p->m_op4p, node2p->m_op4p, false, gateOnly)) {
+        if (const AstJumpGo* const jump1p = VN_CAST(node1p, JumpGo)) {
+            // Same if branching after corresponding blocks in the trees, or after the same
+            // block enclosing both trees, so identical code in two copies compares the same
+            const AstJumpBlock* const block1p = jump1p->blockp();
+            const AstJumpBlock* const block2p = VN_DBG_AS(node2p, JumpGo)->blockp();
+            const auto it = std::find_if(blocks.begin(), blocks.end(), [&](const auto& pair) {
+                return pair.first == block1p || pair.second == block2p;
+            });
+            if (it == blocks.end() ? block1p != block2p
+                                   : (it->first != block1p || it->second != block2p)) {
+                return false;
+            }
+        } else if (!node1p->sameNode(node2p)) {
             return false;
         }
+        if (gateOnly && !node1p->isGateOptimizable()) return false;
+        const bool isBlock = VN_IS(node1p, JumpBlock);
+        if (isBlock) blocks.emplace_back(VN_AS(node1p, JumpBlock), VN_AS(node2p, JumpBlock));
+        if (!sameTreeIter(node1p->m_op1p, node2p->m_op1p, false, gateOnly, blocks)
+            || !sameTreeIter(node1p->m_op2p, node2p->m_op2p, false, gateOnly, blocks)
+            || !sameTreeIter(node1p->m_op3p, node2p->m_op3p, false, gateOnly, blocks)
+            || !sameTreeIter(node1p->m_op4p, node2p->m_op4p, false, gateOnly, blocks)) {
+            return false;
+        }
+        if (isBlock) blocks.pop_back();
         if (ignNext) return true;
         node1p = node1p->m_nextp;
         node2p = node2p->m_nextp;
