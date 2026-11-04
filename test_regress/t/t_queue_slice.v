@@ -12,6 +12,13 @@
 // verilog_format: on
 
 module t;
+  int pos = 1;
+  int calls = 0;
+  function int pos_call();
+    ++calls;
+    return pos;
+  endfunction
+
   initial begin
     typedef string q_t[$];
     q_t q;
@@ -168,6 +175,53 @@ module t;
       ri = '{1, 2, 3, 4, 5, 6, 7, 8, 9};
       qi = ri;
       `checkh(qi.size, 6);
+    end
+
+    // Indexed part-selects and slices of queues and dynamic arrays
+    begin
+      typedef int d_t[];
+      d_t d;
+      int iq[$];
+      iq = '{10, 11, 12, 13};
+      d = '{20, 21, 22, 23};
+      for (int j = 0; j < 3; ++j) begin
+        ri = iq[j+:2];
+        `checkp(ri, $sformatf("'{'h%0x, 'h%0x}", 10 + j, 11 + j));
+        ri = iq[j+1-:2];
+        `checkp(ri, $sformatf("'{'h%0x, 'h%0x}", 10 + j, 11 + j));
+        ri = d[j+:2];
+        `checkp(ri, $sformatf("'{'h%0x, 'h%0x}", 20 + j, 21 + j));
+      end
+      d = d[pos-:2];
+      `checkp(d, "'{'h14, 'h15}");
+      begin
+        // Narrow positions; '-:' going below the first element is clamped to it
+        bit [2:0] p3;
+        byte sp;
+        p3 = 0;
+        sp = 2;
+        ri = iq[p3-:2];
+        `checkp(ri, "'{'ha}");
+        ri = iq[sp-:2];
+        `checkp(ri, "'{'hb, 'hc}");
+      end
+      d = '{20, 21, 22, 23};
+      d = d[1:2];
+      `checkp(d, "'{'h15, 'h16}");
+      q = '{"a", "b", "c"};
+      q = q[pos+:2];
+      `checkp(q, "'{\"b\", \"c\"}");
+      // The position is evaluated once
+      ri = iq[pos_call()+:2];
+      `checkp(ri, "'{'hb, 'hc}");
+      `checkh(calls, 1);
+      iq[pos_call()+:2] = '{1, 2};
+      `checkp(iq, "'{'ha, 'h1, 'h2, 'hd}");
+      `checkh(calls, 2);
+      d = '{20, 21, 22, 23};
+      d[pos_call()-:2] = '{3, 4};
+      `checkp(d, "'{'h3, 'h4, 'h16, 'h17}");
+      `checkh(calls, 3);
     end
 
     $write("*-* All Finished *-*\n");
