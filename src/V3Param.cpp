@@ -2555,8 +2555,11 @@ public:
         if (AstIfaceRefDType* const ifaceRefp = VN_CAST(nodep, IfaceRefDType)) {
             if (nodeName.empty()) nodeName = ifaceRefp->cellName();
         }
-        const string instanceName
-            = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
+        // A class is not an instance, so it is named after the instance referring to it. Else
+        // the names along a chain of class references grow, quadratic in memory.
+        const string instanceName = nodeName.empty() || VN_IS(srcModp, Class)
+                                        ? someInstanceName
+                                        : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             for (AstPin* const pinp : cellp->paramspList()) {
