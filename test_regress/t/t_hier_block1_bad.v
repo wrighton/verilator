@@ -39,6 +39,7 @@ module t (  /*AUTOARG*/
       .in(in_ifs),
       .out(out_ifs)
   );
+  sub2 i_sub2 (.bus(in_ifs));
 
 endmodule
 
@@ -61,4 +62,10 @@ module sub1 (
 );
   `HIER_BLOCK
   assign out.data = in.data;
+endmodule
+
+module sub2 (
+    byte_ifs bus
+);
+  `HIER_BLOCK
 endmodule
