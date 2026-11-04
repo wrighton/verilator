@@ -81,6 +81,26 @@ class CycX;
   rand CycBase c;
 endclass
 
+// A tree through handles of a base class, which may form a cycle: each object's
+// pre/post_randomize() runs once per call (IEEE 1800-2023 18.6)
+class Expr;
+  rand bit [3:0] v;
+  int pre_count;
+  int post_count;
+  constraint c_v {v > 4'd0;}
+  function void pre_randomize();
+    ++pre_count;
+  endfunction
+  function void post_randomize();
+    ++post_count;
+  endfunction
+endclass
+
+class BinExpr extends Expr;
+  rand Expr lhs;
+  rand Expr rhs;
+endclass
+
 module t;
   initial begin
     automatic Ring ring = new;
@@ -147,6 +167,32 @@ module t;
         randomize_result = cd.randomize();
         `checkd(randomize_result, 1);
         `checkd(cd.vb < 7'd3, 1'b1);
+      end
+    end
+    begin
+      automatic BinExpr be = new;
+      automatic BinExpr l = new;
+      automatic Expr ll = new;
+      automatic Expr r = new;
+      be.lhs = l;
+      be.rhs = r;
+      l.lhs = ll;
+      for (int i = 1; i <= 5; ++i) begin
+        be.v = 0;
+        l.v = 0;
+        ll.v = 0;
+        r.v = 0;
+        randomize_result = be.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(be.pre_count, i);
+        `checkd(l.pre_count, i);
+        `checkd(ll.pre_count, i);
+        `checkd(r.pre_count, i);
+        `checkd(be.post_count, i);
+        `checkd(l.post_count, i);
+        `checkd(ll.post_count, i);
+        `checkd(r.post_count, i);
+        `checkd(be.v != 0 && l.v != 0 && ll.v != 0 && r.v != 0, 1'b1);
       end
     end
     $write("*-* All Finished *-*\n");

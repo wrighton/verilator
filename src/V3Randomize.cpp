@@ -2073,6 +2073,8 @@ class RandomizeVisitor final : public VNVisitor {
             if (!classRefp) return;
             AstClass* const memberClassp = classRefp->classp();
             if (memberClassp == classp) return;  // Avoid self-reference
+            // Randomized by member.randomize(), which calls its callbacks
+            if (inRandHandleCycle(memberVarp, classp)) return;
 
             // Force-visit member class if not yet processed
             if (memberClassp->user1()) {
@@ -2108,26 +2110,11 @@ class RandomizeVisitor final : public VNVisitor {
             if (!stmtsp) return;
 
             // Wrap in null check
-            AstNodeExpr* condp
-                = new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
-                             new AstConst{fl, AstConst::Null{}}};
-            // Each object of a cycle is reached once, while flagged as being randomized
-            if (inRandHandleCycle(memberVarp, classp)) {
-                condp
-                    = new AstLogAnd{fl, condp,
-                                    new AstNot{fl, newRandomizingSelp(fl, ownerClassp, memberVarp,
-                                                                      VAccess::READ)}};
-                AstNodeStmt* const setp = new AstAssign{
-                    fl, newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
-                    new AstConst{fl, AstConst::BitTrue{}}};
-                stmtsp = AstNode::addNext(setp, stmtsp);
-                stmtsp = AstNode::addNext(
-                    stmtsp,
-                    new AstAssign{fl,
-                                  newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
-                                  new AstConst{fl, AstConst::BitFalse{}}});
-            }
-            AstIf* const nullCheckp = new AstIf{fl, condp, stmtsp};
+            AstIf* const nullCheckp = new AstIf{
+                fl,
+                new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
+                           new AstConst{fl, AstConst::Null{}}},
+                stmtsp};
 
             // Wrap in rand_mode check
             callbackTaskp->addStmtsp(wrapIfRandMode(classp, memberVarp, nullCheckp));
