@@ -4845,6 +4845,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     UASSERT_OBJ(ifacerefp->ifaceViaCellp(), ifacerefp, "Unlinked interface");
                     // Really this is a scope reference into an interface
                     UINFO(9, indent() << "varref-ifaceref " << m_ds.m_dotText << "  " << nodep);
+                    // After a dotted prefix, reference the variable relative to that prefix
+                    AstNodeExpr* newp;
+                    if (m_ds.m_dotText.empty()) {
+                        newp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
+                    } else {
+                        AstVarXRef* const xrefp = new AstVarXRef{nodep->fileline(), varp,
+                                                                 m_ds.m_dotText, VAccess::READ};
+                        xrefp->containsGenBlock(m_ds.m_genBlk);
+                        newp = xrefp;
+                        // Through an instance array, as the last name, link after V3Param
+                        if (m_ds.m_unresolvedCell && m_ds.m_dotPos == DP_FINAL
+                            && m_ds.m_unlinkedScopep) {
+                            newp = new AstUnlinkedRef{nodep->fileline(), newp, newp->name(),
+                                                      m_ds.m_unlinkedScopep->unlinkFrBack()};
+                            m_ds.m_unlinkedScopep = nullptr;
+                            m_ds.m_unresolvedCell = false;
+                        }
+                    }
                     m_ds.m_dotText = VString::dot(m_ds.m_dotText, ".", nodep->name());
                     // If modport specified, use modport symbol table for lookup of virtual ports
                     if (ifacerefp->modportp() && m_statep->existsNodeSym(ifacerefp->modportp())) {
@@ -4854,9 +4872,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                     m_ds.m_dotPos = DP_SCOPE;
                     ok = true;
-
-                    AstVarRef* const refp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
-                    nodep->replaceWith(refp);
+                    nodep->replaceWith(newp);
 
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 } else if (allowVar) {
