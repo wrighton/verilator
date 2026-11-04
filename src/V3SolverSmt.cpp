@@ -699,7 +699,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         // similar to V3WidthSel.cpp
         // skipRefp() unwraps typedef wrappers (AstRefDType) so the dtype kind
         // checks below recognize types spelled as `typedef <scalar> <name>[$]`.
-        AstNodeDType* const arrDtp = arrayp->unlinkFrBack()->dtypep()->skipRefp();
+        if (arrayp->backp()) arrayp->unlinkFrBack();
+        AstNodeDType* const arrDtp = arrayp->dtypep()->skipRefp();
         AstNodeExpr* selp = nullptr;
         if (VN_IS(arrDtp, QueueDType) || VN_IS(arrDtp, DynArrayDType))
             selp = new AstCMethodHard{fl, arrayp, VCMethod::ARRAY_AT, idxp};
@@ -992,6 +993,21 @@ class ConstraintExprVisitor final : public VNVisitor {
                                  new AstForeach{fl, headerp, bodyp}, true});
         cexprp->add("return ret;\n})()");
         return new AstSFormatF{fl, "%s", false, cexprp};
+    }
+    // SMT constant with the current value of a variable, an SMT array for an array
+    AstNodeExpr* newStateFormatp(AstNodeExpr* varExprp) {
+        // A rand_mode(0) array selected by a random index needs all of its elements
+        const AstNodeDType* const dtypep = varExprp->dtypep()->skipRefp();
+        if (!dtypep->isNonPackedArray() || !dtypep->subDTypep()->skipRefp()->isIntegralOrPacked())
+            return getConstFormat(varExprp);
+        varExprp->user1(false);  // Read the elements as state
+        // newIndexedArrayp replaces the index by each element's
+        AstNodeExpr* const selp
+            = newSel(varExprp->fileline(), varExprp, new AstConst{varExprp->fileline(), 0});
+        AstSFormatF* const arrayp = newIndexedArrayp(selp, selp);
+        // varExprp may be the visited reference, which a global constraint keeps for later
+        VL_DO_DANGLING(pushDeletep(selp), selp);
+        return arrayp;
     }
     // Replace an expression reading a non-random array through a random index
     bool editStateArraySel(AstNodeExpr* nodep) {
@@ -1364,8 +1380,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
 
         // Get const format, using memberRefp if available for correct width/value
-        AstNodeExpr* constFormatp
-            = memberRefp ? getConstFormat(memberRefp->cloneTree(false)) : getConstFormat(nodep);
+        AstNodeExpr* constFormatp = newStateFormatp(memberRefp ? memberRefp->cloneTree(false)
+                                                               : static_cast<AstNodeExpr*>(nodep));
         if (!randMode.usesMode) {
             exprp = new AstCond{varp->fileline(), handlesActivep, exprp, constFormatp};
             exprp->user1(true);  // Mark as formatted
