@@ -1823,8 +1823,22 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstEmptyQueue* nodep) override {
         nodep->dtypeSetEmptyQueue();
-        if (!VN_IS(nodep->backp(), Assign) && !VN_IS(nodep->backp(), Var)
-            && !VN_IS(nodep->backp(), Arg)) {
+        if (VN_IS(nodep->backp(), Arg)) {
+            // Converted once widthed with the port's or built-in method argument's type
+            const AstNodeDType* const argDtp = m_vup->dtypeNullSkipRefp();
+            if (!argDtp) return;
+            AstNodeExpr* newp = newConsDynArrayOrQueue(nodep->fileline(), argDtp);
+            if (!newp) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported/Illegal: empty queue ('{}') in this context");
+                newp = new AstConst{nodep->fileline(), AstConst::Unsized32{}, 0};
+            }
+            newp->dtypeFrom(m_vup->dtypep());
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        if (!VN_IS(nodep->backp(), Assign) && !VN_IS(nodep->backp(), Var)) {
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported/Illegal: empty queue ('{}') in this context");
         }
@@ -8910,18 +8924,6 @@ class WidthVisitor final : public VNVisitor {
                 AstNodeExpr* pinp = argp->exprp();
                 if (!pinp) continue;  // Argument error we'll find later
                 AstNodeDType* const portDTypep = portp->dtypep()->skipRefToEnump();
-                if (VN_IS(pinp, EmptyQueue)) {
-                    AstNodeExpr* newp = newConsDynArrayOrQueue(pinp->fileline(), portDTypep);
-                    if (!newp) {
-                        pinp->v3warn(E_UNSUPPORTED,
-                                     "Unsupported/Illegal: empty queue ('{}') in this context");
-                        newp = new AstConst{pinp->fileline(), AstConst::Unsized32{}, 0};
-                    }
-                    newp->dtypeFrom(portDTypep);
-                    pinp->replaceWith(newp);
-                    VL_DO_DANGLING(pushDeletep(pinp), pinp);
-                    pinp = newp;
-                }
                 const AstNodeDType* const pinDTypep = pinp->dtypep()->skipRefToEnump();
                 const AstIfaceRefDType* const portIfacep
                     = VN_CAST(portDTypep->elemDTypep(true), IfaceRefDType);
@@ -11703,7 +11705,6 @@ class WidthVisitor final : public VNVisitor {
     // Check DPI open array argument 'portp' can be passed actual 'pinp' of a call, else report
     static void checkOpenArrayActual(const AstVar* portp, const AstNode* pinp) {
         const AstNodeDType* const pinDTypep = pinp->dtypep()->skipRefp();
-        if (VN_IS(pinDTypep, EmptyQueueDType)) return;  // '{}', reported as an argument
         if (VN_IS(pinDTypep, StreamDType)) {
             pinp->v3warn(E_UNSUPPORTED, "Unsupported: DPI open array argument "
                                             << portp->prettyNameQ()
