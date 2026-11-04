@@ -1680,6 +1680,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         }
         // Move non-port declarations and statements from the out-of-block task
         // to the prototype task. Rewrite port.X references to just X in the body.
+        AstNode* firstNewDeclp = nullptr;  // First declaration added to the prototype
         for (AstNode* const declp : nodep->declspList()) {
             // Skip port declarations -- they already exist in the prototype
             if (const AstVar* const varp = VN_CAST(declp, Var)) {
@@ -1689,15 +1690,32 @@ class LinkDotFindVisitor final : public VNVisitor {
             AstNode* const newDeclp = declp->cloneTree(false);
             rewriteIfacePortRefsSingle(newDeclp, portName);
             protoTaskp->addDeclsp(newDeclp);
+            if (!firstNewDeclp) firstNewDeclp = newDeclp;
         }
+        // The statements go in a block named for the task, as their unnamed blocks are numbered
+        // in this module, so would clash with the interface's own.
+        AstBegin* const bodyp
+            = new AstBegin{nodep->fileline(), "__Vexport_" + nodep->name(), nullptr, true};
         for (AstNodeStmt* const stmtp : nodep->stmtspList()) {
             // Clone this statement and rewrite port references
             AstNodeStmt* const newStmtp = stmtp->cloneTree(false);
             rewriteIfacePortRefsSingle(newStmtp, portName);
-            protoTaskp->addStmtsp(newStmtp);
+            bodyp->addStmtsp(newStmtp);
         }
+        protoTaskp->addStmtsp(bodyp);
         // Mark prototype as no longer prototype (it has a body now)
         protoTaskp->prototype(false);
+        if (m_statep->existsNodeSym(protoTaskp)) {
+            // The interface was visited first, so the body needs its symbols now
+            VL_RESTORER(m_modSymp);
+            VL_RESTORER(m_curSymp);
+            VL_RESTORER(m_ftaskp);
+            m_modSymp = m_statep->getNodeSym(ifaceModp);
+            m_curSymp = m_statep->getNodeSym(protoTaskp);
+            m_ftaskp = protoTaskp;
+            iterateAndNextNull(firstNewDeclp);  // The declarations added above, to the last
+            iterate(bodyp);
+        }
         // Delete the out-of-block task from the module
         nodep->unlinkFrBack();
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
