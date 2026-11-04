@@ -1787,15 +1787,22 @@ class RandomizeVisitor final : public VNVisitor {
             return createArrayForeachLoop(fl, wildDtp, exprp, outputVarp);
         } else {
             AstNodeExpr* valp;
+            AstVar* randVarp = nullptr;  // Random value of an enum
+            AstNodeStmt* randStmtsp = nullptr;  // Draws the random value, before the assignment
             AstNodeDType* const dtypep = memberp ? memberp->subDTypep() : exprp->dtypep();
             if (AstEnumDType* const enumDtp = VN_CAST(dtypep->skipRefToEnump(true), EnumDType)) {
-                AstVarRef* const tabRefp = enumValueTabRefp(enumDtp);
-                AstNodeExpr* const randp
-                    = newRandValue(fl, randcVarp, exprp->findBasicDType(VBasicDTypeKwd::UINT32));
-                AstNodeExpr* const moddivp = new AstModDiv{
-                    fl, randp, new AstConst{fl, static_cast<uint32_t>(enumDtp->itemCount())}};
-                moddivp->dtypep(enumDtp);
-                valp = new AstArraySel{fl, tabRefp, moddivp};
+                // Random value in a variable: a wide value is copied word by word, each word
+                // evaluating the table index again
+                randVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VenumRand"),
+                                      exprp->findUInt32DType()};
+                randVarp->funcLocal(true);
+                randVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+                randStmtsp = new AstAssign{fl, new AstVarRef{fl, randVarp, VAccess::WRITE},
+                                           newRandValue(fl, randcVarp, randVarp->dtypep())};
+                AstNodeExpr* const moddivp
+                    = new AstModDiv{fl, new AstVarRef{fl, randVarp, VAccess::READ},
+                                    new AstConst{fl, static_cast<uint32_t>(enumDtp->itemCount())}};
+                valp = new AstArraySel{fl, enumValueTabRefp(enumDtp), moddivp};
             } else {
                 valp
                     = newRandValue(fl, randcVarp, (memberp ? memberp->dtypep() : exprp->dtypep()));
@@ -1810,7 +1817,11 @@ class RandomizeVisitor final : public VNVisitor {
                 if (varrefp->access().isWriteOrRW()) varp = varrefp->varp();
                 return varp != nullptr;
             });
-            return wrapIfRandMode(VN_AS(m_modp, Class), varp, assignp);
+            if (!randStmtsp) return wrapIfRandMode(VN_AS(m_modp, Class), varp, assignp);
+            AstBegin* const beginp
+                = new AstBegin{fl, "", AstNode::addNext(randStmtsp, assignp), false};
+            beginp->addDeclsp(randVarp);
+            return wrapIfRandMode(VN_AS(m_modp, Class), varp, beginp);
         }
     }
     AstNodeExpr* newRandValue(FileLine* const fl, AstVar* const randcVarp,
