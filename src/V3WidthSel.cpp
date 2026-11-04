@@ -411,10 +411,6 @@ class WidthSelVisitor final : public VNVisitor {
                 && fromRange.lo() == lsb) {  // Extracting whole of original array
                 nodep->replaceWith(fromp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else if (fromRange.elements() == 1) {  // Extracting single element
-                AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, lsbp};
-                nodep->replaceWith(newp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
             } else {  // Slice
                 AstSliceSel* const newp
                     = new AstSliceSel{nodep->fileline(), fromp,
@@ -535,10 +531,6 @@ class WidthSelVisitor final : public VNVisitor {
                 && VN_AS(rhsp, Const)->toSInt()
                        == fromRange.lo()) {  // Extracting whole of original array
                 nodep->replaceWith(fromp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else if (fromRange.elements() == 1) {  // Extracting single element
-                AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, rhsp};
-                nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
             } else if (VN_IS(rhsp, Const)) {  // Slice
                 const int32_t rhs = VN_AS(rhsp, Const)->toSInt();
