@@ -3943,6 +3943,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         return shadowEntp;
     }
+    // Find a simple identifier upward, looking past named blocks
+    static VSymEnt* findIdFallbackSkipBlocks(VSymEnt* lookp, const string& name) {
+        // A block is never a valid variable operand, so look past it to an outer
+        // variable as VCS does (else the reference could only be an error).
+        // Keep the first block found to preserve the "found: ..." error.
+        VSymEnt* blockEntp = nullptr;
+        for (; lookp; lookp = lookp->fallbackp()) {
+            VSymEnt* const foundp = lookp->findIdFlat(name);
+            if (!foundp) continue;
+            if (!VN_IS(foundp->nodep(), NodeBlock) && !VN_IS(foundp->nodep(), GenBlock)) {
+                return foundp;
+            }
+            if (!blockEntp) blockEntp = foundp;
+        }
+        return blockEntp;
+    }
 
     void symIterateChildren(AstNode* nodep, VSymEnt* symp) {
         // Iterate children, changing to given context, with restore to old context
@@ -4678,7 +4694,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 foundp = m_statep->findDotted(nodep->fileline(), m_ds.m_dotSymp, nodep->name(),
                                               baddot, okSymp, first);  // Maybe nullptr
             } else if (first) {
-                foundp = m_ds.m_dotSymp->findIdFallback(nodep->name());
+                foundp = findIdFallbackSkipBlocks(m_ds.m_dotSymp, nodep->name());
             } else {
                 foundp = m_ds.m_dotSymp->findIdFlat(nodep->name());
             }
