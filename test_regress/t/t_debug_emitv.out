@@ -447,7 +447,7 @@ module t;
                 $write("");
             end
             sum = dpi_exported(32'sh3);
-            if (((cls_arr[2'h0]) == null)) begin
+            if (((cls_arr[32'sh0]) == null)) begin
                 $write("");
             end
             if ((PP != 32'sh2)) begin
@@ -472,10 +472,10 @@ module t;
                  != 32'sh0)) begin
                 $write("");
             end
-            if (((usarr.marr[1'h0]) != 32'sh0)) begin
+            if (((usarr.marr[32'sh0]) != 32'sh0)) begin
                 $write("");
             end
-            if ((((arraymanyd[4'h0])[4'h0])[4'h0])[7:4][3:2][2]) begin
+            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[7:4][3:2][2]) begin
                 $write("");
             end
             if ((var_part != 32'sh0)) begin
@@ -1605,14 +1605,14 @@ class Cls;
     constraint array_values {
 
         ???? // CONSTRAINTBEFORE
-        (rarray[2'h0])rmember1
+        (rarray[32'sh0])rmember1
         ???? // CONSTRAINTFOREACH
 
         ???? // FOREACHHEADER
         rarrayint i;
 
         ???? // CONSTRAINTEXPR
-        ((rarray[i[1:0]]) == (rmember1 + i))}
+        ((rarray[i]) == (rmember1 + i))}
     static constraint static_c {
 
         ???? // CONSTRAINTEXPR

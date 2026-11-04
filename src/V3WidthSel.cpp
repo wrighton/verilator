@@ -109,7 +109,7 @@ class WidthSelVisitor final : public VNVisitor {
         return FromData(errp, ddtypep, fromRange);
     }
 
-    AstNodeExpr* newSubNeg(AstNodeExpr* lhsp, int32_t rhs) {
+    AstNodeExpr* newSubNeg(AstNodeExpr* lhsp, int32_t rhs, bool signedRhs = false) {
         // Return lhs-rhs, but if rhs is negative use an add, so we won't
         // have to deal with signed math and related 32bit sign extension problems
         if (rhs == 0) {
@@ -120,17 +120,32 @@ class WidthSelVisitor final : public VNVisitor {
             num.opSub(VN_AS(lhsp, Const)->num(), V3Number(lhsp, 32, rhs));
             num.isSigned(lhsp->isSigned());
             return new AstConst{lhsp->fileline(), num};
-        } else if (rhs > 0) {
+        }
+        // Unsized, as a literal; a signed constant sign extends a narrower signed lhs
+        if (signedRhs && rhs == std::numeric_limits<int32_t>::min()) {
+            // The most negative int has no signed magnitude, so subtract it, sign extended to a
+            // wider lhs
+            V3Number bound{lhsp, 32, static_cast<uint32_t>(rhs)};
+            bound.width(32, false);
+            bound.isSigned(true);
             AstNodeExpr* const newp
-                = new AstSub{lhsp->fileline(), lhsp,
-                             new AstConst(lhsp->fileline(), AstConst::Unsized32{}, rhs)};
+                = new AstSub{lhsp->fileline(), lhsp, new AstConst{lhsp->fileline(), bound}};
+            newp->dtypeFrom(lhsp);
+            return newp;
+        }
+        // Negated in 64 bits, as a low bound may be the most negative int
+        V3Number offset{lhsp, 32,
+                        static_cast<uint32_t>(rhs < 0 ? -static_cast<int64_t>(rhs) : rhs)};
+        offset.width(32, false);
+        offset.isSigned(signedRhs);
+        AstConst* const offsetp = new AstConst{lhsp->fileline(), offset};
+        if (rhs > 0) {
+            AstNodeExpr* const newp = new AstSub{lhsp->fileline(), lhsp, offsetp};
             // We must make sure sub gets sign of original value, not from the constant
             newp->dtypeFrom(lhsp);
             return newp;
         } else {  // rhs < 0;
-            AstNodeExpr* const newp
-                = new AstAdd{lhsp->fileline(), lhsp,
-                             new AstConst(lhsp->fileline(), AstConst::Unsized32{}, -rhs)};
+            AstNodeExpr* const newp = new AstAdd{lhsp->fileline(), lhsp, offsetp};
             // We must make sure sub gets sign of original value, not from the constant
             newp->dtypeFrom(lhsp);
             return newp;
@@ -501,7 +516,8 @@ class WidthSelVisitor final : public VNVisitor {
             // SELBIT(array, index) -> ARRAYSEL(array, index)
             AstNodeExpr* subp = rhsp;
             if (fromRange.lo() != 0 || fromRange.hi() < 0) {
-                subp = newSubNeg(subp, fromRange.lo());
+                // Signed for a signed index, as V3Width keeps the index's full value
+                subp = newSubNeg(subp, fromRange.lo(), subp->isSigned());
             }
             AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, subp};
             UINFOTREE(9, newp, "", "SELBTn");
