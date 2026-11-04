@@ -20,6 +20,10 @@ module t;
 
   localparam TWO = 2;
 
+  function automatic int bounded_size(int q[$:1]);
+    return q.size();
+  endfunction
+
   int q[$ : TWO];  // Shall not go higher than [2], i.e. size 3
 
   initial begin
@@ -145,6 +149,33 @@ module t;
       q = {bq2_t'{4, 5, 6}, 7};
       `checkd(q.size(), 3);
       `checkd(q[2], 6);
+    end
+
+    begin
+      // Casts to and from a bounded queue type, and streams into bounded queues
+      typedef int bq1_t[$:1];
+      typedef int uq_t[$];
+      int src[$];
+      bq1_t b;
+      int u[$];
+      src = '{'h01020304, 9, 10};
+      b = bq1_t'(src);
+      `checkd(b.size(), 2);
+      `checkd(b[0], 'h01020304);
+      `checkd(b[1], 9);
+      `checkd($size(bq1_t'(src)), 2);
+      u = uq_t'(b);
+      `checkd(u.size(), 2);
+      `checkd(u[1], 9);
+      b = {<<{src}};
+      `checkd(b.size(), 2);
+      `checkd(b[0], 'h50000000);
+      `checkd(b[1], 'h90000000);
+      u = {<<byte{b}};
+      `checkd(u.size(), 2);
+      `checkd(u[0], 'h90);
+      `checkd(u[1], 'h50);
+      `checkd(bounded_size(bq1_t'({<<{src}})), 2);
     end
 
     $write("*-* All Finished *-*\n");
