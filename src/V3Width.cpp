@@ -2347,6 +2347,7 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstSClocked* nodep) override {
+        // Not m_underSExpr, as a parenthesized clocking event may also lead a property_expr
         m_hasSExpr = true;
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
