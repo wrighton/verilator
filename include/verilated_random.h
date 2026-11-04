@@ -312,7 +312,7 @@ class VlRandomizer VL_NOT_FINAL {
     void reportUnsatCore(VlSolverSession& sess);
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
     void recordRandcValues();  // Record solved randc values for future exclusion
-    size_t hashConstraints(const std::vector<std::string>& extras) const;
+    size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly);
     // "(distinct ...)" expression per unique-constrained array
     std::vector<std::string> buildUniqueExprs() const;
