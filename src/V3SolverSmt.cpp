@@ -3432,7 +3432,11 @@ class SolverSmtLowering final : public V3SolverLowering {
                 new AstNot{fl, RandomizeUtil::newElemModeOffp(
                                    RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp)}};
         }
-        VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
+        AstNodeExpr* const elemp = newElemp(fl, objp, arrVarp, offsetp);
+        if (AstNodeExpr* const modep = newObjConstraintModep(elemp, it->second.origp)) {
+            condp = new AstLogAnd{fl, condp, modep};
+        }
+        VL_DO_DANGLING(elemp->deleteTree(), elemp);
         AstNodeStmt* const bodyp = foreachp->bodyp()->unlinkFrBackWithNext();
         foreachp->addBodyp(new AstIf{fl, condp, bodyp});
     }
@@ -3528,8 +3532,38 @@ class SolverSmtLowering final : public V3SolverLowering {
         m_elemModePinPath.erase(classp);
         return stmtsp;
     }
+    // Read of the constraint_mode() of constraint constrp of objp, nullptr if never set
+    AstNodeExpr* newObjConstraintModep(AstNodeExpr* const objp, AstConstraint* const constrp) {
+        const RandomizeMode mode = {.asUQuad = constrp->user1()};
+        if (!mode.usesMode) return nullptr;
+        FileLine* const fl = objp->fileline();
+        AstClass* const classp = VN_AS(objp->dtypep()->skipRefp(), ClassRefDType)->classp();
+        AstNodeExpr* modesp;
+        if (constrp->isStatic()) {
+            AstVar* const modeVarp = getStaticConstraintModeVar(classp);
+            modesp = new AstVarRef{fl, VN_AS(modeVarp->user2p(), NodeModule), modeVarp,
+                                   VAccess::READ};
+        } else {
+            AstVar* const modeVarp = getConstraintModeVar(classp);
+            modesp = new AstMemberRef{fl, objp->cloneTree(false), modeVarp};
+        }
+        AstCMethodHard* const atp
+            = new AstCMethodHard{fl, modesp, VCMethod::ARRAY_AT, new AstConst{fl, mode.index}};
+        atp->dtypeSetUInt32();
+        return atp;
+    }
     AstNodeStmt* wrapIfConstraintMode(AstClass* classp, AstConstraint* const constrp,
                                       AstNodeStmt* stmtp) {
+        const auto it = m_cloneObjps.find(constrp);
+        if (it != m_cloneObjps.end()) {
+            // The constraint of an object can be off in that object (IEEE 1800-2023 18.9), but
+            // not in the object constraining it. skipInactiveElems checks the objects of an
+            // array.
+            AstNodeExpr* const objp = it->second.objp;
+            if (!VN_IS(objp->dtypep()->skipRefp(), ClassRefDType)) return stmtp;
+            AstNodeExpr* const modep = newObjConstraintModep(objp, it->second.origp);
+            return modep ? new AstIf{stmtp->fileline(), modep, stmtp} : stmtp;
+        }
         const RandomizeMode rmode = {.asUQuad = constrp->user1()};
         AstVar* const modeVarp = constrp->isStatic() ? getStaticConstraintModeVar(classp)
                                                      : getConstraintModeVar(classp);
