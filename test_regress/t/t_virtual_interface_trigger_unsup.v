@@ -6,7 +6,6 @@
 
 interface str_if;
   string s;
-  event ed[];
 endinterface
 
 module t;
@@ -15,7 +14,6 @@ module t;
 
   initial begin
     vif.s = "hello";
-    vif.ed = new[2];
     $finish;
   end
 endmodule
