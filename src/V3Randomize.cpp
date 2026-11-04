@@ -425,10 +425,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
         return cloneConstrp;
     }
-    // Add a constraint cloned for the object (or object array) objp to targetClassp
+    // Add a constraint cloned from origp for the object (or object array) objp to targetClassp
     void addClonedConstraint(AstClass* targetClassp, AstConstraint* cloneConstrp,
-                             AstNodeExpr* objp) {
-        m_cloneObjps.emplace(cloneConstrp, ClonedConstraint{objp->cloneTree(false)});
+                             AstConstraint* origp, AstNodeExpr* objp) {
+        m_cloneObjps.emplace(cloneConstrp, ClonedConstraint{objp->cloneTree(false), origp});
         targetClassp->addMembersp(cloneConstrp);
         // Immediately iterate to set user1 marks
         iterateConst(cloneConstrp);
@@ -453,7 +453,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         AstNodeExpr* const objp = buildMemberRefChain(rootVarRefp, newPath);
         if (AstConstraint* const cloneConstrp = cloneObjectConstraint(
                 constrp, objp, clonePathPrefix(rootVarRefp, newPath), targetClassp)) {
-            addClonedConstraint(targetClassp, cloneConstrp, objp);
+            addClonedConstraint(targetClassp, cloneConstrp, constrp, objp);
         }
         VL_DO_DANGLING(objp->deleteTree(), objp);
     }
@@ -548,7 +548,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             AstNodeConstraintItem* const itemsp = cloneConstrp->itemsp()->unlinkFrBackWithNext();
             cloneConstrp->addItemsp(new AstConstraintForeach{
                 fl, new AstForeachHeader{fl, arrRefp->cloneTree(false), idxVarp}, itemsp});
-            addClonedConstraint(targetClassp, cloneConstrp, arrRefp);
+            addClonedConstraint(targetClassp, cloneConstrp, constrp, arrRefp);
         }
     }
 
