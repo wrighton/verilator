@@ -121,15 +121,42 @@ AstVar* ElemRandModes::modeVarp(AstVar* arrVarp) {
     return modeVarp;
 }
 
-AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstVar* const arrVarp,
+AstNodeDType* RandomizeUtil::arrayElementDTypep(AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefp();
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+    return dtypep;
+}
+
+AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstNodeDType* const arrDtp,
                                            AstNodeExpr* const idxp) {
-    const AstUnpackArrayDType* const unpackDtp
-        = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
+    const AstUnpackArrayDType* const unpackDtp = VN_CAST(arrDtp->skipRefp(), UnpackArrayDType);
     if (!unpackDtp) return idxp;
     AstNodeExpr* const offsetp
         = new AstSub{fl, idxp, new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
     offsetp->dtypeSetUInt32();
     return offsetp;
+}
+
+AstNodeExpr* RandomizeUtil::newIdxSelp(FileLine* const fl, AstNodeExpr* const arrp,
+                                       AstVar* const idxVarp) {
+    AstNodeDType* const arrDtp = arrp->dtypep()->skipRefp();
+    // foreach gives the declared index, a select takes the offset
+    AstNodeExpr* const offsetp
+        = newElemOffsetp(fl, arrDtp, new AstVarRef{fl, idxVarp, VAccess::READ});
+    AstNodeExpr* selp;
+    if (VN_IS(arrDtp, UnpackArrayDType)) {
+        selp = new AstArraySel{fl, arrp, offsetp};
+    } else {
+        selp = new AstCMethodHard{fl, arrp, VCMethod::ARRAY_AT, offsetp};
+    }
+    selp->dtypep(arrDtp->subDTypep());
+    return selp;
+}
+
+AstNodeExpr* RandomizeUtil::newElemSelp(FileLine* const fl, AstNodeExpr* arrp,
+                                        const std::vector<AstVar*>& idxVarps) {
+    for (AstVar* const idxVarp : idxVarps) arrp = newIdxSelp(fl, arrp, idxVarp);
+    return arrp;
 }
 
 bool RandomizeUtil::isClassHandleArray(AstVar* varp) {

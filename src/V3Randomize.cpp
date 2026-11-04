@@ -458,12 +458,20 @@ class RandomizeMarkVisitor final : public VNVisitor {
         VL_DO_DANGLING(objp->deleteTree(), objp);
     }
 
-    // Whether varp is a fixed-size or dynamic array, or queue, of class handles
+    // Whether dtypep is a fixed-size or dynamic array, or a queue
+    static bool isIndexedArray(const AstNodeDType* dtypep) {
+        return VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, DynArrayDType)
+               || VN_IS(dtypep, QueueDType);
+    }
+    // Whether varp is a fixed-size or dynamic array, or queue, of class handles, or of
+    // fixed-size arrays of them
     static bool isHandleArray(const AstVar* varp) {
-        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
-        return (VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, DynArrayDType)
-                || VN_IS(dtypep, QueueDType))
-               && VN_IS(dtypep->subDTypep()->skipRefp(), ClassRefDType);
+        // Elements of inner dynamic arrays or queues are nested accesses, not supported
+        const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+        if (!isIndexedArray(dtypep)) return false;
+        dtypep = dtypep->subDTypep()->skipRefp();
+        while (VN_IS(dtypep, UnpackArrayDType)) dtypep = dtypep->subDTypep()->skipRefp();
+        return VN_IS(dtypep, ClassRefDType);
     }
     // Whether refp is a reference to the same member as pathp, through the same objects
     static bool samePath(const AstNodeExpr* refp, const AstNodeExpr* pathp) {
@@ -490,8 +498,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
         // object.
         const AstMemberRef* const arrSelp = VN_CAST(arrRefp, MemberRef);
         AstVar* const arrVarp = arrSelp ? arrSelp->varp() : VN_AS(arrRefp, VarRef)->varp();
-        AstNodeDType* const elemRefDtp = arrVarp->dtypep()->skipRefp()->subDTypep();
-        const AstClassRefDType* const elemDtp = VN_AS(elemRefDtp->skipRefp(), ClassRefDType);
+        const AstClassRefDType* const elemDtp
+            = VN_AS(RandomizeUtil::arrayElementDTypep(arrVarp->dtypep()), ClassRefDType);
         // Not counting the size, which is a separate solver variable
         const bool referenced
             = targetClassp->existsMember([&](const AstClass*, const AstConstraint* constrp) {
@@ -527,27 +535,29 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 })) {
                 continue;
             }
-            AstVar* const idxVarp
-                = new AstVar{fl, VVarType::BLOCKTEMP, "__Vi", arrVarp->findIntDType()};
-            // foreach gives the declared index, a select takes the offset
-            AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
-                fl, arrVarp, new AstVarRef{fl, idxVarp, VAccess::READ});
-            AstNodeExpr* const elemp = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType)
-                                           ? static_cast<AstNodeExpr*>(new AstArraySel{
-                                                 fl, arrRefp->cloneTree(false), offsetp})
-                                           : new AstCMethodHard{fl, arrRefp->cloneTree(false),
-                                                                VCMethod::ARRAY_AT, offsetp};
-            elemp->dtypep(elemRefDtp);
+            // An index for each dimension
+            std::vector<AstVar*> idxVarps;
+            AstNode* idxVarsp = nullptr;
+            for (const AstNodeDType* dtypep = arrVarp->dtypep()->skipRefp();
+                 isIndexedArray(dtypep); dtypep = dtypep->subDTypep()->skipRefp()) {
+                idxVarps.push_back(
+                    new AstVar{fl, VVarType::BLOCKTEMP,
+                               "__Vi" + (idxVarps.empty() ? "" : cvtToStr(idxVarps.size())),
+                               arrVarp->findIntDType()});
+                idxVarsp = AstNode::addNext(idxVarsp, idxVarps.back());
+            }
+            AstNodeExpr* const elemp
+                = RandomizeUtil::newElemSelp(fl, arrRefp->cloneTree(false), idxVarps);
             AstConstraint* const cloneConstrp
                 = cloneObjectConstraint(constrp, elemp, prefix, targetClassp);
             VL_DO_DANGLING(elemp->deleteTree(), elemp);
             if (!cloneConstrp) {
-                VL_DO_DANGLING(idxVarp->deleteTree(), idxVarp);
+                VL_DO_DANGLING(idxVarsp->deleteTree(), idxVarsp);
                 continue;
             }
             AstNodeConstraintItem* const itemsp = cloneConstrp->itemsp()->unlinkFrBackWithNext();
             cloneConstrp->addItemsp(new AstConstraintForeach{
-                fl, new AstForeachHeader{fl, arrRefp->cloneTree(false), idxVarp}, itemsp});
+                fl, new AstForeachHeader{fl, arrRefp->cloneTree(false), idxVarsp}, itemsp});
             addClonedConstraint(targetClassp, cloneConstrp, constrp, arrRefp);
         }
     }
@@ -564,12 +574,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             std::vector<AstVar*> newPath = pathToClass;
             newPath.push_back(memberVarp);
             if (!memberClassRefp) {
-                // Fixed-size arrays of a member object are not cloned yet: their elements are
-                // reached by a nested access, where the cloned forms are not all supported
-                if (!isHandleArray(memberVarp)
-                    || VN_IS(memberVarp->dtypep()->skipRefp(), UnpackArrayDType)) {
-                    return;
-                }
+                if (!isHandleArray(memberVarp)) return;
                 AstNodeExpr* const arrRefp = buildMemberRefChain(rootVarRefp, newPath);
                 cloneElementConstraints(arrRefp, clonePathPrefix(rootVarRefp, newPath),
                                         targetClassp);
