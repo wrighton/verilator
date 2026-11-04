@@ -1017,22 +1017,14 @@ class ParamProcessor final {
         V3Stats::addStatSum("IfaceCapture, Ledger fixups in V3Param", fixedCount);
     }
 
-    // Return true on success, false on error
-    bool deepCloneModule(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
-                         const string& newname, const IfaceRefRefs& ifaceRefRefs) {
-        // Deep clone of new module
-        // Note all module internal variables will be re-linked to the new modules by clone
-        // However links outside the module (like on the upper cells) will not.
-        AstNodeModule* newModp;
-        if (srcModp->user3p()) {
-            newModp = VN_CAST(srcModp->user3p()->cloneTree(false), NodeModule);
-        } else {
-            newModp = srcModp->cloneTree(false);
-        }
+    // Clone a module, linking pins of references to its nested classes to the cloned formals
+    static AstNodeModule* cloneModule(AstNodeModule* srcModp) {
+        AstNodeModule* const newModp = srcModp->cloneTree(false);
         // AstPin retains links to formals across cloning, as pins of self references (recursive
         // modules and classes) keep linking to the source module. Pins of references to nested
         // classes, which cloning linked to the cloned nested classes, must instead link to the
-        // cloned formals; relink them while clonep() is still valid.
+        // cloned formals; relink them while clonep() is still valid. This includes the copy kept
+        // in user3p, as specializations are later cloned from it.
         std::unordered_set<const AstNode*> newStmtps;
         for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
             newStmtps.insert(stmtp);
@@ -1043,6 +1035,17 @@ class ParamProcessor final {
             UASSERT_OBJ(formalp, pinp, "Pin not linked");
             if (!newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
         });
+        return newModp;
+    }
+
+    // Return true on success, false on error
+    bool deepCloneModule(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
+                         const string& newname, const IfaceRefRefs& ifaceRefRefs) {
+        // Deep clone of new module
+        // Note all module internal variables will be re-linked to the new modules by clone
+        // However links outside the module (like on the upper cells) will not.
+        AstNodeModule* const newModp
+            = cloneModule(srcModp->user3p() ? VN_AS(srcModp->user3p(), NodeModule) : srcModp);
 
         // Mark the source module as a parameterized template now that a specialized
         // clone exists.  This suppresses width/type errors on the unresolved template
@@ -2173,7 +2176,7 @@ class ParamProcessor final {
             // If it's the first use of the default instance, create a copy and store it in user3p.
             // user3p will also be used to check if the default instance is used.
             if (!srcModp->user3p() && (VN_IS(srcModp, Class) || VN_IS(srcModp, Iface))) {
-                AstNodeModule* nodeCopyp = srcModp->cloneTree(false);
+                AstNodeModule* const nodeCopyp = cloneModule(srcModp);
                 // It is a temporary copy of the original class node, stored in order to create
                 // another instances. It is needed only during class instantiation.
                 UINFO(8, "    Created clone " << nodeCopyp);
