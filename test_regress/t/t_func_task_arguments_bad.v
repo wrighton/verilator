@@ -28,6 +28,12 @@ task scalar_vec_task(input logic [30:0] data);
   $display("%b", data);
 endtask
 
+typedef struct {logic [30:0] data;} ustruct_t;
+
+task ustruct_task(input ustruct_t data);
+  $display("%p", data);
+endtask
+
 function logic logical_or(input logic a, b);
   return a | b;
 endfunction
@@ -38,6 +44,8 @@ module t;
   logic queue_data[$];
   logic assoc_data[int];
   logic vec_data[3:0];
+  logic [30:0] wildcard_data[*];
+  ustruct_t ustruct_data;
   logic my_signal_a[10];
   logic my_signal_b[10];
   initial begin
@@ -50,6 +58,9 @@ module t;
     scalar_task(.data(queue_data));
     scalar_task(.data(assoc_data));
     scalar_vec_task(.data(vec_data));
+    scalar_vec_task(.data(wildcard_data));
+    scalar_vec_task(.data(ustruct_data));
+    ustruct_task(.data(1));
     logical_or(my_signal_a[0], my_signal_b);
     $write("*-* All Finished *-*\n");
     $finish;

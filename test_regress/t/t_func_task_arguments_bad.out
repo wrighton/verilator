@@ -1,42 +1,54 @@
-%Error: t/t_func_task_arguments_bad.v:44:20: Function Argument expects 'logic[30:0]$[]', got 'IData'
+%Error: t/t_func_task_arguments_bad.v:52:20: Function Argument expects 'logic[30:0]$[]', got 'IData'
                                            : ... note: In instance 't'
-   44 |     dyn_task(.data($urandom));
+   52 |     dyn_task(.data($urandom));
       |                    ^~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_func_task_arguments_bad.v:45:25: Function Argument expects 'logic[30:0]$[3:0]', got 'IData'
+%Error: t/t_func_task_arguments_bad.v:53:25: Function Argument expects 'logic[30:0]$[3:0]', got 'IData'
                                            : ... note: In instance 't'
-   45 |     unpacked_task(.data($urandom));
+   53 |     unpacked_task(.data($urandom));
       |                         ^~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:46:22: Function Argument expects 'logic[30:0]$[$]', got 'IData'
+%Error: t/t_func_task_arguments_bad.v:54:22: Function Argument expects 'logic[30:0]$[$]', got 'IData'
                                            : ... note: In instance 't'
-   46 |     queue_task(.data($urandom));
+   54 |     queue_task(.data($urandom));
       |                      ^~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:47:22: Function Argument expects 'logic[30:0]$[int]', got 'IData'
+%Error: t/t_func_task_arguments_bad.v:55:22: Function Argument expects 'logic[30:0]$[int]', got 'IData'
                                            : ... note: In instance 't'
-   47 |     assoc_task(.data($urandom));
+   55 |     assoc_task(.data($urandom));
       |                      ^~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:48:23: Function Argument expects 'logic', got 'logic$[3:0]'
+%Error: t/t_func_task_arguments_bad.v:56:23: Function Argument expects 'logic', got 'logic$[3:0]'
                                            : ... note: In instance 't'
-   48 |     scalar_task(.data(unpacked_data));
+   56 |     scalar_task(.data(unpacked_data));
       |                       ^~~~~~~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:49:23: Function Argument expects 'logic', got 'logic$[]'
+%Error: t/t_func_task_arguments_bad.v:57:23: Function Argument expects 'logic', got 'logic$[]'
                                            : ... note: In instance 't'
-   49 |     scalar_task(.data(dyn_data));
+   57 |     scalar_task(.data(dyn_data));
       |                       ^~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:50:23: Function Argument expects 'logic', got 'logic$[$]'
+%Error: t/t_func_task_arguments_bad.v:58:23: Function Argument expects 'logic', got 'logic$[$]'
                                            : ... note: In instance 't'
-   50 |     scalar_task(.data(queue_data));
+   58 |     scalar_task(.data(queue_data));
       |                       ^~~~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:51:23: Function Argument expects 'logic', got 'logic$[int]'
+%Error: t/t_func_task_arguments_bad.v:59:23: Function Argument expects 'logic', got 'logic$[int]'
                                            : ... note: In instance 't'
-   51 |     scalar_task(.data(assoc_data));
+   59 |     scalar_task(.data(assoc_data));
       |                       ^~~~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:52:27: Function Argument expects 'logic[30:0]', got 'logic$[3:0]'
+%Error: t/t_func_task_arguments_bad.v:60:27: Function Argument expects 'logic[30:0]', got 'logic$[3:0]'
                                            : ... note: In instance 't'
-   52 |     scalar_vec_task(.data(vec_data));
+   60 |     scalar_vec_task(.data(vec_data));
       |                           ^~~~~~~~
-%Error: t/t_func_task_arguments_bad.v:53:32: Function Argument expects 'logic', got 'logic$[0:9]'
+%Error: t/t_func_task_arguments_bad.v:61:27: Function Argument expects 'logic[30:0]', got 'logic[30:0]$[*]'
                                            : ... note: In instance 't'
-   53 |     logical_or(my_signal_a[0], my_signal_b);
+   61 |     scalar_vec_task(.data(wildcard_data));
+      |                           ^~~~~~~~~~~~~
+%Error: t/t_func_task_arguments_bad.v:62:27: Function Argument expects 'logic[30:0]', got 'struct $unit::ustruct_t'
+                                           : ... note: In instance 't'
+   62 |     scalar_vec_task(.data(ustruct_data));
+      |                           ^~~~~~~~~~~~
+%Error: t/t_func_task_arguments_bad.v:63:24: Function Argument expects 'struct $unit::ustruct_t', got 'bit[31:0]'
+                                           : ... note: In instance 't'
+   63 |     ustruct_task(.data(1));
+      |                        ^
+%Error: t/t_func_task_arguments_bad.v:64:32: Function Argument expects 'logic', got 'logic$[0:9]'
+                                           : ... note: In instance 't'
+   64 |     logical_or(my_signal_a[0], my_signal_b);
       |                                ^~~~~~~~~~~
 %Error: Exiting due to
