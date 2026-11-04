@@ -1207,17 +1207,15 @@ public:
     }
     // Return next element. Verilog: function int next(ref index)
     int next(T_Key& indexr) const {
-        auto it = m_map.find(indexr);
-        if (VL_UNLIKELY(it == m_map.end())) return 0;
-        ++it;
+        // The given index need not be in the array
+        const auto it = m_map.upper_bound(indexr);
         if (VL_UNLIKELY(it == m_map.end())) return 0;
         indexr = it->first;
         return 1;
     }
     // Return prev element. Verilog: function int prev(ref index)
     int prev(T_Key& indexr) const {
-        auto it = m_map.find(indexr);
-        if (VL_UNLIKELY(it == m_map.end())) return 0;
+        auto it = m_map.lower_bound(indexr);
         if (VL_UNLIKELY(it == m_map.begin())) return 0;
         --it;
         indexr = it->first;
