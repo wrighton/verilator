@@ -9040,8 +9040,8 @@ class WidthVisitor final : public VNVisitor {
                     }
                 }
                 if (portp->direction() != VDirection::REF
-                    && ((VN_IS(portDTypep, BasicDType) && pinDTypep->isNonPackedArray())
-                        || (VN_IS(pinDTypep, BasicDType) && portDTypep->isNonPackedArray()))) {
+                    && ((VN_IS(portDTypep, BasicDType) && pinDTypep->isAggregateType())
+                        || (VN_IS(pinDTypep, BasicDType) && portDTypep->isAggregateType()))) {
                     pinp->v3error("Function Argument expects " << portDTypep->prettyDTypeNameQ()
                                                                << ", got "
                                                                << pinDTypep->prettyDTypeNameQ());
