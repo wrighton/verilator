@@ -3320,6 +3320,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     AstGenBlock* m_genBlockp = nullptr;  // Current generate block
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
+    const FileLine* m_declFlp = nullptr;  // Task, function or block declaration being resolved
+    VSymEnt* m_declSymp = nullptr;  // SymEnt of the scope of the m_declFlp declaration
     AstMethodCall* m_randMethodCallp = nullptr;  // Current randomize() method call
     int m_modportNum = 0;  // Uniqueify modport numbers
     int m_indent = 0;  // Indentation (tree depth) for debug
@@ -3403,6 +3405,27 @@ class LinkDotResolveVisitor final : public VNVisitor {
     }
 
     // METHODS - Variables
+    // Return the symbol a simple name in the declaration at m_declFlp refers to
+    VSymEnt* findDeclaredBefore(VSymEnt* foundp, const string& name) const {
+        // IEEE 1800-2023 6.18: a name declared later in the same task, function or block is not
+        // yet visible, e.g. in the data type of an earlier port, so an outer declaration is used
+        if (!foundp || !m_declFlp || m_declSymp->findIdFlat(name) != foundp) return foundp;
+        // A forward typedef declares the name earlier than its typedef
+        const AstNode* const foundNodep = foundp->nodep();
+        const uint32_t foundTokenNum = foundNodep->declTokenNum()
+                                           ? foundNodep->declTokenNum()
+                                           : foundNodep->fileline()->tokenNum();
+        if (foundTokenNum <= m_declFlp->tokenNum()) return foundp;
+        VSymEnt* const outerp = m_declSymp->fallbackp()->findIdFallback(name);
+        return outerp ? outerp : foundp;
+    }
+    // Set the declaration being resolved, at the given position
+    void declarationAt(const FileLine* flp) {
+        const bool local
+            = VN_IS(m_curSymp->nodep(), NodeFTask) || VN_IS(m_curSymp->nodep(), NodeBlock);
+        m_declFlp = local ? flp : nullptr;
+        m_declSymp = m_curSymp;
+    }
     AstVar* createImplicitVar(VSymEnt* /*lookupSymp*/, AstParseRef* nodep, AstNodeModule* modp,
                               VSymEnt* moduleSymp, bool noWarn) {
         // Create implicit after warning
@@ -4682,6 +4705,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else {
                 foundp = m_ds.m_dotSymp->findIdFlat(nodep->name());
             }
+            if (first) foundp = findDeclaredBefore(foundp, nodep->name());
             // In a generate block, an implicit net is local to the block, even if an enclosing
             // scope declares the name later (IEEE 1800-2023 6.10)
             const AstVar* const laterVarp = foundp && !m_ds.m_dotp && inGenBlockScope()
@@ -5547,10 +5571,26 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         VL_RESTORER(m_isParam);
         m_isParam = nodep->varType().isParam();
+        VL_RESTORER(m_declFlp);
+        VL_RESTORER(m_declSymp);
+        declarationAt(nodep->fileline());
         iterateChildren(nodep);
         if (m_statep->forPrimary() && nodep->isIO() && !m_ftaskp && !nodep->user4()) {
             nodep->v3error(
                 "Input/output/inout does not appear in port list: " << nodep->prettyNameQ());
+        }
+    }
+    void visit(AstInitialAutomaticStmt* nodep) override { iterateInitializers(nodep->stmtsp()); }
+    void visit(AstInitialStaticStmt* nodep) override { iterateInitializers(nodep->stmtsp()); }
+    // Iterate variable initializations, with each value part of the variable's declaration
+    void iterateInitializers(AstNode* stmtsp) {
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            AstNodeAssign* const assignp = VN_AS(stmtp, NodeAssign);
+            iterate(assignp->lhsp());
+            VL_RESTORER(m_declFlp);
+            VL_RESTORER(m_declSymp);
+            declarationAt(assignp->rhsp()->fileline());
+            iterate(assignp->rhsp());
         }
     }
     void visit(AstVarScope* nodep) override {
@@ -6641,7 +6681,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (nodep->classOrPackagep()) {
                 foundp = m_statep->getNodeSym(nodep->classOrPackagep())->findIdFlat(nodep->name());
             } else if (m_ds.m_dotPos == DP_FIRST || m_ds.m_dotPos == DP_NONE) {
-                foundp = findIdFallbackSkipMemberDType(m_curSymp, nodep->name());
+                foundp = findDeclaredBefore(
+                    findIdFallbackSkipMemberDType(m_curSymp, nodep->name()), nodep->name());
             } else {
                 // Defensive: dotPos should be DP_FIRST/DP_NONE or classOrPackagep set.
                 v3fatalSrc("Unexpected dotPos="
@@ -6870,6 +6911,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     void visit(AstTypedef* nodep) override {
         VL_RESTORER(m_resolvingTypedef)
         m_resolvingTypedef = true;
+        VL_RESTORER(m_declFlp);
+        VL_RESTORER(m_declSymp);
+        declarationAt(nodep->fileline());
         iterateChildren(nodep);
     }
 
