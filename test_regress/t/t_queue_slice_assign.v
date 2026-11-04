@@ -50,6 +50,11 @@ module t;
     `checkh(q[3], 40);
     `checkh(q[4], 50);
 
+    // Slice outside the queue
+    q = '{10, 20, 30, 40, 50};
+    q[5:6] = '{77, 88};
+    `checkh(q[4], 50);
+
     // Verify size unchanged after all operations
     `checkh(q.size, 5);
 
