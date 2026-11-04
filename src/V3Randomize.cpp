@@ -2787,27 +2787,68 @@ public:
 //######################################################################
 // Randomize method class functions
 
-// Restrict each solver variable of enum type, or array of enums, to the enum's values
+// SMT application of op to one or more terms, a single term standing alone
+static std::string smtJoin(const char* op, const std::vector<std::string>& terms) {
+    // SMT-LIB 2.6 'and'/'or' take at least two arguments
+    if (terms.size() == 1) return terms[0];
+    std::string result = std::string{"("} + op;
+    for (const std::string& term : terms) result += " " + term;
+    return result + ")";
+}
+
+// SMT Bool term restricting packed valueExpr to its enum values, empty if it holds no enum
+static std::string enumDomainTerm(const AstNodeDType* dtypep, const std::string& valueExpr) {
+    dtypep = dtypep->skipRefToEnump();
+    std::vector<std::string> terms;
+    if (const AstEnumDType* const enumDtp = VN_CAST(dtypep, EnumDType)) {
+        for (const AstEnumItem* const itemp : enumDtp->itemspList()) {
+            const V3Number& num = VN_AS(itemp->valuep(), Const)->num();
+            if (num.isFourState()) continue;  // The solver can't produce X/Z
+            terms.push_back("(= " + valueExpr + " (_ bv" + num.toDecimalU() + " "
+                            + cvtToStr(enumDtp->width()) + "))");
+        }
+        return terms.empty() ? "false" : smtJoin("or", terms);
+    }
+    // Enums inside packed arrays and packed structs constrain their bit slice
+    const auto addSlice = [&](const AstNodeDType* sliceDtp, int lsb) {
+        const std::string term
+            = enumDomainTerm(sliceDtp, "((_ extract " + cvtToStr(lsb + sliceDtp->width() - 1) + " "
+                                           + cvtToStr(lsb) + ") " + valueExpr + ")");
+        if (!term.empty()) terms.push_back(term);
+        return !term.empty();
+    };
+    if (const AstPackArrayDType* const arrayDtp = VN_CAST(dtypep, PackArrayDType)) {
+        const AstNodeDType* const elemDtp = arrayDtp->subDTypep();
+        for (int i = 0; i < arrayDtp->elementsConst(); ++i) {
+            if (!addSlice(elemDtp, i * elemDtp->width())) break;  // No element holds an enum
+        }
+    } else if (const AstStructDType* const structDtp = VN_CAST(dtypep, StructDType)) {
+        if (structDtp->packed()) {
+            for (const AstMemberDType* const memberp : structDtp->memberspList()) {
+                addSlice(memberp->subDTypep(), memberp->lsb());
+            }
+        }
+    }
+    return terms.empty() ? "" : smtJoin("and", terms);
+}
+
+std::string V3Randomize::enumDomain(AstNodeDType* dtypep) {
+    return enumDomainTerm(RandomizeUtil::arrayElementDTypep(dtypep), "__Ve");
+}
+
+// Restrict each solver variable holding enums, or an array of such, to the enum's values
 static void addEnumDomains(AstNetlist* nodep) {
     // At each registration, after lowering, so registrations made or copied anywhere are
     // covered: members reached through handles, elements of arrays, fields of object-array
-    // elements (IEEE 1800-2023 18.4). Enum fields of unpacked structs are not covered.
+    // elements (IEEE 1800-2023 18.4). Enum fields of unpacked structs are registered, with
+    // their domain, by the runtime from the struct's memberEnumDomains().
     std::vector<AstCMethodHard*> writeVarps;
     nodep->foreach([&](AstCMethodHard* const methodp) {
         if (methodp->method() == VCMethod::RANDOMIZER_WRITE_VAR) writeVarps.push_back(methodp);
     });
     for (AstCMethodHard* const writeVarp : writeVarps) {
-        const AstEnumDType* const enumDtp
-            = VN_CAST(RandomizeUtil::arrayElementDTypep(writeVarp->pinsp()->dtypep()), EnumDType);
-        if (!enumDtp) continue;
-        std::string domain = "(or";
-        for (const AstEnumItem* const itemp : enumDtp->itemspList()) {
-            const V3Number& num = VN_AS(itemp->valuep(), Const)->num();
-            if (num.isFourState()) continue;  // The solver can't produce X/Z
-            domain
-                += " (= __Ve (_ bv" + num.toDecimalU() + " " + cvtToStr(enumDtp->width()) + "))";
-        }
-        domain += ")";
+        const std::string domain = V3Randomize::enumDomain(writeVarp->pinsp()->dtypep());
+        if (domain.empty()) continue;
         FileLine* const fl = writeVarp->fileline();
         AstNode* const namep = writeVarp->pinsp()->nextp()->nextp();  // After variable, width
         AstCMethodHard* const domainp = new AstCMethodHard{
