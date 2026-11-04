@@ -192,8 +192,9 @@ class UnknownVisitor final : public VNVisitor {
         {
             m_modp = nodep;
             m_constXCvt = true;
-            // Class X randomization causes Vxrand in strange places, so disable
-            if (VN_IS(nodep, Class)) m_allowXUnique = false;
+            // Class X randomization causes Vxrand in strange places, so disable.
+            // Constant pool tables (e.g. enum values) must stay constants.
+            if (VN_IS(nodep, Class) || nodep->isConstPool()) m_allowXUnique = false;
             m_lvboundNames.reset();
             xrandNames.swap(m_xrandNames);
             iterateChildren(nodep);
