@@ -1,6 +1,14 @@
-%Error: t/t_bitsel_wire_array_bad.v:16:15: Illegal assignment of constant to unpacked array
-                                         : ... note: In instance 't'
+%Error: t/t_bitsel_wire_array_bad.v:15:14: CONST '1'h0' is not an unpacked array, but is in an unpacked array context
+   15 |   assign a = 1'b0;   
+      |              ^~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_bitsel_wire_array_bad.v:16:15: ARRAYSEL is not an unpacked array, but is in an unpacked array context
    16 |   assign b = a[0];   
       |               ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_bitsel_wire_array_bad.v:19:14: CONST '1'h1' is not an unpacked array, but is in an unpacked array context
+   19 |   assign c = 1'b1;
+      |              ^~~~
+%Error: t/t_bitsel_wire_array_bad.v:23:14: CONST '1'h1' is not an unpacked array, but is in an unpacked array context
+   23 |   assign d = 1'b1;
+      |              ^~~~
 %Error: Exiting due to
