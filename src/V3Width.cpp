@@ -6457,6 +6457,7 @@ class WidthVisitor final : public VNVisitor {
         if (!adtypep) {  // e.g. int a = new;
             nodep->v3error(
                 "dynamic new() not expected in this context (data type must be dynamic array)");
+            nodep->dtypeFrom(m_vup->dtypep());  // So the assignment's checks can continue
             return;
         }
         // The AstNodeAssign visitor will be soon be replacing this node, make sure it gets it
