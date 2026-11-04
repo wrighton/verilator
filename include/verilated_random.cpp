@@ -40,7 +40,16 @@
 //   re-asserting. See solveDiversity.
 #define _VL_SOLVER_HASH_LEN 1
 static constexpr int diversityMaxChecks = 512;  // Most solver checks to spread one solution
+static constexpr int diversityMaxSatisfied = 64;  // Most of them satisfied
 static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
+static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to drop a part of all
+static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
+
+// Index of the i-th of the elements checked out of n, spread over them
+static size_t diversitySample(size_t i, size_t n) {
+    const size_t nsamples = std::min<size_t>(diversitySlotSamples, n);
+    return (2 * i + 1) * n / (2 * nsamples);
+}
 
 // clang-format off
 #if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
@@ -1472,9 +1481,15 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
     std::string keep;  // Surviving literals
     int lits = 0;  // Literals declared so far
     int checksLeft = diversityMaxChecks;
+    // Satisfied checks are the slow ones on large problems; past their limit, no further
+    // check is made and the literals kept so far are the result
+    int satisfiedLeft = diversityMaxSatisfied;
+    const auto satisfied = [&]() {
+        if (--satisfiedLeft <= 0) checksLeft = 0;
+    };
     bool settled = true;  // The last check was satisfied, so its model satisfies keep
     std::vector<bool> dropped;
-    while (!terms.empty()) {
+    while (!terms.empty() && checksLeft > 0) {
         for (size_t k = 0; k < terms.size(); ++k) {
             os << "(declare-fun a" << lits + k << " () Bool)\n";
             os << "(assert (= a" << lits + k << " (=";
@@ -1485,22 +1500,42 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                 if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
                 os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
             }
+            terms[k].value0 = VL_BITISSET_I(bits, (terms[k].width - 1) & VL_SIZEBITS_I) ? 1 : 0;
             os << ")))\n";
         }
-        settled = assumeDropping(sess, keep, lits, terms, dropped, checksLeft);
+        std::vector<int> slotIds;
+        settled = assumeDropping(sess, keep, lits, terms, dropped, checksLeft, nullptr, &slotIds,
+                                 &satisfiedLeft);
         if (!settled) break;
+        satisfied();
         std::vector<PinTerm> conflicted;
+        std::vector<std::vector<PinTerm>> slots;  // Parts dropped for a whole array, per part
         for (size_t k = 0; k < terms.size(); ++k) {
             const PinTerm& term = terms[k];
             if (!dropped[k]) {
                 keep += " a" + std::to_string(lits + k);
+            } else if (term.width > 1 && slotIds[k] >= 0) {
+                if (slots.size() <= static_cast<size_t>(slotIds[k])) slots.resize(slotIds[k] + 1);
+                slots[slotIds[k]].push_back(term);
             } else if (term.width > 1) {
                 conflicted.push_back(term);
             }
         }
         lits += terms.size();
         terms.clear();
-        if (conflicted.empty()) break;
+        // Of a part dropped for a whole array, only a few elements spread over it are
+        // checked below, and the others follow them: checking all would need a model
+        // changing all of them, which is slow on a large array
+        const size_t nalone = conflicted.size();
+        std::vector<size_t> nsamples;  // Per slot
+        for (const std::vector<PinTerm>& members : slots) {
+            nsamples.push_back(std::min<size_t>(diversitySlotSamples, members.size()));
+            for (size_t i = 0; i < nsamples.back(); ++i) {
+                conflicted.push_back(members[diversitySample(i, members.size())]);
+            }
+        }
+        // Out of checks, the last model, which satisfies keep, is the result
+        if (conflicted.empty() || checksLeft <= 0) break;
         // Which conflicted terms can differ from the last model's values at all
         os << "(get-value (";
         for (const PinTerm& term : conflicted) emitTerm(term);
@@ -1516,6 +1551,7 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         std::vector<bool> guessed;
         settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
         if (!settled) break;
+        satisfied();
         // A term dropped as a guess may still change on its own, which would leave its
         // bits unspread, so check it alone
         for (size_t k = 0; k < conflicted.size() && checksLeft > 0; ++k) {
@@ -1524,7 +1560,10 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             --checksLeft;
             const VlSolverStatus status = sess.readStatus();
             settled = status == VlSolverStatus::SAT;
-            if (settled) dropped[k] = false;
+            if (settled) {
+                dropped[k] = false;
+                satisfied();
+            }
             if (!settled && status != VlSolverStatus::UNSAT) break;
         }
         lits += conflicted.size();
@@ -1549,17 +1588,27 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             --checksLeft;
             const VlSolverStatus status = sess.readStatus();
             settled = status == VlSolverStatus::SAT;
+            if (settled) satisfied();
             if (status == VlSolverStatus::UNSAT) stopped.insert(it.first);
         }
-        for (size_t k = 0; k < conflicted.size(); ++k) {
-            if (dropped[k]) continue;
-            const PinTerm& term = conflicted[k];
-            if (stopped.count(term.root)) continue;
+        const auto split = [&](const PinTerm& term) {
             const int step = (term.width + 1) / 2;
             for (int lsb = 0; lsb < term.width; lsb += step) {
                 const int width = std::min(step, term.width - lsb);
                 terms.push_back({term.varp, term.elem, term.lsb + lsb, width, term.root});
             }
+        };
+        const auto splitting
+            = [&](size_t k) { return !dropped[k] && !stopped.count(conflicted[k].root); };
+        for (size_t k = 0; k < nalone; ++k) {
+            if (splitting(k)) split(conflicted[k]);
+        }
+        size_t samplek = nalone;
+        for (size_t sloti = 0; sloti < slots.size(); ++sloti) {
+            bool any = false;
+            for (size_t i = 0; i < nsamples[sloti]; ++i) any |= splitting(samplek++);
+            if (!any) continue;
+            for (const PinTerm& term : slots[sloti]) split(term);
         }
     }
     if (!settled) {
@@ -1572,11 +1621,17 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
 
 bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
                                   const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
-                                  int& checksLeftr, std::vector<bool>* guessedp)
+                                  int& checksLeftr, std::vector<bool>* guessedp,
+                                  std::vector<int>* slotIdsp, int* satisfiedLeftp)
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     droppedr.assign(terms.size(), false);
     if (guessedp) guessedp->assign(terms.size(), false);
+    if (slotIdsp) slotIdsp->assign(terms.size(), -1);
+    int nslots = 0;
+    // Conflicts per part of an array's elements (and pinned value, for a single bit), and
+    // whether each of them was among others in its unsat core
+    std::map<std::tuple<const VlRandomVar*, int, int, int>, std::pair<int, bool>> slotConflicts;
     while (checksLeftr-- > 0) {
         os << "(check-sat-assuming (" << keep;
         for (size_t k = 0; k < terms.size(); ++k) {
@@ -1601,6 +1656,49 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         if (pick < 0) return false;
         droppedr[pick] = true;
         if (guessedp && candidates > 1) (*guessedp)[pick] = true;
+        // Once the same part of several elements of an array conflicts, that part of the
+        // others likely does too, under one foreach: drop it for all of them, so the array
+        // costs a few checks rather than one per element. The elements that conflicted are
+        // kept apart, as they may be ones constrained on their own (say the first one).
+        // Dropped parts are checked further in solveDiversity, but single bits are not. A
+        // single bit dropped with others of its unsat cores is set by those that remain,
+        // but one that conflicted alone would be left to the solver, so it is dropped for
+        // all only if a few of the other elements cannot take their pin either.
+        if (!slotIdsp) continue;
+        const PinTerm& pickTerm = terms[pick];
+        const auto slotOf = [](const PinTerm& term) {
+            return std::make_tuple(term.varp, term.lsb, term.width,
+                                   term.width == 1 ? term.value0 : 0);
+        };
+        std::pair<int, bool>& conflicts = slotConflicts[slotOf(pickTerm)];
+        if (conflicts.first++ == 0) conflicts.second = true;
+        conflicts.second &= candidates > 1;
+        if (conflicts.first < diversitySlotConflicts) continue;
+        std::vector<size_t> members;
+        for (size_t k = 0; k < terms.size(); ++k) {
+            if (!droppedr[k] && slotOf(terms[k]) == slotOf(pickTerm)) members.push_back(k);
+        }
+        bool othersFit = false;
+        if (pickTerm.width == 1 && !conflicts.second) {
+            for (size_t i = 0; i < std::min<size_t>(diversitySlotSamples, members.size()); ++i) {
+                if (checksLeftr-- <= 0) return false;
+                os << "(check-sat-assuming (" << keep << " a"
+                   << first + members[diversitySample(i, members.size())] << "))\n";
+                othersFit = sess.readStatus() == VlSolverStatus::SAT;
+                if (!othersFit) continue;
+                if (--*satisfiedLeftp <= 0) checksLeftr = 0;
+                break;
+            }
+        }
+        if (othersFit) {
+            conflicts.first = 0;  // They go one by one
+            continue;
+        }
+        for (const size_t k : members) {
+            droppedr[k] = true;
+            (*slotIdsp)[k] = nslots;
+        }
+        ++nslots;
     }
     return false;
 }
