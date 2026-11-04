@@ -116,6 +116,8 @@ public:
 
 class RandomizeUtil final {
 public:
+    // Look through unpacked array dimensions to the element type
+    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
     // Offset of the element at declared index idxp of array arrVarp, as selects and the solver
     // use
     static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstVar* arrVarp,
