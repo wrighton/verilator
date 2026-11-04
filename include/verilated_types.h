@@ -223,6 +223,7 @@ public:
 static_assert(sizeof(WDataInP) == sizeof(EData*), "WDataInP should be a single pointer");
 
 inline int _vl_cmp_w(int words, WDataInP const lwp, WDataInP const rwp) VL_PURE;
+inline int _vl_cmps_w(int lbits, WDataInP const lwp, WDataInP const rwp) VL_PURE;
 
 template <std::size_t N_Words>
 bool VlWide<N_Words>::operator<(const VlWide<N_Words>& rhs) const VL_PURE {
@@ -1140,11 +1141,25 @@ struct VlContainsCustomStruct<VlQueue<T_Value, N_MaxSize>> : VlContainsCustomStr
 // There are no multithreaded locks on this; the base variable must
 // be protected by other means
 //
-template <typename T_Key, typename T_Value>
+/// Ordering of associative array keys of a signed type N_Width bits wide
+template <int N_Width>
+struct VlSignedKeyLess final {
+    template <typename T_Key>
+    bool operator()(T_Key lhs, T_Key rhs) const VL_PURE {
+        // Flipping the sign bit maps signed order onto unsigned order
+        return (lhs ^ (1ULL << (N_Width - 1))) < (rhs ^ (1ULL << (N_Width - 1)));
+    }
+    template <std::size_t N_Words>
+    bool operator()(const VlWide<N_Words>& lhs, const VlWide<N_Words>& rhs) const VL_PURE {
+        return _vl_cmps_w(N_Width, lhs, rhs) < 0;
+    }
+};
+
+template <typename T_Key, typename T_Value, typename T_KeyLess = std::less<T_Key>>
 class VlAssocArray final {
 private:
     // TYPES
-    using Map = std::map<T_Key, T_Value>;
+    using Map = std::map<T_Key, T_Value, T_KeyLess>;
 
 public:
     using const_iterator = typename Map::const_iterator;
@@ -1171,6 +1186,11 @@ public:
                           std::initializer_list<std::pair<const T_Key, T_Value>> init)
         : m_map{init}
         , m_defaultValue{defaultValue} {}
+    // Construct from an array with differently ordered keys, e.g. of the other signedness
+    template <typename T_OtherKeyLess>
+    VlAssocArray(const VlAssocArray<T_Key, T_Value, T_OtherKeyLess>& other)
+        : m_map{other.begin(), other.end()}
+        , m_defaultValue{other.atDefault()} {}
     ~VlAssocArray() = default;
     VlAssocArray(const VlAssocArray&) = default;
     VlAssocArray(VlAssocArray&&) = default;
@@ -1471,17 +1491,19 @@ public:
     }
 };
 
-template <typename T_Key, typename T_Value>
-std::string VL_TO_STRING(const VlAssocArray<T_Key, T_Value>& obj) {
+template <typename T_Key, typename T_Value, typename T_KeyLess>
+std::string VL_TO_STRING(const VlAssocArray<T_Key, T_Value, T_KeyLess>& obj) {
     return obj.to_string();
 }
 
-template <typename T_Key, typename T_Value>
-struct VlContainsCustomStruct<VlAssocArray<T_Key, T_Value>> : VlContainsCustomStruct<T_Value> {};
+template <typename T_Key, typename T_Value, typename T_KeyLess>
+struct VlContainsCustomStruct<VlAssocArray<T_Key, T_Value, T_KeyLess>>
+    : VlContainsCustomStruct<T_Value> {};
 
-template <typename T_Key, typename T_Value>
+template <typename T_Key, typename T_Value, typename T_KeyLess>
 void VL_READMEM_N(bool hex, int bits, const std::string& filename,
-                  VlAssocArray<T_Key, T_Value>& obj, QData start, QData end) VL_MT_SAFE {
+                  VlAssocArray<T_Key, T_Value, T_KeyLess>& obj, QData start,
+                  QData end) VL_MT_SAFE {
     VlReadMem rmem{hex, bits, filename, start, end};
     if (VL_UNLIKELY(!rmem.isOpen())) return;
     while (true) {
@@ -1495,15 +1517,16 @@ void VL_READMEM_N(bool hex, int bits, const std::string& filename,
     }
 }
 
-template <typename T_Key, typename T_Value>
+template <typename T_Key, typename T_Value, typename T_KeyLess>
 void VL_WRITEMEM_N(bool hex, int bits, const std::string& filename,
-                   const VlAssocArray<T_Key, T_Value>& obj, QData start, QData end) VL_MT_SAFE {
+                   const VlAssocArray<T_Key, T_Value, T_KeyLess>& obj, QData start,
+                   QData end) VL_MT_SAFE {
     VlWriteMem wmem{hex, bits, filename, start, end};
     if (VL_UNLIKELY(!wmem.isOpen())) return;
     const QData lo = std::min(start, end);
     const QData hi = std::max(start, end);
     const auto printIfInRange
-        = [&](const typename VlAssocArray<T_Key, T_Value>::const_iterator& it) {
+        = [&](const typename VlAssocArray<T_Key, T_Value, T_KeyLess>::const_iterator& it) {
               const QData addr = it->first;
               if (addr >= lo && addr <= hi) wmem.print(addr, true, &(it->second));
           };
