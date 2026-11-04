@@ -841,6 +841,33 @@ class ConstraintExprVisitor final : public VNVisitor {
         return formatp;
     }
 
+    // Return a random array index in the 32-bit index sort of solver arrays
+    static AstNodeExpr* newSmtIndexp(AstNodeExpr* indexp, bool isSigned) {
+        FileLine* const fl = indexp->fileline();
+        const int width = indexp->width();
+        AstNodeExpr* newp;
+        if (width < 32) {
+            newp = isSigned ? static_cast<AstNodeExpr*>(new AstExtendS{fl, indexp, 32})
+                            : new AstExtend{fl, indexp, 32};
+        } else if (width > 32) {
+            // Only a dynamic array or queue index can be wider. An index with any bit above 31
+            // set is out of range, so map it to the out of range index 2**32-1, not into range.
+            AstSel* const highp = new AstSel{fl, indexp->cloneTreePure(false), 32, width - 32};
+            AstEq* const inRangep
+                = new AstEq{fl, highp, new AstConst{fl, AstConst::WidthedValue{}, width - 32, 0}};
+            AstSel* const lowp = new AstSel{fl, indexp, 0, 32};
+            highp->user1(true);
+            inRangep->user1(true);
+            lowp->user1(true);
+            newp = new AstCond{fl, inRangep, lowp,
+                               new AstConst{fl, AstConst::WidthedValue{}, 32, 0xffffffffU}};
+        } else {
+            return indexp;
+        }
+        newp->user1(true);
+        return newp;
+    }
+
     void setRandMode(AstVar* const varp, AstMemberRef* const memberRefp,
                      const std::string& smtName, const RandomizeMode& randMode,
                      AstBegin* const initp) {
@@ -2022,13 +2049,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         if (indexIsRand) {
             // Index depends on rand variable -- keep as SMT symbol.
-            // Array index sort is 32-bit, so zero-extend narrower indices.
-            AstNodeExpr* indexp = nodep->bitp()->unlinkFrBack(&handle);
-            if (indexp->width() < 32) {
-                AstExtend* const extendp = new AstExtend{fl, indexp, 32};
-                extendp->user1(true);
-                indexp = extendp;
-            }
+            // The offset from the low bound is unsigned, even when computed as signed
+            AstNodeExpr* const indexp = newSmtIndexp(nodep->bitp()->unlinkFrBack(&handle), false);
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
             renameArrayExpr(newp);
@@ -2612,6 +2634,99 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstCMethodHard* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
+
+        if (nodep->method() == VCMethod::ARRAY_AT) {
+            addStringNamePart(nodep->pinsp(), "%x");
+            const bool indexIsRand = nodep->pinsp()->exists([](const AstNodeVarRef* const vrefp) {
+                return vrefp->varp()->rand().isRandomizable();
+            });
+            if (nodep->fromp()->user1()) {
+                // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
+                // only. A std::randomize() with-clause argument carries no rand qualifier of its
+                // own but is still part of the solve.
+                {
+                    const AstNode* const basep = nodep->baseFromp(true);
+                    if (basep->name() == "__Vthis"
+                        && VN_AS(basep->backp(), MemberRef)->varp()->isRand()) {
+                        nodep->fromp()->v3warn(E_UNSUPPORTED,
+                                               "Unsupported: Complex expression captured from "
+                                               "current scope with randomized variable");
+                        return;
+                    }
+                }
+                AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
+                const AstVarRef* const baseRefp
+                    = m_structSel ? VN_CAST(nodep->fromp()->baseFromp(true), VarRef) : nullptr;
+                if (baseRefp && VN_IS(nodep->pinsp(), Const)
+                    && VN_IS(baseRefp->varp()->dtypep()->skipRefp(), DynArrayDType)
+                    && m_prepareConstrainedArraysp) {
+                    AstNodeExpr* const indexp = nodep->pinsp()->cloneTreePure(false);
+                    AstNodeExpr* const arrayp = nodep->fromp()->cloneTreePure(false);
+                    AstCMethodHard* const currentSizep
+                        = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+                    currentSizep->dtypeSetInt();
+                    AstNodeExpr* const inRangeRequiredp = new AstLogAnd{
+                        fl,
+                        new AstLteS{fl,
+                                    new AstConst{fl, AstConst::WidthedValue{}, indexp->width(), 0},
+                                    indexp->cloneTreePure(false)},
+                        new AstGteS{fl, indexp->cloneTreePure(false), currentSizep}};
+                    AstCMethodHard* const resizep
+                        = new AstCMethodHard{fl, arrayp, VCMethod::DYN_RESIZE,
+                                             new AstAdd{fl, indexp, new AstConst{fl, 1}}};
+                    resizep->dtypeSetVoid();
+                    m_prepareConstrainedArraysp->addStmtsp(
+                        new AstIf{fl, inRangeRequiredp, resizep->makeStmt()});
+                }
+                AstCMethodHard* const sizep
+                    = m_structSel ? new AstCMethodHard{fl, nodep->fromp()->cloneTreePure(false),
+                                                       VCMethod::DYN_SIZE}
+                                  : nullptr;
+                AstNodeExpr* const originalPinp = nodep->pinsp();
+                if (indexIsRand) {
+                    // A negative index stays out of range when sign extended
+                    AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
+                    nodep->addPinsp(newSmtIndexp(pinp, pinp->isSigned()));
+                }
+                iterateChildren(nodep);
+                AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
+                AstSFormatF* newp;
+                if (m_structSel) {
+                    if (AstSFormatF* const sformatfp = VN_CAST(pinp, SFormatF)) {
+                        sformatfp->name("%x");
+                    }
+                    AstNodeExpr* const argsp
+                        = AstNode::addNext(nodep->fromp()->unlinkFrBack(), pinp);
+                    sizep->dtypeSetInt();
+                    AstLogAnd* const condp
+                        = new AstLogAnd{fl,
+                                        new AstLteS{fl,
+                                                    new AstConst{fl, AstConst::WidthedValue{},
+                                                                 originalPinp->width(), 0},
+                                                    originalPinp->cloneTreePure(false)},
+                                        new AstLtS{fl, originalPinp->cloneTreePure(false), sizep}};
+                    m_conditionp = m_conditionp ? new AstLogAnd{fl, m_conditionp, condp} : condp;
+                    newp = new AstSFormatF{fl, "%s.%s", false, argsp};
+                } else {
+                    newp = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), pinp);
+                }
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                if (origp && !hoistRandModeOverSelectAndMember(newp, origp)) {
+                    VL_DO_DANGLING(origp->deleteTree(), origp);
+                }
+
+            } else if (indexIsRand) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: Randomization of an index to a non-random variable");
+
+            } else {
+                nodep->user1(false);
+                UASSERT_OBJ(editFormat(nodep), nodep,
+                            "editFormat should return true when user1 is false");
+            }
+            return;
+        }
 
         if (nodep->method() == VCMethod::ARRAY_INSIDE) {
             const bool randArr = nodep->fromp()->user1();
