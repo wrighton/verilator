@@ -2671,7 +2671,17 @@ class ConstraintExprVisitor final : public VNVisitor {
             if (withp) {
                 // With 'with' clause: evaluate expression for each element
                 const bool randArr = nodep->fromp()->user1();
-                AstNodeExpr* const idxRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
+                // The loop variable is the declared index, ArraySel and the lambda's index
+                // argument use the storage index
+                AstNodeExpr* idxRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
+                const AstUnpackArrayDType* const unpackp
+                    = VN_CAST(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
+                if (unpackp && unpackp->lo()) {
+                    idxRefp = new AstSub{fl, idxRefp,
+                                         new AstConst{fl, AstConst::WidthedValue{}, 32,
+                                                      static_cast<uint32_t>(unpackp->lo())}};
+                    idxRefp->dtypeSetInt();
+                }
                 AstNodeExpr* const elemSelp = newSel(fl, nodep->fromp(), idxRefp);
                 elemSelp->user1(randArr);
 
@@ -2682,9 +2692,9 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNode* perElemExprp = withp->exprp()->cloneTreePure(false);
                 if (AstLambdaArgRef* const rootRefp = VN_CAST(perElemExprp, LambdaArgRef)) {
                     if (rootRefp->index()) {
-                        // item.index at root -> replace with loop variable, adjust width
-                        AstVarRef* const loopRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
-                        perElemExprp = adjustWidth(fl, loopRefp, resultWidth, resultSigning);
+                        // item.index at root -> replace with storage index, adjust width
+                        perElemExprp = adjustWidth(fl, idxRefp->cloneTree(false), resultWidth,
+                                                   resultSigning);
                     } else {
                         // item at root -> replace with array element
                         perElemExprp = elemSelp->cloneTreePure(false);
@@ -2693,10 +2703,9 @@ class ConstraintExprVisitor final : public VNVisitor {
                 } else {
                     perElemExprp->foreach([&](AstLambdaArgRef* refp) {
                         if (refp->index()) {
-                            // item.index -> replace with loop variable, adjust width
-                            AstVarRef* const loopRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
-                            AstNode* const replacementp
-                                = adjustWidth(fl, loopRefp, resultWidth, resultSigning);
+                            // item.index -> replace with storage index, adjust width
+                            AstNode* const replacementp = adjustWidth(
+                                fl, idxRefp->cloneTree(false), resultWidth, resultSigning);
                             refp->replaceWith(replacementp);
                         } else {
                             // item -> replace with array element
