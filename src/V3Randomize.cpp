@@ -1875,9 +1875,15 @@ class RandomizeVisitor final : public VNVisitor {
             AstAssign* const assignp = new AstAssign{
                 fl, new AstVarRef{fl, outputVarp, VAccess::WRITE},
                 new AstAnd{fl, new AstVarRef{fl, outputVarp, VAccess::READ}, callp}};
-            return new AstIf{
-                fl, new AstNeq{fl, exprp->cloneTree(false), new AstConst{fl, AstConst::Null{}}},
-                assignp};
+            AstNodeExpr* condp
+                = new AstNeq{fl, exprp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+            // Each object of a cycle of rand handles is randomized once per call
+            if (AstVar* const flagVarp = getRandomizingVarIfCycle(classRefDtp->classp())) {
+                condp = new AstLogAnd{
+                    fl, condp,
+                    new AstNot{fl, new AstMemberRef{fl, exprp->cloneTree(false), flagVarp}}};
+            }
+            return new AstIf{fl, condp, assignp};
         } else if (AstDynArrayDType* const dynarrayDtp = VN_CAST(memberDtp, DynArrayDType)) {
             return createArrayForeachLoop(fl, dynarrayDtp, exprp, outputVarp);
         } else if (AstQueueDType* const queueDtp = VN_CAST(memberDtp, QueueDType)) {
@@ -2236,16 +2242,17 @@ class RandomizeVisitor final : public VNVisitor {
         }
         return classp->existsMember([&](const AstClass*, const AstVar* varp) {
             const AstClassRefDType* const classRefp
-                = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+                = VN_CAST(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
             return varp->rand().isRandomizable() && classRefp
                    && reachesByRandHandle(classRefp->classp(), targetp, visited);
         });
     }
 
-    // Whether rand handle varp of classp is part of a cycle of rand handles
+    // Whether rand handle varp of classp, or rand array of handles, is part of a cycle of rand
+    // handles
     bool inRandHandleCycle(const AstVar* varp, AstClass* classp) {
         const AstClassRefDType* const classRefp
-            = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
         std::set<const AstClass*> visited;
         return varp->rand().isRandomizable() && classRefp
                && reachesByRandHandle(classRefp->classp(), classp, visited);
