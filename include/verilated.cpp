@@ -2605,6 +2605,16 @@ std::string VL_CVT_PACK_STR_NW(int lwords, const WDataInP lwp) VL_PURE {
     return result;
 }
 
+std::string VL_CVT_WILDCARD_KEY_NW(int lwords, const WDataInP lwp) VL_PURE {
+    // As VL_CVT_PACK_STR_NW, but only leading zero bytes are dropped
+    std::string result;
+    for (int lsb = lwords * VL_EDATASIZE - 8; lsb >= 0; lsb -= 8) {
+        const IData charval = VL_BITRSHIFT_W(lwp, lsb) & 0xff;
+        if (charval || !result.empty()) result += static_cast<char>(charval);
+    }
+    return result;
+}
+
 std::string VL_CVT_PACK_STR_ND(const VlQueue<std::string>& q) VL_PURE {
     std::string output;
     for (const std::string& s : q) output += s;

@@ -1651,8 +1651,8 @@ class WidthVisitor final : public VNVisitor {
                     && !basicp->keyword().isIntNumeric())) {
                 nodep->v3error("Wildcard index must be integral (IEEE 1800-2023 7.8.1)");
             }
-            iterateCheckTyped(nodep, "Wildcard associative select", nodep->bitp(),
-                              adtypep->findStringDType(), BOTH);
+            userIterateAndNext(nodep->bitp(), WidthVP{SELF, BOTH}.p());
+            convertWildcardKey(nodep->bitp());
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }
@@ -5388,7 +5388,7 @@ class WidthVisitor final : public VNVisitor {
             // IEEE really should have made this a "bit" return
             methodOkArguments(nodep, 1, 1);
             iterateCheckSelf(nodep, "argument", methodArg(nodep, 0), SELF, BOTH);
-            AstNodeExpr* const index_exprp = methodCallWildcardIndexExpr(nodep, adtypep);
+            AstNodeExpr* const index_exprp = methodCallWildcardIndexExpr(nodep);
             newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
                                       VCMethod::ASSOC_EXISTS, index_exprp->unlinkFrBack()};
             newp->dtypeSetBitUnsized(32, 1, VSigning::SIGNED);
@@ -5401,7 +5401,7 @@ class WidthVisitor final : public VNVisitor {
                 newp->dtypeSetVoid();
             } else {
                 iterateCheckSelf(nodep, "argument", methodArg(nodep, 0), SELF, BOTH);
-                AstNodeExpr* const index_exprp = methodCallWildcardIndexExpr(nodep, adtypep);
+                AstNodeExpr* const index_exprp = methodCallWildcardIndexExpr(nodep);
                 newp = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(),
                                           VCMethod::ASSOC_ERASE, index_exprp->unlinkFrBack()};
                 newp->dtypeSetVoid();
@@ -5622,13 +5622,19 @@ class WidthVisitor final : public VNVisitor {
         VL_DANGLING(index_exprp);  // May have been edited
         return nodep->argsp()->exprp();
     }
-    AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep,
-                                             AstWildcardArrayDType* adtypep) {
-        AstNode* const index_exprp = nodep->argsp()->exprp();
-        iterateCheck(nodep, "index", index_exprp, CONTEXT_DET, FINAL, adtypep->findStringDType(),
-                     EXTEND_EXP);
-        VL_DANGLING(index_exprp);  // May have been edited
+    AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep) {
+        convertWildcardKey(nodep->argsp()->exprp());
         return nodep->argsp()->exprp();
+    }
+    // Convert widthed wildcard associative array index 'keyp' to the key string
+    void convertWildcardKey(AstNodeExpr* keyp) {
+        // Not a string conversion, which drops all zero bytes (IEEE 1800-2023 7.8.1)
+        if (keyp->dtypep()->skipRefp()->isString()) return;
+        VNRelinker relinker;
+        keyp->unlinkFrBack(&relinker);
+        AstNodeExpr* const newp = new AstCvtWildcardKey{keyp->fileline(), keyp};
+        newp->didWidth(true);
+        relinker.relink(newp);
     }
     void methodCallLValueRecurse(AstMethodCall* nodep, AstNode* childp, const VAccess& access) {
         if (AstCMethodHard* const ichildp = VN_CAST(childp, CMethodHard)) {
@@ -6981,8 +6987,9 @@ class WidthVisitor final : public VNVisitor {
         return constp;
     }
     // Return the key of a pattern member of a non-aggregate key type, converted to the key type,
-    // unlinked, or nullptr after reporting an error. A key that is an index of the dynamic array
-    // or queue 'indexConsp' constructs is checked before conversion, so not truncated into range.
+    // or to a wildcard key if 'keyDTypep' is nullptr, unlinked, or nullptr after reporting an
+    // error. A key that is an index of the dynamic array or queue 'indexConsp' constructs is
+    // checked before conversion, so not truncated into range.
     AstConst* patternScalarKeyp(AstPatternItem* patp, AstNodeDType* keyDTypep,
                                 const AstNodeCons* indexConsp = nullptr) {
         if (!patp->keyp()) {
@@ -6992,7 +6999,7 @@ class WidthVisitor final : public VNVisitor {
         bool keySigned = false;  // Signedness of the key, before conversion
         // An integral key is evaluated in the context of the key type, as an index converted to
         // it (IEEE 1800-2023 7.8.4), but not truncated before checking it for X or Z
-        if (keyDTypep->skipRefp()->isIntegralOrPacked() && patp->keyExprp()) {
+        if (keyDTypep && keyDTypep->skipRefp()->isIntegralOrPacked() && patp->keyExprp()) {
             userIterate(patp->keyExprp(), WidthVP{keyDTypep, PRELIM}.p());
             keySigned = patp->keyExprp()->isSigned();
             const int width = std::max(patp->keyExprp()->width(), keyDTypep->width());
@@ -7027,7 +7034,11 @@ class WidthVisitor final : public VNVisitor {
         }
         // Convert to the key type. The conversion is inserted above 'constp', so take the key
         // from the member again rather than from what iterateCheck returns.
-        iterateCheck(patp, "key", constp, CONTEXT_DET, FINAL, keyDTypep, EXTEND_EXP, false);
+        if (keyDTypep) {
+            iterateCheck(patp, "key", constp, CONTEXT_DET, FINAL, keyDTypep, EXTEND_EXP, false);
+        } else {
+            convertWildcardKey(constp);
+        }
         AstNodeExpr* const convp = patp->keyExprp();
         // Fold the conversion, so the key is a Const again
         AstNodeExpr* const keyp = V3Const::constifyEdit(convp);
@@ -7056,8 +7067,8 @@ class WidthVisitor final : public VNVisitor {
         }
         return foldedp->unlinkFrBack();
     }
-    AstConst* patternKeyp(AstConsWildcard*, AstPatternItem* patp, AstNodeDType* arrayDtp) {
-        return patternScalarKeyp(patp, arrayDtp->findStringDType());
+    AstConst* patternKeyp(AstConsWildcard*, AstPatternItem* patp, AstNodeDType*) {
+        return patternScalarKeyp(patp, nullptr);
     }
     // A dynamic array or queue key is an index. One that no array can have (negative, or too
     // large for an int size) is an error, while keys beyond a new[] size are ignored.

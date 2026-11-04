@@ -3769,6 +3769,17 @@ inline std::string VL_CVT_PACK_STR_NI(IData lhs) VL_PURE {
     VL_SET_WI(lw, lhs);
     return VL_CVT_PACK_STR_NW(1, lw);
 }
+extern std::string VL_CVT_WILDCARD_KEY_NW(int lwords, const WDataInP lwp) VL_PURE;
+inline std::string VL_CVT_WILDCARD_KEY_NQ(QData lhs) VL_PURE {
+    VlWide<VL_WQ_WORDS_E> lw;
+    VL_SET_WQ(lw, lhs);
+    return VL_CVT_WILDCARD_KEY_NW(VL_WQ_WORDS_E, lw);
+}
+inline std::string VL_CVT_WILDCARD_KEY_NI(IData lhs) VL_PURE {
+    VlWide<VL_WQ_WORDS_E> lw;
+    VL_SET_WI(lw, lhs);
+    return VL_CVT_WILDCARD_KEY_NW(1, lw);
+}
 inline std::string VL_CONCATN_NNN(const std::string& lhs, const std::string& rhs) VL_PURE {
     return lhs + rhs;
 }

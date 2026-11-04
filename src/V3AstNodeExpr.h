@@ -5734,6 +5734,22 @@ public:
     bool sizeMattersLhs() const override { return false; }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
 };
+class AstCvtWildcardKey final : public AstNodeUniop {
+    // Convert to a wildcard associative array key: the value's bytes without leading zero bytes,
+    // so a value is the same key at any width
+public:
+    AstCvtWildcardKey(FileLine* fl, AstNodeExpr* lhsp)
+        : ASTGEN_SUPER_CvtWildcardKey(fl, lhsp) {
+        dtypeSetString();
+    }
+    ASTGEN_MEMBERS_AstCvtWildcardKey;
+    void numberOperate(V3Number& out, const V3Number& lhs) override { out.opCvtWildcardKey(lhs); }
+    string emitVerilog() override { return "%l"; }
+    string emitC() override { return "VL_CVT_WILDCARD_KEY_N%lq(%lW, %li)"; }
+    bool cleanOut() const override { return true; }
+    bool cleanLhs() const override { return true; }
+    bool sizeMattersLhs() const override { return false; }
+};
 class AstExtend final : public AstNodeUniop {
     // Expand a value into a wider entity by 0 extension.  Width is implied from nodep->width()
     // @astgen makeDfgVertex
