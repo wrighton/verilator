@@ -96,12 +96,10 @@ public:
     AstNodeExpr* m_andRhsCondp = nullptr;  // OWNED; RHS final condition (may be nullptr)
     // Reject sink for SAnd rejectOnFail wiring; not a state-signal source
     bool m_isRejectSink = false;
-    // In-window vertex of a strong s_always[m:n]: if its state is still set at
+    // Vertex of a strong s_always[m:n] attempt: if its state is still set at
     // end-of-simulation the universal-quantifier window never completed, which is
     // a liveness failure (IEEE 1800-2023 16.12.11 strong semantics).
     bool m_strongPending = false;
-    // Ring introduced for the checked portion of a bounded strong s_always window.
-    bool m_strongAlwaysRing = false;
 
     // CONSTRUCTORS
     explicit SvaStateVertex(V3Graph* graphp)
@@ -329,7 +327,7 @@ class SvaNfaBuilder final {
     // (IEEE 1800-2023 16.12.14 outer-wraps-inner).
     std::vector<AstNodeExpr*> m_outerAbortStack;
     bool m_inUnboundedScope = false;  // Sticky: nodes created after inherit liveness
-    bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
+    bool m_markStrongPending = false;  // Mark new vertices as of a strong s_always attempt
     bool m_isCover = false;  // Cover directives do not fail at end-of-simulation
     // Negated: a strong obligation pending at end-of-simulation makes the property hold
     // (IEEE 1800-2023 16.12.3)
@@ -891,8 +889,8 @@ class SvaNfaBuilder final {
             return {livep, nullptr, {}};
         }
         const unsigned hi = getConstUInt(nodep->hiBoundp());
-        // Strong s_always[m:n]: mark every in-window registered vertex so an
-        // attempt still mid-window at end-of-simulation is reported as a liveness
+        // Strong s_always[m:n]: mark every vertex of the attempt so an attempt
+        // still before or in its window at end-of-simulation is reported as a liveness
         // failure (IEEE strong: the n+1 ticks must exist). An attempt that has
         // completed earlier in the trace has already cleared its state, so it is
         // not flagged; an attempt whose final tick coincides with $finish is still
@@ -909,7 +907,6 @@ class SvaNfaBuilder final {
         currentp = checkp;
         m_temporalGuardStack.push_back(propp);
         currentp = addDelayChain(currentp, hi - lo, flp);
-        if (nodep->isStrong() && currentp->m_delayRingSize) currentp->m_strongAlwaysRing = true;
         m_temporalGuardStack.pop_back();
         return {currentp, propp, {}};
     }
@@ -3018,7 +3015,7 @@ public:
         const SignalSet sigs
             = computeSignals(c, needThreadFailCount, needThroughoutThreadFailCount, countMatches);
 
-        // Strong s_always[m:n] end-of-simulation liveness: if any in-window state
+        // Strong s_always[m:n] end-of-simulation liveness: if any state of an attempt
         // is still set at $finish, the universal-quantifier window never completed
         // (IEEE 1800-2023 16.12.11 strong semantics). Fire the assertion failure
         // from a final block.
@@ -3029,7 +3026,7 @@ public:
             AstNodeExpr* pendingExprp = nullptr;
             if (vtx[i]->datap()->stateVarp) {
                 pendingExprp = new AstVarRef{flp, vtx[i]->datap()->stateVarp, VAccess::READ};
-            } else if (vtx[i]->m_strongAlwaysRing) {
+            } else if (vtx[i]->m_delayRingSize) {
                 pendingExprp
                     = delayRingHasLiveThreadsp(flp, vtx[i]->datap()->delayRingLiveCountVarp);
             } else {
