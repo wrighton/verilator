@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: 2026 BRDR LIFE
 // SPDX-License-Identifier: CC0-1.0
 
+class E;
+  rand bit [3:0] f[4];
+endclass
+
 class C;
   rand bit [3:0] q[$];
   rand bit [3:0] arr[4];
@@ -19,6 +23,9 @@ class C;
   }
   // A scalar cannot be made distinct from the elements of an array
   constraint scalar_vs_array {unique {x, arr};}
+  // The array of an object of an array
+  rand E objs[2];
+  constraint elem_member {unique {objs[0].f};}
 endclass
 
 module t;
