@@ -235,6 +235,49 @@ class RandcDeep;
   endfunction
 endclass
 
+// Test 8: A state value changing in a constraint without the randc variable
+// does not restart its cycle
+class RandcItem;
+  rand bit [3:0] v;
+endclass
+
+class RandcStateChange;
+  randc bit [2:0] rc;
+  rand bit [7:0] x, y;
+  bit [7:0] lim;
+  rand RandcItem items[2];
+  constraint c_x {x == f(y);}
+  constraint c_y {y < lim;}
+  constraint c_rc {rc != 3'd7 || rc == 3'd7;}
+  constraint c_items {foreach (items[i]) items[i].v < 4'(lim - 5);}
+
+  function new();
+    foreach (items[i]) items[i] = new;
+  endfunction
+
+  static function bit [7:0] f(bit [7:0] d);
+    return d + 8'd3;
+  endfunction
+
+  function void test_cyclic;
+    automatic int count[8];
+    automatic int randomize_result;
+    $display("Test randc next to changing state values");
+    for (int trial = 0; trial < 3; ++trial) begin
+      for (int i = 0; i < 8; ++i) begin
+        lim = 8'(10 + i);
+        randomize_result = randomize();
+        `checkd(randomize_result, 1);
+        `checkd(items[1].v < 4'(lim - 5), 1);
+        ++count[rc];
+      end
+    end
+    for (int v = 0; v < 8; ++v) begin
+      `checkd(count[v], 3);
+    end
+  endfunction
+endclass
+
 module t;
   RandcRange rr;
   RandcSmall rs;
@@ -243,6 +286,7 @@ module t;
   RandcModeSwitch rms;
   RandcEnumConstrained rec;
   RandcDeep rd;
+  RandcStateChange rsc;
 
   initial begin
     rr = new;
@@ -265,6 +309,9 @@ module t;
 
     rd = new;
     rd.test_cyclic();
+
+    rsc = new;
+    rsc.test_cyclic();
 
     $write("*-* All Finished *-*\n");
     $finish();
