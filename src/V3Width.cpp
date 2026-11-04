@@ -8335,7 +8335,7 @@ class WidthVisitor final : public VNVisitor {
             // An override pattern is left for the specialized module to type
             VL_RESTORER(m_inParamOverride);
             m_inParamOverride = isOverridePattern(nodep->exprp());
-            userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
+            userIterateChildren(nodep, WidthVP{SELF, BOTH, STREAM_USE_ASSIGN}.p());
         } else if (!m_paramsOnly) {
             if (!nodep->modVarp()->didWidth()) {
                 // Var hasn't been widthed, so make it so.
