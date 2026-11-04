@@ -1474,6 +1474,18 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return true;
     }
 
+    // Whether singleton bin value constp of a real coverpoint is not in 'listed'; adds it
+    static bool realBinUnlisted(const AstConst* constp, std::set<double>& listed) {
+        const V3Number& num = constp->num();
+        if (num.isDouble()) return listed.insert(num.toDouble()).second;
+        // Values with X/Z or over 64 bits are not values of the coverpoint, but name a bin
+        if (num.isFourState() || num.width() > 64) return true;
+        return listed
+            .insert(constp->isSigned() ? static_cast<double>(num.toSQuad())
+                                       : static_cast<double>(num.toUQuad()))
+            .second;
+    }
+
     // Individual equality targets of an array bin (bins b[] = {values/ranges}) of a real
     // coverpoint, in order; integral coverpoints generate array bins as runs (see arrayBinRuns).
     // An open-ended bound ('$', AstUnbounded) resolves to the coverpoint domain: '[lo:$]'
@@ -1486,6 +1498,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         const int width = exprp->width();
         const uint64_t maxVal = (width >= 64) ? UINT64_MAX : ((1ULL << width) - 1);
         std::vector<AstNodeExpr*> values;
+        // A value names one bin, however many elements list it (IEEE 1800-2023 19.5.1)
+        std::set<double> listed;
         for (AstNode* rangep = arrayBinp->rangesp(); rangep; rangep = rangep->nextp()) {
             rangep = V3Const::constifyEdit(rangep);
             if (!checkArrayBinElement(arrayBinp, rangep)) return values;
@@ -1511,10 +1525,12 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                     values.clear();
                     return values;
                 }
-                for (uint64_t v = lo; v <= hi; ++v)
+                for (uint64_t v = lo; v <= hi; ++v) {
+                    if (!listed.insert(static_cast<double>(v)).second) continue;
                     values.push_back(new AstConst{irp->fileline(), AstConst::WidthedValue{}, width,
                                                   static_cast<uint32_t>(v)});
-            } else {
+                }
+            } else if (realBinUnlisted(VN_AS(rangep, Const), listed)) {
                 values.push_back(VN_AS(rangep->cloneTree(false), NodeExpr));
             }
         }
@@ -1548,6 +1564,44 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return true;
     }
 
+    // Order of coverpoint values, as crossValueLess
+    struct ValueLess final {
+        bool operator()(const V3Number& lhs, const V3Number& rhs) const {
+            return crossValueLess(lhs, rhs);
+        }
+    };
+    // Disjoint intervals of coverpoint values, each keyed by its lowest value
+    using ValueIntervals = std::map<V3Number, V3Number, ValueLess>;
+
+    // Return the parts of [lo:hi] not in 'listed', in order, and add them to 'listed'
+    static std::vector<std::pair<V3Number, V3Number>>
+    takeUnlisted(ValueIntervals& listed, const V3Number& lo, const V3Number& hi) {
+        std::vector<std::pair<V3Number, V3Number>> pieces;
+        const V3Number one{&lo, lo.width(), 1};
+        V3Number from = lo;
+        bool covered = false;  // [from:hi] is listed
+        // The interval starting last at or below lo may hold it
+        auto it = listed.upper_bound(lo);
+        if (it != listed.begin()) --it;
+        for (; it != listed.end() && !crossValueLess(hi, it->first); ++it) {
+            if (crossValueLess(it->second, from)) continue;
+            if (crossValueLess(from, it->first)) {
+                V3Number top{&lo, lo.width()};
+                top.opSub(it->first, one);
+                pieces.emplace_back(from, top);
+            }
+            // Adding one only below hi cannot overflow
+            if (!crossValueLess(it->second, hi)) {
+                covered = true;
+                break;
+            }
+            from.opAdd(it->second, one);
+        }
+        if (!covered) pieces.emplace_back(from, hi);
+        for (const auto& piece : pieces) listed.emplace(piece.first, piece.second);
+        return pieces;
+    }
+
     // The elements of an array bin (bins b[] = {values/ranges}), in order, as runs of
     // single-value bins.  A range holds the values of the coverpoint type it contains (IEEE
     // 1800-2023 19.5.7), while a singleton names a bin even without such a value.  Errors on a
@@ -1556,6 +1610,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     BinRuns arrayBinRuns(AstCoverBin* arrayBinp, AstNodeExpr* exprp) {
         BinRuns out;
         const int width = runWidth(exprp);
+        ValueIntervals listed;
         for (AstNode* rangep = arrayBinp->rangesp(); rangep; rangep = rangep->nextp()) {
             rangep = V3Const::constifyEdit(rangep);
             if (!checkArrayBinElement(arrayBinp, rangep)) return out;
@@ -1569,33 +1624,43 @@ class FunctionalCoverageVisitor final : public VNVisitor {
                 empty = crossRangeEmpty(range);
             }
             if (empty && irp) continue;  // A range without values contributes no bins
-            BinRun run{rangep, width, 1};
-            run.m_empty = empty;
-            uint64_t count = 1;
-            if (!empty) {
-                run.m_lo.opAssign(range.lo);
-                run.m_hi.opAssign(range.hi);
-                V3Number span{rangep, width};
-                span.opSub(run.m_hi, run.m_lo);
-                // Wider spans exceed any limit
-                count = span.mostSetBitP1() > 32 ? UINT64_MAX : span.toUQuad() + 1;
+            V3Number lo{rangep, width};
+            V3Number hi{rangep, width};
+            lo.opAssign(range.lo);
+            hi.opAssign(range.hi);
+            // A value names one bin, however many elements list it (IEEE 1800-2023 19.5.1)
+            const std::vector<std::pair<V3Number, V3Number>> pieces
+                = empty ? std::vector<std::pair<V3Number, V3Number>>{{lo, hi}}
+                        : takeUnlisted(listed, lo, hi);
+            for (const auto& piece : pieces) {
+                BinRun run{rangep, width, 1};
+                run.m_empty = empty;
+                uint64_t count = 1;
+                if (!empty) {
+                    run.m_lo.opAssign(piece.first);
+                    run.m_hi.opAssign(piece.second);
+                    V3Number span{rangep, width};
+                    span.opSub(run.m_hi, run.m_lo);
+                    // Wider spans exceed any limit
+                    count = span.mostSetBitP1() > 32 ? UINT64_MAX : span.toUQuad() + 1;
+                }
+                if (count > v3Global.opt.coverageMaxBins() - out.count) {
+                    arrayBinp->v3warn(COVERIGN, "Unsupported: array 'bins' covering more than "
+                                                    << v3Global.opt.coverageMaxBins()
+                                                    << " values (e.g. an open '[lo:$]' range over "
+                                                       "a wide coverpoint); bin "
+                                                    << arrayBinp->prettyNameQ() << " ignored\n"
+                                                    << arrayBinp->warnMore()
+                                                    << "... Suggest a larger --coverage-max-bins");
+                    out.runs.clear();
+                    out.count = 0;
+                    out.unsupported = true;
+                    return out;
+                }
+                run.m_count = static_cast<uint32_t>(count);
+                out.count += run.m_count;
+                out.runs.push_back(std::move(run));
             }
-            if (count > v3Global.opt.coverageMaxBins() - out.count) {
-                arrayBinp->v3warn(COVERIGN, "Unsupported: array 'bins' covering more than "
-                                                << v3Global.opt.coverageMaxBins()
-                                                << " values (e.g. an open '[lo:$]' range over "
-                                                   "a wide coverpoint); bin "
-                                                << arrayBinp->prettyNameQ() << " ignored\n"
-                                                << arrayBinp->warnMore()
-                                                << "... Suggest a larger --coverage-max-bins");
-                out.runs.clear();
-                out.count = 0;
-                out.unsupported = true;
-                return out;
-            }
-            run.m_count = static_cast<uint32_t>(count);
-            out.count += run.m_count;
-            out.runs.push_back(std::move(run));
         }
         return out;
     }
