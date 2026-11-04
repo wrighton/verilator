@@ -839,12 +839,11 @@ void VlRandomizer::randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
     int varBits = 0;
     if (layerVarsp) {
         for (const auto& name : *layerVarsp) {
-            const auto it = m_vars.find(name);
-            // buildSolveLayers() only ever adds a name after confirming
-            // it's already in m_vars.
-            assert(it != m_vars.end());
-            vars.push_back(it->second.get());
-            varBits += it->second->totalWidth();
+            // buildSolveLayers() only ever adds a name after confirming it names a variable
+            const VlRandomVar* const varp = solveBeforeVarp(name);
+            assert(varp);
+            vars.push_back(varp);
+            varBits += varp->totalWidth();
         }
     } else {
         for (const auto& var : m_vars) {
@@ -1809,16 +1808,52 @@ void VlRandomizer::solveBefore(const std::string& beforeName, const std::string&
     m_solveBefore.emplace_back(beforeName, afterName);
 }
 
+const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
+    const auto it = m_vars.find(name);
+    if (it != m_vars.end()) return it->second.get();
+    const auto elemIt = m_solveBeforeElems.find(name);
+    if (elemIt != m_solveBeforeElems.end()) return elemIt->second.get();
+    // An element "array.index...", with an index of vlToSolverHex() for each dimension, of an
+    // array that the solver has as one variable
+    std::vector<std::string> indices;
+    std::string base = name;
+    while (true) {
+        const size_t dot = base.rfind('.');
+        if (dot == std::string::npos) return nullptr;
+        indices.insert(indices.begin(), base.substr(dot + 1));
+        base.erase(dot);
+        const auto arrIt = m_vars.find(base);
+        if (arrIt == m_vars.end()
+            || arrIt->second->dimension() != static_cast<int>(indices.size()))
+            continue;
+        // An array without elements has no index widths, nor the element
+        const auto firstIt = m_arr_vars.find(generateKey(base, 0));
+        if (firstIt == m_arr_vars.end()) return nullptr;
+        std::string term = base;
+        for (size_t i = 0; i < indices.size(); ++i) {
+            // Wider keys, as strings or 64-bit integers, are not named by vlToSolverHex()
+            const size_t width = firstIt->second->m_idxWidths[i];
+            if (width > 32) return nullptr;
+            term = "(select " + term + " #x" + indices[i].substr(8 - width / 4) + ")";
+        }
+        return (m_solveBeforeElems[name]
+                = std::make_shared<const VlRandomVar>(term, arrIt->second->width(), nullptr, 0,
+                                                      std::numeric_limits<std::uint32_t>::max()))
+            .get();
+    }
+}
+
 bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layersr) {
     std::map<std::string, std::set<std::string>> graph;
     std::map<std::string, int> inDegree;
     std::set<std::string> solveBeforeVars;
 
+    m_solveBeforeElems.clear();
     for (const auto& pair : m_solveBefore) {
         const std::string& before = pair.first;
         const std::string& after = pair.second;
-        // Only consider variables that are actually registered
-        if (m_vars.find(before) == m_vars.end() || m_vars.find(after) == m_vars.end()) continue;
+        // Only consider variables, and elements of array variables, that are registered
+        if (!solveBeforeVarp(before) || !solveBeforeVarp(after)) continue;
         graph[before].insert(after);
         solveBeforeVars.insert(before);
         solveBeforeVars.insert(after);
@@ -1942,17 +1977,17 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     const auto emitGetValueCmd = [&]() {
         os << "(get-value (";
         for (const auto& varName : layerVars) {
-            const auto it = m_vars.find(varName);
-            if (it->second->dimension() > 0) {
+            const VlRandomVar* const varp = solveBeforeVarp(varName);
+            if (varp->dimension() > 0) {
                 auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
-                it->second->setArrayInfo(arrVarsp);
+                varp->setArrayInfo(arrVarsp);
                 // Enumerable arrays: query each element for a QF_ABV-safe pin.
-                if (it->second->hasMatchingElements(m_arr_vars, it->second->name())) {
-                    it->second->emitGetValue(os);
+                if (varp->hasMatchingElements(m_arr_vars, varp->name())) {
+                    varp->emitGetValue(os);
                     continue;
                 }
             }
-            os << varName << " ";
+            os << varp->name() << " ";
         }
         os << "))\n";
     };
