@@ -15,4 +15,11 @@ module t;
   assign a = 1'b0;  // Only net assignment allowed
   assign b = a[0];  // Only net assignment allowed
 
+  wire c[2:1];  // Never read
+  assign c = 1'b1;
+
+  typedef logic arr_t[1:0];
+  wire arr_t d;  // Never read
+  assign d = 1'b1;
+
 endmodule
