@@ -169,7 +169,7 @@ package std;
 `endif
     endtask
 
-    static task killQueue(ref process processQueue[$]);
+    static function void killQueue(ref process processQueue[$]);
 `ifdef VERILATOR_TIMING
       process current = process::self();
       repeat (processQueue.size()) begin
@@ -180,7 +180,7 @@ package std;
       // kill() also stops a killed caller; call it last, once the whole queue is disabled.
       if (current.status() == KILLED) current.kill();
 `endif
-    endtask
+    endfunction
 
     // verilog_format: off
 `ifdef VERILATOR_TIMING
