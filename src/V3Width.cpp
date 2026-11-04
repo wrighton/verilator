@@ -7800,7 +7800,15 @@ class WidthVisitor final : public VNVisitor {
         }
         FileLine* const fl = valuep->fileline();
         AstLambdaArgRef* const indexArgp = new AstLambdaArgRef{fl, "item__DOT__index", true};
-        indexArgp->dtypeSetUInt32();
+        // An associative array item, spliced in index order, is mapped by its keys
+        const AstNodeDType* const fromDtp = valuep->dtypep()->skipRefp();
+        if (const AstAssocArrayDType* const adtypep = VN_CAST(fromDtp, AssocArrayDType)) {
+            indexArgp->dtypep(adtypep->keyDTypep());
+        } else if (VN_IS(fromDtp, WildcardArrayDType)) {
+            indexArgp->dtypep(indexArgp->findStringDType());
+        } else {
+            indexArgp->dtypeSetUInt32();
+        }
         AstLambdaArgRef* const valueArgp = new AstLambdaArgRef{fl, "item", false};
         valueArgp->dtypep(subDtp);
         AstWith* const withp = new AstWith{fl, indexArgp, valueArgp, valueArgp->cloneTree(false)};
