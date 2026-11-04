@@ -367,6 +367,30 @@ module t (
   localparam int SUM = sum_slice(2);
   initial `checkd(SUM, 39);
 
+  // Slice of a one-element array
+  int one_d[5:5];
+  int one_a[0:0];
+  int one_r[1];
+  int one_pos;
+  always @(posedge clk) begin
+    if (cyc == 1) begin
+      one_d[5] = 42;
+      one_a[0] = 7;
+      one_pos = 5;
+    end else if (cyc == 2) begin
+      one_r = one_d[one_pos+:1];
+      `checkd(one_r[0], 42);
+      one_r = one_d[one_pos-:1];
+      `checkd(one_r[0], 42);
+      one_r = one_a[one_pos-5+:1];
+      `checkd(one_r[0], 7);
+      one_d[one_pos+:1] = '{43};
+      `checkd(one_d[5], 43);
+      one_r = one_d[one_pos+1+:1];
+      `checkd(one_r[0], 0);
+    end
+  end
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     if (cyc == 10) begin
