@@ -885,10 +885,23 @@ void VlRandomizer::randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
     os << ')';
 }
 
-size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras) const {
+size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
+                                     bool randcOnly) const {
     size_t h = 0;
-    for (const auto& c : m_constraints) {
-        h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    for (size_t i = 0; i < m_constraints.size(); ++i) {
+        if (randcOnly) {
+            // Only a change of the constraints on a randc variable restarts its cycle
+            // (IEEE 1800-2023 18.4.2), not a state value changing in another constraint
+            const auto beginIt
+                = m_constraintVarNames.begin() + (i ? m_constraintVarEnds[i - 1] : 0);
+            const auto endIt = m_constraintVarNames.begin() + m_constraintVarEnds[i];
+            if (std::none_of(beginIt, endIt, [this](const char* namep) {
+                    return m_randcVarNames.count(namep) != 0;
+                })) {
+                continue;
+            }
+        }
+        h ^= std::hash<std::string>{}(m_constraints[i]) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
     for (const auto& c : extras) {
         h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
@@ -976,7 +989,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
     if (!m_randcVarNames.empty()) {
-        const size_t currentHash = hashConstraints(uniqueExprs);
+        const size_t currentHash = hashConstraints(uniqueExprs, true);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
         if (currentHash != m_randcConstraintHash) {
             m_randcUsedValues.clear();
