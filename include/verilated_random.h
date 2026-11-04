@@ -118,8 +118,8 @@ template <typename T>
 struct VlRandomAssocKeyWidths final {
     static void push(std::vector<size_t>&) {}
 };
-template <typename T_Key, typename T_Value>
-struct VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value>> final {
+template <typename T_Key, typename T_Value, typename T_KeyLess>
+struct VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value, T_KeyLess>> final {
     static void push(std::vector<size_t>& widths) {
         widths.push_back(std::is_same<T_Key, std::string>::value ? 128 : sizeof(T_Key) * 8);
         VlRandomAssocKeyWidths<T_Value>::push(widths);
@@ -565,16 +565,17 @@ public:
     }
 
     // Register associative array of non-struct types
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<!VlContainsCustomStruct<T_Value>::value, void>::type
-    write_var(VlAssocArray<T_Key, T_Value>& var, int width, const char* name, int dimension,
+    write_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, int width, const char* name,
+              int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
         if (m_vars.find(name) == m_vars.end()) {
             std::vector<size_t> keyWidths;
-            VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value>>::push(keyWidths);
-            m_vars[name]
-                = std::make_shared<const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value>>>(
-                    name, width, &var, dimension, randmodeIdx, keyWidths);
+            VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value, T_KeyLess>>::push(keyWidths);
+            m_vars[name] = std::make_shared<
+                const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value, T_KeyLess>>>(
+                name, width, &var, dimension, randmodeIdx, keyWidths);
         }
         if (dimension > 0) {
             m_index = 0;
@@ -585,9 +586,10 @@ public:
     }
 
     // Register associative array of structs
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<VlContainsCustomStruct<T_Value>::value, void>::type
-    write_var(VlAssocArray<T_Key, T_Value>& var, int /*width*/, const char* name, int dimension,
+    write_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, int /*width*/, const char* name,
+              int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
@@ -672,8 +674,8 @@ public:
     }
 
     // Recursively record all elements in an associative array
-    template <typename T_Key, typename T_Value>
-    void record_arr_table(VlAssocArray<T_Key, T_Value>& var, const std::string& name,
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void record_arr_table(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name,
                           int dimension, std::vector<IData> indices,
                           std::vector<size_t> idxWidths) {
         if ((dimension > 0) && (var.size() != 0)) {
@@ -702,8 +704,8 @@ public:
     }
 
     // Recursively update pointers to all elements in an associative array
-    template <typename T_Key, typename T_Value>
-    void update_arr_table(VlAssocArray<T_Key, T_Value>& var, const std::string& name,
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void update_arr_table(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name,
                           int dimension) {
         assert(dimension > 0);
         for (auto it = var.begin(); it != var.end(); ++it) {
@@ -794,8 +796,8 @@ public:
     }
 
     // Recursively process associative arrays of structs
-    template <typename T_Key, typename T_Value>
-    void record_struct_arr(VlAssocArray<T_Key, T_Value>& var, const std::string& name,
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void record_struct_arr(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name,
                            int dimension, const std::vector<IData>& indices,
                            const std::vector<size_t>& idxWidths, std::uint32_t randmodeIdx) {
         if ((dimension > 0) && (!var.empty())) {
@@ -815,8 +817,8 @@ public:
         }
     }
 
-    template <typename T_Key, typename T_Value>
-    void update_struct_arr(VlAssocArray<T_Key, T_Value>& var, const std::string& name) {
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void update_struct_arr(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name) {
         for (auto it = var.begin(); it != var.end(); ++it) {
             const T_Key& key = it->first;
 
@@ -904,24 +906,24 @@ public:
         update_struct_arr(var, name);
     }
 
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<!VlContainsCustomStruct<T_Value>::value, void>::type
-    update_var(VlAssocArray<T_Key, T_Value>& var, const char* name) {
+    update_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const char* name) {
         auto it = m_vars.find(name);
         assert(it != m_vars.end());
         const int dimension = it->second->dimension();
         std::vector<size_t> keyWidths;
-        VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value>>::push(keyWidths);
-        it->second
-            = std::make_shared<const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value>>>(
-                name, it->second->width(), &var, dimension, it->second->randModeIdx(), keyWidths);
+        VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value, T_KeyLess>>::push(keyWidths);
+        it->second = std::make_shared<
+            const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value, T_KeyLess>>>(
+            name, it->second->width(), &var, dimension, it->second->randModeIdx(), keyWidths);
         m_index = 0;
         update_arr_table(var, name, dimension);
     }
 
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<VlContainsCustomStruct<T_Value>::value, void>::type
-    update_var(VlAssocArray<T_Key, T_Value>& var, const char* name) {
+    update_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const char* name) {
         update_struct_arr(var, name);
     }
 
@@ -1035,8 +1037,8 @@ public:
     }
 
     // Associative array randomization
-    template <typename T_Key, typename T_Value>
-    bool basicStdRandomization(VlAssocArray<T_Key, T_Value>& value, size_t width) {
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    bool basicStdRandomization(VlAssocArray<T_Key, T_Value, T_KeyLess>& value, size_t width) {
         T_Key key;
         for (int exists = value.first(key); exists; exists = value.next(key)) {
             basicStdRandomization(value.atWrite(key), width);
