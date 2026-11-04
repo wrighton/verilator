@@ -74,6 +74,21 @@ enum ClassRandom : uint8_t {
 // ######################################################################
 // Establishes the target of a rand_mode() call
 
+// Whether a packed type holds an enum, possibly inside packed arrays, structs or unions
+static bool packedHasEnum(const AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefToEnump();
+    if (VN_IS(dtypep, EnumDType)) return true;
+    if (const AstPackArrayDType* const arrayDtp = VN_CAST(dtypep, PackArrayDType)) {
+        return packedHasEnum(arrayDtp->subDTypep());
+    }
+    if (const AstNodeUOrStructDType* const structDtp = VN_CAST(dtypep, NodeUOrStructDType)) {
+        for (const AstMemberDType* const memberp : structDtp->memberspList()) {
+            if (packedHasEnum(memberp->subDTypep())) return true;
+        }
+    }
+    return false;
+}
+
 struct RandModeTarget final {
     // MEMBERS
     AstVar* const receiverp;  // Variable that is the target of the rand_mode() call
@@ -1627,18 +1642,19 @@ class RandomizeVisitor final : public VNVisitor {
         return new AstForeach{fl, headerp, randStmtsp};
     }
     AstNodeStmt* newRandStmtsp(FileLine* fl, AstNodeExpr* exprp, AstVar* randcVarp,
-                               AstVar* const outputVarp, int offset = 0,
-                               AstMemberDType* memberp = nullptr) {
-        AstNodeDType* const memberDtp
-            = memberp ? memberp->subDTypep()->skipRefp() : exprp->dtypep()->skipRefp();
+                               AstVar* const outputVarp, int lsb = 0,
+                               AstNodeDType* fieldDtp = nullptr) {
+        // With fieldDtp, randomize only the packed field of that type at bit lsb of exprp
+        if (!fieldDtp) fieldDtp = exprp->dtypep();
+        AstNodeDType* const memberDtp = fieldDtp->skipRefp();
         if (const auto* const structDtp = VN_CAST(memberDtp, StructDType)) {
             AstNodeStmt* stmtsp = nullptr;
-            if (structDtp->packed()) offset += memberp ? memberp->lsb() : 0;
             for (AstMemberDType* const smemberp : structDtp->memberspList()) {
                 AstNodeStmt* randp = nullptr;
                 if (structDtp->packed()) {
-                    randp = newRandStmtsp(fl, stmtsp ? exprp->cloneTree(false) : exprp, nullptr,
-                                          outputVarp, offset, smemberp);
+                    randp
+                        = newRandStmtsp(fl, stmtsp ? exprp->cloneTree(false) : exprp, nullptr,
+                                        outputVarp, lsb + smemberp->lsb(), smemberp->subDTypep());
                 } else if (smemberp->rand().isRandomizable()) {
                     // IEEE 1800-2023 18.4: an unpacked struct member is only
                     // randomized if its own declaration carries rand/randc.
@@ -1655,8 +1671,8 @@ class RandomizeVisitor final : public VNVisitor {
             // Illegal for rand/randc, rejected by type upstream for every such
             // case; nothing valid to build a randomize statement for here.
             if (!unionDtp->packed()) return nullptr;
-            AstMemberDType* const firstMemberp = unionDtp->membersp();
-            return newRandStmtsp(fl, exprp, nullptr, outputVarp, offset, firstMemberp);
+            return newRandStmtsp(fl, exprp, nullptr, outputVarp, lsb,
+                                 unionDtp->membersp()->subDTypep());
         } else if (const AstClassRefDType* const classRefDtp = VN_CAST(memberDtp, ClassRefDType)) {
             AstFunc* const memberFuncp
                 = V3Randomize::newRandomizeFunc(m_memberMap, classRefDtp->classp());
@@ -1678,13 +1694,42 @@ class RandomizeVisitor final : public VNVisitor {
             return createArrayForeachLoop(fl, unpackarrayDtp, exprp, outputVarp);
         } else if (AstAssocArrayDType* const assocarrayDtp = VN_CAST(memberDtp, AssocArrayDType)) {
             return createArrayForeachLoop(fl, assocarrayDtp, exprp, outputVarp);
+        } else if (const AstPackArrayDType* const arrayDtp = VN_CAST(memberDtp, PackArrayDType);
+                   arrayDtp && packedHasEnum(arrayDtp)) {
+            // A loop over the elements, so each enum gets one of its values
+            AstNodeDType* const elemDtp = arrayDtp->subDTypep();
+            AstVar* const idxVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VpackIdx"),
+                             exprp->findUInt32DType()};
+            idxVarp->funcLocal(true);
+            idxVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            AstSel* const elemp = new AstSel{
+                fl, exprp,
+                new AstAdd{fl, new AstConst{fl, static_cast<uint32_t>(lsb)},
+                           new AstMul{fl, new AstVarRef{fl, idxVarp, VAccess::READ},
+                                      new AstConst{fl, static_cast<uint32_t>(elemDtp->width())}}},
+                elemDtp->width()};
+            elemp->dtypep(elemDtp);
+            AstLoop* const loopp = new AstLoop{fl};
+            loopp->addStmtsp(new AstLoopTest{
+                fl, loopp,
+                new AstLt{fl, new AstVarRef{fl, idxVarp, VAccess::READ},
+                          new AstConst{fl, static_cast<uint32_t>(arrayDtp->elementsConst())}}});
+            loopp->addStmtsp(newRandStmtsp(fl, elemp, nullptr, outputVarp));
+            loopp->addStmtsp(new AstAssign{
+                fl, new AstVarRef{fl, idxVarp, VAccess::WRITE},
+                new AstAdd{fl, new AstConst{fl, 1}, new AstVarRef{fl, idxVarp, VAccess::READ}}});
+            AstNodeStmt* const stmtsp = new AstAssign{
+                fl, new AstVarRef{fl, idxVarp, VAccess::WRITE}, new AstConst{fl, 0}};
+            stmtsp->addNext(loopp);
+            AstBegin* const beginp = new AstBegin{fl, "", stmtsp, false};
+            beginp->addDeclsp(idxVarp);
+            return beginp;
         } else {
             AstNodeExpr* valp;
             AstVar* randVarp = nullptr;  // Random value of an enum
             AstNodeStmt* randStmtsp = nullptr;  // Draws the random value, before the assignment
-            if (AstEnumDType* const enumDtp = VN_CAST(memberp ? memberp->subDTypep()->subDTypep()
-                                                              : exprp->dtypep()->subDTypep(),
-                                                      EnumDType)) {
+            if (AstEnumDType* const enumDtp = VN_CAST(fieldDtp->skipRefToEnump(), EnumDType)) {
                 // Random value in a variable: a wide value is copied word by word, each word
                 // evaluating the table index again
                 randVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VenumRand"),
@@ -1698,14 +1743,10 @@ class RandomizeVisitor final : public VNVisitor {
                                     new AstConst{fl, static_cast<uint32_t>(enumDtp->itemCount())}};
                 valp = new AstArraySel{fl, enumValueTabRefp(enumDtp), moddivp};
             } else {
-                valp
-                    = newRandValue(fl, randcVarp, (memberp ? memberp->dtypep() : exprp->dtypep()));
+                valp = newRandValue(fl, randcVarp, fieldDtp);
             }
             AstAssign* assignp
-                = new AstAssign{fl,
-                                new AstSel{fl, exprp, offset + (memberp ? memberp->lsb() : 0),
-                                           memberp ? memberp->width() : exprp->width()},
-                                valp};
+                = new AstAssign{fl, new AstSel{fl, exprp, lsb, fieldDtp->width()}, valp};
             AstVar* varp = nullptr;
             exprp->exists([&](const AstVarRef* varrefp) {
                 if (varrefp->access().isWriteOrRW()) varp = varrefp->varp();
