@@ -1412,7 +1412,7 @@ class ParamProcessor final {
     }
 
     // Check if exprp's class matches origp's class after deparameterization.
-    // Handles both the simple case (user4p link from defaultsResolved) and the
+    // Handles both the simple case (user4p link to the default specialization) and the
     // nested case where the default's inner class has non-default sub-parameters
     // (e.g., uvm_sequence#(uvm_reg_item) where uvm_reg_item != default uvm_sequence_item).
     bool classTypeMatchesDefaultClone(const AstNodeDType* exprp, const AstNodeDType* origp) {
@@ -1995,7 +1995,8 @@ class ParamProcessor final {
         return pinp;
     }
 
-    void resolveDefaultParams(AstNode* nodep) {
+    // Give a class reference a pin for each default type; return true if it gives no value
+    bool resolveDefaultParams(AstNode* nodep) {
         AstClassOrPackageRef* classOrPackageRefp = VN_CAST(nodep, ClassOrPackageRef);
         AstClassRefDType* classRefDTypep = VN_CAST(nodep, ClassRefDType);
         AstClass* classp = nullptr;
@@ -2003,7 +2004,7 @@ class ParamProcessor final {
 
         if (classOrPackageRefp) {
             classp = VN_CAST(classOrPackageRefp->classOrPackageSkipp(), Class);
-            if (!classp) return;  // No parameters in packages
+            if (!classp) return false;  // No parameters in packages
             paramsp = classOrPackageRefp->paramsp();
         } else if (classRefDTypep) {
             classp = classRefDTypep->classp();
@@ -2027,12 +2028,14 @@ class ParamProcessor final {
                 paramPins.emplace(stmtp, nullptr);
             }
         }
+        bool givesNoValue = true;
         for (AstPin *pinp = paramsp, *nextp; pinp; pinp = nextp) {
             nextp = VN_AS(pinp->nextp(), Pin);
             if (!pinp->exprp()) {  // An empty override keeps the default, given below
                 VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
                 continue;
             }
+            givesNoValue = false;
             const AstNode* const paramp
                 = pinp->modPTypep() ? static_cast<AstNode*>(pinp->modPTypep()) : pinp->modVarp();
             const auto it = paramPins.find(paramp);
@@ -2074,10 +2077,12 @@ class ParamProcessor final {
                 classRefDTypep->addParamsp(pinp);
             }
         }
+        return givesNoValue;
     }
 
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
-                                     AstPin* pinsp, bool any_overrides) {
+                                     AstPin* pinsp, bool any_overrides,
+                                     bool givesNoValue = false) {
         // Returns new or reused module
         // Make sure constification worked
         // Must be a separate loop, as constant conversion may have changed some pointers.
@@ -2198,8 +2203,10 @@ class ParamProcessor final {
         AstClass* const newClassp = VN_CAST(newModp, Class);
         if (newClassp && !newClassp->user2()) m_specializedClassps.push_back(newClassp);
 
-        // Link source class to its specialized version for later relinking of method references
-        if (defaultsResolved) srcModp->user4p(newModp);
+        // Link source class to its default specialization for later relinking of method
+        // references. A reference giving no value is to it, even if a default depending on
+        // another type parameter made a pin look overriding above.
+        if (defaultsResolved || givesNoValue) srcModp->user4p(newModp);
 
         for (AstNode* const stmtp : newModp->stmtspList()) {
             if (AstParamTypeDType* dtypep = VN_CAST(stmtp, ParamTypeDType)) {
@@ -2311,9 +2318,9 @@ class ParamProcessor final {
         return newModp;
     }
     AstNodeModule* classRefDeparam(AstClassRefDType* nodep, AstNodeModule* srcModp) {
-        resolveDefaultParams(nodep);
+        const bool givesNoValue = resolveDefaultParams(nodep);
         AstNodeModule* const newModp
-            = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
+            = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false, givesNoValue);
         if (!newModp) return nullptr;
         AstClass* const newClassp = VN_AS(newModp, Class);
         nodep->classp(newClassp);  // Might be unchanged if not cloned (newModp == srcModp)
