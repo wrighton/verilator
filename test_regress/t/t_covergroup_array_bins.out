@@ -49,6 +49,8 @@ t.cg14.x.<w[0],one> [cross]: 0
 t.cg14.x.<w[1],one> [cross]: 1
 t.cg15.cp.v[0]: 0
 t.cg15.cp.v[1]: 1
+t.cg15.cp.v[2]: 1
+t.cg15.cp.w: 1
 t.cg2.cp.range_arr[0]: 1
 t.cg2.cp.range_arr[1]: 1
 t.cg2.cp.range_arr[2]: 1
