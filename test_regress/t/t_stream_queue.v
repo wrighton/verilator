@@ -288,7 +288,13 @@ module t;
     // ----------- VLWide QUEUE --------
 
     // test with QData
+    vlwide_pkt_129 = {>>{i_header}};
+    `checks_w(129, {>>{vlwide_pkt_129}}, {i_header, 97'b0});
+    {>>{o_header}} = vlwide_pkt_129;
+    `checks(i_header, o_header);
+
     vlwide_pkt_129 = {>>{i_header, i_len}};
+    `checks_w(129, {>>{vlwide_pkt_129}}, {i_header, i_len, 65'b0});
     {>>{o_header, o_len}} = vlwide_pkt_129;
     `checks({i_header, i_len}, {o_header, o_len});
 
@@ -296,7 +302,12 @@ module t;
     vlwide_pkt_129 = {>>{i_header, i_len, i_crc, i_data}};
     {>>{o_header, o_len, o_crc, o_data}} = vlwide_pkt_129;
 
-    `checks_w(129, {>>{vlwide_pkt_129}}, {>>{1'b0, i_header, i_len, i_crc, i_data}});
+    `checks_w(129, {>>{vlwide_pkt_129}}, {>>{i_header, i_len, i_crc, i_data, 1'b0}});
+
+    vlwide_pkt_129 = {>>{i_header, i_len, i_crc, i_data, i_header, i_len, i_crc, i_data, i_crc}};
+    `checks(vlwide_pkt_129.size(), 3);
+    `checks_w(387, {>>{vlwide_pkt_129}},
+              {i_header, i_len, i_crc, i_data, i_header, i_len, i_crc, i_data, i_crc, 99'b0});
     `checks({o_header, o_len, o_crc, o_data}, {i_header, i_len, i_crc, i_data});
 
     //---------- into other queues ------
