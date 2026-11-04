@@ -1222,23 +1222,26 @@ class GateUnused final {
 
     // METHODS
 
-    void markRecurse(GateEitherVertex* vtxp) {
-        if (vtxp->user()) return;  // Already marked
-        vtxp->user(true);
-        vtxp->setConsumed("propagated");
-        // Walk sources and mark them too
-        for (V3GraphEdge& edge : vtxp->inEdges()) {
-            GateEitherVertex* const fromVtxp = static_cast<GateEitherVertex*>(edge.fromp());
-            markRecurse(fromVtxp);
-        }
-    }
-
     // Mark all vertices that feed a consumed vertex
     void mark() {
         m_graph.userClearVertices();
+        // With a work list, as recursion overflows the stack on long paths
+        std::vector<GateEitherVertex*> todop;
         for (V3GraphVertex& vtx : m_graph.vertices()) {
             GateEitherVertex& eVtx = static_cast<GateEitherVertex&>(vtx);
-            if (eVtx.consumed()) markRecurse(&eVtx);
+            if (eVtx.consumed()) todop.push_back(&eVtx);
+        }
+        while (!todop.empty()) {
+            GateEitherVertex* const vtxp = todop.back();
+            todop.pop_back();
+            if (vtxp->user()) continue;  // Already marked
+            vtxp->user(true);
+            vtxp->setConsumed("propagated");
+            // Walk sources and mark them too
+            for (V3GraphEdge& edge : vtxp->inEdges()) {
+                GateEitherVertex* const fromVtxp = static_cast<GateEitherVertex*>(edge.fromp());
+                if (!fromVtxp->user()) todop.push_back(fromVtxp);
+            }
         }
     }
 
