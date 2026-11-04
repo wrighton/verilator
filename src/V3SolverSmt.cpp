@@ -193,13 +193,6 @@ public:
         return setupAllTaskp;
     }
 
-    // Look through unpacked array dimensions to the element type
-    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
-        return dtypep;
-    }
-
     // Whether dtypep is, or contains anywhere through unpacked array/struct
     // nesting, a real value. A packed struct can't hold one (IEEE disallows
     // real as a packed-struct member), so it's never worth descending into.
@@ -418,7 +411,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     // IEEE 1800-2023 18.4: all rand members of a rand unpacked struct are solved
     // concurrently, so unreferenced rand members must still reach the solver.
     static void markStructConstrainedRandRecurse(AstNodeDType* const dtypep) {
-        AstStructDType* const structp = VN_CAST(SmtUtil::arrayElementDTypep(dtypep), StructDType);
+        AstStructDType* const structp
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
         if (!structp || structp->packed()) return;
         structp->markConstrainedRand(true);
         for (AstMemberDType* const memberp : structp->memberspList()) {
@@ -1271,7 +1265,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             varRefp->classOrPackagep(classOrPackagep);
             methodp->addPinsp(varRefp);
         }
-        const size_t width = SmtUtil::arrayElementDTypep(varp->dtypep())->width();
+        const size_t width = RandomizeUtil::arrayElementDTypep(varp->dtypep())->width();
         methodp->addPinsp(new AstConst{varp->fileline(), AstConst::Unsized64{}, width});
         AstNodeExpr* const varnamep = new AstCExpr{varp->fileline(), AstCExpr::Pure{},
                                                    "\"" + smtName + "\"", varp->width()};
@@ -4230,7 +4224,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         varRefp->classOrPackagep(classp);
         methodp->addPinsp(varRefp);
 
-        const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
+        const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
 
         methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
         AstNodeExpr* const varnamep
@@ -4881,7 +4875,7 @@ public:
                     dimension = dims.second;
                 }
 
-                const size_t width = SmtUtil::arrayElementDTypep(arrVarp->dtypep())->width();
+                const size_t width = RandomizeUtil::arrayElementDTypep(arrVarp->dtypep())->width();
                 methodp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
                 AstNodeExpr* const varnamep = new AstCExpr{
                     fl, AstCExpr::Pure{}, "\"" + arrVarp->name() + "\"", arrVarp->width()};
