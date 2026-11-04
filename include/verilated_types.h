@@ -1155,6 +1155,14 @@ struct VlSignedKeyLess final {
     }
 };
 
+/// Ordering of wildcard associative array keys, which are numerical
+struct VlWildcardKeyLess final {
+    bool operator()(const std::string& lhs, const std::string& rhs) const VL_PURE {
+        // A key has no leading zero bytes, so a longer key is larger
+        return lhs.size() != rhs.size() ? lhs.size() < rhs.size() : lhs < rhs;
+    }
+};
+
 template <typename T_Key, typename T_Value, typename T_KeyLess = std::less<T_Key>>
 class VlAssocArray final {
 private:

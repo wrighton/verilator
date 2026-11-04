@@ -2680,7 +2680,8 @@ AstNodeDType::CTypeRecursed AstNodeDType::cTypeRecurse(bool compound, bool packe
     } else if (const auto* const adtypep = VN_CAST(dtypep, WildcardArrayDType)) {
         UASSERT_OBJ(!packed, this, "Unsupported type for packed struct or union");
         const CTypeRecursed sub = adtypep->subDTypep()->cTypeRecurse(true, false);
-        info.m_type = "::VlAssocArray<::std::string, " + sub.m_type + ">";
+        // Wildcard keys are ordered numerically (IEEE 1800-2023 7.8.1)
+        info.m_type = "::VlAssocArray<::std::string, " + sub.m_type + ", ::VlWildcardKeyLess>";
     } else if (const auto* const adtypep = VN_CAST(dtypep, DynArrayDType)) {
         UASSERT_OBJ(!packed, this, "Unsupported type for packed struct or union");
         const CTypeRecursed sub = adtypep->subDTypep()->cTypeRecurse(true, false);
