@@ -1238,6 +1238,21 @@ class LinkDotFindVisitor final : public VNVisitor {
             }
         });
     }
+    // Resolve an out-of-block declaration's class scope to its class or package
+    AstNodeModule* resolveExternScope(VSymEnt* lookSymp, AstNode* scopep, bool fallback) {
+        // The scope may be '::'-chained, e.g. 'pkg::outer::inner' (IEEE 1800-2023 8.24);
+        // each later name is looked up inside the previous one
+        if (AstDot* const dotp = VN_CAST(scopep, Dot)) {
+            AstNodeModule* const lhsp = resolveExternScope(lookSymp, dotp->lhsp(), fallback);
+            if (!lhsp) return nullptr;
+            return resolveExternScope(m_statep->getNodeSym(lhsp), dotp->rhsp(), false);
+        }
+        AstClassOrPackageRef* const refp = VN_AS(scopep, ClassOrPackageRef);
+        iterate(refp);  // Links '$unit'
+        m_statep->resolveClassOrPackage(lookSymp, refp, fallback, false,
+                                        "External definition :: reference");
+        return refp->classOrPackageSkipp();
+    }
 
     // VISITORS
     void visit(AstNetlist* nodep) override {  // FindVisitor::
@@ -1759,45 +1774,16 @@ class LinkDotFindVisitor final : public VNVisitor {
         }
         // Change to appropriate package if extern declaration (vs definition)
         if (nodep->classOrPackagep()) {
-            // class-in-class
-            if (AstDot* const dotp = VN_CAST(nodep->classOrPackagep(), Dot)) {
-                AstClassOrPackageRef* const lhsp = VN_AS(dotp->lhsp(), ClassOrPackageRef);
-                m_statep->resolveClassOrPackage(m_curSymp, lhsp, true, false,
-                                                "External definition :: reference");
-                AstClass* const lhsclassp = VN_CAST(lhsp->classOrPackageSkipp(), Class);
-                if (!lhsclassp) {
-                    nodep->v3error("Extern declaration's scope is not a defined class");
-                } else {
-                    m_curSymp = m_statep->getNodeSym(lhsclassp);
-                    upSymp = m_curSymp;
-                    AstClassOrPackageRef* const rhsp = VN_AS(dotp->rhsp(), ClassOrPackageRef);
-                    m_statep->resolveClassOrPackage(m_curSymp, rhsp, true, false,
-                                                    "External definition :: reference");
-                    AstClass* const rhsclassp = VN_CAST(rhsp->classOrPackageSkipp(), Class);
-                    if (!rhsclassp) {
-                        nodep->v3error("Extern declaration's scope is not a defined class");
-                    } else {
-                        m_curSymp = m_statep->getNodeSym(rhsclassp);
-                        upSymp = m_curSymp;
-                        moveExternFuncDecl(nodep, rhsclassp);
-                    }
-                }
-            } else {
-                AstClassOrPackageRef* const cpackagerefp
-                    = VN_AS(nodep->classOrPackagep(), ClassOrPackageRef);
-                if (!cpackagerefp->classOrPackageSkipp()) {
-                    m_statep->resolveClassOrPackage(m_curSymp, cpackagerefp, true, false,
-                                                    "External definition :: reference");
-                }
-                AstClass* const classp = VN_CAST(cpackagerefp->classOrPackageSkipp(), Class);
-                if (!classp) {
-                    nodep->v3error("Extern declaration's scope is not a defined class");
-                } else {
-                    m_curSymp = m_statep->getNodeSym(classp);
-                    upSymp = m_curSymp;
-                    moveExternFuncDecl(nodep, classp);
-                }
+            AstClass* const classp
+                = VN_CAST(resolveExternScope(m_curSymp, nodep->classOrPackagep(), true), Class);
+            if (!classp) {
+                nodep->v3error("Extern declaration's scope is not a defined class");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
             }
+            m_curSymp = m_statep->getNodeSym(classp);
+            upSymp = m_curSymp;
+            moveExternFuncDecl(nodep, classp);
         }
         // Set the class as package for iteration
         if (VN_IS(m_curSymp->nodep(), Class)) {
@@ -1887,28 +1873,19 @@ class LinkDotFindVisitor final : public VNVisitor {
         // Change to appropriate package if extern declaration (vs definition)
         VSymEnt* upSymp = m_curSymp;
         if (nodep->classOrPackagep()) {
-            AstClassOrPackageRef* const cpackagerefp
-                = VN_CAST(nodep->classOrPackagep(), ClassOrPackageRef);
-            if (!cpackagerefp) {
-                nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported: extern constraint definition with class-in-class");
-            } else {
-                if (!cpackagerefp->classOrPackageSkipp()) {
-                    m_statep->resolveClassOrPackage(m_curSymp, cpackagerefp, true, false,
-                                                    "External definition :: reference");
-                }
-                AstClass* const classp = VN_CAST(cpackagerefp->classOrPackageSkipp(), Class);
-                if (!classp) {
-                    nodep->v3error("Extern declaration's scope is not a defined class");
-                } else {
-                    m_curSymp = m_statep->getNodeSym(classp);
-                    upSymp = m_curSymp;
-                    // Move it to proper spot under the target class
-                    nodep->unlinkFrBack();
-                    classp->addMembersp(nodep);
-                    nodep->classOrPackagep()->unlinkFrBack()->deleteTree();
-                }
+            AstClass* const classp
+                = VN_CAST(resolveExternScope(m_curSymp, nodep->classOrPackagep(), true), Class);
+            if (!classp) {
+                nodep->v3error("Extern declaration's scope is not a defined class");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
             }
+            m_curSymp = m_statep->getNodeSym(classp);
+            upSymp = m_curSymp;
+            // Move it to proper spot under the target class
+            nodep->unlinkFrBack();
+            classp->addMembersp(nodep);
+            nodep->classOrPackagep()->unlinkFrBack()->deleteTree();
         }
         // Set the class as package for iteration
         const string name = (nodep->isExternProto() ? "extern "s : ""s) + nodep->name();
