@@ -362,7 +362,7 @@ class WidthSelVisitor final : public VNVisitor {
         const FromData fromdata = fromDataForArray(nodep, fromp);
         AstNodeDType* const ddtypep = fromdata.m_dtypep;
         const VNumRange fromRange = fromdata.m_fromRange;
-        if (VN_IS(ddtypep, QueueDType)) {
+        if (VN_IS(ddtypep, QueueDType) || VN_IS(ddtypep, DynArrayDType)) {
             AstNodeExpr* const qleftp = nodep->leftp()->unlinkFrBack();
             AstNodeExpr* const qrightp = nodep->rightp()->unlinkFrBack();
             AstNodeExpr* const qleftBacknessp = selQueueBackness(qleftp);
@@ -592,6 +592,28 @@ class WidthSelVisitor final : public VNVisitor {
             newp->declElWidth(elwidth);
             UINFO(6, "   new " << newp);
             UINFOTREE(9, newp, "", "SELNEW");
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        } else if (VN_IS(ddtypep, QueueDType) || VN_IS(ddtypep, DynArrayDType)) {
+            // SELPLUS(from,lsb,width) -> CMETHODHARD(from, slicePlus, lsb, width), so the position
+            // is evaluated once
+            AstNodeExpr* lsbp = rhsp;
+            if (VN_IS(nodep, SelMinus)) {
+                // Subtract in 32 bits, the width of the runtime position, so a narrow position
+                // may go below 0
+                if (rhsp->width() < 32 && rhsp->isSigned()) {
+                    lsbp = new AstExtendS{rhsp->fileline(), rhsp, 32};
+                } else if (rhsp->width() < 32) {
+                    lsbp = new AstExtend{rhsp->fileline(), rhsp, 32};
+                }
+                lsbp = newSubNeg(lsbp, width - 1);
+            }
+            AstCMethodHard* const newp
+                = new AstCMethodHard{nodep->fileline(), fromp, VCMethod::DYN_SLICE_PLUS, lsbp};
+            newp->addPinsp(widthp);
+            newp->dtypep(fromdata.m_dtypep);
+            newp->didWidth(true);
+            newp->protect(false);
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else {  // nullptr=bad extract, or unknown node type
