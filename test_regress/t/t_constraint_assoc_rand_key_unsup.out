@@ -1,0 +1,17 @@
+%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:37:48: Unsupported: Randomized key into a non-random associative array
+   37 |     void'(std::randomize(key) with {local_state[key] > 0;});
+      |                                                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:23:28: Unsupported: Randomized key into a non-random associative array
+   23 |   constraint c_state {state[idx] > 0;}
+      |                            ^
+%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:24:26: Unsupported: Randomized key into an associative array of non-integral elements
+   24 |   constraint c_struct {sa[idx].a == 7;}
+      |                          ^
+%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:25:29: Unsupported: Randomized key into an associative array of non-integral elements
+   25 |   constraint c_handle {items[idx].x == 7;}
+      |                             ^
+%Error-UNSUPPORTED: t/t_constraint_assoc_rand_key_unsup.v:26:28: Unsupported: Randomized key into an associative array of non-integral elements
+   26 |   constraint c_object {objs[idx] != null;}
+      |                            ^
+%Error: Exiting due to
