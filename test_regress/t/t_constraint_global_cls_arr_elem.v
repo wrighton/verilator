@@ -120,6 +120,25 @@ class Fixed;
   endfunction
 endclass
 
+// Multi-dimensional arrays, with a null element
+class Multi;
+  rand Item m[2][3:1];
+  rand Item q[$][2];
+  constraint c_g {
+    m[1][1].v > 7'd16;
+    foreach (q[i, j]) q[i][j].v > 7'd16;
+  }
+  function new();
+    Item pair[2];
+    foreach (m[i, j]) m[i][j] = new;
+    m[0][2] = null;
+    repeat (2) begin
+      foreach (pair[i]) pair[i] = new;
+      q.push_back(pair);
+    end
+  endfunction
+endclass
+
 // Null elements have no object, so no constraints
 class Partial;
   rand Item a[3];
@@ -271,6 +290,17 @@ module t;
     end
   endtask
 
+  task automatic test_multi;
+    Multi mu = new;
+    int randomize_result;
+    repeat (10) begin
+      randomize_result = mu.randomize();
+      `checkd(randomize_result, 1);
+      check_items('{mu.m[1][1], mu.q[0][0], mu.q[0][1], mu.q[1][0], mu.q[1][1]}, 16, 128);
+      check_items('{mu.m[0][1], mu.m[0][3], mu.m[1][2], mu.m[1][3]}, 0, 128);
+    end
+  endtask
+
   task automatic test_partial;
     Partial pa = new;
     int randomize_result;
@@ -293,6 +323,7 @@ module t;
 
   initial begin
     test_fixed();
+    test_multi();
     test_partial();
     test_big();
     test_dyn();
