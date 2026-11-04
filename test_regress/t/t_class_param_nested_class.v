@@ -28,6 +28,44 @@ class Outer #(
   endfunction
 endclass
 
+// Parameterized class nested in a class with only value parameters, whose default
+// specialization is copied before the others are made, including the UVM
+// uvm_analysis_imp_decl form taking the enclosing class's own specialization
+class Mon #(
+    int A = 1,
+    int B = 2
+);
+  typedef Mon #(A, B) this_t;
+  class Imp #(
+      type IMP = int,
+      type X = int
+  );
+    IMP imp;
+    X x;
+    static function int xbits();
+      return $bits(X);
+    endfunction
+  endclass
+  Imp #(Mon #(A, B), bit [A:0]) h;
+  Imp #(this_t) ht;
+  Imp #(Mon) hb;
+  Imp #(bit [A+B:0]) hv;
+  function new();
+    h = new;
+    h.imp = this;
+    ht = new;
+    ht.imp = this;
+    hb = new;
+    hv = new;
+  endfunction
+  function int sum();
+    return A + B;
+  endfunction
+  function int xbits();
+    return Imp#(this_t, bit [A+B:0])::xbits();
+  endfunction
+endclass
+
 // Parameterized class nested in a parameterized module
 module sub #(
     type T = int
@@ -74,5 +112,27 @@ module t;
     `checkd($bits(s16.h.v), 16);
     $write("*-* All Finished *-*\n");
     $finish;
+  end
+
+  initial begin
+    // Default specialization first, as it is copied
+    automatic Mon m0 = new;
+    automatic Mon #(3) m3 = new;
+    automatic Mon #(4, 5) m45 = new;
+    `checkd(m0.h.imp == m0, 1);
+    `checkd(m3.h.imp == m3, 1);
+    `checkd(m45.ht.imp == m45, 1);
+    `checkd(m0.h.imp.sum(), 3);
+    `checkd(m3.ht.imp.sum(), 5);
+    `checkd(m45.h.imp.sum(), 9);
+    `checkd($bits(m0.h.x), 2);
+    `checkd($bits(m3.h.x), 4);
+    `checkd($bits(m45.ht.x), 32);
+    m0.hb.imp = m0;
+    `checkd(m0.hb.imp.sum(), 3);
+    `checkd($bits(m0.hv.imp), 4);
+    `checkd($bits(m3.hv.imp), 6);
+    `checkd($bits(m45.hv.imp), 10);
+    `checkd(m45.xbits(), 10);
   end
 endmodule
