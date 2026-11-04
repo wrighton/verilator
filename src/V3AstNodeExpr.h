@@ -187,7 +187,6 @@ protected:
 
 public:
     ASTGEN_MEMBERS_AstNodeSel;
-    int bitConst() const;
 };
 class AstNodeStream VL_NOT_FINAL : public AstNodeBiop {
     // Verilog {rhs{lhs}} - Note rhsp() is the slice size, not the lhsp()
