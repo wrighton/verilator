@@ -127,16 +127,17 @@ protected:
         if (pbase() == pptr()) return 0;
         const size_t size = pptr() - pbase();
         log("  ", std::string(pbase(), size));
-        const ssize_t n = ::write(m_writeFd, pbase(), size);
-        if (VL_UNLIKELY(n == -1)) perror("write");
-        if (n <= 0) {
-            wait_report();
-            return traits_type::eof();
+        // write() may write only part of the buffer
+        for (size_t done = 0; done < size;) {
+            const ssize_t n = ::write(m_writeFd, pbase() + done, size - done);
+            if (VL_UNLIKELY(n == -1)) perror("write");
+            if (n <= 0) {
+                wait_report();
+                return traits_type::eof();
+            }
+            done += n;
         }
-        if (n == size)
-            setp(m_writeBuf, m_writeBuf + sizeof(m_writeBuf));
-        else
-            setp(m_writeBuf + n, m_writeBuf + sizeof(m_writeBuf));
+        setp(m_writeBuf, m_writeBuf + sizeof(m_writeBuf));
         if (c != traits_type::eof()) sputc(c2);
         return 0;
     }
