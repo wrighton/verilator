@@ -1558,11 +1558,15 @@ class WidthVisitor final : public VNVisitor {
             AstNodeDType* const selwidthDTypep = nodep->findBitOrLogicDType(
                 selwidth, selwidth, nodep->bitp()->dtypep()->numeric(),
                 nodep->bitp()->isFourstateOrNoDtype());
-            if (widthBad(nodep->bitp(), selwidthDTypep) && nodep->bitp()->width() != 32) {
-                nodep->v3widthWarn(selwidth, nodep->bitp()->width(),
+            // V3WidthSel gave an unsigned index of 32 bits or more one more bit (newIndexExtendp)
+            const int indexWidth
+                = nodep->bitp()->width()
+                  - (fromlsb < 0 && !nodep->bitp()->isSigned() && nodep->bitp()->width() > 32);
+            if (widthBad(nodep->bitp(), selwidthDTypep) && indexWidth != 32) {
+                nodep->v3widthWarn(selwidth, indexWidth,
                                    "Bit extraction of array["
                                        << frommsb << ":" << fromlsb << "] requires " << selwidth
-                                       << " bit index, not " << nodep->bitp()->width()
+                                       << " bit index, not " << indexWidth
                                        << (nodep->bitp()->width() != nodep->bitp()->widthMin()
                                                ? " or " + cvtToStr(nodep->bitp()->widthMin())
                                                : "")
