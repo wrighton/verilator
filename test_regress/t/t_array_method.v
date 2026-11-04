@@ -114,6 +114,43 @@ module t;
     i = q.xor with (item + 1);
     `checkh(i, 32'hb);
 
+    // item.index is each element's index (IEEE 1800-2023 7.12.4)
+    q = '{5, 4, 3, 2, 1};
+    i = q.sum with (item.index);
+    `checkh(i, 32'ha);
+    i = q.product with (item.index + 1);
+    `checkh(i, 32'd120);
+    i = q.and with (item.index + 9);
+    `checkh(i, 32'h8);
+    i = q.or with (item.index);
+    `checkh(i, 32'h7);
+    i = q.xor with (item.index);
+    `checkh(i, 32'h4);
+    qv = q.min with (4 - item.index);
+    `checkp(qv, "'{'h1}");
+    qv = q.max with (item.index);
+    `checkp(qv, "'{'h1}");
+    qv = q.unique with (item.index / 2);
+    `checkp(qv, "'{'h5, 'h3, 'h1}");
+    begin
+      byte bq[3];
+      byte bqv[$];
+      bq = '{1, 1, 1};
+      bqv = bq.unique with (item.index * 256);
+      `checkp(bqv, "'{'h1, 'h1, 'h1}");
+      qi = bq.unique_index with (item.index * 256);
+      `checkp(qi, "'{'h0, 'h1, 'h2}");
+    end
+    begin
+      longint lq[3];
+      longint lqv[$];
+      lq = '{64'h1_0000_0000, 5, 2};
+      lqv = lq.max with (item);
+      `checkp(lqv, "'{'h100000000}");
+      lqv = lq.min with (item);
+      `checkp(lqv, "'{'h2}");
+    end
+
     // map method
     q = '{1, 2, 3, 4, 5};
     qv = q.map() with (item * 2);

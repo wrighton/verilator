@@ -181,6 +181,18 @@ module t;
     qv = qe.max;
     `checkp(qv, "'{}");
 
+    begin  // item.index is each element's index (IEEE 1800-2023 7.12.4)
+      int iq[$];
+      int iqv[$];
+      iq = '{5, 4, 3, 2, 1};
+      iqv = iq.min with (4 - item.index);
+      `checkp(iqv, "'{'h1}");
+      iqv = iq.max with (item.index);
+      `checkp(iqv, "'{'h1}");
+      iqv = iq.unique with (item.index / 2);
+      `checkp(iqv, "'{'h5, 'h3, 'h1}");
+    end
+
     string_qv = string_q.min;
     `checks(string_qv[0], "A");
     string_qv = string_q.min(x) with (int'(x[0]) + 10);
