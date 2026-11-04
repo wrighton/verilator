@@ -7203,6 +7203,7 @@ class WidthVisitor final : public VNVisitor {
                 return;
             }
         }
+        if (!isElement) valuep = newElementsConverted(valuep, arrayDtp->subDTypep());
         T_Item* const itemp = new T_Item{valuep->fileline(), valuep};
         consp->addItemsp(itemp);
         // Width the value now, as constructors are widthed when created
@@ -7211,6 +7212,32 @@ class WidthVisitor final : public VNVisitor {
         } else {
             userIterateAndNext(valuep, WidthVP{arrayDtp, FINAL}.p());
         }
+    }
+    // Return array 'valuep' with its elements converted to 'elemDtp'
+    AstNodeExpr* newElementsConverted(AstNodeExpr* valuep, AstNodeDType* elemDtp) {
+        // Each element is assigned to the constructed array (IEEE 1800-2023 10.10); arrays of
+        // arrays are not converted
+        AstNodeDType* const subDtp = valuep->dtypep()->skipRefp()->subDTypep();
+        if (!subDtp || subDtp->similarDType(elemDtp) || elemDtp->isNonPackedArray()) {
+            return valuep;
+        }
+        FileLine* const fl = valuep->fileline();
+        AstLambdaArgRef* const indexArgp = new AstLambdaArgRef{fl, "item__DOT__index", true};
+        indexArgp->dtypeSetUInt32();
+        AstLambdaArgRef* const valueArgp = new AstLambdaArgRef{fl, "item", false};
+        valueArgp->dtypep(subDtp);
+        AstWith* const withp = new AstWith{fl, indexArgp, valueArgp, valueArgp->cloneTree(false)};
+        withp->dtypep(elemDtp);
+        {
+            VL_RESTORER(m_withp);
+            m_withp = withp;
+            iterateCheckTyped(withp, "element", withp->exprp(), elemDtp, FINAL);
+        }
+        AstCMethodHard* const mapp = new AstCMethodHard{fl, valuep, VCMethod::ARRAY_MAP};
+        mapp->withp(withp);
+        mapp->dtypep(queueDTypeIndexedBy(elemDtp));
+        mapp->didWidth(true);
+        return mapp;
     }
     void addConsItem(AstNodeExpr* consp, AstNodeExpr* valuep) {
         if (AstConsDynArray* const dynp = VN_CAST(consp, ConsDynArray)) {
