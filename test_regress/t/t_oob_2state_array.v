@@ -107,4 +107,46 @@ module t;
     `checkh(m2[idx + 2][$urandom_range(1, 1)], idx == 0 ? 22 : 0);
     `checkh(m3[idx + 2][$urandom_range(1, 1)][$urandom_range(0, 0)], idx == 0 ? 211 : 0);
   end
+
+  // A whole out-of-range sub-array reads the default value
+  int row[4];
+  int plane[1:3][4];
+  string srow[2];
+  logic [7:0] lrow[4];
+  logic [7:0] l2[3][4];
+  initial l2[2][1] = 8'h66;
+  real rrow[2];
+  int crow[4];
+  assign crow = m2[idx+2];
+  s_t sa2[2][2] = '{'{'{0, 0}, '{1, 0}}, '{'{2, 0}, '{3, 0}}};
+  s_t srows[2];
+  typedef struct {int q[$];} sq_t;
+  sq_t q2[2][2];
+  sq_t qrow[2];
+  initial begin
+    q2[0][1].q = '{1};
+    q2[1][1].q = '{2, 3};
+  end
+  always @(posedge clk) begin
+    row = m2[idx + 2];
+    `checkh(row[0], idx == 0 ? 21 : 0);
+    `checkh(row[3], idx == 0 ? 24 : 0);
+    plane = m3[idx + 2];
+    `checkh(plane[1][0], idx == 0 ? 211 : 0);
+    `checkh(plane[3][3], idx == 0 ? 234 : 0);
+    srow = ss[idx + 1];
+    if (srow[1] != (idx == 0 ? "d" : "")) `stop;
+    `checkh(m2[idx + 2] == '{0, 0, 0, 0}, idx != 0);
+    lrow = l2[idx + 2];  // 4-state, X is 1 with --x-assign 1
+    `checkh(lrow[1], idx == 0 ? 8'h66 : 8'hff);
+    rrow = rr[idx + 1];
+    if (rrow[1] != (idx == 0 ? 4.5 : 0.0)) `stop;
+    `checkh(crow[0], idx == 0 ? 21 : 0);
+    srows = sa2[idx + 1];
+    `checkh(srows[1].f, idx == 0 ? 3 : 0);
+    `checkh(sa2[idx + 1][1].f, idx == 0 ? 3 : 0);
+    // No default value of a struct with a queue is built, so element 0 is read
+    qrow = q2[idx + 1];
+    `checkh(qrow[1].q.size(), idx == 0 ? 2 : 1);
+  end
 endmodule
