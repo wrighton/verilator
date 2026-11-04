@@ -3259,8 +3259,7 @@ defparam_assignment<nodep>:     // ==IEEE: defparam_assignment
                 defparamIdRangeList '.' idAnyAsParseRef '=' expr
                         { $$ = new AstDefParam{$4, $1, $3, $5}; }
         |       idAnyAsParseRef '=' expr
-                        { $$ = nullptr; BBUNSUP($2, "Unsupported: defparam with no dot");
-                          DEL($3); }
+                        { $$ = new AstDefParam{$2, nullptr, $1, $3}; }
         ;
 
 defparamIdRangeList<nodeExprp>:  // IEEE: part of defparam_assignment
