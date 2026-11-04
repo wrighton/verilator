@@ -24,5 +24,12 @@ module t;
     r = arr[p+:7];
     // Bad: instance array slice out of range
     vs = ifs[ident(3)+:2];
+    // Bad: slices of a one-element array out of range
+    begin
+      int one[5:5];
+      int r1[1];
+      r1 = one[6:6];
+      r1 = one[4+:1];
+    end
   end
 endmodule
