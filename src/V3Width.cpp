@@ -7534,6 +7534,9 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->disablep()) {
                 VL_RESTORER(m_underDisableIff);
                 m_underDisableIff = true;
+                // The condition is an expression, so may not contain an instance
+                VL_RESTORER(m_underSvaExpr);
+                m_underSvaExpr = false;
                 iterateCheckBool(nodep, "Disable", nodep->disablep(),
                                  BOTH);  // it's like an if() condition.
             }
@@ -9656,7 +9659,12 @@ class WidthVisitor final : public VNVisitor {
         assertAtExpr(nodep);
         if (replacePropertyInSExpr(nodep)) return;
         if (m_vup->prelim()) {
-            iterateCheckBool(nodep, "cond", nodep->condp(), BOTH);
+            {
+                // The condition is an expression, so may not contain an instance
+                VL_RESTORER(m_underSvaExpr);
+                m_underSvaExpr = false;
+                iterateCheckBool(nodep, "cond", nodep->condp(), BOTH);
+            }
             iterateCheckBool(nodep, "prop", nodep->propp(), BOTH);
             nodep->dtypeSetBit();
         }

@@ -46,6 +46,17 @@ module t (
   function bit g;
     return s_arg(a);
   endfunction
+  // A disable iff or abort condition is an expression
+  assert property (disable iff (s2) a);
+  assert property (disable iff (!s1) a);
+  assert property (disable iff (b || p1) a);
+  property p_dis;
+    disable iff (s_arg(b)) a;
+  endproperty
+  assert property (p_dis);
+  assert property (accept_on (s1) a);
+  assert property (sync_reject_on (p1) a);
+  sub u_sub (.clk);
 
   // Legal
   always @(s1) x = 1;
@@ -54,4 +65,16 @@ module t (
   assert property (s_arg(s1) |-> b);
   assert property (p1);
   cover sequence (s_outer);
+  assert property (disable iff (b) s1);
+  assert property (accept_on (b) s1);
+endmodule
+
+module sub (
+    input clk
+);
+  logic a;
+  sequence s1;
+    a;
+  endsequence
+  default disable iff (s1);
 endmodule
