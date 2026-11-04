@@ -1,0 +1,8 @@
+%Error-UNSUPPORTED: t/t_stream_slice_force_unsup.v:13:5: Unsupported: force or procedural continuous assignment of a stream of a dynamically sized array to an unpacked array slice
+   13 |     force arr[1:2] = {>>{q}};
+      |     ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_stream_slice_force_unsup.v:15:5: Unsupported: force or procedural continuous assignment of a stream of a dynamically sized array to an unpacked array slice
+   15 |     assign arr2[1:2] = {>>{q}};
+      |     ^~~~~~
+%Error: Exiting due to
