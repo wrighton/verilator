@@ -922,18 +922,21 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_DO_DANGLING(oldIndexp->deleteTree(), oldIndexp);
         // The path from elemp down to the element select, through fromp (see randIndexSelp),
         // no longer depends on the index
-        std::vector<AstNode*> pathps;
+        std::vector<AstNodeExpr*> pathps;
         for (AstNode* nodep = elemp;; nodep = nodep->op1p()) {
-            pathps.push_back(nodep);
+            pathps.push_back(VN_AS(nodep, NodeExpr));
             if (nodep == elemSelp) break;
         }
+        // A null handle on the path has no members, so the element reads as zero like a
+        // nonexistent one, also for a null handle reached from a member of the element
+        AstNodeExpr* nonNullp = nullptr;
         for (auto it = pathps.rbegin(); it != pathps.rend(); ++it) {
             (*it)->user1(operandsRand(*it));
+            if (!VN_IS((*it)->dtypep()->skipRefp(), ClassRefDType)) continue;
+            AstNodeExpr* const neqp
+                = new AstNeq{fl, (*it)->cloneTreePure(false), new AstConst{fl, AstConst::Null{}}};
+            nonNullp = nonNullp ? new AstLogAnd{fl, nonNullp, neqp} : neqp;
         }
-        AstNodeExpr* const handlep = selp->cloneTreePure(false);
-        AstNodeExpr* const handleIndexp = selIndexp(handlep);
-        handleIndexp->replaceWith(posp->cloneTreePure(false));
-        VL_DO_DANGLING(handleIndexp->deleteTree(), handleIndexp);
         const int width = exprp->width();
         AstCStmt* const cstmtp = new AstCStmt{fl};
         cstmtp->add("ret = \"(store \" + ret + \" \" + ");
@@ -948,14 +951,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         cexprp->add("([&]{\nstd::string ret = \"((as const (Array (_ BitVec " + cvtToStr(idxWidth)
                     + ") (_ BitVec " + cvtToStr(width) + "))) " + zero + ")\";\n");
         AstNodeStmt* bodyp = cstmtp;
-        if (VN_IS(handlep->dtypep()->skipRefp(), ClassRefDType)) {
-            // A null handle has no members; its element reads as zero like a nonexistent one
-            AstNeq* const nonNullp = new AstNeq{fl, handlep, new AstConst{fl, AstConst::Null{}}};
-            nonNullp->dtypeSetBit();
-            bodyp = new AstIf{fl, nonNullp, cstmtp};
-        } else {
-            VL_DO_DANGLING(handlep->deleteTree(), handlep);
-        }
+        if (nonNullp) bodyp = new AstIf{fl, nonNullp, cstmtp};
         cexprp->add(new AstBegin{fl, m_uniqueNames.get("__VrandBlock"),
                                  new AstForeach{fl, headerp, bodyp}, true});
         cexprp->add("return ret;\n})()");
