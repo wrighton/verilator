@@ -32,6 +32,7 @@ module t;
   int arr10[10] = '{20, 21, 22, 23, 24, 25, 26, 27, 28, 29};
   int wr8[8];
   int an[-2:5] = '{98, 99, 100, 101, 102, 103, 104, 105};
+  int a12[-4:7] = '{-4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7};
   localparam int TBL[4] = '{1, 2, 3, 4};
   localparam int IDX5 = 5;
   localparam longint IDX_WIDE = 64'h1_0000_0001;
@@ -50,6 +51,15 @@ module t;
     `checkh(arr8[64'(idx)], 10 + idx);
     wr8[idx + 8] = 1;
     wr8[widx + 100'(idx)] = 2;
+    // verilator lint_off SELRANGE
+    wr8[64'h1_0000_0000] = 3;
+    `checkh(an[64'h1_0000_0000], 0);
+    `checkh(an[3'd7], 0);
+    // verilator lint_on SELRANGE
+    `checkh(a12[3'd7], 7);
+    `checkh(an[65'sd3], 103);
+    `checkh(arr8[3'bx01], 15);  // X is 1 with --x-assign 1
+    `checkh(an[-64'sd1], 99);
     `checkh(wr8[idx], idx == 0 ? 2 : 0);
   end
   // verilator lint_on WIDTH
