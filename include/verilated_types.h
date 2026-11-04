@@ -675,11 +675,11 @@ private:
     void append(const T_Arg& value) {
         m_deque.push_back(T_Value{value});
     }
-    void appendAll() {}
-    template <typename T_Arg, typename... T_Args>
-    void appendAll(const T_Arg& arg, const T_Args&... args) {
-        append(arg);
-        appendAll(args...);
+    // Append the values or arrays of values in order
+    template <typename... T_Args>
+    void appendAll(const T_Args&... args) {
+        // Not recursively, which exceeds the template depth limit on long lists
+        (void)std::initializer_list<int>{(append(args), 0)...};
     }
 
 public:
@@ -701,16 +701,13 @@ public:
     // Verilog: '{a, b} or {a, q}
     template <typename... T_Args>
     explicit VlQueue(const T_Args&... args) {
-        appendAll(args...);
-        applyBound();
+        appendItems(args...);
     }
     // Verilog: '{index: value, default: value}, sized by new[size], else by the largest index
     explicit VlQueue(size_t size, const T_Value& defaultValue,
                      std::initializer_list<std::pair<QData, T_Value>> items) {
         m_deque.resize(size, defaultValue);
-        for (const auto& item : items) {
-            if (item.first < size) m_deque[item.first] = item.second;
-        }
+        addItems(items);
         applyBound();
     }
     // Verilog: '{index: value}, sized by new[size], else by the largest index
@@ -722,14 +719,21 @@ public:
         applyBound();
     }
 
-    template <typename T_Rhs, size_t N_RhsMaxSize>
-    bool operator==(const VlQueue<T_Rhs, N_RhsMaxSize>& rhs) const {
-        return std::equal(m_deque.begin(), m_deque.end(), rhs.m_deque.begin(), rhs.m_deque.end());
+    // Append items as the '{a, b} constructor does, e.g. for a long constant in parts
+    template <typename... T_Args>
+    void appendItems(const T_Args&... args) {
+        appendAll(args...);
+        applyBound();
     }
-    template <typename T_Rhs, size_t N_RhsMaxSize>
-    bool operator!=(const VlQueue<T_Rhs, N_RhsMaxSize>& rhs) const {
-        return !(*this == rhs);
+    // Set '{index: value} items within the size, e.g. for a long constant in parts
+    void addItems(std::initializer_list<std::pair<QData, T_Value>> items) {
+        for (const auto& item : items) {
+            if (item.first < m_deque.size()) m_deque[item.first] = item.second;
+        }
     }
+
+    bool operator==(const VlQueue& rhs) const { return m_deque == rhs.m_deque; }
+    bool operator!=(const VlQueue& rhs) const { return m_deque != rhs.m_deque; }
     bool operator<(const VlQueue& rhs) const {
         for (int index = 0; index < m_deque.size(); ++index) {
             if (m_deque[index] < rhs.m_deque[index]) return true;
@@ -1210,6 +1214,10 @@ public:
     VlAssocArray(VlAssocArray&&) = default;
     VlAssocArray& operator=(const VlAssocArray&) = default;
     VlAssocArray& operator=(VlAssocArray&&) = default;
+    // Insert entries as the constructor does, e.g. for a long constant in parts
+    void addItems(std::initializer_list<std::pair<const T_Key, T_Value>> init) {
+        m_map.insert(init);
+    }
     bool operator==(const VlAssocArray& rhs) const { return m_map == rhs.m_map; }
     bool operator!=(const VlAssocArray& rhs) const { return m_map != rhs.m_map; }
     bool operator<(const VlAssocArray& rhs) const { return m_map < rhs.m_map; }
