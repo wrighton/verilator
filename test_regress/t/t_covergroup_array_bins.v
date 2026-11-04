@@ -145,10 +145,11 @@ module t;
     x: cross cp, cps;
   endgroup
 
-  // cg15: an array bin of a real coverpoint has one bin per value
+  // cg15: an array bin of a real coverpoint has one bin per value, compared as real
   covergroup cg15;
     cp: coverpoint rdata {
-      bins v[] = {1.5, 2.5};
+      bins v[] = {1.5, 2.5, 65'd5};
+      bins w = {66'd7};
     }
   endgroup
 
@@ -304,7 +305,12 @@ module t;
     // Hit cg15: v[1] holds 2.5
     rdata = 2.5;
     cg15_inst.sample();
-    `checkr(cg15_inst.get_inst_coverage(), 50.0);
+    `checkr(cg15_inst.get_inst_coverage(), 25.0);
+    rdata = 5.0;
+    cg15_inst.sample();
+    rdata = 7.0;
+    cg15_inst.sample();
+    `checkr(cg15_inst.get_inst_coverage(), 75.0);
 
     $write("*-* All Finished *-*\n");
     $finish;
