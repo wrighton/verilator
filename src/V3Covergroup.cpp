@@ -2578,7 +2578,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         return constp;
     }
 
-    // A real copy of a real or integral range bound, for comparing with a real coverpoint.
+    // A real copy of a real or integral bin value or bound, for comparing with a real coverpoint.
     static AstConst* newRealConst(AstConst* constp) {
         if (constp->num().isDouble()) return constp->cloneTree(false);
         V3Number real{&constp->num(), 64};
@@ -4130,8 +4130,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     AstNodeExpr* buildValueCondition(AstCoverBin* binp, AstNodeExpr* exprp, AstNode* valuep) {
         FileLine* const fl = valuep->fileline();
         if (!exprp->dtypep()->skipRefp()->isIntegralOrPacked()) {
-            return new AstEq{fl, exprp->cloneTree(false),
-                             VN_AS(valuep, NodeExpr)->cloneTree(false)};
+            // A real coverpoint compares as real, also with an integral value of any width
+            return new AstEqD{fl, exprp->cloneTree(false), newRealConst(VN_AS(valuep, Const))};
         }
         CrossValueRange range{valuep, resolveWidth(valuep, exprp)};
         if (!resolveValue(valuep, exprp, true, binp->isWildcard(), range)) {
