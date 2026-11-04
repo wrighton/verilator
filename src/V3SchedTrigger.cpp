@@ -667,8 +667,8 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         ifp->addThensp(cstmtp);
         cstmtp->add("VL_DBG_MSGS(\"         '\" + ");
         cstmtp->add(rd(dumpTagp));
-        cstmtp->add(" + \"' region trigger index " + std::to_string(index) + " is active: " + text
-                    + "\\n\");");
+        cstmtp->add(" + \"' region trigger index " + std::to_string(index)
+                    + " is active: " + V3OutFormatter::quoteNameControls(text) + "\\n\");");
     };
 
     // Add sense trigger computation
@@ -706,9 +706,7 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         V3EmitV::verilogForTree(senItemp, ss);
         ss << ")";
         // Names were hashed by V3Name, show the user the original text
-        std::string desc = VString::quoteBackslash(VName::dehash(ss.str()));
-        desc = VString::replaceSubstr(desc, "\n", "\\n");
-        addDebug(i, desc);
+        addDebug(i, VName::dehash(ss.str()));
     }
     UASSERT(trigps.size() == nSenseTriggers, "Inconsistent number of trigger expressions");
 
