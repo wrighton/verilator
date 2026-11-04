@@ -194,10 +194,62 @@ module t;
     `checkh(rbits, 64'hefbeaddefecadefa);
   endtask
 
+  typedef logic [7:0] byte_t;
+  task test4;
+    byte_t tq[$];
+    int dyn32[];
+    byte dyn8[];
+    byte q8[$];
+    logic [99:0] q100[$];
+    logic [31:0] a;
+    logic [31:0] b;
+    byte c;
+    byte d;
+    logic [11:0] w12;
+    logic [99:0] w100;
+
+    // Unpacking a dynamic array or queue into a concatenation
+    dyn32 = '{32'h11223344, 32'h55667788};
+    {>>{a, b}} = dyn32;
+    `checkh(a, 32'h11223344);
+    `checkh(b, 32'h55667788);
+    dyn8 = '{8'h11, 8'h22};
+    {>>{c, d}} = dyn8;
+    `checkh(c, 8'h11);
+    `checkh(d, 8'h22);
+    q8 = '{8'h11, 8'h22, 8'h33, 8'h44, 8'h55, 8'h66, 8'h77, 8'h88};
+    {>>{a, b}} = q8;
+    `checkh(a, 32'h11223344);
+    `checkh(b, 32'h55667788);
+    tq = '{8'h5a, 8'ha5};
+    {>>{c, d}} = tq;
+    `checkh(c, 8'h5a);
+    `checkh(d, 8'ha5);
+
+    // Bits beyond the target are ignored
+    q8 = '{8'h33, 8'h44, 8'h55};
+    {>>{c, d}} = q8;
+    `checkh(c, 8'h33);
+    `checkh(d, 8'h44);
+    {>>{w12}} = q8;
+    `checkh(w12, 12'h334);
+    q8 = '{8'h11, 8'h22, 8'h33, 8'h44, 8'h55, 8'h66, 8'h77, 8'h88, 8'h99, 8'haa, 8'hbb, 8'hcc,
+           8'hdd, 8'hee};
+    {>>{w100}} = q8;
+    `checkh(w100, 100'h112233445566778899aabbccd);
+    q100 = '{100'h123456789abcdef0123456789, 100'hfedcba9876543210fedcba987};
+    {>>{a}} = q100;
+    `checkh(a, 32'h12345678);
+    {>>{a, w100}} = q100;
+    `checkh(a, 32'h12345678);
+    `checkh(w100, 100'h9abcdef0123456789fedcba98);
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
+    test4();
     $write("*-* All Finished *-*\n");
     $finish;
   end
