@@ -1055,6 +1055,16 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             os << "))\n";
         }
     }
+    // Variables registered by different paths to the same object, as through two handles to it,
+    // are one variable
+    std::map<const void*, const VlRandomVar*> scalars;
+    for (const auto& var : m_vars) {
+        if (var.second->dimension()) continue;
+        const auto pair = scalars.emplace(var.second->datap(0), var.second.get());
+        if (!pair.second) {
+            os << "(assert (= " << pair.first->second->name() << ' ' << var.first << "))\n";
+        }
+    }
 }
 
 void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>& extras,
