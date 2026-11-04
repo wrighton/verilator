@@ -30,6 +30,7 @@
 #include <sstream>
 #include <streambuf>
 #include <tuple>
+#include <unordered_map>
 
 // Diversity (scalar rand vars): tie each free bit to a random target via a
 //   boolean assumption literal, then force the bits with (check-sat-assuming).
@@ -1073,6 +1074,16 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             os << "(assert (= " << var.first << ' ';
             var.second->emitConcreteValue(os);
             os << "))\n";
+        }
+    }
+    // Variables registered by different paths to the same object, as through two handles to it,
+    // are one variable
+    std::unordered_map<const void*, const VlRandomVar*> scalars;
+    for (const auto& var : m_vars) {
+        if (var.second->dimension()) continue;
+        const auto pair = scalars.emplace(var.second->datap(0), var.second.get());
+        if (!pair.second) {
+            os << "(assert (= " << pair.first->second->name() << ' ' << var.first << "))\n";
         }
     }
 }
