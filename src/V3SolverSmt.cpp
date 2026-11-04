@@ -1281,7 +1281,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
 
             AstNodeModule* const classp = getLeftmostVarModulep(memberRefp, varp);
-            AstBegin* const initp = getInitp(varp, memberRefp || structSelOrCMeth, classp);
+            const bool inRandomize = memberRefp || structSelOrCMeth;
+            AstBegin* const initp = getInitp(varp, inRandomize, classp);
             if (m_nestedAccessp) {
                 AstStmtExpr* const writeVarStmtp = m_nestedAccessp->makeWriteVarStmt(varp, m_genp);
                 addRegistrationStmt(writeVarStmtp, initp);
@@ -1296,6 +1297,17 @@ class ConstraintExprVisitor final : public VNVisitor {
             } else {
                 createSolverVarHandle(varp, structSelOrCMeth, isGlobalConstrained, randMode,
                                       memberRefp, smtName, classOrPackagep, classp, initp);
+                AstNodeDType* dtp = varp->dtypep()->skipRefp();
+                while (VN_IS(dtp, UnpackArrayDType)) dtp = dtp->subDTypep()->skipRefp();
+                if (VN_IS(dtp, AssocArrayDType) && !inRandomize && !m_inlineInitBlockp) {
+                    // Keys can be added to an associative array (also one in a fixed-size array)
+                    // after new(), so randomize() registers it again for its current elements.
+                    // new() still registers it for a randomize() of a base class, which does not
+                    // run this one.
+                    createSolverVarHandle(varp, false, isGlobalConstrained, randMode, nullptr,
+                                          smtName, classOrPackagep, classp,
+                                          getInitp(varp, true, classp));
+                }
             }
         } else {
             // Variable already written, clean up cloned memberRefp if any
