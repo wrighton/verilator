@@ -4155,7 +4155,7 @@ class WidthVisitor final : public VNVisitor {
             userIterate(nodep->varp(), nullptr);
         }
         if (!m_paramsOnly && nodep->varp()->isIfaceArraySplit()) {
-            replaceSplitIfaceArrayRef(nodep);
+            replaceSplitIfaceArrayRef(nodep, nodep->varp());
             return;
         }
         // UINFOTREE(9, nodep, "", "VRin");
@@ -4773,6 +4773,10 @@ class WidthVisitor final : public VNVisitor {
                 if (AstClocking* const clockingp = VN_CAST(foundp, Clocking))
                     foundp = clockingp->ensureEventp();
                 if (AstVar* const varp = VN_CAST(foundp, Var)) {
+                    if (varp->isIfaceArraySplit()) {
+                        replaceSplitIfaceArrayRef(nodep, varp);
+                        return;
+                    }
                     if (!varp->didWidth()) userIterate(varp, nullptr);
                     AstIface* const ifacep = adtypep->ifaceViaCellp();
                     varp->sensIfacep(ifacep);
@@ -5083,7 +5087,9 @@ class WidthVisitor final : public VNVisitor {
         const AstModport* const modportp = adtypep->modportp();
         if (!modportp) return true;
         if (const AstVar* const varp = VN_CAST(itemp, Var)) {
-            if (varp->isParam()) return true;
+            // An array of interface instances is found by its __Viftop variable, see
+            // memberRefIface; instances, like parameters, are not listed in modports
+            if (varp->isParam() || varp->isIfaceParent()) return true;
         } else if (!VN_IS(itemp, NodeFTask) && !VN_IS(itemp, Clocking)) {
             return true;
         }
@@ -5109,7 +5115,12 @@ class WidthVisitor final : public VNVisitor {
         UASSERT_OBJ(ifacep, nodep, "Unlinked");
         VSpellCheck speller;
         for (AstNode* const itemp : ifacep->stmtspList()) {
-            if (itemp->name() == nodep->name()) {
+            // An array of interface instances, split by V3Param, is found by its whole array
+            // variable
+            const AstVar* const varp = VN_CAST(itemp, Var);
+            if (itemp->name() == nodep->name()
+                || (varp && varp->isIfaceArraySplit()
+                    && varp->name() == nodep->name() + "__Viftop")) {
                 if (!modportAllowsItem(nodep, adtypep, itemp)) {
                     return nullptr;  // Caller handles error
                 }
@@ -11945,7 +11956,7 @@ class WidthVisitor final : public VNVisitor {
     // element variables being named 'name' + 'suffix'. 'elemVarpr' is the element variable of
     // the leftmost element in the dimensions of 'dtypep', and is moved to the right past them.
     // E.g. 'ifc' of dimensions [0:1][3:2] -> '{'{ifc[0][3], ifc[0][2]}, '{ifc[1][3], ifc[1][2]}}
-    AstNodeExpr* newIfaceArrayValue(const AstNodeVarRef* refp, AstNodeDType* dtypep,
+    AstNodeExpr* newIfaceArrayValue(const AstNodeExpr* refp, AstNodeDType* dtypep,
                                     const std::string& name, const std::string& suffix,
                                     AstVar*& elemVarpr) {
         FileLine* const flp = refp->fileline();
@@ -11956,11 +11967,18 @@ class WidthVisitor final : public VNVisitor {
             UASSERT_OBJ(varp && varp->name() == name + suffix, refp,
                         "Missing element variable of interface array " << name);
             elemVarpr = VN_CAST(varp->nextp(), Var);
-            AstNodeVarRef* newp;
-            if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
-                newp = new AstVarXRef{flp, varp, xrefp->dotted(), refp->access()};
+            AstNodeExpr* newp;
+            if (const AstMemberRef* const memberRefp = VN_CAST(refp, MemberRef)) {
+                // The element of a member, e.g. 'vif.ifc', by the element's name. Each element
+                // has a copy of 'vif', of which a constant select keeps only one.
+                AstMemberRef* const newMemberRefp = new AstMemberRef{
+                    flp, memberRefp->fromp()->cloneTree(false), VFlagChildDType{}, name};
+                newMemberRefp->access(memberRefp->access());
+                newp = newMemberRefp;
+            } else if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+                newp = new AstVarXRef{flp, varp, xrefp->dotted(), xrefp->access()};
             } else {
-                newp = new AstVarRef{flp, varp, refp->access()};
+                newp = new AstVarRef{flp, varp, VN_AS(refp, VarRef)->access()};
             }
             userIterate(newp, WidthVP{SELF, BOTH}.p());
             return newp;
@@ -11978,11 +11996,10 @@ class WidthVisitor final : public VNVisitor {
         return consp;
     }
 
-    // Replace a reference to a whole interface array variable (a __Viftop companion, or an
-    // interface array port) split by V3Param, with the AstConsArray of references to its
-    // elements, which is how whole arrays of interfaces are handled from here on
-    void replaceSplitIfaceArrayRef(AstNodeVarRef* nodep) {
-        AstVar* const varp = nodep->varp();
+    // Replace a reference, or member select, to a whole interface array variable (a __Viftop
+    // companion, or an interface array port) split by V3Param, with the AstConsArray of
+    // references to its elements, which is how whole arrays of interfaces are handled from here on
+    void replaceSplitIfaceArrayRef(AstNodeExpr* nodep, AstVar* varp) {
         UASSERT_OBJ(varp->isIfaceArraySplit(), nodep, "Not a split interface array");
         std::string name = varp->name();
         std::string suffix;
