@@ -10812,6 +10812,20 @@ class WidthVisitor final : public VNVisitor {
                 underp = convertUnpackedOrder(exprp, expDTypep);
             }
         }
+        // A singular value is not assignable to an unpacked aggregate (IEEE 1800-2023 7.6),
+        // unlike an empty concatenation {} (IEEE 1800-2023 10.10), or a streaming
+        // concatenation, which is unpacked into it (IEEE 1800-2023 11.4.14). A connection to
+        // a fixed-size array port has its own check, with a better message.
+        const AstNodeDType* const expDtp = expDTypep->skipRefp();
+        const AstNodeDType* const underDtp = underp->dtypep()->skipRefp();
+        if (determ == ASSIGN && expDtp->isAggregateType() && !underDtp->isAggregateType()
+            && !VN_IS(underDtp, EmptyQueueDType) && !VN_IS(underp, NodeStream)
+            && !(VN_IS(parentp, Pin) && VN_IS(expDtp, UnpackArrayDType))
+            && !underp->fileline()->erroringOn()) {
+            parentp->v3error("Illegal assignment: types are not assignment compatible (IEEE "
+                             "1800-2023 7.6)"
+                             << warnDTypes(parentp, expDtp, underDtp));
+        }
         if (VN_IS(underp, NodeDType)) {  // Note the node itself, not node's data type
             // Must be near top of these checks as underp->dtypep() will look normal
             underp->v3error(ucfirst(parentp->prettyOperatorName())
@@ -10839,7 +10853,6 @@ class WidthVisitor final : public VNVisitor {
             spliceCvtString(VN_AS(underp, NodeExpr));
             underp = userIterateSubtreeReturnEdits(oldp, WidthVP{SELF, FINAL, childStreamUse}.p());
         } else {
-            const AstNodeDType* const underDtp = underp->dtypep()->skipRefp();
             if (determ != ASSIGN && expDTypep->skipRefp()->isIntegralOrPacked()
                 && underDtp->isAggregateType()) {
                 parentp->v3error(ucfirst(parentp->prettyOperatorName())
@@ -10851,13 +10864,6 @@ class WidthVisitor final : public VNVisitor {
                 underp->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(underp), underp);
                 underp = newp;
-            }
-            const AstNodeDType* const expDtp = expDTypep->skipRefp();
-            if (determ == ASSIGN && VN_IS(expDtp, NodeUOrStructDType) && expDtp->isAggregateType()
-                && !underDtp->isAggregateType()) {
-                parentp->v3error("Illegal assignment: types are not assignment compatible (IEEE "
-                                 "1800-2023 7.6)"
-                                 << warnDTypes(parentp, expDtp, underDtp));
             }
             // Connections of interface arrays have their own check, with a better message
             if (determ == ASSIGN && !isIfaceArrayDType(expDtp)

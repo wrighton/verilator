@@ -3391,13 +3391,11 @@ class ConstVisitor final : public VNVisitor {
         }
         iterateAndNextNull(nodep->fromp());
         if (VN_IS(nodep->fromp(), Const)) {  // It did.
-            if (!m_selp) {
-                nodep->v3error("Illegal assignment of constant to unpacked array");
-            } else {
-                AstNode* const fromp = nodep->fromp()->unlinkFrBack();
-                nodep->replaceWithKeepDType(fromp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            }
+            // V3Width reports a singular value assigned to an unpacked array
+            UASSERT_OBJ(m_selp, nodep, "Constant substituted for an unpacked array");
+            AstNode* const fromp = nodep->fromp()->unlinkFrBack();
+            nodep->replaceWithKeepDType(fromp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
         }
         // Handle ARRAYSEL directly on ConsArray (not through VarRef)
         else if (VN_IS(nodep->bitp(), Const) && VN_IS(nodep->fromp(), ConsArray)) {
