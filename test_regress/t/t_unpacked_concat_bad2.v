@@ -90,5 +90,20 @@ module t;
     qq = {qq, c};
     qq = '{c};
     cqq = {cqq, iq};
+    qq = {qq, 5};
+    cqq = {cqq, 5};
+  end
+
+  typedef struct {int a;} ustruct_t;
+
+  initial begin
+    int dq[][$];
+    ustruct_t s;
+    ustruct_t sq[$];
+    int iq[$];
+    // Singular item of an element type that is an unpacked array or structure
+    dq = {dq, 5};
+    sq = {sq, 5};
+    iq = {iq, s};
   end
 endmodule
