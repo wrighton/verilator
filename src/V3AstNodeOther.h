@@ -2778,7 +2778,7 @@ public:
     bool isTemp() const { return varType().isTemp(); }
     bool isClassMember() const { return varType() == VVarType::MEMBER; }
     bool isVirtIface() const {
-        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep(), IfaceRefDType)) {
+        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep()->skipRefp(), IfaceRefDType)) {
             return dtp->isVirtual();
         }
         return false;
