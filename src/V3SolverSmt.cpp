@@ -623,6 +623,29 @@ class ConstraintExprVisitor final : public VNVisitor {
         return selp;
     }
 
+    // Whether a reduction cannot iterate over the row array selected by exprp
+    static bool unsupportedRowSel(const AstNodeExpr* exprp) {
+        // The rows of a queue, dynamic or associative array are not solver variables, and a
+        // random index would select a dynamically sized row before solving
+        const bool dynRow = !VN_IS(exprp->dtypep()->skipRefp(), UnpackArrayDType);
+        while (true) {
+            if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                if (dynRow && selp->bitp()->exists([](const AstNodeVarRef* refp) {
+                        return refp->varp()->rand().isRandomizable();
+                    })) {
+                    return true;
+                }
+                exprp = selp->fromp();
+            } else if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+                exprp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else {
+                return VN_IS(exprp, AssocSel) || VN_IS(exprp, CMethodHard);
+            }
+        }
+    }
+
     // Convert expression to target width using extend or truncate as needed
     static AstNodeExpr* adjustWidth(FileLine* fl, AstNodeExpr* exprp, int targetWidth,
                                     VSigning targetSigning) {
@@ -2599,7 +2622,16 @@ class ConstraintExprVisitor final : public VNVisitor {
                 nodep->v3fatalSrc("Method not handled in constraints? " << nodep);
                 return;
             }
-            if (!VN_IS(nodep->fromp(), VarRef)) {
+            if (unsupportedRowSel(nodep->fromp())) {
+                nodep->v3warn(CONSTRAINTIGN,
+                              "Unsupported: Array reduction constraint on array selected from a "
+                              "non-fixed-size array or by a random index, treating as state");
+                nodep->user1(false);
+                if (editFormat(nodep)) return;
+                nodep->v3fatalSrc("Method not handled in constraints? " << nodep);
+                return;
+            }
+            if (!withp && !VN_IS(nodep->fromp(), VarRef)) {
                 // Non-dynamic subarrays and member arrays are handled in other parts of code
                 nodep->v3warn(CONSTRAINTIGN, "Unsupported: Array reduction constraint on dynamic "
                                              "array inside array or struct");
@@ -2691,7 +2723,18 @@ class ConstraintExprVisitor final : public VNVisitor {
                     }
                     VL_DO_DANGLING(rootRefp->deleteTree(), rootRefp);
                 } else {
+                    // Arguments of a nested reduction's 'with' are left to that reduction
+                    std::unordered_set<const AstLambdaArgRef*> nestedArgRefs;
+                    perElemExprp->foreach([&](const AstWith* nestedp) {
+                        nestedp->foreach([&](const AstLambdaArgRef* refp) {
+                            if (refp->name() == nestedp->valueArgRefp()->name()
+                                || refp->name() == nestedp->indexArgRefp()->name()) {
+                                nestedArgRefs.insert(refp);
+                            }
+                        });
+                    });
                     perElemExprp->foreach([&](AstLambdaArgRef* refp) {
+                        if (nestedArgRefs.count(refp)) return;
                         if (refp->index()) {
                             // item.index -> replace with loop variable, adjust width
                             AstVarRef* const loopRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
@@ -2711,10 +2754,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                 perElemExprp = V3Const::constifyEdit(perElemExprp);
 
                 perElemExprp->foreach([&](AstNode* nodep) {
-                    // Don't mark loop variable references as randomizable
+                    // Block temporaries (loop indices of this or an enclosing reduction or
+                    // foreach, captured caller locals) are state, not random variables
                     if (!VN_IS(nodep, Const)) {
                         if (AstNodeVarRef* const vrefp = VN_CAST(nodep, NodeVarRef)) {
-                            if (vrefp->varp() != loopVarp) nodep->user1(true);
+                            if (vrefp->varp()->varType() != VVarType::BLOCKTEMP) {
+                                nodep->user1(true);
+                            }
                         } else {
                             nodep->user1(true);
                         }
