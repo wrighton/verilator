@@ -35,6 +35,8 @@ module t (
   // Goto repetition coalesces multiple live attempts into one NFA state.
   cover sequence (a [-> 2]);
   cover sequence (a [-> 2: 3]);
+  // As does the goto repetition in a nonconsecutive repetition.
+  cover sequence (a [= 2] ##1 b);
 
   // Simultaneous prefix endpoints are not preserved by concatenation.
   cover sequence ((a [*1:2]) ##[1:258] b);
