@@ -33,6 +33,30 @@
                                                 : ... note: In instance 't'
    27 |     dim2[0+:1][1] = 0;   
       |               ^
+%Error: t/t_mem_multi_ref_bad.v:27:19: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'logic[1:0]$[1:0]' (4-state)
+                                     : ... Right-hand data type: 'bit[31:0]' (2-state)
+   27 |     dim2[0+:1][1] = 0;   
+      |                   ^
+%Error: t/t_mem_multi_ref_bad.v:28:20: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'logic[1:0]$[1:0]' (4-state)
+                                     : ... Right-hand data type: 'bit[31:0]' (2-state)
+   28 |     dim2[1 : 0][1] = 0;   
+      |                    ^
+%Error: t/t_mem_multi_ref_bad.v:29:18: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'logic[1:0]$[1:0]' (4-state)
+                                     : ... Right-hand data type: 'bit[31:0]' (2-state)
+   29 |     dim2[1][1:0] = 0;   
+      |                  ^
+%Error: t/t_mem_multi_ref_bad.v:30:17: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'logic$[1:0]' (4-state)
+                                     : ... Right-hand data type: 'bit[31:0]' (2-state)
+   30 |     dim0nv[1:0] = 0;   
+      |                 ^
 %Error: t/t_mem_multi_ref_bad.v:31:14: Illegal bit or array select; type does not have a bit range, or bad dimension: data type is 'logic'
                                      : ... note: In instance 't'
    31 |     dim0nv[1][1] = 0;   
