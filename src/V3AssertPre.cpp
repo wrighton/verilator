@@ -1358,8 +1358,8 @@ private:
     }
 
     // Reject [=M:N] nonconsecutive range that reached V3AssertPre.
-    // [->M:N] is fully handled upstream (NFA path); only [=M:N] still lands
-    // here because AstSNonConsRep lowering is not yet implemented there.
+    // [->M:N] is fully handled upstream (NFA path); only [=M:N] without a
+    // cycle delay still lands here, as V3AssertNfa leaves such properties here.
     // Replaces the node with BitFalse so lowering continues after the warning.
     bool rejectNonconsecRange(AstNode* nodep, AstNodeExpr* maxCountp) {
         if (!maxCountp) return false;
