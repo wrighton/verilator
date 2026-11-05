@@ -35,6 +35,12 @@
                                     : ... note: In instance 't'
    32 |     qi = q.size with (1);   
       |                 ^~~~
+%Error: t/t_queue_method_bad.v:32:8: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                   : ... note: In instance 't'
+                                   : ... Left-hand data type: 'int$[$]'
+                                   : ... Right-hand data type: 'int'
+   32 |     qi = q.size with (1);   
+      |        ^
 %Error: t/t_queue_method_bad.v:34:7: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
                                    : ... note: In instance 't'
                                    : ... Left-hand data type: 'int'

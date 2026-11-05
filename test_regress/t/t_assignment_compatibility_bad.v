@@ -56,4 +56,31 @@ module t;
   row3_t rows3[2];
   row2_t rows2[2];
   assign rows3 = rows2;
+
+  // Singular values assigned to unpacked arrays
+  int queueI[$] = 5;
+  int queueQ[$][$] = '{5};
+  typedef int queue_t[$];
+  queue_t queueT = 5;
+  initial begin
+    int dynI[];
+    int assocI[int];
+    int fixedI[3];
+    real queueR[$];
+    string queueS[$];
+    string str;
+    queueI = 5;
+    queueQ = '{queueI, nonAggregate};
+    dynI = nonAggregate;
+    assocI = 5;
+    fixedI = 5;
+    queueR = 1.5;
+    queueS = str;
+  end
+  sub u_sub (.queueP(5));
+endmodule
+
+module sub (
+    input int queueP[$]
+);
 endmodule
