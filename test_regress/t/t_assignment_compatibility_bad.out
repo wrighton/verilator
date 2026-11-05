@@ -111,4 +111,75 @@
                                                 : ... Right-hand data type: 'logic$[0:1][0:1]'
    58 |   assign rows3 = rows2;
       |                ^
+%Error: t/t_assignment_compatibility_bad.v:61:19: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[$]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   61 |   int queueI[$] = 5;
+      |                   ^
+%Error: t/t_assignment_compatibility_bad.v:62:24: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[$]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   62 |   int queueQ[$][$] = '{5};
+      |                        ^
+%Error: t/t_assignment_compatibility_bad.v:64:20: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[$]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   64 |   queue_t queueT = 5;
+      |                    ^
+%Error: t/t_assignment_compatibility_bad.v:72:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[$]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   72 |     queueI = 5;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:73:24: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[$]' (2-state)
+                                                : ... Right-hand data type: 'logic' (4-state)
+   73 |     queueQ = '{queueI, nonAggregate};
+      |                        ^~~~~~~~~~~~
+%Error: t/t_assignment_compatibility_bad.v:74:10: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[]' (2-state)
+                                                : ... Right-hand data type: 'logic' (4-state)
+   74 |     dynI = nonAggregate;
+      |          ^
+%Error: t/t_assignment_compatibility_bad.v:75:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   75 |     assocI = 5;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:76:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[0:2]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   76 |     fixedI = 5;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:77:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'real$[$]'
+                                                : ... Right-hand data type: 'real'
+   77 |     queueR = 1.5;
+      |            ^
+%Warning-REALCVT: t/t_assignment_compatibility_bad.v:77:14: Implicit conversion of real to integer
+   77 |     queueR = 1.5;
+      |              ^~~
+                  ... For warning description see https://verilator.org/warn/REALCVT?v=latest
+                  ... Use "/* verilator lint_off REALCVT */" and lint_on around source to disable this message.
+%Error: t/t_assignment_compatibility_bad.v:78:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'string$[$]'
+                                                : ... Right-hand data type: 'string'
+   78 |     queueS = str;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:80:15: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[$]'
+                                                : ... Right-hand data type: 'bit[31:0]'
+   80 |   sub u_sub (.queueP(5));
+      |               ^~~~~~
 %Error: Exiting due to
