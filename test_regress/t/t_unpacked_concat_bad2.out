@@ -112,4 +112,29 @@
                                         : ... Item data type: 'int$[$]'
    92 |     cqq = {cqq, iq};
       |                 ^~
+%Error: t/t_unpacked_concat_bad2.v:93:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'int$[$]'
+                                        : ... Item data type: 'bit[31:0]'
+   93 |     qq = {qq, 5};
+      |               ^
+%Error: t/t_unpacked_concat_bad2.v:94:17: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'class Cls$[$]'
+                                        : ... Item data type: 'bit[31:0]'
+   94 |     cqq = {cqq, 5};
+      |                 ^
+%Error: t/t_unpacked_concat_bad2.v:105:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                         : ... Element data type: 'int$[$]'
+                                         : ... Item data type: 'bit[31:0]'
+  105 |     dq = {dq, 5};
+      |               ^
+%Error: t/t_unpacked_concat_bad2.v:106:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                         : ... Element data type: 'struct t.ustruct_t'
+                                         : ... Item data type: 'bit[31:0]'
+  106 |     sq = {sq, 5};
+      |               ^
+%Error: t/t_unpacked_concat_bad2.v:107:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                         : ... Element data type: 'int'
+                                         : ... Item data type: 'struct t.ustruct_t'
+  107 |     iq = {iq, s};
+      |               ^
 %Error: Exiting due to

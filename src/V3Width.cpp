@@ -7142,8 +7142,9 @@ class WidthVisitor final : public VNVisitor {
     static bool isNeverAssignable(const AstNodeDType* toDtp, const AstNodeDType* fromDtp) {
         // computeCastable does not decide a class handle or an unpacked array against a type of
         // another kind (e.g. for a bit-stream cast), but a class handle is assignable only to a
-        // class handle, and only a class handle or null is assignable to one; and an unpacked
-        // array only from an unpacked array of assignable elements (IEEE 1800-2023 7.6). An
+        // class handle, and only a class handle or null is assignable to one; an unpacked
+        // array only from an unpacked array of assignable elements (IEEE 1800-2023 7.6); and an
+        // unpacked structure or union not from a singular value (IEEE 1800-2023 6.22.3). An
         // empty queue '{}' is left to computeCastable, as it is reported elsewhere.
         const AstNodeDType* const toSkipp = toDtp->skipRefp();
         const AstNodeDType* const fromSkipp = fromDtp->skipRefp();
@@ -7152,7 +7153,10 @@ class WidthVisitor final : public VNVisitor {
             if (toArray && fromSkipp->isNonPackedArray()) {
                 return isNeverAssignable(toSkipp->subDTypep(), fromSkipp->subDTypep());
             }
-            if (toArray != fromSkipp->isNonPackedArray()) return true;
+            if (toArray != fromSkipp->isNonPackedArray()
+                || toSkipp->isAggregateType() != fromSkipp->isAggregateType()) {
+                return true;
+            }
             if (VN_IS(toSkipp, ClassRefDType) != VN_IS(fromSkipp, ClassRefDType)) {
                 const AstBasicDType* const fromBasicp = VN_CAST(fromSkipp, BasicDType);
                 return !(fromBasicp && fromBasicp->keyword() == VBasicDTypeKwd::NULLTYPE);
@@ -7172,8 +7176,10 @@ class WidthVisitor final : public VNVisitor {
         const AstNodeDType* const valueDtp = valuep->dtypep()->skipRefp();
         // An element if assignable to the element type, else an array of such elements
         // (IEEE 1800-2023 10.10)
-        const bool isElement = AstNode::computeCastable(elemDtp, valueDtp, nullptr).isAssignable();
-        if (!isElement && isNeverAssignable(elemDtp, valueDtp)
+        const bool neverElement = isNeverAssignable(elemDtp, valueDtp);
+        const bool isElement
+            = !neverElement && AstNode::computeCastable(elemDtp, valueDtp, nullptr).isAssignable();
+        if (neverElement
             && (!valueDtp->isNonPackedArray()
                 || isNeverAssignable(elemDtp, valueDtp->subDTypep()))) {
             valuep->v3error("Unpacked array concatenation item is neither an element nor"
