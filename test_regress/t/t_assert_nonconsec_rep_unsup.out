@@ -1,0 +1,74 @@
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:13:43: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   13 |   assert property (@(posedge clk) a [= 2] ##1 b);
+      |                                           ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:14:49: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   14 |   assert property (@(posedge clk) c |-> a [= 2] ##1 b);
+      |                                                 ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:15:56: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) c |-> (a [= 2] or d) ##1 b);
+      |                                                        ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:16:50: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   16 |   assert property (@(posedge clk) c |-> (a [= 2] ##1 b) and d);
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:20:42: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   20 |   assert property (@(posedge clk) not (a [= 2] ##1 b));
+      |                                          ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:21:44: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   21 |   assert property (@(posedge clk) c |-> (a [= 2] ##1 b |-> d));
+      |                                            ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:22:39: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   22 |   assert property (@(posedge clk) ((a [= 2] ##1 b) |-> d) or (c |-> b));
+      |                                       ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:23:43: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   23 |   assert property (@(posedge clk) not ((a [= 2] ##1 b) |-> d));
+      |                                           ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:24:38: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   24 |   assert property (@(posedge clk) (a [= 2] ##1 b |-> d) and (c |-> b));
+      |                                      ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:25:37: Unsupported: nonconsecutive repetition in a property with a ranged cycle delay (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   25 |   assert property (@(posedge clk) a [= 2] ##[1:2] b |-> d);
+      |                                     ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:26:61: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   26 |   assert property (@(posedge clk) sync_reject_on (c) (##1 a [= 1]));
+      |                                                             ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:27:56: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   27 |   assert property (@(posedge clk) reject_on (c) (##1 a [= 1]));
+      |                                                        ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:28:56: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   28 |   assert property (@(posedge clk) accept_on (c) (##1 a [= 1]));
+      |                                                        ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:29:61: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   29 |   assert property (@(posedge clk) sync_accept_on (c) (##1 a [= 1]));
+      |                                                             ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:30:57: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   30 |   assert property (@(posedge clk) sync_reject_on (c) (a [= 2] ##1 b |-> d));
+      |                                                         ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:31:45: Unsupported: nonconsecutive repetition with a cycle delay under another property operator (IEEE 1800-2023 16.9.2).
+                                                          : ... note: In instance 't'
+   31 |   assert property (@(posedge clk) if (c) (a [= 2] ##1 b |-> d));
+      |                                             ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:34:45: Unsupported: intersect with this variable-length operand
+                                                          : ... note: In instance 't'
+   34 |   assert property (@(posedge clk) (a [= 2]) intersect (b [* 1:6]) |-> d);
+      |                                             ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:35:45: Unsupported: within with ranged cycle-delay operand
+                                                          : ... note: In instance 't'
+   35 |   assert property (@(posedge clk) (a [= 2]) within (c [* 4:8]) |-> d);
+      |                                             ^~~~~~
+%Error: Exiting due to
