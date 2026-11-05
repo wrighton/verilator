@@ -266,6 +266,29 @@ class Test25_LowBound;
   }
 endclass
 
+// Test 26: item.index in a 'with' expression narrower than the index
+class Test26_NarrowResult;
+  rand bit [7:0] data[4];
+  rand bit [3:0] nib[6];
+  rand bit bits[4];
+  rand bit [7:0] dyn[];
+  rand bit [7:0] que[$];
+
+  function new();
+    dyn = new[3];
+    que = '{0, 0, 0};
+  endfunction
+
+  constraint c {
+    data.and() with (item == 8'(item.index * 4)) == 1'b1;
+    nib.or() with (item.index >= 2 ? item : 4'h0) == 4'h0;
+    bits.or() with (item.index == 2 ? item : 1'b0) == 1'b1;
+    bits.or() with (item.index == 3 ? item : 1'b0) == 1'b0;
+    dyn.and() with (item == 8'(item.index + 3)) == 1'b1;
+    que.and() with (item == 8'(item.index + 5)) == 1'b1;
+  }
+endclass
+
 module t;
   initial begin
     Test1_BasicSum t1;
@@ -293,6 +316,7 @@ module t;
     Test23_BoundaryElements t23;
     Test24_CascadingConstraint t24;
     Test25_LowBound t25;
+    Test26_NarrowResult t26;
     int i;
 
     // Test: Basic sum
@@ -424,6 +448,17 @@ module t;
     `checkd(t25.data[3], 9)
     `checkd(t25.desc[3], 4)
     `checkd(t25.desc[1], 0)
+
+    // Test 26: Narrow result
+    t26 = new;
+    i = t26.randomize();
+    `checkd(i, 1)
+    foreach (t26.data[j]) `checkd(t26.data[j], 8'(j * 4))
+    for (int j = 2; j < 6; ++j) `checkd(t26.nib[j], 4'h0)
+    `checkd(t26.bits[2], 1'b1)
+    `checkd(t26.bits[3], 1'b0)
+    foreach (t26.dyn[j]) `checkd(t26.dyn[j], 8'(j + 3))
+    foreach (t26.que[j]) `checkd(t26.que[j], 8'(j + 5))
 
     $write("*-* All Finished *-*\n");
     $finish;
