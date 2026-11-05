@@ -2685,16 +2685,13 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeExpr* const elemSelp = newSel(fl, nodep->fromp(), idxRefp);
                 elemSelp->user1(randArr);
 
-                // Get the result width for the reduction
-                const int resultWidth = nodep->dtypep()->width();
-                const VSigning resultSigning = nodep->dtypep()->numeric();
-
                 AstNode* perElemExprp = withp->exprp()->cloneTreePure(false);
                 if (AstLambdaArgRef* const rootRefp = VN_CAST(perElemExprp, LambdaArgRef)) {
                     if (rootRefp->index()) {
                         // item.index at root -> replace with storage index, adjust width
-                        perElemExprp = adjustWidth(fl, idxRefp->cloneTree(false), resultWidth,
-                                                   resultSigning);
+                        perElemExprp
+                            = adjustWidth(fl, idxRefp->cloneTree(false), rootRefp->width(),
+                                          rootRefp->dtypep()->numeric());
                     } else {
                         // item at root -> replace with array element
                         perElemExprp = elemSelp->cloneTreePure(false);
@@ -2703,9 +2700,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                 } else {
                     perElemExprp->foreach([&](AstLambdaArgRef* refp) {
                         if (refp->index()) {
-                            // item.index -> replace with storage index, adjust width
-                            AstNode* const replacementp = adjustWidth(
-                                fl, idxRefp->cloneTree(false), resultWidth, resultSigning);
+                            // item.index -> replace with storage index, adjust to the
+                            // index width the parent expression was sized for
+                            AstNode* const replacementp
+                                = adjustWidth(fl, idxRefp->cloneTree(false), refp->width(),
+                                              refp->dtypep()->numeric());
                             refp->replaceWith(replacementp);
                         } else {
                             // item -> replace with array element
