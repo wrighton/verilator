@@ -55,6 +55,7 @@ private:
     // Callables already added to the worklist
     std::set<IfaceCallable> m_seenReachableIfaceCallables;
     VirtIfaceTriggers m_triggers;  // Triggers found for virtual interface writes
+    const AstIface* m_ifacep = nullptr;  // Current interface
     const std::unique_ptr<V3CallTargets> m_callTargetsp;  // For the methods a call may run
 
     // METHODS
@@ -102,6 +103,19 @@ private:
         if (varp->isTemp()) return;
         m_vscpsByVar[varp].push_back(nodep);
         if (const AstIface* const ifacep = varp->sensIfacep()) addCandidateVscp(ifacep, nodep);
+    }
+    void visit(AstIface* nodep) override {
+        VL_RESTORER(m_ifacep);
+        m_ifacep = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstVar* nodep) override {
+        // Reads through a virtual interface may continue through this variable
+        if (m_ifacep && nodep->isVirtIface()) {
+            m_triggers.m_memberIfaces[m_ifacep].insert(
+                VN_AS(nodep->dtypep()->skipRefp(), IfaceRefDType)->ifacep());
+        }
+        iterateChildren(nodep);
     }
     void visit(AstNodeProcedure* nodep) override {
         // Disable lifetime optimization for variables in AlwaysPost blocks
