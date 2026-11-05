@@ -382,7 +382,12 @@ class BeginVisitor final : public VNVisitor {
         }
     }
     void visit(AstTypedef* nodep) override {
-        if (m_unnamedScope != "") {
+        if (m_ftaskp) {
+            // Later passes (e.g. struct emit) expect typedefs in the module, so move it there
+            nodep->name(dot(m_ftaskp->name(), dot(m_unnamedScope, nodep->name())));
+            nodep->unlinkFrBack();
+            m_ftaskp->addHereThisAsNext(nodep);
+        } else if (m_unnamedScope != "") {
             // Rename it
             nodep->name(dot(m_unnamedScope, nodep->name()));
             m_statep->userMarkChanged(nodep);
