@@ -1188,6 +1188,47 @@ class RandomizeVisitor final : public VNVisitor {
         }
         return it->second;
     }
+    // Return statements randomizing an std::randomize() argument without constraints
+    AstNodeStmt* newBasicStdRandStmtsp(FileLine* const fl, AstVar* const stdrandp,
+                                       AstVar* const fvarp, AstNodeExpr* const exprp) {
+        AstNodeDType* const dtypep = exprp->dtypep()->skipRefp();
+        AstNodeDType* elemDtypep = dtypep;  // Element type, through unpacked array dimensions
+        while (elemDtypep->isNonPackedArray()) elemDtypep = elemDtypep->subDTypep()->skipRefp();
+        const AstStructDType* const structp = VN_CAST(elemDtypep, StructDType);
+        if (structp && !structp->packed()) {
+            // The runtime randomizes integral values and arrays of them, so recurse into
+            // arrays of unpacked structs and into the members
+            if (dtypep->isNonPackedArray()) {
+                return createArrayForeachLoop(fl, dtypep, exprp, [&](AstNodeExpr* elemp) {
+                    return newBasicStdRandStmtsp(fl, stdrandp, fvarp, elemp->cloneTree(false));
+                });
+            }
+            // As for class members (newRandStmtsp), IEEE 1800-2023 18.4: an unpacked struct
+            // member is only randomized if its own declaration carries rand/randc. Members
+            // the 'with' constraints refer to are randomized by the solver.
+            AstNodeStmt* stmtsp = nullptr;
+            for (const AstMemberDType* const memberp : structp->memberspList()) {
+                if (!memberp->rand().isRandomizable()) continue;
+                AstStructSel* const selp
+                    = new AstStructSel{fl, exprp->cloneTree(false), memberp->name()};
+                selp->dtypep(memberp->subDTypep());
+                stmtsp = AstNode::addNextNull(stmtsp,
+                                              newBasicStdRandStmtsp(fl, stdrandp, fvarp, selp));
+            }
+            VL_DO_DANGLING(exprp->deleteTree(), exprp);
+            return stmtsp;
+        }
+        AstCMethodHard* const callp
+            = new AstCMethodHard{fl, new AstVarRef{fl, stdrandp, VAccess::READWRITE},
+                                 VCMethod::RANDOMIZER_BASIC_STD_RANDOMIZATION, exprp};
+        // The runtime masks each element to this width; queue, dynamic and associative array
+        // types have no width of their own
+        const uint64_t width = elemDtypep->width();
+        callp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, width});
+        callp->dtypeSetBit();
+        return new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
+                             new AstAnd{fl, new AstVarRef{fl, fvarp, VAccess::READ}, callp}};
+    }
     AstVar* getCreateRandModeVar(AstClass* const classp) {
         if (classp->user2p()) return VN_AS(classp->user2p(), Var);
         if (AstClassExtends* const extendsp = classp->extendsp()) {
@@ -1578,8 +1619,10 @@ class RandomizeVisitor final : public VNVisitor {
         UINFO(9, "created " << varp);
         return newp;
     }
-    AstNodeStmt* createArrayForeachLoop(FileLine* const fl, AstNodeDType* const dtypep,
-                                        AstNodeExpr* exprp, AstVar* const outputVarp) {
+    // Return a foreach loop over an array, with newElementStmtsp(element) as the body
+    AstNodeStmt*
+    createArrayForeachLoop(FileLine* const fl, AstNodeDType* const dtypep, AstNodeExpr* exprp,
+                           const std::function<AstNodeStmt*(AstNodeExpr*)>& newElementStmtsp) {
         AstNodeDType* tempDTypep = dtypep;
         AstVar* randLoopIndxp = nullptr;
         auto createLoopIndex = [&](AstNodeDType* tempDTypep) {
@@ -1621,7 +1664,7 @@ class RandomizeVisitor final : public VNVisitor {
 
         AstForeachHeader* const headerp
             = new AstForeachHeader{fl, exprp->cloneTree(false), randLoopIndxp};
-        AstNodeStmt* const randStmtsp = newRandStmtsp(fl, tempElementp, nullptr, outputVarp);
+        AstNodeStmt* const randStmtsp = newElementStmtsp(tempElementp);
         // TODO: we should just not clone in 'newRandStmtsp' if not necessary
         if (!tempElementp->backp()) VL_DO_DANGLING(pushDeletep(tempElementp), tempElementp);
         return new AstForeach{fl, headerp, randStmtsp};
@@ -1669,15 +1712,10 @@ class RandomizeVisitor final : public VNVisitor {
             return new AstIf{
                 fl, new AstNeq{fl, exprp->cloneTree(false), new AstConst{fl, AstConst::Null{}}},
                 assignp};
-        } else if (AstDynArrayDType* const dynarrayDtp = VN_CAST(memberDtp, DynArrayDType)) {
-            return createArrayForeachLoop(fl, dynarrayDtp, exprp, outputVarp);
-        } else if (AstQueueDType* const queueDtp = VN_CAST(memberDtp, QueueDType)) {
-            return createArrayForeachLoop(fl, queueDtp, exprp, outputVarp);
-        } else if (AstUnpackArrayDType* const unpackarrayDtp
-                   = VN_CAST(memberDtp, UnpackArrayDType)) {
-            return createArrayForeachLoop(fl, unpackarrayDtp, exprp, outputVarp);
-        } else if (AstAssocArrayDType* const assocarrayDtp = VN_CAST(memberDtp, AssocArrayDType)) {
-            return createArrayForeachLoop(fl, assocarrayDtp, exprp, outputVarp);
+        } else if (memberDtp->isNonPackedArray()) {
+            return createArrayForeachLoop(fl, memberDtp, exprp, [&](AstNodeExpr* elemp) {
+                return newRandStmtsp(fl, elemp, nullptr, outputVarp);
+            });
         } else {
             AstNodeExpr* valp;
             if (AstEnumDType* const enumDtp = VN_CAST(memberp ? memberp->subDTypep()->subDTypep()
@@ -2547,10 +2585,6 @@ class RandomizeVisitor final : public VNVisitor {
             AstNodeStmt* basicStmtsp = nullptr;
             for (const AstArg* const argp : nodep->argspList()) {
                 AstNodeExpr* const exprp = argp->exprp();
-                AstCMethodHard* const basicMethodp = new AstCMethodHard{
-                    nodep->fileline(),
-                    new AstVarRef{nodep->fileline(), stdrandp, VAccess::READWRITE},
-                    VCMethod::RANDOMIZER_BASIC_STD_RANDOMIZATION};
                 AstVar* const refvarp
                     = new AstVar{exprp->fileline(), VVarType::MEMBER,
                                  "__Varg"s + std::to_string(++argn), exprp->dtypep()};
@@ -2589,23 +2623,11 @@ class RandomizeVisitor final : public VNVisitor {
                                       new AstVarRef{fl, prevVarp, VAccess::READ}});
                 }
 
-                const size_t width = exprp->width();
-                basicMethodp->addPinsp(
-                    new AstVarRef{exprp->fileline(), refvarp, VAccess::READWRITE});
-
-                basicMethodp->addPinsp(
-                    new AstConst{nodep->fileline(), AstConst::Unsized64{}, width});
-                basicMethodp->dtypeSetBit();
-
                 basicStmtsp = AstNode::addNextNull(
                     basicStmtsp,
-                    new AstAssign{
-                        nodep->fileline(),
-                        new AstVarRef{nodep->fileline(), randomizeFuncp->fvarp(), VAccess::WRITE},
-                        new AstAnd{nodep->fileline(),
-                                   new AstVarRef{nodep->fileline(), randomizeFuncp->fvarp(),
-                                                 VAccess::READ},
-                                   basicMethodp}});
+                    newBasicStdRandStmtsp(
+                        nodep->fileline(), stdrandp, randomizeFuncp->fvarp(),
+                        new AstVarRef{exprp->fileline(), refvarp, VAccess::READWRITE}));
             }
             if (basicStmtsp) randomizeFuncp->addStmtsp(basicStmtsp);
             if (withp) {
