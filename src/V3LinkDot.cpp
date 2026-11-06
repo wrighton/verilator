@@ -4228,7 +4228,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             "Class " << derivedClassp->prettyNameQ() << impOrExtends
                                      << baseClassp->prettyNameQ()
                                      << " but missing inheritance conflict resolution for "
-                                     << baseSubp->prettyNameQ() << " (IEEE 1800-2023 8.26.6.2)\n"
+                                     << baseSubp->prettyNameQ() << " (IEEE 1800-2023 8.26.6.1)\n"
                                      << derivedClassp->warnContextPrimary() << '\n'
                                      << baseSubp->warnOther()
                                      << "... Location of interface class's function\n"
