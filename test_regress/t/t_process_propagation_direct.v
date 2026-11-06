@@ -44,6 +44,44 @@ module t;
     endtask
   endclass
 
+  // A method that interface classes inherit along several paths without redeclaring it passes
+  // suspension and the caller's process between all its implementations
+  interface class Dag0;
+    pure virtual task get(output process p);
+  endclass
+  interface class Dag1 extends Dag0;
+  endclass
+  interface class Dag2 extends Dag1, Dag0;
+  endclass
+  interface class Dag3 extends Dag2, Dag1;
+  endclass
+  class DagSelf implements Dag3;
+    virtual task get(output process p);
+      #1 p = process::self();
+    endtask
+  endclass
+  class DagNull implements Dag2;
+    virtual task get(output process p);
+      p = null;
+    endtask
+  endclass
+
+  initial begin
+    automatic process p = process::self();
+    automatic DagSelf dagSelf = new;
+    automatic DagNull dagNull = new;
+    Dag0 dag;
+    process got;
+    dag = dagNull;
+    dag.get(got);
+    `checkd(got == null, 1);
+    `checkd($time, 0);
+    dag = dagSelf;
+    dag.get(got);
+    `checkd(got == p, 1);
+    `checkd($time, 1);
+  end
+
   initial begin
     static int finished = 0;
     fork

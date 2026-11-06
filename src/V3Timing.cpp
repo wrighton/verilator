@@ -312,8 +312,10 @@ class TimingSuspendableVisitor final : public VNVisitor {
         DepVtx* const pVxp = getNeedsProcDepVtx(nodep);
         if (!m_classp) return;
 
-        // Go over overridden functions
+        // Go over overridden functions. Visit each base class once, as interface classes can
+        // inherit the same class along many paths.
 
+        std::set<const AstClass*> visited;
         std::queue<AstClassExtends*> extends;
         if (m_classp->extendsp()) extends.push(m_classp->extendsp());
 
@@ -323,6 +325,7 @@ class TimingSuspendableVisitor final : public VNVisitor {
 
             for (AstClassExtends* cextp = ext_listp; cextp;
                  cextp = VN_AS(cextp->nextp(), ClassExtends)) {
+                if (!visited.insert(cextp->classp()).second) continue;
                 // TODO: It is possible that a methods the same name in the base class is not
                 // actually overridden by our method. If this causes a problem, traverse to
                 // the root of the inheritance hierarchy and check if the original method is
