@@ -92,6 +92,7 @@ class BeginVisitor final : public VNVisitor {
     string m_displayScope;  // Name of %m in $display/AstScopeName
     string m_namedScope;  // Name of begin blocks above us
     string m_unnamedScope;  // Name of begin blocks, including unnamed blocks
+    std::map<const AstNodeFTask*, string> m_forkBranchScopes;  // m_displayScope at the call
     int m_ifDepth = 0;  // Current if depth
     bool m_keepBegins = false;  // True if begins should not be inlined
 
@@ -175,7 +176,14 @@ class BeginVisitor final : public VNVisitor {
         UINFO(8, "  " << nodep);
         // %m uses the original name; m_displayScope already has the enclosing blocks
         VL_RESTORER_COPY(m_displayScope);
-        m_displayScope = dot(m_displayScope, nodep->name());
+        if (nodep->forkBranch()) {
+            // The branch keeps the %m of the fork it was moved out of
+            const auto it = m_forkBranchScopes.find(nodep);
+            UASSERT_OBJ(it != m_forkBranchScopes.end(), nodep, "Fork branch before its call");
+            m_displayScope = it->second;
+        } else {
+            m_displayScope = dot(m_displayScope, nodep->name());
+        }
         // Rename it
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));
@@ -393,6 +401,11 @@ class BeginVisitor final : public VNVisitor {
             nodep->unlinkFrBack();
             m_modp->addStmtsp(nodep);
         }
+        iterateChildren(nodep);
+    }
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (nodep->taskp()->forkBranch())
+            m_forkBranchScopes.emplace(nodep->taskp(), m_displayScope);
         iterateChildren(nodep);
     }
     void visit(AstScopeName* nodep) override {
