@@ -574,12 +574,15 @@ class ForkVisitor final : public VNVisitor {
         FileLine* const flp = beginp->fileline();
         const std::string name = "__VforkTask_" + std::to_string(m_nForkTasks++);
         AstTask* const taskp = new AstTask{flp, name, m_capturedVarsp};
+        taskp->forkBranch(true);
         // A branch that spawns another process must hand its captured variables over to it
         if (m_hasNestedFork) {
             taskp->classMethod(VN_IS(m_modp, Class));
             taskp->isStatic(m_ftaskp && m_ftaskp->isStatic());
         }
-        m_tasksp = AstNode::addNext(m_tasksp, taskp);
+        // Prepend, so each task precedes those of forks nested in it, and V3Begin visits its call
+        // before the task
+        m_tasksp = AstNode::addNext(taskp, m_tasksp);
         if (beginp->declsp()) taskp->addStmtsp(beginp->declsp()->unlinkFrBackWithNext());
         if (beginp->stmtsp()) taskp->addStmtsp(beginp->stmtsp()->unlinkFrBackWithNext());
         AstTaskRef* const callp = new AstTaskRef{flp, taskp, m_capturedArgsp};
