@@ -35,7 +35,7 @@
         t/t_class_implements_param_bad.v:36:27: ... Location of interface class's function
    36 |   pure virtual function T get_c();
       |                           ^~~~~
-%Error: t/t_class_implements_param_bad.v:64:9: Class 'conflict_param_cls' implements 'e2_if' but missing inheritance conflict resolution for 'get_e' (IEEE 1800-2023 8.26.6.2)
+%Error: t/t_class_implements_param_bad.v:64:9: Class 'conflict_param_cls' implements 'e2_if' but missing inheritance conflict resolution for 'get_e' (IEEE 1800-2023 8.26.6.1)
    64 | virtual class conflict_param_cls extends param_cls #(int) implements e1_if, e2_if;
       |         ^~~~~
         t/t_class_implements_param_bad.v:61:29: ... Location of interface class's function
