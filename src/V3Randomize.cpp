@@ -947,6 +947,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
     // constraint items either move their expressions into one or never iterate them.
     std::set<std::string>* m_constraintVarsp = nullptr;
+    // Condition that the arrays reduced in the current constraint keep their current sizes
+    AstNodeExpr* m_sizeGatep = nullptr;
 
     class NestedAccessPath final {
         AstMemberSel* m_topNestedArrayMemberSelp
@@ -1304,6 +1306,37 @@ class ConstraintExprVisitor final : public VNVisitor {
         nodep->unlinkFrBack(&handle);
         handle.relink(getConstFormat(nodep));
         return true;
+    }
+    // Make the current constraint hold only while a solver-sized array keeps its size
+    void gateOnCurrentSize(AstNodeExpr* arrayp) {
+        // A reduction of the array, or an 'inside' it, is expanded over the elements the array
+        // has when the constraints are set up. A dynamic array or queue with a size constraint
+        // is solved twice: first for its new size (IEEE 1800-2023 18.5.8.1: size constraints
+        // are solved before iterative ones) while it still has its previous size, then resized
+        // and solved with the size pinned. So the expansion is only right in the first solve
+        // if that keeps the previous size, and must not constrain any other.
+        AstVarRef* const arrRefp = VN_CAST(arrayp, VarRef);
+        if (!arrRefp) return;
+        AstVar* const arrVarp = arrRefp->varp();
+        AstVar* const sizeVarp = VN_CAST(arrVarp->user4p(), Var);
+        if (!sizeVarp || VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)) return;
+        FileLine* const fl = arrRefp->fileline();
+        AstVarRef* const sizeRefp
+            = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
+        sizeRefp->user1(true);
+        AstCMethodHard* const curSizep
+            = new AstCMethodHard{fl, arrRefp->cloneTree(false), VCMethod::DYN_SIZE};
+        curSizep->dtypeFrom(sizeVarp);
+        AstEq* const eqp = new AstEq{fl, sizeRefp, curSizep};
+        eqp->user1(true);
+        if (m_sizeGatep) {
+            m_sizeGatep = new AstLogAnd{fl, m_sizeGatep, eqp};
+            m_sizeGatep->user1(true);
+        } else {
+            m_sizeGatep = eqp;
+        }
+        // Solve twice even if no element is referenced, e.g. with only 'item.index'
+        if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
     }
     AstNodeExpr* wrapWithCond(AstNodeExpr* const exprp, AstNodeExpr* const condp,
                               const int width) {
@@ -3180,7 +3213,17 @@ class ConstraintExprVisitor final : public VNVisitor {
                 nodep->exprp(neqp);
             }
         }
+        VL_RESTORER(m_sizeGatep);
+        m_sizeGatep = nullptr;
         iterateChildren(nodep);
+        if (m_sizeGatep) {
+            AstLogIf* const gatedp
+                = new AstLogIf{nodep->fileline(), m_sizeGatep, nodep->exprp()->unlinkFrBack()};
+            gatedp->dtypeSetBit();
+            gatedp->user1(true);
+            nodep->exprp(gatedp);
+            iterate(gatedp);
+        }
         if (m_wantSingle) {
             nodep->replaceWith(nodep->exprp()->unlinkFrBack());
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
@@ -3317,6 +3360,7 @@ class ConstraintExprVisitor final : public VNVisitor {
 
         if (nodep->method() == VCMethod::ARRAY_INSIDE) {
             const bool randArr = nodep->fromp()->user1();
+            gateOnCurrentSize(nodep->fromp());
 
             AstVar* const newVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, "__Vinside", nodep->findIntDType()};
@@ -3396,57 +3440,28 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstForeachHeader* const headerp
                 = new AstForeachHeader{fl, nodep->fromp()->cloneTreePure(false), loopVarp};
 
-            // Determine SMT operation and compute identity elements
+            gateOnCurrentSize(nodep->fromp());
+
+            // Determine SMT operation and its identity element, of the result's width (that of
+            // the 'with' expression or, without one, of an array element)
             const char* smtOp = nullptr;
             std::string identity;
-            if (withp) {
-                // For 'with' clause: use binary format, compute from result width
-                const int width = nodep->dtypep()->width();
-                if (nodep->method() == VCMethod::ARRAY_R_SUM) {
-                    smtOp = "bvadd";
-                    identity = "#b" + std::string(width, '0');
-                } else if (nodep->method() == VCMethod::ARRAY_R_PRODUCT) {
-                    smtOp = "bvmul";
-                    identity = (width > 0) ? "#b" + std::string(width - 1, '0') + "1" : "#b0";
-                } else if (nodep->method() == VCMethod::ARRAY_R_AND) {
-                    smtOp = "bvand";
-                    identity = "#b" + std::string(width, '1');
-                } else if (nodep->method() == VCMethod::ARRAY_R_OR) {
-                    smtOp = "bvor";
-                    identity = "#b" + std::string(width, '0');
-                } else {  // ARRAY_R_XOR
-                    smtOp = "bvxor";
-                    identity = "#b" + std::string(width, '0');
-                }
-            } else {
-                // For without 'with' clause: use hex format, compute from element width
-                AstVarRef* const arrRefp = VN_CAST(nodep->fromp(), VarRef);
-                UASSERT_OBJ(arrRefp, nodep, "Array reduction in constraint has non-VarRef source");
-                AstVar* const arrVarp = arrRefp->varp();
-                AstNodeDType* elemDtp = arrVarp->dtypep()->skipRefp()->subDTypep();
-                const int elemWidth = elemDtp->width();
-                const int hexDigits = (elemWidth + 3) / 4;
-
-                const std::string zeroIdentity = "#x" + std::string(hexDigits, '0');
-                const std::string oneIdentity = "#x" + std::string(hexDigits - 1, '0') + "1";
-                const std::string allOnesIdentity = "#x" + std::string(hexDigits, 'f');
-
-                if (nodep->method() == VCMethod::ARRAY_R_SUM) {
-                    smtOp = "bvadd";
-                    identity = zeroIdentity;
-                } else if (nodep->method() == VCMethod::ARRAY_R_PRODUCT) {
-                    smtOp = "bvmul";
-                    identity = oneIdentity;
-                } else if (nodep->method() == VCMethod::ARRAY_R_AND) {
-                    smtOp = "bvand";
-                    identity = allOnesIdentity;
-                } else if (nodep->method() == VCMethod::ARRAY_R_OR) {
-                    smtOp = "bvor";
-                    identity = zeroIdentity;
-                } else {  // ARRAY_R_XOR
-                    smtOp = "bvxor";
-                    identity = zeroIdentity;
-                }
+            const int width = nodep->dtypep()->width();
+            if (nodep->method() == VCMethod::ARRAY_R_SUM) {
+                smtOp = "bvadd";
+                identity = "#b" + std::string(width, '0');
+            } else if (nodep->method() == VCMethod::ARRAY_R_PRODUCT) {
+                smtOp = "bvmul";
+                identity = "#b" + std::string(width - 1, '0') + "1";
+            } else if (nodep->method() == VCMethod::ARRAY_R_AND) {
+                smtOp = "bvand";
+                identity = "#b" + std::string(width, '1');
+            } else if (nodep->method() == VCMethod::ARRAY_R_OR) {
+                smtOp = "bvor";
+                identity = "#b" + std::string(width, '0');
+            } else {  // ARRAY_R_XOR
+                smtOp = "bvxor";
+                identity = "#b" + std::string(width, '0');
             }
 
             // Build loop body based on whether we have a 'with' clause
