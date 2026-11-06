@@ -62,6 +62,10 @@ class Foo;
       #1 `checks($sformatf("%m"), {base, ".cn"});
     join_none
     #2;
+    fork : ci
+      automatic string s = $sformatf("%m");
+      #1 `checks(s, {base, ".ci"});
+    join_any
   endtask
 endclass
 
@@ -208,6 +212,62 @@ module t;
     `checks($sformatf("%m"), "t.wrapped");
     auto_scopes();
     Foo::scopes();
+  end
+
+  // Initializers in the declarations of a fork run once, in order, when the fork is entered
+  class Box;
+    int v;
+    function new(int x);
+      v = x;
+    endfunction
+  endclass
+  int init_n;
+  string init_order;
+  function automatic int init_next(string tag);
+    init_order = {init_order, tag};
+    return ++init_n;
+  endfunction
+  task automatic init_task(int x);
+    fork : tf
+      automatic Box b = new(x + init_next("t"));
+      automatic string s = $sformatf("%m");
+      #1 begin
+        `checkd(b.v, x + 7);
+        `checks(s, "t.init_task.tf");
+      end
+    join_none
+    #2;
+  endtask
+  initial begin : inits
+    fork : ij
+      automatic int a = init_next("a");
+      automatic Box b = new(init_next("b"));
+      automatic string s = $sformatf("%m");
+      automatic int c = init_next("c");
+      begin
+        `checks(init_order, "abc");
+        `checkd(a + 10 * b.v + 100 * c, 321);
+        `checks(s, "t.inits.ij");
+      end
+    join
+    fork : ia
+      automatic string s = $sformatf("%m");
+      automatic string d = $sformatf("%0d", init_next("d"));
+      #1 begin
+        `checks(d, "4");
+        `checks(s, "t.inits.ia");
+      end
+    join_any
+    fork : in
+      automatic int e = init_next("e");
+      automatic Box b = new(e + init_next("f"));
+      `checks(init_order, "abcdef");
+      #1 `checkd(b.v, 11);
+    join_none
+    `checks(init_order, "abcdef");
+    #2;
+    init_task(init_n);
+    `checks(init_order, "abcdeft");
   end
 
   initial begin : main
