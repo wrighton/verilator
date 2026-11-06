@@ -29,6 +29,18 @@
         t/t_class_implements_param_bad.v:44:29: ... Location of interface class's function
    44 |   pure virtual function int get_d();
       |                             ^~~~~
+%Error: t/t_class_implements_param_bad.v:52:1: Class 'only_param_if' implements 'param_if#(int)' but is missing implementation for 'get_c' (IEEE 1800-2023 8.26)
+   52 | class only_param_if implements param_if #(int);
+      | ^~~~~
+        t/t_class_implements_param_bad.v:36:27: ... Location of interface class's function
+   36 |   pure virtual function T get_c();
+      |                           ^~~~~
+%Error: t/t_class_implements_param_bad.v:64:9: Class 'conflict_param_cls' implements 'e2_if' but missing inheritance conflict resolution for 'get_e' (IEEE 1800-2023 8.26.6.2)
+   64 | virtual class conflict_param_cls extends param_cls #(int) implements e1_if, e2_if;
+      |         ^~~~~
+        t/t_class_implements_param_bad.v:61:29: ... Location of interface class's function
+   61 |   pure virtual function int get_e();
+      |                             ^~~~~
 %Error: t/t_class_implements_param_bad.v:31:1: Class 'param_from_param_cls#(2)' implements 'top_if' but is missing implementation for 'get_a' (IEEE 1800-2023 8.26)
    31 | class param_from_param_cls #(int N = 1) extends param_cls #(int) implements top_if;
       | ^~~~~

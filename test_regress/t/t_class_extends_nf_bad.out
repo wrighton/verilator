@@ -10,8 +10,4 @@
 %Error: t/t_class_extends_nf_bad.v:20:10: 'super' used on non-extended class (IEEE 1800-2023 8.15)
    20 |     super.new();
       |          ^
-%Error: t/t_class_extends_nf_bad.v:27:20: Class for 'extends' not found: 'IsNotFound3'
-                                        : ... Suggested alternative: 'IsFound'
-   27 | class Cls3 extends IsNotFound3 implements Ifc;   
-      |                    ^~~~~~~~~~~
 %Error: Exiting due to

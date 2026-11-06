@@ -48,6 +48,22 @@ endclass
 class from_abstract_param_cls extends abstract_param_cls #(int);
 endclass
 
+// Bad: only implements a parameterized interface class
+class only_param_if implements param_if #(int);
+endclass
+
+// Bad: inherited interface class methods conflict (IEEE 1800-2023 8.26.6.1)
+interface class e1_if;
+  pure virtual function int get_e();
+endclass
+
+interface class e2_if;
+  pure virtual function int get_e();
+endclass
+
+virtual class conflict_param_cls extends param_cls #(int) implements e1_if, e2_if;
+endclass
+
 module t;
   from_param_cls c1 = new;
   from_pass_param_cls c2 = new;

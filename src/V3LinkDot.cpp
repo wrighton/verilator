@@ -4254,18 +4254,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
     }
-    void importSymbolsFromExtended(AstClass* const nodep, AstClassExtends* const cextp) {
-        AstClass* const baseClassp = cextp->classp();
-        VSymEnt* const srcp = m_statep->getNodeSym(baseClassp);
-        if (!cextp->isImplements()) m_curSymp->importFromClass(srcp);
-    }
-    // Whether 'classp' has a parameterized base class, so its bases are resolved by V3Param
-    static bool extendsParameterized(const AstClass* classp) {
-        for (const AstClassExtends* const cextp : classp->extendspList()) {
-            if (cextp->parameterized() || extendsParameterized(cextp->classp())) return true;
-        }
-        return false;
-    }
     void classExtendImport(AstClass* nodep) {
         // A class reference might be to a class that is later in Ast due to
         // e.g. parameterization or referring to a "class (type T) extends T"
@@ -7199,18 +7187,21 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     baseClassp->isExtended(true);
                     nodep->isExtended(true);
                     iterate(baseClassp);
-                    importSymbolsFromExtended(nodep, cextp);
+                    if (!cextp->isImplements()) {
+                        m_curSymp->importFromClass(m_statep->getNodeSym(baseClassp));
+                    }
                     continue;
                 }
             }
             m_ds.m_dotSymp = m_curSymp;
             // Check implementations of inherited pure methods once all inherited members are
-            // known, which is after V3Param if a base class is parameterized
-            if (m_statep->forPrimary() ? !m_insideClassExtParam
-                                       : m_statep->forParamed() && extendsParameterized(nodep)) {
+            // known, which is after V3Param if a base class is parameterized. The first pass
+            // decides once; the flag is copied to the classes V3Param clones.
+            if (m_statep->forPrimary()) nodep->implChecksDeferred(m_insideClassExtParam);
+            if (nodep->implChecksDeferred() ? m_statep->forParamed() : m_statep->forPrimary()) {
                 for (AstClassExtends* const cextp : nodep->extendspList()) {
                     AstClass* const baseClassp = cextp->classOrNullp();
-                    if (!baseClassp) continue;  // Unresolved after an error
+                    if (!baseClassp) continue;  // Not a class after an error
                     importDerivedClass(nodep, m_statep->getNodeSym(baseClassp), baseClassp);
                 }
             }
