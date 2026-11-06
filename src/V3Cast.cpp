@@ -235,13 +235,16 @@ class CastVisitor final : public VNVisitor {
         }
     }
     void visit(AstVarRef* nodep) override {
-        const AstNode* const backp = nodep->backp();
-        if (nodep->access().isReadOnly() && VN_IS(backp, NodeExpr) && !VN_IS(backp, CCast)
-            && !VN_IS(backp, NodeCCall) && !VN_IS(backp, CMethodHard) && !VN_IS(backp, SFormatF)
-            && !VN_IS(backp, ArraySel) && !VN_IS(backp, StructSel) && !VN_IS(backp, RedXor)
+        // Call arguments, which may be passed by reference, and $c text take the variable itself.
+        // abovep is null for a later element of a list, such as of arguments or C text.
+        const AstNode* const abovep = nodep->firstAbovep();
+        if (nodep->access().isReadOnly() && VN_IS(abovep, NodeExpr) && !VN_IS(abovep, CCast)
+            && !VN_IS(abovep, NodeCCall) && !VN_IS(abovep, CMethodHard) && !VN_IS(abovep, SFormatF)
+            && !VN_IS(abovep, ArraySel) && !VN_IS(abovep, StructSel) && !VN_IS(abovep, RedXor)
+            && !VN_IS(abovep, CExprUser)
             && (nodep->varp()->basicp() && !nodep->varp()->basicp()->isForkSync()
                 && !nodep->varp()->basicp()->isProcessRef() && !nodep->varp()->basicp()->isEvent())
-            && backp->width() && castSize(nodep) != castSize(nodep->varp())) {
+            && abovep->width() && castSize(nodep) != castSize(nodep->varp())) {
             // Cast vars to IData first, else below has upper bits wrongly set
             //  CData x=3; out = (QData)(x<<30);
             insertCast(nodep, castSize(nodep));

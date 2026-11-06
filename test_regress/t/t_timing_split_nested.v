@@ -60,6 +60,26 @@ module t;
       end
       total = acc;
     endtask
+    // Narrow local variables read by the moved statements are passed by reference after other
+    // arguments of the new function
+    task narrow(input int x, output int sum);
+      automatic bit [6:0] a = 7'(x);
+      automatic bit [14:0] b = 15'(x + 1);
+      automatic bit [30:0] w = 31'(x + 2);
+      sum = x;
+      #1;
+      if (x != 0) begin
+        sum += int'(a) * 3 + int'(b);
+        sum += int'(w) * 5 + int'(a);
+        sum += int'(b) * 7 + int'(w);
+        sum += int'(a) * 11 + int'(b);
+        sum += int'(w) * 13 + int'(a);
+        sum += int'(b) * 17 + int'(w);
+        sum += int'(a) * 19 + int'(b);
+        sum += int'(w) * 23 + int'(a);
+        sum += int'(b) * 29 + int'(w);
+      end
+    endtask
   endclass
 
   initial begin
@@ -154,6 +174,10 @@ module t;
       cls.run(4, lim, acc);
       `checkd(acc, 168);
       `checkd(cls.total, 168);
+      for (int x = 1; x < 4; x++) begin
+        cls.narrow(x, acc);
+        `checkd(acc, 137 * x + 144);
+      end
     end
     $write("*-* All Finished *-*\n");
     $finish;
