@@ -439,7 +439,7 @@ private:
         for (const AstClassExtends* extendsp = classp->extendsp(); extendsp;
              extendsp = VN_AS(extendsp->nextp(), ClassExtends)) {
             const AstClass* const eclassp = extendsp->classp();
-            if (!visited.insert(eclassp).second) continue;
+            if (!visited.emplace(eclassp).second) continue;
             const AstNodeFTask* const basep
                 = VN_CAST(m_memberMap.findMember(eclassp, nodep->name()), NodeFTask);
             if (basep && isUserMethod(basep)) {

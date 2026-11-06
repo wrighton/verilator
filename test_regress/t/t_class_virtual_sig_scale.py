@@ -17,7 +17,7 @@ test.top_filename = test.obj_dir + "/t_class_virtual_sig_scale.v"
 # Interface classes I2..I{N_IFACES} each extend the previous two without redeclaring the method,
 # so the number of inheritance paths from the implementing class to I0 is exponential
 N_IFACES = 32
-# Share of verilation time spent in V3Width and V3WidthCommit (about 0.9 when exponential)
+# Share of verilation time spent in V3WidthCommit (about 0.9 when exponential)
 MAX_SHARE = 0.5
 # Ignore a high share of a short time, e.g. from a load spike (exponential takes about 0.4 s)
 MIN_SECONDS = 0.1
@@ -63,7 +63,7 @@ if not total or not width:
 seconds = float(width.group(1))
 share = seconds / float(total.group(1))
 if seconds > MIN_SECONDS and share > MAX_SHARE:
-    test.error(f"V3Width and V3WidthCommit took {share:.0%} of verilation time with " +
+    test.error(f"V3WidthCommit took {share:.0%} of verilation time with " +
                f"{N_IFACES} interface classes (over {MAX_SHARE:.0%})")
 
 test.passes()

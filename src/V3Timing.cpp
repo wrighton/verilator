@@ -325,7 +325,7 @@ class TimingSuspendableVisitor final : public VNVisitor {
 
             for (AstClassExtends* cextp = ext_listp; cextp;
                  cextp = VN_AS(cextp->nextp(), ClassExtends)) {
-                if (!visited.insert(cextp->classp()).second) continue;
+                if (!visited.emplace(cextp->classp()).second) continue;
                 // TODO: It is possible that a methods the same name in the base class is not
                 // actually overridden by our method. If this causes a problem, traverse to
                 // the root of the inheritance hierarchy and check if the original method is
