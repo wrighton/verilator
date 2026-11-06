@@ -326,25 +326,6 @@ class DynScopeVisitor final : public VNVisitor {
         auto r = m_frames.emplace(nodep, framep);
         if (r.second) m_frameOrder.push_back(nodep);
     }
-    void bindInitIterate(AstNode* stmtsp, ForkDynScopeFrame* framep) {
-        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
-            if (AstAssign* const asgnp = VN_CAST(stmtp, Assign)) {
-                bindNodeToDynScope(asgnp->lhsp(), framep);
-                iterate(asgnp->rhsp());
-            } else if (AstInitialAutomaticStmt* astmtp
-                       = VN_CAST(stmtp, InitialAutomaticStmt)) {  // Moves in V3Begin
-                // Underlying assign RHS might use function argument, so can't just
-                // move whole thing into the new class's constructor/statements
-                bindInitIterate(astmtp->stmtsp(), framep);
-            } else if (AstInitialStaticStmt* astmtp
-                       = VN_CAST(stmtp, InitialStaticStmt)) {  // Moves in V3Begin
-                bindInitIterate(astmtp->stmtsp(), framep);
-            } else {
-                stmtp->v3fatalSrc("Invalid node under block item initialization part of fork");
-            }
-        }
-    }
-
     bool needsDynScope(const AstVarRef* refp) const {
         const AstVar* const varp = refp->varp();
         return
@@ -401,7 +382,7 @@ class DynScopeVisitor final : public VNVisitor {
                 bindNodeToDynScope(varp, framep);
             }
         }
-        bindInitIterate(nodep->stmtsp(), framep);
+        iterateAndNextNull(nodep->stmtsp());
 
         for (AstNode* const stmtp : nodep->forkspList()) {
             m_afterTimingControl = false;
