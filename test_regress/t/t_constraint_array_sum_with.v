@@ -100,6 +100,139 @@ class test_product;
   endfunction
 endclass
 
+class state_sub;
+  rand int r;
+  int k;
+  constraint c {r inside {[1 : 9]};}
+endclass
+
+class test_state;
+  rand int a[3];
+  rand bit [6:0] d[];
+  rand shortint q[$];
+  rand int s;
+  rand bit [6:0] p;
+  rand bit [6:0] n;
+  rand bit [6:0] o;
+  rand shortint x;
+  rand int ix;
+  rand int sk;
+  rand int sr;
+  rand int ss;
+  rand int ls;
+  rand int ns;
+  rand int ws;
+  rand int kw;
+  rand int nx;
+  int nb[3];
+  int off;
+  int w[3];
+  bit [6:0] mask;
+  rand state_sub sub;
+  state_sub st;
+
+  function new();
+    d = new[4];
+    q = '{0, 0, 0};
+    sub = new;
+    st = new;
+  endfunction
+
+  constraint c {
+    // State variables and state array elements in 'with' keep their values
+    foreach (a[i]) a[i] inside {[-50 : 50]};
+    s == a.sum() with (item * w[item.index] + off);
+    p == d.product() with (item ^ mask);
+    n == d.and() with (item | mask);
+    o == d.or() with (item & mask);
+    x == q.xor() with (item ^ shortint'(off));
+    ix == q.sum() with (int'(item.index) * off);
+    // Members of a random and of a state object
+    sk == a.sum() with (item + sub.k);
+    sr == a.sum() with (item + sub.r);
+    ss == a.sum() with (item - st.k);
+    // A reduction of a state array, nested or with a random 'with' expression
+    ns == a.sum() with (item + w.sum());
+    kw inside {[1 : 9]};
+    ws == w.sum() with (item * kw);
+    nx == a.sum(e) with (nb.sum(f) with (e + f));
+  }
+
+  function void verify();
+    int exp_s = 0;
+    bit [6:0] exp_p = 1;
+    bit [6:0] exp_n = '1;
+    bit [6:0] exp_o = 0;
+    shortint exp_x = 0;
+    int exp_ix = 0;
+    int exp_sk = 0;
+    int exp_sr = 0;
+    int exp_ss = 0;
+    int exp_ns = 0;
+    int exp_ws = 0;
+    int exp_nx = 0;
+    int i;
+    int set_off;
+    int set_w[3];
+    bit [6:0] set_mask;
+    int set_sub_k;
+    int set_st_k;
+    int set_nb[3];
+
+    set_off = $urandom_range(1000, 1);
+    foreach (set_w[k]) set_w[k] = $urandom_range(9) - 4;
+    set_mask = 7'($urandom);
+    set_sub_k = $urandom_range(1000);
+    set_st_k = $urandom_range(1000);
+    foreach (set_nb[k]) set_nb[k] = $urandom_range(1000) - 500;
+    nb = set_nb;
+    off = set_off;
+    w = set_w;
+    mask = set_mask;
+    sub.k = set_sub_k;
+    st.k = set_st_k;
+
+    i = randomize();
+    `checkd(i, 1);
+    `checkd(off, set_off);
+    foreach (w[k]) `checkd(w[k], set_w[k]);
+    `checkd(mask, set_mask);
+    `checkd(sub.k, set_sub_k);
+    `checkd(st.k, set_st_k);
+    foreach (nb[k]) `checkd(nb[k], set_nb[k]);
+    foreach (a[k]) begin
+      exp_s += a[k] * set_w[k] + set_off;
+      exp_sk += a[k] + set_sub_k;
+      exp_sr += a[k] + sub.r;
+      exp_ss += a[k] - set_st_k;
+      exp_ns += a[k] + set_w[0] + set_w[1] + set_w[2];
+      exp_ws += set_w[k] * kw;
+      foreach (set_nb[j]) exp_nx += a[k] + set_nb[j];
+    end
+    foreach (d[k]) begin
+      exp_n &= d[k] | set_mask;
+      exp_p *= d[k] ^ set_mask;
+      exp_o |= d[k] & set_mask;
+    end
+    foreach (q[k]) begin
+      exp_x ^= q[k] ^ shortint'(set_off);
+      exp_ix += k * set_off;
+    end
+    `checkd(s, exp_s);
+    `checkd(p, exp_p);
+    `checkd(n, exp_n);
+    `checkd(o, exp_o);
+    `checkd(x, exp_x);
+    `checkd(ix, exp_ix);
+    `checkd(sk, exp_sk);
+    `checkd(sr, exp_sr);
+    `checkd(ss, exp_ss);
+    `checkd(ns, exp_ns);
+    `checkd(ws, exp_ws);
+    `checkd(nx, exp_nx);
+  endfunction
+endclass
+
 class test_and;
   rand bit [7:0] array[3];
 
@@ -229,6 +362,26 @@ module t;
     and_inst = new();
     repeat (20) and_inst.verify();
     $display("and test PASSED");
+
+    // Test state variables in 'with'
+    begin
+      test_state state_inst;
+      int loc;
+      int ok;
+      int exp_ls;
+      state_inst = new();
+      repeat (20) state_inst.verify();
+      // So is a caller's local variable in an inline constraint
+      repeat (20) begin
+        loc = $urandom_range(1000);
+        ok = state_inst.randomize() with { ls == a.sum() with (item + loc); };
+        `checkd(ok, 1);
+        exp_ls = 0;
+        foreach (state_inst.a[k]) exp_ls += state_inst.a[k] + loc;
+        `checkd(state_inst.ls, exp_ls);
+      end
+      $display("state test PASSED");
+    end
 
     // Test or
     or_inst = new();
