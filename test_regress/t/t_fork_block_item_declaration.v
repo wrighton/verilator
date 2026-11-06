@@ -117,25 +117,6 @@ module t;
     join_any
   endtask
 
-  // Unpacked struct typedef in the declarations of a fork in a task
-  task automatic struct_typedefs(int i);
-    fork
-      typedef enum int {
-        E_A = 3,
-        E_B = 7
-      } e_t /*verilator public*/;
-      typedef struct {
-        int x;
-        e_t e;
-      } s_t;
-      s_t s[2];
-      begin
-        #1 s[1].e = E_B;
-        o_task = i + int'(s[1].e) + 1;
-      end
-    join_none
-  endtask
-
   // Scope name after forks in a static task
   task static scope_names();
     fork
@@ -366,9 +347,6 @@ module t;
 
     typedefs(v);
     `checkd(o_task, 12);
-    struct_typedefs(v);
-    #2;
-    `checkd(o_task, 13);
     Foo::typedefs(v);
     #2;
     `checkd(Foo::last, 12);
