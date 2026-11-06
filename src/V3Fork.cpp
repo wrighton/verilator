@@ -222,20 +222,11 @@ private:
             new AstVarRef{m_procp->fileline(), m_instance.m_handlep, VAccess::WRITE}, newp};
     }
 
-    // Wrap Fork in Begin
+    // Declare the dynamic scope in the Fork and create it before the Fork's initializers
     void linkNodesOfFork(VMemberMap& memberMap, AstFork* forkp) {
-        // Replace the Fork with a Begin
-        const std::string name = "_Vwrapped_"  //
-                                 + (forkp->name().empty() ? "" : forkp->name() + "_")  //
-                                 + std::to_string(m_id);
-        AstBegin* const beginp = new AstBegin{forkp->fileline(), name, m_instance.m_handlep, true};
-        forkp->replaceWith(beginp);
-        // Create the dynamic scope in the Begin
-        beginp->addStmtsp(instantiateDynScope(memberMap));
-        // Move all sequential statements there
-        if (forkp->stmtsp()) beginp->addStmtsp(forkp->stmtsp()->unlinkFrBackWithNext());
-        // Put the Fork back at the end of the Begin
-        beginp->addStmtsp(forkp);
+        // A wrapping block would add its name to %m and to the names of the Fork's variables
+        forkp->addDeclsp(m_instance.m_handlep);
+        forkp->prependStmtsp(instantiateDynScope(memberMap));
         m_modp->addStmtsp(m_instance.m_classp);
     }
 
