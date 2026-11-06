@@ -3234,6 +3234,7 @@ void AstNodeFTask::dump(std::ostream& str) const {
     if (dpiOpenParent()) str << " [DPIOPENPARENT]";
     if (isExternDef()) str << " [EXTDEF]";
     if (isExternProto()) str << " [EXTPROTO]";
+    if (forkBranch()) str << " [FORKBRANCH]";
     if (isVirtual()) str << " [VIRT]";
     if (keepAlive()) str << " [KALIVE]";
     if (prototype()) str << " [PROTOTYPE]";
@@ -3257,6 +3258,7 @@ void AstNodeFTask::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, dpiOpenParent);
     dumpJsonBoolFuncIf(str, isExternDef);
     dumpJsonBoolFuncIf(str, isExternProto);
+    dumpJsonBoolFuncIf(str, forkBranch);
     dumpJsonBoolFuncIf(str, isVirtual);
     dumpJsonBoolFuncIf(str, keepAlive);
     dumpJsonBoolFuncIf(str, needsVlProcess);
