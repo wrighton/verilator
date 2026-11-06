@@ -64,10 +64,21 @@ endclass
 virtual class conflict_param_cls extends param_cls #(int) implements e1_if, e2_if;
 endclass
 
+// Bad: a parameterized non-interface class remains an illegal interface base.
+interface class bad_param_base extends param_cls #(int);
+endclass
+
+// Type parameters must resolve to interface classes, too (IEEE 1800-2023 8.26.2).
+interface class type_base_if #(type T = param_if #(int)) extends T;
+endclass
+
 module t;
   from_param_cls c1 = new;
   from_pass_param_cls c2 = new;
   param_from_param_cls #(2) c3 = new;
   from_param_if c4 = new;
   from_abstract_param_cls c5 = new;
+  bad_param_base bad_direct;
+  type_base_if #(param_cls #(int)) bad_type;
+  type_base_if #(param_if #(int)) good_type;
 endmodule

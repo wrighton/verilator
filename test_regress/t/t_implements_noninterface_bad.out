@@ -7,4 +7,13 @@
 ... Suggest use 'implements'
    16 | class ClsBad2 extends Icls;
       |                       ^~~~
+%Error: t/t_implements_noninterface_bad.v:20:34: Interface class 'BadPlain' attempts to extend non-interface class 'NotIcls' (IEEE 1800-2023 8.26.2).
+   20 | interface class BadPlain extends NotIcls;
+      |                                  ^~~~~~~
+%Error: t/t_implements_noninterface_bad.v:24:34: Interface class 'BadAlias' attempts to extend non-interface class 'NotIcls' (IEEE 1800-2023 8.26.2).
+   24 | interface class BadAlias extends NotIclsAlias;
+      |                                  ^~~~~~~~~~~~
+%Error: t/t_implements_noninterface_bad.v:38:36: Interface class 'BadVirtual' attempts to extend non-interface class 'VirtualNotIcls' (IEEE 1800-2023 8.26.2).
+   38 | interface class BadVirtual extends VirtualNotIcls, FnIcls;
+      |                                    ^~~~~~~~~~~~~~
 %Error: Exiting due to

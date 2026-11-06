@@ -7157,6 +7157,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     cextp->v3error("Attempting to implement from non-interface class "
                                    << baseClassp->prettyNameQ() << '\n'
                                    << "... Suggest use 'extends'");
+                } else if (!cextp->isImplements() && nodep->isInterfaceClass()
+                           && !baseClassp->isInterfaceClass()) {
+                    cextp->v3error("Interface class " << nodep->prettyNameQ()
+                                                      << " attempts to extend non-interface class "
+                                                      << baseClassp->prettyNameQ()
+                                                      << " (IEEE 1800-2023 8.26.2).");
                 } else if (!cextp->isImplements() && !nodep->isInterfaceClass()
                            && baseClassp->isInterfaceClass()) {
                     cextp->v3error("Attempting to extend from interface class "

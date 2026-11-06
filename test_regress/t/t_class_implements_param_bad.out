@@ -41,10 +41,16 @@
         t/t_class_implements_param_bad.v:61:29: ... Location of interface class's function
    61 |   pure virtual function int get_e();
       |                             ^~~~~
+%Error: t/t_class_implements_param_bad.v:68:40: Interface class 'bad_param_base' attempts to extend non-interface class 'param_cls#(int)' (IEEE 1800-2023 8.26.2).
+   68 | interface class bad_param_base extends param_cls #(int);
+      |                                        ^~~~~~~~~
 %Error: t/t_class_implements_param_bad.v:31:1: Class 'param_from_param_cls#(2)' implements 'top_if' but is missing implementation for 'get_a' (IEEE 1800-2023 8.26)
    31 | class param_from_param_cls #(int N = 1) extends param_cls #(int) implements top_if;
       | ^~~~~
         t/t_class_implements_param_bad.v:10:29: ... Location of interface class's function
    10 |   pure virtual function int get_a();
       |                             ^~~~~
+%Error: t/t_class_implements_param_bad.v:72:66: Interface class 'type_base_if#(class param_cls#(int))' attempts to extend non-interface class 'param_cls#(int)' (IEEE 1800-2023 8.26.2).
+   72 | interface class type_base_if #(type T = param_if #(int)) extends T;
+      |                                                                  ^
 %Error: Exiting due to
