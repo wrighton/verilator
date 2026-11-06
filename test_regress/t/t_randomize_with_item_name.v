@@ -30,6 +30,7 @@ endclass
 class Summed;
   rand bit [31:0] other;
   int q[$] = '{1, 4, 2, 7};
+  int off = 100;
 endclass
 
 class Seq;
@@ -106,6 +107,13 @@ class Seq;
     ok = t.randomize() with {other == q.sum() with (item);};
     `checkd(ok, 1)
     `checkh(t.other, 32'd14)
+    // A member of the randomized object, in the array method's 'with'
+    ok = t.randomize() with {other == q.sum() with (item + off);};
+    `checkd(ok, 1)
+    `checkh(t.other, 32'd414)
+    ok = t.randomize() with {t.other == q.sum(a) with (q.sum(b) with (a * b + t.off));};
+    `checkd(ok, 1)
+    `checkh(t.other, 32'd1796)
   endfunction
 endclass
 
