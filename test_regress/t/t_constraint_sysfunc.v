@@ -27,6 +27,11 @@ class test_countbits_zeros;
   constraint c_bits {$countbits(value, '0) == 6;}  // 6 zeros = 2 ones
 endclass
 
+class test_countones_unpacked;
+  rand bit [2:0] value[4];
+  constraint c_bits {$countones(value) == 2;}
+endclass
+
 class test_clog2;
   rand bit [7:0] data_width;
   rand bit [7:0] addr_bits;
@@ -40,6 +45,7 @@ module t;
     automatic test_onehot0 oh0 = new;
     automatic test_countbits_ones cb1 = new;
     automatic test_countbits_zeros cb0 = new;
+    automatic test_countones_unpacked cu = new;
     automatic test_clog2 cl = new;
     automatic bit ok = 1'b1;
 
@@ -79,6 +85,12 @@ module t;
                  $countbits(cb0.value, '0), $countbits(cb0.value, '1));
         ok = 1'b0;
       end
+    end
+
+    // Test $countones of an unpacked array: exactly 2 ones over all elements
+    repeat (20) begin
+      if (cu.randomize() == 0) $fatal(1, "unpacked $countones randomize failed");
+      if ($countones(cu.value) != 2) $fatal(1, "unpacked $countones value=%p", cu.value);
     end
 
     // Test $clog2: addr_bits == $clog2(data_width)
