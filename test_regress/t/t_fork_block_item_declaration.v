@@ -13,6 +13,8 @@
 static int counts[10];
 
 class Foo;
+  static int last;
+
   static task do_something();
     for (int i = 0; i < 10; i++)
       frk :
@@ -24,6 +26,27 @@ class Foo;
         end
       join_none : frk
     #1;
+  endtask
+
+  // Typedefs in the declarations of a fork in a class method
+  static task typedefs(int i);
+    fork
+      typedef enum int {
+        E_A = 3,
+        E_B = 7
+      } e_t /*verilator public*/;
+      typedef struct {
+        int x;
+        e_t e;
+      } s_t;
+      typedef int arr_t[2];
+      s_t s = '{0, E_B};
+      arr_t a;
+      begin
+        #1 a[1] = i + int'(s.e);
+        last = a[1];
+      end
+    join_none
   endtask
 endclass
 
@@ -58,6 +81,41 @@ module t;
     `checkd(typedef_a(o_named), 2);
     `checkd(typedef_b(o_named), 3);
   end
+
+  // Typedefs in the declarations of a fork in a task
+  task automatic typedefs(int i);
+    fork
+      typedef enum int {
+        E_A = 3,
+        E_B = 7
+      } e_t;
+      typedef e_t arr_t[2];
+      arr_t a;
+      begin
+        #1 a[1] = E_B;
+        o_task = i + int'(a[1]);
+      end
+    join_any
+  endtask
+
+  // Unpacked struct typedef in the declarations of a fork in a task
+  task automatic struct_typedefs(int i);
+    fork
+      typedef enum int {
+        E_A = 3,
+        E_B = 7
+      } e_t /*verilator public*/;
+      typedef struct {
+        int x;
+        e_t e;
+      } s_t;
+      s_t s[2];
+      begin
+        #1 s[1].e = E_B;
+        o_task = i + int'(s[1].e) + 1;
+      end
+    join_none
+  endtask
 
   // Scope name after forks in a static task
   task static scope_names();
@@ -113,6 +171,42 @@ module t;
     #2;
     `checkd(o, 7);
 
+    // Typedefs in the declarations of forks, of each join type
+    fork
+      typedef struct {
+        int x;
+        int y;
+      } s_t;
+      s_t s[2];
+      begin
+        #1 s[1].y = v;
+        o = s[1].y;
+      end
+    join
+    `checkd(o, 5);
+    fork
+      typedef enum int {
+        E_A = 3,
+        E_B = 7
+      } s_t;
+      s_t e;
+      begin
+        #1 e = E_B;
+        o = v + int'(e);
+      end
+    join_any
+    `checkd(o, 12);
+    fork
+      typedef int s_t[3];
+      s_t a;
+      begin
+        #1 a[2] = v + 1;
+        o = a[2];
+      end
+    join_none
+    #2;
+    `checkd(o, 6);
+
     // Nested and named forks
     fork : outer
       static int a = 1;
@@ -130,6 +224,14 @@ module t;
       `checks($sformatf("%m"), "t.main.later");
     join
 
+    typedefs(v);
+    `checkd(o_task, 12);
+    struct_typedefs(v);
+    #2;
+    `checkd(o_task, 13);
+    Foo::typedefs(v);
+    #2;
+    `checkd(Foo::last, 12);
     scope_names();
     `checkd(o_task, 1);
     #2;
