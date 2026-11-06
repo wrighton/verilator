@@ -201,24 +201,23 @@ class BeginVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
     void visit(AstFork* nodep) override {
-        dotNames(nodep->name(), nodep->fileline(), "__FORK__");
-        iterateAndNextNull(nodep->stmtsp());
         {
+            VL_RESTORER_COPY(m_displayScope);
+            VL_RESTORER_COPY(m_namedScope);
+            VL_RESTORER_COPY(m_unnamedScope);
+            dotNames(nodep->name(), nodep->fileline(), "__FORK__");
+            iterateAndNextNull(nodep->declsp());
+            iterateAndNextNull(nodep->stmtsp());
             // Keep begins in forks to group their statements together
             VL_RESTORER(m_keepBegins);
             m_keepBegins = true;
             iterateAndNextNull(nodep->forksp());
         }
-        AstNode* addsp = nullptr;
-        if (AstNode* const declsp = nodep->declsp()) {
-            declsp->unlinkFrBackWithNext();
-            addsp = AstNode::addNext(addsp, declsp);
-        }
+        // A fork with declarations is named, so visiting them lifted them all
+        UASSERT_OBJ(!nodep->declsp(), nodep, "Fork declarations not lifted");
         if (AstNode* const stmtsp = nodep->stmtsp()) {
-            stmtsp->unlinkFrBackWithNext();
-            addsp = AstNode::addNext(addsp, stmtsp);
+            nodep->addHereThisAsNext(stmtsp->unlinkFrBackWithNext());
         }
-        if (addsp) nodep->addHereThisAsNext(addsp);
         nodep->name("");
     }
     void visit(AstBegin* nodep) override {
