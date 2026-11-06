@@ -50,7 +50,4 @@
         t/t_class_implements_param_bad.v:10:29: ... Location of interface class's function
    10 |   pure virtual function int get_a();
       |                             ^~~~~
-%Error: t/t_class_implements_param_bad.v:72:66: Interface class 'type_base_if#(class param_cls#(int))' attempts to extend non-interface class 'param_cls#(int)' (IEEE 1800-2023 8.26.2).
-   72 | interface class type_base_if #(type T = param_if #(int)) extends T;
-      |                                                                  ^
 %Error: Exiting due to
