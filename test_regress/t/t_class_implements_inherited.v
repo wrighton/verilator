@@ -282,6 +282,36 @@ package nested_param;
   endclass
 endpackage
 
+// Extern definitions inherit declaration specifiers before nested inheritance checks.
+package nested_extern;
+  typedef class B;
+  class A extends B;
+  endclass
+  class B;
+    extern virtual function int g();
+    class N extends A implements J;
+    endclass
+  endclass
+  function int B::g();
+    return 7;
+  endfunction
+endpackage
+
+package nested_extern_param;
+  typedef class B;
+  class A extends B #(9);
+  endclass
+  class B #(int V = 1);
+    int value;
+    extern virtual function int g();
+    class N extends A implements J;
+    endclass
+  endclass
+  function int B::g();
+    return V + value;
+  endfunction
+endpackage
+
 module t;
   initial begin
     derived_cls obj;
@@ -432,6 +462,25 @@ module t;
         n.data = 7'(27 + i);
         `checkd(j.g(), 20 + i)
         `checkd(int'(n.data), 27 + i)
+      end
+    end
+
+    begin
+      nested_extern::B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
+
+    begin
+      nested_extern_param::B #(9)::N n;
+      J j;
+      n = new;
+      j = n;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        `checkd(j.g(), 22 + i)
       end
     end
 

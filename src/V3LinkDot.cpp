@@ -4104,6 +4104,20 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         return classSymp;
     }
+    // Link declaration specifiers without visiting the definition's body or processing
+    // its prototype signature, so inheritance can classify methods before body traversal.
+    const AstNodeFTask* resolveExternSpecifiers(AstNodeFTask* const nodep, VSymEnt* const scopep) {
+        const VSymEnt* const foundp = scopep->findIdFallback("extern " + nodep->name());
+        if (!foundp) return nullptr;
+        const AstNodeFTask* const protop = VN_AS(foundp->nodep(), NodeFTask);
+        // An out-of-block definition cannot have specifiers, so none are overwritten.
+        nodep->isHideLocal(protop->isHideLocal());
+        nodep->isHideProtected(protop->isHideProtected());
+        nodep->isStatic(protop->isStatic());
+        nodep->isVirtual(protop->isVirtual());
+        nodep->lifetime(protop->lifetime());
+        return protop;
+    }
     // Is the current scope within the given class, including within its nested classes
     bool insideClass(const AstClass* classp) const {
         for (const VSymEnt* symp = m_curSymp; symp; symp = symp->parentp()) {
@@ -6764,16 +6778,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         if (nodep->isExternDef() && !nodep->didProto()) {
             nodep->didProto(true);
-            if (const VSymEnt* const foundp
-                = m_curSymp->findIdFallback("extern " + nodep->name())) {
-                const AstNodeFTask* const protop = VN_AS(foundp->nodep(), NodeFTask);
-                // Copy specifiers.
-                // External definition cannot have any specifiers, so no value will be overwritten.
-                nodep->isHideLocal(protop->isHideLocal());
-                nodep->isHideProtected(protop->isHideProtected());
-                nodep->isStatic(protop->isStatic());
-                nodep->isVirtual(protop->isVirtual());
-                nodep->lifetime(protop->lifetime());
+            if (const AstNodeFTask* const protop = resolveExternSpecifiers(nodep, m_curSymp)) {
                 // AstTask is a task or void function; a task versus a non-void function is
                 // reported by V3Width as a return data type mismatch
                 if (VN_IS(protop, Task) && VN_IS(nodep, Task)
@@ -7120,6 +7125,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
         m_ds.init(m_statep->getNodeSym(nodep));
         m_curSymp = m_modSymp = m_ds.m_dotSymp;
         m_modp = nodep;
+        // Definitions may follow nested classes in the member list. Their declaration
+        // specifiers must be available before inherited methods are imported or checked.
+        for (AstNode* const memberp : nodep->memberspList()) {
+            if (AstNodeFTask* const ftaskp = VN_CAST(memberp, NodeFTask)) {
+                if (ftaskp->isExternDef() && !ftaskp->didProto()) {
+                    resolveExternSpecifiers(ftaskp, m_curSymp);
+                }
+            }
+        }
         m_insideClassExtParam = nodep->isCovergroup() && nodep->covergroupEnclosingClassp()
                                 && m_extendsParam.count(nodep->covergroupEnclosingClassp());
         int next = 0;
@@ -7222,6 +7236,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             // Until overridden by a SCOPE
             m_ds.m_dotSymp = m_curSymp = m_modSymp = m_statep->getNodeSym(nodep);
             m_modp = nodep;
+            // Link base-class method prototypes before checking inherited implementations.
             for (AstClassExtends* const cextp : nodep->extendspList()) {
                 if (AstClassRefDType* const classRefp
                     = VN_CAST(cextp->childDTypep(), ClassRefDType)) {
