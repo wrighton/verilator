@@ -100,6 +100,119 @@ class test_product;
   endfunction
 endclass
 
+class test_nested_indices;
+  rand bit [6:0] a[3];
+  int inner[2];
+  rand int equal_sum;
+  rand int unequal_sum;
+  rand int delta_sum;
+  rand bit [6:0] shifted[3:1];
+  int ascending[2:3];
+  rand int shifted_sum;
+  int bias;
+
+  function new();
+    inner = '{1, 2};
+    ascending = '{5, 6};
+  endfunction
+
+  constraint c {
+    foreach (a[i]) a[i] == 7'(i + bias);
+    // Different reduction indices must not compare equal before their loops are scoped.
+    equal_sum == a.sum(outer) with (inner.sum(elem) with
+        (elem.index == outer.index ? int'(outer) : 0));
+    unequal_sum == a.sum(outer) with (inner.sum(elem) with
+        (elem.index != outer.index ? int'(outer) : 0));
+    delta_sum == a.sum(outer) with (inner.sum(elem) with
+        ((elem.index - outer.index) * int'(outer)));
+    // Compare declared indices, not storage offsets, across differently directed ranges.
+    foreach (shifted[i]) shifted[i] == 7'(i + bias);
+    shifted_sum == shifted.sum(outer) with (ascending.sum(elem) with
+        (elem.index == outer.index ? int'(outer) : 0));
+  }
+
+  function void verify(int turn);
+    int ok;
+    int expected_equal = 0;
+    int expected_unequal = 0;
+    int expected_delta = 0;
+    int expected_shifted = 0;
+    bias = turn + 1;
+    ok = randomize();
+    `checkd(ok, 1);
+    foreach (a[i]) begin
+      `checkd(a[i], 7'(i + bias));
+      foreach (inner[j]) begin
+        if (i == j) expected_equal += int'(a[i]);
+        else expected_unequal += int'(a[i]);
+        expected_delta += (j - i) * int'(a[i]);
+      end
+    end
+    foreach (shifted[i]) begin
+      `checkd(shifted[i], 7'(i + bias));
+      foreach (ascending[j]) if (i == j) expected_shifted += int'(shifted[i]);
+    end
+    `checkd(equal_sum, expected_equal);
+    `checkd(unequal_sum, expected_unequal);
+    `checkd(delta_sum, expected_delta);
+    `checkd(shifted_sum, expected_shifted);
+    // At turn zero, the original {1, 2, 3} reproducer sums to 3, not 12.
+    `checkd(equal_sum, 2 * bias + 1);
+  endfunction
+endclass
+
+class test_value_carriers;
+  rand int a[3];
+  rand bit choose;
+  rand int state_sum;
+  rand int state_product;
+  rand int random_sum;
+  rand int random_product;
+  rand int logical_value;
+  rand int function_value;
+  int bias;
+
+  function int keep_value(int value);
+    return value;
+  endfunction
+
+  // Multiple returns keep the call's arguments in the function-value carrier path.
+  function int pick_value(bit selected);
+    if (selected) return 23;
+    return 29;
+  endfunction
+
+  constraint c {
+    foreach (a[i]) a[i] == i + bias;
+    state_sum == a.sum() with (item.index == 1 ? int'(item) : 0);
+    state_product == a.product() with (item.index == 1 ? int'(item) : 1);
+    random_sum == a.sum() with (choose ? int'(item) : 0);
+    random_product == a.product() with (choose ? int'(item) : 1);
+    logical_value == keep_value(int'((a[0] > 0) && (a[2] > 0)));
+    function_value == pick_value(choose);
+  }
+
+  function void verify(int turn);
+    int ok;
+    int sum_value = 0;
+    int product_value = 1;
+    bias = turn + 1;
+    ok = randomize() with {choose == bit'(turn % 2);};
+    `checkd(ok, 1);
+    foreach (a[i]) begin
+      `checkd(a[i], i + bias);
+      sum_value += a[i];
+      product_value *= a[i];
+    end
+    `checkd(state_sum, a[1]);
+    `checkd(state_product, a[1]);
+    `checkd(random_sum, choose ? sum_value : 0);
+    `checkd(random_product, choose ? product_value : 1);
+    `checkd(logical_value, 1);
+    `checkd(function_value, choose ? 23 : 29);
+  endfunction
+endclass
+
 class state_sub;
   rand int r;
   int k;
@@ -123,6 +236,8 @@ class test_state;
   rand int ns;
   rand int ws;
   rand int kw;
+  rand int nx;
+  int nb[3];
   int off;
   int w[3];
   bit [6:0] mask;
@@ -153,6 +268,7 @@ class test_state;
     ns == a.sum() with (item + w.sum());
     kw inside {[1 : 9]};
     ws == w.sum() with (item * kw);
+    nx == a.sum(e) with (nb.sum(f) with (e + f));
   }
 
   function void verify();
@@ -167,18 +283,22 @@ class test_state;
     int exp_ss = 0;
     int exp_ns = 0;
     int exp_ws = 0;
+    int exp_nx = 0;
     int i;
     int set_off;
     int set_w[3];
     bit [6:0] set_mask;
     int set_sub_k;
     int set_st_k;
+    int set_nb[3];
 
     set_off = $urandom_range(1000, 1);
     foreach (set_w[k]) set_w[k] = $urandom_range(9) - 4;
     set_mask = 7'($urandom);
     set_sub_k = $urandom_range(1000);
     set_st_k = $urandom_range(1000);
+    foreach (set_nb[k]) set_nb[k] = $urandom_range(1000) - 500;
+    nb = set_nb;
     off = set_off;
     w = set_w;
     mask = set_mask;
@@ -192,6 +312,7 @@ class test_state;
     `checkd(mask, set_mask);
     `checkd(sub.k, set_sub_k);
     `checkd(st.k, set_st_k);
+    foreach (nb[k]) `checkd(nb[k], set_nb[k]);
     foreach (a[k]) begin
       exp_s += a[k] * set_w[k] + set_off;
       exp_sk += a[k] + set_sub_k;
@@ -199,6 +320,7 @@ class test_state;
       exp_ss += a[k] - set_st_k;
       exp_ns += a[k] + set_w[0] + set_w[1] + set_w[2];
       exp_ws += set_w[k] * kw;
+      foreach (set_nb[j]) exp_nx += a[k] + set_nb[j];
     end
     foreach (d[k]) begin
       exp_n &= d[k] | set_mask;
@@ -220,6 +342,7 @@ class test_state;
     `checkd(ss, exp_ss);
     `checkd(ns, exp_ns);
     `checkd(ws, exp_ws);
+    `checkd(nx, exp_nx);
   endfunction
 endclass
 
