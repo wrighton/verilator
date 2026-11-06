@@ -623,6 +623,24 @@ class ConstraintExprVisitor final : public VNVisitor {
         return selp;
     }
 
+    // Mark the expressions under nodep that depend on a random variable, returning nodep's mark
+    static bool markRandDependent(AstNode* nodep) {
+        // Needed where 'with' arguments were replaced by array elements and loop indices.
+        // Variable references and member selections keep the marks RandomizeMarkVisitor gave
+        // them; any other expression is random if an operand is, so the state variables and
+        // state array elements in it stay state. Unlike propagateUser1InlineRecurse, which marks
+        // a function body RandomizeMarkVisitor never saw, this keeps those marks, as they also
+        // depend on context (e.g. std::randomize() arguments, members of a random object).
+        bool randOperand = false;
+        for (AstNode* const opp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (AstNode* itemp = opp; itemp; itemp = itemp->nextp()) {
+                randOperand |= markRandDependent(itemp);
+            }
+        }
+        if (!VN_IS(nodep, NodeVarRef) && !VN_IS(nodep, MemberRef)) nodep->user1(randOperand);
+        return nodep->user1();
+    }
+
     // Convert expression to target width using extend or truncate as needed
     static AstNodeExpr* adjustWidth(FileLine* fl, AstNodeExpr* exprp, int targetWidth,
                                     VSigning targetSigning) {
@@ -2670,10 +2688,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstNodeStmt* bodyp;
             if (withp) {
                 // With 'with' clause: evaluate expression for each element
-                const bool randArr = nodep->fromp()->user1();
                 AstNodeExpr* const idxRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
                 AstNodeExpr* const elemSelp = newSel(fl, nodep->fromp(), idxRefp);
-                elemSelp->user1(randArr);
 
                 // Get the result width for the reduction
                 const int resultWidth = nodep->dtypep()->width();
@@ -2710,16 +2726,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 // enum-literal folding pass already ran -- re-fold the literals.
                 perElemExprp = V3Const::constifyEdit(perElemExprp);
 
-                perElemExprp->foreach([&](AstNode* nodep) {
-                    // Don't mark loop variable references as randomizable
-                    if (!VN_IS(nodep, Const)) {
-                        if (AstNodeVarRef* const vrefp = VN_CAST(nodep, NodeVarRef)) {
-                            if (vrefp->varp() != loopVarp) nodep->user1(true);
-                        } else {
-                            nodep->user1(true);
-                        }
-                    }
-                });
+                markRandDependent(perElemExprp);
 
                 // Apply the operator to the text so far and the element's term
                 AstNodeExpr* const openp = new AstConcatN{

@@ -804,6 +804,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
         if (m_stdRandCallp && nodep == m_stdRandCallp->withp()) m_inStdWith = true;
         iterateChildrenConst(nodep);
         m_inStdWith = false;
+        // So a method of a state array is random if its 'with' is, as in 'sum() with (item * r)'
+        if (m_constraintExprGenp) nodep->user1(nodep->exprp()->user1());
     }
 
     void visit(AstNodeExpr* nodep) override {
