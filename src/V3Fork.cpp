@@ -400,6 +400,7 @@ class DynScopeVisitor final : public VNVisitor {
 
         // This can be probably optimized to detect cases in which dynscopes could be avoided
         for (AstNode* const declp : nodep->declspList()) {
+            if (VN_IS(declp, Typedef)) continue;  // V3Begin lifts it to the module
             AstVar* const varp = VN_CAST(declp, Var);
             UASSERT_OBJ(varp, declp, "Invalid node under block item initialization part of fork");
             UASSERT_OBJ(!varp->lifetime().isNone(), nodep, "Variable's lifetime is unknown");
