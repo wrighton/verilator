@@ -884,6 +884,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         emitNodesWithText(nodep->nodesp(), true, "");
         puts(")");
     }
+    void visit(AstCReturn* nodep) override {
+        putfs(nodep, "return ");
+        iterateConst(nodep->lhsp());
+        puts(";\n");
+    }
     void visit(AstCStmtUser* nodep) override {
         putfs(nodep, "$c(");
         emitNodesWithText(nodep->nodesp(), false, "");
