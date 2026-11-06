@@ -392,7 +392,8 @@ class WidthVisitor final : public VNVisitor {
     const AstConstraint* m_constraintp = nullptr;  // Current constraint
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
     const AstNode* m_writerp = nullptr;  // Assignment, release or pin whose lvalue is iterated
-    const AstWith* m_withp = nullptr;  // Current 'with' statement
+    // Arguments of the enclosing 'with' clauses, by name, innermost shadowing outer
+    std::map<std::string, const AstLambdaArgRef*> m_withArgps;
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     const AstNodeExpr* m_randomizeFromp = nullptr;  // Current randomize method call fromp
@@ -9218,8 +9219,9 @@ class WidthVisitor final : public VNVisitor {
         m_underCast = false;  // The lambda is checked independently of a cast of the result.
         // Should otherwise be underneath a method call
         AstNodeDType* const vdtypep = m_vup->dtypeNullSkipRefp();
-        VL_RESTORER(m_withp);
-        m_withp = nodep;
+        VL_RESTORER_COPY(m_withArgps);
+        m_withArgps[nodep->indexArgRefp()->name()] = nodep->indexArgRefp();
+        m_withArgps[nodep->valueArgRefp()->name()] = nodep->valueArgRefp();
         userIterateChildren(nodep->indexArgRefp(), nullptr);
         userIterateChildren(nodep->valueArgRefp(), nullptr);
         if (!nodep->exprp()) {
@@ -9245,12 +9247,10 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstLambdaArgRef* nodep) override {
-        UASSERT_OBJ(m_withp, nodep, "LambdaArgRef not underneath 'with' lambda");
-        if (nodep->index()) {
-            nodep->dtypeFrom(m_withp->indexArgRefp());
-        } else {
-            nodep->dtypeFrom(m_withp->valueArgRefp());
-        }
+        // The reference may be to an argument of an enclosing 'with'
+        const auto it = m_withArgps.find(nodep->name());
+        UASSERT_OBJ(it != m_withArgps.end(), nodep, "LambdaArgRef not underneath its 'with'");
+        nodep->dtypeFrom(it->second);
     }
     void visit(AstNetlist* nodep) override {
         // Iterate modules backwards, in bottom-up order.  That's faster
