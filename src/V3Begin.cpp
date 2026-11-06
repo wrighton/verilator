@@ -202,8 +202,13 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstFork* nodep) override {
         if (nodep->user1SetOnce()) return;
-        dotNames(nodep->name(), nodep->fileline(), "__FORK__");
-        iterateChildren(nodep);
+        {
+            VL_RESTORER_COPY(m_displayScope);
+            VL_RESTORER_COPY(m_namedScope);
+            VL_RESTORER_COPY(m_unnamedScope);
+            dotNames(nodep->name(), nodep->fileline(), "__FORK__");
+            iterateChildren(nodep);
+        }
         if (AstNode* const declsp = nodep->declsp()) {
             // Only blocks made after V3LinkDot keep declarations to here, in functions; lift them
             // to the function
