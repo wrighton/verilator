@@ -429,19 +429,23 @@ private:
             }
         }
     }
-    // Check user method 'nodep' against the methods of its name 'classp' inherits
-    void overrideCheck(const AstNodeFTask* nodep, const AstClass* classp) {
+    // Check user method 'nodep' against the methods of its name 'classp' inherits. 'visited'
+    // holds the classes already searched, as interface classes can inherit the same class
+    // along many paths.
+    void overrideCheck(const AstNodeFTask* nodep, const AstClass* classp,
+                       std::set<const AstClass*>& visited) {
         // The nearest user method of the name in each class extended or implemented, if virtual
         // (after virtualRecurse).
         for (const AstClassExtends* extendsp = classp->extendsp(); extendsp;
              extendsp = VN_AS(extendsp->nextp(), ClassExtends)) {
             const AstClass* const eclassp = extendsp->classp();
+            if (!visited.insert(eclassp).second) continue;
             const AstNodeFTask* const basep
                 = VN_CAST(m_memberMap.findMember(eclassp, nodep->name()), NodeFTask);
             if (basep && isUserMethod(basep)) {
                 if (basep->isVirtual()) overrideSigCheck(nodep, basep);
             } else {
-                overrideCheck(nodep, eclassp);
+                overrideCheck(nodep, eclassp, visited);
             }
         }
     }
@@ -658,7 +662,10 @@ private:
         if (const AstClass* const classp = VN_CAST(m_modp, Class)) {
             bool isVirtual = false;
             virtualRecurse(nodep, classp, isVirtual /*ref*/);
-            if (isUserMethod(nodep)) overrideCheck(nodep, classp);
+            if (isUserMethod(nodep)) {
+                std::set<const AstClass*> visited;
+                overrideCheck(nodep, classp, visited);
+            }
         }
         if (nodep->isStatic() && nodep->isVirtual())  // After propagated isVirtual
             nodep->v3error("Static methods cannot be virtual");
