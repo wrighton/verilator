@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+# DESCRIPTION: Verilator: Verilog Test driver/expect definition
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of either the GNU Lesser General Public License Version 3
+# or the Perl Artistic License Version 2.0.
+# SPDX-FileCopyrightText: 2026 Wilson Snyder
+# SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
+import vltest_bootstrap
+
+test.scenarios('vlt')
+
+test.compile(verilator_flags2=[
+    "--binary",
+    "--dumpi-tree 1 --dumpi-tree-json 1 --dumpi-V3Fork 3"  # Dev coverage of the fork task dump
+])
+
+test.execute(all_run_flags=["+verilator+error+limit+100"], expect_filename=test.golden_filename)
+
+test.passes()
