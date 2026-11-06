@@ -926,7 +926,7 @@ class ConstraintFuncRounds final {
     bool m_circular = false;  // Found a circular dependency
 
     int roundOf(const std::string& name, const ConstraintFuncCall& call) {
-        const auto pair = m_rounds.emplace(name, VISITING);
+        const auto pair = m_rounds.emplace(name, int{VISITING});
         if (!pair.second) {
             if (pair.first->second == VISITING) {
                 m_circular = true;
