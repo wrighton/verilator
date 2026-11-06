@@ -492,8 +492,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstRedAnd* nodep) override { visit_red_and_or(nodep); }
     void visit(AstRedOr* nodep) override { visit_red_and_or(nodep); }
     void visit(AstRedXor* nodep) override { visit_red_and_or(nodep); }
-    void visit(AstOneHot* nodep) override { visit_red_and_or(nodep); }
-    void visit(AstOneHot0* nodep) override { visit_red_and_or(nodep); }
+    void visit(AstOneHot* nodep) override { visit_onehot(nodep); }
+    void visit(AstOneHot0* nodep) override { visit_onehot(nodep); }
     void visit(AstIsUnknown* nodep) override {
         visit_red_unknown(nodep);  // Allow real
     }
@@ -2667,7 +2667,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstCountBits* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->lhsp(), SELF, BOTH);
+            if (sumBitStreamElements(nodep)) return;
+            iterateCheckSizedSelf(nodep, "LHS", nodep->lhsp(), SELF, FINAL);
             iterateCheckSizedSelf(nodep, "RHS", nodep->rhsp(), SELF, BOTH);
             iterateCheckSizedSelf(nodep, "THS", nodep->thsp(), SELF, BOTH);
             iterateCheckSizedSelf(nodep, "FHS", nodep->fhsp(), SELF, BOTH);
@@ -2678,7 +2679,8 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstCountOnes* nodep) override {
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->lhsp(), SELF, BOTH);
+            if (sumBitStreamElements(nodep)) return;
+            iterateCheckSizedSelf(nodep, "LHS", nodep->lhsp(), SELF, FINAL);
             // For widthMin, if a 32 bit number, we need a 6 bit number as we need to return '32'.
             const int widthMin = V3Number::log2b(nodep->lhsp()->width()) + 1;
             nodep->dtypeSetBitUnsized(32, widthMin, VSigning::SIGNED);
@@ -9485,6 +9487,74 @@ class WidthVisitor final : public VNVisitor {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             iterateCheckSizedSelf(nodep, "LHS", nodep->lhsp(), SELF, BOTH);
+            nodep->dtypeSetBitOrLogic(nodep->lhsp()->isFourstateOrNoDtype());
+        }
+    }
+    static bool isUnpackedAggregate(const AstNodeDType* dtypep) {
+        // IEEE 1800-2023 6.24.3: bit-stream types include unpacked arrays and structs of
+        // bit-stream types; bit vector functions count these per element or member
+        dtypep = dtypep->skipRefp();
+        const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+        return dtypep->isNonPackedArray() || VN_IS(dtypep, WildcardArrayDType)
+               || (structp && !structp->packed());
+    }
+    // Replace a bit count of an unpacked operand with the sum of its element counts
+    template <typename T_Node>
+    bool sumBitStreamElements(T_Node* nodep) {
+        // CALLER: CountBits, CountOnes
+        // IEEE 1800-2023 20.9: the operand is a bit-stream type.  Each element (or member) is
+        // counted by a copy of nodep, which in turn sums its own elements if unpacked.
+        userIterateAndNext(nodep->lhsp(), WidthVP{SELF, PRELIM}.p());
+        if (!isUnpackedAggregate(nodep->lhsp()->dtypep())) return false;
+        FileLine* const flp = nodep->fileline();
+        VNRelinker relinker;
+        nodep->unlinkFrBack(&relinker);
+        AstNodeExpr* newp = nullptr;
+        if (const AstStructDType* const structp
+            = VN_CAST(nodep->lhsp()->dtypep()->skipRefp(), StructDType)) {
+            for (const AstMemberDType* const memberp : structp->memberspList()) {
+                T_Node* const countp = nodep->cloneTreePure(false);
+                AstStructSel* const selp
+                    = new AstStructSel{flp, countp->lhsp()->unlinkFrBack(), memberp->name()};
+                selp->dtypep(memberp->subDTypep()->skipRefToEnump());
+                selp->didWidth(true);
+                countp->lhsp(selp);
+                newp = newp ? new AstAdd{flp, newp, countp} : static_cast<AstNodeExpr*>(countp);
+            }
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        } else {
+            AstNodeExpr* const fromp = nodep->lhsp()->unlinkFrBack();
+            const string name = "__VcountElem";
+            nodep->lhsp(new AstLambdaArgRef{flp, name, false});
+            AstMethodCall* const callp = new AstMethodCall{flp, fromp, "sum"};
+            callp->withp(new AstWith{flp, new AstLambdaArgRef{flp, name + "__DOT__index", true},
+                                     new AstLambdaArgRef{flp, name, false}, nodep});
+            newp = callp;
+        }
+        relinker.relink(newp);
+        userIterate(newp, m_vup);
+        return true;
+    }
+    void visit_onehot(AstNodeUniop* nodep) {
+        // CALLER: OneHot, OneHot0
+        // IEEE 1800-2023 20.9: an unpacked bit-stream operand is checked by counting its ones
+        assertAtExpr(nodep);
+        if (m_vup->prelim()) {
+            userIterateAndNext(nodep->lhsp(), WidthVP{SELF, PRELIM}.p());
+            if (isUnpackedAggregate(nodep->lhsp()->dtypep())) {
+                FileLine* const flp = nodep->fileline();
+                AstNodeExpr* const countp = new AstCountOnes{flp, nodep->lhsp()->unlinkFrBack()};
+                AstNodeExpr* const onep = new AstConst{flp, AstConst::Signed32{}, 1};
+                AstNodeExpr* const newp
+                    = VN_IS(nodep, OneHot)
+                          ? static_cast<AstNodeExpr*>(new AstEq{flp, countp, onep})
+                          : new AstLte{flp, countp, onep};
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                userIterate(newp, m_vup);
+                return;
+            }
+            iterateCheckSizedSelf(nodep, "LHS", nodep->lhsp(), SELF, FINAL);
             nodep->dtypeSetBitOrLogic(nodep->lhsp()->isFourstateOrNoDtype());
         }
     }
