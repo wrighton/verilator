@@ -311,7 +311,8 @@ class WidthVisitor final : public VNVisitor {
     bool m_inConstraintExpr = false;  // Under a class or inline ('with') constraint expression
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
     const AstNode* m_writerp = nullptr;  // Assignment, pin, alias, etc. whose lvalue is iterated
-    const AstWith* m_withp = nullptr;  // Current 'with' statement
+    // Arguments of the enclosing 'with' clauses, by name, innermost shadowing outer
+    std::map<std::string, const AstLambdaArgRef*> m_withArgps;
     // For each item.index name in scope: its 'with' argument, and the declared index of the
     // array's storage index 0
     std::map<std::string, std::pair<const AstLambdaArgRef*, int>> m_withIndexes;
@@ -7434,8 +7435,8 @@ class WidthVisitor final : public VNVisitor {
         AstWith* const withp = new AstWith{fl, indexArgp, valueArgp, valueArgp->cloneTree(false)};
         withp->dtypep(elemDtp);
         {
-            VL_RESTORER(m_withp);
-            m_withp = withp;
+            VL_RESTORER_COPY(m_withArgps);
+            m_withArgps[valueArgp->name()] = valueArgp;
             iterateCheckTyped(withp, "element", withp->exprp(), elemDtp, FINAL);
         }
         AstCMethodHard* const mapp = new AstCMethodHard{fl, valuep, VCMethod::ARRAY_MAP};
@@ -9930,8 +9931,9 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstWith* nodep) override {
         // Should otherwise be underneath a method call
         AstNodeDType* const vdtypep = m_vup->dtypeNullSkipRefp();
-        VL_RESTORER(m_withp);
-        m_withp = nodep;
+        VL_RESTORER_COPY(m_withArgps);
+        m_withArgps[nodep->indexArgRefp()->name()] = nodep->indexArgRefp();
+        m_withArgps[nodep->valueArgRefp()->name()] = nodep->valueArgRefp();
         userIterateChildren(nodep->indexArgRefp(), nullptr);
         userIterateChildren(nodep->valueArgRefp(), nullptr);
         if (!nodep->exprp()) {
@@ -9957,7 +9959,6 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstLambdaArgRef* nodep) override {
-        UASSERT_OBJ(m_withp, nodep, "LambdaArgRef not underneath 'with' lambda");
         // Visited again by the 'with' expression's final check; add the offset once
         if (nodep->didWidthAndSet()) return;
         if (nodep->index()) {
@@ -9977,7 +9978,10 @@ class WidthVisitor final : public VNVisitor {
                 relinker.relink(newp);
             }
         } else {
-            nodep->dtypeFrom(m_withp->valueArgRefp());
+            // The name may be of an enclosing 'with'
+            const auto it = m_withArgps.find(nodep->name());
+            UASSERT_OBJ(it != m_withArgps.end(), nodep, "LambdaArgRef not underneath its 'with'");
+            nodep->dtypeFrom(it->second);
         }
     }
     void visit(AstNetlist* nodep) override {
