@@ -55,7 +55,12 @@ class LinkLValueVisitor final : public VNVisitor {
                     nodep->v3error(
                         "Attempt to drive input-only modport: " << nodep->prettyNameQ());
                 }
-                xrefp->readOnlyModport(false);
+                // Only read net references need a longer permission lifetime for late
+                // port coercion. Variable and class-handle references keep their existing
+                // permission handling; this is not a general late-write permission change.
+                if (nodep->access().isWriteOrRW() || !nodep->varp()->isNetOrNetPort()) {
+                    xrefp->readOnlyModport(false);
+                }
             }
         }
         if (nodep->varp() && nodep->access().isWriteOrRW()) {

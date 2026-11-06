@@ -208,7 +208,9 @@ List Of Warnings
       assign a = 1'b1;
 
    Ignoring this warning will only suppress the lint check; it will
-   simulate correctly.
+   simulate correctly, except for an input port of net kind driven inside
+   its module that cannot be coerced to inout, see Tri/Inout in
+   :ref:`Language Limitations`.
 
 
 .. option:: BADSTDPRAGMA
