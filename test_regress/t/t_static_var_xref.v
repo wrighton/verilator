@@ -37,6 +37,19 @@ module t;
     end
   endtask
 
+  task ts(input int ti);
+    fork : f
+      int s;
+      begin
+        s = ti;
+        begin : b
+          int n;
+          n = ti + 1;
+        end
+      end
+    join
+  endtask
+
   function automatic int af(input int fi);
     begin : fblk
       static int fs;
@@ -52,6 +65,12 @@ module t;
     st(7);
     `checkd(st.blk.ba, 7);
     `checkd(st.blk.inner.bi, 8);
+    ts(3);
+    `checkd(ts.f.s, 3);
+    `checkd(ts.f.b.n, 4);
+    ts(7);
+    `checkd(ts.f.s, 7);
+    `checkd(ts.f.b.n, 8);
     `checkd(af(5), 5);
     `checkd(af.fblk.fs, 10);
     $write("*-* All Finished *-*\n");
