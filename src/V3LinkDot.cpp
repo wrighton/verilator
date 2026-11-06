@@ -7036,6 +7036,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 iterate(nodep->childDTypep());
             } else if (AstParamTypeDType* const paramp
                        = VN_CAST(foundp->nodep(), ParamTypeDType)) {
+                if (nodep->isImplements() || VN_AS(m_modp, Class)->isInterfaceClass()) {
+                    nodep->v3error("Type parameter "
+                                   << paramp->prettyNameQ() << " cannot be "
+                                   << (nodep->isImplements() ? "implemented by a class"
+                                                             : "extended by an interface class")
+                                   << " (IEEE 1800-2023 8.26.4).");
+                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                }
                 AstRefDType* const refParamp = new AstRefDType{nodep->fileline(), paramp->name()};
                 refParamp->refDTypep(paramp);
                 nodep->childDTypep(refParamp);
