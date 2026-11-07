@@ -831,6 +831,15 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     void markRandc(AstVar* const varp, const std::string& smtName, AstBegin* const initp) {
+        // The randomizer records the used values of a randc variable as 64-bit numbers
+        const int width = SmtUtil::arrayElementDTypep(varp->dtypep())->width();
+        if (width > VL_QUADSIZE) {
+            varp->v3warn(E_UNSUPPORTED, "Unsupported: Constrained randc variable "
+                                            << varp->prettyNameQ() << " is " << width
+                                            << " bits, wider than the implemented " << VL_QUADSIZE
+                                            << " bits (IEEE 1800-2023 18.4.2).");
+            return;
+        }
         AstCMethodHard* const markp = new AstCMethodHard{
             varp->fileline(),
             new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
@@ -840,7 +849,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const nameExprp
             = m_nestedAccessp ? m_nestedAccessp->cloneName()
                               : new AstSFormatF{varp->fileline(), smtName, false, nullptr};
-        nameExprp->dtypep(varp->dtypep());
         markp->addPinsp(nameExprp);
         addRegistrationStmt(markp->makeStmt(), initp);
     }
