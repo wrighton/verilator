@@ -1405,12 +1405,9 @@ class AssertVisitor final : public VNVisitor {
     // Pending calls run in the Reactive region unless a flush of their process clears them
     // (IEEE 1800-2023 16.4.1).
     AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNode* actionsp) {
-        // A null statement, 'else;', is an empty block (see elseAction), with nothing to call
+        // The null statement of an 'else;', an empty implied block, has no call to defer
         const AstBegin* const beginp = VN_CAST(actionsp, Begin);
-        if (beginp && beginp->implied() && !beginp->stmtsp() && !beginp->nextp()) {
-            VL_DO_DANGLING(pushDeletep(actionsp), actionsp);
-            return nullptr;
-        }
+        if (beginp && beginp->implied() && !beginp->stmtsp()) return VN_AS(actionsp, NodeStmt);
         if (!(actionsp->isOutputter() || VN_IS(actionsp, SFormat) || VN_IS(actionsp, StmtExpr))) {
             actionsp->v3error("Observed deferred immediate assertion action block must be a "
                               "single subroutine call (IEEE 1800-2023 16.4).");
