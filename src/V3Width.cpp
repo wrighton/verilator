@@ -13201,6 +13201,12 @@ class WidthVisitor final : public VNVisitor {
         // A select of a multi-dimensional packed array has an unfolded index expression
         return VN_CAST(V3Const::constifyEdit(indexp), Const);
     }
+    // Mark a written input port connection written, by the port collapsing with its nets
+    static void linkCollapsedWrite(AstNode* const exprp) {
+        // Not a write through a modport of the nets (see readOnlyModport)
+        exprp->foreach([](AstVarXRef* const refp) { refp->readOnlyModport(false); });
+        V3LinkLValue::linkLValueSet(exprp);
+    }
     // Whether an inout port connection could be the expression, adding the nets in it
     static bool coercibleConn(AstNode* exprp, std::vector<AstVar*>& netps) {
         if (AstSel* const selp = VN_CAST(exprp, Sel)) {
@@ -13347,7 +13353,7 @@ public:
             varp->direction(VDirection::INOUT);
             for (AstPin* const pinp : pinps[varp]) {
                 if (!pinp->exprp()) continue;
-                V3LinkLValue::linkLValueSet(pinp->exprp());
+                linkCollapsedWrite(pinp->exprp());
                 // Now written, as is e.g. a top-level inout connected
                 std::vector<AstVar*> netps;
                 coercibleConn(pinp->exprp(), netps);
@@ -13396,7 +13402,7 @@ public:
         for (const Conn& conn : conns) {
             if (conn.overlapped) continue;
             AstNodeExpr* const exprp = VN_AS(conn.pinp->exprp(), NodeExpr)->unlinkFrBack();
-            V3LinkLValue::linkLValueSet(exprp);
+            linkCollapsedWrite(exprp);
             conn.netp->icoMaybeWritten(true);
             conn.netp->isContinuously(true);
             FileLine* const flp = exprp->fileline();
