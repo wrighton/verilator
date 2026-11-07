@@ -8877,13 +8877,10 @@ class WidthVisitor final : public VNVisitor {
             if (repp && repp->countp()->isOne()) exprp = repp->srcp();  // A '{...}'
             const AstConcat* const concatp = VN_CAST(exprp, Concat);
             const bool isShort = VN_IS(exprp, Const) || (concatp && VN_IS(concatp->lhsp(), Const));
-            if ((pinDirection == VDirection::OUTPUT || pinDirection == VDirection::INOUT)
-                && !isShort && !isPinLvalue(exprp)) {
-                nodep->exprp()->v3error(ucfirst(pinDirection.prettyName())
-                                        << " port " << nodep->modVarp()->prettyNameQ()
-                                        << " is connected to an expression that cannot be"
-                                           " assigned (IEEE 1800-2023 23.3.3)");
-            }
+            // Decided before its PRELIM visit, reported after the destination checks below
+            const bool notLvalue = (pinDirection == VDirection::OUTPUT
+                                    || pinDirection == VDirection::INOUT)
+                                   && !isShort && !isPinLvalue(exprp);
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             // Outputs are continuous assignments; inouts are transistor connections (23.3.3).
             if (pinDirection.isOutput() || pinDirection.isInout()) {
@@ -8892,6 +8889,13 @@ class WidthVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(exprp), exprp);
                     return;
                 }
+            }
+            // One error per connection: an invalid destination in it was reported above
+            if (notLvalue) {
+                nodep->exprp()->v3error(ucfirst(pinDirection.prettyName())
+                                        << " port " << nodep->modVarp()->prettyNameQ()
+                                        << " is connected to an expression that cannot be"
+                                           " assigned (IEEE 1800-2023 23.3.3)");
             }
             if (pinDirection == VDirection::REF && !VN_IS(nodep->exprp(), NodeStream)) {
                 const AstNodeExpr* const exprp = VN_AS(nodep->exprp(), NodeExpr);
