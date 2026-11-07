@@ -76,6 +76,12 @@ class DistMixedBounds;
   }
 endclass
 
+// Signed expression wider than 64 bits, with bounds that fit in 64 bits
+class DistSignedWide;
+  rand bit signed [79:0] w;
+  constraint c_w {w dist {[80'sd3 : 80'sd10] := 1};}
+endclass
+
 module t;
   parameter int N = 2000;  // randomize() calls per test
   parameter int TOL_PCT = 30;  // +-% tolerance on expected counts
@@ -197,6 +203,16 @@ module t;
         cnt[obj.x]++;
       end
       for (int v = 1; v <= 7; v++) `check_tol(cnt[v], N / 7)
+    end
+
+    // --- T7: signed expression wider than 64 bits ---
+    begin
+      automatic DistSignedWide obj = new();
+      repeat (20) begin
+        randomize_result = obj.randomize();
+        `checkd(randomize_result, 1);
+        `check_range(obj.w, 3, 10)
+      end
     end
 
     $write("*-* All Finished *-*\n");
