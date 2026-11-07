@@ -18,4 +18,14 @@ test.compile()
 
 test.execute()
 
+if test.vlt_all:
+    # The randomizer gets the names of the fields wider than 64 bits as strings
+    cpp_files = test.glob_some(test.obj_dir + "/*.cpp")
+    for regexp in [
+            r'clear_var\("item\.w"s\)', r'clear_var\("item\.p"s\)',
+            r'clear_var\("holder\.arr\.1\.w"s\)', r'set_var_disabled\("item\.w"s\)',
+            r'set_var_disabled\("holder\.arr\.1\.w"s\)'
+    ]:
+        test.file_grep_any(cpp_files, regexp)
+
 test.passes()

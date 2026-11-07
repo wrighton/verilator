@@ -854,7 +854,6 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstNodeExpr* const namep = m_nestedAccessp
                                            ? m_nestedAccessp->cloneName()
                                            : new AstSFormatF{fl, smtName, false, nullptr};
-            namep->dtypep(varp->dtypep());
             callp->addPinsp(namep);
             return callp->makeStmt();
         };
