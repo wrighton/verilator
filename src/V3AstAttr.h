@@ -954,6 +954,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(ARRAY_SORT,                         "sort",                   false,  CLEAN,  false,      "") \
     macro(ARRAY_UNIQUE,                       "unique",                 PURE,   CLEAN,  false,      "") \
     macro(ARRAY_UNIQUE_INDEX,                 "unique_index",           PURE,   CLEAN,  false,      "") \
+    macro(ASSOC_AT_WRITE,                     "atWrite",                false,  CLEAN,  false,      "r") \
     macro(ASSOC_CLEAR,                        "clear",                  false,  CLEAN,  false,      "") \
     macro(ASSOC_ERASE,                        "erase",                  false,  CLEAN,  false,      "r") \
     macro(ASSOC_EXISTS,                       "exists",                 PURE,   CLEAN,  false,      "r") \

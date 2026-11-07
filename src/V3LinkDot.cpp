@@ -3843,6 +3843,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (access.isWriteOrRW() && snodep->direction().isReadOnly()) {
                 nodep->v3error("Attempt to drive input-only modport: " << nodep->prettyNameQ());
             }  // else other simulators don't warn about reading, and IEEE doesn't say illegal
+            // Keep the permission for writes found later, e.g. in V3LinkLValue and V3Width
+            if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
+                if (m_statep->forParamed() && snodep->direction().isReadOnly()) {
+                    xrefp->readOnlyModport(true);
+                }
+            }
             return varp;
         } else {
             return nullptr;

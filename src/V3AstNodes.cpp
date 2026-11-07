@@ -3232,6 +3232,7 @@ const AstNodeExpr* AstNodeExpr::getVAccessTargetRecurse() const {
         case VCMethod::ARRAY_AT:
         case VCMethod::ARRAY_AT_BACK:
         case VCMethod::ARRAY_AT_WRITE:
+        case VCMethod::ASSOC_AT_WRITE:
         case VCMethod::DYN_AT_WRITE_APPEND:
         case VCMethod::DYN_AT_WRITE_APPEND_BACK:
             // Used for things like Queue/AssocArray/DynArray
