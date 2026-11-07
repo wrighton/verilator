@@ -65,7 +65,7 @@ module t (
     for (genvar j = 0; j < 3; ++j) begin : g_typed
       always @(posedge clk) if (wr[i*3+j]) typed[i][j] <= in[5:0] + 6'(j);
     end
-    // Whole rows, real/string elements, and unpacked structs retain their existing schemes.
+    // Whole rows and unpacked structs use fallback; real/string elements use array flags.
     always @(posedge clk) if (wr[i]) rows[i] <= '{in[7:0], in[15:8]};
     always @(posedge clk) if (wr[i]) reals[i] <= real'(in[15:0]) / 4.0;
     always @(posedge clk) if (wr[i]) strs[i] <= $sformatf("%0d", in[15:0]);

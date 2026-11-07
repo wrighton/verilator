@@ -111,8 +111,9 @@
 //
 // "Flag array" scheme. Used instead of shared flags for dense, constant-index
 // whole-element updates in ordered code. One array of flags and one array of
-// captured values replace the per-NBA temporaries. The flag temporaries start
-// zeroed, and each committed element clears its flag:
+// captured values replace the per-NBA temporaries. Dense means at least as
+// many NBA sites as total array elements, and more than one site. The flag
+// temporaries start zeroed, and each committed element clears its flag:
 //   LHS[1][2] <= RHS
 // becomes, at the original NBA:
 //   __Vdly_Val__LHS[1][2] = RHS;
@@ -124,8 +125,8 @@
 //   }
 // All writes to a target must qualify; otherwise keep its existing scheme,
 // so constant-index writes cannot be reordered relative to other updates.
-// Sparse or single-site writes and consecutive NBAs sharing a flag keep the
-// shared flag scheme, where allocating full arrays would not be worthwhile.
+// Sparse or single-site writes and consecutive NBAs to a target conservatively
+// retain the shared flag scheme; eligibility does not predict later flag reuse.
 //
 // "Generic" scheme is the most general, and uses a queue of closures, which
 // when committed performs the update to the target variable in the order they were
@@ -299,7 +300,7 @@ protected:
         bool m_event = false;  // Fired by a non-blocking event trigger ('->>')
         bool m_nonClocked = false;  // Used on LHS of NBA in init or unordered code, or a function
         bool m_mixed = false;  // Also written by blocking assignments outside init code
-        // All NBAs write whole elements at constant indices, without consecutive flag sharing
+        // All NBAs write whole elements at constant indices, without consecutive target sites
         bool m_constElems = true;
         uint32_t m_nNbas = 0;  // Number of NBAs to the target
         Scheme m_scheme = Scheme::Undecided;  // Conversion scheme to use for this variable
@@ -518,7 +519,7 @@ class DelayedRecord final : public VNVisitorConst, public DelayedBase {
         targetInfo.m_inLoop |= m_inLoop;
         targetInfo.m_event |= VN_IS(nodep, FireEvent);
         ++targetInfo.m_nNbas;
-        // Preserve the existing flag sharing for consecutive NBAs to this target.
+        // Conservatively retain the old scheme for consecutive NBAs to this target.
         const bool afterSameTarget = !m_state.nbas.empty()
                                      && m_state.nbas.back().targetp->sameTree(nbaRefp)
                                      && m_state.nbas.back().nodep->nextp() == nodep;
