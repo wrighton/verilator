@@ -177,14 +177,14 @@ private:
                     << m_ftaskp->warnContextSecondary());
         // Forks V3LinkJump made for disable by name do not block
         const AstFork* const forkp = VN_CAST(nodep, Fork);
+        const bool disableFork = forkp && forkp->forksp() && forkp->forksp()->disableWrapper();
         if (m_alwaysCombp && m_taskRefWarn && nodep->isTimingControl() && !VN_IS(nodep, AssignDly)
-            && !(forkp && forkp->disableWrap())) {
+            && !disableFork) {
             nodep->v3error("Blocking timing controls and fork-join are not legal under "
                            << m_alwaysCombp->keyword().ascii() << " (IEEE 1800-2023 9.2.2.2.2)\n"
                            << nodep->warnMore() << "... Suggest use a normal 'always'");
         }
-        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl()
-            && !(forkp && forkp->disableWrap())) {
+        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl() && !disableFork) {
             nodep->v3error("Timing controls and fork-join are not legal in final blocks"
                            " (IEEE 1800-2023 9.2.3)");
         }

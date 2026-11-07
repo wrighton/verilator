@@ -289,7 +289,6 @@ class LinkJumpVisitor final : public VNVisitor {
         bodyp->setDisableWrapper();
         bodyp->addStmtsp(getQueuePushProcessSelfp(fl, processQueuep));
         AstFork* const forkp = new AstFork{fl, VJoinType::JOIN};
-        forkp->disableWrap(true);
         forkp->addForksp(bodyp);
         if (AstTask* const taskp = VN_CAST(nodep, Task)) {
             // Variables stay in the task, ports so calls see them, locals as they live for the
