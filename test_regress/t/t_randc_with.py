@@ -21,9 +21,9 @@ test.execute()
 if test.vlt_all:
     # Only a class without class constraints whose randomization reaches a randc variable
     # gets a generator for its randc cycles
-    for name in ["RandcNone", "RandcTop"]:
+    for name in ["RandcNone", "RandcTop", "RandcLeaf", "RandcPong"]:
         test.file_grep_any(test.glob_some(test.obj_dir + "/*" + name + "*.h"), r'__Vrandc_history')
-    for name in ["RandNone", "RandChainA", "RandChainB", "RandChainC"]:
+    for name in ["RandNone", "RandLoopA", "RandLoopB", "RandChainA", "RandChainB", "RandChainC"]:
         for filename in test.glob_some(test.obj_dir + "/*" + name + "*.h"):
             test.file_grep_not(filename, r'__Vrandc_history')
 

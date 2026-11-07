@@ -207,6 +207,27 @@ class SoftNegatedItemError;
   constraint c {soft !((item.flag == 1) -> (value == 7'd23));}
 endclass
 
+class ModeArrayItem;
+  rand bit [6:0] w;
+  constraint c {w > 7'd100;}
+endclass
+
+class ModeArrayHolder;
+  rand ModeArrayItem arr[2];
+  function new();
+    foreach (arr[i]) arr[i] = new;
+  endfunction
+endclass
+
+class ModeArraySeq;
+  rand ModeArrayHolder holder;
+  rand bit [6:0] low;
+  function new();
+    holder = new;
+  endfunction
+  constraint c {holder.arr[1].w == low;}
+endclass
+
 module t;
   initial begin
     int res;
@@ -415,6 +436,28 @@ module t;
       res = soft_guard.randomize();
       `checkd(res, 1);
       `checkd(soft_guard.value, 7'd23);
+    end
+
+    begin
+      automatic ModeArraySeq s = new;
+      repeat (5) begin
+        res = s.randomize();
+        `checkd(res, 1);
+        `checkd(s.holder.arr[1].w, s.low);
+      end
+      // The complete member path must remain recognizable until its mode gate is hoisted.
+      s.holder.arr[1].w = 7'd109;
+      s.holder.arr[1].w.rand_mode(0);
+      repeat (5) begin
+        res = s.randomize();
+        `checkd(res, 1);
+        `checkd(s.low, 7'd109);
+        `checkd(s.holder.arr[1].w, 7'd109);
+      end
+      s.holder.arr[1].w.rand_mode(1);
+      res = s.randomize() with {low == 7'd117;};
+      `checkd(res, 1);
+      `checkd(s.holder.arr[1].w, 7'd117);
     end
 
     $write("*-* All Finished *-*\n");

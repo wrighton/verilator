@@ -3497,7 +3497,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstVar* errorVarp;
         bool state;
     };
-    using GuardFlagsMap = std::unordered_map<const AstNodeExpr*, GuardFlags>;
+    using GuardFlagsMap = std::map<const AstNodeExpr*, GuardFlags>;
     static void recordGuardFlags(const AstNodeExpr* const exprp, const GuardResult& result,
                                  GuardFlagsMap& flags) {
         const auto varp = [](AstNodeExpr* const refp) -> AstVar* {
@@ -3718,6 +3718,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         if (nodep->condp()->user1()) {
             editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
+            return;
+        }
+        if (isRandModeGate(nodep->condp())) {
+            // A generated mode gate may still be an SMT-name prefix. Keep its typed Cond
+            // until hoistRandModeOverSelectAndMember lifts it around the complete access.
+            iterate(nodep->thenp());
+            iterate(nodep->elsep());
+            nodep->dtypeSetString();
             return;
         }
         iterate(nodep->thenp());

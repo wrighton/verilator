@@ -55,6 +55,33 @@ class RandcTop;
   endfunction
 endclass
 
+// A randc variable inherited, without class constraints
+class RandcLeafDerived extends RandcLeaf;
+  rand bit [3:0] y;
+endclass
+
+// A cycle of rand handles, with a randc variable
+typedef class RandcPong;
+class RandcPing;
+  randc bit [1:0] x;
+  rand RandcPong pong;
+endclass
+
+class RandcPong;
+  rand RandcPing ping;
+endclass
+
+// A cycle of rand handles, without a randc variable
+typedef class RandLoopB;
+class RandLoopA;
+  rand bit [3:0] y;
+  rand RandLoopB b;
+endclass
+
+class RandLoopB;
+  rand RandLoopA a;
+endclass
+
 // Rand handles reaching no randc variable
 class RandChainC;
   rand bit [3:0] y;
@@ -83,6 +110,10 @@ module t;
     automatic RandcPrefix prefix = new;
     automatic RandcTop top = new;
     automatic RandChainA chain = new;
+    automatic RandcLeafDerived leaf_derived = new;
+    automatic RandcPing ping = new;
+    automatic RandcPong pong = new;
+    automatic RandLoopA loop = new;
     automatic int randomize_result;
     for (int trial = 0; trial < 4; ++trial) begin
       // Values seen in this cycle
@@ -91,6 +122,8 @@ module t;
       automatic bit [3:0] derived_seen = 0;
       automatic bit [3:0] prefix_seen = 0;
       automatic bit [3:0] top_seen = 0;
+      automatic bit [3:0] leaf_derived_seen = 0;
+      automatic bit [3:0] ping_seen = 0;
       for (int i = 0; i < 3; ++i) begin
         randomize_result = own.randomize() with {x != 3 || x == 3;};
         `checkd(randomize_result, 1);
@@ -132,6 +165,24 @@ module t;
         `checkd(top.h.x == 0, 0);
         `checkd(top_seen[top.h.x], 0);
         top_seen[top.h.x] = 1;
+
+        randomize_result = leaf_derived.randomize() with {x != 0;};
+        `checkd(randomize_result, 1);
+        `checkd(leaf_derived.x == 0, 0);
+        `checkd(leaf_derived_seen[leaf_derived.x], 0);
+        leaf_derived_seen[leaf_derived.x] = 1;
+
+        // Through the other class of the cycle
+        pong.ping = ping;
+        randomize_result = pong.randomize() with {ping.x != 0;};
+        `checkd(randomize_result, 1);
+        `checkd(ping.x == 0, 0);
+        `checkd(ping_seen[ping.x], 0);
+        ping_seen[ping.x] = 1;
+
+        randomize_result = loop.randomize() with {y < 4'd5;};
+        `checkd(randomize_result, 1);
+        `checkd(loop.y < 4'd5, 1);
 
         randomize_result = chain.randomize() with {h.h.y < 4'd5;};
         `checkd(randomize_result, 1);
