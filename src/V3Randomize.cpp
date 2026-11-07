@@ -1975,6 +1975,7 @@ class RandomizeVisitor final : public VNVisitor {
         // With fieldDtp, randomize only the packed field of that type at bit lsb of exprp
         if (!fieldDtp) fieldDtp = exprp->dtypep();
         AstNodeDType* const memberDtp = fieldDtp->skipRefp();
+        const AstPackArrayDType* const packArrayDtp = VN_CAST(memberDtp, PackArrayDType);
         if (const auto* const structDtp = VN_CAST(memberDtp, StructDType)) {
             AstNodeStmt* stmtsp = nullptr;
             for (AstMemberDType* const smemberp : structDtp->memberspList()) {
@@ -2025,11 +2026,9 @@ class RandomizeVisitor final : public VNVisitor {
             return createArrayForeachLoop(fl, memberDtp, exprp, [&](AstNodeExpr* elemp) {
                 return newRandStmtsp(fl, elemp, nullptr, outputVarp);
             });
-        } else if (VN_IS(memberDtp, PackArrayDType)
-                   && packedHasEnum(VN_AS(memberDtp, PackArrayDType))) {
+        } else if (packArrayDtp && packedHasEnum(packArrayDtp)) {
             // A loop over the elements, so each enum gets one of its values
-            const AstPackArrayDType* const arrayDtp = VN_AS(memberDtp, PackArrayDType);
-            AstNodeDType* const elemDtp = arrayDtp->subDTypep();
+            AstNodeDType* const elemDtp = packArrayDtp->subDTypep();
             AstVar* const idxVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VpackIdx"),
                              exprp->findUInt32DType()};
@@ -2045,8 +2044,9 @@ class RandomizeVisitor final : public VNVisitor {
             AstLoop* const loopp = new AstLoop{fl};
             loopp->addStmtsp(new AstLoopTest{
                 fl, loopp,
-                new AstLt{fl, new AstVarRef{fl, idxVarp, VAccess::READ},
-                          new AstConst{fl, static_cast<uint32_t>(arrayDtp->elementsConst())}}});
+                new AstLt{
+                    fl, new AstVarRef{fl, idxVarp, VAccess::READ},
+                    new AstConst{fl, static_cast<uint32_t>(packArrayDtp->elementsConst())}}});
             loopp->addStmtsp(newRandStmtsp(fl, elemp, nullptr, outputVarp));
             loopp->addStmtsp(new AstAssign{
                 fl, new AstVarRef{fl, idxVarp, VAccess::WRITE},
