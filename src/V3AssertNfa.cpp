@@ -1382,7 +1382,9 @@ class SvaNfaBuilder final {
     BuildResult buildFromLoweringTree(AstNodeExpr* treep, SvaStateVertex* entryVtxp,
                                       bool isTopLevelStep) {
         BuildResult result = buildExpr(treep, entryVtxp, isTopLevelStep);
-        if (result.valid() && result.finalCondp) {
+        // A final condition in the tree is deleted with it; a new one is already the result's
+        if (result.valid() && result.finalCondp
+            && (result.finalCondp == treep || result.finalCondp->backp())) {
             result.finalCondp = result.finalCondp->cloneTreePure(false);
         }
         VL_DO_DANGLING(treep->deleteTree(), treep);
