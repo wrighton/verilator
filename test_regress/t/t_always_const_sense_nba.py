@@ -11,8 +11,13 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-# With --timing, constant sensitivities are kept rather than reduced to an initial trigger
+# Cover constant change sensitivities in the non-timing scheduler.
 test.compile(verilator_flags2=["--no-timing", "--stats"])
+
+# Constant change sensitivities remain clocked and share one startup trigger.
+# Both NBA targets therefore use shadow variables, not the global NBA queue.
+test.file_grep(test.stats, r'NBA, variables using ShadowVar scheme\s+(\d+)', 2)
+test.file_grep(test.stats, r'Scheduling, \'act\' sense triggers\s+(\d+)', 2)
 
 test.execute()
 
