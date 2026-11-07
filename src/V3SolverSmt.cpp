@@ -1303,6 +1303,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             } else if (SmtUtil::isMultiDimHandleArray(varp->dtypep())) {
                 exprp->v3warn(E_UNSUPPORTED, "Unsupported: Constraint referencing a"
                                              " multi-dimensional array of class handles");
+                if (memberRefp) VL_DO_DANGLING(memberRefp->deleteTree(), memberRefp);
             } else {
                 createSolverVarHandle(varp, structSelOrCMeth, isGlobalConstrained, randMode,
                                       memberRefp, smtName, classOrPackagep, classp, initp);
