@@ -7,6 +7,7 @@
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
+import os
 import re
 
 import vltest_bootstrap
@@ -37,6 +38,10 @@ def gen(filename):
 
 
 gen(test.top_filename)
+
+if test.have_dev_asan:
+    # Freed memory in the AddressSanitizer quarantine would count as peak memory
+    test.setenv("ASAN_OPTIONS", os.environ.get("ASAN_OPTIONS", "") + ":quarantine_size_mb=0")
 
 test.compile(verilator_flags2=["--stats"], make_main=False, verilator_make_gmake=False)
 
