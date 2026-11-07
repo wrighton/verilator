@@ -395,7 +395,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh191, SUB_B, 2'h1);
+                               32'sh192, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -1038,13 +1038,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1101,13 +1101,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1163,13 +1163,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1223,13 +1223,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1304,13 +1304,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1401,13 +1401,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1486,13 +1486,13 @@ module t;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1604,13 +1604,13 @@ class Cls;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -1663,13 +1663,13 @@ class Cls;
     endfunction
     function get_coverage;
         get_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function get_inst_coverage;
         get_inst_coverage = /*CRESET*/;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
     endfunction
     function set_inst_name;
         input string name;
@@ -2038,6 +2038,10 @@ endmodule
 package p;
     logic pkgvar;
 endpackage
+module defparam_gen__pie9c2606d;
+    /* generate */ begin : dpg
+    end : dpg
+endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
     input byte pin;
@@ -2055,3 +2059,9 @@ package Pkg;
         BAZ = 32'h2
     } enum_t;
 endpackage
+module defparam_leaf;
+    parameter bit signed [31:0]  P = 32'sh1;
+endmodule
+module defparam_leaf__P2;
+    parameter bit signed [31:0]  P = 32'sh2;
+endmodule

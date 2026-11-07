@@ -9,9 +9,19 @@ class Cls #(
 );
 endclass
 
+module sub #(
+    type T = int
+);
+endmodule
+
 module t;
 
   Cls #(.PARAMBAD(1)) c;  // Bad param name
   Cls #(13, 1) cd;  // Bad param number
+
+  if (1) begin : g
+    Cls #(.PARAMBAD(2)) gc;  // Bad param name, in generate block
+    sub #(.T(Cls#(.PARAMBAD(3)))) u_sub ();  // Bad param name, in generate block instance
+  end
 
 endmodule

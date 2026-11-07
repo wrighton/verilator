@@ -33,6 +33,7 @@
 #include "V3Graph.h"
 #include "V3Stats.h"
 
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -382,18 +383,24 @@ namespace ModuleInliner {
 
 // The scopes instantiated directly under each scope (that is parent -> children links)
 using ScopeChildren = std::unordered_map<const AstScope*, std::vector<AstScope*>>;
+// The scopes of each instance to inline
+using CellScopes = std::unordered_map<const AstCell*, std::vector<AstScope*>>;
 
-// Record downward links from parent scopes to their child scopes
-void gatherScopes(const AstNodeModule* modp, ScopeChildren& children) {
+// Record downward links from parent scopes to their child scopes that are not inlined
+void gatherScopes(const AstNodeModule* modp, const CellScopes& cellScopeps,
+                  ScopeChildren& children) {
     for (AstNode* const nodep : modp->stmtspList()) {
         if (AstScope* const scopep = VN_CAST(nodep, Scope)) {
             // Note the top scope is held under the AstTopScope, so is not seen here
             UASSERT_OBJ(scopep->aboveScopep(), scopep, "Instance scope should have a scope above");
+            // A scope to inline is inlined before the scope above it is inlined or renamed
+            // (bottom up order), so no link to it is ever needed
+            if (cellScopeps.count(scopep->aboveCellp())) continue;
             children[scopep->aboveScopep()].push_back(scopep);
         } else if (const AstNodeModule* const subModp = VN_CAST(nodep, NodeModule)) {
             // An AstClass holds its scopes under itself
             UASSERT_OBJ(VN_IS(subModp, Class), subModp, "Nested module should be a class");
-            gatherScopes(subModp, children);
+            gatherScopes(subModp, cellScopeps, children);
         }
     }
 }
@@ -497,17 +504,16 @@ void inlineScope(AstScope* scopep, AstCell* cellp, const std::string& prefix,
     // Children of the inlined scope are now children of the scope above. Note this must
     // come after the erase above, as inserting into 'children' can invalidate 'it'.
     std::vector<AstScope*>& parentChildps = children[parentScopep];
-    parentChildps.erase(std::remove(parentChildps.begin(), parentChildps.end(), scopep),
-                        parentChildps.end());
     parentChildps.insert(parentChildps.end(), childScopeps.begin(), childScopeps.end());
 
     UASSERT_OBJ(!scopep->varsp() && !scopep->blocksp() && !scopep->inlinesp(), scopep,
                 "Inlined scope should be empty");
 }
 
-// Inline 'cellp' into 'modp'. 'last' indicatest this is tha last instance of the inlined module
-void inlineCell(AstNodeModule* modp, AstCell* cellp, bool last, InlineModGraph& graph,
-                ScopeChildren& children) {
+// Inline 'cellp', with its unlinked scopes 'scopeps', into 'modp'
+void inlineCell(AstNodeModule* modp, AstCell* cellp, const std::vector<AstScope*>& scopeps,
+                bool last, InlineModGraph& graph, ScopeChildren& children) {
+    // 'last' indicates this is the last instance of the inlined module
     UINFO(5, " Inline Cell  " << cellp);
     UINFO(5, " into Module  " << modp);
 
@@ -517,23 +523,9 @@ void inlineCell(AstNodeModule* modp, AstCell* cellp, bool last, InlineModGraph& 
 
     VNDeleter deleter;
     deleter.pushDeletep(cellp->unlinkFrBack());
+    for (AstScope* const scopep : scopeps) deleter.pushDeletep(scopep);
 
     AstNodeModule* const subModp = cellp->modp();  // The module being inlined
-
-    // Unlink all scopes of the instantiated module, so they are not cloned with it
-    std::vector<AstScope*> inlineScopeps;  // Scopes under 'cellp'
-    std::vector<AstScope*> otherScopeps;  // Scopes under some other instance
-    for (AstNode* const nodep : subModp->stmtspList()) {
-        AstScope* const scopep = VN_CAST(nodep, Scope);
-        if (!scopep) continue;
-        scopep->unlinkFrBack();
-        if (scopep->aboveCellp() == cellp) {
-            inlineScopeps.push_back(scopep);
-            deleter.pushDeletep(scopep);
-        } else {
-            otherScopeps.push_back(scopep);
-        }
-    }
 
     // Important: If this is the last cell, then don't clone the instantiated module but
     // inline the original directly. While this requires some special casing, doing so
@@ -549,8 +541,6 @@ void inlineCell(AstNodeModule* modp, AstCell* cellp, bool last, InlineModGraph& 
     AstNodeModule* inlinedp;
     if (last) {
         inlinedp = subModp->unlinkFrBack();
-        // This is the only instantiation, so all scopes are being inlined
-        UASSERT_OBJ(otherScopeps.empty(), cellp, "Last instance, but has other scopes");
     } else {
         inlinedp = subModp->cloneTree(false);
         // Compute map from the original module items to their clones
@@ -568,8 +558,6 @@ void inlineCell(AstNodeModule* modp, AstCell* cellp, bool last, InlineModGraph& 
                 }
             }
         }
-        // Put back the scopes of the instances we are not inlining this time
-        for (AstScope* const scopep : otherScopeps) subModp->addStmtsp(scopep);
     }
     deleter.pushDeletep(inlinedp);
 
@@ -615,17 +603,13 @@ void inlineCell(AstNodeModule* modp, AstCell* cellp, bool last, InlineModGraph& 
     }
 
     // Merge each scope (instance) of the inlined cell into the scope above it
-    for (AstScope* const scopep : inlineScopeps) inlineScope(scopep, cellp, prefix, children);
+    for (AstScope* const scopep : scopeps) inlineScope(scopep, cellp, prefix, children);
 }
 
 // Apply all inlining decisions
 void process(AstNetlist* netlistp, InlineModGraph& graph) {
     // Number of inlined instances, for statistics
     VDouble0 m_nInlined;
-
-    // Record the scope hierarchy - we need the downward links
-    ScopeChildren children;
-    for (AstNodeModule* const modp : netlistp->modulespList()) { gatherScopes(modp, children); }
 
     // Gather all cells that need to be inlined (this is in topological order)
     std::vector<InlineModCellVertex*> cVtxps;
@@ -634,6 +618,35 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
         if (!cVtxp) continue;
         if (!cVtxp->doInline()) continue;
         cVtxps.push_back(cVtxp);
+    }
+
+    // The scopes of each instance to inline, filled below
+    CellScopes cellScopeps;
+    for (const InlineModCellVertex* const cVtxp : cVtxps) {
+        cellScopeps.emplace(cVtxp->cellp(), std::vector<AstScope*>{});
+    }
+
+    // Record the scope hierarchy - we need the downward links
+    ScopeChildren children;
+    for (AstNodeModule* const modp : netlistp->modulespList()) {
+        gatherScopes(modp, cellScopeps, children);
+    }
+
+    // Unlink the scopes of the modules being inlined, so they are not cloned with them, and
+    // group them by instance. Doing this once here rather than for each inlined instance keeps
+    // inlining linear in the number of instances of a module.
+    std::map<AstNodeModule*, std::vector<AstScope*>> otherScopeps;  // Of instances not inlined
+    for (const InlineModCellVertex* const cVtxp : cVtxps) {
+        AstNodeModule* const subModp = cVtxp->cellp()->modp();
+        const auto pair = otherScopeps.emplace(subModp, std::vector<AstScope*>{});
+        if (!pair.second) continue;  // Already unlinked
+        for (AstNode* const nodep : subModp->stmtspList()) {
+            AstScope* const scopep = VN_CAST(nodep, Scope);
+            if (!scopep) continue;
+            scopep->unlinkFrBack();
+            const auto it = cellScopeps.find(scopep->aboveCellp());
+            (it != cellScopeps.end() ? it->second : pair.first->second).push_back(scopep);
+        }
     }
 
     // Inline cells bottom up (leaves into roots)
@@ -653,6 +666,10 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
         VL_DO_DANGLING(cVtxp->unlinkDelete(&graph), cVtxp);
         // Delete the module we are inlining if this is the last instance
         if (last) {
+            // This is the only instantiation, so all scopes are being inlined
+            const auto it = otherScopeps.find(cellp->modp());
+            UASSERT_OBJ(it->second.empty(), cellp, "Last instance, but has other scopes");
+            otherScopeps.erase(it);
             while (!iVtxp->outEmpty()) {
                 InlineModCellVertex* const tVtxp
                     = iVtxp->outEdges().frontp()->top()->as<InlineModCellVertex>();
@@ -664,8 +681,15 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
         }
 
         // Do it
-        inlineCell(mVtx.modp(), cellp, last, graph, children);
+        const auto it = cellScopeps.find(cellp);
+        inlineCell(mVtx.modp(), cellp, it->second, last, graph, children);
+        cellScopeps.erase(it);
         if (dumpGraphLevel() >= 9) graph.dumpDotFilePrefixed("inlinemod-cell");
+    }
+
+    // Put back the scopes of the instances not inlined
+    for (const auto& pair : otherScopeps) {
+        for (AstScope* const scopep : pair.second) pair.first->addStmtsp(scopep);
     }
 
     // Restore varp() == varScopep()->varp() on all references, as cloning modules for
@@ -701,12 +725,17 @@ void V3Inline::inlineAll(AstNetlist* nodep) {
             if (mVtxp->noInlineHard()) continue;
             // Don't inline if soft off
             if (mVtxp->noInlineSoft()) continue;
-            // If all instances of this module combined are less than 20% of the design, inline all
-            size_t totalSize = mVtxp->flattenedSize() * mVtxp->instanceCount();
-            if (totalSize * 5 < designSize) {
+            // If it would yield less than the given number of ops, or all instances of this
+            // module combined are less than 20% of the design, inline all
+            const size_t inlinedSize = mVtxp->inEdges().size() * mVtxp->size();
+            const size_t limit = v3Global.opt.inlineMult();
+            const size_t totalSize = mVtxp->flattenedSize() * mVtxp->instanceCount();
+            const char* const whyp = inlinedSize < limit          ? "inlinedSize < inlineMult"
+                                     : totalSize * 5 < designSize ? "< 20% of design"
+                                                                  : nullptr;
+            if (whyp) {
                 for (V3GraphEdge& edge : mVtxp->inEdges()) {
-                    InlineModCellVertex* const cVtxp = edge.fromp()->as<InlineModCellVertex>();
-                    cVtxp->setDoInline("< 20% of design");
+                    edge.fromp()->as<InlineModCellVertex>()->setDoInline(whyp);
                 }
             }
             // No more decisions based on module vertex
@@ -735,10 +764,6 @@ void V3Inline::inlineAll(AstNetlist* nodep) {
         if (mVtx.size() < INLINE_MODS_SMALLER) cVtx.setDoInline("Small");
         // If inlineMult is 0, inline it
         if (v3Global.opt.inlineMult() < 1) cVtx.setDoInline("inlineMult < 1");
-        // If it would yield less than the given number of ops, inline it
-        const size_t inlinedSize = mVtx.inEdges().size() * mVtx.size();
-        const size_t limit = v3Global.opt.inlineMult();
-        if (inlinedSize < limit) cVtx.setDoInline("inlinedSize < inlineMult");
     }
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("inlinemod-decision");
 

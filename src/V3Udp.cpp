@@ -20,6 +20,10 @@
 //
 // 0 1 0 on a, b, c turns into !a&b&~c
 //
+// In a table with edge-sensitive lines, all lines update the output with
+// non-blocking assignments, level-sensitive lines are also evaluated at time
+// 0, and edge-sensitive lines apply only when no level-sensitive line matches.
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -41,6 +45,9 @@ class UdpVisitor final : public VNVisitor {
     bool m_isFirstOutput = false;  // Whether the first IO port is output
     AstVarRef* m_outputInitVerfp = nullptr;  // Initial output value for sequential UDP
     AstAlways* m_alwaysBlockp = nullptr;  // Main Always block in UDP transform
+    std::vector<AstIf*> m_edgeIfps;  // Edge-sensitive lines of current table
+    std::vector<AstIf*> m_levelIfps;  // Level-sensitive sequential lines of current table
+    AstNodeExpr* m_levelCondp = nullptr;  // Any level-sensitive sequential line matches
 
     void visit(AstInitial* nodep) override {
         VL_RESTORER(m_inInitial);
@@ -105,7 +112,49 @@ class UdpVisitor final : public VNVisitor {
 
         m_alwaysBlockp = new AstAlways{fl, VAlwaysKwd::ALWAYS, nullptr, nullptr};
         fl->warnOff(V3ErrorCode::LATCH, true);
+        VL_RESTORER_CLEAR(m_edgeIfps);
+        VL_RESTORER_CLEAR(m_levelIfps);
+        VL_RESTORER(m_levelCondp);
+        m_levelCondp = nullptr;
         iterateChildren(nodep);
+        // A table with edge-sensitive lines is a flop, its level-sensitive lines are the
+        // asynchronous controls (e.g. reset, IEEE 1800-2023 29.9), so update them like a flop
+        const bool isFlop = !m_edgeIfps.empty();
+        for (AstIf* const ifp : m_levelIfps) {
+            AstSenTree* sentreep = nullptr;
+            if (isFlop) {
+                // IEEE evaluates the table on any input change. Instead evaluate on a change of
+                // an input the line tests (any input if none), so data inputs are not triggers.
+                // This, and reading the output before pending updates, differ only for a line
+                // also testing the output.
+                FileLine* const lineFlp = ifp->fileline();
+                sentreep = new AstSenTree{lineFlp, nullptr};
+                ifp->condp()->foreach([&](const AstVarRef* refp) {
+                    if (refp->varp() != m_oFieldVarp) addChangedSense(sentreep, refp->varp());
+                });
+                if (!sentreep->sensesp()) {
+                    for (AstVar* const varp : m_inputVars) addChangedSense(sentreep, varp);
+                }
+                AstAssign* const assignp = VN_AS(ifp->thensp(), Assign);
+                assignp->replaceWith(new AstAssignDly{lineFlp, assignp->lhsp()->unlinkFrBack(),
+                                                      assignp->rhsp()->unlinkFrBack()});
+                VL_DO_DANGLING(pushDeletep(assignp), assignp);
+                // Also evaluate at time 0, as a control held from time 0 does not change
+                AstNode::addNext<AstNode, AstNode>(m_alwaysBlockp,
+                                                   new AstInitial{lineFlp, ifp->cloneTree(false)});
+            }
+            m_alwaysBlockp->addNext(
+                new AstAlways{ifp->fileline(), VAlwaysKwd::ALWAYS, sentreep, ifp});
+        }
+        // Level-sensitive lines dominate edge-sensitive lines (IEEE 1800-2023 29.10)
+        if (m_levelCondp) {
+            for (AstIf* const ifp : m_edgeIfps) {
+                AstNodeExpr* const condp = ifp->condp()->unlinkFrBack();
+                ifp->condp(
+                    new AstLogAnd{fl, condp, new AstLogNot{fl, m_levelCondp->cloneTree(false)}});
+            }
+            VL_DO_DANGLING(pushDeletep(m_levelCondp), m_levelCondp);
+        }
 
         nodep->replaceWith(m_alwaysBlockp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -166,12 +215,6 @@ class UdpVisitor final : public VNVisitor {
         }
 
         string const oValName = nodep->udpIsCombo() ? oNodep->name() : oNodep->nextp()->name();
-        if (oValName == "-") {
-            if (edgetrigp) VL_DO_DANGLING(pushDeletep(edgetrigp), edgetrigp);
-            if (logandp) VL_DO_DANGLING(pushDeletep(logandp), logandp);
-            return;
-        }
-
         if (!nodep->udpIsCombo()) {
             if (oNodep->name() == "0") {
                 logandp = new AstLogAnd{
@@ -187,6 +230,16 @@ class UdpVisitor final : public VNVisitor {
                 if (logandp) VL_DO_DANGLING(pushDeletep(logandp), logandp);
                 return;
             }
+            // A level-sensitive line, also with '-' output, dominates edge-sensitive lines
+            if (!edgetrigp) {
+                AstNodeExpr* const condp = logandp->cloneTree(false);
+                m_levelCondp = m_levelCondp ? new AstLogOr{fl, m_levelCondp, condp} : condp;
+            }
+        }
+        if (oValName == "-") {
+            if (edgetrigp) VL_DO_DANGLING(pushDeletep(edgetrigp), edgetrigp);
+            if (logandp) VL_DO_DANGLING(pushDeletep(logandp), logandp);
+            return;
         }
 
         fl->warnOff(V3ErrorCode::LATCH, true);
@@ -206,6 +259,11 @@ class UdpVisitor final : public VNVisitor {
         if (!isSequentOutputSig(oValName)) {
             oNodep->nextp()->v3error("Illegal value for sequential UDP line output");
         }
+        if (!edgetrigp) {
+            m_levelIfps.push_back(ifp);
+            return;
+        }
+        m_edgeIfps.push_back(ifp);
         m_alwaysBlockp->addNext(new AstAlways{fl, VAlwaysKwd::ALWAYS, edgetrigp, ifp});
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
@@ -236,6 +294,12 @@ class UdpVisitor final : public VNVisitor {
         }
         if (valName[0] != '0' && valName[0] != '1') { valName = "?"; }
         return false;
+    }
+    // Add sensitivity to any change of an input
+    static void addChangedSense(AstSenTree* sentreep, AstVar* varp) {
+        FileLine* const fl = sentreep->fileline();
+        sentreep->addSensesp(
+            new AstSenItem{fl, VEdgeType::ET_CHANGED, new AstVarRef{fl, varp, VAccess::READ}});
     }
     static bool isCombOutputSig(const std::string& valName) {
         return (valName == "0" || valName == "1" || valName == "x" || valName == "X");

@@ -577,8 +577,8 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
         return "";
     } else if (basicp && (basicp->isRandomGenerator() || basicp->isStdRandomGenerator())) {
         return "";
-    } else if (basicp && basicp->isCovergroupInstHandle()) {
-        // The handle's own constructor deals with it.
+    } else if (basicp && (basicp->isCovergroupInstHandle() || basicp->isMailboxMessage())) {
+        // The type's own constructor deals with it.
         return "";
     } else if (basicp && (basicp->isEvent())) {
         return "VlAssignableEvent{};\n";

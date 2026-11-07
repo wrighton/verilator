@@ -82,22 +82,24 @@ void addTriggerIndices(LogicByScope& lbs, const TriggerKit& trigKit, bool pre) {
 
 // Add the VIF triggers that a given VarScope should be sensitive to.
 // Case 2 (non-virtual interface read): sensitive to that specific VarScope's trigger only
-// Case 3 (virtual interface read): sensitive to all member triggers of the same interface type
+// Case 3 (virtual interface read): also to all member triggers of the interface types it reaches
 void addTriggeredIface(const AstVarScope* vscp, const VirtIfaceTriggers::VscpTrigMap& vscpToTrig,
                        const VirtIfaceTriggers& virtIfaceTriggers, std::set<uint32_t>& triggers) {
+    // Interface member -- sensitive to this VarScope's trigger. This includes a virtual interface
+    // variable that is itself an interface member written through a virtual interface.
+    const auto ownIt = vscpToTrig.find(vscp);
+    if (ownIt != vscpToTrig.end()) triggers.insert(ownIt->second);
     if (vscp->varp()->isVirtIface()) {
-        // Virtual interface variable -- sensitive to all member triggers of this interface type
-        const AstIface* const ifacep = VN_AS(vscp->varp()->dtypep(), IfaceRefDType)->ifacep();
+        // Virtual interface variable -- sensitive to all member triggers of this interface type,
+        // and of the interface types of its virtual interface members, e.g. for 'vif.sub_vif.x'
+        const std::set<const AstIface*> ifaceps = virtIfaceTriggers.reachableIfaces(
+            VN_AS(vscp->varp()->dtypep()->skipRefp(), IfaceRefDType)->ifacep());
         for (const auto& entry : virtIfaceTriggers.m_triggers) {
-            if (entry.m_ifacep == ifacep) {
+            if (ifaceps.count(entry.m_ifacep)) {
                 const auto it = vscpToTrig.find(entry.m_vscp);
                 if (it != vscpToTrig.end()) triggers.insert(it->second);
             }
         }
-    } else {
-        // Non-virtual interface member -- sensitive to this VarScope's trigger only
-        const auto it = vscpToTrig.find(vscp);
-        if (it != vscpToTrig.end()) triggers.insert(it->second);
     }
     // May add none if sensIfacep() is set but no VIF write targets this member
 }
@@ -732,6 +734,20 @@ void createEval(AstNetlist* netlistp,  //
 
 //============================================================================
 // Helper that builds virtual interface trigger sentrees
+
+std::set<const AstIface*> VirtIfaceTriggers::reachableIfaces(const AstIface* ifacep) const {
+    std::set<const AstIface*> result{ifacep};
+    std::vector<const AstIface*> worklist{ifacep};
+    while (!worklist.empty()) {
+        const auto it = m_memberIfaces.find(worklist.back());
+        worklist.pop_back();
+        if (it == m_memberIfaces.end()) continue;
+        for (const AstIface* const memberIfacep : it->second) {
+            if (result.insert(memberIfacep).second) worklist.push_back(memberIfacep);
+        }
+    }
+    return result;
+}
 
 VirtIfaceTriggers::VscpTrigMap VirtIfaceTriggers::makeVscpToTrigMap(const TriggerKit& trigKit,
                                                                     uint32_t firstIndex) const {

@@ -962,6 +962,7 @@ bool AstCMethodHard::getPurity() {
     for (AstNodeExpr* const argp : pinspList()) {
         if (!argp->isPure()) return false;
     }
+    if (withp() && !withp()->isPure()) return false;
     return true;
 }
 int AstCMethodHard::instrCount() const {
@@ -2741,6 +2742,8 @@ AstNodeDType::CTypeRecursed AstNodeDType::cTypeRecurse(bool compound, bool packe
             info.m_type = "::VlStdRandomizer";
         } else if (bdtypep->isCovergroupInstHandle()) {
             info.m_type = "::VlCovInstHandle";
+        } else if (bdtypep->isMailboxMessage()) {
+            info.m_type = "::VlMailboxMessage";
         } else if (bdtypep->isEvent()) {
             info.m_type = v3Global.assignsEvents() ? "::VlAssignableEvent" : "::VlEvent";
         } else if (dtypep->widthMin() <= 8) {  // Handle unpacked arrays; not bdtypep->width
@@ -3653,11 +3656,13 @@ void AstPin::dump(std::ostream& str) const {
     }
     if (param()) str << " [PAR]";
     if (!paramPath().empty()) str << " paramPath=" << paramPath();
+    if (defparamGenAlt()) str << " [GENALT]";
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
 }
 void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
+    dumpJsonBoolFuncIf(str, defparamGenAlt);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
@@ -4712,6 +4717,14 @@ void AstVar::dumpJson(std::ostream& str) const {
     if (rand().isRandomizable()) dumpJsonStr(str, "rand", rand().ascii());
     dumpJsonGen(str);
 }
+bool AstVar::isNetOrNetPort() const {
+    if (isNet()) return true;
+    if (varType() != VVarType::PORT) return false;
+    // Port kind omitted: inputs and inouts are nets, outputs are nets unless
+    // explicitly data typed (IEEE 1800-2023 23.2.2.3)
+    return direction() == VDirection::INPUT || direction() == VDirection::INOUT
+           || (direction() == VDirection::OUTPUT && !isDeclTyped());
+}
 bool AstVar::isScBigUint() const {
     // Pragma has the highest priority
     if (m_attrScBigUint) return true;
@@ -5050,6 +5063,13 @@ void AstWith::dumpJson(std::ostream& str) const {
         dumpJsonStr(str, "restrictedNames", joined);
     }
     dumpJsonGen(str);
+}
+bool AstWith::isPure() {
+    // Check every node, as statements in the body (AstCReturn after V3Task) ignore their children
+    for (AstNode* const itemp : exprpList()) {
+        if (itemp->exists([](AstNode* nodep) { return !nodep->isPure(); })) return false;
+    }
+    return true;
 }
 void AstWithParse::dump(std::ostream& str) const {
     Super::dump(str);

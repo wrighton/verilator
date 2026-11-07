@@ -100,3 +100,91 @@ AstVar* RandModeVars::constraintModeVarp(AstClass* classp) {
     }
     return nullptr;
 }
+
+AstVar* ElemRandModes::modeVarp(AstVar* arrVarp) {
+    if (!m_arrays.count(arrVarp)) return nullptr;
+    AstVar*& modeVarp = m_modeVars[arrVarp];
+    if (modeVarp) return modeVarp;
+    // Keyed by element offset, kept across resizes, holding 1 for the elements with
+    // rand_mode off
+    FileLine* const fl = arrVarp->fileline();
+    if (!m_dtypep) {
+        m_dtypep = new AstAssocArrayDType{fl, arrVarp->findBitDType(), arrVarp->findUInt32DType()};
+        m_dtypep->dtypep(m_dtypep);
+        v3Global.rootp()->typeTablep()->addTypesp(m_dtypep);
+    }
+    AstClass* const classp = VN_AS(arrVarp->user2p(), Class);
+    modeVarp = new AstVar{fl, VVarType::MEMBER, "__Vrandmode__" + arrVarp->name(), m_dtypep};
+    modeVarp->user2p(classp);
+    classp->addMembersp(modeVarp);
+    return modeVarp;
+}
+
+//######################################################################
+// RandomizeUtil implementation
+
+AstNodeDType* RandomizeUtil::arrayElementDTypep(AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefToEnump();
+    while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefToEnump();
+    return dtypep;
+}
+
+AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstVar* const arrVarp,
+                                   AstNodeExpr* const idxp) {
+    const AstUnpackArrayDType* const unpackDtp
+        = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
+    if (!unpackDtp) return idxp;
+    AstNodeExpr* const offsetp
+        = new AstSub{fl, idxp, new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
+    offsetp->dtypeSetUInt32();
+    return offsetp;
+}
+
+bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
+    return varp->dtypep()->skipRefp()->isNonPackedArray()
+           && VN_IS(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
+}
+
+bool RandomizeUtil::operandsRand(const AstNode* nodep) {
+    return (nodep->op1p() && nodep->op1p()->user1()) || (nodep->op2p() && nodep->op2p()->user1())
+           || (nodep->op3p() && nodep->op3p()->user1())
+           || (nodep->op4p() && nodep->op4p()->user1());
+}
+
+AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
+                                  bool (*isRandIndexp)(const AstNodeExpr* indexp)) {
+    // exprp is the select itself, or reached from it through member and element selects and
+    // array methods, e.g. 'arr[idx].q.size()'. Each step is to the first operand, fromp.
+    for (AstNodeExpr* curp = exprp;;) {
+        AstNodeExpr* fromp;
+        AstNodeExpr* indexp = nullptr;
+        if (AstArraySel* const arraySelp = VN_CAST(curp, ArraySel)) {
+            fromp = arraySelp->fromp();
+            indexp = arraySelp->bitp();
+        } else if (AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
+            fromp = methodp->fromp();
+            if (methodp->method() == VCMethod::ARRAY_AT) indexp = methodp->pinsp();
+        } else if (AstStructSel* const structSelp = VN_CAST(curp, StructSel)) {
+            fromp = structSelp->fromp();
+        } else if (AstMemberSel* const memberSelp = VN_CAST(curp, MemberSel)) {
+            fromp = memberSelp->fromp();
+        } else {
+            return nullptr;
+        }
+        if (indexp && !fromp->user1() && isRandIndexp(indexp)) return curp;
+        curp = fromp;
+    }
+}
+
+AstNodeExpr* RandomizeUtil::newElemModeOffp(AstNodeExpr* const modesp, AstNodeExpr* const indexp) {
+    AstCMethodHard* const atp = new AstCMethodHard{
+        indexp->fileline(), modesp, VCMethod::ARRAY_AT, indexp->cloneTree(false)};
+    atp->dtypeSetBit();
+    return atp;
+}
+
+AstNodeExpr* RandomizeUtil::newMemberRefp(FileLine* const fl, AstNodeExpr* const objp,
+                                  AstVar* const varp) {
+    if (objp) return new AstMemberSel{fl, objp->cloneTreePure(false), varp};
+    return new AstVarRef{fl, VN_AS(varp->user2p(), Class), varp, VAccess::READ};
+}

@@ -443,6 +443,12 @@ class SubstVisitor final : public VNVisitor {
         if (!nodep->isPure()) m_ops = SUBST_MAX_OPS_NA;
     }
 
+    void visit(AstWith* nodep) override {
+        iterateChildren(nodep);
+        // Do not substitute an array method 'with' lambda, its body is a statement
+        m_ops = SUBST_MAX_OPS_NA;
+    }
+
     void visit(AstVar*) override {}  // Accelerate
     void visit(AstConst*) override {}  // Accelerate
 

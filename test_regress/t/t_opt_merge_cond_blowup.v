@@ -23,8 +23,10 @@ module t (
     end
   end
 
-  reg a[N-1:0];
-  reg b[N-1:0];
+  // One more element than written, so each NBA gets its own temporary variables, which the
+  // conditional merging then sees
+  reg a[N:0];
+  reg b[N:0];
 
   // This yields pathological complexity for the current conditional merging
   // algorithm. Note in practice, other parts of the compiler blow up on this

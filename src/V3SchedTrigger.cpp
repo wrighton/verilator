@@ -415,7 +415,14 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
     FileLine* const flp = netlistp->fileline();
     AstNodeDType* const dtypep = instVscp->dtypep()->skipRefp();
 
-    // Reject types that do not support value-change comparison
+    // Reject types that do not support value-change comparison. A virtual interface compares as
+    // a handle, but an interface port or cell is not a variable.
+    const AstIfaceRefDType* const ifaceDtypep = VN_CAST(dtypep, IfaceRefDType);
+    const AstNodeDType* elemDtp = dtypep;  // Element compared by (nested) dynamic containers
+    while (VN_IS(elemDtp, QueueDType) || VN_IS(elemDtp, DynArrayDType)
+           || VN_IS(elemDtp, AssocArrayDType) || VN_IS(elemDtp, WildcardArrayDType)) {
+        elemDtp = elemDtp->subDTypep()->skipRefp();
+    }
     if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
         if (bdtypep->isEvent() || bdtypep->isString()
             || bdtypep->keyword() == VBasicDTypeKwd::CHANDLE) {
@@ -423,12 +430,15 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
                                                 << dtypep->prettyDTypeNameQ() << " type");
             return;
         }
-    } else if (!VN_IS(dtypep, PackArrayDType) && !VN_IS(dtypep, UnpackArrayDType)
-               && !VN_IS(dtypep, NodeUOrStructDType) && !VN_IS(dtypep, ClassRefDType)) {
+    } else if (elemDtp == dtypep && !VN_IS(dtypep, PackArrayDType)
+               && !VN_IS(dtypep, UnpackArrayDType) && !VN_IS(dtypep, NodeUOrStructDType)
+               && !VN_IS(dtypep, ClassRefDType) && !(ifaceDtypep && ifaceDtypep->isVirtual())) {
         instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
                                             << dtypep->prettyDTypeNameQ() << " type");
         return;
     }
+    // Events in a container are compared as handles, so must be assignable (shared) events
+    if (elemDtp->isEvent()) v3Global.setAssignsEvents();
 
     const auto rdInst = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::READ}; };
     const auto wrPrev = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::WRITE}; };
@@ -667,8 +677,8 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         ifp->addThensp(cstmtp);
         cstmtp->add("VL_DBG_MSGS(\"         '\" + ");
         cstmtp->add(rd(dumpTagp));
-        cstmtp->add(" + \"' region trigger index " + std::to_string(index) + " is active: " + text
-                    + "\\n\");");
+        cstmtp->add(" + \"' region trigger index " + std::to_string(index)
+                    + " is active: " + V3OutFormatter::quoteNameControls(text) + "\\n\");");
     };
 
     // Add sense trigger computation
@@ -691,12 +701,21 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         trigps.emplace_back(pair.first);
 
         // Add initialization time trigger
-        if (pair.second || v3Global.opt.xInitialEdge()) {
+        AstNodeExpr* rhsp = nullptr;
+        if (pair.second) {
+            rhsp = new AstConst{flp, AstConst::BitTrue{}};
+        } else if (v3Global.opt.xInitialEdge()) {
+            rhsp = senExprBuilder.buildXInitialEdge(senItemp);
+        }
+        if (rhsp) {
             const int wrdIndex = static_cast<int>(i / WORD_SIZE);
             const int bitIndex = static_cast<int>(i % WORD_SIZE);
             AstNodeExpr* const wordp = new AstArraySel{flp, wr(kit.m_vscp), wrdIndex};
             AstNodeExpr* const lhsp = new AstSel{flp, wordp, bitIndex, 1};
-            AstNodeExpr* const rhsp = new AstConst{flp, AstConst::BitTrue{}};
+            // The --x-initial-edge value depends on what initial blocks assigned, so like the
+            // other initialization time triggers it is computed with the first trigger
+            // evaluation. It is never 0 when the edge was detected, so assigning it does not
+            // lose a trigger.
             initialTrigsp = AstNode::addNext(initialTrigsp, new AstAssign{flp, lhsp, rhsp});
         }
 
@@ -706,9 +725,7 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         V3EmitV::verilogForTree(senItemp, ss);
         ss << ")";
         // Names were hashed by V3Name, show the user the original text
-        std::string desc = VString::quoteBackslash(VName::dehash(ss.str()));
-        desc = VString::replaceSubstr(desc, "\n", "\\n");
-        addDebug(i, desc);
+        addDebug(i, VName::dehash(ss.str()));
     }
     UASSERT(trigps.size() == nSenseTriggers, "Inconsistent number of trigger expressions");
 

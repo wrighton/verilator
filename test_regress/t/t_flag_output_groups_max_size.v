@@ -10,7 +10,9 @@ module t #(
 ) (
     input clk
 );
-  logic [63:0] r[N];
+  // One more element than written, so each NBA gets its own temporary variables, making the
+  // headers large
+  logic [63:0] r[N+1];
   logic [63:0] sum;
   int cyc = 0;
 

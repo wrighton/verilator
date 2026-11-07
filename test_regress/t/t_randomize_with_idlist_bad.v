@@ -7,6 +7,9 @@
 class Cls;
   rand int m_x;
   rand int m_y;
+  function int f_inclass();
+    return randomize() with (m_x, m_w) { m_x > 0; };
+  endfunction
 endclass
 
 // 'm_z' is not a member of Cls -- typo (rejected as IEEE 1800-2023 18.7 violation).

@@ -174,6 +174,7 @@ public:
     bool sizeMattersLhs() const override { return false; }
     bool sizeMattersRhs() const override { return false; }
     bool isSystemFunc() const override { return true; }
+    bool isPure() override { return false; }  // Writes the seed
     int instrCount() const override { return INSTR_COUNT_DBL_TRIG; }
     void numberOperate(V3Number&, const V3Number&, const V3Number&) override { V3ERROR_NA; }
 };
@@ -488,6 +489,7 @@ public:
     bool sizeMattersRhs() const override { return false; }
     bool sizeMattersThs() const override { return false; }
     bool isSystemFunc() const override { return true; }
+    bool isPure() override { return false; }  // Writes the seed
     int instrCount() const override { return INSTR_COUNT_DBL_TRIG; }
     void numberOperate(V3Number& out, const V3Number& lhs, const V3Number& rhs,
                        const V3Number& ths) override {
@@ -627,6 +629,7 @@ public:
     }
     ASTGEN_MEMBERS_AstWith;
     bool hasDType() const override { return true; }
+    bool isPure() override;
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
     const char* broken() const override {
         BROKEN_RTN(!indexArgRefp());  // varp needed to know lambda's arg dtype
@@ -2274,9 +2277,11 @@ public:
     bool isSystemFunc() const override { return true; }
 };
 class AstSClocked final : public AstNodeExpr {
-    // Sequence expression with an explicit leading clocking event
+    // Sequence or property expression with an explicit leading clocking event
     // IEEE 1800-2023 16.7: sequence_expr ::= clocking_event sequence_expr
-    // The clocking event is hoisted to the enclosing assertion clock by V3AssertNfa.
+    // IEEE 1800-2023 16.12: property_expr ::= clocking_event property_expr
+    // Leading a property_spec, the clocking event is moved to it by V3LinkParse; leading a
+    // sequence, it is hoisted to the enclosing assertion clock by V3AssertNfa.
     // @astgen op1 := sensesp : AstSenItem
     // @astgen op2 := exprp : AstNodeExpr
 public:

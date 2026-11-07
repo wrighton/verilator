@@ -1343,7 +1343,7 @@ class AstDefParam final : public AstNode {
     // A defparam assignment
     // Parents: MODULE
     // @astgen op1 := rhsp : AstNodeExpr
-    // @astgen op2 := pathp : AstNodeExpr
+    // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if in the defparam's own scope
     string m_name;  // Name of variable getting set
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, const string& name, AstNodeExpr* rhsp)
@@ -1751,8 +1751,9 @@ class AstPin final : public AstNode {
     // @astgen ptr := m_modPTypep : Optional[AstParamTypeDType]  // Param type connects to on sub
     int m_pinNum;  // Pin number
     string m_name;  // Pin name, or "" for number based interconnect
-    string m_paramPath;  // Original defparam cell path, if this pin came from a defparam
+    string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
+    bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
 public:
@@ -1780,6 +1781,8 @@ public:
     void param(bool flag) { m_param = flag; }
     const string& paramPath() const { return m_paramPath; }
     void paramPath(const string& path) { m_paramPath = path; }
+    bool defparamGenAlt() const { return m_defparamGenAlt; }
+    void defparamGenAlt(bool flag) { m_defparamGenAlt = flag; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
@@ -2708,12 +2711,14 @@ public:
     bool isIfaceParam() const { return m_isIfaceParam; }
     bool isSignal() const { return varType().isSignal(); }
     bool isNet() const { return varType().isNet(); }
+    // True if a net, including a port whose omitted kind defaults to a net
+    bool isNetOrNetPort() const;
     bool isWor() const { return varType().isWor(); }
     bool isWiredNet() const { return varType().isWiredNet(); }
     bool isTemp() const { return varType().isTemp(); }
     bool isClassMember() const { return varType() == VVarType::MEMBER; }
     bool isVirtIface() const {
-        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep(), IfaceRefDType)) {
+        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep()->skipRefp(), IfaceRefDType)) {
             return dtp->isVirtual();
         }
         return false;
