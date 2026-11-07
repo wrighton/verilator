@@ -7720,6 +7720,44 @@ class RandomizeVisitor final : public VNVisitor {
         }
     }
 
+    // Give dist preambles operand ownership, recording the original body boundaries
+    // so callers can restore the off-tree layout when needed.
+    static std::vector<std::pair<AstConstraintForeach*, AstNode*>>
+    attachDistPreambles(AstNode* const nodep) {
+        std::vector<std::pair<AstConstraintForeach*, AstNode*>> preambles;
+        nodep->foreachAndNext([&](AstConstraintForeach* const foreachp) {
+            if (foreachp->user3p()) preambles.emplace_back(foreachp, foreachp->bodyp());
+        });
+        // A lowered dist leaves a non-empty body; remember its first statement so
+        // each preamble can be detached again without walking its off-tree list.
+        for (const std::pair<AstConstraintForeach*, AstNode*>& preamble : preambles) {
+            AstConstraintForeach* const foreachp = preamble.first;
+            AstNode* const preamblep = foreachp->user3p();
+            foreachp->user3p(nullptr);
+            preamblep->addNext(preamble.second->unlinkFrBackWithNext());
+            foreachp->addBodyp(preamblep);
+        }
+        return preambles;
+    }
+
+    // Clone preamble variables and loop-index references with the bodies using them.
+    static AstNode* cloneWithDistPreambles(AstNode* const nodep) {
+        const std::vector<std::pair<AstConstraintForeach*, AstNode*>> preambles
+            = attachDistPreambles(nodep);
+        AstNode* const clonep = nodep->cloneTree(true);
+        const auto restorePreamble
+            = [](AstConstraintForeach* const foreachp, AstNode* const bodyp) {
+                  AstNode* const preamblep = foreachp->bodyp()->unlinkFrBackWithNext();
+                  foreachp->addBodyp(bodyp->unlinkFrBackWithNext());
+                  foreachp->user3p(preamblep);
+              };
+        for (const std::pair<AstConstraintForeach*, AstNode*>& preamble : preambles) {
+            restorePreamble(preamble.first->clonep(), preamble.second->clonep());
+            restorePreamble(preamble.first, preamble.second);
+        }
+        return clonep;
+    }
+
     static bool isDynArrOfClassTypeRecurse(const AstNodeDType* const dtypep) {
         const AstNodeDType* const refp = dtypep->skipRefp();
         if (VN_IS(refp, DynArrayDType) || VN_IS(refp, QueueDType)) {
@@ -8840,10 +8878,9 @@ class RandomizeVisitor final : public VNVisitor {
             }
         }
 
-        // A pristine copy of the with-block's own constraint tree, taken before any
-        // mutation, in case a size phase (below) needs to re-lower it a second time
-        // against post-resize arrays.
-        AstNode* const capturedClonep = capturedTreep->cloneTree(true);
+        // Keep an independent copy of the lowered with-block constraints to rebuild
+        // them against post-resize arrays if a size phase is needed below.
+        AstNode* const capturedClonep = cloneWithDistPreambles(capturedTreep);
 
         // Arrays that gain a size var from THIS with-block's own inline .size()==expr
         // constraint (as opposed to a class-level one) and are also referenced by a
@@ -9049,6 +9086,8 @@ class RandomizeVisitor final : public VNVisitor {
                                       new AstVarRef{fl, sizeOkVarp, VAccess::READ}},
                            new AstVarRef{fl, finalOkVarp, VAccess::READ}}});
         } else {
+            // Preambles held in user3p are off-tree; reattach them so deletion frees them.
+            attachDistPreambles(capturedClonep);
             VL_DO_DANGLING(capturedClonep->deleteTree(), capturedClonep);
 
             // Call the solver and set return value
