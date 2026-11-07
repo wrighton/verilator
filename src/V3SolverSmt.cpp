@@ -208,7 +208,6 @@ public:
         return setupAllTaskp;
     }
 
-
     // Whether dtypep is, or contains anywhere through unpacked array/struct
     // nesting, a real value. A packed struct can't hold one (IEEE disallows
     // real as a packed-struct member), so it's never worth descending into.
@@ -477,7 +476,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     // IEEE 1800-2023 18.4: all rand members of a rand unpacked struct are solved
     // concurrently, so unreferenced rand members must still reach the solver.
     static void markStructConstrainedRandRecurse(AstNodeDType* const dtypep) {
-        AstStructDType* const structp = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
+        AstStructDType* const structp
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
         if (!structp || structp->packed()) return;
         structp->markConstrainedRand(true);
         for (AstMemberDType* const memberp : structp->memberspList()) {
@@ -1057,8 +1057,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         blockp->addDeclsp(textVarp);
         lowerTextReturns(blockp->stmtsp(), textVarp);
-        return new AstSFormatF{fl, "%s", false,
-                               new AstExprStmt{fl, blockp, new AstVarRef{fl, textVarp, VAccess::READ}}};
+        return new AstSFormatF{
+            fl, "%s", false,
+            new AstExprStmt{fl, blockp, new AstVarRef{fl, textVarp, VAccess::READ}}};
     }
     // Make each AstCReturn in the linked statements from stmtp on assign textVarp instead,
     // see newReturnedTextp
@@ -1224,10 +1225,10 @@ class ConstraintExprVisitor final : public VNVisitor {
         const int width = exprp->width();
         AstVar* const textVarp = newTextVarp(selp);
         // Each element stores its value in the array built so far
-        AstNode* bodyp = new AstAssign{
-            fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
-            new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(store "},
-                           new AstVarRef{fl, textVarp, VAccess::READ}}};
+        AstNode* bodyp
+            = new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
+                            new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(store "},
+                                           new AstVarRef{fl, textVarp, VAccess::READ}}};
         bodyp->addNext(newTermAppendp(
             fl, textVarp,
             getConstFormat(posp->width() < idxWidth ? new AstExtend{fl, posp, idxWidth} : posp)));
@@ -1257,11 +1258,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
         blockp->addDeclsp(textVarp);
-        blockp->addStmtsp(new AstAssign{
-            fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
-            new AstConst{fl, AstConst::String{},
-                         "((as const (Array (_ BitVec " + cvtToStr(idxWidth) + ") (_ BitVec "
-                             + cvtToStr(width) + "))) "}});
+        blockp->addStmtsp(
+            new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
+                          new AstConst{fl, AstConst::String{},
+                                       "((as const (Array (_ BitVec " + cvtToStr(idxWidth)
+                                           + ") (_ BitVec " + cvtToStr(width) + "))) "}});
         blockp->addStmtsp(newTextAppendp(fl, textVarp, getConstFormat(defaultp)));
         blockp->addStmtsp(newTextAppendp(fl, textVarp, new AstConst{fl, AstConst::String{}, ")"}));
         blockp->addStmtsp(new AstForeach{fl, headerp, bodyp});
@@ -1330,7 +1331,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             return callp->makeStmt();
         };
         AstNodeExpr* activep = newHandlesActivep(m_memberMap, memberselp->fromp(), true, false);
-        AstVar* const subRandModeVarp = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule));
+        AstVar* const subRandModeVarp
+            = RandModeVars::randModeVarp(VN_AS(varp->user2p(), NodeModule));
         if (randMode.usesMode && subRandModeVarp) {
             AstMemberSel* const randModeSelp
                 = new AstMemberSel{fl, memberselp->fromp()->cloneTree(false), subRandModeVarp};
@@ -2893,7 +2895,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
         }
         // Of an array of objects, or of arrays of them
-        const bool objectElem = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
+        const bool objectElem
+            = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
         const bool indexIsRand = isRandIndex(nodep->bitp());
         if (!indexIsRand) {
@@ -4432,7 +4435,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         for (AstNode* nodep = foreachp->headerp()->elementsp(); nodep; nodep = nodep->nextp()) {
             idxVarps.push_back(VN_AS(nodep, Var));
         }
-        AstNodeExpr* const elemp = RandomizeUtil::newElemSelp(fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp), idxVarps);
+        AstNodeExpr* const elemp = RandomizeUtil::newElemSelp(
+            fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp), idxVarps);
         AstNodeExpr* condp
             = new AstNeq{fl, elemp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
         if (AstVar* const modeVarp = m_elemModes.modeVarp(arrVarp)) {
@@ -4441,7 +4445,8 @@ class SolverSmtLowering final : public V3SolverLowering {
                 fl, arrVarp->dtypep(), new AstVarRef{fl, idxVarps[0], VAccess::READ});
             condp = new AstLogAnd{
                 fl, condp,
-                new AstNot{fl, RandomizeUtil::newElemModeOffp(RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp)}};
+                new AstNot{fl, RandomizeUtil::newElemModeOffp(
+                                   RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp)}};
             VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
         }
         if (AstNodeExpr* const modep = newObjConstraintModep(elemp, it->second.origp)) {
@@ -4460,8 +4465,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstVar* const idxVarp = new AstVar{fl, VVarType::VAR, m_randArrayUniqueNames.get(""),
                                            arrVarp->findUInt32DType()};
         // Offset of the element, as used by the solver
-        AstNodeExpr* const offsetp
-            = RandomizeUtil::newElemOffsetp(fl, arrVarp->dtypep(), new AstVarRef{fl, idxVarp, VAccess::READ});
+        AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+            fl, arrVarp->dtypep(), new AstVarRef{fl, idxVarp, VAccess::READ});
         AstNodeExpr* const elemp = newElemp(fl, objp, arrVarp, offsetp->cloneTree(false));
         const bool unpacked = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
         // Pin solver term termFmt (formatted with the offset) of variable varFmt to valuep
@@ -4495,13 +4500,18 @@ class SolverSmtLowering final : public V3SolverLowering {
             pinsp = newPinp(name, "(select " + name + " #x%8x)", elemp);
         }
         AstIf* const ifp
-            = new AstIf{fl, RandomizeUtil::newElemModeOffp(RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp), pinsp};
+            = new AstIf{fl,
+                        RandomizeUtil::newElemModeOffp(
+                            RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp),
+                        pinsp};
         VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
         // In a block, so the loop variable is moved out of an enclosing 'if'
         return new AstBegin{
             fl, m_uniqueNames.get("__VrandBlock"),
-            new AstForeach{fl, new AstForeachHeader{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp), idxVarp},
-                           ifp},
+            new AstForeach{
+                fl,
+                new AstForeachHeader{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp), idxVarp},
+                ifp},
             false};
     }
     // Statements pinning the elements with rand_mode off in the arrays of classp
@@ -6360,8 +6370,8 @@ public:
             calls.insert(calls.end(), newCalls.begin(), newCalls.end());
             addFuncRounds(
                 randomizeFuncp, solveAfterp ? solveAfterp->nextp() : randomizeFuncp->stmtsp(),
-                classGenp ? classGenp : localGenp, localGenp, retVarp, basicRandomizeFuncp,
-                calls, classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
+                classGenp ? classGenp : localGenp, localGenp, retVarp, basicRandomizeFuncp, calls,
+                classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
         }
         // A failed call leaves the randc cycles alone
         if (randcHistoryp) {
@@ -6384,9 +6394,8 @@ public:
         expandUniqueElementList(setupBlockp->stmtsp());
         AstNode* const itemsp = setupBlockp->stmtsp();  // Expansion may delete the first item
         const ConstraintExprVisitor exprVisitor{
-            nullptr,       m_memberMap, itemsp,        setupBlockp,
-            stdrandp,      nullptr,     m_writtenVars, &m_uniqueConstraintId,
-            m_uniqueNames, nullptr};
+            nullptr,       m_memberMap,           itemsp,        setupBlockp, stdrandp, nullptr,
+            m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, nullptr};
         m_stdFuncRounds[randomizeFuncp] = StdFuncRounds{roundsFirstp, exprVisitor.funcCalls()};
         AstCExpr* const solverCallp = new AstCExpr{fl};
         solverCallp->dtypeSetBit();

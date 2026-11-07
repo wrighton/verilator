@@ -8893,9 +8893,9 @@ class WidthVisitor final : public VNVisitor {
             const AstConcat* const concatp = VN_CAST(exprp, Concat);
             const bool isShort = VN_IS(exprp, Const) || (concatp && VN_IS(concatp->lhsp(), Const));
             // Decided before its PRELIM visit, reported after the destination checks below
-            const bool notLvalue = (pinDirection == VDirection::OUTPUT
-                                    || pinDirection == VDirection::INOUT)
-                                   && !isShort && !isPinLvalue(exprp);
+            const bool notLvalue
+                = (pinDirection == VDirection::OUTPUT || pinDirection == VDirection::INOUT)
+                  && !isShort && !isPinLvalue(exprp);
             userIterateAndNext(nodep->exprp(), WidthVP{nodep->modVarp()->dtypep(), PRELIM}.p());
             // Outputs are continuous assignments; inouts are transistor connections (23.3.3).
             if (pinDirection.isOutput() || pinDirection.isInout()) {

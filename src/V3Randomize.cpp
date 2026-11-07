@@ -64,7 +64,6 @@ enum ClassRandom : uint8_t {
     IS_STD_RANDOMIZED,  // std::randomize() is called
 };
 
-
 // ######################################################################
 // Establishes the target of a rand_mode() call
 
@@ -348,8 +347,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 // If member is randomizable and of class type, mark its class
                 if (varp->rand().isRandomizable()) {
                     // Also the elements of arrays of any dimension
-                    const AstClassRefDType* const classRefp
-                        = VN_CAST(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
+                    const AstClassRefDType* const classRefp = VN_CAST(
+                        RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
                     if (classRefp) {
                         AstClass* const rclassp = classRefp->classp();
                         if (!rclassp->user1()) {
@@ -643,7 +642,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
                                arrVarp->findIntDType()});
                 idxVarsp = AstNode::addNext(idxVarsp, idxVarps.back());
             }
-            AstNodeExpr* const elemp = RandomizeUtil::newElemSelp(fl, arrRefp->cloneTree(false), idxVarps);
+            AstNodeExpr* const elemp
+                = RandomizeUtil::newElemSelp(fl, arrRefp->cloneTree(false), idxVarps);
             AstConstraint* const cloneConstrp
                 = cloneObjectConstraint(constrp, elemp, prefix, targetClassp);
             VL_DO_DANGLING(elemp->deleteTree(), elemp);
@@ -1870,7 +1870,8 @@ class RandomizeVisitor final : public VNVisitor {
     AstNodeStmt* newBasicStdRandStmtsp(FileLine* const fl, AstVar* const stdrandp,
                                        AstVar* const fvarp, AstNodeExpr* const exprp) {
         AstNodeDType* const dtypep = exprp->dtypep()->skipRefp();
-        const AstStructDType* const structp = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
+        const AstStructDType* const structp
+            = VN_CAST(RandomizeUtil::arrayElementDTypep(dtypep), StructDType);
         if (structp && !structp->packed()) {
             // The runtime randomizes integral values and arrays of them, so recurse into
             // arrays of unpacked structs and into the members
@@ -1961,7 +1962,8 @@ class RandomizeVisitor final : public VNVisitor {
             randStmtsp = new AstIf{
                 fl,
                 new AstLogNot{
-                    fl, RandomizeUtil::newElemModeOffp(RandomizeUtil::newMemberRefp(fl, nullptr, elemModeVarp), firstIndexp)},
+                    fl, RandomizeUtil::newElemModeOffp(
+                            RandomizeUtil::newMemberRefp(fl, nullptr, elemModeVarp), firstIndexp)},
                 randStmtsp};
         }
         // TODO: we should just not clone in 'newRandStmtsp' if not necessary
@@ -2889,7 +2891,8 @@ class RandomizeVisitor final : public VNVisitor {
             m_nullPhase = phase;
             classp->foreachMember([&](AstClass* const ownerClassp, AstVar* const memberVarp) {
                 if (!memberVarp->rand().isRandomizable()) return;
-                if (!VN_IS(RandomizeUtil::arrayElementDTypep(memberVarp->dtypep()), ClassRefDType)) return;
+                if (!VN_IS(RandomizeUtil::arrayElementDTypep(memberVarp->dtypep()), ClassRefDType))
+                    return;
                 AstVarRef* const refp = new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ};
                 AstNodeStmt* stmtp = newRandStmtsp(fl, refp, nullptr, fvarp);
                 if (inRandHandleCycle(memberVarp, classp)) {

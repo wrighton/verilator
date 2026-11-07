@@ -581,41 +581,14 @@ public:
         }
     }
     const char* dpiType() const {
-        static constexpr const char* const names[] = {"%E-unk",
-                                                      "svBit",
-                                                      "char",
-                                                      "void*",
-                                                      "void",
-                                                      "null",
-                                                      "char",
-                                                      "int",
-                                                      "%E-integer",
-                                                      "%E-integer",
-                                                      "svLogic",
-                                                      "svLogic",
-                                                      "long long",
-                                                      "double",
-                                                      "short",
-                                                      "%E-time",
-                                                      "%E-time",
-                                                      "const char*",
-                                                      "%E-untyped",
-                                                      "dpiScope",
-                                                      "const char*",
-                                                      "%E-dly-sched",
-                                                      "%E-trig-sched",
-                                                      "%E-dyn-sched",
-                                                      "%E-nba-queue",
-                                                      "%E-fork",
-                                                      "%E-proc-ref",
-                                                      "%E-rand-gen",
-                                                      "%E-stdrand-gen",
-                                                      "%E-cg-insthandle",
-                                                      "%E-mbx-msg",
-                                                      "IData",
-                                                      "QData",
-                                                      "%E-logic-implct",
-                                                      " MAX"};
+        static constexpr const char* const names[] = {
+            "%E-unk",      "svBit",        "char",          "void*",           "void",
+            "null",        "char",         "int",           "%E-integer",      "%E-integer",
+            "svLogic",     "svLogic",      "long long",     "double",          "short",
+            "%E-time",     "%E-time",      "const char*",   "%E-untyped",      "dpiScope",
+            "const char*", "%E-dly-sched", "%E-trig-sched", "%E-dyn-sched",    "%E-nba-queue",
+            "%E-fork",     "%E-proc-ref",  "%E-rand-gen",   "%E-stdrand-gen",  "%E-cg-insthandle",
+            "%E-mbx-msg",  "IData",        "QData",         "%E-logic-implct", " MAX"};
         return names[m_e];
     }
     static void selfTest() {
