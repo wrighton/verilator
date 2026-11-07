@@ -3773,7 +3773,7 @@ inline std::string VL_CONCATN_NNN(const std::string& lhs, const std::string& rhs
     return lhs + rhs;
 }
 // Append in place, unlike 'lhs = VL_CONCATN_NNN(lhs, rhs)', which copies 'lhs'
-inline void VL_APPENDN_NN(std::string& lhsr, const std::string& rhs) VL_PURE { lhsr += rhs; }
+inline void VL_APPENDN_NN(std::string& lhsr, const std::string& rhs) VL_MT_SAFE { lhsr += rhs; }
 inline std::string VL_REPLICATEN_NNQ(const std::string& lhs, IData rep) VL_PURE {
     std::string result;
     result.reserve(lhs.length() * rep);
