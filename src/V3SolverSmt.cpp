@@ -3600,8 +3600,14 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
         rand64p->dtypeSetUInt64();
-        AstNodeExpr* const offsetp
-            = new AstCCast{fl, new AstModDiv{fl, rand64p, rangeSzp}, distWidth};
+        AstNodeExpr* offsetp = new AstModDiv{fl, rand64p, rangeSzp};
+        // The offset is below 2^64, so it is zero extended to a wider expression; a cast is
+        // only to a basic C type
+        if (distWidth > VL_QUADSIZE) {
+            offsetp = new AstExtend{fl, offsetp, distWidth};
+        } else {
+            offsetp = new AstCCast{fl, offsetp, distWidth};
+        }
         AstNodeExpr* const valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
         AstNodeExpr* const eqp = new AstEq{fl, distExprCopyp, valuep};
         eqp->user1(true);
