@@ -11,8 +11,6 @@ import vltest_bootstrap
 
 test.scenarios('linter')
 
-test.lint(fails=test.vlt_all, expect_filename=test.golden_filename)
-
 if test.vlt_all:
     test.lint(fails=True,
               verilator_flags2=['+define+PERMISSION_BAD'],

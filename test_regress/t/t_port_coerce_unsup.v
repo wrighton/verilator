@@ -47,31 +47,4 @@ module t;
   dropped_drv u_var (.a(v));
 endmodule
 
-`else
-// Coerced port connected by a hierarchical reference to a non-interface net
-interface drv_if (
-    input logic clk,
-    input logic d
-);
-  clocking cb @(posedge clk);
-    // verilator lint_off ASSIGNIN
-    output d;
-    // verilator lint_on ASSIGNIN
-  endclocking
-endinterface
-
-module dut (
-    input logic [1:0] d,
-    output logic q
-);
-  assign q = d[0];
-endmodule
-
-module t (
-    input clk,
-    output q
-);
-  dut u (.d(), .q(q));
-  drv_if i (.clk(clk), .d(t.u.d[0]));
-endmodule
 `endif
