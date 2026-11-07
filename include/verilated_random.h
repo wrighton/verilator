@@ -283,6 +283,8 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
     bool m_checkOnly = false;  // Set for randomize(null)
+    bool m_sizeSolve = false;  // Set for the solve of array sizes before the final solve
+    bool m_sizeSolved = false;  // The sizes are solved, so the final solve is next
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
@@ -313,7 +315,7 @@ class VlRandomizer VL_NOT_FINAL {
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
     void recordRandcValues();  // Record solved randc values for future exclusion
     size_t hashConstraints(const std::vector<std::string>& extras) const;
-    bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly);
+    bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve = false);
     // "(distinct ...)" expression per unique-constrained array
     std::vector<std::string> buildUniqueExprs() const;
     void emitDefines(std::ostream& os) const;
@@ -389,6 +391,8 @@ public:
     // Validate the constraints against the current runtime values of every
     // registered rand variable without picking new ones.
     bool next_check_only(VlRNGReseeds& rngr);
+    /// Finds the sizes of the arrays for a final next(), without advancing randc cycles
+    bool next_size(VlRNGReseeds& rngr);
 
     // ---  Process the key for associative array  ---
 
