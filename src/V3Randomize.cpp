@@ -2025,9 +2025,10 @@ class RandomizeVisitor final : public VNVisitor {
             return createArrayForeachLoop(fl, memberDtp, exprp, [&](AstNodeExpr* elemp) {
                 return newRandStmtsp(fl, elemp, nullptr, outputVarp);
             });
-        } else if (const AstPackArrayDType* const arrayDtp = VN_CAST(memberDtp, PackArrayDType);
-                   arrayDtp && packedHasEnum(arrayDtp)) {
+        } else if (VN_IS(memberDtp, PackArrayDType)
+                   && packedHasEnum(VN_AS(memberDtp, PackArrayDType))) {
             // A loop over the elements, so each enum gets one of its values
+            const AstPackArrayDType* const arrayDtp = VN_AS(memberDtp, PackArrayDType);
             AstNodeDType* const elemDtp = arrayDtp->subDTypep();
             AstVar* const idxVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VpackIdx"),
