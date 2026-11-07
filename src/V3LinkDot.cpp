@@ -216,6 +216,7 @@ private:
     // Generate block -> earlier same-named alternative it replaced in the symbol table
     std::unordered_map<const VSymEnt*, VSymEnt*> m_genAltPrev;
     std::set<const AstVar*> m_ownDefparamVars;  // Set by a defparam in their scope
+    std::vector<AstCell*> m_topIfaceCellps;  // Dummy cells of top level interfaces
     const VLinkDotStep m_step;  // Operational step
 
 public:
@@ -274,6 +275,7 @@ public:
     ~LinkDotState() {
         V3Error::errorExitCb(nullptr);
         s_errorThisp = nullptr;
+        for (AstCell* const cellp : m_topIfaceCellps) VL_DO_DANGLING(cellp->deleteTree(), cellp);
     }
 
     // ACCESSORS
@@ -423,6 +425,8 @@ public:
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
         return symp;
     }
+    // Keep the dummy cell of a top level interface, which its symbol refers to
+    void keepTopIfaceCell(AstCell* nodep) { m_topIfaceCellps.push_back(nodep); }
     VSymEnt* insertTopIface(AstCell* nodep, const string& scopename) {
         VSymEnt* const symp = new VSymEnt{&m_syms, nodep};
         UINFO(9, "      INSERTtopiface se" << cvtToHex(symp) << "  " << scopename << " " << nodep);
@@ -1364,7 +1368,7 @@ class LinkDotFindVisitor final : public VNVisitor {
                                 m_curSymp = m_modSymp
                                     = m_statep->insertTopIface(ifacecellp, m_scope);
                                 iterate(ifacecellp);
-                                VL_DO_DANGLING(pushDeletep(ifacecellp), ifacecellp);
+                                m_statep->keepTopIfaceCell(ifacecellp);
                             }
                         }
                     }
