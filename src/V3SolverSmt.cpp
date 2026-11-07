@@ -3934,12 +3934,13 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
     }
 
-    static AstCExpr* newSolverCallp(AstVar* const genp) {
+    // sizeSolve for the solve of array sizes before the final solve
+    static AstCExpr* newSolverCallp(AstVar* const genp, const bool sizeSolve = false) {
         AstCExpr* const callp = new AstCExpr{genp->fileline()};
         callp->dtypeSetBit();
         callp->add(new AstVarRef{genp->fileline(), VN_CAST(genp->user2p(), NodeModule), genp,
                                  VAccess::READWRITE});
-        callp->add(".next(__Vm_rng)");
+        callp->add(sizeSolve ? ".next_size(__Vm_rng)" : ".next(__Vm_rng)");
         return callp;
     }
 
@@ -3957,7 +3958,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             addFrozenSizePin(fl, arrVarp, randomizep, genp, randModeVarp);
         }
         randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, sizeOkVarp, VAccess::WRITE},
-                                            newSolverCallp(genp)});
+                                            newSolverCallp(genp, true)});
         return sizeOkVarp;
     }
 
