@@ -940,14 +940,25 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
     for (const auto& c : extras) {
         h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
+    // Only the randc variables themselves, not others a randomize() with also registers
     for (const auto& var : m_vars) {
+        if (randcOnly && !m_randcVarNames.count(var.first)) continue;
         h ^= std::hash<std::string>{}(var.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<int>{}(var.second->width()) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<int>{}(var.second->dimension()) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        if (randcOnly && var.second->dimension() > 0) {
+            // The elements of a randc array, by their keys as VlRandomArrayVarTemplate::datap()
+            // finds them, so a resized array gets a different hash
+            int elements = 0;
+            while (m_arr_vars.count(var.first + std::to_string(elements))) ++elements;
+            h ^= std::hash<int>{}(elements) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
     }
     // Keys are one per array element, so a resized queue gets a different hash.
-    for (const auto& elem : m_arr_vars) {
-        h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    if (!randcOnly) {
+        for (const auto& elem : m_arr_vars) {
+            h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
     }
     return h;
 }

@@ -5245,6 +5245,8 @@ class RandomizeVisitor final : public VNVisitor {
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     // m_writtenVars of each class, with those of its base classes
     std::map<const AstClass*, std::set<std::string>> m_classWrittenVars;
+    // Classes whose randomization may randomize a randc variable
+    std::unordered_set<const AstClass*> m_randcClasses;
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
     std::map<const AstVar*, AstVar*> m_memberSizeVars;  // Size variables of member arrays
     // Arrays of member objects, by SMT name, each with its member select
@@ -6432,6 +6434,60 @@ class RandomizeVisitor final : public VNVisitor {
             VCMethod::RANDOMIZER_CLEARCONSTRAINTS};
         clearp->dtypeSetVoid();
         return clearp->makeStmt();
+    }
+    // Statement continuing the randc cycles of fromGenp in toGenp
+    static AstNodeStmt* newRandcHistoryFromp(FileLine* const fl, AstVar* const toGenp,
+                                             AstVar* const fromGenp) {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl,
+            new AstVarRef{fl, VN_CAST(toGenp->user2p(), NodeModule), toGenp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_RANDC_HISTORY_FROM,
+            new AstVarRef{fl, VN_CAST(fromGenp->user2p(), NodeModule), fromGenp, VAccess::READ}};
+        callp->dtypeSetVoid();
+        return callp->makeStmt();
+    }
+    // Find m_randcClasses: the classes with a randc variable, and, from those, the classes with
+    // a rand handle to one, or extending one
+    void findRandcClasses(AstNetlist* const nodep) {
+        // Classes with a rand handle to, or extending, each class
+        std::unordered_map<const AstClass*, std::vector<const AstClass*>> reachingClasses;
+        std::vector<const AstClass*> worklist;  // Classes found, whose reaching classes are next
+        nodep->foreach([&](const AstClass* const classp) {
+            if (classp->extendsp()) {
+                reachingClasses[classp->extendsp()->classp()].push_back(classp);
+            }
+            for (const AstNode* itemp = classp->membersp(); itemp; itemp = itemp->nextp()) {
+                const AstVar* const varp = VN_CAST(itemp, Var);
+                if (!varp || !varp->isRand()) continue;
+                if (varp->isRandC()) worklist.push_back(classp);
+                const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+                while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+                if (const AstClassRefDType* const refp = VN_CAST(dtypep, ClassRefDType)) {
+                    reachingClasses[refp->classp()].push_back(classp);
+                }
+            }
+        });
+        while (!worklist.empty()) {
+            const AstClass* const classp = worklist.back();
+            worklist.pop_back();
+            if (!m_randcClasses.insert(classp).second) continue;
+            const auto it = reachingClasses.find(classp);
+            if (it == reachingClasses.end()) continue;
+            worklist.insert(worklist.end(), it->second.begin(), it->second.end());
+        }
+    }
+    // The generator keeping the randc cycles of the randomize() with calls of the objects of a
+    // class without a class generator, in the base-most class like a class generator
+    AstVar* getCreateRandcHistoryp(AstClass* classp) {
+        while (classp->extendsp()) classp = classp->extendsp()->classp();
+        static constexpr const char* const name = "__Vrandc_history";
+        if (AstVar* const varp = VN_CAST(m_memberMap.findMember(classp, name), Var)) return varp;
+        AstVar* const varp = new AstVar{classp->fileline(), VVarType::MEMBER, name,
+                                        classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)};
+        varp->user2p(classp);
+        classp->addMembersp(varp);
+        m_memberMap.insert(classp, varp);
+        return varp;
     }
     AstNodeStmt* implementConstraintsClearAll(FileLine* const fileline, AstVar* const genp) {
         AstCMethodHard* const clearp = new AstCMethodHard{
@@ -8787,6 +8843,16 @@ class RandomizeVisitor final : public VNVisitor {
                               VAccess::READ}});
         }
 
+        // The randc cycles continue across calls (IEEE 1800-2023 18.4.2), but this call's
+        // generator also holds its own constraints, so only its randc cycles are kept
+        AstVar* const randcHistoryp = !m_randcClasses.count(classp) ? nullptr
+                                      : classGenp                   ? classGenp
+                                                  : getCreateRandcHistoryp(classp);
+        if (randcHistoryp && !classGenp) {
+            randomizeFuncp->addStmtsp(
+                newRandcHistoryFromp(nodep->fileline(), localGenp, randcHistoryp));
+        }
+
         // Set rand mode if present (not needed if classGenp exists and was copied)
         AstVar* const randModeVarp = getRandModeVarFromClass(classp);
         if (!classGenp && randModeVarp) addSetRandMode(randomizeFuncp, localGenp, randModeVarp);
@@ -8974,10 +9040,24 @@ class RandomizeVisitor final : public VNVisitor {
                 AstTask* const constrSetupFuncp2
                     = getCreateConstraintSetupFunc(classp, m_memberMap);
                 randomizeFuncp->addStmtsp((new AstTaskRef{fl, constrSetupFuncp2})->makeStmt());
+                // The copy keeps the randc cycles of this call, as its size solve left them
+                AstVar* const randcKeepp
+                    = randcHistoryp
+                          ? new AstVar{fl, VVarType::BLOCKTEMP, "__Vrandc_keep",
+                                       classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)}
+                          : nullptr;
+                if (randcKeepp) {
+                    randcKeepp->funcLocal(true);
+                    randomizeFuncp->addStmtsp(randcKeepp);
+                    randomizeFuncp->addStmtsp(newRandcHistoryFromp(fl, randcKeepp, localGenp));
+                }
                 randomizeFuncp->addStmtsp(
                     new AstAssign{fl, new AstVarRef{fl, localGenp, VAccess::WRITE},
                                   new AstVarRef{fl, VN_AS(classGenp->user2p(), NodeModule),
                                                 classGenp, VAccess::READ}});
+                if (randcKeepp) {
+                    randomizeFuncp->addStmtsp(newRandcHistoryFromp(fl, localGenp, randcKeepp));
+                }
             } else if (AstNode* const pinsp = newClassElemModePinsp(classp, localGenp)) {
                 randomizeFuncp->addStmtsp(pinsp);
             }
@@ -9129,6 +9209,12 @@ class RandomizeVisitor final : public VNVisitor {
                 classGenp ? classGenp : localGenp, localGenp, retVarp, basicRandomizeFuncp, calls,
                 classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
         }
+        // A failed call leaves the randc cycles alone
+        if (randcHistoryp) {
+            randomizeFuncp->addStmtsp(
+                new AstIf{fl, new AstVarRef{fl, retVarp, VAccess::READ},
+                          newRandcHistoryFromp(fl, randcHistoryp, localGenp)});
+        }
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         if (classHasRandClassMembers(classp)) {
@@ -9234,6 +9320,7 @@ public:
             if (classp->extendsp())
                 m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
         });
+        findRandcClasses(nodep);
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.
         // Runs before any class is lowered. Only a randomized class counts, and
