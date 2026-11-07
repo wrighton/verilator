@@ -277,8 +277,9 @@ class VlRandomizer VL_NOT_FINAL {
     std::unordered_set<std::string> m_staticVars;  // Names of static rand vars
     int m_index = 0;  // Internal counter for key generation
     std::set<std::string> m_randcVarNames;  // Names of randc variables for cyclic tracking
-    std::map<std::string, std::set<uint64_t>>
-        m_randcUsedValues;  // Previously used values per randc var (exclusion-based cycling)
+    // Previously used values per randc variable element, keyed by its solver term
+    // (exclusion-based cycling)
+    std::map<std::string, std::set<uint64_t>> m_randcUsedValues;
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
