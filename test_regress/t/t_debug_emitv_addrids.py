@@ -13,11 +13,13 @@ test.scenarios('vlt')
 test.top_filename = "t/t_debug_emitv.v"
 
 test.lint(
+    # The full fixture intentionally includes unsupported goto repetition.
+    # Check its diagnostic instead of disabling it, while keeping full AST checks.
+    fails=True,
+    expect_filename=test.golden_filename,
     # We also have dump-tree turned on, so hit a lot of AstNode*::dump() functions
     # Likewise XML
-    # --Wno-COVERIGN: shares t_debug_emitv.v, whose cg_trans uses a goto-repetition transition
-    # bin ([->N]); the count is unsupported (dropped) but the bin is still created with a
-    # non-NONE VTransRepType.
-    v_flags=["--lint-only --dumpi-tree 9 --dump-tree-addrids --Wno-COVERIGN --timing"])
+    # Keep diagnostics enabled while exercising all incoming fixture forms.
+    v_flags=["--lint-only --dumpi-tree 9 --dump-tree-addrids --timing"])
 
 test.passes()
