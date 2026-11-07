@@ -64,7 +64,6 @@ enum ClassRandom : uint8_t {
     IS_STD_RANDOMIZED,  // std::randomize() is called
 };
 
-
 // ######################################################################
 // Establishes the target of a rand_mode() call
 
@@ -327,8 +326,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 // If member is randomizable and of class type, mark its class
                 if (varp->rand().isRandomizable()) {
                     // Also the elements of arrays of any dimension
-                    const AstClassRefDType* const classRefp
-                        = VN_CAST(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
+                    const AstClassRefDType* const classRefp = VN_CAST(
+                        RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
                     if (classRefp) {
                         AstClass* const rclassp = classRefp->classp();
                         if (!rclassp->user1()) {
@@ -606,8 +605,8 @@ class RandomizeMarkVisitor final : public VNVisitor {
             AstVar* const idxVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, "__Vi", arrVarp->findIntDType()};
             // foreach gives the declared index, a select takes the offset
-            AstNodeExpr* const offsetp
-                = RandomizeUtil::newElemOffsetp(fl, arrVarp, new AstVarRef{fl, idxVarp, VAccess::READ});
+            AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+                fl, arrVarp, new AstVarRef{fl, idxVarp, VAccess::READ});
             AstNodeExpr* const elemp = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType)
                                            ? static_cast<AstNodeExpr*>(new AstArraySel{
                                                  fl, arrRefp->cloneTree(false), offsetp})
@@ -1883,7 +1882,8 @@ class RandomizeVisitor final : public VNVisitor {
             randStmtsp = new AstIf{
                 fl,
                 new AstLogNot{
-                    fl, RandomizeUtil::newElemModeOffp(RandomizeUtil::newMemberRefp(fl, nullptr, elemModeVarp), firstIndexp)},
+                    fl, RandomizeUtil::newElemModeOffp(
+                            RandomizeUtil::newMemberRefp(fl, nullptr, elemModeVarp), firstIndexp)},
                 randStmtsp};
         }
         // TODO: we should just not clone in 'newRandStmtsp' if not necessary
@@ -2760,7 +2760,8 @@ class RandomizeVisitor final : public VNVisitor {
             m_nullPhase = phase;
             classp->foreachMember([&](AstClass* const ownerClassp, AstVar* const memberVarp) {
                 if (!memberVarp->rand().isRandomizable()) return;
-                if (!VN_IS(RandomizeUtil::arrayElementDTypep(memberVarp->dtypep()), ClassRefDType)) return;
+                if (!VN_IS(RandomizeUtil::arrayElementDTypep(memberVarp->dtypep()), ClassRefDType))
+                    return;
                 AstVarRef* const refp = new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ};
                 AstNodeStmt* stmtp = newRandStmtsp(fl, refp, nullptr, fvarp);
                 if (inRandHandleCycle(memberVarp, classp)) {

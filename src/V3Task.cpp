@@ -722,9 +722,8 @@ class TaskVisitor final : public VNVisitor {
         } else if (dtypep->isIntegralOrPacked()) {
             // V3Unknown made 4-state types 2-state; they still name their 4-state type
             const bool fourstate = dtypep->isFourstate() || dtypep->mimicsFourstate();
-            typeName = string{fourstate ? "logic" : "bit"}
-                       + (dtypep->isSigned() ? " signed" : "") + "["
-                       + std::to_string(dtypep->width() - 1) + ":0]";
+            typeName = string{fourstate ? "logic" : "bit"} + (dtypep->isSigned() ? " signed" : "")
+                       + "[" + std::to_string(dtypep->width() - 1) + ":0]";
         }
         typeName
             = "\"" + V3OutFormatter::quoteNameControls(VIdProtect::protect(typeName)) + "\", ";
