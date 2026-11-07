@@ -33,6 +33,13 @@ class RandcSize;
   }
 endclass
 
+// The size, from the randc variable, and element constraints are inline
+class RandcInlineSize;
+  randc bit [1:0] n;
+  rand bit [7:0] q[];
+  constraint c {n != 0;}
+endclass
+
 // The size and element constraints are inline; randomize() with also solves the sizes first
 class RandcInline;
   randc bit [1:0] x;
@@ -45,12 +52,15 @@ module t;
     automatic RandcSized sized[3];
     automatic RandcSize size = new;
     automatic RandcInline inl = new;
+    automatic RandcInlineSize inl_size = new;
     automatic int randomize_result;
     foreach (sized[o]) sized[o] = new;
     for (int trial = 0; trial < 4; ++trial) begin
       // Values seen in this cycle
       automatic bit [3:0] sized_seen[3] = '{0, 0, 0};
       automatic bit [3:0] size_seen = 0;
+      automatic bit [3:0] inl_seen = 0;
+      automatic bit [3:0] inl_size_seen = 0;
       for (int i = 0; i < 3; ++i) begin
         foreach (sized[o]) begin
           randomize_result = sized[o].randomize();
@@ -78,6 +88,19 @@ module t;
         `checkd(inl.x == 0, 0);
         `checkd(inl.d.size(), 2);
         foreach (inl.d[k]) `checkd(inl.d[k] < 8'd10, 1);
+        `checkd(inl_seen[inl.x], 0);
+        inl_seen[inl.x] = 1;
+
+        randomize_result = inl_size.randomize() with {
+          q.size() == 32'(n);
+          foreach (q[k]) q[k] == 8'(k);
+        };
+        `checkd(randomize_result, 1);
+        `checkd(inl_size.n == 0, 0);
+        `checkd(inl_size.q.size(), 32'(inl_size.n));
+        foreach (inl_size.q[k]) `checkd(inl_size.q[k], 8'(k));
+        `checkd(inl_size_seen[inl_size.n], 0);
+        inl_size_seen[inl_size.n] = 1;
       end
     end
     $write("*-* All Finished *-*\n");
