@@ -862,6 +862,7 @@ class CaptureVisitor final : public VNVisitor {
     AstClass* m_targetp;  // Module of inner context (for symbol lookup)
     std::map<const AstVar*, AstVar*> m_varCloneMap;  // Map original var nodes to their clones
     std::set<AstNode*> m_ignore;  // Nodes to ignore for capturing
+    std::set<const AstVar*> m_constraintIterators;  // All with-block foreach index variables
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     bool m_staticContext = false;  // True when capturing from a static function context
 
@@ -927,9 +928,7 @@ class CaptureVisitor final : public VNVisitor {
         const bool varHasAutomaticLifetime = varRefp->varp()->lifetime().isAutomatic();
         const bool varIsFieldOfCaller = AstClass::isClassExtendedFrom(callerClassp, varClassp);
         const bool varIsParam = varRefp->varp()->isParam();
-        const bool varIsConstraintIterator
-            = VN_IS(varRefp->varp()->firstAbovep(), ForeachHeader)
-              && VN_IS(varRefp->varp()->firstAbovep()->firstAbovep(), ConstraintForeach);
+        const bool varIsConstraintIterator = m_constraintIterators.count(varRefp->varp());
         if (refIsXref) return CaptureMode::CAP_VALUE | CaptureMode::CAP_F_XREF;
         if (varIsConstraintIterator) return CaptureMode::CAP_NO;
         if (varIsFuncLocal && varHasAutomaticLifetime) return CaptureMode::CAP_VALUE;
@@ -991,6 +990,13 @@ class CaptureVisitor final : public VNVisitor {
 
     // VISITORS
 
+    void visit(AstConstraintForeach* const nodep) override {
+        // All header indices are local, including later and omitted dimensions.
+        for (const AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_constraintIterators.insert(varp);
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstNodeVarRef* nodep) override {
         if (m_ignore.count(nodep)) return;
         m_ignore.emplace(nodep);
