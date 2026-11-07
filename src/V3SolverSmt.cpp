@@ -5489,7 +5489,10 @@ public:
     }
     void prepareInlineRandomize(AstClass* classp,
                                 const std::function<void(AstClass*)>& lowerClass) override {
-        m_inlineDerivedCalls[classp] = derivedFuncCalls(classp, lowerClass);
+        // Lowering the derived classes can lower a nested 'randomize() with' of the same class,
+        // which takes its entry, so get the calls before the entry
+        std::vector<ConstraintFuncCall> calls = derivedFuncCalls(classp, lowerClass);
+        m_inlineDerivedCalls[classp] = std::move(calls);
     }
     AstNodeExpr* lowerCheckOnly(AstClass* classp, AstFunc* funcp) override {
         FileLine* const fl = classp->fileline();
