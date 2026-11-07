@@ -10,5 +10,6 @@ lint_off -rule COMBDLY -file "*/cmt.v"
 lint_off -rule COMBDLY -file "*/blk.v" -lines 2
 lint_off -rule COMBDLY -file "*/code.v" -lines 2-2
 lint_off -rule COMBDLY -file "*/one.v"
+lint_off -rule COMBDLY -file "*/nl.v" -lines 2
 lint_off -rule COMBDLY -file "*/pragma.v"
 lint_off -rule BADVLTPRAGMA -file "*/pragma.v"
