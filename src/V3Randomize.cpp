@@ -3006,6 +3006,31 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
         iterate(sump);
     }
+    // Lower $countones(x) == 1 as $onehot(x), and $countones(x) <= 1 as $onehot0(x)
+    bool editOneHotCount(AstNodeBiop* nodep) {
+        // IEEE 1800-2023 20.9 defines them so. Their lowering is a few nodes, while the count
+        // is a sum over every bit of x, which is large and slow to solve when x is wide.
+        if (!nodep->user1()) return false;
+        const bool eq = VN_IS(nodep, Eq);
+        const bool lte = VN_IS(nodep, Lte) || VN_IS(nodep, LteS);
+        const bool gte = VN_IS(nodep, Gte) || VN_IS(nodep, GteS);
+        AstCountOnes* countp = (eq || lte) ? VN_CAST(nodep->lhsp(), CountOnes) : nullptr;
+        const AstConst* constp = VN_CAST(nodep->rhsp(), Const);
+        if (!countp && (eq || gte)) {
+            countp = VN_CAST(nodep->rhsp(), CountOnes);
+            constp = VN_CAST(nodep->lhsp(), Const);
+        }
+        if (!countp || !constp || !constp->num().isEqOne()) return false;
+        FileLine* const flp = nodep->fileline();
+        AstNodeExpr* const argp = countp->lhsp()->unlinkFrBack();
+        AstNodeExpr* const newp
+            = eq ? static_cast<AstNodeExpr*>(new AstOneHot{flp, argp}) : new AstOneHot0{flp, argp};
+        newp->user1(true);
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(nodep->deleteTree(), nodep);
+        iterate(newp);
+        return true;
+    }
     void visit(AstRedXor* nodep) override {
         if (editFormat(nodep)) return;
 
@@ -3330,6 +3355,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstShiftR* nodep) override { handleShift(nodep); }
     void visit(AstShiftRS* nodep) override { handleShift(nodep); }
     void visit(AstNodeBiop* nodep) override {
+        if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
