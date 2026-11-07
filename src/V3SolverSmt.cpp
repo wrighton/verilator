@@ -3605,10 +3605,21 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
         rand64p->dtypeSetUInt64();
         AstNodeExpr* offsetp = new AstModDiv{fl, rand64p, rangeSzp};
-        // The offset is below 2^64, so it is zero extended to a wider expression; a cast is
-        // only to a basic C type
+        // Evaluate the 64-bit offset once before wide expansion can duplicate operands.
+        // A C cast is only to a basic C type; a wider result needs zero extension.
         if (distWidth > VL_QUADSIZE) {
-            offsetp = new AstExtend{fl, offsetp, distWidth};
+            AstVar* const offsetVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vdist_offset"),
+                             distp->findUInt64DType()};
+            offsetVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            AstBegin* const blockp
+                = new AstBegin{fl, m_uniqueNames.get("__Vdist_offset_block"), nullptr, true};
+            blockp->addDeclsp(offsetVarp);
+            blockp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, offsetVarp, VAccess::WRITE}, offsetp});
+            offsetp = new AstExprStmt{
+                fl, blockp,
+                new AstExtend{fl, new AstVarRef{fl, offsetVarp, VAccess::READ}, distWidth}};
         } else {
             offsetp = new AstCCast{fl, offsetp, distWidth};
         }
