@@ -77,4 +77,27 @@ test.run(
 
 test.files_identical(test.run_log_filename, test.golden_filename)
 
+# Callers of runtime helpers: with the Verilator root as the root, the script also checks the
+# annotations of the functions they call in ../include
+runtime_dir = test.obj_dir + "/runtime"
+runtime_log = runtime_dir + "/runtime.log"
+os.makedirs(runtime_dir, exist_ok=True)
+runtime_ccjson = [{
+    **ccjson[0], "arguments": [
+        *common_args, "-DT_DIST_ATTRIBUTES_RUNTIME", "-o", srcs_dir + "/mt_enabled.o",
+        srcs_dir + "/mt_enabled.cpp"
+    ]
+}]
+test.write_wholefile(runtime_dir + "/compile_commands.json", json.dumps(runtime_ccjson))
+
+test.run(logfile=runtime_log,
+         cmd=[
+             "python3", aroot + "/nodist/clang_check_attributes", "--verilator-root=" + aroot,
+             "--compile-commands-dir=" + runtime_dir, "--jobs=1", srcs_dir + "/mt_enabled.cpp"
+         ])
+
+test.file_grep(runtime_log,
+               r'"runtime_append_pure_caller\([^"]*\)" is pure but calls non-pure function')
+test.file_grep_not(runtime_log, r'"runtime_append_mt_safe_caller')
+
 test.passes()
