@@ -940,25 +940,49 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
     for (const auto& c : extras) {
         h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
+    // Only the randc variables themselves, not others a randomize() with also registers
     for (const auto& var : m_vars) {
+        if (randcOnly && !m_randcVarNames.count(var.first)) continue;
         h ^= std::hash<std::string>{}(var.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<int>{}(var.second->width()) + 0x9e3779b9 + (h << 6) + (h >> 2);
         h ^= std::hash<int>{}(var.second->dimension()) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        if (randcOnly && var.second->dimension() > 0) {
+            // The elements of a randc array, by their keys as VlRandomArrayVarTemplate::datap()
+            // finds them, so a resized array gets a different hash
+            int elements = 0;
+            while (m_arr_vars.count(var.first + std::to_string(elements))) ++elements;
+            h ^= std::hash<int>{}(elements) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
     }
     // Keys are one per array element, so a resized queue gets a different hash.
-    for (const auto& elem : m_arr_vars) {
-        h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    if (!randcOnly) {
+        for (const auto& elem : m_arr_vars) {
+            h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
     }
     return h;
 }
 
+// The solver term of element j of var, which keys the used values of a randc variable, as
+// each element of a randc array cycles on its own (IEEE 1800-2023 18.4)
+static std::string randcElementTerm(const VlRandomVar& var, int j) {
+    std::ostringstream termOs;
+    var.emitElement(termOs, j);
+    return termOs.str();
+}
+
 void VlRandomizer::emitRandcExclusions(std::ostream& os) const {
     for (const auto& name : m_randcVarNames) {
-        const auto usedIt = m_randcUsedValues.find(name);
-        if (usedIt != m_randcUsedValues.end()) {
-            const int w = m_vars.at(name)->width();
+        const auto varIt = m_vars.find(name);
+        if (varIt == m_vars.end()) continue;
+        const VlRandomVar& var = *varIt->second;
+        for (int j = 0; j < var.totalWidth() / var.width(); ++j) {
+            const std::string term = randcElementTerm(var, j);
+            const auto usedIt = m_randcUsedValues.find(term);
+            if (usedIt == m_randcUsedValues.end()) continue;
             for (const uint64_t val : usedIt->second) {
-                os << "(assert (not (= " << name << " (_ bv" << val << " " << w << "))))\n";
+                os << "(assert (not (=" << term << " (_ bv" << val << " " << var.width()
+                   << "))))\n";
             }
         }
     }
@@ -973,13 +997,16 @@ static uint64_t readVarValueU64(const void* datap, int width) {
 }
 
 void VlRandomizer::recordRandcValues() {
-    // Only the final function-call solve round picks the values
-    if (funcPreRound()) return;
+    // Only the final solve, of the final function-call solve round, picks the values
+    if (funcPreRound() || m_sizeSolve) return;
     for (const auto& name : m_randcVarNames) {
         const auto varIt = m_vars.find(name);
         if (varIt == m_vars.end()) continue;
         const VlRandomVar& var = *varIt->second;
-        m_randcUsedValues[name].insert(readVarValueU64(var.datap(0), var.width()));
+        for (int j = 0; j < var.totalWidth() / var.width(); ++j) {
+            m_randcUsedValues[randcElementTerm(var, j)].insert(
+                readVarValueU64(var.datap(j), var.width()));
+        }
     }
 }
 
@@ -1011,7 +1038,9 @@ bool VlRandomizer::next_check_only(VlRNGReseeds& rngr) { return nextRandomize(rn
 
 bool VlRandomizer::next(VlRNGReseeds& rngr) { return nextRandomize(rngr, false); }
 
-bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
+bool VlRandomizer::next_size(VlRNGReseeds& rngr) { return nextRandomize(rngr, false, true); }
+
+bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
     // No rand variables: randomize() still checks the constraints (IEEE 1800-2023 18.11.1)
     if (!checkOnly && m_vars.empty() && m_uniqueArrays.empty() && m_constraints.empty()) {
         return true;
@@ -1020,6 +1049,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
+    m_sizeSolve = sizeSolve;
     std::vector<std::string> uniqueExprs = buildUniqueExprs();
     // pin_frozen() constraints of the variables registered by now
     for (const auto& pin : m_frozenPins) {
@@ -1031,11 +1061,12 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     // An earlier function-call solve round has fewer constraints, not changed ones
     if (!m_randcVarNames.empty() && !funcPreRound()) {
         const size_t currentHash = hashConstraints(uniqueExprs, true);
+        // The final solve continues the history its size solve checked, though the resize
+        // changes the hash
+        const bool sizeSolved = std::exchange(m_sizeSolved, false);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
-        if (currentHash != m_randcConstraintHash) {
-            m_randcUsedValues.clear();
-            m_randcConstraintHash = currentHash;
-        }
+        if (currentHash != m_randcConstraintHash && !sizeSolved) m_randcUsedValues.clear();
+        m_randcConstraintHash = currentHash;
     }
 
     // Reseeded from outside, so everything cached came from the old seed.
@@ -1058,6 +1089,8 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     }
     m_ug2.rngReseeds = rngr.reseeds();
     m_checkOnly = false;
+    m_sizeSolve = false;
+    m_sizeSolved = sizeSolve && result;
     return result;
 }
 

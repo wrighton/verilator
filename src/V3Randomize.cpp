@@ -1530,6 +1530,11 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::set<std::string> m_constraintVars;
     // Constraint replacing the top-level if whose folded names m_constraintVars holds
     const AstConstraintExpr* m_foldTakerp = nullptr;
+    struct GuardItem final {
+        AstVar* errorVarp = nullptr;  // Out-of-band ERROR of this active constraint item
+    };
+    GuardItem* m_guardItemp = nullptr;  // Shared by nested formatting within one item
+    AstVar* m_foldErrorVarp = nullptr;  // Error status taken over with m_foldTakerp
     // Where the variable references being lowered record their solver names. Set by
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
     // constraint items either move their expressions into one or never iterate them.
@@ -2415,7 +2420,6 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstNodeExpr* const namep = m_nestedAccessp
                                            ? m_nestedAccessp->cloneName()
                                            : new AstSFormatF{fl, smtName, false, nullptr};
-            namep->dtypep(varp->dtypep());
             callp->addPinsp(namep);
             return callp->makeStmt();
         };
@@ -2444,6 +2448,15 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     void markRandc(AstVar* const varp, const std::string& smtName, AstBegin* const initp) {
+        // The randomizer records the used values of a randc variable as 64-bit numbers
+        const int width = arrayElementDTypep(varp->dtypep())->width();
+        if (width > VL_QUADSIZE) {
+            varp->v3warn(E_UNSUPPORTED, "Unsupported: Constrained randc variable "
+                                            << varp->prettyNameQ() << " is " << width
+                                            << " bits, wider than the implemented " << VL_QUADSIZE
+                                            << " bits (IEEE 1800-2023 18.4.2).");
+            return;
+        }
         AstCMethodHard* const markp = new AstCMethodHard{
             varp->fileline(),
             new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
@@ -2453,7 +2466,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const nameExprp
             = m_nestedAccessp ? m_nestedAccessp->cloneName()
                               : new AstSFormatF{varp->fileline(), smtName, false, nullptr};
-        nameExprp->dtypep(varp->dtypep());
         markp->addPinsp(nameExprp);
         addRegistrationStmt(markp->makeStmt(), initp);
     }
@@ -3367,20 +3379,397 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (editFormat(nodep)) return;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
     }
+    // State proofs of TRUE/FALSE/ERROR, all absent only when the predicate is RANDOM.
+    struct GuardResult final {
+        AstNodeExpr* truep;
+        AstNodeExpr* falsep;
+        AstNodeExpr* errorp;
+    };
+    AstVar* newGuardVarp(FileLine* const fl, AstBegin* const blockp, AstNodeDType* const dtypep) {
+        AstVar* const varp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vguard"), dtypep};
+        varp->funcLocal(true);
+        // Preserve the single stored branch/proof representation through later substitution.
+        varp->noSubst(true);
+        blockp->addStmtsp(varp);
+        return varp;
+    }
+    static AstVarRef* newGuardRefp(AstVar* const varp, const VAccess access = VAccess::READ) {
+        return new AstVarRef{varp->fileline(), varp, access};
+    }
+    struct GuardRead final {
+        bool unresolved = false;  // Receiver value depends on an unsolved index/call
+        bool sampled = false;  // Statements were emitted using the error status
+        bool checked = false;  // A nullable receiver was checked
+    };
+    static AstNodeExpr* newNoGuardErrorp(AstVar* const errorVarp) {
+        return new AstLogNot{errorVarp->fileline(), newGuardRefp(errorVarp)};
+    }
+    // Move receivers out of one cloned leaf in postorder. Every prefix is sampled once;
+    // neither prefix scans nor cloning a prefix at every member selection are necessary.
+    GuardRead editGuardReceivers(AstNode* const nodep, AstBegin* const blockp,
+                                 AstVar* const errorVarp) {
+        FileLine* const fl = nodep->fileline();
+        if (AstCond* const condp = VN_CAST(nodep, Cond)) {
+            const bool stateCond = !condp->condp()->user1();
+            const bool stateValue = !condp->user1();
+            GuardRead result = editGuardReceivers(condp->condp(), blockp, errorVarp);
+            if (!stateCond) {
+                result.unresolved = true;
+                return result;
+            }
+            AstBegin* const thenBlockp
+                = new AstBegin{fl, m_uniqueNames.get("__VguardThen"), nullptr, true};
+            AstBegin* const elseBlockp
+                = new AstBegin{fl, m_uniqueNames.get("__VguardElse"), nullptr, true};
+            const GuardRead thenRead = editGuardReceivers(condp->thenp(), thenBlockp, errorVarp);
+            const GuardRead elseRead = editGuardReceivers(condp->elsep(), elseBlockp, errorVarp);
+            result.checked |= thenRead.checked || elseRead.checked;
+            result.unresolved |= thenRead.unresolved || elseRead.unresolved;
+            if (stateValue && !result.unresolved) {
+                AstVar* const valueVarp = newGuardVarp(fl, blockp, condp->dtypep());
+                thenBlockp->addStmtsp(
+                    new AstIf{fl, newNoGuardErrorp(errorVarp),
+                              new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
+                                            condp->thenp()->unlinkFrBack()}});
+                elseBlockp->addStmtsp(
+                    new AstIf{fl, newNoGuardErrorp(errorVarp),
+                              new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
+                                            condp->elsep()->unlinkFrBack()}});
+                blockp->addStmtsp(new AstIf{
+                    fl, newNoGuardErrorp(errorVarp),
+                    new AstIf{fl, condp->condp()->unlinkFrBack(), thenBlockp, elseBlockp}});
+                condp->replaceWith(newGuardRefp(valueVarp));
+                VL_DO_DANGLING(pushDeletep(condp), condp);
+                result.sampled = true;
+            } else if (thenRead.sampled || elseRead.sampled) {
+                blockp->addStmtsp(new AstIf{
+                    fl, newNoGuardErrorp(errorVarp),
+                    new AstIf{fl, condp->condp()->cloneTree(false), thenBlockp, elseBlockp}});
+                result.sampled = true;
+            } else {
+                VL_DO_DANGLING(thenBlockp->deleteTree(), thenBlockp);
+                VL_DO_DANGLING(elseBlockp->deleteTree(), elseBlockp);
+            }
+            return result;
+        }
+        AstNodeExpr* fromp = nullptr;
+        if (AstMemberSel* const selp = VN_CAST(nodep, MemberSel)) {
+            fromp = selp->fromp();
+        } else if (AstMethodCall* const callp = VN_CAST(nodep, MethodCall)) {
+            fromp = callp->fromp();
+        }
+        bool fromUnresolved = false;
+        GuardRead result;
+        for (AstNode* const opp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (AstNode *childp = opp, *nextp; childp; childp = nextp) {
+                nextp = childp->nextp();
+                const GuardRead child = editGuardReceivers(childp, blockp, errorVarp);
+                if (childp == fromp) fromUnresolved = child.unresolved;
+                result.unresolved |= child.unresolved;
+                result.sampled |= child.sampled;
+                result.checked |= child.checked;
+            }
+        }
+        // Propagate unsolved value dependencies once, not by rescanning each receiver prefix.
+        if (const AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) {
+            result.unresolved |= selp->bitp()->user1() != 0;
+        } else if (const AstCMethodHard* const atp = VN_CAST(nodep, CMethodHard)) {
+            result.unresolved |= atp->method() == VCMethod::ARRAY_AT && atp->pinsp()->user1();
+        } else if (const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef)) {
+            result.unresolved |= callp->user1() != 0;
+        }
+        // The child's root may have become a sampled conditional value.
+        if (AstMemberSel* const selp = VN_CAST(nodep, MemberSel)) {
+            fromp = selp->fromp();
+        } else if (AstMethodCall* const callp = VN_CAST(nodep, MethodCall)) {
+            fromp = callp->fromp();
+        }
+        if (fromp && fromp->isClassHandleValue() && !fromUnresolved) {
+            AstVar* const receiverVarp = newGuardVarp(fl, blockp, fromp->dtypep());
+            fromp->replaceWith(newGuardRefp(receiverVarp));
+            AstNode* const samplep
+                = new AstAssign{fl, newGuardRefp(receiverVarp, VAccess::WRITE), fromp};
+            samplep->addNext(new AstIf{
+                fl, new AstEq{fl, newGuardRefp(receiverVarp), new AstConst{fl, AstConst::Null{}}},
+                new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
+                              new AstConst{fl, AstConst::BitTrue{}}}});
+            blockp->addStmtsp(new AstIf{fl, newNoGuardErrorp(errorVarp), samplep});
+            result.sampled = result.checked = true;
+        }
+        return result;
+    }
+    static AstNodeExpr* newGuardJoinp(FileLine* const fl, AstNodeExpr* const lhsp,
+                                      AstNodeExpr* const rhsp, const bool both) {
+        if (lhsp && rhsp) {
+            if (both) return new AstLogAnd{fl, lhsp, rhsp};
+            return new AstLogOr{fl, lhsp, rhsp};
+        }
+        if (!both) return lhsp ? lhsp : rhsp;
+        if (lhsp) VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
+        if (rhsp) VL_DO_DANGLING(rhsp->deleteTree(), rhsp);
+        return nullptr;
+    }
+    AstNodeExpr* newGuardProofp(AstNodeExpr* const exprp, AstBegin* const blockp) {
+        if (!exprp) return nullptr;
+        AstVar* const varp = newGuardVarp(exprp->fileline(), blockp, blockp->findBitDType());
+        blockp->addStmtsp(
+            new AstAssign{exprp->fileline(), newGuardRefp(varp, VAccess::WRITE), exprp});
+        return newGuardRefp(varp);
+    }
+    struct GuardFlags final {
+        AstVar* trueVarp;
+        AstVar* falseVarp;
+        AstVar* errorVarp;
+        bool state;
+    };
+    using GuardFlagsMap = std::map<const AstNodeExpr*, GuardFlags>;
+    static void recordGuardFlags(const AstNodeExpr* const exprp, const GuardResult& result,
+                                 GuardFlagsMap& flags) {
+        const auto varp = [](AstNodeExpr* const refp) -> AstVar* {
+            return refp ? VN_AS(refp, VarRef)->varp() : nullptr;
+        };
+        flags.emplace(exprp, GuardFlags{varp(result.truep), varp(result.falsep),
+                                        varp(result.errorp), !exprp->user1()});
+    }
+    GuardResult newGuardResult(AstNodeExpr* const exprp, AstBegin* const blockp,
+                               GuardFlagsMap& flags) {
+        FileLine* const fl = exprp->fileline();
+        // Recurse even for all-state predicates: FALSE && ERROR and TRUE || ERROR must sift
+        // out the invalid leaf in either operand order (IEEE 1800-2023 18.5.12).
+        if (const AstLogNot* const notp = VN_CAST(exprp, LogNot)) {
+            const GuardResult child = newGuardResult(notp->lhsp(), blockp, flags);
+            const GuardResult result{child.falsep, child.truep, child.errorp};
+            recordGuardFlags(exprp, result, flags);
+            return result;
+        }
+        const bool isAnd = VN_IS(exprp, LogAnd);
+        if (isAnd || VN_IS(exprp, LogOr)) {
+            const AstNodeBiop* const biopp = VN_AS(exprp, NodeBiop);
+            const GuardResult lhs = newGuardResult(biopp->lhsp(), blockp, flags);
+            const GuardResult rhs = newGuardResult(biopp->rhsp(), blockp, flags);
+            AstNodeExpr* const truep
+                = newGuardProofp(newGuardJoinp(fl, lhs.truep, rhs.truep, isAnd), blockp);
+            AstNodeExpr* const falsep
+                = newGuardProofp(newGuardJoinp(fl, lhs.falsep, rhs.falsep, !isAnd), blockp);
+            AstNodeExpr* errorp = newGuardJoinp(fl, lhs.errorp, rhs.errorp, false);
+            AstNodeExpr* const dominantp = isAnd ? falsep : truep;
+            if (errorp && dominantp) {
+                errorp = new AstLogAnd{fl, new AstLogNot{fl, dominantp->cloneTree(false)}, errorp};
+            }
+            const GuardResult result{truep, falsep, newGuardProofp(errorp, blockp)};
+            recordGuardFlags(exprp, result, flags);
+            return result;
+        }
+        AstVar* const errorVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        AstAssign* const initp = new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
+                                               new AstConst{fl, AstConst::BitFalse{}}};
+        blockp->addStmtsp(initp);
+        // A single clone is edited by moving receiver paths, not cloning each path prefix.
+        // Ordinary cloning also preserves legal state calls that are not classified pure.
+        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp->cloneTree(false), false};
+        const GuardRead read = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp);
+        AstNodeExpr* const valuep = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
+        VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
+        AstNodeExpr* const errorp = read.checked ? newGuardRefp(errorVarp) : nullptr;
+        if (!read.sampled) {
+            VL_DO_DANGLING(initp->unlinkFrBack()->deleteTree(), initp);
+            VL_DO_DANGLING(errorVarp->unlinkFrBack()->deleteTree(), errorVarp);
+        }
+        if (exprp->user1()) {
+            VL_DO_DANGLING(valuep->deleteTree(), valuep);
+            const GuardResult result{nullptr, nullptr, errorp};
+            recordGuardFlags(exprp, result, flags);
+            return result;
+        }
+        AstVar* const trueVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        AstVar* const falseVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(trueVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::BitFalse{}}});
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(falseVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::BitFalse{}}});
+        AstNode* samplep = new AstAssign{fl, newGuardRefp(trueVarp, VAccess::WRITE),
+                                         new AstLogNot{fl, new AstLogNot{fl, valuep}}};
+        samplep->addNext(new AstAssign{fl, newGuardRefp(falseVarp, VAccess::WRITE),
+                                       new AstLogNot{fl, newGuardRefp(trueVarp)}});
+        if (errorp) samplep = new AstIf{fl, newNoGuardErrorp(errorVarp), samplep};
+        blockp->addStmtsp(samplep);
+        const GuardResult result{newGuardRefp(trueVarp), newGuardRefp(falseVarp), errorp};
+        recordGuardFlags(exprp, result, flags);
+        return result;
+    }
+    AstNode* newGuardErrorReturnp(AstNode* const nodep) {
+        UASSERT_OBJ(m_guardItemp, nodep, "Guard formatting outside a constraint item");
+        FileLine* const fl = nodep->fileline();
+        if (!m_guardItemp->errorVarp) {
+            AstVar* const varp
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VguardItemError"),
+                             nodep->findBitDType()};
+            varp->funcLocal(true);
+            varp->noSubst(true);
+            m_guardItemp->errorVarp = varp;
+        }
+        AstNode* const reportp
+            = new AstAssign{fl, newGuardRefp(m_guardItemp->errorVarp, VAccess::WRITE),
+                            new AstConst{fl, AstConst::BitTrue{}}};
+        // The string is only transport. The item status forces a hard failure outside any
+        // negation, soft constraint, or RANDOM guard that could otherwise mask this ERROR.
+        reportp->addNext(new AstCReturn{fl, new AstSFormatF{fl, "#b0", false, nullptr}});
+        return reportp;
+    }
+    AstNodeExpr* formatGuardPredicate(AstNodeExpr* const exprp, GuardFlagsMap& flags) {
+        FileLine* const fl = exprp->fileline();
+        const auto it = flags.find(exprp);
+        UASSERT_OBJ(it != flags.end(), exprp, "Missing guard proofs for predicate");
+        const GuardFlags proof = it->second;
+        flags.erase(it);
+        AstNodeExpr* smtp;
+        if (AstLogNot* const notp = VN_CAST(exprp, LogNot)) {
+            smtp = new AstSFormatF{fl, "(bvnot %s)", false,
+                                   formatGuardPredicate(notp->lhsp()->unlinkFrBack(), flags)};
+            VL_DO_DANGLING(pushDeletep(exprp), exprp);
+        } else if (VN_IS(exprp, LogAnd) || VN_IS(exprp, LogOr)) {
+            AstNodeBiop* const biopp = VN_AS(exprp, NodeBiop);
+            AstNodeExpr* const lhsp = formatGuardPredicate(biopp->lhsp()->unlinkFrBack(), flags);
+            AstNodeExpr* const rhsp = formatGuardPredicate(biopp->rhsp()->unlinkFrBack(), flags);
+            smtp = new AstSFormatF{fl, VN_IS(exprp, LogAnd) ? "(bvand %s %s)" : "(bvor %s %s)",
+                                   false, AstNode::addNext(lhsp, rhsp)};
+            VL_DO_DANGLING(pushDeletep(exprp), exprp);
+        } else if (proof.state) {
+            // State predicates use the sampled truth, not a repeated possibly invalid read.
+            smtp = getConstFormat(newGuardRefp(proof.trueVarp));
+            VL_DO_DANGLING(pushDeletep(exprp), exprp);
+        } else {
+            smtp = VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
+        }
+        if (!proof.trueVarp && !proof.falseVarp && !proof.errorVarp) return smtp;
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardPredicate"), nullptr, true};
+        if (proof.errorVarp) {
+            blockp->addStmtsp(
+                new AstIf{fl, newGuardRefp(proof.errorVarp), newGuardErrorReturnp(blockp)});
+        }
+        if (proof.trueVarp) {
+            blockp->addStmtsp(
+                new AstIf{fl, newGuardRefp(proof.trueVarp),
+                          new AstCReturn{fl, new AstSFormatF{fl, "#b1", false, nullptr}}});
+        }
+        if (proof.falseVarp) {
+            blockp->addStmtsp(
+                new AstIf{fl, newGuardRefp(proof.falseVarp),
+                          new AstCReturn{fl, new AstSFormatF{fl, "#b0", false, nullptr}}});
+        }
+        blockp->addStmtsp(new AstCReturn{fl, smtp});
+        AstCExpr* const cexprp = new AstCExpr{fl};
+        cexprp->dtypeSetString();
+        cexprp->add("([&]() -> std::string {\n");
+        cexprp->add(blockp);
+        cexprp->add("})()");
+        return new AstSFormatF{fl, "%s", false, cexprp};
+    }
+    void visit(AstLogIf* nodep) override {
+        // The caller knows this is a constraint implication, not a value conditional.
+        FileLine* const fl = nodep->fileline();
+        AstCond* const condp
+            = new AstCond{fl, nodep->lhsp()->unlinkFrBack(), nodep->rhsp()->unlinkFrBack(),
+                          new AstConst{fl, AstConst::BitTrue{}}};
+        condp->dtypeSetBit();
+        condp->user1(true);
+        nodep->replaceWith(condp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        editConstraintGuard(condp);
+    }
+    void editConstraintGuard(AstCond* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        GuardFlagsMap flags;
+        const GuardResult result = newGuardResult(nodep->condp(), blockp, flags);
+        AstNodeExpr* const predicatep = nodep->condp()->unlinkFrBack();
+        nodep->condp(formatGuardPredicate(predicatep, flags));
+        UASSERT_OBJ(flags.empty(), nodep, "Unconsumed guard predicate proofs");
+        AstSFormatF* const smtp = editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
+        if (!result.truep && !result.falsep && !result.errorp) {
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
+            return;
+        }
+        AstVar* const trueVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        AstVar* const falseVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        AstVar* const errorVarp
+            = result.errorp ? newGuardVarp(fl, blockp, blockp->findBitDType()) : nullptr;
+        blockp->addStmtsp(
+            new AstAssign{fl, newGuardRefp(trueVarp, VAccess::WRITE),
+                          result.truep ? result.truep : new AstConst{fl, AstConst::BitFalse{}}});
+        blockp->addStmtsp(
+            new AstAssign{fl, newGuardRefp(falseVarp, VAccess::WRITE),
+                          result.falsep ? result.falsep : new AstConst{fl, AstConst::BitFalse{}}});
+        if (errorVarp) {
+            blockp->addStmtsp(
+                new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE), result.errorp});
+            // ERROR is reported to the active item, not encoded as a boolean value.
+            blockp->addStmtsp(
+                new AstIf{fl, newGuardRefp(errorVarp), newGuardErrorReturnp(blockp)});
+        }
+        AstVar* const thenVarp = newGuardVarp(fl, blockp, blockp->findStringDType());
+        AstVar* const elseVarp = newGuardVarp(fl, blockp, blockp->findStringDType());
+        // Each branch is lowered and stored exactly once, including nested guards. Cloning
+        // either branch into a fast path would double the AST at every mixed-guard depth.
+        AstNodeExpr* const thenp = VN_AS(smtp->exprsp()->nextp(), NodeExpr);
+        AstNodeExpr* const elsep = VN_AS(thenp->nextp(), NodeExpr);
+        thenp->replaceWith(newGuardRefp(thenVarp));
+        elsep->replaceWith(newGuardRefp(elseVarp));
+        blockp->addStmtsp(
+            new AstIf{fl, new AstLogNot{fl, newGuardRefp(falseVarp)},
+                      new AstAssign{fl, newGuardRefp(thenVarp, VAccess::WRITE), thenp}});
+        blockp->addStmtsp(
+            new AstIf{fl, new AstLogNot{fl, newGuardRefp(trueVarp)},
+                      new AstAssign{fl, newGuardRefp(elseVarp, VAccess::WRITE), elsep}});
+        blockp->addStmtsp(
+            new AstIf{fl, newGuardRefp(trueVarp), new AstCReturn{fl, newGuardRefp(thenVarp)}});
+        blockp->addStmtsp(
+            new AstIf{fl, newGuardRefp(falseVarp), new AstCReturn{fl, newGuardRefp(elseVarp)}});
+        VNRelinker relinker;
+        smtp->unlinkFrBack(&relinker);
+        blockp->addStmtsp(new AstCReturn{fl, smtp});
+        AstCExpr* const cexprp = new AstCExpr{fl};
+        cexprp->dtypeSetString();
+        cexprp->add("([&]() -> std::string {\n");
+        cexprp->add(blockp);
+        cexprp->add("})()");
+        relinker.relink(new AstSFormatF{fl, "%s", false, cexprp});
+    }
     void visit(AstCond* nodep) override {
+        // Value conditionals retain ordinary value semantics. In particular, an invalid value
+        // arm must not become boolean FALSE merely because constraint guards use that status.
         if (editFormat(nodep)) return;
-        if (!nodep->condp()->user1()) {
-            // Do not burden the solver if cond computable: (cond ? "then" : "else")
+        if (nodep->condp()->user1()) {
+            editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
+            return;
+        }
+        if (isRandModeGate(nodep->condp())) {
+            // A generated mode gate may still be an SMT-name prefix. Keep its typed Cond
+            // until hoistRandModeOverSelectAndMember lifts it around the complete access.
             iterate(nodep->thenp());
             iterate(nodep->elsep());
-            UASSERT_OBJ(
-                nodep->thenp()->isString() && nodep->elsep()->isString(), nodep,
-                "Branches of conditional expression in constraint not converted to strings");
             nodep->dtypeSetString();
             return;
         }
-        // Fall back to "(ite cond then else)"
-        visit(static_cast<AstNodeTriop*>(nodep));
+        iterate(nodep->thenp());
+        iterate(nodep->elsep());
+        UASSERT_OBJ(nodep->thenp()->isString() && nodep->elsep()->isString(), nodep,
+                    "Value conditional arms not converted to strings");
+        FileLine* const fl = nodep->fileline();
+        AstCExpr* const cexprp = new AstCExpr{fl};
+        cexprp->dtypeSetString();
+        cexprp->add("([&]() -> std::string {\n");
+        cexprp->add(new AstBegin{fl, m_uniqueNames.get("__VvalueConditional"),
+                                 new AstIf{fl, nodep->condp()->unlinkFrBack(),
+                                           new AstCReturn{fl, nodep->thenp()->unlinkFrBack()},
+                                           new AstCReturn{fl, nodep->elsep()->unlinkFrBack()}},
+                                 true});
+        cexprp->add("})()");
+        nodep->replaceWith(new AstSFormatF{fl, "%s", false, cexprp});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstReplicate* nodep) override {
         // Biop, but RHS is harmful
@@ -3922,8 +4311,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     // Negated condition of a constraint 'if'
     static AstNodeExpr* newNotCond(const AstConstraintIf* ifp) {
-        AstNodeExpr* const notp
-            = new AstLogNot{ifp->fileline(), ifp->condp()->cloneTreePure(false)};
+        AstNodeExpr* const notp = new AstLogNot{ifp->fileline(), ifp->condp()->cloneTree(false)};
         notp->user1(ifp->condp()->user1());
         return notp;
     }
@@ -3939,6 +4327,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Outside a fold, this if's branches are folded here and m_constraintVars collects
         // their names for the constraint replacing it; a nested if adds to its parent's fold
         const bool foldOwner = !m_wantSingle;
+        VL_RESTORER(m_guardItemp);
+        GuardItem item;
+        if (foldOwner) m_guardItemp = &item;
         UASSERT_OBJ(!foldOwner || m_constraintVars.empty(), nodep,
                     "Constraint names of an earlier fold were not taken over");
         AstNodeExpr* newp = nullptr;
@@ -3953,12 +4344,21 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const thenp = editSingle(fl, nodep->thensp());
         AstNodeExpr* const elsep = editSingle(fl, nodep->elsesp());
         if (thenp && elsep) {
-            newp = new AstCond{fl, nodep->condp()->unlinkFrBack(), thenp, elsep};
+            // Keep guard origin explicit: both arms are constraint implications, not a value
+            // conditional whose ERROR handling could change an enclosing value expression.
+            AstNodeExpr* const condp = nodep->condp()->unlinkFrBack();
+            AstLogNot* const notp = new AstLogNot{fl, condp->cloneTree(false)};
+            notp->user1(condp->user1());
+            AstLogIf* const thenGuardp = new AstLogIf{fl, condp, thenp};
+            AstLogIf* const elseGuardp = new AstLogIf{fl, notp, elsep};
+            thenGuardp->user1(true);
+            elseGuardp->user1(true);
+            newp = new AstLogAnd{fl, thenGuardp, elseGuardp};
         } else if (thenp) {
             newp = new AstLogIf{fl, nodep->condp()->unlinkFrBack(), thenp};
         } else if (elsep) {
             AstNodeExpr* const condp = nodep->condp()->unlinkFrBack();
-            AstNot* const notp = new AstNot{fl, condp};
+            AstLogNot* const notp = new AstLogNot{fl, condp};
             notp->user1(condp->user1());  // Solve the negated condition if it is rand-dependent
             newp = new AstLogIf{fl, notp, elsep};
         }
@@ -3969,7 +4369,10 @@ class ConstraintExprVisitor final : public VNVisitor {
             exprp->isSoft(isSoft);
             nodep->replaceWith(exprp);
             // Iterated next (AstNode::iterateAndNext), and takes over the folded names
-            if (foldOwner) m_foldTakerp = exprp;
+            if (foldOwner) {
+                m_foldTakerp = exprp;
+                m_foldErrorVarp = item.errorVarp;
+            }
         } else {
             nodep->unlinkFrBack();
         }
@@ -4269,6 +4672,29 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
+    AstNode* wrapGuardItemCall(AstCMethodHard* const callp, AstNode* const stmtp,
+                               AstVar* const errorVarp) {
+        FileLine* const fl = callp->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardItem"), errorVarp, true};
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::BitFalse{}}});
+        AstVar* const textVarp = newGuardVarp(fl, blockp, blockp->findStringDType());
+        AstNodeExpr* const textp = callp->pinsp();
+        textp->replaceWith(newGuardRefp(textVarp));
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(textVarp, VAccess::WRITE), textp});
+        // ERROR is always a hard failure, including a soft item or an expression that negates
+        // the guard's boolean payload. Evaluate all needed formatting before testing status.
+        AstCMethodHard* const failp = callp->cloneTree(false);
+        const bool wasSoft = failp->method() == VCMethod::RANDOMIZER_SOFT;
+        failp->method(VCMethod::RANDOMIZER_HARD);
+        AstNodeExpr* const oldTextp = failp->pinsp();
+        oldTextp->replaceWith(new AstSFormatF{fl, "#b0", false, nullptr});
+        VL_DO_DANGLING(pushDeletep(oldTextp), oldTextp);
+        if (wasSoft) { failp->pinsp()->addNextHere(new AstCExpr{fl, AstCExpr::Pure{}, "{}"}); }
+        blockp->addStmtsp(new AstIf{fl, newGuardRefp(errorVarp), failp->makeStmt(), stmtp});
+        return blockp;
+    }
     void visit(AstConstraintExpr* nodep) override {
         // IEEE 1800-2023 18.5.13: 'disable soft' is a meta-level directive on
         // the constraint graph, lowered to a void RANDOMIZER_DISABLE_SOFT
@@ -4276,12 +4702,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         // are rewritten by extractConditionalDisableSofts() before this
         // visitor runs, so anything we see here is unconditional.
         VL_RESTORER(m_firstExpressionInsideIndexp);
+        VL_RESTORER(m_guardItemp);
+        GuardItem item;
+        if (!m_wantSingle) m_guardItemp = &item;
         // Outside a fold this constraint is emitted here with only its own names: those it
         // records, plus the folded names when it replaces an if (see visit(AstConstraintIf*))
         std::set<std::string> vars;
         if (!m_wantSingle) {
             if (nodep == m_foldTakerp) {
                 vars.swap(m_constraintVars);
+                item.errorVarp = m_foldErrorVarp;
+                m_foldErrorVarp = nullptr;
                 m_foldTakerp = nullptr;
             }
             UASSERT_OBJ(m_constraintVars.empty(), nodep,
@@ -4359,6 +4790,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         callp->addPinsp(
             new AstCExpr{nodep->fileline(), AstCExpr::Pure{}, "\"" + prettyText + "\""});
         AstNode* stmtp = callp->makeStmt();
+        if (item.errorVarp) stmtp = wrapGuardItemCall(callp, stmtp, item.errorVarp);
         if (!m_funcArgNames.empty()) {
             // Add the constraint once the arguments of its function calls are solved
             m_funcCalls.push_back({nodep->fileline(), m_funcArgNames, m_itemVarNames});
@@ -4867,7 +5299,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             if (AstConstraintIf* const ifp = VN_CAST(stmtp, ConstraintIf)) {
                 // then branch: accumulated = outer && this.cond
                 AstNodeExpr* const thenCondp
-                    = newGuardAnd(outerCondp, ifp->condp()->cloneTreePure(false));
+                    = newGuardAnd(outerCondp, ifp->condp()->cloneTree(false));
                 if (AstNode* const thenHoistp
                     = extractConditionalDisableSofts(ifp->thensp(), thenCondp)) {
                     hoistListp
@@ -4968,6 +5400,7 @@ class CaptureVisitor final : public VNVisitor {
     AstClass* m_targetp;  // Module of inner context (for symbol lookup)
     std::map<const AstVar*, AstVar*> m_varCloneMap;  // Map original var nodes to their clones
     std::set<AstNode*> m_ignore;  // Nodes to ignore for capturing
+    std::set<const AstVar*> m_constraintIterators;  // All with-block foreach index variables
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     bool m_thisIsTarget = false;  // True when the caller's 'this' is the randomized object
 
@@ -5033,9 +5466,7 @@ class CaptureVisitor final : public VNVisitor {
         const bool varHasAutomaticLifetime = varRefp->varp()->lifetime().isAutomatic();
         const bool varIsFieldOfCaller = AstClass::isClassExtendedFrom(callerClassp, varClassp);
         const bool varIsParam = varRefp->varp()->isParam();
-        const bool varIsConstraintIterator
-            = VN_IS(varRefp->varp()->firstAbovep(), ForeachHeader)
-              && VN_IS(varRefp->varp()->firstAbovep()->firstAbovep(), ConstraintForeach);
+        const bool varIsConstraintIterator = m_constraintIterators.count(varRefp->varp());
         if (refIsXref) return CaptureMode::CAP_VALUE | CaptureMode::CAP_F_XREF;
         if (varIsConstraintIterator) return CaptureMode::CAP_NO;
         if (varIsFuncLocal && varHasAutomaticLifetime) return CaptureMode::CAP_VALUE;
@@ -5098,6 +5529,13 @@ class CaptureVisitor final : public VNVisitor {
 
     // VISITORS
 
+    void visit(AstConstraintForeach* const nodep) override {
+        // All header indices are local, including later and omitted dimensions.
+        for (const AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_constraintIterators.insert(varp);
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstNodeVarRef* nodep) override {
         if (m_ignore.count(nodep)) return;
         m_ignore.emplace(nodep);
@@ -5258,6 +5696,8 @@ class RandomizeVisitor final : public VNVisitor {
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     // m_writtenVars of each class, with those of its base classes
     std::map<const AstClass*, std::set<std::string>> m_classWrittenVars;
+    // Classes whose randomization may randomize a randc variable
+    std::unordered_set<const AstClass*> m_randcClasses;
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
     std::map<const AstVar*, AstVar*> m_memberSizeVars;  // Size variables of member arrays
     // Arrays of member objects, by SMT name, each with its member select
@@ -6446,6 +6886,60 @@ class RandomizeVisitor final : public VNVisitor {
         clearp->dtypeSetVoid();
         return clearp->makeStmt();
     }
+    // Statement continuing the randc cycles of fromGenp in toGenp
+    static AstNodeStmt* newRandcHistoryFromp(FileLine* const fl, AstVar* const toGenp,
+                                             AstVar* const fromGenp) {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl,
+            new AstVarRef{fl, VN_CAST(toGenp->user2p(), NodeModule), toGenp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_RANDC_HISTORY_FROM,
+            new AstVarRef{fl, VN_CAST(fromGenp->user2p(), NodeModule), fromGenp, VAccess::READ}};
+        callp->dtypeSetVoid();
+        return callp->makeStmt();
+    }
+    // Find m_randcClasses: the classes with a randc variable, and, from those, the classes with
+    // a rand handle to one, or extending one
+    void findRandcClasses(AstNetlist* const nodep) {
+        // Classes with a rand handle to, or extending, each class
+        std::unordered_map<const AstClass*, std::vector<const AstClass*>> reachingClasses;
+        std::vector<const AstClass*> worklist;  // Classes found, whose reaching classes are next
+        nodep->foreach([&](const AstClass* const classp) {
+            if (classp->extendsp()) {
+                reachingClasses[classp->extendsp()->classp()].push_back(classp);
+            }
+            for (const AstNode* itemp = classp->membersp(); itemp; itemp = itemp->nextp()) {
+                const AstVar* const varp = VN_CAST(itemp, Var);
+                if (!varp || !varp->isRand()) continue;
+                if (varp->isRandC()) worklist.push_back(classp);
+                const AstNodeDType* dtypep = varp->dtypep()->skipRefp();
+                while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
+                if (const AstClassRefDType* const refp = VN_CAST(dtypep, ClassRefDType)) {
+                    reachingClasses[refp->classp()].push_back(classp);
+                }
+            }
+        });
+        while (!worklist.empty()) {
+            const AstClass* const classp = worklist.back();
+            worklist.pop_back();
+            if (!m_randcClasses.insert(classp).second) continue;
+            const auto it = reachingClasses.find(classp);
+            if (it == reachingClasses.end()) continue;
+            worklist.insert(worklist.end(), it->second.begin(), it->second.end());
+        }
+    }
+    // The generator keeping the randc cycles of the randomize() with calls of the objects of a
+    // class without a class generator, in the base-most class like a class generator
+    AstVar* getCreateRandcHistoryp(AstClass* classp) {
+        while (classp->extendsp()) classp = classp->extendsp()->classp();
+        static constexpr const char* const name = "__Vrandc_history";
+        if (AstVar* const varp = VN_CAST(m_memberMap.findMember(classp, name), Var)) return varp;
+        AstVar* const varp = new AstVar{classp->fileline(), VVarType::MEMBER, name,
+                                        classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)};
+        varp->user2p(classp);
+        classp->addMembersp(varp);
+        m_memberMap.insert(classp, varp);
+        return varp;
+    }
     AstNodeStmt* implementConstraintsClearAll(FileLine* const fileline, AstVar* const genp) {
         AstCMethodHard* const clearp = new AstCMethodHard{
             fileline,
@@ -7606,17 +8100,10 @@ class RandomizeVisitor final : public VNVisitor {
                               AstConstraintForeach* foreachp = nullptr) {
         // When inside a foreach, bucket preamble stmts are stored in foreachp->user3p()
         // (as a linked list) so visit(AstConstraintForeach*) can inject them into the
-        // real AstForeach body. Outside a foreach, they go directly into taskp.
-        AstNode* foreachTailp = nullptr;
+        // real AstForeach body. Recursive branches share and append to the same list.
         auto addStmt = [&](AstNode* nodep) {
             if (foreachp) {
-                if (!foreachTailp) {
-                    foreachp->user3p(nodep);
-                    foreachTailp = nodep;
-                } else {
-                    foreachTailp->addNext(nodep);
-                    foreachTailp = nodep;
-                }
+                foreachp->user3p(AstNode::addNext(foreachp->user3p(), nodep));
             } else {
                 taskp->addStmtsp(nodep);
             }
@@ -7751,6 +8238,44 @@ class RandomizeVisitor final : public VNVisitor {
             // Last cumSum is unused (last bucket is unconditional default)
             pushDeletep(cumSums.back());
         }
+    }
+
+    // Give dist preambles operand ownership, recording the original body boundaries
+    // so callers can restore the off-tree layout when needed.
+    static std::vector<std::pair<AstConstraintForeach*, AstNode*>>
+    attachDistPreambles(AstNode* const nodep) {
+        std::vector<std::pair<AstConstraintForeach*, AstNode*>> preambles;
+        nodep->foreachAndNext([&](AstConstraintForeach* const foreachp) {
+            if (foreachp->user3p()) preambles.emplace_back(foreachp, foreachp->bodyp());
+        });
+        // A lowered dist leaves a non-empty body; remember its first statement so
+        // each preamble can be detached again without walking its off-tree list.
+        for (const std::pair<AstConstraintForeach*, AstNode*>& preamble : preambles) {
+            AstConstraintForeach* const foreachp = preamble.first;
+            AstNode* const preamblep = foreachp->user3p();
+            foreachp->user3p(nullptr);
+            preamblep->addNext(preamble.second->unlinkFrBackWithNext());
+            foreachp->addBodyp(preamblep);
+        }
+        return preambles;
+    }
+
+    // Clone preamble variables and loop-index references with the bodies using them.
+    static AstNode* cloneWithDistPreambles(AstNode* const nodep) {
+        const std::vector<std::pair<AstConstraintForeach*, AstNode*>> preambles
+            = attachDistPreambles(nodep);
+        AstNode* const clonep = nodep->cloneTree(true);
+        const auto restorePreamble
+            = [](AstConstraintForeach* const foreachp, AstNode* const bodyp) {
+                  AstNode* const preamblep = foreachp->bodyp()->unlinkFrBackWithNext();
+                  foreachp->addBodyp(bodyp->unlinkFrBackWithNext());
+                  foreachp->user3p(preamblep);
+              };
+        for (const std::pair<AstConstraintForeach*, AstNode*>& preamble : preambles) {
+            restorePreamble(preamble.first->clonep(), preamble.second->clonep());
+            restorePreamble(preamble.first, preamble.second);
+        }
+        return clonep;
     }
 
     static bool isDynArrOfClassTypeRecurse(const AstNodeDType* const dtypep) {
@@ -8043,12 +8568,13 @@ class RandomizeVisitor final : public VNVisitor {
         funcp->addStmtsp(endp->makeStmt());
     }
 
-    static AstCExpr* newSolverCallp(AstVar* const genp) {
+    // sizeSolve for the solve of array sizes before the final solve
+    static AstCExpr* newSolverCallp(AstVar* const genp, const bool sizeSolve = false) {
         AstCExpr* const callp = new AstCExpr{genp->fileline()};
         callp->dtypeSetBit();
         callp->add(new AstVarRef{genp->fileline(), VN_CAST(genp->user2p(), NodeModule), genp,
                                  VAccess::READWRITE});
-        callp->add(".next(__Vm_rng)");
+        callp->add(sizeSolve ? ".next_size(__Vm_rng)" : ".next(__Vm_rng)");
         return callp;
     }
     // Solve for the element values if the size solve succeeded
@@ -8067,7 +8593,7 @@ class RandomizeVisitor final : public VNVisitor {
         sizeOkVarp->funcLocal(true);
         randomizep->addStmtsp(sizeOkVarp);
         randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, sizeOkVarp, VAccess::WRITE},
-                                            newSolverCallp(genp)});
+                                            newSolverCallp(genp, true)});
         return sizeOkVarp;
     }
 
@@ -8768,6 +9294,16 @@ class RandomizeVisitor final : public VNVisitor {
                               VAccess::READ}});
         }
 
+        // The randc cycles continue across calls (IEEE 1800-2023 18.4.2), but this call's
+        // generator also holds its own constraints, so only its randc cycles are kept
+        AstVar* const randcHistoryp = !m_randcClasses.count(classp) ? nullptr
+                                      : classGenp                   ? classGenp
+                                                  : getCreateRandcHistoryp(classp);
+        if (randcHistoryp && !classGenp) {
+            randomizeFuncp->addStmtsp(
+                newRandcHistoryFromp(nodep->fileline(), localGenp, randcHistoryp));
+        }
+
         // Set rand mode if present (not needed if classGenp exists and was copied)
         AstVar* const randModeVarp = getRandModeVarFromClass(classp);
         if (!classGenp && randModeVarp) addSetRandMode(randomizeFuncp, localGenp, randModeVarp);
@@ -8873,10 +9409,9 @@ class RandomizeVisitor final : public VNVisitor {
             }
         }
 
-        // A pristine copy of the with-block's own constraint tree, taken before any
-        // mutation, in case a size phase (below) needs to re-lower it a second time
-        // against post-resize arrays.
-        AstNode* const capturedClonep = capturedTreep->cloneTree(true);
+        // Keep an independent copy of the lowered with-block constraints to rebuild
+        // them against post-resize arrays if a size phase is needed below.
+        AstNode* const capturedClonep = cloneWithDistPreambles(capturedTreep);
 
         // Arrays that gain a size var from THIS with-block's own inline .size()==expr
         // constraint (as opposed to a class-level one) and are also referenced by a
@@ -8956,10 +9491,24 @@ class RandomizeVisitor final : public VNVisitor {
                 AstTask* const constrSetupFuncp2
                     = getCreateConstraintSetupFunc(classp, m_memberMap);
                 randomizeFuncp->addStmtsp((new AstTaskRef{fl, constrSetupFuncp2})->makeStmt());
+                // The copy keeps the randc cycles of this call, as its size solve left them
+                AstVar* const randcKeepp
+                    = randcHistoryp
+                          ? new AstVar{fl, VVarType::BLOCKTEMP, "__Vrandc_keep",
+                                       classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)}
+                          : nullptr;
+                if (randcKeepp) {
+                    randcKeepp->funcLocal(true);
+                    randomizeFuncp->addStmtsp(randcKeepp);
+                    randomizeFuncp->addStmtsp(newRandcHistoryFromp(fl, randcKeepp, localGenp));
+                }
                 randomizeFuncp->addStmtsp(
                     new AstAssign{fl, new AstVarRef{fl, localGenp, VAccess::WRITE},
                                   new AstVarRef{fl, VN_AS(classGenp->user2p(), NodeModule),
                                                 classGenp, VAccess::READ}});
+                if (randcKeepp) {
+                    randomizeFuncp->addStmtsp(newRandcHistoryFromp(fl, localGenp, randcKeepp));
+                }
             } else if (AstNode* const pinsp = newClassElemModePinsp(classp, localGenp)) {
                 randomizeFuncp->addStmtsp(pinsp);
             }
@@ -9082,6 +9631,8 @@ class RandomizeVisitor final : public VNVisitor {
                                       new AstVarRef{fl, sizeOkVarp, VAccess::READ}},
                            new AstVarRef{fl, finalOkVarp, VAccess::READ}}});
         } else {
+            // Preambles held in user3p are off-tree; reattach them so deletion frees them.
+            attachDistPreambles(capturedClonep);
             VL_DO_DANGLING(capturedClonep->deleteTree(), capturedClonep);
 
             // Call the solver and set return value
@@ -9108,6 +9659,12 @@ class RandomizeVisitor final : public VNVisitor {
                 randomizeFuncp, solveAfterp ? solveAfterp->nextp() : randomizeFuncp->stmtsp(),
                 classGenp ? classGenp : localGenp, localGenp, retVarp, basicRandomizeFuncp, calls,
                 classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
+        }
+        // A failed call leaves the randc cycles alone
+        if (randcHistoryp) {
+            randomizeFuncp->addStmtsp(
+                new AstIf{fl, new AstVarRef{fl, retVarp, VAccess::READ},
+                          newRandcHistoryFromp(fl, randcHistoryp, localGenp)});
         }
 
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
@@ -9214,6 +9771,7 @@ public:
             if (classp->extendsp())
                 m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
         });
+        findRandcClasses(nodep);
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.
         // Runs before any class is lowered. Only a randomized class counts, and
