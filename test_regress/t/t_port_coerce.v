@@ -398,7 +398,8 @@ module t (
   cast_drv u_cast (.a(pair_t'({ncastw1, ncastw2})));
   unpacked_drv u_unpacked (.a(uw), .v(cv));
 
-  // Readonly view exclusion and writable-view control have independent drivers.
+  // Input nets of a readonly view are coerced as through a writable view, as port
+  // coercion is not a write through the modport; each view has its own drivers.
   logic view_en = 0;
   logic [1:0] view_value = 0;
   view_if read_view ();
@@ -414,21 +415,25 @@ module t (
     view_en = 1;
     view_value = 2'b10;
     #1;
-    `checkh(read_view.a, 2'bzz);
+    `checkh(read_view.a, 2'b10);
     `checkh(write_view.a, 2'b10);
-    `checkh(read_array[0].a, 2'bzz);
-    `checkh(read_array[1].a, 2'bzz);
+    `checkh(read_array[0].a, 2'b10);
+    `checkh(read_array[1].a, 2'b10);
     `checkh(write_array[0].a, 2'b10);
     `checkh(write_array[1].a, 2'b10);
     view_value = 2'b01;
     #1;
-    `checkh(read_array[0].a, 2'bzz);
-    `checkh(read_array[1].a, 2'bzz);
+    `checkh(read_view.a, 2'b01);
+    `checkh(read_array[0].a, 2'b01);
+    `checkh(read_array[1].a, 2'b01);
     `checkh(write_array[0].a, 2'b01);
     `checkh(write_array[1].a, 2'b01);
     view_en = 0;
     #1;
+    `checkh(read_view.a, 2'bzz);
     `checkh(write_view.a, 2'bzz);
+    `checkh(read_array[0].a, 2'bzz);
+    `checkh(read_array[1].a, 2'bzz);
     `checkh(write_array[0].a, 2'bzz);
     `checkh(write_array[1].a, 2'bzz);
   end
