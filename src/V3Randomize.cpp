@@ -1360,8 +1360,6 @@ class RandomizeVisitor final : public VNVisitor {
 
     // STATE
     V3UniqueNames m_inlineUniqueNames;  // For generating unique function names
-    // Constraints cloned from objects -> the object (or object array) they were cloned for
-    const ClonedConstraints& m_cloneObjps;  // Constraints cloned from objects
     V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Random array loop indices
     V3UniqueNames m_modeUniqueNames{"__Vmode"};  // For generating unique rand/constraint
                                                  // mode state var names
@@ -3299,7 +3297,6 @@ public:
     RandomizeVisitor(AstNetlist* nodep, const ClonedConstraints& cloneObjps,
                      const std::unordered_set<AstVar*>& elemModeArrays)
         : m_inlineUniqueNames{"__Vrandwith"}
-        , m_cloneObjps{cloneObjps}
         , m_elemModes{elemModeArrays}
         , m_solverp{v3Global.solverBackendp()->newLowering(m_memberMap, m_uniqueNames, m_modeVars,
                                                            m_elemModes, cloneObjps, deleter())} {
