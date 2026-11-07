@@ -2180,6 +2180,16 @@ class RandomizeVisitor final : public VNVisitor {
         callp->dtypeSetVoid();
         randomizeFuncp->addStmtsp(callp->makeStmt());
     }
+    // Make the statements of 'funcp' after 'lastp' run only if randomize() succeeds
+    static void guardPostCallbacks(AstFunc* const funcp, AstNode* const lastp) {
+        // IEEE 1800-2023 18.6.3: "If randomize() fails, post_randomize() is not called."
+        AstNode* const postp = lastp->nextp();
+        if (!postp) return;
+        FileLine* const fl = postp->fileline();
+        AstVar* const fvarp = VN_AS(funcp->fvarp(), Var);
+        funcp->addStmtsp(
+            new AstIf{fl, new AstVarRef{fl, fvarp, VAccess::READ}, postp->unlinkFrBackWithNext()});
+    }
     // Check if a class (including inherited members) has any rand class-type members
     bool classHasRandClassMembers(AstClass* classp) {
         return classp->existsMember([](const AstClass*, const AstVar* varp) {
@@ -2988,15 +2998,18 @@ class RandomizeVisitor final : public VNVisitor {
             AstVarRef* const fvarRefReadp = fvarRefp->cloneTree(false);
             fvarRefReadp->access(VAccess::READ);
 
+            // Only after a success, so a failed solve does not randomize rand members, calling
+            // their post_randomize
             AstNodeExpr* const secondHalfp
                 = basicFirst ? beginValp : new AstFuncRef{fl, basicRandomizep};
-            randomizep->addStmtsp(new AstAssign{fl, fvarRefp->cloneTree(false),
-                                                new AstAnd{fl, fvarRefReadp, secondHalfp}});
+            randomizep->addStmtsp(new AstIf{
+                fl, fvarRefReadp, new AstAssign{fl, fvarRefp->cloneTree(false), secondHalfp}});
 
             if (basicFirst) m_solverp->addAfterClassSolve(nodep, randomizep);
         }
         m_solverp->finishClassRandomize(nodep, randomizep, basicRandomizep);
 
+        AstNode* const lastp = randomizep->stmtsp()->lastp();
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         if (classHasRandClassMembers(nodep)) {
             AstTask* const postTaskp = getCreateNestedCallbackTask(nodep, "post");
@@ -3005,6 +3018,7 @@ class RandomizeVisitor final : public VNVisitor {
         }
 
         addPrePostCall(nodep, randomizep, "post_randomize");
+        guardPostCallbacks(randomizep, lastp);
         if (randomizingVarp) {
             randomizep->addStmtsp(
                 new AstAssign{fl,
@@ -3345,6 +3359,7 @@ class RandomizeVisitor final : public VNVisitor {
                                         withp->exprp()->unlinkFrBackWithNext(),
                                         captured.getThisp(), basicRandomizeFuncCallp);
 
+        AstNode* const lastp = randomizeFuncp->stmtsp()->lastp();
         // Call nested post_randomize on rand class-type members (IEEE 18.4.1)
         if (classHasRandClassMembers(classp)) {
             AstTask* const postTaskp = getCreateNestedCallbackTask(classp, "post");
@@ -3359,6 +3374,7 @@ class RandomizeVisitor final : public VNVisitor {
         } else {
             addPrePostCall(classp, randomizeFuncp, "post_randomize");
         }
+        guardPostCallbacks(randomizeFuncp, lastp);
         if (randomizingVarp) {
             randomizeFuncp->addStmtsp(new AstAssign{
                 nodep->fileline(),

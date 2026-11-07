@@ -2210,8 +2210,10 @@ bool VlRandomizer::func_args_ready(std::initializer_list<const char*> names) con
     return true;
 }
 
-void VlRandomizer::solveBefore(const std::string& beforeName, const std::string& afterName) {
-    m_solveBefore.emplace_back(beforeName, afterName);
+void VlRandomizer::solveBefore(const std::string& beforeName, IData beforeLsb, IData beforeWidth,
+                               const std::string& afterName, IData afterLsb, IData afterWidth) {
+    m_solveBefore.emplace_back(SolveBeforeRef{beforeName, beforeLsb, beforeWidth},
+                               SolveBeforeRef{afterName, afterLsb, afterWidth});
 }
 
 const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
@@ -2242,6 +2244,7 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
             if (width > 32) return nullptr;
             term = "(select " + term + " #x" + indices[i].substr(8 - width / 4) + ")";
         }
+        m_solveBeforeArrays[name] = arrIt->second.get();
         return (m_solveBeforeElems[name]
                 = std::make_shared<const VlRandomVar>(term, arrIt->second->width(), nullptr, 0,
                                                       std::numeric_limits<std::uint32_t>::max()))
@@ -2250,47 +2253,156 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
 }
 
 bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layersr) {
-    std::map<std::string, std::set<std::string>> graph;
-    std::map<std::string, int> inDegree;
-    std::set<std::string> solveBeforeVars;
-
+    // The pairs order bits of variables and array elements, which overlap when of the same
+    // variable or element, or of an array and its element. The bits of each variable or
+    // element are split at the bounds of its operands into segments, each ordered, solved and
+    // pinned as a variable, so a variable is pinned only after the predecessors of each of
+    // its parts. The graph nodes are the segments, a start node before and an end node after
+    // the segments of each variable or element, which an operand of all its bits uses, and a
+    // node per pair, after its first operand and before its second. So the edges are bounded
+    // by the segments and the widths of the operands of parts.
+    struct Root final {
+        std::string name;  // Name of the variable or array element
+        const VlRandomVar* arrayp = nullptr;  // Array of an array element, else nullptr
+        std::vector<IData> bounds;  // Sorted bounds of its segments
+        size_t firstNode = 0;  // Node of its first segment, then of its start and end
+        bool whole = false;  // Operand of all its segments, so all are ordered
+    };
+    std::vector<std::pair<SolveBeforeBits, SolveBeforeBits>> pairs;
+    std::map<const VlRandomVar*, Root> roots;
     m_solveBeforeElems.clear();
+    m_solveBeforeArrays.clear();
     for (const auto& pair : m_solveBefore) {
-        const std::string& before = pair.first;
-        const std::string& after = pair.second;
-        // Only consider variables, and elements of array variables, that are registered
-        if (!solveBeforeVarp(before) || !solveBeforeVarp(after)) continue;
-        graph[before].insert(after);
-        solveBeforeVars.insert(before);
-        solveBeforeVars.insert(after);
-        if (inDegree.find(before) == inDegree.end()) inDegree[before] = 0;
-        if (inDegree.find(after) == inDegree.end()) inDegree[after] = 0;
-    }
-
-    // "solve x before y": edge x -> y, in-degree of y increases
-    for (const auto& entry : graph) {
-        for (const auto& to : entry.second) { inDegree[to]++; }
-    }
-
-    std::set<std::string> remaining = solveBeforeVars;
-    while (!remaining.empty()) {
-        std::vector<std::string> currentLayer;
-        for (const auto& var : remaining) {
-            if (inDegree[var] == 0) currentLayer.push_back(var);
+        SolveBeforeBits bits[2];
+        const SolveBeforeRef* const refps[2] = {&pair.first, &pair.second};
+        bool ok = true;
+        for (int i = 0; i < 2 && ok; ++i) ok = solveBeforeBits(*refps[i], bits[i]);
+        // Only consider registered variables and elements of array variables, in range
+        if (!ok) continue;
+        for (int i = 0; i < 2; ++i) {
+            Root& root = roots[bits[i].rootp];
+            root.name = refps[i]->name;
+            root.arrayp = bits[i].arrayp;
+            root.bounds.push_back(bits[i].lo);
+            root.bounds.push_back(bits[i].hi);
         }
-        if (currentLayer.empty()) {
-            VL_WARN_MT("", 0, "randomize", "Circular dependency in solve-before constraints");
-            return false;
+        pairs.emplace_back(bits[0], bits[1]);
+    }
+    size_t nodes = 0;
+    for (auto& it : roots) {
+        std::vector<IData>& bounds = it.second.bounds;
+        std::sort(bounds.begin(), bounds.end());
+        bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+        it.second.firstNode = nodes;
+        nodes += bounds.size() + 1;
+    }
+    const size_t pairNode0 = nodes;
+    nodes += pairs.size();
+    // Edges, with the number of layers the node after is at least after the node before
+    std::vector<std::vector<std::pair<size_t, size_t>>> succs(nodes);
+    std::vector<size_t> inDegree(nodes, 0);
+    std::vector<bool> ordered(nodes, false);  // Segment of a part operand, not of a gap
+    const auto addEdge = [&](size_t from, size_t to, size_t layers) {
+        succs[from].emplace_back(to, layers);
+        ++inDegree[to];
+    };
+    for (const auto& it : roots) {
+        const Root& root = it.second;
+        const size_t start = root.firstNode + root.bounds.size() - 1;
+        for (size_t node = root.firstNode; node < start; ++node) {
+            addEdge(start, node, 0);
+            addEdge(node, start + 1, 0);
         }
-        std::sort(currentLayer.begin(), currentLayer.end());
-        for (const auto& var : currentLayer) {
-            remaining.erase(var);
-            if (graph.count(var)) {
-                for (const auto& to : graph[var]) { inDegree[to]--; }
+        // An element is part of its array, which is pinned only after it
+        if (!root.arrayp) continue;
+        const auto arrayIt = roots.find(root.arrayp);
+        if (arrayIt == roots.end()) continue;
+        const Root& array = arrayIt->second;
+        const size_t arrayStart = array.firstNode + array.bounds.size() - 1;
+        addEdge(arrayStart, start, 0);
+        addEdge(start + 1, arrayStart + 1, 0);
+        for (size_t node = array.firstNode; node < arrayStart; ++node) addEdge(start + 1, node, 0);
+    }
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        for (int side = 0; side < 2; ++side) {
+            const SolveBeforeBits& bits = side ? pairs[i].second : pairs[i].first;
+            Root& root = roots[bits.rootp];
+            const auto loIt = std::lower_bound(root.bounds.begin(), root.bounds.end(), bits.lo);
+            const auto hiIt = std::lower_bound(loIt, root.bounds.end(), bits.hi);
+            const size_t loNode = root.firstNode + (loIt - root.bounds.begin());
+            const size_t hiNode = root.firstNode + (hiIt - root.bounds.begin());
+            const size_t start = root.firstNode + root.bounds.size() - 1;
+            if (loNode == root.firstNode && hiNode == start) {
+                root.whole = true;
+                if (side) addEdge(pairNode0 + i, start, 1);
+                if (!side) addEdge(start + 1, pairNode0 + i, 0);
+                continue;
+            }
+            for (size_t node = loNode; node < hiNode; ++node) {
+                ordered[node] = true;
+                if (side) addEdge(pairNode0 + i, node, 1);
+                if (!side) addEdge(node, pairNode0 + i, 0);
             }
         }
-        layersr.push_back(std::move(currentLayer));
     }
+    // Topological order, with the layer of each node
+    std::vector<size_t> layer(nodes, 0);
+    std::vector<size_t> ready;
+    for (size_t node = 0; node < nodes; ++node) {
+        if (!inDegree[node]) ready.push_back(node);
+    }
+    size_t done = 0;
+    while (!ready.empty()) {
+        const size_t node = ready.back();
+        ready.pop_back();
+        ++done;
+        for (const auto& edge : succs[node]) {
+            layer[edge.first] = std::max(layer[edge.first], layer[node] + edge.second);
+            if (!--inDegree[edge.first]) ready.push_back(edge.first);
+        }
+    }
+    if (done < nodes) {
+        VL_WARN_MT("", 0, "randomize", "Circular dependency in solve-before constraints");
+        return false;
+    }
+    for (const auto& it : roots) {
+        const Root& root = it.second;
+        for (size_t i = 0; i + 1 < root.bounds.size(); ++i) {
+            const size_t node = root.firstNode + i;
+            if (!root.whole && !ordered[node]) continue;
+            const IData lo = root.bounds[i];
+            const IData hi = root.bounds[i + 1];
+            std::string name = root.name;
+            if (lo || hi != static_cast<IData>(it.first->width())) {
+                name = "((_ extract " + std::to_string(hi - 1) + " " + std::to_string(lo) + ") "
+                       + it.first->name() + ")";
+                m_solveBeforeElems[name] = std::make_shared<const VlRandomVar>(
+                    name, static_cast<int>(hi - lo), nullptr, 0,
+                    std::numeric_limits<std::uint32_t>::max());
+            }
+            if (layersr.size() <= layer[node]) layersr.resize(layer[node] + 1);
+            layersr[layer[node]].push_back(name);
+        }
+    }
+    for (auto& names : layersr) std::sort(names.begin(), names.end());
+    return true;
+}
+
+bool VlRandomizer::solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr) {
+    bitsr.rootp = solveBeforeVarp(ref.name);
+    if (!bitsr.rootp) return false;
+    const auto arrayIt = m_solveBeforeArrays.find(ref.name);
+    bitsr.arrayp = arrayIt == m_solveBeforeArrays.end() ? nullptr : arrayIt->second;
+    const IData varWidth = bitsr.rootp->width();
+    if (!ref.width) {
+        bitsr.lo = 0;
+        bitsr.hi = varWidth;
+        return true;
+    }
+    // A select by a variable index can be out of range
+    if (ref.lsb >= varWidth || ref.width > varWidth - ref.lsb) return false;
+    bitsr.lo = ref.lsb;
+    bitsr.hi = ref.lsb + ref.width;
     return true;
 }
 

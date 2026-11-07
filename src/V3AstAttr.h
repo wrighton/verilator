@@ -1093,7 +1093,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrr") \
     macro(RANDOMIZER_UNIQUE,                  "rand_unique",            false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_MARK_RANDC,              "markRandc",              false,  CLEAN,  false,      "r") \
-    macro(RANDOMIZER_SOLVE_BEFORE,            "solveBefore",            false,  CLEAN,  false,      "rr") \
+    macro(RANDOMIZER_SOLVE_BEFORE,            "solveBefore",            false,  CLEAN,  false,      "rrrrrr") \
     macro(RANDOMIZER_PIN_VAR,                 "pin_var",                false,  CLEAN,  false,      "rrr") \
     macro(RANDOMIZER_UPDATE_VAR,              "update_var",             false,  CLEAN,  false,      "TODO") \
     macro(RANDOMIZER_WRITE_VAR,               "write_var",              false,  CLEAN,  false,      "TODO") \
