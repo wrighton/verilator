@@ -123,6 +123,7 @@ class AstNodeFTask VL_NOT_FINAL : public AstNode {
     bool m_taskPublic : 1;  // Public task
     bool m_classMethod : 1;  // Class method
     bool m_didProto : 1;  // Did prototype processing
+    bool m_forkBranch : 1;  // Body of a fork branch, moved out of its scope by V3Fork
     bool m_prototype : 1;  // Just a prototype
     bool m_dpiExport : 1;  // DPI exported
     bool m_dpiImport : 1;  // DPI imported
@@ -158,6 +159,7 @@ protected:
         , m_taskPublic{false}
         , m_classMethod{false}
         , m_didProto{false}
+        , m_forkBranch{false}
         , m_prototype{false}
         , m_dpiExport{false}
         , m_dpiImport{false}
@@ -211,6 +213,8 @@ public:
     void classMethod(bool flag) { m_classMethod = flag; }
     bool didProto() const { return m_didProto; }
     void didProto(bool flag) { m_didProto = flag; }
+    bool forkBranch() const { return m_forkBranch; }
+    void forkBranch(bool flag) { m_forkBranch = flag; }
     bool isExternProto() const { return m_isExternProto; }
     void isExternProto(bool flag) { m_isExternProto = flag; }
     bool isExternDef() const { return m_isExternDef; }
@@ -302,6 +306,7 @@ public:
 class AstNodeFuncCovItem VL_NOT_FINAL : public AstNode {
     // Base class for functional coverage items (coverpoints, crosses)
     // @astgen ptr := m_instCoveragep : Optional[AstFunc]  // [V3Width] Its get_inst_coverage()
+    // @astgen ptr := m_optionVarp : Optional[AstVar]  // Generated option struct member
 protected:
     string m_name;  // Item name
 
@@ -317,6 +322,8 @@ public:
     bool maybePointedTo() const override { return true; }
     AstFunc* instCoveragep() const { return m_instCoveragep; }
     void instCoveragep(AstFunc* funcp) { m_instCoveragep = funcp; }
+    AstVar* optionVarp() const { return m_optionVarp; }
+    void optionVarp(AstVar* varp) { m_optionVarp = varp; }
 };
 class AstNodeGen VL_NOT_FINAL : public AstNode {
     // Generate construct
@@ -1081,6 +1088,7 @@ class AstCoverBin final : public AstNode {
     bool m_isArray = false;  // Bin is an array: of a bin per value or transition, or of
                              // arraySizep() bins
     bool m_isWildcard = false;  // Bin uses wildcard matching (independent of ignore/illegal)
+    bool m_isSetExpr = false;  // Ranges contain one set_covergroup_expression, not a braced list
 
 public:
     AstCoverBin(FileLine* fl, const string& name, AstNode* rangesp, bool isIgnore, bool isIllegal,
@@ -1127,6 +1135,8 @@ public:
     bool isWildcard() const { return m_isWildcard; }
     bool isArray() const { return m_isArray; }
     void isArray(bool flag) { m_isArray = flag; }
+    bool isSetExpr() const { return m_isSetExpr; }
+    void isSetExpr(bool flag) { m_isSetExpr = flag; }
 };
 class AstCoverBinsof final : public AstNode {
     // A binsof selection of a coverpoint or one of its named bins
@@ -1375,7 +1385,7 @@ class AstDefParam final : public AstNode {
     // A defparam assignment
     // Parents: MODULE
     // @astgen op1 := rhsp : AstNodeExpr
-    // @astgen op2 := pathp : AstNodeExpr
+    // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if in the defparam's own scope
     string m_name;  // Name of variable getting set
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, const string& name, AstNodeExpr* rhsp)
@@ -2718,7 +2728,7 @@ public:
     bool isTemp() const { return varType().isTemp(); }
     bool isClassMember() const { return varType() == VVarType::MEMBER; }
     bool isVirtIface() const {
-        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep(), IfaceRefDType)) {
+        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep()->skipRefp(), IfaceRefDType)) {
             return dtp->isVirtual();
         }
         return false;
@@ -3260,6 +3270,7 @@ class AstClass final : public AstNodeModule {
                                        // which updates pointers to rand variables in clone()
     bool m_covergroup = false;  // Is covergroup (TODO perhaps make a new Ast node type for CG?)
     bool m_extended = false;  // Is extension or extended by other classes
+    bool m_implChecksDeferred = false;  // V3LinkDot checks implementations after V3Param
     bool m_interfaceClass = false;  // Interface class
     bool m_needRNG = false;  // Need RNG, uses srandom/randomize
     bool m_useVirtualPublic = false;  // Subclasses need virtual public as uses interface class
@@ -3297,6 +3308,8 @@ public:
     void isCovergroup(bool flag) { m_covergroup = flag; }
     bool isExtended() const { return m_extended; }
     void isExtended(bool flag) { m_extended = flag; }
+    bool implChecksDeferred() const { return m_implChecksDeferred; }
+    void implChecksDeferred(bool flag) { m_implChecksDeferred = flag; }
     bool isInterfaceClass() const { return m_interfaceClass; }
     void isInterfaceClass(bool flag) { m_interfaceClass = flag; }
     bool isVirtual() const { return m_virtual; }
@@ -3328,6 +3341,9 @@ public:
     // Covergroup options accessors
     int cgAutoBinMax() const { return m_cgAutoBinMax; }
     void cgAutoBinMax(int value) { m_cgAutoBinMax = value; }
+    // Return true if this class is an extension of base class following all extends (SLOW)
+    // Accepts nullptrs
+    static bool isClassDerivedFrom(const AstClass* refClassp, const AstClass* baseClassp);
     // Return true if this class is an extension of base class (SLOW)
     // Accepts nullptrs
     static bool isClassExtendedFrom(const AstClass* refClassp, const AstClass* baseClassp);

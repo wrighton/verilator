@@ -20,6 +20,7 @@
 #include "V3EmitCBase.h"
 #include "V3File.h"
 #include "V3MemberMap.h"
+#include "V3Randomize.h"
 #include "V3UniqueNames.h"
 
 #include <algorithm>
@@ -364,9 +365,9 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
         switch (type) {
         case AttributeType::WIDTH: {
             if (isArrayType) {
-                // For arrays, get innermost element width
+                // For arrays, get the element width, without descending into packed types
                 const AstNodeDType* dtypep = itemp->dtypep();
-                while (dtypep->subDTypep()) dtypep = dtypep->subDTypep();
+                while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefp();
                 return dtypep->width();
             }
             return itemp->width();
@@ -401,12 +402,13 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
             puts(";\n");
         }
 
-        // Three helper functions for struct constrained randomization:
+        // Helper functions for struct constrained randomization:
         // - memberNames: Get member names
         // - getMembers: Access member references
         // - memberIndices: Retrieve member indices
         // - memberWidth: Retrieve member width
         // - memberDimension: Retrieve member dimension
+        // - memberEnumDomains: Retrieve member enum domain, see V3Randomize::enumDomain
         if (sdtypep->isConstrainedRand()) {
             bool needComma = false;
             putns(sdtypep, "\nstd::vector<std::string> memberNames(void) const {\n");
@@ -424,6 +426,18 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
 
             putns(sdtypep, "\nstd::vector<int> memberDimension(void) const {\n");
             emitMemberVector<AttributeType::DIMENSION>(sdtypep);
+
+            needComma = false;
+            putns(sdtypep, "\nstd::vector<const char*> memberEnumDomains(void) const {\n");
+            puts("return {");
+            for (const AstMemberDType* const itemp : sdtypep->memberspList()) {
+                if (!itemp->isConstrainedRand()) continue;
+                if (needComma) puts(",\n");
+                const std::string domain = V3Randomize::enumDomain(itemp->subDTypep());
+                putns(itemp, domain.empty() ? "nullptr" : "\"" + domain + "\"");
+                needComma = true;
+            }
+            puts("};\n}\n");
 
             needComma = false;
             putns(sdtypep, "\nauto memberIndices(void) const {\n");

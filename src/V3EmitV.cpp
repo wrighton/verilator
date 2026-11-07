@@ -465,7 +465,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                 if (setp != nodep->transp()) puts(", ");
                 iterateConst(setp);
             }
-        } else if (VN_IS(nodep->rangesp(), CoverWith)) {
+        } else if (nodep->isSetExpr() || VN_IS(nodep->rangesp(), CoverWith)) {
             puts(" = ");
             iterateConst(nodep->rangesp());
         } else if (nodep->rangesp()) {  // LCOV_EXCL_BR_LINE - false: CoverBin always has
@@ -872,6 +872,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         putfs(nodep, "$_CEXPR(");
         emitNodesWithText(nodep->nodesp(), true, "");
         puts(")");
+    }
+    void visit(AstCReturn* nodep) override {
+        putfs(nodep, "return ");
+        iterateConst(nodep->lhsp());
+        puts(";\n");
     }
     void visit(AstCStmtUser* nodep) override {
         putfs(nodep, "$c(");

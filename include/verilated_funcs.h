@@ -275,11 +275,19 @@ inline std::string VL_CVT_N_CSTR(const char* lhsp) VL_PURE {
     return lhsp ? std::string{lhsp} : ""s;
 }
 
-// Return queue from an unpacked array, from its last element if T_Reverse
-template <bool T_Reverse, typename T, std::size_t N_Depth>
+// Return queue from an unpacked array
+template <typename T, std::size_t N_Depth>
 inline VlQueue<T> VL_CVT_UNPACK_TO_Q(const VlUnpacked<T, N_Depth>& q) VL_PURE {
     VlQueue<T> ret;
-    for (size_t i = 0; i < N_Depth; ++i) ret.push_back(q[T_Reverse ? N_Depth - 1 - i : i]);
+    for (size_t i = 0; i < N_Depth; ++i) ret.push_back(q[i]);
+    return ret;
+}
+
+// Return queue from a descending unpacked array, left index first
+template <typename T, std::size_t N_Depth>
+inline VlQueue<T> VL_CVT_UNPACK_TO_Q_REVERSED(const VlUnpacked<T, N_Depth>& q) VL_PURE {
+    VlQueue<T> ret;
+    for (size_t i = 0; i < N_Depth; ++i) ret.push_back(q[N_Depth - 1 - i]);
     return ret;
 }
 
@@ -1784,11 +1792,13 @@ inline void VL_STREAMR_RII(int lbits, VlQueue<T>& q, IData ld, IData rd_log2) VL
 }
 
 template <std::size_t N_Words>
-inline void VL_STREAMR_RII(int lbits, VlQueue<VlWide<N_Words>>& q, IData ld,
+inline void VL_STREAMR_RII(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, IData ld,
                            IData rd_log2) VL_PURE {
+    // Left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
     q.clear();
     VlWide<N_Words> value;
-    VL_SET_WI(value, ld);
+    VL_ZERO_W(queueBits, value);
+    _vl_insert_WI(value, ld, queueBits - 1, queueBits - lbits);
     q.push_back(value);
 }
 
@@ -1861,11 +1871,13 @@ inline IData VL_STREAMR_QRI(int lbits, VlQueue<T>& q, IData rd_log2) VL_PURE {
 }
 
 template <std::size_t N_Words>
-inline void VL_STREAMR_RQI(int lbits, VlQueue<VlWide<N_Words>>& q, QData ld,
+inline void VL_STREAMR_RQI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, QData ld,
                            IData rd_log2) VL_PURE {
-    q.clear();  // Empty the queue first
+    // Left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
+    q.clear();
     VlWide<N_Words> value;
-    VL_SET_WQ(value, ld);
+    VL_ZERO_W(queueBits, value);
+    _vl_insert_WQ(value, ld, queueBits - 1, queueBits - lbits);
     q.push_back(value);
 }
 
@@ -1911,13 +1923,17 @@ inline void VL_STREAMR_RWI(int lbits, int queueBits, VlQueue<T>& q, WDataInP con
 template <std::size_t N_Words>
 inline void VL_STREAMR_RWI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q,
                            WDataInP const lwp, IData rd_log2) VL_PURE {
-    q.clear();  // Empty the queue first
-    const int numWords = VL_BITWORD_E(lbits);
-    VlWide<N_Words> value;
-    for (int ii = 0; ii < N_Words; ii++) value.at(ii) = 0;
-    for (int word = numWords - 1; word >= 0; word--) {
-        value.at(word) = lwp[word];
-        if ((word % N_Words) == 0) { q.push_back(value); }
+    // Elements take the stream from the left, the last zero-filled on the right
+    // (IEEE 1800-2023 11.4.14)
+    q.clear();
+    for (int msb = lbits - 1; msb >= 0; msb -= queueBits) {
+        const int width = std::min(queueBits, msb + 1);
+        VlWide<N_Words> bits;
+        VL_SEL_WWII(width, lbits, bits, lwp, msb - width + 1, width);
+        VlWide<N_Words> value;
+        VL_ZERO_W(queueBits, value);
+        _vl_insert_WW(value, bits, queueBits - 1, queueBits - width);
+        q.push_back(value);
     }
 }
 
@@ -3005,18 +3021,20 @@ inline WDataOutP VL_SEL_WWII(int obits, int lbits, WDataOutP owp, WDataInP const
     return owp;
 }
 
-template <typename T>
-inline VlQueue<T> VL_CLONE_Q(const VlQueue<T>& from, int lbits, int srcElementBits,
-                             int dstElementBits) {
-    VlQueue<T> ret;
+// Return a converted copy of a queue; N_MaxSize is as in VlQueue, for a bounded result
+template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
+inline VlQueue<T, N_MaxSize> VL_CLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
+                                        int srcElementBits, int dstElementBits) {
+    VlQueue<T, N_MaxSize> ret;
     VL_COPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
 
-template <typename T>
-inline VlQueue<T> VL_REVCLONE_Q(const VlQueue<T>& from, int lbits, int srcElementBits,
-                                int dstElementBits) {
-    VlQueue<T> ret;
+// Return a converted copy of a queue, reversed; N_MaxSize as for VL_CLONE_Q
+template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
+inline VlQueue<T, N_MaxSize> VL_REVCLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
+                                           int srcElementBits, int dstElementBits) {
+    VlQueue<T, N_MaxSize> ret;
     VL_REVCOPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
@@ -3181,6 +3199,33 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
     }
 }
 
+// Convert a queue into a queue, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+          int srcElementBits, int dstElementBits) {
+    // Convert unbounded copies, then assign, which discards elements beyond the destination's
+    // bound with a warning (IEEE 1800-2023 7.10.5)
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_COPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
+}
+
+// Convert a queue into a queue, reversed, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+             int srcElementBits, int dstElementBits) {
+    // As VL_COPY_Q above
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_REVCOPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
+}
+
 // Overloads for VlUnpacked source -> VlQueue destination
 template <typename T, std::size_t N_Depth>
 inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int lbits,
@@ -3201,18 +3246,18 @@ inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int 
 }
 
 // Overloads for VlQueue source -> fixed-size VlUnpacked destination
-template <typename T_Dst, std::size_t N_Depth, typename T_Src>
-inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src>& from, int lbits,
-                      int srcElementBits, int dstElementBits) {
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
+inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                      int lbits, int srcElementBits, int dstElementBits) {
     VlQueue<T_Dst> dstQ;
     VL_COPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
     // Elements past a shorter stream read as zero (IEEE 1800-2023 11.4.14)
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
 }
 
-template <typename T_Dst, std::size_t N_Depth, typename T_Src>
-inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src>& from, int lbits,
-                         int srcElementBits, int dstElementBits) {
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
+inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                         int lbits, int srcElementBits, int dstElementBits) {
     VlQueue<T_Dst> dstQ;
     VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
@@ -3841,6 +3886,17 @@ inline std::string VL_CVT_PACK_STR_NI(IData lhs) VL_PURE {
     VlWide<VL_WQ_WORDS_E> lw;
     VL_SET_WI(lw, lhs);
     return VL_CVT_PACK_STR_NW(1, lw);
+}
+extern std::string VL_CVT_WILDCARD_KEY_NW(int lwords, const WDataInP lwp) VL_PURE;
+inline std::string VL_CVT_WILDCARD_KEY_NQ(QData lhs) VL_PURE {
+    VlWide<VL_WQ_WORDS_E> lw;
+    VL_SET_WQ(lw, lhs);
+    return VL_CVT_WILDCARD_KEY_NW(VL_WQ_WORDS_E, lw);
+}
+inline std::string VL_CVT_WILDCARD_KEY_NI(IData lhs) VL_PURE {
+    VlWide<VL_WQ_WORDS_E> lw;
+    VL_SET_WI(lw, lhs);
+    return VL_CVT_WILDCARD_KEY_NW(1, lw);
 }
 inline std::string VL_CONCATN_NNN(const std::string& lhs, const std::string& rhs) VL_PURE {
     return lhs + rhs;

@@ -1138,6 +1138,7 @@ void AstClass::dump(std::ostream& str) const {
     Super::dump(str);
     if (isCovergroup()) str << " [CG]";
     if (isExtended()) str << " [EXT]";
+    if (implChecksDeferred()) str << " [IMPLDEFER]";
     if (isInterfaceClass()) str << " [IFCCLS]";
     if (isPrintedFrom()) str << " [PRINTED]";
     if (isVirtual()) str << " [VIRT]";
@@ -1153,6 +1154,7 @@ void AstClass::dumpJson(std::ostream& str) const {
     // dumpJsonNumFunc(str, declTokenNum);  // Not dumped as adding token changes whole file
     dumpJsonBoolFuncIf(str, isCovergroup);
     dumpJsonBoolFuncIf(str, isExtended);
+    dumpJsonBoolFuncIf(str, implChecksDeferred);
     dumpJsonBoolFuncIf(str, isInterfaceClass);
     dumpJsonBoolFuncIf(str, isPrintedFrom);
     dumpJsonBoolFuncIf(str, isVirtual);
@@ -1186,15 +1188,19 @@ bool AstClass::isCacheableChild(const AstNode* nodep) {
            || (VN_IS(nodep, NodeFTask) && !VN_AS(nodep, NodeFTask)->isExternProto())
            || VN_IS(nodep, CFunc);
 }
-bool AstClass::isClassExtendedFrom(const AstClass* refClassp, const AstClass* baseClassp) {
-    // Follows every extends/implements, as interface classes allow multiple inheritance
-    if (!refClassp || !baseClassp) return false;
+bool AstClass::isClassDerivedFrom(const AstClass* refClassp, const AstClass* baseClassp) {
     if (refClassp == baseClassp) return true;
-    for (const AstClassExtends* extp = refClassp->extendsp(); extp;
-         extp = VN_AS(extp->nextp(), ClassExtends)) {
-        if (isClassExtendedFrom(extp->classp(), baseClassp)) return true;
+    for (const AstClassExtends* const extp : refClassp->extendspList()) {
+        if (isClassDerivedFrom(extp->classp(), baseClassp)) return true;
     }
     return false;
+}
+bool AstClass::isClassExtendedFrom(const AstClass* refClassp, const AstClass* baseClassp) {
+    // TAIL RECURSIVE
+    if (!refClassp || !baseClassp) return false;
+    if (refClassp == baseClassp) return true;
+    if (!refClassp->extendsp()) return false;
+    return isClassExtendedFrom(refClassp->extendsp()->classp(), baseClassp);
 }
 AstClass* AstClassExtends::classOrNullp() const {
     const AstNodeDType* const dtp = dtypep() ? dtypep() : childDTypep();
@@ -1643,11 +1649,13 @@ void AstCoverBin::dump(std::ostream& str) const {
     str << " " << m_binsType.ascii();
     if (m_isArray) str << "[]";
     if (m_isWildcard) str << "[*]";
+    if (m_isSetExpr) str << " [SETEXPR]";
 }
 void AstCoverBin::dumpJson(std::ostream& str) const {
     Super::dumpJson(str);
     dumpJsonBoolIf(str, "isArray", isArray());
     dumpJsonBoolIf(str, "isWildcard", isWildcard());
+    dumpJsonBoolIf(str, "isSetExpr", isSetExpr());
     str << ", \"binsType\": \"" << binsType().ascii() << "\"";
 }
 void AstCoverBinsof::dump(std::ostream& str) const {
@@ -2679,14 +2687,21 @@ AstNodeDType::CTypeRecursed AstNodeDType::cTypeRecurse(bool compound, bool packe
         UASSERT_OBJ(!packed, this, "Unsupported type for packed struct or union");
         const CTypeRecursed key = adtypep->keyDTypep()->cTypeRecurse(true, false);
         const CTypeRecursed val = adtypep->subDTypep()->cTypeRecurse(true, false);
-        info.m_type = "::VlAssocArray<" + key.m_type + ", " + val.m_type + ">";
+        info.m_type = "::VlAssocArray<" + key.m_type + ", " + val.m_type;
+        // Signed keys are ordered numerically as signed (IEEE 1800-2023 7.8.4)
+        const AstNodeDType* const keyDtp = adtypep->keyDTypep()->skipRefp();
+        if (keyDtp->isIntegralOrPacked() && keyDtp->isSigned()) {
+            info.m_type += ", ::VlSignedKeyLess<" + cvtToStr(keyDtp->width()) + ">";
+        }
+        info.m_type += ">";
     } else if (const auto* const adtypep = VN_CAST(dtypep, CDType)) {
         UASSERT_OBJ(!packed, this, "Unsupported type for packed struct or union");
         info.m_type = adtypep->name();
     } else if (const auto* const adtypep = VN_CAST(dtypep, WildcardArrayDType)) {
         UASSERT_OBJ(!packed, this, "Unsupported type for packed struct or union");
         const CTypeRecursed sub = adtypep->subDTypep()->cTypeRecurse(true, false);
-        info.m_type = "::VlAssocArray<::std::string, " + sub.m_type + ">";
+        // Wildcard keys are ordered numerically (IEEE 1800-2023 7.8.1)
+        info.m_type = "::VlAssocArray<::std::string, " + sub.m_type + ", ::VlWildcardKeyLess>";
     } else if (const auto* const adtypep = VN_CAST(dtypep, DynArrayDType)) {
         UASSERT_OBJ(!packed, this, "Unsupported type for packed struct or union");
         const CTypeRecursed sub = adtypep->subDTypep()->cTypeRecurse(true, false);
@@ -3158,6 +3173,9 @@ AstNode* AstNodeExpr::baseFromp(bool overMembers) {
         } else if (VN_IS(nodep, CMethodHard)) {
             nodep = VN_AS(nodep, CMethodHard)->fromp();
             continue;
+        } else if (VN_IS(nodep, SliceSel)) {
+            nodep = VN_AS(nodep, SliceSel)->fromp();
+            continue;
         } else if (overMembers && VN_IS(nodep, MemberSel)) {
             nodep = VN_AS(nodep, MemberSel)->fromp();
             continue;
@@ -3214,6 +3232,7 @@ const AstNodeExpr* AstNodeExpr::getVAccessTargetRecurse() const {
         case VCMethod::ARRAY_AT:
         case VCMethod::ARRAY_AT_BACK:
         case VCMethod::ARRAY_AT_WRITE:
+        case VCMethod::ASSOC_AT_WRITE:
         case VCMethod::DYN_AT_WRITE_APPEND:
         case VCMethod::DYN_AT_WRITE_APPEND_BACK:
             // Used for things like Queue/AssocArray/DynArray
@@ -3264,6 +3283,7 @@ void AstNodeFTask::dump(std::ostream& str) const {
     if (dpiOpenParent()) str << " [DPIOPENPARENT]";
     if (isExternDef()) str << " [EXTDEF]";
     if (isExternProto()) str << " [EXTPROTO]";
+    if (forkBranch()) str << " [FORKBRANCH]";
     if (isVirtual()) str << " [VIRT]";
     if (keepAlive()) str << " [KALIVE]";
     if (prototype()) str << " [PROTOTYPE]";
@@ -3288,6 +3308,7 @@ void AstNodeFTask::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, dpiOpenParent);
     dumpJsonBoolFuncIf(str, isExternDef);
     dumpJsonBoolFuncIf(str, isExternProto);
+    dumpJsonBoolFuncIf(str, forkBranch);
     dumpJsonBoolFuncIf(str, isVirtual);
     dumpJsonBoolFuncIf(str, keepAlive);
     dumpJsonBoolFuncIf(str, needProcess);
@@ -3485,10 +3506,6 @@ void AstNodeReadWriteMem::dump(std::ostream& str) const {
 void AstNodeReadWriteMem::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isHex);
     dumpJsonGen(str);
-}
-int AstNodeSel::bitConst() const {
-    const AstConst* const constp = VN_AS(bitp(), Const);
-    return (constp ? constp->toSInt() : 0);
 }
 void AstNodeStmt::dump(std::ostream& str) const { Super::dump(str); }
 void AstNodeStmt::dumpJson(std::ostream& str) const { dumpJsonGen(str); }

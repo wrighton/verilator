@@ -204,9 +204,11 @@ class V3DfgPeephole final : public DfgVisitor {
     const DfgDataType& m_bitDType = DfgDataType::packed(1);  // Common, so grab it up front
     std::vector<DfgVertex*> m_workList;  // List of vertices processed in current interation
     std::vector<DfgVertex*> m_iterList;  // Vertices to start from on next iteration
+    std::vector<DfgVertexVar*> m_removableVarps;  // In visit(DfgVertexVar*), removable sinks
     DfgUserMap<VertexInfo> m_vInfo = m_dfg.makeUserMap<VertexInfo>();  // Map to VertexInfo
     V3DfgCache m_cache{m_dfg};  // Vertex cache to avoid creating redundant vertices
     DfgVertex* m_vtxp = nullptr;  // Currently considered vertex
+    std::vector<DfgVertex*> m_movedSinks;  // In replace(), the sinks moving to the replacement
     size_t m_currentGeneration = 0;  // Current generation number
     size_t m_lastId = 0;  // Last unique vertex ID assigned
     // Scope for transient temporariy variables cerated in this pass. They should all be
@@ -298,6 +300,18 @@ class V3DfgPeephole final : public DfgVisitor {
         vInfo.m_iterListIndex = 0;
     }
 
+    // Drop removed entries from the iter list, keeping the order
+    void compactIterList() {
+        size_t size = 1;
+        for (size_t i = 1; i < m_iterList.size(); ++i) {
+            DfgVertex* const vtxp = m_iterList[i];
+            if (!vtxp) continue;
+            m_vInfo[vtxp].m_iterListIndex = size;
+            m_iterList[size++] = vtxp;
+        }
+        m_iterList.resize(size);
+    }
+
     void deleteVertex(DfgVertex* vtxp) {
         UASSERT_OBJ(!m_vInfo[vtxp].m_workListIndex, vtxp, "Deleted Vertex is in work list");
         UASSERT_OBJ(!vtxp->hasSinks(), vtxp, "Should not delete used vertex");
@@ -307,8 +321,10 @@ class V3DfgPeephole final : public DfgVisitor {
         // Invalidate cache entry
         invalidateVertex(vtxp);
 
-        // It might be in the iter list, remove it
+        // It might be in the iter list, remove it. Replacements can add and remove many
+        // vertices in one iteration, so compact the list when it is mostly removed entries.
         removeFromIterList(vtxp);
+        if (m_iterList.size() > 2 * m_dfg.size()) compactIterList();
 
         // Gather source vertices - they might be duplicates, make unique using generation number
         incrementGeneration();
@@ -326,6 +342,9 @@ class V3DfgPeephole final : public DfgVisitor {
             vInfo.m_generation = m_currentGeneration;
             return false;
         });
+
+        // Release its VertexInfo for reuse, as replacements can create many vertices
+        m_vInfo.erase(*vtxp);
 
         // This pass only removes variables that are either not driven in this graph,
         // or are not observable outside the graph. If there is also no external write
@@ -378,17 +397,18 @@ class V3DfgPeephole final : public DfgVisitor {
         });
 
         // Remove sinks of the original vertex from the cache - their inputs are changing
+        m_movedSinks.clear();
         m_vtxp->foreachSink([&](DfgVertex& dst) {
             invalidateVertex(&dst);
+            m_movedSinks.push_back(&dst);
             return false;
         });
         // Replace vertex with the replacement
         m_vtxp->replaceWith(resp);
-        // Re-cache all sinks of the replacement
-        resp->foreachSink([&](DfgVertex& dst) {
-            cacheVertex(&dst);
-            return false;
-        });
+        // The replacement itself might be an existing vertex that was cached, so it might
+        // have other unrelated sinks. Re-cache the sinks that moved to the replacement,
+        // but avoid re-caching the existing ones.
+        for (DfgVertex* const vtxp : vlstd::reverse_view(m_movedSinks)) cacheVertex(vtxp);
 
         // Original vertex is now unused, so delete it
         deleteVertex(m_vtxp);
@@ -3223,6 +3243,23 @@ class V3DfgPeephole final : public DfgVisitor {
                     return;
                 }
             }
+            // 'c ? a : b' on bits selected from vectors, as one bit of a Concat: in the bitwise
+            // form '(c & a) | (~c & b)' the Concat is pushed through, so that neighbouring bits
+            // merge into one operation on the vectors. Not if 'c' has other uses: the bitwise
+            // terms might then be shared, which stops the Concat being pushed through them.
+            if (condp->is<DfgSel>() && thenp->is<DfgSel>() && elsep->is<DfgSel>()
+                && !condp->hasMultipleSinks() && !thenp->unsafe() && !elsep->unsafe()) {
+                const DfgVertex* const sinkp = vtxp->singleSink();
+                if (sinkp && sinkp->is<DfgConcat>()) {
+                    APPLYING(REPLACE_COND_OF_SEL_BITS_WITH_BITWISE) {
+                        DfgAnd* const takenp = make<DfgAnd>(vtxp, condp, thenp);
+                        DfgNot* const notp = make<DfgNot>(condp, condp);
+                        DfgAnd* const otherp = make<DfgAnd>(vtxp, notp, elsep);
+                        replace(make<DfgOr>(vtxp, takenp, otherp));
+                        return;
+                    }
+                }
+            }
         }
 
         if (vtxp->width() <= VL_QUADSIZE) {
@@ -3409,10 +3446,14 @@ class V3DfgPeephole final : public DfgVisitor {
 
         // Otherwise remove if there is only one sink that is not a removable variable
         bool foundOne = false;
+        m_removableVarps.clear();
         const bool keep = vtxp->srcp()->foreachSink([&](DfgVertex& sink) -> bool {
             // Ignore non-observable variable sinks. These can be eliminated.
-            if (const DfgVertexVar* const varp = sink.cast<DfgVertexVar>()) {
-                if (!varp->hasSinks() && !varp->isObserved()) return false;
+            if (DfgVertexVar* const varp = sink.cast<DfgVertexVar>()) {
+                if (!varp->hasSinks() && !varp->isObserved()) {
+                    if (!varp->defaultp()) m_removableVarps.push_back(varp);
+                    return false;
+                }
             }
             // Keep if found more than one sink
             if (foundOne) return true;
@@ -3420,10 +3461,13 @@ class V3DfgPeephole final : public DfgVisitor {
             foundOne = true;
             return false;
         });
-        if (!keep) {
+        if (keep) return;
+        // This holds for every removable variable of this source, including this one, so
+        // remove them all now. Visiting each would scan all sinks of the source again.
+        for (DfgVertexVar* const varp : m_removableVarps) {
             APPLYING(REMOVE_VAR) {
-                deleteVertex(vtxp);
-                return;
+                removeFromWorkList(varp);
+                deleteVertex(varp);
             }
         }
     }

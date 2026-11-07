@@ -20,4 +20,7 @@
 %Error: t/t_func_automatic_hier_bad.v:41:29: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 13.3.1, 13.4.2): 'bv'
    41 |     $display("%0d", abt.blk.bv);   
       |                             ^~
+%Error: t/t_func_automatic_hier_bad.v:43:26: Automatic variable cannot be referenced hierarchically (IEEE 1800-2023 13.3.1, 13.4.2): 'a'
+   43 |     $display("%0d", ta.f.a);   
+      |                          ^
 %Error: Exiting due to

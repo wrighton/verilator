@@ -33,7 +33,7 @@ module t (
   assert property (@(posedge clk) s_always[1: 3] 1'b1)
   else $display("EOS_FAIL");
 
-  // s_always [2:2]: two distinct unfinished attempts (unsupported yet: none fires).
+  // s_always [2:2]: two unfinished attempts at $finish.
   assert property (@(posedge clk) s_always[2: 2] 1'b1)
   else $display("EOS_RING");
 
@@ -55,19 +55,28 @@ module t (
   // Attempts resolved by the immediate sibling are not EOS failures
   assert property (@(posedge clk) 1'b1 or(s_always[1: 3] 1'b1))
   else $display("EOS_RESOLVED_BAD");
+  assert property (@(posedge clk) 1'b1 or(s_always[2: 2] 1'b1))
+  else $display("EOS_RESOLVED_RING_BAD");
 
   assert property (@(posedge clk) disable iff (disable_now) s_always[1: 3] 1'b1)
   else $display("EOS_DISABLE_BAD");
+  assert property (@(posedge clk) disable iff (disable_now) s_always[2: 2] 1'b1)
+  else $display("EOS_DISABLE_RING_BAD");
 
   assert property (@(posedge clk) sync_accept_on (abort_now) s_always[1: 3] 1'b1)
   else $display("EOS_ABORT_BAD");
+  assert property (@(posedge clk) sync_accept_on (abort_now) s_always[2: 2] 1'b1)
+  else $display("EOS_ABORT_RING_BAD");
 
   // A kill on the finish edge suppresses stale pending states.
   assume property (@(posedge clk) s_always[1: 3] 1'b1)
   else $display("EOS_KILL_BAD");
+  assume property (@(posedge clk) s_always[2: 2] 1'b1)
+  else $display("EOS_KILL_RING_BAD");
 
   // A pending strong cover obligation is not an EOS failure.
   cover property (@(posedge clk) s_always[1: 3] 1'b1);
+  cover property (@(posedge clk) s_always[2: 2] 1'b1);
 
   // The default action should carry the same per-attempt multiplicity.
   assert property (@(posedge clk) s_always[1: 3] 1'b1);

@@ -43,7 +43,18 @@ module t;
     if (i < 5) `checkh(arr[i], expected);
   endtask
 
+  task automatic assign_side_effect_method(input int i);
+    int aa[int];
+    aa[5] = 1;
+    aa[9] = 2;
+    `checkh(aa.last(arr[i]), 1);
+    if (i < 5) `checkh(arr[i], 9);
+  endtask
+
   initial begin
+    assign_side_effect_method(2);
+    assign_side_effect_method(6);
+
     incr(0, 0);
     incr(7, 0);
     incr(4, 2);

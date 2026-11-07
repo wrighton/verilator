@@ -172,6 +172,35 @@ class from_abstract_param_cls extends abstract_param_cls #(int);
   endfunction
 endclass
 
+// Implementations through interface classes sharing base interface classes
+interface class dag0_if;
+  pure virtual function int get_dag();
+endclass
+interface class dag1_if extends dag0_if;
+endclass
+interface class dag2_if extends dag1_if, dag0_if;
+endclass
+interface class dag3_if extends dag2_if, dag1_if;
+endclass
+
+class dag_impl_cls;
+  virtual function int get_dag();
+    return 110;
+  endfunction
+endclass
+
+class from_dag_cls extends dag_impl_cls implements dag3_if;
+endclass
+
+class dag_param_cls #(int N = 1);
+  virtual function int get_dag();
+    return 110 + N;
+  endfunction
+endclass
+
+class from_param_dag_cls extends dag_param_cls #(2) implements dag3_if;
+endclass
+
 // A class nested in one implementing an interface class is checked on its own
 interface class f1_if;
   pure virtual function int f();
@@ -183,7 +212,7 @@ class nest_outer_param extends param_cls #(int) implements f1_if;
   virtual function int f();
     return 1;
   endfunction
-  virtual class nest_inner implements f2_if;
+  virtual class nest_inner extends param_cls #(int) implements f2_if;
   endclass
 endclass
 class nest_outer extends base_cls implements f1_if;
@@ -194,6 +223,95 @@ class nest_outer extends base_cls implements f1_if;
   endclass
 endclass
 
+// A superclass's nested class can derive from the class extending that superclass.
+// The original missing-implementation reproducer (IEEE 1800-2023 8.23, 8.26.2).
+interface class J;
+  pure virtual function int g();
+endclass
+typedef class B;
+class A extends B;
+endclass
+class B;
+  virtual function int g();
+    return 7;
+  endfunction
+  class N extends A implements J;
+  endclass
+
+  // Inherited qualified types must also be ready, independently of implements.
+  typedef bit [6:0] word_t;
+  typedef enum { ONE = 1, SEVEN = 7 } kind_t;
+  int value;
+  class Lookup extends A;
+    A::word_t data;
+    A::kind_t kind;
+    function int read_value();
+      return value + int'(data) + int'(kind) + g();
+    endfunction
+  endclass
+endclass
+
+// Reverse source order must have identical inheritance and interface dispatch.
+package nested_reverse;
+  typedef class A;
+  class B;
+    virtual function int g();
+      return 7;
+    endfunction
+    class N extends A implements J;
+    endclass
+  endclass
+  class A extends B;
+  endclass
+endpackage
+
+// The same dependency after a parameterized superclass has been specialized.
+package nested_param;
+  typedef class B;
+  class A extends B #(7);
+  endclass
+  class B #(int V = 1);
+    typedef bit [6:0] word_t;
+    int value;
+    virtual function int g();
+      return V + value;
+    endfunction
+    class N extends A implements J;
+      A::word_t data;
+    endclass
+  endclass
+endpackage
+
+// Extern definitions inherit declaration specifiers before nested inheritance checks.
+package nested_extern;
+  typedef class B;
+  class A extends B;
+  endclass
+  class B;
+    extern virtual function int g();
+    class N extends A implements J;
+    endclass
+  endclass
+  function int B::g();
+    return 7;
+  endfunction
+endpackage
+
+package nested_extern_param;
+  typedef class B;
+  class A extends B #(9);
+  endclass
+  class B #(int V = 1);
+    int value;
+    extern virtual function int g();
+    class N extends A implements J;
+    endclass
+  endclass
+  function int B::g();
+    return V + value;
+  endfunction
+endpackage
+
 module t;
   initial begin
     derived_cls obj;
@@ -202,17 +320,6 @@ module t;
     from_plain_cls plobj;
     from_pass_plain_cls pplobj;
     from_override_cls ovobj;
-    from_param_cls paobj;
-    from_pass_param_cls ppaobj;
-    from_plain_param_cls plpobj;
-    from_pass_plain_param_cls pplpobj;
-    param_from_plain_param_cls #(4) pfp4obj;
-    param_from_plain_param_cls #(5) pfp5obj;
-    type_from_plain_param_cls tfpobj;
-    from_g_if_cls gobj2;
-    from_abstract_param_cls apobj;
-    g_if #(int) gifc;
-    abstract_param_cls #(int) apcls;
     if_pkg::leaf_if ifc;
     if_pkg::mid_if mifc;
     other_if oifc;
@@ -253,43 +360,129 @@ module t;
     fifc = ovobj;
     `checkd(fifc.get_f(), 60)
 
-    paobj = new;
-    fifc = paobj;
-    `checkd(paobj.get_f(), 70)
-    `checkd(fifc.get_f(), 70)
+    begin
+      from_param_cls paobj;
+      from_pass_param_cls ppaobj;
+      paobj = new;
+      fifc = paobj;
+      `checkd(paobj.get_f(), 70)
+      `checkd(fifc.get_f(), 70)
+      ppaobj = new;
+      fifc = ppaobj;
+      `checkd(fifc.get_f(), 70)
+    end
 
-    ppaobj = new;
-    fifc = ppaobj;
-    `checkd(fifc.get_f(), 70)
+    begin
+      from_plain_param_cls plpobj;
+      from_pass_plain_param_cls pplpobj;
+      param_from_plain_param_cls #(4) pfp4obj;
+      param_from_plain_param_cls #(5) pfp5obj;
+      type_from_plain_param_cls tfpobj;
+      plpobj = new;
+      fifc = plpobj;
+      `checkd(plpobj.get_f(), 82)
+      `checkd(fifc.get_f(), 82)
+      pplpobj = new;
+      fifc = pplpobj;
+      `checkd(fifc.get_f(), 83)
+      pfp4obj = new;
+      fifc = pfp4obj;
+      `checkd(fifc.get_f(), 84)
+      pfp5obj = new;
+      fifc = pfp5obj;
+      `checkd(fifc.get_f(), 85)
+      tfpobj = new;
+      fifc = tfpobj;
+      `checkd(fifc.get_f(), 86)
+    end
 
-    plpobj = new;
-    fifc = plpobj;
-    `checkd(plpobj.get_f(), 82)
-    `checkd(fifc.get_f(), 82)
+    begin
+      from_g_if_cls gobj2;
+      g_if #(int) gifc;
+      from_abstract_param_cls apobj;
+      abstract_param_cls #(int) apcls;
+      gobj2 = new;
+      gifc = gobj2;
+      `checkd(gifc.get_g(), 90)
+      `checkd(gobj2.get_f(), 87)
+      apobj = new;
+      apcls = apobj;
+      `checkd(apcls.get_h(), 100)
+    end
 
-    pplpobj = new;
-    fifc = pplpobj;
-    `checkd(fifc.get_f(), 83)
+    begin
+      from_dag_cls dobj;
+      from_param_dag_cls pdobj;
+      dag3_if difc;
+      dag0_if d0ifc;
+      dobj = new;
+      difc = dobj;
+      d0ifc = dobj;
+      `checkd(difc.get_dag(), 110)
+      `checkd(d0ifc.get_dag(), 110)
+      pdobj = new;
+      difc = pdobj;
+      `checkd(difc.get_dag(), 112)
+    end
 
-    pfp4obj = new;
-    fifc = pfp4obj;
-    `checkd(fifc.get_f(), 84)
-    pfp5obj = new;
-    fifc = pfp5obj;
-    `checkd(fifc.get_f(), 85)
+    begin
+      B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
 
-    tfpobj = new;
-    fifc = tfpobj;
-    `checkd(fifc.get_f(), 86)
+    begin
+      nested_reverse::B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
 
-    gobj2 = new;
-    gifc = gobj2;
-    `checkd(gifc.get_g(), 90)
-    `checkd(gobj2.get_f(), 87)
+    begin
+      B::Lookup n;
+      n = new;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        n.data = 7'(i);
+        n.kind = B::SEVEN;
+        `checkd(n.read_value(), 27 + 2 * i)
+      end
+    end
 
-    apobj = new;
-    apcls = apobj;
-    `checkd(apcls.get_h(), 100)
+    begin
+      nested_param::B #(7)::N n;
+      J j;
+      n = new;
+      j = n;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        n.data = 7'(27 + i);
+        `checkd(j.g(), 20 + i)
+        `checkd(int'(n.data), 27 + i)
+      end
+    end
+
+    begin
+      nested_extern::B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
+
+    begin
+      nested_extern_param::B #(9)::N n;
+      J j;
+      n = new;
+      j = n;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        `checkd(j.g(), 22 + i)
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

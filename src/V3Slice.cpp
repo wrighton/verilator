@@ -39,6 +39,7 @@
 
 #include "V3Slice.h"
 
+#include "V3SharedTmps.h"
 #include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -54,17 +55,20 @@ class SliceVisitor final : public VNVisitor {
     const VNUser1InUse m_inuser1;
 
     // STATE - across all visitors
+    V3SharedTmps m_tmps{"__Vslice", VVarType::MODULETEMP};  // Temporaries of impure operands
     VDouble0 m_statAssigns;  // Statistic tracking
     VDouble0 m_statSliceElementSkips;  // Statistic tracking
+    V3SharedTmps m_cvtTmps{"__VsliceCvt", VVarType::MODULETEMP};  // Converted slice sources
 
     // STATE - for current visit position (use VL_RESTORER)
+    AstScope* m_scopep = nullptr;  // Current scope
     AstNode* m_assignp = nullptr;  // Assignment we are under
     bool m_assignError = false;  // True if the current assign already has an error
     bool m_okConsArray = false;  // Allow ConsArray children
 
     // METHODS
     AstNodeExpr* cloneAndSel(AstNodeExpr* const nodep, uint64_t elements, uint64_t elemIdx,
-                             const bool needPure) {
+                             const bool needPure, const bool rvalue) {
         // Insert an ArraySel, except for a few special cases
         const AstUnpackArrayDType* const arrayp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
@@ -90,6 +94,25 @@ class SliceVisitor final : public VNVisitor {
             elements = 1;
             elemIdx = 0;
         }
+        if (rvalue && !nodep->isPure() && !VN_IS(nodep, ExprStmt)) {
+            // Evaluate an impure value once, for the first element, into a temporary that
+            // replaces it, so the other elements read the temporary
+            UASSERT_OBJ(m_scopep, nodep, "Not under scope");
+            FileLine* const flp = nodep->fileline();
+            AstVarScope* const vscp = m_tmps.make(flp, m_scopep, nodep->dtypep());
+            AstVarRef* const refp = new AstVarRef{flp, vscp, VAccess::READ};
+            nodep->replaceWith(refp);
+            AstAssign* const assignp
+                = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, nodep};
+            assignp->user1(true);  // Copied as a whole, not sliced
+            {
+                VL_RESTORER(m_okConsArray);
+                m_okConsArray = true;
+                iterateChildren(assignp);
+            }
+            return new AstExprStmt{flp, assignp,
+                                   cloneAndSel(refp, elements, elemIdx, needPure, rvalue)};
+        }
         AstNodeExpr* newp;
         if (AstConsArray* const consp = VN_CAST(nodep, ConsArray)) {
             UINFO(9, "  cloneConsArray(" << elements << "," << elemIdx << ") " << nodep);
@@ -99,7 +122,8 @@ class SliceVisitor final : public VNVisitor {
         } else if (const AstCvtUnpackToUnpack* const cvtp = VN_CAST(nodep, CvtUnpackToUnpack)) {
             UINFO(9, "  cloneCvtUnpackToUnpack(" << elements << "," << elemIdx << ") " << nodep);
             // The element in the same left-to-right position of the source
-            AstNodeExpr* const elemp = cloneAndSel(cvtp->fromp(), elements, elemIdx, needPure);
+            AstNodeExpr* const elemp
+                = cloneAndSel(cvtp->fromp(), elements, elemIdx, needPure, rvalue);
             AstNodeDType* const subDTypep = arrayp->subDTypep();
             const AstUnpackArrayDType* const subArrayp
                 = VN_CAST(subDTypep->skipRefp(), UnpackArrayDType);
@@ -121,8 +145,8 @@ class SliceVisitor final : public VNVisitor {
         } else if (AstCond* const snodep = VN_CAST(nodep, Cond)) {
             UINFO(9, "  cloneCond(" << elements << "," << elemIdx << ") " << nodep);
             return new AstCond{snodep->fileline(), snodep->condp()->cloneTree(false, needPure),
-                               cloneAndSel(snodep->thenp(), elements, elemIdx, needPure),
-                               cloneAndSel(snodep->elsep(), elements, elemIdx, needPure)};
+                               cloneAndSel(snodep->thenp(), elements, elemIdx, needPure, rvalue),
+                               cloneAndSel(snodep->elsep(), elements, elemIdx, needPure, rvalue)};
         } else if (const AstSliceSel* const snodep = VN_CAST(nodep, SliceSel)) {
             UINFO(9, "  cloneSliceSel(" << elements << "," << elemIdx << ") " << nodep);
             // Offset from the lowest selected element
@@ -144,12 +168,12 @@ class SliceVisitor final : public VNVisitor {
         } else if (const AstSampled* const snodep = VN_CAST(nodep, Sampled)) {
             UINFO(9, "  cloneSliceSel(" << elements << "," << elemIdx << ") " << nodep);
             AstNodeExpr* const exprp = VN_AS(snodep->exprp(), NodeExpr);
-            AstNodeExpr* const selp = cloneAndSel(exprp, elements, elemIdx, needPure);
+            AstNodeExpr* const selp = cloneAndSel(exprp, elements, elemIdx, needPure, rvalue);
             return new AstSampled{nodep->fileline(), selp, selp->dtypep(), snodep->internal()};
         } else if (AstExprStmt* const snodep = VN_CAST(nodep, ExprStmt)) {
             UINFO(9, "  cloneExprStmt(" << elements << "," << elemIdx << ") " << nodep);
             AstNodeExpr* const resultSelp
-                = cloneAndSel(snodep->resultp(), elements, elemIdx, needPure);
+                = cloneAndSel(snodep->resultp(), elements, elemIdx, needPure, rvalue);
             if (snodep->stmtsp()) {
                 return new AstExprStmt{nodep->fileline(), snodep->stmtsp()->unlinkFrBackWithNext(),
                                        resultSelp};
@@ -185,7 +209,29 @@ class SliceVisitor final : public VNVisitor {
         // A slice target can only be written element by element
         const bool lhsSlice = VN_IS(nodep->lhsp(), SliceSel);
         if (VN_IS(stp, CvtPackedToArray) && !lhsSlice) return false;
-        if (VN_IS(stp, CvtArrayToArray)) return false;
+        if (VN_IS(stp, CvtArrayToArray)) {
+            if (!lhsSlice) return false;
+            if (VN_IS(nodep, AssignForce) || VN_IS(nodep, AssignCont)) {
+                // Would need the temporary below to follow the stream continuously
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: force or procedural continuous "
+                                             "assignment of a stream of a dynamically sized "
+                                             "array to an unpacked array slice");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return true;
+            }
+            // Convert into a temporary of the slice's type, then copy that element by element
+            FileLine* const flp = stp->fileline();
+            AstVarScope* const tmpp = m_cvtTmps.make(flp, m_scopep, nodep->lhsp()->dtypep());
+            AstVarRef* const tmpRefp = new AstVarRef{flp, tmpp, VAccess::WRITE};
+            AstNodeExpr* const cvtp = VN_AS(stp, NodeExpr)->unlinkFrBack();
+            AstNodeAssign* const cvtAssignp
+                = VN_IS(nodep, AssignW)
+                      ? static_cast<AstNodeAssign*>(new AstAssignW{flp, tmpRefp, cvtp})
+                      : new AstAssign{flp, tmpRefp, cvtp};
+            nodep->addHereThisAsNext(cvtAssignp);
+            nodep->rhsp(new AstVarRef{flp, tmpp, VAccess::READ});
+            stp = nodep->rhsp();
+        }
         if (VN_IS(stp, CvtQueueToUnpack) && !lhsSlice) return false;
         if (VN_IS(stp, CReset)) return false;
 
@@ -231,9 +277,9 @@ class SliceVisitor final : public VNVisitor {
         AstNodeAssign* newlistp = nullptr;
         for (uint64_t elemIdx = 0; elemIdx < static_cast<uint64_t>(elements); ++elemIdx) {
             // Original node is replaced, so it is safe to copy it one time even if it is impure.
-            AstNodeAssign* const newp
-                = nodep->cloneType(cloneAndSel(nodep->lhsp(), elements, elemIdx, elemIdx != 0),
-                                   cloneAndSel(nodep->rhsp(), elements, elemIdx, elemIdx != 0));
+            AstNodeAssign* const newp = nodep->cloneType(
+                cloneAndSel(nodep->lhsp(), elements, elemIdx, elemIdx != 0, false),
+                cloneAndSel(nodep->rhsp(), elements, elemIdx, elemIdx != 0, true));
             UINFOTREE(9, newp, "", "new");
             newlistp = AstNode::addNext(newlistp, newp);
         }
@@ -266,6 +312,12 @@ class SliceVisitor final : public VNVisitor {
         return true;
     }
 
+    void visit(AstScope* nodep) override {
+        VL_RESTORER(m_scopep);
+        m_scopep = nodep;
+        iterateChildren(nodep);
+    }
+
     void visit(AstNodeAssign* nodep) override {
         // Called recursively on newly created assignments
         if (nodep->user1SetOnce()) return;  // Process once
@@ -287,6 +339,7 @@ class SliceVisitor final : public VNVisitor {
     void visit(AstConsArray* nodep) override {
         UASSERT_OBJ(!m_assignp || m_okConsArray, nodep,
                     "Array initialization should have been removed earlier");
+        iterateChildren(nodep);
     }
 
     template <typename T_NodeBiop>
@@ -306,8 +359,9 @@ class SliceVisitor final : public VNVisitor {
                 // Original node is replaced, so it is safe to copy it one time even if it is
                 // impure.
                 T_NodeBiop* const clonep = new T_NodeBiop{
-                    nodep->fileline(), cloneAndSel(nodep->lhsp(), elements, elemIdx, elemIdx != 0),
-                    cloneAndSel(nodep->rhsp(), elements, elemIdx, elemIdx != 0)};
+                    nodep->fileline(),
+                    cloneAndSel(nodep->lhsp(), elements, elemIdx, elemIdx != 0, true),
+                    cloneAndSel(nodep->rhsp(), elements, elemIdx, elemIdx != 0, true)};
                 if (!logp) {
                     logp = clonep;
                 } else {
@@ -337,6 +391,30 @@ class SliceVisitor final : public VNVisitor {
     void visit(AstNeq* nodep) override { expandBiOp(nodep); }
     void visit(AstEqCase* nodep) override { expandBiOp(nodep); }
     void visit(AstNeqCase* nodep) override { expandBiOp(nodep); }
+
+    void visit(AstArraySel* nodep) override {
+        // Select an element of a slice from the sliced array, so that it can be written
+        AstSliceSel* const slicep = VN_CAST(nodep->fromp(), SliceSel);
+        if (slicep) {
+            // The index is the offset from the lowest selected element, at most as wide as
+            // needed to index the slice (V3Width), so not wider than the 32-bit position
+            FileLine* const fl = nodep->fileline();
+            AstNodeExpr* const lsbp = slicep->lsbp()->unlinkFrBack();
+            AstNodeExpr* offsetp = nodep->bitp()->unlinkFrBack();
+            UASSERT_OBJ(offsetp->width() <= lsbp->width(), nodep, "Index wider than position");
+            if (offsetp->width() < lsbp->width()) {
+                offsetp = new AstExtend{fl, offsetp, lsbp->width()};
+            }
+            AstNodeExpr* const indexp = new AstAdd{fl, lsbp, offsetp};
+            indexp->dtypeFrom(lsbp);
+            AstArraySel* const newp = new AstArraySel{fl, slicep->fromp()->unlinkFrBack(), indexp};
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            iterate(newp);  // The sliced array may be a slice too
+            return;
+        }
+        iterateChildren(nodep);
+    }
 
     void visit(AstSliceSel* nodep) override {
         // Slice used as a bare value, e.g. a $display argument. Build it via

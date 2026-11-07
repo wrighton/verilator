@@ -252,6 +252,43 @@ class Test24_CascadingConstraint;
   }
 endclass
 
+// Test 25: Nonzero low bound, item.index is the declared index
+class Test25_LowBound;
+  rand bit [7:0] data[1:3];
+  rand bit [7:0] desc[3:1];
+
+  constraint c {
+    data.sum() with ((item.index == 1) ? int'(item) : 0) == 5;
+    data.sum() with ((item.index == 2) ? int'(item) : 0) == 7;
+    data.sum() with ((item.index == 3) ? int'(item) : 0) == 9;
+    desc.sum() with ((item.index == 3) ? int'(item) : 0) == 4;
+    desc.sum() with (int'(item)) == 4;
+  }
+endclass
+
+// Test 26: item.index in a 'with' expression narrower than the index
+class Test26_NarrowResult;
+  rand bit [7:0] data[4];
+  rand bit [3:0] nib[6];
+  rand bit bits[4];
+  rand bit [7:0] dyn[];
+  rand bit [7:0] que[$];
+
+  function new();
+    dyn = new[3];
+    que = '{0, 0, 0};
+  endfunction
+
+  constraint c {
+    data.and() with (item == 8'(item.index * 4)) == 1'b1;
+    nib.or() with (item.index >= 2 ? item : 4'h0) == 4'h0;
+    bits.or() with (item.index == 2 ? item : 1'b0) == 1'b1;
+    bits.or() with (item.index == 3 ? item : 1'b0) == 1'b0;
+    dyn.and() with (item == 8'(item.index + 3)) == 1'b1;
+    que.and() with (item == 8'(item.index + 5)) == 1'b1;
+  }
+endclass
+
 module t;
   initial begin
     Test1_BasicSum t1;
@@ -278,6 +315,8 @@ module t;
     Test22_IndexPower t22;
     Test23_BoundaryElements t23;
     Test24_CascadingConstraint t24;
+    Test25_LowBound t25;
+    Test26_NarrowResult t26;
     int i;
 
     // Test 1: Basic sum
@@ -399,6 +438,27 @@ module t;
     t24 = new;
     i = t24.randomize();
     `checkd(i, 1)
+
+    // Test 25: Nonzero low bound
+    t25 = new;
+    i = t25.randomize();
+    `checkd(i, 1)
+    `checkd(t25.data[1], 5)
+    `checkd(t25.data[2], 7)
+    `checkd(t25.data[3], 9)
+    `checkd(t25.desc[3], 4)
+    `checkd(t25.desc[1], 0)
+
+    // Test 26: Narrow result
+    t26 = new;
+    i = t26.randomize();
+    `checkd(i, 1)
+    foreach (t26.data[j]) `checkd(t26.data[j], 8'(j * 4))
+    for (int j = 2; j < 6; ++j) `checkd(t26.nib[j], 4'h0)
+    `checkd(t26.bits[2], 1'b1)
+    `checkd(t26.bits[3], 1'b0)
+    foreach (t26.dyn[j]) `checkd(t26.dyn[j], 8'(j + 3))
+    foreach (t26.que[j]) `checkd(t26.que[j], 8'(j + 5))
 
     $write("*-* All Finished *-*\n");
     $finish;

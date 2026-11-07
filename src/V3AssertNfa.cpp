@@ -97,12 +97,10 @@ public:
     AstNodeExpr* m_andRhsCondp = nullptr;  // OWNED; RHS final condition (may be nullptr)
     // Reject sink for SAnd rejectOnFail wiring; not a state-signal source
     bool m_isRejectSink = false;
-    // In-window vertex of a strong s_always[m:n]: if its state is still set at
+    // Vertex of a strong s_always[m:n] attempt: if its state is still set at
     // end-of-simulation the universal-quantifier window never completed, which is
     // a liveness failure (IEEE 1800-2023 16.12.11 strong semantics).
     bool m_strongPending = false;
-    // Ring introduced for the checked portion of a bounded strong s_always window.
-    bool m_strongAlwaysRing = false;
 
     // CONSTRUCTORS
     explicit SvaStateVertex(V3Graph* graphp)
@@ -359,7 +357,7 @@ class SvaNfaBuilder final {
     // (IEEE 1800-2023 16.12.14 outer-wraps-inner).
     std::vector<AstNodeExpr*> m_outerAbortStack;
     bool m_inUnboundedScope = false;  // Sticky: nodes created after inherit liveness
-    bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
+    bool m_markStrongPending = false;  // Mark new vertices as of a strong s_always attempt
     bool m_isCover = false;  // Cover directives do not fail at end-of-simulation
     // Negated: a strong obligation pending at end-of-simulation makes the property hold
     // (IEEE 1800-2023 16.12.3)
@@ -763,6 +761,16 @@ class SvaNfaBuilder final {
                                               " (IEEE 1800-2023 16.9.2)");
                 return BuildResult::failWithError();
             }
+            // A nonconsecutive repetition has several matches. A later step failing after one of
+            // them must not reject while another may still match, which the merged threads
+            // cannot tell apart, so the later steps would never reject.
+            if (!m_inAntecedent && !m_isCover
+                && preExprp->exists([](const AstSNonConsRep*) { return true; })) {
+                sexprp->v3warn(E_UNSUPPORTED, "Unsupported: nonconsecutive repetition followed by"
+                                              " a later sequence element outside an implication"
+                                              " antecedent (IEEE 1800-2023 16.9.2)");
+                return BuildResult::failWithError();
+            }
             if (isTopLevelStep && !m_isCover && preExprp->exists([](const AstSConsRep* repp) {
                     return repp->maxCountp() != nullptr;
                 })) {
@@ -1062,8 +1070,8 @@ class SvaNfaBuilder final {
             return {holdp, nullptr, {}};
         }
         const unsigned hi = getConstUInt(nodep->hiBoundp());
-        // Strong s_always[m:n]: mark every in-window registered vertex so an
-        // attempt still mid-window at end-of-simulation is reported as a liveness
+        // Strong s_always[m:n]: mark every vertex of the attempt so an attempt
+        // still before or in its window at end-of-simulation is reported as a liveness
         // failure (IEEE strong: the n+1 ticks must exist). An attempt that has
         // completed earlier in the trace has already cleared its state, so it is
         // not flagged; an attempt whose final tick coincides with $finish is still
@@ -1080,12 +1088,12 @@ class SvaNfaBuilder final {
         currentp = checkp;
         m_temporalGuardStack.push_back(propp);
         currentp = addDelayChain(currentp, hi - lo, flp);
-        if (nodep->isStrong() && currentp->m_delayRingSize) currentp->m_strongAlwaysRing = true;
         m_temporalGuardStack.pop_back();
         return {currentp, propp, {}};
     }
 
-    BuildResult buildGotoRep(AstSGotoRep* repp, SvaStateVertex* entryVtxp) {
+    template <typename T_Rep>
+    BuildResult buildGotoRep(T_Rep* repp, SvaStateVertex* entryVtxp) {
         FileLine* const flp = repp->fileline();
         AstNodeExpr* const exprp = repp->exprp();
         const unsigned minN = getConstUInt(repp->countp());
@@ -1137,6 +1145,27 @@ class SvaNfaBuilder final {
         mergeVtxp->m_isUnbounded = true;  // [->M:N] still has unbounded waits between matches
         m_inUnboundedScope = true;
         return {mergeVtxp, nullptr, {}};
+    }
+
+    // Build a nonconsecutive repetition b[=M:N]
+    BuildResult buildNonConsRep(AstSNonConsRep* repp, SvaStateVertex* entryVtxp) {
+        FileLine* const flp = repp->fileline();
+        if (m_isCoverSeq) {  // As for a goto repetition
+            warnEndpointUnsupported(flp, "a nonconsecutive repetition");
+            return BuildResult::failWithError();
+        }
+        const BuildResult gotoResult = buildGotoRep(repp, entryVtxp);
+        UASSERT_OBJ(gotoResult.valid(), repp, "V3Width rejects a zero repetition count");
+        // b[=M:N] is b[->M:N] ##1 !b[*0:$] (IEEE 1800-2023 16.9.2), so it also matches at each
+        // later tick until b holds again. As it has several matches, later steps never reject.
+        m_inUnboundedScope = true;
+        SvaStateVertex* const endVtxp = scopedCreateVertex();
+        guardedLink(gotoResult.termVertexp, endVtxp, flp);
+        SvaStateVertex* const waitVtxp = scopedCreateVertex();
+        guardedEdge(endVtxp, waitVtxp, flp);
+        guardedLink(waitVtxp, endVtxp,
+                    new AstLogNot{flp, sampled(repp->exprp()->cloneTreePure(false))}, flp);
+        return {endVtxp, nullptr, {}};
     }
 
     // True if the sequence has a zero-minimum consecutive repetition, which may match empty
@@ -1958,6 +1987,9 @@ public:
         if (AstSGotoRep* const repp = VN_CAST(nodep, SGotoRep)) {
             return buildGotoRep(repp, entryVtxp);
         }
+        if (AstSNonConsRep* const repp = VN_CAST(nodep, SNonConsRep)) {
+            return buildNonConsRep(repp, entryVtxp);
+        }
         if (AstSThroughout* const throughoutp = VN_CAST(nodep, SThroughout)) {
             return buildThroughout(throughoutp, entryVtxp, isTopLevelStep);
         }
@@ -2020,7 +2052,6 @@ public:
             return buildAbortOn(ap->condp(), ap->propp(), entryVtxp, ap->kind(), ap->fileline(),
                                 isTopLevelStep);
         }
-        if (VN_IS(nodep, SNonConsRep)) return BuildResult::fail();
         if (AstImplication* const implp = VN_CAST(nodep, Implication)) {
             // A vacuous success is a success of the whole property only when nothing follows
             // the implication
@@ -3567,7 +3598,7 @@ public:
         const SignalSet sigs = computeSignals(c, needThreadFailCount, needRejectCount,
                                               needSuccessCount, countMatches, countAttempts);
 
-        // Strong s_always[m:n] end-of-simulation liveness: if any in-window state
+        // Strong s_always[m:n] end-of-simulation liveness: if any state of an attempt
         // is still set at $finish, the universal-quantifier window never completed
         // (IEEE 1800-2023 16.12.11 strong semantics). Fire the assertion failure
         // from a final block.
@@ -3578,7 +3609,7 @@ public:
             AstNodeExpr* pendingExprp = nullptr;
             if (vtx[i]->datap()->stateVarp) {
                 pendingExprp = new AstVarRef{flp, vtx[i]->datap()->stateVarp, VAccess::READ};
-            } else if (vtx[i]->m_strongAlwaysRing) {
+            } else if (vtx[i]->m_delayRingSize) {
                 pendingExprp
                     = delayRingHasLiveThreadsp(flp, vtx[i]->datap()->delayRingLiveCountVarp);
             } else {
@@ -4410,16 +4441,6 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
         if (isBareTopLevelUntil(propp)) return nullptr;
-        // Only V3AssertPre lowers a nonconsecutive repetition, but it cannot lower a cycle delay
-        const AstSNonConsRep* nonConsRepp = nullptr;
-        propp->foreach([&](const AstSNonConsRep* repp) { nonConsRepp = repp; });
-        if (nonConsRepp && propp->exists([](const AstSExpr*) { return true; })) {
-            nonConsRepp->v3warn(E_UNSUPPORTED,
-                                "Unsupported: nonconsecutive repetition in a property with a"
-                                " cycle delay (IEEE 1800-2023 16.9.2)");
-            replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
-            return nullptr;
-        }
         // An 'iff' is a Boolean equivalence (AstLogEq), which cannot hold a multi-cycle operand.
         // A followed-by operand is reported more specifically by V3AssertPre.
         const AstLogEq* iffp = nullptr;
@@ -4607,6 +4628,14 @@ class AssertNfaVisitor final : public VNVisitor {
             iterate(propp->propp());
             // The fail action may also run in the end-of-simulation final block, with no clock
             if (assertAssertp) iterateAndNextNull(assertAssertp->failsp());
+        }
+        // V3AssertPre runs the action block once per failing attempt of a nonconsecutive
+        // repetition, not at each failing match, but does not support it with a cycle delay.
+        // Left after the module defaults are inherited, which V3AssertPre relies on.
+        if (propp->exists([](const AstSNonConsRep*) { return true; })
+            && !propp->exists([](const AstSExpr*) { return true; })) {
+            VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
+            return;
         }
 
         FileLine* const flp = assertp->fileline();

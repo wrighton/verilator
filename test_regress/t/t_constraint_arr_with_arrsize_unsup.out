@@ -1,5 +1,13 @@
-%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:27:14: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
-   27 |       if (i.s[0].arr.size > 0) {
-      |              ^
+%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:55:32: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
+   55 |     void'(h.randomize() with {s[0].arr.size() == 2;});
+      |                                ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:55:40: Unsupported: randomizing this expression, treating as state
+   55 |     void'(h.randomize() with {s[0].arr.size() == 2;});
+      |                                        ^~~~
+                        ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
+                        ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
+%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:35:14: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
+   35 |       if (i.s[0].arr.size > 0) {
+      |              ^
 %Error: Exiting due to

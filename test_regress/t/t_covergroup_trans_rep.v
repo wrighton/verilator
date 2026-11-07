@@ -16,7 +16,6 @@ module t;
       bins rep = (3 [*3]);
       bins rng = (3 [*2:3]);
       bins rng1 = (3 [*1:2]);  // Includes the sequence of the one value 3
-      bins single = (2);
       bins param = (3 [*N]);
       bins mid = (0 => 1 [*2] => 2);
       bins multi = (1, 2 [*2] => 0);
@@ -43,7 +42,7 @@ module t;
       v = 3;
       c.sample();
     end
-    // 0,1,1,2: 'mid' completes, 'multi' starts, and 'single' completes
+    // 0,1,1,2: 'mid' completes and 'multi' starts
     v = 0;
     c.sample();
     v = 1;

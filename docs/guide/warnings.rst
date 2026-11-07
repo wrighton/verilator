@@ -1435,8 +1435,7 @@ List Of Warnings
 
    .. TODO better example
 
-   Error that a module, typically referenced by a cell or used as a bind
-   target, was not found.
+   Error that a module, typically referenced by a cell, was not found.
    This is typically fatal, but may be suppressed in some linting
    situations with missing libraries.
 
@@ -1815,31 +1814,8 @@ List Of Warnings
 .. option:: PINNOTFOUND
 
    Warns that an instance port or parameter was not found in the module
-   being instantiated. Note that Verilator raises these errors also on
-   instances that should be disabled by generate/if/endgenerate constructs:
-
-   .. code-block:: sv
-      :linenos:
-      :emphasize-lines: 5-6
-
-      module a;
-        localparam A=1;
-        generate
-          if (A==0) begin
-            b b_inst1 (.x(1'b0));  //<--- error nonexistent port
-            b #(.PX(1'b0)) b_inst2 ();  //<--- error nonexistent parameter
-          end
-        endgenerate
-      endmodule
-
-      module b;
-      endmodule
-
-   In the example above, b is instantiated with a port named x, but module
-   b has no such port. In the following line, b is instantiated with a
-   nonexistent PX parameter. Technically, this code is incorrect because of
-   this, but other tools may ignore it because module b is not instantiated
-   due to the generate/if condition being false.
+   being instantiated. Instances in generate blocks that are not
+   elaborated are not checked (IEEE 1800-2023 27.4, 27.5).
 
    This error may be disabled with a lint_off PINNOTFOUND metacomment.
 
@@ -2664,6 +2640,29 @@ List Of Warnings
    name, or put the appropriate lint_off around the wire. Having unused
    signals in one place makes it easy to find what is unused and reduces
    the number of lint_off pragmas, reducing bugs.
+
+
+.. option:: USEBEFOREDECL
+
+   Error that a parameter or localparam is referenced before its
+   declaration. IEEE 1800-2023 6.20.1 lets a parameter refer only to
+   earlier parameters, and some other tools reject such code.
+
+   Faulty example:
+
+   .. code-block:: sv
+      :linenos:
+      :emphasize-lines: 2
+
+      module dut;
+        initial $display(N);  //<--- Error
+        localparam int N = 8;
+      endmodule
+
+   To fix, move the declaration before the reference.
+
+   Ignoring this error will only suppress the lint check; it will simulate
+   correctly.
 
 
 .. option:: USERERROR

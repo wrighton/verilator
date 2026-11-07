@@ -1013,6 +1013,35 @@ class GateDedupe final {
     size_t m_statDedupLogic = 0;  // Statistic tracking
     GateDedupeVarVisitor m_varVisitor;  // Looks for a dupe of the logic
     uint32_t m_depth = 0;  // Iteration depth
+    // Consumer logic -> its deduplicated input variable -> replacement reference
+    std::unordered_map<AstNode*, std::unordered_map<const AstVarScope*, AstNodeVarRef*>> m_pending;
+
+    // Replace the references to deduplicated variables in one consumer logic block
+    void commitSubstitutions(AstNode* consumerp) {
+        // Done once per consumer for all of its deduplicated inputs, as walking the consumer
+        // once per input is quadratic when many deduplicated signals feed one consumer
+        const auto pendingIt = m_pending.find(consumerp);
+        if (pendingIt == m_pending.end()) return;
+        const auto& subs = pendingIt->second;
+        consumerp->foreach([&](AstNodeVarRef* refp) {
+            const auto it = subs.find(refp->varScopep());
+            if (it == subs.end()) return;
+
+            UASSERT_OBJ(refp->access().isReadOnly(), refp, "Can't replace a write ref");
+
+            // The replacement
+            AstNodeVarRef* const newp = it->second->cloneTreePure(false);
+            // A VARREF should point to the original as it's otherwise confusing to throw
+            // warnings that point to a PIN rather than where the pin is used.
+            newp->fileline(refp->fileline());
+            newp->access(VAccess::READ);
+
+            // Replace the node
+            refp->replaceWith(newp);
+            VL_DO_DANGLING(refp->deleteTree(), refp);
+        });
+        m_pending.erase(pendingIt);
+    }
 
     void visit(GateVarVertex* vVtxp) {
         // Break loops; before user2 set so hit this vertex later
@@ -1054,23 +1083,8 @@ class GateDedupe final {
             if (lVtxp == consumerVtxp) {
                 UINFO(9, "skipping as self-recirculates");
             } else {
-                // Substitute consumer logic
-                consumerp->foreach([&](AstNodeVarRef* refp) {
-                    if (refp->varScopep() != vVtxp->varScp()) return;
-
-                    UASSERT_OBJ(refp->access().isReadOnly(), refp, "Can't replace a write ref");
-
-                    // The replacement
-                    AstNodeVarRef* const newp = dupRefp->cloneTreePure(false);
-                    // A VARREF should point to the original as it's otherwise confusing to throw
-                    // warnings that point to a PIN rather than where the pin is used.
-                    newp->fileline(refp->fileline());
-                    newp->access(VAccess::READ);
-
-                    // Replace the node
-                    refp->replaceWith(newp);
-                    VL_DO_DANGLING(refp->deleteTree(), refp);
-                });
+                // Substitute consumer logic, before it is next examined (see commitSubstitutions)
+                m_pending[consumerp].emplace(vVtxp->varScp(), dupRefp);
             }
             edgep->relinkFromp(dupVVtxp);
         }
@@ -1088,6 +1102,9 @@ class GateDedupe final {
     // has the same logic input, or nullptr if none
     AstNodeVarRef* visit(GateLogicVertex* lVtxp, const GateVarVertex* consumerVtxp) {
         for (V3GraphEdge& edge : lVtxp->inEdges()) visit(edge.fromp()->as<GateVarVertex>());
+
+        // Its inputs are now deduplicated, substitute them before hashing the logic
+        commitSubstitutions(lVtxp->nodep());
 
         if (lVtxp->dedupable() && consumerVtxp->dedupable()) {
             // TODO: Doing a simple pointer comparison of activep won't work
@@ -1114,6 +1131,13 @@ class GateDedupe final {
                 if (vVtxp->isTop() && vVtxp->varScp()->varp()->isWritable()) visit(vVtxp);
             }
         }
+        // Substitute in the consumers not examined since
+        for (V3GraphVertex& vtx : graph.vertices()) {
+            if (GateLogicVertex* const lVtxp = vtx.cast<GateLogicVertex>()) {
+                commitSubstitutions(lVtxp->nodep());
+            }
+        }
+        UASSERT(m_pending.empty(), "Substitution in logic not in the graph");
     }
 
     ~GateDedupe() { V3Stats::addStat("Optimizations, Gate sigs deduped", m_statDedupLogic); }
@@ -1237,23 +1261,26 @@ class GateUnused final {
 
     // METHODS
 
-    void markRecurse(GateEitherVertex* vtxp) {
-        if (vtxp->user()) return;  // Already marked
-        vtxp->user(true);
-        vtxp->setConsumed("propagated");
-        // Walk sources and mark them too
-        for (V3GraphEdge& edge : vtxp->inEdges()) {
-            GateEitherVertex* const fromVtxp = static_cast<GateEitherVertex*>(edge.fromp());
-            markRecurse(fromVtxp);
-        }
-    }
-
     // Mark all vertices that feed a consumed vertex
     void mark() {
         m_graph.userClearVertices();
+        // With a work list, as recursion overflows the stack on long paths
+        std::vector<GateEitherVertex*> todop;
         for (V3GraphVertex& vtx : m_graph.vertices()) {
             GateEitherVertex& eVtx = static_cast<GateEitherVertex&>(vtx);
-            if (eVtx.consumed()) markRecurse(&eVtx);
+            if (eVtx.consumed()) todop.push_back(&eVtx);
+        }
+        while (!todop.empty()) {
+            GateEitherVertex* const vtxp = todop.back();
+            todop.pop_back();
+            if (vtxp->user()) continue;  // Already marked
+            vtxp->user(true);
+            vtxp->setConsumed("propagated");
+            // Walk sources and mark them too
+            for (V3GraphEdge& edge : vtxp->inEdges()) {
+                GateEitherVertex* const fromVtxp = static_cast<GateEitherVertex*>(edge.fromp());
+                if (!fromVtxp->user()) todop.push_back(fromVtxp);
+            }
         }
     }
 

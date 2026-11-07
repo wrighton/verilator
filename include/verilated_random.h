@@ -119,8 +119,8 @@ template <typename T>
 struct VlRandomAssocKeyWidths final {
     static void push(std::vector<size_t>&) {}
 };
-template <typename T_Key, typename T_Value>
-struct VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value>> final {
+template <typename T_Key, typename T_Value, typename T_KeyLess>
+struct VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value, T_KeyLess>> final {
     static void push(std::vector<size_t>& widths) {
         widths.push_back(std::is_same<T_Key, std::string>::value ? 128 : sizeof(T_Key) * 8);
         VlRandomAssocKeyWidths<T_Value>::push(widths);
@@ -288,6 +288,8 @@ class VlRandomizer VL_NOT_FINAL {
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
+    // Array elements that solve-before pairs name, as variables of their solver terms
+    std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeElems;
     bool m_checkOnly = false;  // Set for randomize(null)
     // Function argument variable solved in an earlier round (IEEE 1800-2023 18.5.11)
     struct FuncArgRound final {
@@ -311,13 +313,13 @@ class VlRandomizer VL_NOT_FINAL {
     bool parseModel(std::istream& is, size_t requested);
     // Assert the maximal compatible soft-constraint set onto the open session.
     void relaxSoftConstraints(VlSolverSession& sess);
-    // Indices of the "a<N>" literals named by (get-unsat-assumptions).
+    // Indices of the "__Va<N>" literals named by (get-unsat-assumptions).
     std::vector<int> readUnsatAssumptions(VlSolverSession& sess);
     void reportUnsatSetup(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
     void reportUnsatCore(VlSolverSession& sess);
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
     void recordRandcValues();  // Record solved randc values for future exclusion
-    size_t hashConstraints(const std::vector<std::string>& extras) const;
+    size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
     bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly);
     // "(distinct ...)" expression per unique-constrained array
     std::vector<std::string> buildUniqueExprs() const;
@@ -373,20 +375,24 @@ class VlRandomizer VL_NOT_FINAL {
         int lsb;  // Lowest bit
         int width;  // Number of bits
         int root;  // Index of the whole variable or element it is part of
+        int value0 = 0;  // Lowest bit of the value it is pinned to
     };
     // Move the solution towards random values the constraints allow
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                         const std::set<std::string>* fixedp = nullptr);
-    // Assume literals a<first>... (one per term) with keep, dropping conflicting ones until SAT
+    // Assume literals __Va<first>... (one per term) with keep, dropping conflicting ones until SAT
     bool assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
                         const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
-                        int& checksLeftr, std::vector<bool>* guessedp = nullptr);
+                        int& checksLeftr, std::vector<bool>* guessedp = nullptr,
+                        std::vector<int>* slotIdsp = nullptr, int* satisfiedLeftp = nullptr);
     // Values of a (get-value) reply, in order
     bool readValues(VlSolverSession& sess, std::vector<std::string>& valuesr);
     // Layers of solve...before variables in dependency order
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
     // SMT logic for a flat or UniGen2 session
     const char* solverLogic() const;
+    // The variable or array element a solve...before name names, nullptr if none
+    const VlRandomVar* solveBeforeVarp(const std::string& name);
     const char* phasedLogic() const;
     bool nextPhased(VlRNG& rngr, VlSolverSession& sess,
                     const std::vector<std::string>& uniqueExprs);
@@ -453,7 +459,8 @@ public:
         std::ostringstream hex_stream;
         for (size_t i = key.size(); i > 0; --i) {
             const size_t segment_value = key.at(i - 1);
-            hex_stream << std::hex << segment_value;
+            // Zero padded, so a zero segment is not dropped
+            hex_stream << std::hex << std::setw(8) << std::setfill('0') << segment_value;
             integral_index.push_back(segment_value);
         }
         std::string index_string = hex_stream.str();
@@ -512,6 +519,12 @@ public:
     // Clear disabled state for a variable
     void clear_var_disabled(const std::string& name) { m_disabledVars.erase(name); }
 
+    // Drop the registered members of the elements of struct array name, so registering its
+    // current elements does not keep members of elements that were removed or reallocated
+    void clear_struct_arr(const std::string& name) {
+        m_vars.erase(m_vars.lower_bound(name + "."), m_vars.lower_bound(name + "/"));
+    }
+
     // ---  write_var to register variables  ---
     // Register scalar variable (non-struct, basic type)
     template <typename T>
@@ -556,6 +569,7 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     write_var(VlQueue<T, N_MaxSize>& var, int width, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        clear_struct_arr(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
     // Register unpacked array of non-struct types
@@ -581,20 +595,22 @@ public:
     typename std::enable_if<VlContainsCustomStruct<T>::value, void>::type
     write_var(VlUnpacked<T, N_Depth>& var, int /*width*/, const char* name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        clear_struct_arr(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
 
     // Register associative array of non-struct types
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<!VlContainsCustomStruct<T_Value>::value, void>::type
-    write_var(VlAssocArray<T_Key, T_Value>& var, int width, const char* name, int dimension,
+    write_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, int width, const char* name,
+              int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
         if (m_vars.find(name) == m_vars.end()) {
             std::vector<size_t> keyWidths;
-            VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value>>::push(keyWidths);
-            m_vars[name]
-                = std::make_shared<const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value>>>(
-                    name, width, &var, dimension, randmodeIdx, keyWidths);
+            VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value, T_KeyLess>>::push(keyWidths);
+            m_vars[name] = std::make_shared<
+                const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value, T_KeyLess>>>(
+                name, width, &var, dimension, randmodeIdx, keyWidths);
         }
         if (dimension > 0) {
             m_index = 0;
@@ -604,10 +620,12 @@ public:
     }
 
     // Register associative array of structs
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<VlContainsCustomStruct<T_Value>::value, void>::type
-    write_var(VlAssocArray<T_Key, T_Value>& var, int /*width*/, const char* name, int dimension,
+    write_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, int /*width*/, const char* name,
+              int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
+        clear_struct_arr(name);
         record_struct_arr(var, name, dimension, {}, {}, randmodeIdx);
     }
 
@@ -691,8 +709,8 @@ public:
     }
 
     // Recursively record all elements in an associative array
-    template <typename T_Key, typename T_Value>
-    void record_arr_table(VlAssocArray<T_Key, T_Value>& var, const std::string& name,
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void record_arr_table(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name,
                           int dimension, std::vector<IData> indices,
                           std::vector<size_t> idxWidths) {
         if ((dimension > 0) && (var.size() != 0)) {
@@ -721,8 +739,8 @@ public:
     }
 
     // Recursively update pointers to all elements in an associative array
-    template <typename T_Key, typename T_Value>
-    void update_arr_table(VlAssocArray<T_Key, T_Value>& var, const std::string& name,
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void update_arr_table(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name,
                           int dimension) {
         assert(dimension > 0);
         for (auto it = var.begin(); it != var.end(); ++it) {
@@ -813,8 +831,8 @@ public:
     }
 
     // Recursively process associative arrays of structs
-    template <typename T_Key, typename T_Value>
-    void record_struct_arr(VlAssocArray<T_Key, T_Value>& var, const std::string& name,
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void record_struct_arr(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name,
                            int dimension, const std::vector<IData>& indices,
                            const std::vector<size_t>& idxWidths, std::uint32_t randmodeIdx) {
         if ((dimension > 0) && (!var.empty())) {
@@ -828,8 +846,10 @@ public:
 
                 process_key(key, indexed_name, integral_index, name, idx_width);
                 std::ostringstream oss;
-                for (int i = 0; i < integral_index.size(); ++i)
+                for (int i = 0; i < integral_index.size(); ++i) {
+                    if (i) oss << std::setw(8) << std::setfill('0');  // As in process_key
                     oss << std::hex << static_cast<int>(integral_index[i]);
+                }
 
                 std::string result = oss.str();
                 result.insert(result.begin(), int(idx_width / 4) - result.size(), '0');
@@ -839,8 +859,8 @@ public:
         }
     }
 
-    template <typename T_Key, typename T_Value>
-    void update_struct_arr(VlAssocArray<T_Key, T_Value>& var, const std::string& name) {
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    void update_struct_arr(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const std::string& name) {
         for (auto it = var.begin(); it != var.end(); ++it) {
             const T_Key& key = it->first;
 
@@ -851,6 +871,7 @@ public:
             process_key(key, indexed_name, integral_index, name, idx_width);
             std::ostringstream oss;
             for (size_t i = 0; i < integral_index.size(); ++i) {
+                if (i) oss << std::setw(8) << std::setfill('0');  // As in process_key
                 oss << std::hex << static_cast<int>(integral_index[i]);
             }
 
@@ -867,11 +888,12 @@ public:
     void modifyMembers(T& obj, std::index_sequence<I...>, const std::string& baseName,
                        std::uint32_t randmodeIdx) {
         // Use the indices to access each member via std::get
+        const std::vector<std::string> names = obj.memberNames();
+        const std::vector<const char*> domains = obj.memberEnumDomains();
         (void)std::initializer_list<int>{
             (write_var(std::get<I>(obj.getMembers(obj)), obj.memberWidth()[I],
-                       (baseName + "." + obj.memberNames()[I]).c_str(), obj.memberDimension()[I],
-                       randmodeIdx),
-             0)...};
+                       (baseName + "." + names[I]).c_str(), obj.memberDimension()[I], randmodeIdx),
+             domains[I] ? enum_domain(baseName + "." + names[I], domains[I]) : void(), 0)...};
     }
 
     template <typename T, std::size_t... I>
@@ -934,24 +956,24 @@ public:
         update_struct_arr(var, name);
     }
 
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<!VlContainsCustomStruct<T_Value>::value, void>::type
-    update_var(VlAssocArray<T_Key, T_Value>& var, const char* name) {
+    update_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const char* name) {
         auto it = m_vars.find(name);
         assert(it != m_vars.end());
         const int dimension = it->second->dimension();
         std::vector<size_t> keyWidths;
-        VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value>>::push(keyWidths);
-        it->second
-            = std::make_shared<const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value>>>(
-                name, it->second->width(), &var, dimension, it->second->randModeIdx(), keyWidths);
+        VlRandomAssocKeyWidths<VlAssocArray<T_Key, T_Value, T_KeyLess>>::push(keyWidths);
+        it->second = std::make_shared<
+            const VlRandomArrayVarTemplate<VlAssocArray<T_Key, T_Value, T_KeyLess>>>(
+            name, it->second->width(), &var, dimension, it->second->randModeIdx(), keyWidths);
         m_index = 0;
         update_arr_table(var, name, dimension);
     }
 
-    template <typename T_Key, typename T_Value>
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
     typename std::enable_if<VlContainsCustomStruct<T_Value>::value, void>::type
-    update_var(VlAssocArray<T_Key, T_Value>& var, const char* name) {
+    update_var(VlAssocArray<T_Key, T_Value, T_KeyLess>& var, const char* name) {
         update_struct_arr(var, name);
     }
 
@@ -1089,8 +1111,8 @@ public:
     }
 
     // Associative array randomization
-    template <typename T_Key, typename T_Value>
-    bool basicStdRandomization(VlAssocArray<T_Key, T_Value>& value, size_t width) {
+    template <typename T_Key, typename T_Value, typename T_KeyLess>
+    bool basicStdRandomization(VlAssocArray<T_Key, T_Value, T_KeyLess>& value, size_t width) {
         T_Key key;
         for (int exists = value.first(key); exists; exists = value.next(key)) {
             basicStdRandomization(value.atWrite(key), width);

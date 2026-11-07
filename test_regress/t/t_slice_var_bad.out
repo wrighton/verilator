@@ -11,4 +11,12 @@
                                  : ... note: In instance 't'
    26 |     vs = ifs[ident(3)+:2];
       |             ^
+%Error: t/t_slice_var_bad.v:31:15: Slice selection index '[6:6]' outside data type's '[5:5]'
+                                 : ... note: In instance 't'
+   31 |       r1 = one[6:6];
+      |               ^
+%Error: t/t_slice_var_bad.v:32:15: Slice selection index '[4:4]' outside data type's '[5:5]'
+                                 : ... note: In instance 't'
+   32 |       r1 = one[4+:1];
+      |               ^
 %Error: Exiting due to

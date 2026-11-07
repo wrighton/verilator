@@ -348,7 +348,6 @@ class DelayedVisitor final : public VNVisitor {
     bool m_inSuspendableOrFork = false;  // True in suspendable processes and forks
     bool m_ignoreBlkAndNBlk = false;  // Suppress delayed assignment BLKANDNBLK
     bool m_inNonCombLogic = false;  // We are in non-combinational logic
-    bool m_needsInitialTrigger = false;  // Whether a NodeProcedure needs a initial trigger
     std::vector<AstSenTree*> m_nbaEventSenTreeps;  // Sensitivities of '->>' in the process
     AstVarRef* m_currNbaLhsRefp = nullptr;  // Current NBA LHS variable reference
 
@@ -1356,7 +1355,6 @@ class DelayedVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstNodeProcedure* nodep) override {
-        VL_RESTORER(m_needsInitialTrigger);
         VL_RESTORER_CLEAR(m_nbaEventSenTreeps);
         const size_t firstNBAAddedIndex = m_nbas.size();
         {
@@ -1364,9 +1362,10 @@ class DelayedVisitor final : public VNVisitor {
             VL_RESTORER(m_procp);
             VL_RESTORER(m_ignoreBlkAndNBlk);
             VL_RESTORER(m_inNonCombLogic);
-            // When we are dealing with initial block we need to
-            // treat it as suspendable when we meet a NBA
-            m_inSuspendableOrFork = nodep->isSuspendable() || VN_IS(nodep, Initial);
+            // When we are dealing with a process under an initial trigger (an initial block, or
+            // an always whose constant sensitivity V3Const reduced to an initial trigger), we
+            // need to treat it as suspendable when we meet a NBA
+            m_inSuspendableOrFork = nodep->isSuspendable() || m_activep->sentreep()->hasInitial();
             m_procp = nodep;
             if (nodep->isSuspendable()) {
                 m_ignoreBlkAndNBlk = false;
@@ -1381,7 +1380,11 @@ class DelayedVisitor final : public VNVisitor {
             }
             return false;
         };
-        const bool addInitialTrigger = m_needsInitialTrigger
+        // Even after an await, an NBA can execute before the process first suspends (e.g. if the
+        // await is conditional, or in a called task), so commit NBAs at time 0 too. A spurious
+        // commit is harmless: their targets use FlagUnique or ValueQueue* (see chooseScheme)
+        const bool hasNba = m_nbas.size() > firstNBAAddedIndex || !m_nbaEventSenTreeps.empty();
+        const bool addInitialTrigger = hasNba
                                        && !(isProcedureWithSentreep<AstAlways>(nodep)
                                             || isProcedureWithSentreep<AstAlwaysObserved>(nodep)
                                             || isProcedureWithSentreep<AstAlwaysReactive>(nodep))
@@ -1475,7 +1478,6 @@ class DelayedVisitor final : public VNVisitor {
                 senTreep = new AstSenTree{
                     flp, senTreep->hasClocked() ? senTreep->sensesp()->cloneTree(true) : nullptr};
                 m_nbaEventSenTreeps.push_back(senTreep);
-                m_needsInitialTrigger |= m_timingDomains.empty();
                 dlyvscp->varp()->setIgnorePostWrite();
                 ifp->addThensp(new AstAssign{flp, dlyRef(VAccess::WRITE),
                                              new AstConst{flp, AstConst::BitFalse{}}});
@@ -1515,8 +1517,6 @@ class DelayedVisitor final : public VNVisitor {
         UASSERT_OBJ(m_scopep, nodep, "<= not under scope");
         UASSERT_OBJ(m_inSuspendableOrFork || m_activep->hasClocked(), nodep,
                     "<= assignment in non-clocked block, should have been converted in V3Active");
-
-        m_needsInitialTrigger |= m_timingDomains.empty();
 
         // Record scope of this NBA
         nodep->user2p(m_scopep);

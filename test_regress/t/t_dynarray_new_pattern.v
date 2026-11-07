@@ -382,6 +382,27 @@ module t;
       `checkh(q.size, 1);
       `checkh(q[0], 'h5);
     end
+    begin  // Signed keys splice in signed index order
+      int q[$];
+      int aa[int];
+      aa[7] = 7;
+      aa[-7] = 1;
+      aa[0] = 2;
+      q = {aa, 4};
+      `checkh(q.size, 4);
+      `checkh(q[0], 'h1);
+      `checkh(q[1], 'h2);
+      `checkh(q[2], 'h7);
+      begin  // With its elements converted
+        bit [1:0] q2[$];
+        // verilator lint_off WIDTHTRUNC
+        q2 = {aa};
+        // verilator lint_on WIDTHTRUNC
+        `checkh(q2.size, 3);
+        `checkh(q2[0], 2'h1);
+        `checkh(q2[2], 2'h3);
+      end
+    end
     begin  // An associative array of strings into a dynamic array
       bit [6:0] d[];
       bit [6:0] sa[string];
@@ -423,6 +444,42 @@ module t;
         `checkh(bq.size, 4);
         `checkh(bq[3].v, 3);
       end
+    end
+    begin  // Elements of a variable of another element type are converted (IEEE 1800-2023 10.10)
+      // verilator lint_off WIDTHEXPAND
+      // verilator lint_off WIDTHTRUNC
+      bit [3:0] q4[$];
+      bit [7:0] q8[$];
+      byte qb[$];
+      int qi[$];
+      bit [5:0] d6[];
+      q8 = '{8'hff, 8'h12};
+      q4 = {q8};
+      `checkh(q4.size, 2);
+      `checkh(q4[0], 4'hf);
+      `checkh(q4[1], 4'h2);
+      qb = '{-8'sd1, 8'sd5};
+      qi = {qb, q4};
+      `checkh(qi.size, 4);
+      `checkh(qi[0], -1);
+      `checkh(qi[3], 2);
+      d6 = {qb, q8};
+      `checkh(d6.size, 4);
+      `checkh(d6[0], 6'h3f);
+      `checkh(d6[3], 6'h12);
+      begin
+        bit [7:0] d8[];
+        bit [7:0] f8[2];
+        d8 = '{8'h3c};
+        f8 = '{8'h5a, 8'ha5};
+        q4 = {d8, f8};
+        `checkh(q4.size, 3);
+        `checkh(q4[0], 4'hc);
+        `checkh(q4[1], 4'ha);
+        `checkh(q4[2], 4'h5);
+      end
+      // verilator lint_on WIDTHTRUNC
+      // verilator lint_on WIDTHEXPAND
     end
 
     $write("*-* All Finished *-*\n");

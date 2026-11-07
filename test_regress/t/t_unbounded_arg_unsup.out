@@ -7,6 +7,11 @@
                                                    : ... note: In instance 't'
    27 |   assert property (p_struct($));
       |                             ^
+%Error: t/t_unbounded_arg_unsup.v:27:29: Function Argument expects 'struct t.st_t', got 'int'
+                                       : ... note: In instance 't'
+   27 |   assert property (p_struct($));
+      |                             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error-UNSUPPORTED: t/t_unbounded_arg_unsup.v:28:17: Unsupported: Unbounded ('$') outside of queue or string operations
                                                    : ... note: In instance 't'
    28 |   initial x = f($);

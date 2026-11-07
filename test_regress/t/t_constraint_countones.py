@@ -18,6 +18,11 @@ test.timeout(20 if not test.have_dev_asan else 60)
 
 test.compile()
 
+# A one-hot count is a few nodes rather than a sum over each bit of the operand
+cpp_bytes = sum(os.path.getsize(f) for f in test.glob_some(test.obj_dir + "/*.cpp"))
+if cpp_bytes > 200000:
+    test.error("Generated C++ is " + str(cpp_bytes) + " bytes")
+
 test.execute()
 
 test.passes()

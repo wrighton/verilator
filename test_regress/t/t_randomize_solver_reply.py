@@ -31,6 +31,7 @@ runs = [
     ('dup_model', 1, 15),  # the same variable answered twice
     ('err_assume', 1, 16),  # error in place of the unsat assumptions
     ('err_core', 1, 16),  # error in place of the unsat core
+    ('err_extra', 2, 15),  # error replying to an earlier command, ahead of the status
     ('err_multiline', 2, 15),  # solver rejects a command with an error spanning two lines
     ('err_once', 2, 15),  # solver rejects a command instead of answering
     ('err_phase', 1, 15),  # error in place of an intermediate phase value reply
@@ -42,7 +43,7 @@ runs = [
     ('garbage_assume', 1, 16),  # a bare word in place of the unsat assumptions
     ('garbage_model', 1, 15),  # half-valid model must not reach the variables
     ('garbage_status', 2, 15),  # a word that is not a status
-    ('garbage_status', 16, 15),  # a phased check-sat that does not answer with a status
+    ('garbage_status', 15, 15),  # a phased check-sat that does not answer with a status
     ('high_digit', 1, 15),  # a digit legal for some base but not the stated one
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter
@@ -90,8 +91,8 @@ pin_runs = [
     # Unsat-assumptions reply 1: the first pin round of call 1, naming only literals out of
     # range
     ('oor_assume', 1, 14),
-    # Unsat-assumptions reply 1 on: every core names a0, which each call drops first anyway;
-    # in the round checking whether it can change, a0 is no longer one of the literals, which
+    # Unsat-assumptions reply 1 on: every core names __Va0, which each call drops first anyway;
+    # in the round checking whether it can change, __Va0 is no longer one of the literals, which
     # ends the rounds as untampered
     ('stale_assume', 1, 16),
 ]

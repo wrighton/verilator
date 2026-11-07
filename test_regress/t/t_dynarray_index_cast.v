@@ -9,9 +9,11 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// Cast as the index of a dynamic array or queue element
+// Cast or real as the index of a dynamic array or queue element
 
-module t;
+module t (
+  input clk
+);
   initial begin
     automatic int d[] = '{10, 11, 12, 13};
     automatic int q[$] = '{20, 21, 22, 23};
@@ -30,7 +32,63 @@ module t;
     end
     `checkd(d[3], 33);
     `checkd(q[2], 42);
-    $write("*-* All Finished *-*\n");
-    $finish;
+  end
+
+  // Cast as a queue slice bound (bounds already finalized in V3WidthSel)
+  initial begin
+    automatic int q[$] = '{20, 21, 22, 23};
+    automatic int s[$];
+    automatic bit [6:0] i;
+    for (int k = 0; k < 3; k++) begin
+      i = 7'(k + 4);
+      s = q[int'(i[1:0]):int'(i[1:0]) + 1];
+      `checkd(s.size(), 2);
+      `checkd(s[0], 20 + k);
+      `checkd(s[1], 21 + k);
+      s = q[2'(i):$];
+      `checkd(s.size(), 4 - k);
+      `checkd(s[0], 20 + k);
+      s = q[0:$ - int'(i[1:0])];
+      `checkd(s.size(), 4 - k);
+      `checkd(s[$], 23 - k);
+    end
+  end
+
+  // Real index, rounded as for an unpacked array
+  initial begin
+    automatic int u[4] = '{30, 31, 32, 33};
+    automatic int d[] = '{10, 11, 12, 13};
+    automatic int q[$] = '{20, 21, 22, 23};
+    automatic real r;
+    for (int k = 0; k < 3; k++) begin
+      r = k + 0.6;
+      // verilator lint_off REALCVT
+      `checkd(u[r], 31 + k);
+      `checkd(d[r], 11 + k);
+      `checkd(q[r], 21 + k);
+      // verilator lint_on REALCVT
+    end
+  end
+
+  // Module-scope queue indexed through a function called from always_comb
+  logic [3:0] mq[$];
+  logic [7:0] id = 0;
+  logic [3:0] vc;
+  function automatic logic [3:0] pick(logic [7:0] i);
+    return mq.size() == 0 ? 4'd0 : mq[int'(i) % mq.size()];
+  endfunction
+  always_comb vc = pick(id);
+
+  int cyc = 0;
+  logic [3:0] vals[3] = '{4'd4, 4'd8, 4'd5};
+  always @(posedge clk) begin
+    cyc <= cyc + 1;
+    id <= id + 8'd29;
+    `checkd(vc, mq.size() == 0 ? 4'd0 : vals[int'(id) % mq.size()]);
+    if (cyc < 3) mq.push_back(vals[cyc]);
+    if (cyc == 20) begin
+      $write("*-* All Finished *-*\n");
+      $finish;
+    end
   end
 endmodule

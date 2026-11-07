@@ -351,6 +351,31 @@ public:
         return term;
     }
 
+    // Returns the trigger value at initialization with --x-initial-edge, or nullptr if none
+    AstNodeExpr* buildXInitialEdge(const AstSenItem* senItemp) {
+        // Emulate a transition from X to the value the expression has at the first trigger
+        // evaluation: a posedge if it is 1, a negedge if it is 0 (IEEE 1800-2023 9.4.2),
+        // qualified by 'iff' (9.4.2.3). Named events and level triggers have no X state.
+        FileLine* const flp = senItemp->fileline();
+        AstNodeExpr* const senp = senItemp->sensp();
+        AstNodeExpr* termp = nullptr;
+        switch (senItemp->edgeType()) {
+        case VEdgeType::ET_CHANGED:
+        case VEdgeType::ET_BOTHEDGE: termp = new AstConst{flp, AstConst::BitTrue{}}; break;
+        case VEdgeType::ET_POSEDGE: termp = new AstSel{flp, getCurr(senp), 0, 1}; break;
+        case VEdgeType::ET_NEGEDGE:
+            termp = new AstNot{flp, new AstSel{flp, getCurr(senp), 0, 1}};
+            break;
+        default: return nullptr;
+        }
+        termp = wrapExprWithNullCheck(
+            flp, termp, hasNullableMemberAccess(senp) ? getBaseNullableRef(senp) : nullptr);
+        if (AstNodeExpr* const condp = senItemp->condp()) {
+            termp = new AstAnd{flp, condp->cloneTreePure(false), termp};
+        }
+        return termp;
+    }
+
     // Like above, but for a whole SenTree
     std::pair<AstNodeExpr*, bool> build(const AstSenTree* senTreep) {
         FileLine* const flp = senTreep->fileline();

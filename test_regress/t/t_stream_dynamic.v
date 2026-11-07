@@ -238,12 +238,12 @@ module t;
     `checkh(q8[0], w80[79:72]);
     `checkh(q8[9], w80[7:0]);
 
-    // Zero-filled to a whole number of elements, '>>' on the left, '<<' on the right
+    // Zero-filled on the right to a whole number of elements
     dyn12 = {>>{w40}};
     `checkh(dyn12.size(), 4);
-    `checkh(dyn12[0], {8'h0, w40[39:36]});
-    `checkh(dyn12[1], w40[35:24]);
-    `checkh(dyn12[3], w40[11:0]);
+    `checkh(dyn12[0], w40[39:28]);
+    `checkh(dyn12[1], w40[27:16]);
+    `checkh(dyn12[3], {w40[3:0], 8'h0});
     s40 = {<<3{w40}};
     dyn12 = {<<3{w40}};
     `checkh(dyn12.size(), 4);
@@ -256,8 +256,8 @@ module t;
     `checkh(q8[4], s40[7:0]);
     q70 = {>>{w80}};
     `checkh(q70.size(), 2);
-    `checkh(q70[0], {60'h0, w80[79:70]});
-    `checkh(q70[1], w80[69:0]);
+    `checkh(q70[0], w80[79:10]);
+    `checkh(q70[1], {w80[9:0], 60'h0});
     s80 = {<<5{w80}};
     q70 = {<<5{w80}};
     `checkh(q70.size(), 2);
@@ -316,12 +316,64 @@ module t;
     `checkh(up24[1], 24'h445566);
   endtask
 
+  typedef logic [7:0] byte_t;
+  task test6;
+    byte_t tq[$];
+    int dyn32[];
+    byte dyn8[];
+    byte q8[$];
+    logic [99:0] q100[$];
+    logic [31:0] a;
+    logic [31:0] b;
+    byte c;
+    byte d;
+    logic [11:0] w12;
+    logic [99:0] w100;
+
+    // Unpacking a dynamic array or queue into a concatenation
+    dyn32 = '{32'h11223344, 32'h55667788};
+    {>>{a, b}} = dyn32;
+    `checkh(a, 32'h11223344);
+    `checkh(b, 32'h55667788);
+    dyn8 = '{8'h11, 8'h22};
+    {>>{c, d}} = dyn8;
+    `checkh(c, 8'h11);
+    `checkh(d, 8'h22);
+    q8 = '{8'h11, 8'h22, 8'h33, 8'h44, 8'h55, 8'h66, 8'h77, 8'h88};
+    {>>{a, b}} = q8;
+    `checkh(a, 32'h11223344);
+    `checkh(b, 32'h55667788);
+    tq = '{8'h5a, 8'ha5};
+    {>>{c, d}} = tq;
+    `checkh(c, 8'h5a);
+    `checkh(d, 8'ha5);
+
+    // Bits beyond the target are ignored
+    q8 = '{8'h33, 8'h44, 8'h55};
+    {>>{c, d}} = q8;
+    `checkh(c, 8'h33);
+    `checkh(d, 8'h44);
+    {>>{w12}} = q8;
+    `checkh(w12, 12'h334);
+    q8 = '{8'h11, 8'h22, 8'h33, 8'h44, 8'h55, 8'h66, 8'h77, 8'h88, 8'h99, 8'haa, 8'hbb, 8'hcc,
+           8'hdd, 8'hee};
+    {>>{w100}} = q8;
+    `checkh(w100, 100'h112233445566778899aabbccd);
+    q100 = '{100'h123456789abcdef0123456789, 100'hfedcba9876543210fedcba987};
+    {>>{a}} = q100;
+    `checkh(a, 32'h12345678);
+    {>>{a, w100}} = q100;
+    `checkh(a, 32'h12345678);
+    `checkh(w100, 100'h9abcdef0123456789fedcba98);
+  endtask
+
   initial begin
     test1();
     test2();
     test3();
     test4();
     test5();
+    test6();
     $write("*-* All Finished *-*\n");
     $finish;
   end

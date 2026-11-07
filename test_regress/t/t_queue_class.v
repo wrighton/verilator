@@ -44,6 +44,26 @@ module t;
   end
 
   initial begin
+    // Arrays of elements assignable to an element type that is itself an array
+    Base bqq[$][$];
+    Impl implq[$];
+    Impl impl;
+    int qq[$][$];
+    int fa[2];
+    impl = new;
+    implq.push_back(impl);
+    bqq = {bqq, implq};
+    if (bqq.size() != 1) $stop;
+    if (bqq[0].size() != 1) $stop;
+    if (bqq[0][0] != impl) $stop;
+    fa = '{1, 2};
+    qq = {qq, fa};
+    if (qq.size() != 1) $stop;
+    if (qq[0].size() != 2) $stop;
+    if (qq[0][1] != 2) $stop;
+  end
+
+  initial begin
     Cls c2[1:0];
     Cls cq[$];
 

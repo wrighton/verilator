@@ -2,7 +2,4 @@
    19 |     b = cls.get_x(a[1]);
       |                    ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_func_ref_bad.v:28:11: Function/task ref argument is not of allowed type
-   28 |     t_ref(i);
-      |           ^
 %Error: Exiting due to

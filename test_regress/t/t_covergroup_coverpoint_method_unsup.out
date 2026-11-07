@@ -11,12 +11,8 @@
                                                                   : ... note: In instance 't'
    26 |     cg_i.x.stop();
       |          ^
-%Error-UNSUPPORTED: t/t_covergroup_coverpoint_method_unsup.v:27:10: Unsupported: 'option' of coverpoint or cross 'cp_b'
+%Error-UNSUPPORTED: t/t_covergroup_coverpoint_method_unsup.v:27:26: Unsupported: 'type_option' of coverpoint or cross 'x'
                                                                   : ... note: In instance 't'
-   27 |     cg_i.cp_b.option.weight = 2;
-      |          ^~~~
-%Error-UNSUPPORTED: t/t_covergroup_coverpoint_method_unsup.v:28:26: Unsupported: 'type_option' of coverpoint or cross 'x'
-                                                                  : ... note: In instance 't'
-   28 |     $display("%0d", cg_i.x.type_option.weight);
+   27 |     $display("%0d", cg_i.x.type_option.weight);
       |                          ^
 %Error: Exiting due to

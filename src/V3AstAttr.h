@@ -954,6 +954,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(ARRAY_SORT,                         "sort",                   false,  CLEAN,  false,      "") \
     macro(ARRAY_UNIQUE,                       "unique",                 PURE,   CLEAN,  false,      "") \
     macro(ARRAY_UNIQUE_INDEX,                 "unique_index",           PURE,   CLEAN,  false,      "") \
+    macro(ASSOC_AT_WRITE,                     "atWrite",                false,  CLEAN,  false,      "r") \
     macro(ASSOC_CLEAR,                        "clear",                  false,  CLEAN,  false,      "") \
     macro(ASSOC_ERASE,                        "erase",                  false,  CLEAN,  false,      "r") \
     macro(ASSOC_EXISTS,                       "exists",                 PURE,   CLEAN,  false,      "r") \
@@ -983,7 +984,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_LEND_WEIGHT,             "lendWeight",             false,  CLEAN,  false,      "rr") \
     macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "rww") \
     macro(COVERGROUP_RECORD_HIT,              "recordHit",              false,  CLEAN,  false,      "r") \
-    macro(COVERGROUP_REGISTER_BINS,           "registerBins",           false,  CLEAN,  false,      "rrrr") \
+    macro(COVERGROUP_REGISTER_BINS,           "registerBins",           false,  CLEAN,  false,      "rrrrr") \
     macro(COVERGROUP_SAMPLE,                  "sample",                 false,  CLEAN,  false,      "") \
     macro(COVERGROUP_SAMPLE_IFFS,             "sample",                 false,  CLEAN,  false,      "r") \
     macro(COVERGROUP_SELECT_ALL,              "selectAll",              false,  CLEAN,  false,      "") \
@@ -1043,8 +1044,10 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(DYN_SLICE_ASSIGN,                   "sliceAssign",            false,  CLEAN,  false,      "rrr") \
     macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrr") \
     macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrr") \
+    macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrr") \
     macro(DYN_SLICE_BACK_BACK,                "sliceBackBack",          PURE,   CLEAN,  false,      "rr") \
     macro(DYN_SLICE_FRONT_BACK,               "sliceFrontBack",         PURE,   CLEAN,  false,      "rr") \
+    macro(DYN_SLICE_PLUS,                     "slicePlus",              PURE,   CLEAN,  false,      "rr") \
     macro(EVENT_CLEAR_FIRED,                  "clearFired",             false,  CLEAN,  false,      "") \
     macro(EVENT_CLEAR_TRIGGERED,              "clearTriggered",         false,  CLEAN,  false,      "") \
     macro(EVENT_FIRE,                         "fire",                   false,  CLEAN,  false,      "") \

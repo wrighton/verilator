@@ -527,8 +527,10 @@ private:
     AstNode* cloneTreeIterList(bool needPure);
     void checkTreeIter(const AstNode* prevBackp) const VL_MT_STABLE;
     bool gateTreeIter() const;
+    // Pairs of corresponding AstJumpBlocks enclosing the nodes compared by sameTreeIter
+    using SameJumpBlocks = std::vector<std::pair<const AstJumpBlock*, const AstJumpBlock*>>;
     static bool sameTreeIter(const AstNode* node1p, const AstNode* node2p, bool ignNext,
-                             bool gateOnly);
+                             bool gateOnly, SameJumpBlocks& blocks);
     void deleteTreeIter();
     void deleteNode();
     string instanceStr() const;

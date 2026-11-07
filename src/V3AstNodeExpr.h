@@ -188,7 +188,6 @@ protected:
 
 public:
     ASTGEN_MEMBERS_AstNodeSel;
-    int bitConst() const;
 };
 class AstNodeStream VL_NOT_FINAL : public AstNodeBiop {
     // Verilog {rhs{lhs}} - Note rhsp() is the slice size, not the lhsp()
@@ -1323,7 +1322,7 @@ public:
     }
     ASTGEN_MEMBERS_AstCvtUnpackToQueue;
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
-    string emitC() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { return "VL_CVT_UNPACK_TO_Q(%P, %li)"; }
     bool cleanOut() const override { return true; }
 };
 class AstCvtUnpackToUnpack final : public AstNodeExpr {
@@ -1345,6 +1344,7 @@ public:
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
+    bool isPure() override { return fromp()->isPure(); }
 };
 class AstDist final : public AstNodeExpr {
     // @astgen op1 := exprp : AstNodeExpr
@@ -2294,9 +2294,11 @@ public:
     bool isSystemFunc() const override { return true; }
 };
 class AstSClocked final : public AstNodeExpr {
-    // Sequence expression with an explicit leading clocking event
+    // Sequence or property expression with an explicit leading clocking event
     // IEEE 1800-2023 16.7: sequence_expr ::= clocking_event sequence_expr
-    // The clocking event is hoisted to the enclosing assertion clock by V3AssertNfa.
+    // IEEE 1800-2023 16.12: property_expr ::= clocking_event property_expr
+    // Leading a property_spec, the clocking event is moved to it by V3LinkParse; leading a
+    // sequence, it is hoisted to the enclosing assertion clock by V3AssertNfa.
     // @astgen op1 := sensesp : List[AstSenItem]
     // @astgen op2 := exprp : AstNodeExpr
 public:
@@ -5756,6 +5758,22 @@ public:
     bool sizeMattersLhs() const override { return false; }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
 };
+class AstCvtWildcardKey final : public AstNodeUniop {
+    // Convert to a wildcard associative array key: the value's bytes without leading zero bytes,
+    // so a value is the same key at any width
+public:
+    AstCvtWildcardKey(FileLine* fl, AstNodeExpr* lhsp)
+        : ASTGEN_SUPER_CvtWildcardKey(fl, lhsp) {
+        dtypeSetString();
+    }
+    ASTGEN_MEMBERS_AstCvtWildcardKey;
+    void numberOperate(V3Number& out, const V3Number& lhs) override { out.opCvtWildcardKey(lhs); }
+    string emitVerilog() override { return "%l"; }
+    string emitC() override { return "VL_CVT_WILDCARD_KEY_N%lq(%lW, %li)"; }
+    bool cleanOut() const override { return true; }
+    bool cleanLhs() const override { return true; }
+    bool sizeMattersLhs() const override { return false; }
+};
 class AstExtend final : public AstNodeUniop {
     // Expand a value into a wider entity by 0 extension.  Width is implied from nodep->width()
     // @astgen makeDfgVertex
@@ -6624,7 +6642,7 @@ class AstVarXRef final : public AstNodeVarRef {
     string m_dotted;  // Dotted part of scope the name()'ed reference is under or ""
     string m_inlinedDots;  // Dotted hierarchy flattened out
     bool m_containsGenBlock = false;  // Contains gen block reference
-    bool m_readOnlyModport = false;  // Linked via an input-only modport, until V3LinkLValue
+    bool m_readOnlyModport = false;  // Linked via an input-only modport
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)

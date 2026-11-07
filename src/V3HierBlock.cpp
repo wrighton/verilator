@@ -274,10 +274,6 @@ string V3HierBlock::hierLibFilename(bool withDir) const {
     return hierSomeFilename(withDir, "lib", ".a");
 }
 
-string V3HierBlock::hierGeneratedFilenames(bool withDir) const {
-    return hierWrapperFilename(withDir) + ' ' + hierMkFilename(withDir);
-}
-
 string V3HierBlock::vFileIfNecessary() const {
     string filename = V3Os::filenameRealPath(m_modp->fileline()->filename());
     for (const auto& v : v3Global.opt.vFiles()) {
@@ -395,7 +391,9 @@ class HierBlockUsageCollectVisitor final : public VNVisitorConst {
         if (!m_modp->hierBlock()) return;
         // Can't handle interface port on hier block
         if (nodep->isIfaceRef() && !nodep->isIfaceParent()) {
-            nodep->v3error("Modport cannot be used at the hierarchical block boundary");
+            nodep->v3error("Interface port " << nodep->prettyNameQ()
+                                             << " cannot be used at the hierarchical block"
+                                                " boundary.");
         }
         // Record overridden value parameter of this hier block
         if (nodep->isGParam() && nodep->overriddenParam()) {

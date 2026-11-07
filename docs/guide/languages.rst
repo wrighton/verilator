@@ -475,10 +475,11 @@ checker
    inside a checker.
 
 disable
-   Disable statements may be used only if the block being disabled is a
-   block the disable statement itself is inside. This was commonly used to
-   provide loop break and continue functionality before SystemVerilog added
-   the break and continue keywords.
+   A disable statement outside the block or task it disables requires
+   :vlopt:`--timing`. When such a statement is executed by a process that
+   is running the disabled block or task, e.g. in a task or function called
+   from it, the process stops only at its next timing control, so the
+   statements up to that timing control still execute.
 
 force, release
    Verilator supports the procedural `force` (and corresponding `release`)

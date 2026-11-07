@@ -924,16 +924,17 @@ private:
         for (AstNodeExpr* const selp : vlstd::reverse_view(selps)) {
             if (const AstArraySel* const aselp = VN_CAST(selp, ArraySel)) {
                 AstConsArray* const consp = VN_AS(itemp, ConsArray);
-                const uint32_t index = fetchConst(aselp->bitp())->toUInt();
+                const V3Number& indexNum = fetchConst(aselp->bitp())->num();
                 const int elements
                     = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
-                if (index >= static_cast<uint32_t>(elements)) {
+                if (!indexNum.fitsInUInt()
+                    || indexNum.toUInt() >= static_cast<uint32_t>(elements)) {
                     return;  // Ignore a write out of bounds (IEEE 1800-2023 7.4.6)
                 }
-                itemp = consp->valuep(index);
+                itemp = consp->valuep(indexNum.toUInt());
                 if (itemp == consp->defaultp()) {  // Make a defaulted element explicit
                     itemp = itemp->cloneTree(false);
-                    consp->valuep(index, itemp);
+                    consp->valuep(indexNum.toUInt(), itemp);
                 }
             } else {
                 itemp = VN_AS(itemp, ConsStruct)->memberValuep(selp->name());
@@ -1091,11 +1092,11 @@ private:
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
         if (const AstConsArray* const consp = VN_CAST(fetchValueNull(nodep->fromp()), ConsArray)) {
-            const AstConst* const indexp = fetchConst(nodep->bitp());
-            const uint32_t offset = indexp->num().toUInt();
-            AstNodeExpr* const itemp = consp->valuep(offset);
+            const V3Number& indexNum = fetchConst(nodep->bitp())->num();
+            AstNodeExpr* const itemp
+                = indexNum.fitsInUInt() ? consp->valuep(indexNum.toUInt()) : nullptr;
             if (!itemp) {
-                clearOptimizable(nodep, "Array select out of range: " + std::to_string(offset));
+                clearOptimizable(nodep, "Array select out of range: " + indexNum.toDecimalU());
             } else {
                 setValue(nodep, itemp);
             }

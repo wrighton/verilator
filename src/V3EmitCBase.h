@@ -328,14 +328,16 @@ public:
         // Explicitly constructed variables live 'union { struct { HERE } __Vnontrivs; }',
         // possibly in nested named structs
         if (isExplicitlyConstructed(varp)) {
-            const EmitCMemberGroups groups{EmitCParentModule::get(varp)->user3()};
+            const EmitCMemberGroups groups{
+                static_cast<size_t>(EmitCParentModule::get(varp)->user3())};
             return "__Vnontrivs." + groups.namedPath(varp->user3()) + name;
         }
         // Trivially constructible variables may live in nested named structs
         if (isNameableTrivial(varp)) {
             const AstNodeModule* const modp = EmitCParentModule::get(varp);
             if (hasNamedTrivialGroups(modp)) {
-                return EmitCMemberGroups{modp->user4()}.namedPath(varp->user3()) + name;
+                const EmitCMemberGroups groups{static_cast<size_t>(modp->user4())};
+                return groups.namedPath(varp->user3()) + name;
             }
         }
         // Otherwise they should be available in the local scope where emitted

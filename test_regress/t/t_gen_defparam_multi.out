@@ -1,8 +1,16 @@
-%Error-UNSUPPORTED: t/t_gen_defparam_multi.v:12:16: Unsupported: defparam with no dot
-   12 |   defparam PAR = 5;
-      |                ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_gen_defparam_multi.v:28:19: Unsupported: defparam with arrayed instance
+%Warning-PINMISSING: t/t_gen_defparam_multi.v:27:10: Instance has missing pin: 'o3'
+   27 |       m3 u_m3 ();
+      |          ^~~~
+                     t/t_gen_defparam_multi.v:70:24: ... Location of port declaration
+   70 |     output wire [31:0] o3
+      |                        ^~
+                     ... For warning description see https://verilator.org/warn/PINMISSING?v=latest
+                     ... Use "/* verilator lint_off PINMISSING */" and lint_on around source to disable this message.
+%Error-UNSUPPORTED: t/t_gen_defparam_multi.v:28:19: Unsupported: defparam with instance select other than one integer literal
    28 |       defparam blk[i].u_m3.PAR3 = i;
       |                   ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_gen_defparam_multi.v:55:49: Unsupported: defparam to the same parameter as a defparam in another generate block of the same name
+   55 |       defparam m2.PAR2 = 4; defparam m2.m3.PAR3 = 40;
+      |                                                 ^
 %Error: Exiting due to

@@ -40,7 +40,16 @@
 //   re-asserting. See solveDiversity.
 #define _VL_SOLVER_HASH_LEN 1
 static constexpr int diversityMaxChecks = 512;  // Most solver checks to spread one solution
+static constexpr int diversityMaxSatisfied = 64;  // Most of them satisfied
 static constexpr int diversityWideBits = 64;  // Parts wider than this may stay unsplit
+static constexpr int diversitySlotConflicts = 4;  // Elements conflicting to drop a part of all
+static constexpr int diversitySlotSamples = 4;  // Elements checked for a part dropped for all
+
+// Index of the i-th of the elements checked out of n, spread over them
+static size_t diversitySample(size_t i, size_t n) {
+    const size_t nsamples = std::min<size_t>(diversitySlotSamples, n);
+    return (2 * i + 1) * n / (2 * nsamples);
+}
 
 // clang-format off
 #if defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
@@ -125,16 +134,17 @@ protected:
         if (pbase() == pptr()) return 0;
         const size_t size = pptr() - pbase();
         log("  ", std::string(pbase(), size));
-        const ssize_t n = ::write(m_writeFd, pbase(), size);
-        if (VL_UNLIKELY(n == -1)) perror("write");
-        if (n <= 0) {
-            wait_report();
-            return traits_type::eof();
+        // write() may write only part of the buffer
+        for (size_t done = 0; done < size;) {
+            const ssize_t n = ::write(m_writeFd, pbase() + done, size - done);
+            if (VL_UNLIKELY(n == -1)) perror("write");
+            if (n <= 0) {
+                wait_report();
+                return traits_type::eof();
+            }
+            done += n;
         }
-        if (n == size)
-            setp(m_writeBuf, m_writeBuf + sizeof(m_writeBuf));
-        else
-            setp(m_writeBuf + n, m_writeBuf + sizeof(m_writeBuf));
+        setp(m_writeBuf, m_writeBuf + sizeof(m_writeBuf));
         if (c != traits_type::eof()) sputc(c2);
         return 0;
     }
@@ -584,6 +594,7 @@ class VlSolverSession final {
     State m_state VL_GUARDED_BY(m_mutex) = State::UNSTARTED;
     int m_consecFails VL_GUARDED_BY(m_mutex) = 0;  // Failed transactions in a row
     bool m_dirty VL_GUARDED_BY(m_mutex) = false;  // Transaction left the pipe out of step
+    bool m_stale VL_GUARDED_BY(m_mutex) = false;  // Replies of later commands may be queued
     std::string m_program VL_GUARDED_BY(m_mutex);  // Storage backing m_argv
     std::vector<const char*> m_argv VL_GUARDED_BY(m_mutex);  // Solver argv
     bool m_warnedRestart VL_GUARDED_BY(m_mutex) = false;
@@ -593,9 +604,16 @@ public:
     // The pipe may hold bytes of an abandoned reply, so replace the solver
     void abandon() VL_REQUIRES(m_mutex) { m_dirty = true; }
 
-    // A status the runtime cannot use fails the call, but the reply itself was
-    // complete, so the solver is left alone
-    VlSolverStatus readStatus() VL_REQUIRES(m_mutex) { return ::readStatus(m_proc); }
+    // Read a check-sat status; once one fails, so does every later read
+    VlSolverStatus readStatus() VL_REQUIRES(m_mutex) {
+        // A status the runtime cannot use fails the call. It may be the error
+        // reply to an earlier command of the batch, so the replies of the later
+        // commands are still queued; they are skipped when the transaction ends.
+        if (m_stale) return VlSolverStatus::FAIL;
+        const VlSolverStatus status = ::readStatus(m_proc);
+        m_stale = status == VlSolverStatus::FAIL;
+        return status;
+    }
     // An unreadable reply means text of it may still be queued, so it is not
     // safe to read anything more from this solver
     bool readSExpr(std::string& outr) VL_REQUIRES(m_mutex) {
@@ -625,7 +643,7 @@ public:
 
     // End a transaction; a solver left out of step or dead is replaced next time
     void end() VL_REQUIRES(m_mutex) {
-        bool healthy = !m_dirty && !m_proc.fail();
+        bool healthy = !m_dirty && !m_proc.fail() && (!m_stale || resync());
         if (healthy) {
             m_proc << "(reset)\n";
             m_proc.flush();
@@ -639,9 +657,20 @@ public:
             ++m_consecFails;
         }
         m_dirty = false;
+        m_stale = false;
     }
 
 private:
+    // Skip queued replies up to an echoed marker; false if the solver went away
+    bool resync() VL_REQUIRES(m_mutex) {
+        m_proc << "(echo \"vl_resync\")\n";
+        std::string line;
+        // z3 prints the echoed string without quotes, the SMT-LIB 2.6 response with them; the
+        // replies queued before it answer earlier commands, so cannot contain it
+        while (readLine(m_proc, line) && line.find("vl_resync") == std::string::npos) {}
+        return !m_proc.fail();
+    }
+
     // A solver that will not start is not started again
     void spawn() VL_REQUIRES(m_mutex) {
         if (m_argv.empty()) {
@@ -845,12 +874,11 @@ void VlRandomizer::randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
     int varBits = 0;
     if (layerVarsp) {
         for (const auto& name : *layerVarsp) {
-            const auto it = m_vars.find(name);
-            // buildSolveLayers() only ever adds a name after confirming
-            // it's already in m_vars.
-            assert(it != m_vars.end());
-            vars.push_back(it->second.get());
-            varBits += it->second->totalWidth();
+            // buildSolveLayers() only ever adds a name after confirming it names a variable
+            const VlRandomVar* const varp = solveBeforeVarp(name);
+            assert(varp);
+            vars.push_back(varp);
+            varBits += varp->totalWidth();
         }
     } else {
         for (const auto& var : m_vars) {
@@ -891,10 +919,23 @@ void VlRandomizer::randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
     os << ')';
 }
 
-size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras) const {
+size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
+                                     bool randcOnly) const {
     size_t h = 0;
-    for (const auto& c : m_constraints) {
-        h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    for (size_t i = 0; i < m_constraints.size(); ++i) {
+        if (randcOnly) {
+            // Only a change of the constraints on a randc variable restarts its cycle
+            // (IEEE 1800-2023 18.4.2), not a state value changing in another constraint
+            const auto beginIt
+                = m_constraintVarNames.begin() + (i ? m_constraintVarEnds[i - 1] : 0);
+            const auto endIt = m_constraintVarNames.begin() + m_constraintVarEnds[i];
+            if (std::none_of(beginIt, endIt, [this](const char* namep) {
+                    return m_randcVarNames.count(namep) != 0;
+                })) {
+                continue;
+            }
+        }
+        h ^= std::hash<std::string>{}(m_constraints[i]) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
     for (const auto& c : extras) {
         h ^= std::hash<std::string>{}(c) + 0x9e3779b9 + (h << 6) + (h >> 2);
@@ -989,7 +1030,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     // When solver returns unsat (all values exhausted), clear history for new cycle.
     // An earlier function-call solve round has fewer constraints, not changed ones
     if (!m_randcVarNames.empty() && !funcPreRound()) {
-        const size_t currentHash = hashConstraints(uniqueExprs);
+        const size_t currentHash = hashConstraints(uniqueExprs, true);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
         if (currentHash != m_randcConstraintHash) {
             m_randcUsedValues.clear();
@@ -1004,6 +1045,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     for (const FuncArgRound& argRound : m_funcArgRounds) {
         if (argRound.round < m_funcRound && !argRound.pin.empty()) {
             m_constraints.push_back(argRound.pin);
+            m_constraintVarEnds.push_back(m_constraintVarNames.size());  // Names no randc
         }
     }
 
@@ -1087,6 +1129,16 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
             os << ")) " << domainIt->second << "))\n";
         }
     }
+    // Variables registered by different paths to the same object, as through two handles to it,
+    // are one variable
+    std::map<const void*, const VlRandomVar*> scalars;
+    for (const auto& var : m_vars) {
+        if (var.second->dimension()) continue;
+        const auto pair = scalars.emplace(var.second->datap(0), var.second.get());
+        if (!pair.second) {
+            os << "(assert (= " << pair.first->second->name() << ' ' << var.first << "))\n";
+        }
+    }
 }
 
 void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>& extras,
@@ -1094,14 +1146,14 @@ void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>&
     int j = 0;
     for (const std::string& constraint : m_constraints) {
         if (named) {
-            os << "(assert (! (= #b1 " << constraint << ") :named cons" << j++ << "))\n";
+            os << "(assert (! (= #b1 " << constraint << ") :named __Vcons" << j++ << "))\n";
         } else {
             os << "(assert (= #b1 " << constraint << "))\n";
         }
     }
     for (const std::string& extra : extras) {
         if (named) {
-            os << "(assert (! (= #b1 " << extra << ") :named cons" << j++ << "))\n";
+            os << "(assert (! (= #b1 " << extra << ") :named __Vcons" << j++ << "))\n";
         } else {
             os << "(assert (= #b1 " << extra << "))\n";
         }
@@ -1277,11 +1329,11 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
             const Witness& prev = witnesses.back();
             const std::pair<std::string, int>& pick
                 = order[VL_RANDOM_RNG_I(*diversifyRngp) % order.size()];
-            solver << "(declare-fun d" << assumeNum << " () Bool)\n";
-            solver << "(assert (= d" << assumeNum << " (not (=";
+            solver << "(declare-fun __Vd" << assumeNum << " () Bool)\n";
+            solver << "(assert (= __Vd" << assumeNum << " (not (=";
             m_vars.at(pick.first)->emitElement(solver, pick.second);
             solver << ' ' << prev.at(pick.first).at(pick.second) << "))))\n";
-            solver << "(check-sat-assuming (d" << assumeNum << "))\n";
+            solver << "(check-sat-assuming (__Vd" << assumeNum << "))\n";
             ++assumeNum;
             status = sess.readStatus();
         }
@@ -1508,12 +1560,18 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
     std::string keep;  // Surviving literals
     int lits = 0;  // Literals declared so far
     int checksLeft = diversityMaxChecks;
+    // Satisfied checks are the slow ones on large problems; past their limit, no further
+    // check is made and the literals kept so far are the result
+    int satisfiedLeft = diversityMaxSatisfied;
+    const auto satisfied = [&]() {
+        if (--satisfiedLeft <= 0) checksLeft = 0;
+    };
     bool settled = true;  // The last check was satisfied, so its model satisfies keep
     std::vector<bool> dropped;
-    while (!terms.empty()) {
+    while (!terms.empty() && checksLeft > 0) {
         for (size_t k = 0; k < terms.size(); ++k) {
-            os << "(declare-fun a" << lits + k << " () Bool)\n";
-            os << "(assert (= a" << lits + k << " (=";
+            os << "(declare-fun __Va" << lits + k << " () Bool)\n";
+            os << "(assert (= __Va" << lits + k << " (=";
             emitTerm(terms[k]);
             os << " #b";
             IData bits = 0;
@@ -1521,22 +1579,42 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
                 if (!(b & VL_SIZEBITS_I)) bits = VL_RANDOM_RNG_I(rngr);
                 os << (VL_BITISSET_I(bits, b & VL_SIZEBITS_I) ? '1' : '0');
             }
+            terms[k].value0 = VL_BITISSET_I(bits, (terms[k].width - 1) & VL_SIZEBITS_I) ? 1 : 0;
             os << ")))\n";
         }
-        settled = assumeDropping(sess, keep, lits, terms, dropped, checksLeft);
+        std::vector<int> slotIds;
+        settled = assumeDropping(sess, keep, lits, terms, dropped, checksLeft, nullptr, &slotIds,
+                                 &satisfiedLeft);
         if (!settled) break;
+        satisfied();
         std::vector<PinTerm> conflicted;
+        std::vector<std::vector<PinTerm>> slots;  // Parts dropped for a whole array, per part
         for (size_t k = 0; k < terms.size(); ++k) {
             const PinTerm& term = terms[k];
             if (!dropped[k]) {
-                keep += " a" + std::to_string(lits + k);
+                keep += " __Va" + std::to_string(lits + k);
+            } else if (term.width > 1 && slotIds[k] >= 0) {
+                if (slots.size() <= static_cast<size_t>(slotIds[k])) slots.resize(slotIds[k] + 1);
+                slots[slotIds[k]].push_back(term);
             } else if (term.width > 1) {
                 conflicted.push_back(term);
             }
         }
         lits += terms.size();
         terms.clear();
-        if (conflicted.empty()) break;
+        // Of a part dropped for a whole array, only a few elements spread over it are
+        // checked below, and the others follow them: checking all would need a model
+        // changing all of them, which is slow on a large array
+        const size_t nalone = conflicted.size();
+        std::vector<size_t> nsamples;  // Per slot
+        for (const std::vector<PinTerm>& members : slots) {
+            nsamples.push_back(std::min<size_t>(diversitySlotSamples, members.size()));
+            for (size_t i = 0; i < nsamples.back(); ++i) {
+                conflicted.push_back(members[diversitySample(i, members.size())]);
+            }
+        }
+        // Out of checks, the last model, which satisfies keep, is the result
+        if (conflicted.empty() || checksLeft <= 0) break;
         // Which conflicted terms can differ from the last model's values at all
         os << "(get-value (";
         for (const PinTerm& term : conflicted) emitTerm(term);
@@ -1544,23 +1622,27 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
         std::vector<std::string> values;
         if (!readValues(sess, values) || values.size() != conflicted.size()) return;
         for (size_t k = 0; k < conflicted.size(); ++k) {
-            os << "(declare-fun a" << lits + k << " () Bool)\n";
-            os << "(assert (= a" << lits + k << " (not (=";
+            os << "(declare-fun __Va" << lits + k << " () Bool)\n";
+            os << "(assert (= __Va" << lits + k << " (not (=";
             emitTerm(conflicted[k]);
             os << ' ' << values[k] << "))))\n";
         }
         std::vector<bool> guessed;
         settled = assumeDropping(sess, keep, lits, conflicted, dropped, checksLeft, &guessed);
         if (!settled) break;
+        satisfied();
         // A term dropped as a guess may still change on its own, which would leave its
         // bits unspread, so check it alone
         for (size_t k = 0; k < conflicted.size() && checksLeft > 0; ++k) {
             if (!guessed[k]) continue;
-            os << "(check-sat-assuming (" << keep << " a" << lits + k << "))\n";
+            os << "(check-sat-assuming (" << keep << " __Va" << lits + k << "))\n";
             --checksLeft;
             const VlSolverStatus status = sess.readStatus();
             settled = status == VlSolverStatus::SAT;
-            if (settled) dropped[k] = false;
+            if (settled) {
+                dropped[k] = false;
+                satisfied();
+            }
             if (!settled && status != VlSolverStatus::UNSAT) break;
         }
         lits += conflicted.size();
@@ -1575,27 +1657,37 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
             if (conflicted[parts[0]].width <= diversityWideBits || parts.size() < 2) continue;
             std::string assumed = keep;
             for (size_t i = 0; i < parts.size(); ++i, ++lits) {
-                os << "(declare-fun a" << lits << " () Bool)\n";
-                os << "(assert (= a" << lits << (i ? " (=" : " (not (=");
+                os << "(declare-fun __Va" << lits << " () Bool)\n";
+                os << "(assert (= __Va" << lits << (i ? " (=" : " (not (=");
                 emitTerm(conflicted[parts[i]]);
                 os << ' ' << values[parts[i]] << (i ? ")))\n" : "))))\n");
-                assumed += " a" + std::to_string(lits);
+                assumed += " __Va" + std::to_string(lits);
             }
             os << "(check-sat-assuming (" << assumed << "))\n";
             --checksLeft;
             const VlSolverStatus status = sess.readStatus();
             settled = status == VlSolverStatus::SAT;
+            if (settled) satisfied();
             if (status == VlSolverStatus::UNSAT) stopped.insert(it.first);
         }
-        for (size_t k = 0; k < conflicted.size(); ++k) {
-            if (dropped[k]) continue;
-            const PinTerm& term = conflicted[k];
-            if (stopped.count(term.root)) continue;
+        const auto split = [&](const PinTerm& term) {
             const int step = (term.width + 1) / 2;
             for (int lsb = 0; lsb < term.width; lsb += step) {
                 const int width = std::min(step, term.width - lsb);
                 terms.push_back({term.varp, term.elem, term.lsb + lsb, width, term.root});
             }
+        };
+        const auto splitting
+            = [&](size_t k) { return !dropped[k] && !stopped.count(conflicted[k].root); };
+        for (size_t k = 0; k < nalone; ++k) {
+            if (splitting(k)) split(conflicted[k]);
+        }
+        size_t samplek = nalone;
+        for (size_t sloti = 0; sloti < slots.size(); ++sloti) {
+            bool any = false;
+            for (size_t i = 0; i < nsamples[sloti]; ++i) any |= splitting(samplek++);
+            if (!any) continue;
+            for (const PinTerm& term : slots[sloti]) split(term);
         }
     }
     if (!settled) {
@@ -1608,15 +1700,21 @@ void VlRandomizer::solveDiversity(VlRNG& rngr, VlSolverSession& sess,
 
 bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
                                   const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
-                                  int& checksLeftr, std::vector<bool>* guessedp)
+                                  int& checksLeftr, std::vector<bool>* guessedp,
+                                  std::vector<int>* slotIdsp, int* satisfiedLeftp)
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     droppedr.assign(terms.size(), false);
     if (guessedp) guessedp->assign(terms.size(), false);
+    if (slotIdsp) slotIdsp->assign(terms.size(), -1);
+    int nslots = 0;
+    // Conflicts per part of an array's elements (and pinned value, for a single bit), and
+    // whether each of them was among others in its unsat core
+    std::map<std::tuple<const VlRandomVar*, int, int, int>, std::pair<int, bool>> slotConflicts;
     while (checksLeftr-- > 0) {
         os << "(check-sat-assuming (" << keep;
         for (size_t k = 0; k < terms.size(); ++k) {
-            if (!droppedr[k]) os << " a" << first + k;
+            if (!droppedr[k]) os << " __Va" << first + k;
         }
         os << "))\n";
         const VlSolverStatus status = sess.readStatus();
@@ -1637,6 +1735,49 @@ bool VlRandomizer::assumeDropping(VlSolverSession& sess, const std::string& keep
         if (pick < 0) return false;
         droppedr[pick] = true;
         if (guessedp && candidates > 1) (*guessedp)[pick] = true;
+        // Once the same part of several elements of an array conflicts, that part of the
+        // others likely does too, under one foreach: drop it for all of them, so the array
+        // costs a few checks rather than one per element. The elements that conflicted are
+        // kept apart, as they may be ones constrained on their own (say the first one).
+        // Dropped parts are checked further in solveDiversity, but single bits are not. A
+        // single bit dropped with others of its unsat cores is set by those that remain,
+        // but one that conflicted alone would be left to the solver, so it is dropped for
+        // all only if a few of the other elements cannot take their pin either.
+        if (!slotIdsp) continue;
+        const PinTerm& pickTerm = terms[pick];
+        const auto slotOf = [](const PinTerm& term) {
+            return std::make_tuple(term.varp, term.lsb, term.width,
+                                   term.width == 1 ? term.value0 : 0);
+        };
+        std::pair<int, bool>& conflicts = slotConflicts[slotOf(pickTerm)];
+        if (conflicts.first++ == 0) conflicts.second = true;
+        conflicts.second &= candidates > 1;
+        if (conflicts.first < diversitySlotConflicts) continue;
+        std::vector<size_t> members;
+        for (size_t k = 0; k < terms.size(); ++k) {
+            if (!droppedr[k] && slotOf(terms[k]) == slotOf(pickTerm)) members.push_back(k);
+        }
+        bool othersFit = false;
+        if (pickTerm.width == 1 && !conflicts.second) {
+            for (size_t i = 0; i < std::min<size_t>(diversitySlotSamples, members.size()); ++i) {
+                if (checksLeftr-- <= 0) return false;
+                os << "(check-sat-assuming (" << keep << " __Va"
+                   << first + members[diversitySample(i, members.size())] << "))\n";
+                othersFit = sess.readStatus() == VlSolverStatus::SAT;
+                if (!othersFit) continue;
+                if (--*satisfiedLeftp <= 0) checksLeftr = 0;
+                break;
+            }
+        }
+        if (othersFit) {
+            conflicts.first = 0;  // They go one by one
+            continue;
+        }
+        for (const size_t k : members) {
+            droppedr[k] = true;
+            (*slotIdsp)[k] = nslots;
+        }
+        ++nslots;
     }
     return false;
 }
@@ -1672,21 +1813,40 @@ bool VlRandomizer::readValues(VlSolverSession& sess, std::vector<std::string>& v
 
 // Re-add softs highest-priority first, dropping incompatible ones.
 void VlRandomizer::relaxSoftConstraints(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
-    if (m_softConstraints.empty()) return;
+    // A soft is kept when it fits the hard constraints and the higher-priority softs kept
+    // so far; the last soft has the highest priority. A chunk of softs that fits together
+    // is kept as a whole, as each would be on its own. A chunk that conflicts is halved
+    // until the dropped soft is found alone (once its first half fits, the rest conflicts
+    // without a check), and chunks grow again while they fit. So a few dropped softs among
+    // n cost O(log n) checks each, rather than one check per soft; when most softs are
+    // dropped, it takes up to about 1.5 checks per soft.
     std::iostream& os = sess.os();
-    os << "(push 1)\n";
-    for (const auto& s : m_softConstraints) os << "(assert (= #b1 " << s << "))\n";
-    os << "(check-sat)\n";
-    const VlSolverStatus status = sess.readStatus();
-    if (status == VlSolverStatus::SAT || status == VlSolverStatus::FAIL) return;
-    os << "(pop 1)\n";
-    for (auto it = m_softConstraints.rbegin(); it != m_softConstraints.rend(); ++it) {
-        os << "(push 1)\n";
-        os << "(assert (= #b1 " << *it << "))\n";
-        os << "(check-sat)\n";
-        const VlSolverStatus probe = sess.readStatus();
-        if (probe == VlSolverStatus::FAIL) return;
-        if (probe != VlSolverStatus::SAT) os << "(pop 1)\n";
+    const size_t nsofts = m_softConstraints.size();
+    size_t chunk = nsofts;  // First try all of them
+    size_t conflictEnd = 0;  // End of the last conflicting chunk, whose rest still conflicts
+    for (size_t done = 0; done < nsofts;) {
+        chunk = std::min(chunk, nsofts - done);
+        if (done + chunk != conflictEnd) {
+            os << "(push 1)\n";
+            for (size_t i = done; i < done + chunk; ++i) {
+                os << "(assert (= #b1 " << m_softConstraints[nsofts - 1 - i] << "))\n";
+            }
+            os << "(check-sat)\n";
+            const VlSolverStatus status = sess.readStatus();
+            if (status == VlSolverStatus::FAIL) return;
+            if (status == VlSolverStatus::SAT) {
+                done += chunk;
+                chunk = done < conflictEnd ? conflictEnd - done : chunk * 2;
+                continue;
+            }
+            os << "(pop 1)\n";
+            conflictEnd = done + chunk;
+        }
+        if (chunk == 1) {
+            ++done;  // Dropped
+        } else {
+            chunk /= 2;
+        }
     }
 }
 
@@ -1716,7 +1876,7 @@ std::vector<int> VlRandomizer::readUnsatAssumptions(VlSolverSession& sess)
         warnSolverReply(reply);
         return {};
     }
-    // The response lists only "a<N>" literals; collect each full integer run.
+    // The response lists only "__Va<N>" literals; collect each full integer run.
     return scanIntRuns(reply);
 }
 
@@ -2021,16 +2181,52 @@ void VlRandomizer::solveBefore(const std::string& beforeName, const std::string&
     m_solveBefore.emplace_back(beforeName, afterName);
 }
 
+const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
+    const auto it = m_vars.find(name);
+    if (it != m_vars.end()) return it->second.get();
+    const auto elemIt = m_solveBeforeElems.find(name);
+    if (elemIt != m_solveBeforeElems.end()) return elemIt->second.get();
+    // An element "array.index...", with an index of vlToSolverHex() for each dimension, of an
+    // array that the solver has as one variable
+    std::vector<std::string> indices;
+    std::string base = name;
+    while (true) {
+        const size_t dot = base.rfind('.');
+        if (dot == std::string::npos) return nullptr;
+        indices.insert(indices.begin(), base.substr(dot + 1));
+        base.erase(dot);
+        const auto arrIt = m_vars.find(base);
+        if (arrIt == m_vars.end()
+            || arrIt->second->dimension() != static_cast<int>(indices.size()))
+            continue;
+        // An array without elements has no index widths, nor the element
+        const auto firstIt = m_arr_vars.find(generateKey(base, 0));
+        if (firstIt == m_arr_vars.end()) return nullptr;
+        std::string term = base;
+        for (size_t i = 0; i < indices.size(); ++i) {
+            // Wider keys, as strings or 64-bit integers, are not named by vlToSolverHex()
+            const size_t width = firstIt->second->m_idxWidths[i];
+            if (width > 32) return nullptr;
+            term = "(select " + term + " #x" + indices[i].substr(8 - width / 4) + ")";
+        }
+        return (m_solveBeforeElems[name]
+                = std::make_shared<const VlRandomVar>(term, arrIt->second->width(), nullptr, 0,
+                                                      std::numeric_limits<std::uint32_t>::max()))
+            .get();
+    }
+}
+
 bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layersr) {
     std::map<std::string, std::set<std::string>> graph;
     std::map<std::string, int> inDegree;
     std::set<std::string> solveBeforeVars;
 
+    m_solveBeforeElems.clear();
     for (const auto& pair : m_solveBefore) {
         const std::string& before = pair.first;
         const std::string& after = pair.second;
-        // Only consider variables that are actually registered
-        if (m_vars.find(before) == m_vars.end() || m_vars.find(after) == m_vars.end()) continue;
+        // Only consider variables, and elements of array variables, that are registered
+        if (!solveBeforeVarp(before) || !solveBeforeVarp(after)) continue;
         graph[before].insert(after);
         solveBeforeVars.insert(before);
         solveBeforeVars.insert(after);
@@ -2180,17 +2376,17 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     const auto emitGetValueCmd = [&]() {
         os << "(get-value (";
         for (const auto& varName : layerVars) {
-            const auto it = m_vars.find(varName);
-            if (it->second->dimension() > 0) {
+            const VlRandomVar* const varp = solveBeforeVarp(varName);
+            if (varp->dimension() > 0) {
                 auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
-                it->second->setArrayInfo(arrVarsp);
+                varp->setArrayInfo(arrVarsp);
                 // Enumerable arrays: query each element for a QF_ABV-safe pin.
-                if (it->second->hasMatchingElements(m_arr_vars, it->second->name())) {
-                    it->second->emitGetValue(os);
+                if (varp->hasMatchingElements(m_arr_vars, varp->name())) {
+                    varp->emitGetValue(os);
                     continue;
                 }
             }
-            os << varName << " ";
+            os << varp->name() << " ";
         }
         os << "))\n";
     };

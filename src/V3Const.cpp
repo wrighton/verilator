@@ -1030,6 +1030,7 @@ class ConstVisitor final : public VNVisitor {
         if (const AstUnpackArrayDType* const unpackDtypep = VN_CAST(dtypep, UnpackArrayDType)) {
             const VNumRange range = unpackDtypep->declRange();
             const AstConsArray* const consp = VN_CAST(fromp, ConsArray);
+            const AstSliceSel* const slicep = VN_CAST(fromp, SliceSel);
             for (const int idx : range.seqLeftToRight()) {
                 // Select by offset from the low index, from a constant array directly
                 AstNodeExpr* selp;
@@ -1037,22 +1038,13 @@ class ConstVisitor final : public VNVisitor {
                     AstNodeExpr* const valuep = consp->valuep(idx - range.lo());
                     UASSERT_OBJ(valuep, consp, "Constant array element missing");
                     selp = valuep->cloneTree(false);
-                } else if (const AstSliceSel* const slicep = VN_CAST(fromp, SliceSel)) {
-                    // Select from the sliced array, as a slice is a copy that cannot be written
-                    FileLine* const fl = fromp->fileline();
-                    AstNodeExpr* const arrayp = slicep->fromp()->cloneTreePure(false);
-                    const int offset = idx - range.lo();
-                    if (const AstConst* const lsbConstp = VN_CAST(slicep->lsbp(), Const)) {
-                        selp = new AstArraySel{fl, arrayp, lsbConstp->toSInt() + offset};
-                    } else {  // Variable position
-                        AstNodeExpr* const lsbp = slicep->lsbp()->cloneTreePure(false);
-                        AstNodeExpr* const indexp
-                            = new AstAdd{fl, lsbp,
-                                         new AstConst{fl, AstConst::WidthedValue{}, lsbp->width(),
-                                                      static_cast<uint32_t>(offset)}};
-                        indexp->dtypeFrom(lsbp);
-                        selp = new AstArraySel{fl, arrayp, indexp};
-                    }
+                } else if (slicep && VN_IS(slicep->lsbp(), Const)) {
+                    // Select from the sliced array, as a slice is a copy that cannot be written.
+                    // A variable slice is selected from in V3Slice, after V3Unknown checks that
+                    // the whole slice is within the array.
+                    const int offset = slicep->declRange().lo() + idx - range.lo();
+                    selp = new AstArraySel{fromp->fileline(),
+                                           slicep->fromp()->cloneTreePure(false), offset};
                 } else {
                     selp = new AstArraySel{fromp->fileline(), fromp->cloneTreePure(false),
                                            idx - range.lo()};
@@ -2914,8 +2906,25 @@ class ConstVisitor final : public VNVisitor {
                 }
                 srcp = new AstCvtPackedToArray{nodep->fileline(), srcp, dstDTypep};
             } else {
+                const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
                 if (dWidth == 0) {
                     srcp = new AstCvtPackedToArray{nodep->fileline(), srcp, dstDTypep};
+                } else if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType))
+                           && srcDTypep->subDTypep()->skipRefp()->isIntegralOrPacked()) {
+                    // Pack only the first elements covering the target, as the bits of a
+                    // longer source beyond the target are ignored (IEEE 1800-2023 11.4.14.3)
+                    FileLine* const flp = srcp->fileline();
+                    const AstNodeDType* const elemDTypep = srcDTypep->subDTypep();
+                    const int elems = (dWidth + elemDTypep->width() - 1) / elemDTypep->width();
+                    const int packedWidth = elems * elemDTypep->width();
+                    AstCMethodHard* const slicep
+                        = new AstCMethodHard{flp, srcp, VCMethod::DYN_SLICE, new AstConst{flp, 0}};
+                    slicep->addPinsp(new AstConst{flp, static_cast<uint32_t>(elems - 1)});
+                    slicep->dtypeFrom(srcp);
+                    AstNodeDType* const packedDTypep = srcp->findBitOrLogicDType(
+                        packedWidth, packedWidth, VSigning::UNSIGNED, elemDTypep->isFourstate());
+                    srcp = new AstSel{flp, new AstCvtArrayToPacked{flp, slicep, packedDTypep},
+                                      packedWidth - dWidth, dWidth};
                 } else if (sWidth >= dWidth) {
                     srcp = new AstSel{streamp->fileline(), srcp, sWidth - dWidth, dWidth};
                 } else {
@@ -3428,6 +3437,15 @@ class ConstVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
 
+    // Return element of 'consp' at constant 'indexp', or nullptr if out of range
+    static AstNodeExpr* constArrayElementp(const AstConsArray* consp, const AstConst* indexp) {
+        // An out-of-range index, also one wider than 32 bits, is left to V3Unknown
+        const V3Number& num = indexp->num();
+        const uint32_t elements
+            = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        if (!num.fitsInUInt() || num.toUInt() >= elements) return nullptr;
+        return consp->valuep(num.toUInt());
+    }
     void visit(AstArraySel* nodep) override {
         iterateAndNextNull(nodep->bitp());
         if (VN_IS(nodep->bitp(), Const)
@@ -3439,19 +3457,16 @@ class ConstVisitor final : public VNVisitor {
         }
         iterateAndNextNull(nodep->fromp());
         if (VN_IS(nodep->fromp(), Const)) {  // It did.
-            if (!m_selp) {
-                nodep->v3error("Illegal assignment of constant to unpacked array");
-            } else {
-                AstNode* const fromp = nodep->fromp()->unlinkFrBack();
-                nodep->replaceWithKeepDType(fromp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            }
+            // V3Width reports a singular value assigned to an unpacked array
+            UASSERT_OBJ(m_selp, nodep, "Constant substituted for an unpacked array");
+            AstNode* const fromp = nodep->fromp()->unlinkFrBack();
+            nodep->replaceWithKeepDType(fromp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
         }
         // Handle ARRAYSEL directly on ConsArray (not through VarRef)
         else if (VN_IS(nodep->bitp(), Const) && VN_IS(nodep->fromp(), ConsArray)) {
-            const AstConsArray* const consp = VN_AS(nodep->fromp(), ConsArray);
-            const uint32_t bit = VN_AS(nodep->bitp(), Const)->toUInt();
-            AstNodeExpr* const itemp = consp->valuep(bit);
+            AstNodeExpr* const itemp = constArrayElementp(VN_AS(nodep->fromp(), ConsArray),
+                                                          VN_AS(nodep->bitp(), Const));
             if (VN_IS(itemp, Const)) {
                 const V3Number& num = VN_AS(itemp, Const)->num();
                 VL_DO_DANGLING(replaceNum(nodep, num), nodep);
@@ -3529,7 +3544,8 @@ class ConstVisitor final : public VNVisitor {
             // The selected element, when under a constant select of an array
             const AstConsArray* const consp = VN_CAST(valuep, ConsArray);
             const AstNode* const selItemp
-                = (m_selp && consp) ? consp->valuep(m_selp->bitConst()) : nullptr;
+                = (m_selp && consp) ? constArrayElementp(consp, VN_AS(m_selp->bitp(), Const))
+                                    : nullptr;
             if (nodep->access().isReadOnly() && valuep
                 && ((!m_params  // Can reduce constant wires into equations
                      && m_doNConst && v3Global.opt.fConst() && nodep->varp()->isConst())
@@ -3813,6 +3829,8 @@ class ConstVisitor final : public VNVisitor {
         if (m_wremove && !m_params && m_doNConst && m_modp && operandConst(nodep->rhsp())
             && !VN_AS(nodep->rhsp(), Const)->num().isFourState()
             && varrefp  // Don't do messes with BITREFs/ARRAYREFs
+            // A constant to an unpacked array is an error, left for V3Slice to report
+            && !VN_IS(varrefp->dtypep()->skipRefp(), UnpackArrayDType)
             && !varrefp->varp()->hasStrengthAssignment()  // Strengths are resolved in V3Tristate
             && !varrefp->varp()->isWiredNet()  // Wired drivers are merged in V3Tristate
             && !varrefp->varp()->valuep()  // Not already constified

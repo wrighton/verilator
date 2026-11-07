@@ -86,7 +86,7 @@ module t;
   // cpA is crossed, so the guard also runs for a cross-fed coverpoint.
   covergroup cg9;
     cpA: coverpoint wide {
-      bins cumulative[] = {[0 : 600], [0 : 600]};
+      bins cumulative[] = {[0 : 600], [601 : 1200]};
       bins ok = {5};
     }
     cpB: coverpoint sel {
@@ -121,8 +121,8 @@ module t;
     x: cross cpX, cpY{bins mid = binsof (cpX) intersect {[2 : 3]};}
   endgroup
 
-  // cg13: [-1 : 3] holds only 0..3, like [0 : 3], so data 1 hits a[1], a[5] and b; each hit
-  // also reaches the cross
+  // cg13: [-1 : 3] holds only 0..3, so [0 : 3] adds no bins (IEEE 1800-2023 19.5.1): data 1
+  // hits a[1] and b; each hit also reaches the cross
   covergroup cg13;
     cp: coverpoint data {
       bins a[] = {[-1 : 3], [0 : 3]};
@@ -145,10 +145,26 @@ module t;
     x: cross cp, cps;
   endgroup
 
-  // cg15: an array bin of a real coverpoint has one bin per value
+  // cg15: an array bin of a real coverpoint has one bin per value, compared as real
   covergroup cg15;
     cp: coverpoint rdata {
-      bins v[] = {1.5, 2.5};
+      bins v[] = {1.5, 2.5, 65'd5};
+      bins w = {66'd7};
+    }
+  endgroup
+
+  // cg16: a value listed again names no further bin, as in the IEEE 1800-2023 19.5.1 example:
+  // 65 bins for 127..191, then 1..12 as 5, 1..4, 6..10 and 12
+  covergroup cg16;
+    cp: coverpoint data {
+      bins b[] = {[127 : 150], [148 : 191], 5, [1 : 10], 9, 12};
+    }
+    cps: coverpoint sdata {
+      bins s[] = {[-5 : 5], [-2 : 7]};
+    }
+    // Real coverpoint: 8 bins, for 1.5, 2.5, 2, 1, 3, -1, and 4'b1x00 twice
+    cpr: coverpoint rdata {
+      bins r[] = {1.5, 2.5, 1.5, 2, [1 : 3], 4'd3, -1, -1, 4'b1x00, 4'b1x00};
     }
   endgroup
 
@@ -168,6 +184,7 @@ module t;
     cg13 cg13_inst;
     cg14 cg14_inst;
     cg15 cg15_inst;
+    cg16 cg16_inst;
 
     cg_inst = new();
     cg2_inst = new();
@@ -184,6 +201,7 @@ module t;
     cg13_inst = new();
     cg14_inst = new();
     cg15_inst = new();
+    cg16_inst = new();
 
     // Hit first array bin value (1)
     data = 1;
@@ -304,7 +322,26 @@ module t;
     // Hit cg15: v[1] holds 2.5
     rdata = 2.5;
     cg15_inst.sample();
-    `checkr(cg15_inst.get_inst_coverage(), 50.0);
+    `checkr(cg15_inst.get_inst_coverage(), 25.0);
+    rdata = 5.0;
+    cg15_inst.sample();
+    rdata = 7.0;
+    cg15_inst.sample();
+    `checkr(cg15_inst.get_inst_coverage(), 75.0);
+
+    // Hit cg16: 3 of 76 bins of cp, 2 of 13 of cps, 1 of 8 of cpr
+    rdata = 2.5;
+    data = 148;
+    sdata = -2;
+    cg16_inst.sample();
+    data = 5;
+    sdata = 6;
+    cg16_inst.sample();
+    data = 9;
+    cg16_inst.sample();
+    `checkr(cg16_inst.cp.get_inst_coverage(), 100.0 * (3.0 / 76));
+    `checkr(cg16_inst.cps.get_inst_coverage(), 100.0 * (2.0 / 13));
+    `checkr(cg16_inst.cpr.get_inst_coverage(), 100.0 / 8);
 
     $write("*-* All Finished *-*\n");
     $finish;

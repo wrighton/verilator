@@ -68,6 +68,24 @@ module t (
     qs[1:2] <= q;
   end
 
+  // Stream of a queue into a slice, of wider elements, reversed, and continuously assigned
+  logic [15:0] qsl[4];
+  logic [7:0] qdsc[3:0];
+  byte bq[$];
+  byte bq2[$];
+  logic [7:0] cq[4];
+  always @(posedge clk) begin
+    bq = '{w[7:0], w[15:8], w[23:16], w[31:24]};
+    qsl <= '{default: 0};
+    qsl[1:2] <= {>>{bq}};
+    bq2 <= '{w[7:0], w[15:8]};
+    qdsc <= '{default: 0};
+    qdsc[2:1] <= {<<8{bq[0:1]}};
+  end
+  assign cq[1:2] = {>>{bq2}};
+  assign cq[0] = 8'h0;
+  assign cq[3] = 8'h0;
+
   // Slices of unpacked structure elements
   typedef struct {
     logic [3:0] a;
@@ -100,6 +118,28 @@ module t (
   always_comb vpacked = {>>{varr[pos+:2]}};
   always_comb vdpacked = {>>{vdsc[pos+2+:2]}};
 
+  // A variable slice partly out of range is invalid as a whole, for elements of any type
+  typedef struct {
+    bit [3:0] a;
+    bit [3:0] b;
+  } bs_t;
+  bs_t os[5];
+  bit [7:0] ol[5];
+  logic [15:0] opacked;
+  int opos = 4;
+  initial begin
+    os = '{default: '{4'h1, 4'h2}};
+    ol = '{default: 8'h12};
+    {>>{os[opos+:2]}} = 16'h3456;
+    {>>{ol[opos+:2]}} = 16'h3456;
+    `checkh({os[4].a, os[4].b}, 8'h12);
+    `checkh(ol[4], 8'h12);
+    opacked = {>>{os[opos+:2]}};
+    `checkh(opacked, 16'h0);
+    opacked = {>>{ol[opos+:2]}};
+    `checkh(opacked, 16'h0);
+  end
+
   logic [31:0] w_d;  // w of the previous cycle
   logic [2:0] pos_d;  // pos of the previous cycle
   always @(posedge clk) begin
@@ -130,6 +170,16 @@ module t (
       `checkh(qs[1], w_d[7:0]);
       `checkh(qs[2], w_d[15:8]);
       `checkh(qs[3], 8'h0);
+      `checkh(qsl[0], 16'h0);
+      `checkh(qsl[1], {w_d[7:0], w_d[15:8]});
+      `checkh(qsl[2], {w_d[23:16], w_d[31:24]});
+      `checkh(qsl[3], 16'h0);
+      `checkh(qdsc[3], 8'h0);
+      `checkh(qdsc[2], w_d[15:8]);
+      `checkh(qdsc[1], w_d[7:0]);
+      `checkh(qdsc[0], 8'h0);
+      `checkh(cq[1], w_d[7:0]);
+      `checkh(cq[2], w_d[15:8]);
       `checkh({sarr[0].a, sarr[0].b}, 8'h0);
       `checkh({sarr[1].a, sarr[1].b}, w_d[15:8]);
       `checkh({sarr[2].a, sarr[2].b}, w_d[7:0]);

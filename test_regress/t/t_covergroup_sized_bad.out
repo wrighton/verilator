@@ -1,66 +1,78 @@
-%Error: t/t_covergroup_sized_bad.v:22:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
-                                        : ... note: In instance 't'
-   22 |       bins param_value[2] = {UNBOUNDED};   
-      |            ^~~~~~~~~~~
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_covergroup_sized_bad.v:23:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
                                         : ... note: In instance 't'
-   23 |       bins value = {$};   
-      |            ^~~~~
-%Error: t/t_covergroup_sized_bad.v:24:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
-                                        : ... note: In instance 't'
-   24 |       bins array_value[] = {1, $};   
+   23 |       bins param_value[2] = {UNBOUNDED};   
       |            ^~~~~~~~~~~
-%Error: t/t_covergroup_sized_bad.v:25:19: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
-                                        : ... note: In instance 't'
-   25 |       ignore_bins ignore_value = {UNBOUNDED};   
-      |                   ^~~~~~~~~~~~
-%Error: t/t_covergroup_sized_bad.v:26:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
-                                        : ... note: In instance 't'
-   26 |       bins value_with = {$} with (item > 1);   
-      |            ^~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_covergroup_sized_bad.v:27:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
                                         : ... note: In instance 't'
-   27 |       bins param_with = {1, UNBOUNDED} with (item > 0);   
-      |            ^~~~~~~~~~
-%Error: t/t_covergroup_sized_bad.v:16:17: Bins array size must be >= 1, got 0 (IEEE 1800-2023 19.5.1)
+   27 |       bins value = {$};   
+      |            ^~~~~
+%Error: t/t_covergroup_sized_bad.v:28:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
                                         : ... note: In instance 't'
-   16 |       bins zero[0] = {[0 : 3]};   
+   28 |       bins array_value[] = {1, $};   
+      |            ^~~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:29:19: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   29 |       ignore_bins ignore_value = {UNBOUNDED};   
+      |                   ^~~~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:30:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   30 |       bins value_with = {$} with (item > 1);   
+      |            ^~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:31:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   31 |       bins param_with = {1, UNBOUNDED} with (item > 0);   
+      |            ^~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:17:17: Bins array size must be >= 1, got 0 (IEEE 1800-2023 19.5.1)
+                                        : ... note: In instance 't'
+   17 |       bins zero[0] = {[0 : 3]};   
       |                 ^
-%Error: t/t_covergroup_sized_bad.v:17:21: Bins array size must be >= 1, got -1 (IEEE 1800-2023 19.5.1)
+%Error: t/t_covergroup_sized_bad.v:18:21: Bins array size must be >= 1, got -1 (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
-   17 |       bins negative[-1] = {[0 : 3]};   
+   18 |       bins negative[-1] = {[0 : 3]};   
       |                     ^
-%Error: t/t_covergroup_sized_bad.v:18:21: Bins array size must be integral (IEEE 1800-2023 19.5.1)
+%Error: t/t_covergroup_sized_bad.v:19:21: Bins array size must be integral (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
-   18 |       bins fraction[1.5] = {[0 : 3]};   
+   19 |       bins fraction[1.5] = {[0 : 3]};   
       |                     ^~~
-%Error: t/t_covergroup_sized_bad.v:21:12: Bins array size must be integral, not '$' (IEEE 1800-2023 19.5.1)
+%Error: t/t_covergroup_sized_bad.v:22:12: Bins array size must be integral, not '$' (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
-   21 |       bins param_size[UNBOUNDED] = {[0 : 3]};   
+   22 |       bins param_size[UNBOUNDED] = {[0 : 3]};   
       |            ^~~~~~~~~~
-%Error: t/t_covergroup_sized_bad.v:19:29: Four-state (x/z) value in array bins range bound; range bounds must be two-state constants
+%Error: t/t_covergroup_sized_bad.v:24:21: Bins array size must be >= 1, got 0 (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
-   19 |       bins four_state[2] = {[4'b000x : 4'hf]};   
+   24 |       bins set_zero[0] = values;   
+      |                     ^
+%Error: t/t_covergroup_sized_bad.v:25:25: Bins array size must be >= 1, got -1 (IEEE 1800-2023 19.5.1)
+                                        : ... note: In instance 't'
+   25 |       bins set_negative[-1] = values;   
+      |                         ^
+%Error: t/t_covergroup_sized_bad.v:26:12: Bins array size must be integral, not '$' (IEEE 1800-2023 19.5.1)
+                                        : ... note: In instance 't'
+   26 |       bins set_unbounded[UNBOUNDED] = values;   
+      |            ^~~~~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:20:29: Four-state (x/z) value in array bins range bound; range bounds must be two-state constants
+                                        : ... note: In instance 't'
+   20 |       bins four_state[2] = {[4'b000x : 4'hf]};   
       |                             ^
-%Error: t/t_covergroup_sized_bad.v:20:31: Four-state (x/z) value in bin range bound; range bounds must be two-state constants
+%Error: t/t_covergroup_sized_bad.v:21:31: Four-state (x/z) value in bin range bound; range bounds must be two-state constants
                                         : ... note: In instance 't'
-   20 |       bins four_state_with = {[4'b000x : 4'hf]} with (1);   
+   21 |       bins four_state_with = {[4'b000x : 4'hf]} with (1);   
       |                               ^
-%Error: t/t_covergroup_sized_bad.v:37:46: Cross bin 'matches' count must be >= 1, got 0 (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:41:46: Cross bin 'matches' count must be >= 1, got 0 (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   37 |       bins zero = xx with (aa == bb) matches 0;   
+   41 |       bins zero = xx with (aa == bb) matches 0;   
       |                                              ^
-%Error: t/t_covergroup_sized_bad.v:38:50: Cross bin 'matches' count must be >= 1, got -1 (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:42:50: Cross bin 'matches' count must be >= 1, got -1 (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   38 |       bins negative = xx with (aa == bb) matches -1;   
+   42 |       bins negative = xx with (aa == bb) matches -1;   
       |                                                  ^
-%Error: t/t_covergroup_sized_bad.v:39:50: Cross bin 'matches' count must be integral (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:43:50: Cross bin 'matches' count must be integral (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   39 |       bins fraction = xx with (aa == bb) matches 1.5;   
+   43 |       bins fraction = xx with (aa == bb) matches 1.5;   
       |                                                  ^~~
-%Error: t/t_covergroup_sized_bad.v:40:52: Cross bin 'matches' count must be >= 1, got b1x (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:44:52: Cross bin 'matches' count must be >= 1, got b1x (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   40 |       bins four_state = xx with (aa == bb) matches 2'b1x;   
+   44 |       bins four_state = xx with (aa == bb) matches 2'b1x;   
       |                                                    ^~~~~
 %Error: Exiting due to

@@ -1,14 +1,45 @@
 %Error-PINNOTFOUND: t/t_lint_pinnotfound_bad.v:11:19: Pin not found: 'x'
+                                                    : ... note: In instance 'a'
    11 |       b b_inst1 (.x(1'b0));   
       |                   ^
                                                     : ... Location of instance's module declaration
-   17 | module b;
+   28 | module b;
       |        ^
                     ... For error description see https://verilator.org/warn/PINNOTFOUND?v=latest
 %Error-PINNOTFOUND: t/t_lint_pinnotfound_bad.v:12:12: Parameter not found: 'PX'
+                                                    : ... note: In instance 'a'
    12 |       b #(.PX(1'b0)) b_inst2 ();   
       |            ^~
                                                     : ... Location of instance's module declaration
-   17 | module b;
+   28 | module b;
       |        ^
+%Error-PINNOTFOUND: t/t_lint_pinnotfound_bad.v:13:19: Parameter not found: 'PW'
+                                                    : ... note: In instance 'a'
+                                                    : ... Suggested alternative: 'W'
+   13 |       c #(.W(2), .PW(1)) c_inst ();   
+      |                   ^~
+                                                    : ... Location of instance's module declaration
+   31 | module c;
+      |        ^
+%Error-PINNOTFOUND: t/t_lint_pinnotfound_bad.v:17:27: Pin not found: 'y'
+                                                    : ... note: In instance 'a'
+   17 |     b #(.PY(i)) b_inst3 (.y(1'b0));
+      |                           ^
+                                                    : ... Location of instance's module declaration
+   28 | module b;
+      |        ^
+%Error-PINNOTFOUND: t/t_lint_pinnotfound_bad.v:17:10: Parameter not found: 'PY'
+                                                    : ... note: In instance 'a'
+   17 |     b #(.PY(i)) b_inst3 (.y(1'b0));
+      |          ^~
+                                                    : ... Location of instance's module declaration
+   28 | module b;
+      |        ^
+%Error-PINNOTFOUND: t/t_lint_pinnotfound_bad.v:20:15: Parameter not found: 'PZ'
+                                                    : ... note: In instance 'a'
+   20 |     1: ifc #(.PZ(1)) ifc_inst ();
+      |               ^~
+                                                    : ... Location of instance's interface declaration
+   25 | interface ifc;
+      |           ^~~
 %Error: Exiting due to

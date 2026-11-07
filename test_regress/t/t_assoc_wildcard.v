@@ -111,6 +111,38 @@ module t (
       `checkh(y, {64'h1234, 64'h5678});
     end
 
+    begin
+      // Keys with zero bytes are distinct, and a value is the same key at any width
+      static int z[*] = '{0: 10, 1: 11, 256: 12, 65'h1_0000_0000_0000_0000: 13};
+      int k;
+      string sk;
+      k = cyc + 256;
+      sk = "\001";
+      `checkh(z[sk], 11);
+      `checkh(z.num(), 4);
+      `checkh(z[k], 12);
+      `checkh(z[k - 255], 11);
+      `checkh(z[8'd1], 11);
+      `checkh(z[0], 10);
+      `checkh(z[1'b0], 10);
+      `checkh(z[""], 10);
+      z[k + 1] = 14;
+      z[{k, 8'd0}] = 15;
+      z[65'h1_0000_0000_0000_0000] = 16;
+      z[{k, 64'd0}] = 17;
+      `checkh(z.num(), 7);
+      `checkh(z[257], 14);
+      `checkh(z[32'h10000], 15);
+      `checkh(z[65'h1_0000_0000_0000_0000], 16);
+      `checkh(z[96'h100_0000_0000_0000_0000], 17);
+      `checkh(z[k - 256], 10);
+      `checkh(z.exists(k * 256), 1);
+      `checkh(z.exists(k * 512), 0);
+      z.delete(k);
+      `checkh(z.exists(256), 0);
+      `checkh(z.num(), 6);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
