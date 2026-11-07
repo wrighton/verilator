@@ -420,6 +420,12 @@ public:
     bool next_check_only(VlRNGReseeds& rngr);
     /// Finds the sizes of the arrays for a final next(), without advancing randc cycles
     bool next_size(VlRNGReseeds& rngr);
+    /// Continue the randc cycles of another randomizer, which solved for the same object
+    void randc_history_from(const VlRandomizer& other) {
+        m_randcUsedValues = other.m_randcUsedValues;
+        m_randcConstraintHash = other.m_randcConstraintHash;
+        m_sizeSolved = other.m_sizeSolved;
+    }
 
     // ---  Process the key for associative array  ---
 
