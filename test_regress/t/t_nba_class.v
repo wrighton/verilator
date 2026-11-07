@@ -47,21 +47,30 @@ module t;
   // through a handle, also one read from a dynamic array
   Cls #(int) c = new;
   Cls #(int) cs[];
+  // A dynamic array nested in a fixed array only supplies the object handle.
+  // Preserve the formerly rejected handle/part-select cases as legal NBA checks.
+  Cls #(int) matrix[2][];
   initial begin
     cs = new[1];
     cs[0] = new;
+    matrix[0] = new[1];
+    matrix[0][0] = new;
   end
   always @(posedge clk) begin
     c.set_x(cyc);
     c.set_b(cyc);
     c.y <= cyc;
     cs[0].x <= cyc;
+    matrix[0][0].x <= cyc;
+    matrix[0][0].y[3:0] <= cyc[3:0];
     // Not before the NBA region
     if (cyc > 0) begin
       `checkd(c.x, cyc - 1);
       `checkd(c.b, cyc - 1);
       `checkd(c.y, cyc - 1);
       `checkd(cs[0].x, cyc - 1);
+      `checkd(matrix[0][0].x, cyc - 1);
+      `checkd(matrix[0][0].y, (cyc - 1) & 15);
     end
   end
   initial
@@ -71,6 +80,8 @@ module t;
       `checkd(c.b, cyc - 1);
       `checkd(c.y, cyc - 1);
       `checkd(cs[0].x, cyc - 1);
+      `checkd(matrix[0][0].x, cyc - 1);
+      `checkd(matrix[0][0].y, (cyc - 1) & 15);
     end
 
   // In the order they executed, also from a fork, and with an intra-assignment delay
