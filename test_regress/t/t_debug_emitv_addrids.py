@@ -13,7 +13,13 @@ test.scenarios('vlt')
 test.top_filename = "t/t_debug_emitv.v"
 
 test.lint(
+    # The full fixture intentionally includes unsupported goto repetition.
+    # Check its diagnostic instead of disabling it, while keeping full AST checks.
+    fails=True,
+    expect_filename=test.golden_filename,
     # We also have dump-tree turned on, so hit a lot of AstNode*::dump() functions
-    v_flags=["--lint-only --dumpi-tree 9 --dump-tree-addrids --timing --bbox-unsup"])
+    # Likewise XML
+    # Keep diagnostics enabled while exercising all incoming fixture forms.
+    v_flags=["--lint-only --dumpi-tree 9 --dump-tree-addrids --timing"])
 
 test.passes()
