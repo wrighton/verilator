@@ -105,12 +105,156 @@ module t (
   assert property (@(posedge clk) disable iff (cyc < 2) p_top)
   else count_fail13 <= count_fail13 + 1;
 
+  // Test 14-28: multi-cycle bodies of nested instances, each vs its inline body
+  int count_fail14 = 0;
+  int count_fail15 = 0;
+  int count_fail16 = 0;
+  int count_fail17 = 0;
+  int count_fail18 = 0;
+  int count_fail19 = 0;
+  int count_fail20 = 0;
+  int count_fail21 = 0;
+  int count_fail22 = 0;
+  int count_fail23 = 0;
+  int count_fail24 = 0;
+  int count_fail25 = 0;
+  int count_fail26 = 0;
+  int count_fail27 = 0;
+  int count_fail28 = 0;
+
+  property p_seq;
+    b ##1 c;
+  endproperty
+
+  sequence s_bc;
+    b ##1 c;
+  endsequence
+
+  // Body is only a named sequence instance
+  property p_sref;
+    s_bc;
+  endproperty
+
+  property p_ovl(logic x, logic y);
+    x |=> y;
+  endproperty
+
+  property p_rep;
+    b [* 2];
+  endproperty
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> p_seq)
+  else count_fail14 <= count_fail14 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> p_sref)
+  else count_fail15 <= count_fail15 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> (b ##1 c))
+  else count_fail16 <= count_fail16 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) not p_seq)
+  else count_fail17 <= count_fail17 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) not (b ##1 c))
+  else count_fail18 <= count_fail18 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> p_ovl(b, c))
+  else count_fail19 <= count_fail19 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> (b |=> c))
+  else count_fail20 <= count_fail20 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) c |-> p_rep)
+  else count_fail21 <= count_fail21 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) c |-> b [* 2])
+  else count_fail22 <= count_fail22 + 1;
+
+  // Under property if and if/else
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) p_seq)
+  else count_fail23 <= count_fail23 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) (b ##1 c))
+  else count_fail24 <= count_fail24 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) p_seq else p_b)
+  else count_fail25 <= count_fail25 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) (b ##1 c) else b)
+  else count_fail26 <= count_fail26 + 1;
+
+  // Body is only an instance whose multi-cycle body uses a formal as a range bound
+  property p_rng(r);
+    a |-> ##[1:r] b;
+  endproperty
+
+  property p_rng_outer(r);
+    p_rng(r);
+  endproperty
+
+  assert property (@(posedge clk) disable iff (cyc < 2) p_rng_outer(2))
+  else count_fail27 <= count_fail27 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> ##[1:2] b)
+  else count_fail28 <= count_fail28 + 1;
+
   // Cover: nested instance vs inline body, counted only with --coverage
   cover property (@(posedge clk) disable iff (cyc < 2) a |-> p_b)
     count_cover_nested <= count_cover_nested + 1;
 
   cover property (@(posedge clk) disable iff (cyc < 2) a |-> b)
     count_cover_inline <= count_cover_inline + 1;
+
+  // Test 29-32: the whole body of a clocked property is a property instance, directly
+  // or through a chain, compared with the flat property and a reference model.
+  // Sum of failing cycles checks when each failure is reported, not just how many.
+  int fail_cycs29 = 0;
+  int fail_cycs30 = 0;
+  int fail_cycs31 = 0;
+  int fail_cycs32 = 0;
+  int ref_fail_cycs29 = 0;
+  int ref_fail_cycs31 = 0;
+  // Nonvacuous attempts do not overlap, so each cycle has at most one failure
+  wire a4 = a & (cyc[1:0] == 0);
+
+  property p_imp_seq;
+    a4 |-> b ##1 c;
+  endproperty
+
+  property p_clk_seq;
+    @(posedge clk) disable iff (cyc < 2) p_imp_seq;
+  endproperty
+
+  property p_imp_rep;
+    @(posedge clk) disable iff (cyc < 2) a4 |=> b [* 2];
+  endproperty
+
+  property p_via_rep;
+    p_imp_rep;
+  endproperty
+
+  property p_clk_via_rep;
+    p_via_rep;
+  endproperty
+
+  assert property (p_clk_seq)
+  else fail_cycs29 += cyc;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a4 |-> b ##1 c)
+  else fail_cycs30 += cyc;
+
+  assert property (p_clk_via_rep)
+  else fail_cycs31 += cyc;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a4 |=> b [* 2])
+  else fail_cycs32 += cyc;
+
+  always @(posedge clk) begin
+    if (cyc >= 2 && a4 && !b) ref_fail_cycs29 += cyc;
+    if (cyc >= 3 && $past(a4) && $past(b) && !c) ref_fail_cycs29 += cyc;
+    if (cyc >= 3 && $past(a4) && !b) ref_fail_cycs31 += cyc;
+    if (cyc >= 4 && $past(a4, 2) && $past(b) && !b) ref_fail_cycs31 += cyc;
+  end
 
   // Stimulus on negedge so properties sample stable values (see #7545)
   always @(negedge clk) begin
@@ -137,6 +281,27 @@ module t (
       `checkd(count_fail11, 8);
       `checkd(count_fail12, 8);
       `checkd(count_fail13, 8);
+      `checkd(count_fail14, 27);
+      `checkd(count_fail15, 27);
+      `checkd(count_fail16, 27);
+      `checkd(count_fail17, 26);
+      `checkd(count_fail18, 26);
+      `checkd(count_fail19, 11);
+      `checkd(count_fail20, 11);
+      `checkd(count_fail21, 30);
+      `checkd(count_fail22, 30);
+      `checkd(count_fail23, 27);
+      `checkd(count_fail24, 27);
+      `checkd(count_fail25, 52);
+      `checkd(count_fail26, 52);
+      `checkd(count_fail27, 9);
+      `checkd(count_fail28, 9);
+      `checkd(ref_fail_cycs29, 438);
+      `checkd(ref_fail_cycs31, 462);
+      `checkd(fail_cycs29, ref_fail_cycs29);
+      `checkd(fail_cycs30, ref_fail_cycs29);
+      `checkd(fail_cycs31, ref_fail_cycs31);
+      `checkd(fail_cycs32, ref_fail_cycs31);
 `ifdef TEST_COVERAGE
       `checkd(count_cover_nested, 28);
       `checkd(count_cover_inline, 28);

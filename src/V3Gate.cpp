@@ -38,6 +38,10 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 constexpr uint32_t GATE_DEDUP_MAX_DEPTH = 20;
+// Graph edge weight of a read in a loop, as it may be evaluated many times. An edge weight
+// at least this marks a read in a loop, assuming fewer reads outside loops of a variable by
+// one logic block.
+constexpr int GATE_LOOP_READ_WEIGHT = 1 << 10;
 
 //######################################################################
 // Gate graph classes
@@ -203,6 +207,7 @@ class GateBuildVisitor final : public VNVisitorConst {
     bool m_inStaticActive = false;  // Underneath static active
     bool m_inInitialActive = false;  // Underneath initial active
     bool m_inSenItem = false;  // Underneath AstSenItem; any varrefs are clocks
+    bool m_inLoop = false;  // Underneath AstLoop
 
     // METHODS
     void checkNode(AstNode* nodep) {
@@ -299,10 +304,17 @@ class GateBuildVisitor final : public VNVisitorConst {
             }
         }
 
-        // We use weight of one; if we ref the var more than once, when we simplify,
-        // the weight will increase
+        // We use weight of one, or GATE_LOOP_READ_WEIGHT for a read in a loop; if we ref
+        // the var more than once, when we simplify, the weights are added
         if (nodep->access().isWriteOrRW()) m_graphp->addEdge(m_logicVertexp, vVtxp, 1);
-        if (nodep->access().isReadOrRW()) m_graphp->addEdge(vVtxp, m_logicVertexp, 1);
+        if (nodep->access().isReadOrRW()) {
+            m_graphp->addEdge(vVtxp, m_logicVertexp, m_inLoop ? GATE_LOOP_READ_WEIGHT : 1);
+        }
+    }
+    void visit(AstLoop* nodep) override {
+        VL_RESTORER(m_inLoop);
+        m_inLoop = true;
+        iterateChildrenConst(nodep);
     }
     void visit(AstConcat* nodep) override {
         UASSERT_OBJ(!(VN_IS(nodep->backp(), NodeAssign)
@@ -594,7 +606,8 @@ class GateInline final {
         // Don't inline on first round if reads more than one variable
         if (nReads > 1 && !allowMultiIn) return false;
         // Reads multiple variables, or is expensive to compute.
-        // Inline if used only once, ignoring slow code, or dead code that can be deleted.
+        // Inline if used only once, outside loops, ignoring slow code, or dead code that can be
+        // deleted.
         int n = 0;
         for (V3GraphEdge& edge : vVtxp->outEdges()) {
             const GateLogicVertex* const dstVtxp = edge.top()->as<GateLogicVertex>();
@@ -771,11 +784,14 @@ class GateInline final {
 
                 recordSubstitution(vscp, substp, dstVtxp->nodep());
 
+                // If the replaced read was in a loop, so are the new reads
+                const int weight
+                    = edgep->weight() >= GATE_LOOP_READ_WEIGHT ? GATE_LOOP_READ_WEIGHT : 1;
                 // If the new replacement referred to a signal,
                 // Correct the graph to point to this new generating variable
                 for (AstVarScope* const newVscp : okVisitor.readVscps()) {
                     GateVarVertex* const varvertexp = m_graph.makeVarVertex(newVscp);
-                    m_graph.addEdge(varvertexp, dstVtxp, 1);
+                    m_graph.addEdge(varvertexp, dstVtxp, weight);
                     // Propagate clock attribute onto generating node
                     varvertexp->propagateAttrFrom(vVtxp);
                 }
@@ -830,9 +846,6 @@ class GateDedupeHash final : public V3DupFinderUserSame {
     // NODE STATE
     // VNUser2InUse    m_inuser2;      (Allocated in GateDedupe)
     struct AuxAstNodeExpr final {
-        // AstActive* of assign, for isSame() in test for duplicate. Set to nullptr if this
-        // assign's tree was later replaced
-        AstActive* activep = nullptr;
         // AstNodeExpr* of assign if condition, for isSame() in test for duplicate. Set to nullptr
         // if this assign's tree was later replaced
         AstNodeExpr* condp = nullptr;
@@ -844,27 +857,11 @@ class GateDedupeHash final : public V3DupFinderUserSame {
     AstNodeExpr* m_currRhsp = nullptr;  // Current node we are searching for duplicates of
     AuxAstNodeExpr m_auxCurRhsp;  // Aux of current node
 
-    V3DupFinder m_dupFinder;  // Duplicate finder for rhs of assigns
+    const V3Hasher m_hasher;  // Hasher for the duplicate finders
+    // Duplicate finder for rhs of assigns, per AstActive of the assign
+    std::unordered_map<const AstActive*, V3DupFinder> m_dupFinders;
 
     static bool same(AstNode* node1p, AstNode* node2p) {
-        // Regarding the complexity of this function 'same':
-        // Applying this comparison function to a a set of n trees pairwise is O(n^2) in the
-        // number of comparisons (number of pairs). AstNode::sameTree itself, is O(sizeOfTree) in
-        // the worst case, which happens if the operands of sameTree are indeed identical copies,
-        // which means this line is O(n^2*sizeOfTree), iff you are comparing identical copies of
-        // the same tree. In practice the identity comparison over the pointers, and the short
-        // circuiting in sameTree means that for comparing the same tree instance to itself, or
-        // trees of different types/shapes is a lot closer to O(1), so this 'same' function is
-        // Omega(n^2) and O(n^2*sizeOfTree), and in practice as we are mostly comparing the same
-        // instance to itself or different trees, the complexity should be closer to the lower
-        // bound.
-        //
-        // Also if you see where this 'same' function is used within isSame, it's only ever
-        // comparing AstActive nodes, which are very likely not to compare equals (and for the
-        // purposes of V3Gate, we probably only care about them either being identical instances,
-        // or having the same sensitivities anyway, so if this becomes a problem, it can be
-        // improved which should also speed things up), and AstNodeExpr for if conditions, which
-        // are hopefully small.
         return node1p == node2p || (node1p && node1p->sameTree(node2p));
     }
 
@@ -873,7 +870,6 @@ class GateDedupeHash final : public V3DupFinderUserSame {
         UASSERT_OBJ(node1p == m_currRhsp, m_currRhsp, "Comparing to unexpected node");
         const auto& aux2 = m_auxNodeExpr(VN_AS(node2p, NodeExpr));
         return m_auxCurRhsp.parentp->type() == aux2.parentp->type()  //
-               && same(m_auxCurRhsp.activep, aux2.activep)  //
                && same(m_auxCurRhsp.condp, aux2.condp);
     }
 
@@ -883,18 +879,21 @@ public:
 
     const AstNodeAssign* hashAndFindDupe(AstNodeAssign* assignp, AstActive* activep,
                                          AstNodeExpr* condp) {
-        // Legal for activep to be nullptr, we'll compare with other assigns with also nullptr
+        // Only assigns under the same AstActive are duplicates, so each has its own finder.
+        // A different AstActive with the same logic would mean a second driver of the lhs, so
+        // comparing AstActives by identity is the same as comparing their trees. Legal for
+        // activep to be nullptr, we'll compare with other assigns with also nullptr.
+        V3DupFinder& dupFinder = m_dupFinders.emplace(activep, m_hasher).first->second;
         m_currRhsp = assignp->rhsp();
-        m_auxCurRhsp.activep = activep;
         m_auxCurRhsp.condp = condp;
         m_auxCurRhsp.parentp = assignp;
 
         // Check for a duplicate, if found return its assignment
-        const auto it = m_dupFinder.findDuplicate(m_currRhsp, this);
-        if (it != m_dupFinder.end()) return m_auxNodeExpr(VN_AS(it->second, NodeExpr)).parentp;
+        const auto it = dupFinder.findDuplicate(m_currRhsp, this);
+        if (it != dupFinder.end()) return m_auxNodeExpr(VN_AS(it->second, NodeExpr)).parentp;
 
         // Insert new node
-        m_dupFinder.insert(m_currRhsp);
+        dupFinder.insert(m_currRhsp);
         m_auxNodeExpr(m_currRhsp) = m_auxCurRhsp;
         return nullptr;
     }
@@ -1011,6 +1010,35 @@ class GateDedupe final {
     size_t m_statDedupLogic = 0;  // Statistic tracking
     GateDedupeVarVisitor m_varVisitor;  // Looks for a dupe of the logic
     uint32_t m_depth = 0;  // Iteration depth
+    // Consumer logic -> its deduplicated input variable -> replacement reference
+    std::unordered_map<AstNode*, std::unordered_map<const AstVarScope*, AstNodeVarRef*>> m_pending;
+
+    // Replace the references to deduplicated variables in one consumer logic block
+    void commitSubstitutions(AstNode* consumerp) {
+        // Done once per consumer for all of its deduplicated inputs, as walking the consumer
+        // once per input is quadratic when many deduplicated signals feed one consumer
+        const auto pendingIt = m_pending.find(consumerp);
+        if (pendingIt == m_pending.end()) return;
+        const auto& subs = pendingIt->second;
+        consumerp->foreach([&](AstNodeVarRef* refp) {
+            const auto it = subs.find(refp->varScopep());
+            if (it == subs.end()) return;
+
+            UASSERT_OBJ(refp->access().isReadOnly(), refp, "Can't replace a write ref");
+
+            // The replacement
+            AstNodeVarRef* const newp = it->second->cloneTreePure(false);
+            // A VARREF should point to the original as it's otherwise confusing to throw
+            // warnings that point to a PIN rather than where the pin is used.
+            newp->fileline(refp->fileline());
+            newp->access(VAccess::READ);
+
+            // Replace the node
+            refp->replaceWith(newp);
+            VL_DO_DANGLING(refp->deleteTree(), refp);
+        });
+        m_pending.erase(pendingIt);
+    }
 
     void visit(GateVarVertex* vVtxp) {
         // Break loops; before user2 set so hit this vertex later
@@ -1052,23 +1080,8 @@ class GateDedupe final {
             if (lVtxp == consumerVtxp) {
                 UINFO(9, "skipping as self-recirculates");
             } else {
-                // Substitute consumer logic
-                consumerp->foreach([&](AstNodeVarRef* refp) {
-                    if (refp->varScopep() != vVtxp->varScp()) return;
-
-                    UASSERT_OBJ(refp->access().isReadOnly(), refp, "Can't replace a write ref");
-
-                    // The replacement
-                    AstNodeVarRef* const newp = dupRefp->cloneTreePure(false);
-                    // A VARREF should point to the original as it's otherwise confusing to throw
-                    // warnings that point to a PIN rather than where the pin is used.
-                    newp->fileline(refp->fileline());
-                    newp->access(VAccess::READ);
-
-                    // Replace the node
-                    refp->replaceWith(newp);
-                    VL_DO_DANGLING(refp->deleteTree(), refp);
-                });
+                // Substitute consumer logic, before it is next examined (see commitSubstitutions)
+                m_pending[consumerp].emplace(vVtxp->varScp(), dupRefp);
             }
             edgep->relinkFromp(dupVVtxp);
         }
@@ -1086,6 +1099,9 @@ class GateDedupe final {
     // has the same logic input, or nullptr if none
     AstNodeVarRef* visit(GateLogicVertex* lVtxp, const GateVarVertex* consumerVtxp) {
         for (V3GraphEdge& edge : lVtxp->inEdges()) visit(edge.fromp()->as<GateVarVertex>());
+
+        // Its inputs are now deduplicated, substitute them before hashing the logic
+        commitSubstitutions(lVtxp->nodep());
 
         if (lVtxp->dedupable() && consumerVtxp->dedupable()) {
             // TODO: Doing a simple pointer comparison of activep won't work
@@ -1112,6 +1128,13 @@ class GateDedupe final {
                 if (vVtxp->isTop() && vVtxp->varScp()->varp()->isWritable()) visit(vVtxp);
             }
         }
+        // Substitute in the consumers not examined since
+        for (V3GraphVertex& vtx : graph.vertices()) {
+            if (GateLogicVertex* const lVtxp = vtx.cast<GateLogicVertex>()) {
+                commitSubstitutions(lVtxp->nodep());
+            }
+        }
+        UASSERT(m_pending.empty(), "Substitution in logic not in the graph");
     }
 
     ~GateDedupe() { V3Stats::addStat("Optimizations, Gate sigs deduped", m_statDedupLogic); }
@@ -1235,23 +1258,26 @@ class GateUnused final {
 
     // METHODS
 
-    void markRecurse(GateEitherVertex* vtxp) {
-        if (vtxp->user()) return;  // Already marked
-        vtxp->user(true);
-        vtxp->setConsumed("propagated");
-        // Walk sources and mark them too
-        for (V3GraphEdge& edge : vtxp->inEdges()) {
-            GateEitherVertex* const fromVtxp = static_cast<GateEitherVertex*>(edge.fromp());
-            markRecurse(fromVtxp);
-        }
-    }
-
     // Mark all vertices that feed a consumed vertex
     void mark() {
         m_graph.userClearVertices();
+        // With a work list, as recursion overflows the stack on long paths
+        std::vector<GateEitherVertex*> todop;
         for (V3GraphVertex& vtx : m_graph.vertices()) {
             GateEitherVertex& eVtx = static_cast<GateEitherVertex&>(vtx);
-            if (eVtx.consumed()) markRecurse(&eVtx);
+            if (eVtx.consumed()) todop.push_back(&eVtx);
+        }
+        while (!todop.empty()) {
+            GateEitherVertex* const vtxp = todop.back();
+            todop.pop_back();
+            if (vtxp->user()) continue;  // Already marked
+            vtxp->user(true);
+            vtxp->setConsumed("propagated");
+            // Walk sources and mark them too
+            for (V3GraphEdge& edge : vtxp->inEdges()) {
+                GateEitherVertex* const fromVtxp = static_cast<GateEitherVertex*>(edge.fromp());
+                if (!fromVtxp->user()) todop.push_back(fromVtxp);
+            }
         }
     }
 

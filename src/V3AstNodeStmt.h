@@ -1282,7 +1282,7 @@ public:
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
 };
 class AstSetuphold final : public AstNodeStmt {
-    // Verilog $setuphold
+    // Verilog $setuphold, or $recrem (same arguments and delayed signals)
     // @astgen op1 := refevp : AstNodeExpr
     // @astgen op2 := dataevp : AstNodeExpr
     // @astgen op3 := delrefp : Optional[AstNodeExpr]
@@ -1693,6 +1693,7 @@ class AstFork final : public AstNodeBlock {
     // @astgen op3 := forksp : List[AstForkItem]
     const VJoinType m_joinType;  // Join keyword type
     bool m_immediateStart = false;  // Fork starts before its parent blocks or exits
+    bool m_disableWrap = false;  // Created to run a block or task disabled by name as a process
 
 public:
     AstFork(FileLine* fl, VJoinType joinType, const string& name = "")
@@ -1709,6 +1710,8 @@ public:
     VJoinType joinType() const { return m_joinType; }
     bool immediateStart() const { return m_immediateStart; }
     void immediateStart(bool flag) { m_immediateStart = flag; }
+    bool disableWrap() const { return m_disableWrap; }
+    void disableWrap(bool flag) { m_disableWrap = flag; }
 };
 
 // === AstNodeCoverOrAssert ===

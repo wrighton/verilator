@@ -44,6 +44,7 @@
 #include "V3LinkInc.h"
 
 #include "V3LinkLValue.h"
+#include "V3MemberMap.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -56,6 +57,7 @@ class LinkIncVisitor final : public VNVisitor {
     int m_tmpNum = 0;  // Temporary variable name counter
     const char* m_illegalReasonp = nullptr;  // Where ++/-- is illegal, if under such
     bool m_staticTemps = false;  // Temporaries must be static
+    VMemberMap m_memberMap;  // Struct members by name, for V3LinkLValue
 
     // METHODS
     // Return a new temporary of the type of 'typeExprp', declared in the current container
@@ -142,7 +144,7 @@ class LinkIncVisitor final : public VNVisitor {
         AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
         AstNodeExpr* const writep = nodep->lhsp()->cloneTreePure(true);
         AstNodeExpr* const readp = nodep->lhsp()->unlinkFrBack();
-        V3LinkLValue::linkLValueSet(readp, VAccess::READ);
+        V3LinkLValue::linkLValueSet(readp, VAccess::READ, &m_memberMap);
         AstAssign* const assignp
             = new AstAssign{nodep->fileline(), writep, newOperationp(nodep, readp, rhsp)};
         nodep->replaceWith(assignp);
@@ -158,8 +160,8 @@ class LinkIncVisitor final : public VNVisitor {
         AstNode* const hoistedp = hoistIndices(nodep->lhsp());
         AstNodeExpr* const readp = nodep->lhsp();
         AstNodeExpr* const writep = readp->cloneTreePure(true);
-        V3LinkLValue::linkLValueSet(writep);
-        V3LinkLValue::linkLValueSet(readp, VAccess::READ);
+        V3LinkLValue::linkLValueSet(writep, VAccess::WRITE, &m_memberMap);
+        V3LinkLValue::linkLValueSet(readp, VAccess::READ, &m_memberMap);
 
         FileLine* const flp = nodep->fileline();
 
@@ -248,6 +250,26 @@ class LinkIncVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     // VISITORS -- illegal
+    void visit(AstAssignW* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "a continuous assignment (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
+    void visit(AstAssignCont* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "a procedural continuous assignment (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
+    void visit(AstAssignForce* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "a procedural continuous assignment (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
+    void visit(AstCell* nodep) override {
+        VL_RESTORER(m_illegalReasonp);
+        m_illegalReasonp = "an instance connection (IEEE 1800-2023 11.3.6)";
+        iterateChildren(nodep);
+    }
     void visit(AstSenTree* nodep) override {
         VL_RESTORER(m_illegalReasonp);
         m_illegalReasonp = "an event expression (IEEE 1800-2023 11.3.6)";

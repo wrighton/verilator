@@ -1,0 +1,309 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// Bit-stream casts to and from fixed-size unpacked types (IEEE 1800-2023 6.24.3)
+
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
+module sub #(
+    parameter type DATA_T = logic
+) (
+    input clk,
+    input logic [2*$bits(DATA_T)-1:0] rd,
+    input logic byp,
+    input DATA_T src,
+    output DATA_T out1,
+    output DATA_T out0,
+    output DATA_T outb
+);
+  typedef DATA_T pp_array_t[1:0];
+  pp_array_t pp_q;
+  always @(posedge clk) begin
+    pp_q <= pp_array_t'(rd);
+    outb <= byp ? src : DATA_T'(rd[$bits(DATA_T)-1:0]);
+  end
+  assign out1 = pp_q[1];
+  assign out0 = pp_q[0];
+endmodule
+
+module t (
+    input clk
+);
+
+  typedef logic [7:0] v8_t;
+  typedef logic [14:0] v15_t;
+  typedef logic signed [14:0] s15_t;
+  typedef logic [20:0] v21_t;
+  typedef logic [21:0] v22_t;
+  typedef logic [29:0] v30_t;
+  typedef logic [98:0] v99_t;
+  typedef logic [3:0] pair_t[1:0];
+  typedef logic [6:0] asc_t[0:2];
+  typedef logic [32:0] wide_t[3:1];
+  typedef logic [1:0] grid_t[2:1][0:1];
+  typedef logic [1:0] quad_t[4];
+  typedef struct {
+    logic [7:0] a;
+    logic [6:0] b;
+  } us_t;
+  typedef struct packed {
+    logic [7:0] a;
+    logic [6:0] b;
+  } ps_t;
+  typedef us_t us_pair_t[2:1];
+  typedef ps_t ps_pair_t[1:0];
+  typedef struct {
+    logic [2:0] c;
+    us_t s;
+    logic [1:0] arr[2];
+  } nest_t;
+
+  // In constant expressions
+  typedef logic [1:0] gdesc_t[2][1:0];
+  localparam pair_t PAIR_P = pair_t'(8'ha5);
+  localparam logic [7:0] B8_P = 8'h3c;
+  localparam pair_t PAIR_REF_P = pair_t'(B8_P);
+  localparam asc_t ASC_P = asc_t'(21'h1abcde);
+  localparam grid_t GRID_P = grid_t'(8'hb4);
+  localparam gdesc_t GDESC_P = gdesc_t'(8'hb4);
+  typedef logic [32:0] w33_t[3];
+  localparam w33_t W33_P = w33_t'(99'h5_5aef0c8d_d70a4497_3fa1b2c3);
+  initial begin
+    `checkh(PAIR_P[1], 4'ha);
+    `checkh(PAIR_P[0], 4'h5);
+    `checkh(PAIR_REF_P[1], 4'h3);
+    `checkh(PAIR_REF_P[0], 4'hc);
+    `checkh(ASC_P[0], 7'h6a);
+    `checkh(ASC_P[1], 7'h79);
+    `checkh(ASC_P[2], 7'h5e);
+    `checkh(GRID_P[2][0], 2'h2);
+    `checkh(GRID_P[2][1], 2'h3);
+    `checkh(GRID_P[1][0], 2'h1);
+    `checkh(GRID_P[1][1], 2'h0);
+    `checkh(GDESC_P[0][1], 2'h2);
+    `checkh(GDESC_P[0][0], 2'h3);
+    `checkh(GDESC_P[1][1], 2'h1);
+    `checkh(GDESC_P[1][0], 2'h0);
+    `checkh(W33_P[0], 33'h1_56bbc323);
+    `checkh(W33_P[1], 33'h0_eb85224b);
+    `checkh(W33_P[2], 33'h1_3fa1b2c3);
+  end
+
+  logic [98:0] crc = 99'h5_5aef0c8d_d70a4497_3fa1b2c3;
+
+  function automatic us_t ident(us_t s);
+    return s;
+  endfunction
+
+  int calls = 0;
+  function automatic logic [29:0] next_bits();
+    ++calls;
+    return crc[29:0] + 30'(calls);
+  endfunction
+  function automatic us_t next_us();
+    ++calls;
+    return us_t'(crc[14:0] + 15'(calls));
+  endfunction
+  function automatic us_t next_us_cast();
+    return us_t'(15'(next_bits()));
+  endfunction
+
+  initial begin
+    for (int i = 0; i < 20; ++i) begin
+      crc = {crc[97:0], crc[98] ^ crc[63] ^ crc[2]};
+      begin
+        // Packed to unpacked array, and back
+        pair_t a;
+        asc_t asc;
+        wide_t w;
+        grid_t g;
+        a = pair_t'(crc[7:0]);
+        `checkh(a[1], crc[7:4]);
+        `checkh(a[0], crc[3:0]);
+        `checkh(v8_t'(a), crc[7:0]);
+        asc = asc_t'(crc[20:0]);
+        `checkh(asc[0], crc[20:14]);
+        `checkh(asc[2], crc[6:0]);
+        `checkh(v21_t'(asc), crc[20:0]);
+        w = wide_t'(crc);
+        `checkh(w[3], crc[98:66]);
+        `checkh(w[1], crc[32:0]);
+        `checkh(v99_t'(w), crc);
+        g = grid_t'(crc[7:0]);
+        `checkh(g[2][0], crc[7:6]);
+        `checkh(g[1][1], crc[1:0]);
+        `checkh(v8_t'(g), crc[7:0]);
+      end
+      begin
+        // Packed to unpacked struct, and back
+        us_t s;
+        ps_t p;
+        int n;
+        s = us_t'(crc[14:0]);
+        `checkh(s.a, crc[14:7]);
+        `checkh(s.b, crc[6:0]);
+        `checkh(v15_t'(s), crc[14:0]);
+        p = ps_t'(s);
+        `checkh(p, crc[14:0]);
+        s = us_t'(p);
+        `checkh(s.b, crc[6:0]);
+        n = int'(s15_t'(s));
+        `checkh(n, {{17{crc[14]}}, crc[14:0]});
+        s = us_t'(s);
+        `checkh(s.a, crc[14:7]);
+        s = us_t'(ident(s));
+        `checkh(s.a, crc[14:7]);
+      end
+      begin
+        // Arrays of structs
+        us_pair_t up;
+        ps_pair_t pp;
+        up = us_pair_t'(crc[29:0]);
+        `checkh(up[2].a, crc[29:22]);
+        `checkh(up[2].b, crc[21:15]);
+        `checkh(up[1].a, crc[14:7]);
+        `checkh(v30_t'(up), crc[29:0]);
+        pp = ps_pair_t'(crc[29:0]);
+        `checkh(pp[1], crc[29:15]);
+        `checkh(pp[0], crc[14:0]);
+        `checkh(v30_t'(pp), crc[29:0]);
+      end
+      begin
+        // Unpacked to unpacked of another shape
+        pair_t a;
+        quad_t q;
+        nest_t n;
+        us_t s;
+        a = pair_t'(crc[7:0]);
+        q = quad_t'(a);
+        `checkh(q[0], crc[7:6]);
+        `checkh(q[3], crc[1:0]);
+        n = nest_t'(crc[21:0]);
+        `checkh(n.c, crc[21:19]);
+        `checkh(n.s.b, crc[10:4]);
+        `checkh(n.arr[0], crc[3:2]);
+        `checkh(n.arr[1], crc[1:0]);
+        `checkh(v22_t'(n), crc[21:0]);
+        s = us_t'(n.s);
+        `checkh(s.b, crc[10:4]);
+      end
+      begin
+        // To the same type, not a bit-stream type
+        typedef struct {
+          real r;
+          string s;
+        } rs_t;
+        typedef union {logic [7:0] a;} uu_t;
+        rs_t rs1, rs2;
+        uu_t uu1, uu2;
+        rs2.r = real'(crc[7:0]);
+        rs2.s = "x";
+        rs1 = rs_t'(rs2);
+        `checkh(rs1.r, real'(crc[7:0]));
+        uu2.a = crc[7:0];
+        uu1 = uu_t'(uu2);
+        `checkh(uu1.a, crc[7:0]);
+      end
+      begin
+        // Not directly assigned
+        us_t s;
+        pair_t a;
+        asc_t asc;
+        grid_t g;
+        s = crc[0] ? us_t'(crc[14:0]) : us_t'(crc[29:15]);
+        `checkh(s.a, crc[0] ? crc[14:7] : crc[29:22]);
+        a = crc[1] ? pair_t'(crc[7:0]) : pair_t'(crc[15:8]);
+        `checkh(a[1], crc[1] ? crc[7:4] : crc[15:12]);
+        g = crc[2] ? grid_t'(crc[7:0]) : grid_t'(crc[15:8]);
+        `checkh(g[2][0], crc[2] ? crc[7:6] : crc[15:14]);
+        `checkh(g[1][1], crc[2] ? crc[1:0] : crc[9:8]);
+        asc = crc[3] ? asc_t'(crc[20:0]) : asc_t'(crc[41:21]);
+        `checkh(asc[0], crc[3] ? crc[20:14] : crc[41:35]);
+        `checkh(asc[2], crc[3] ? crc[6:0] : crc[27:21]);
+      end
+      begin
+        // Compared
+        pair_t a;
+        asc_t asc;
+        a = pair_t'(crc[7:0]);
+        asc = asc_t'(crc[20:0]);
+        `checkh(pair_t'(crc[7:0]) == a, 1'b1);
+        `checkh(a != pair_t'(crc[15:8]), crc[7:0] != crc[15:8]);
+        `checkh(asc == asc_t'(crc[20:0]), 1'b1);
+        `checkh(asc_t'(crc[41:21]) != asc, crc[20:0] != crc[41:21]);
+      end
+      begin
+        // Impure operand, evaluated once
+        us_t s;
+        us_pair_t up;
+        pair_t a;
+        logic [29:0] exp;
+        logic [14:0] v;
+        logic eq;
+        calls = 0;
+        exp = crc[29:0] + 30'(1);
+        up = us_pair_t'(next_bits());
+        `checkh(up[2].a, exp[29:22]);
+        `checkh(up[1].b, exp[6:0]);
+        `checkd(calls, 1);
+        exp = crc[29:0] + 30'(2);
+        s = us_t'(15'(next_bits() >> 15));
+        `checkh(s.a, exp[29:22]);
+        `checkh(s.b, exp[21:15]);
+        `checkd(calls, 2);
+        exp = crc[29:0] + 30'(3);
+        v = v15_t'(next_us());
+        `checkh(v, exp[14:0]);
+        `checkd(calls, 3);
+        exp = crc[29:0] + 30'(4);
+        a = crc[0] ? pair_t'(8'(next_bits() >> 22)) : pair_t'(8'(~next_bits() >> 22));
+        `checkh(a[1], crc[0] ? exp[29:26] : ~exp[29:26]);
+        `checkh(a[0], crc[0] ? exp[25:22] : ~exp[25:22]);
+        `checkd(calls, 4);
+        exp = crc[29:0] + 30'(5);
+        eq = pair_t'(8'(next_bits() >> 22)) == pair_t'(exp[29:22]);
+        `checkh(eq, 1'b1);
+        `checkd(calls, 5);
+        exp = crc[29:0] + 30'(6);
+        s = next_us_cast();
+        `checkh(s.a, exp[14:7]);
+        `checkh(s.b, exp[6:0]);
+        `checkd(calls, 6);
+      end
+    end
+  end
+
+  // In a parameterized module, as nonblocking assignments
+  int cyc = 0;
+  logic [29:0] rd;
+  us_t src = '{8'h12, 7'h34};
+  us_t us1, us0, usb;
+  ps_t ps1, ps0, psb;
+  sub #(.DATA_T(us_t)) u_us (.clk, .rd, .byp(rd[0]), .src, .out1(us1), .out0(us0), .outb(usb));
+  sub #(.DATA_T(ps_t)) u_ps (.clk, .rd, .byp(rd[0]), .src(ps_t'(src)), .out1(ps1), .out0(ps0),
+                             .outb(psb));
+  always @(posedge clk) begin
+    cyc <= cyc + 1;
+    rd <= crc[29:0] + 30'(cyc * 32'h1234567);
+    if (cyc > 1) begin
+      `checkh(us1.a, $past(rd[29:22]));
+      `checkh(us0.b, $past(rd[6:0]));
+      `checkh(usb.a, $past(rd[0]) ? 8'h12 : $past(rd[14:7]));
+      `checkh(ps1, $past(rd[29:15]));
+      `checkh(ps0, $past(rd[14:0]));
+      `checkh(psb, $past(rd[0]) ? 15'h0934 : $past(rd[14:0]));
+    end
+    if (cyc == 20) begin
+      $write("*-* All Finished *-*\n");
+      $finish;
+    end
+  end
+
+endmodule

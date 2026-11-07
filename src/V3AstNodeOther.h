@@ -123,6 +123,7 @@ class AstNodeFTask VL_NOT_FINAL : public AstNode {
     bool m_taskPublic : 1;  // Public task
     bool m_classMethod : 1;  // Class method
     bool m_didProto : 1;  // Did prototype processing
+    bool m_forkBranch : 1;  // Body of a fork branch, moved out of its scope by V3Fork
     bool m_prototype : 1;  // Just a prototype
     bool m_dpiExport : 1;  // DPI exported
     bool m_dpiImport : 1;  // DPI imported
@@ -141,6 +142,7 @@ class AstNodeFTask VL_NOT_FINAL : public AstNode {
     bool m_recursive : 1;  // Recursive or part of recursion
     bool m_static : 1;  // Static method in class
     bool m_underGenerate : 1;  // Under generate (for warning)
+    bool m_usesConstFunc : 1;  // Calls a function where a constant expression is required
     bool m_verilogFunction : 1;  // Declared by user as function (versus internal-made)
     bool m_verilogTask : 1;  // Declared by user as task (versus internal-made)
     bool m_virtual : 1;  // Virtual method in class
@@ -157,6 +159,7 @@ protected:
         , m_taskPublic{false}
         , m_classMethod{false}
         , m_didProto{false}
+        , m_forkBranch{false}
         , m_prototype{false}
         , m_dpiExport{false}
         , m_dpiImport{false}
@@ -175,6 +178,7 @@ protected:
         , m_recursive{false}
         , m_static{false}
         , m_underGenerate{false}
+        , m_usesConstFunc{false}
         , m_verilogFunction{false}
         , m_verilogTask{false}
         , m_virtual{false}
@@ -209,6 +213,8 @@ public:
     void classMethod(bool flag) { m_classMethod = flag; }
     bool didProto() const { return m_didProto; }
     void didProto(bool flag) { m_didProto = flag; }
+    bool forkBranch() const { return m_forkBranch; }
+    void forkBranch(bool flag) { m_forkBranch = flag; }
     bool isExternProto() const { return m_isExternProto; }
     void isExternProto(bool flag) { m_isExternProto = flag; }
     bool isExternDef() const { return m_isExternDef; }
@@ -250,6 +256,8 @@ public:
     void isStatic(bool flag) { m_static = flag; }
     bool underGenerate() const { return m_underGenerate; }
     void underGenerate(bool flag) { m_underGenerate = flag; }
+    bool usesConstFunc() const { return m_usesConstFunc; }
+    void usesConstFunc(bool flag) { m_usesConstFunc = flag; }
     bool verilogFunction() const { return m_verilogFunction; }
     void verilogFunction(bool flag) { m_verilogFunction = flag; }
     bool verilogTask() const { return m_verilogTask; }
@@ -574,6 +582,7 @@ class AstCFunc final : public AstNode {
     bool m_keepIfEmpty : 1;  // Keep declaration and definition separate, even if empty
     bool m_slow : 1;  // Slow routine, called once or just at init time
     bool m_funcPublic : 1;  // From user public task/function
+    bool m_fromFTask : 1;  // From user task/function, other than a DPI import
     bool m_isConstructor : 1;  // Is C class constructor
     bool m_isDestructor : 1;  // Is C class destructor
     bool m_isMethod : 1;  // Is inside a class definition
@@ -611,6 +620,7 @@ public:
         m_keepIfEmpty = false;
         m_slow = false;
         m_funcPublic = false;
+        m_fromFTask = false;
         m_isConstructor = false;
         m_isDestructor = false;
         m_isMethod = true;
@@ -640,7 +650,7 @@ public:
         const AstCFunc* const asamep = VN_DBG_AS(samep, CFunc);
         return ((isTrace() == asamep->isTrace()) && (rtnTypeVoid() == asamep->rtnTypeVoid())
                 && (argTypes() == asamep->argTypes()) && isLoose() == asamep->isLoose()
-                && voidSelf() == asamep->voidSelf()
+                && voidSelf() == asamep->voidSelf() && needProcess() == asamep->needProcess()
                 && (!(dpiImportPrototype() || dpiExportImpl()) || name() == asamep->name()));
     }
     //
@@ -669,6 +679,8 @@ public:
     void slow(bool flag) { m_slow = flag; }
     bool funcPublic() const { return m_funcPublic; }
     void funcPublic(bool flag) { m_funcPublic = flag; }
+    bool fromFTask() const { return m_fromFTask; }
+    void fromFTask(bool flag) { m_fromFTask = flag; }
     void argTypes(const string& str) { m_argTypes = str; }
     string argTypes() const { return m_argTypes; }
     void ifdef(const string& str) { m_ifdef = str; }
@@ -754,6 +766,7 @@ class AstCell final : public AstNode {
     string m_origName;  // Original name before dot addition
     string m_modName;  // Module the cell instances
     int m_arrayIdx = -1;  // Row-major position in instance array, from the left (V3Param-V3Width)
+    bool m_hasDriveStrength : 1;  // Drive strength given, legal only on a UDP instance
     bool m_hasIfaceVar : 1;  // True if a Var has been created for this cell
     bool m_recursive : 1;  // Self-recursive module
     bool m_trace : 1;  // Trace this cell
@@ -765,6 +778,7 @@ public:
         , m_name{instName}
         , m_origName{instName}
         , m_modName{modName}
+        , m_hasDriveStrength{false}
         , m_hasIfaceVar{false}
         , m_recursive{false}
         , m_trace{true} {
@@ -790,6 +804,8 @@ public:
     void modp(AstNodeModule* nodep) { m_modp = nodep; }
     int arrayIdx() const { return m_arrayIdx; }
     void arrayIdx(int idx) { m_arrayIdx = idx; }
+    bool hasDriveStrength() const { return m_hasDriveStrength; }
+    void hasDriveStrength(bool flag) { m_hasDriveStrength = flag; }
     bool hasIfaceVar() const { return m_hasIfaceVar; }
     void hasIfaceVar(bool flag) { m_hasIfaceVar = flag; }
     void trace(bool flag) { m_trace = flag; }
@@ -1254,15 +1270,19 @@ class AstCoverTransItem final : public AstNode {
     // @astgen op1 := valuesp : List[AstNode]
     // @astgen op2 := repMinp : Optional[AstNodeExpr]
     // @astgen op3 := repMaxp : Optional[AstNodeExpr]
-    const VTransRepType m_repType;
+    const VTransRepType m_repType;  // Repetition operator, if any
 
 public:
-    AstCoverTransItem(FileLine* fl, AstNode* valuesp, VTransRepType repType = VTransRepType::NONE)
+    AstCoverTransItem(FileLine* fl, AstNode* valuesp, VTransRepType repType = VTransRepType::NONE,
+                      AstNodeExpr* repMinp = nullptr, AstNodeExpr* repMaxp = nullptr)
         : ASTGEN_SUPER_CoverTransItem(fl)
         , m_repType{repType} {
         addValuesp(valuesp);
+        this->repMinp(repMinp);
+        this->repMaxp(repMaxp);
     }
     ASTGEN_MEMBERS_AstCoverTransItem;
+    VTransRepType repType() const { return m_repType; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
 };
@@ -1343,7 +1363,7 @@ class AstDefParam final : public AstNode {
     // A defparam assignment
     // Parents: MODULE
     // @astgen op1 := rhsp : AstNodeExpr
-    // @astgen op2 := pathp : AstNodeExpr
+    // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if in the defparam's own scope
     string m_name;  // Name of variable getting set
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, const string& name, AstNodeExpr* rhsp)
@@ -1751,8 +1771,9 @@ class AstPin final : public AstNode {
     // @astgen ptr := m_modPTypep : Optional[AstParamTypeDType]  // Param type connects to on sub
     int m_pinNum;  // Pin number
     string m_name;  // Pin name, or "" for number based interconnect
-    string m_paramPath;  // Original defparam cell path, if this pin came from a defparam
+    string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
+    bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
 public:
@@ -1780,6 +1801,8 @@ public:
     void param(bool flag) { m_param = flag; }
     const string& paramPath() const { return m_paramPath; }
     void paramPath(const string& path) { m_paramPath = path; }
+    bool defparamGenAlt() const { return m_defparamGenAlt; }
+    void defparamGenAlt(bool flag) { m_defparamGenAlt = flag; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
@@ -1801,19 +1824,21 @@ public:
 };
 class AstPragma final : public AstNode {
     const VPragmaType m_pragType;  // Type of pragma
-    const VTimescale m_timescale;  // For TIMEUNIT_SET
+    const VTimescale m_timescale;  // For TIMEUNIT_SET/TIMEPRECISION_SET, declared value
 public:
     // Pragmas don't result in any output code, they're just flags that affect
     // other processing in verilator.
     AstPragma(FileLine* fl, VPragmaType pragType)
         : ASTGEN_SUPER_Pragma(fl)
         , m_pragType{pragType} {
-        UASSERT_OBJ(pragType != VPragmaType::TIMEUNIT_SET, fl, "Should use other constructor");
+        UASSERT_OBJ(!isTimescale(), fl, "Should use other constructor");
     }
-    AstPragma(FileLine* fl, const VTimescale& timescale)
+    AstPragma(FileLine* fl, VPragmaType pragType, const VTimescale& timescale)
         : ASTGEN_SUPER_Pragma(fl)
-        , m_pragType{VPragmaType::TIMEUNIT_SET}
-        , m_timescale{timescale} {}
+        , m_pragType{pragType}
+        , m_timescale{timescale} {
+        UASSERT_OBJ(isTimescale(), fl, "Should use other constructor");
+    }
     ASTGEN_MEMBERS_AstPragma;
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
@@ -1823,12 +1848,16 @@ public:
         return pragType() == VN_DBG_AS(samep, Pragma)->pragType();
     }
     VTimescale timescale() const { return m_timescale; }
+    bool isTimescale() const {
+        return m_pragType == VPragmaType::TIMEUNIT_SET
+               || m_pragType == VPragmaType::TIMEPRECISION_SET;
+    }
 };
 class AstPropSpec final : public AstNode {
     // A clocked property
     // Parents:  ASSERT|COVER (property)
     // Children: SENITEM, Properties
-    // @astgen op1 := sensesp : Optional[AstSenItem]
+    // @astgen op1 := sensesp : List[AstSenItem]
     // @astgen op2 := disablep : Optional[AstNodeExpr]
     // @astgen op3 := propp : AstNode
     // @astgen op4 := matchCountp : Optional[AstNodeExpr] // Cover sequence matches this tick
@@ -1839,7 +1868,7 @@ public:
                 VPropStrength propStrength = VPropStrength::DEFAULT)
         : ASTGEN_SUPER_PropSpec(fl)
         , m_propStrength{propStrength} {
-        this->sensesp(sensesp);
+        addSensesp(sensesp);
         this->disablep(disablep);
         this->propp(propp);
     }
@@ -1850,6 +1879,7 @@ public:
         return true;
     }  // Used under Cover, which expects a bool child
     VPropStrength propStrength() const { return m_propStrength; }
+    void propStrength(VPropStrength flag) { m_propStrength = flag; }
 };
 class AstPull final : public AstNode {
     // @astgen op1 := lhsp : AstNodeExpr
@@ -2322,6 +2352,7 @@ class AstVar final : public AstNode {
     // @astgen op4 := attrsp : List[AstNode] // Attributes during early parse
     // @astgen ptr := m_sensIfacep : Optional[AstIface]  // Interface type to which reads from this
     //                                                      var are sensitive
+    // @astgen ptr := m_forceRdVarp : Optional[AstVar]  // [AfterForce] Generated force read signal
 
     string m_name;  // Name of variable
     string m_origName;  // Original name before dot addition
@@ -2654,6 +2685,8 @@ public:
     void trace(bool flag) { m_trace = flag; }
     void isLatched(bool flag) { m_isLatched = flag; }
     bool isForceable() const { return m_isForceable; }
+    AstVar* forceRdVarp() const { return m_forceRdVarp; }
+    void forceRdVarp(AstVar* const nodep) { m_forceRdVarp = nodep; }
     void setForceable() { m_isForceable = true; }
     void setForcedByCode() { m_isForcedByCode = true; }
     bool isForced() const { return m_isForceable || m_isForcedByCode; }
@@ -2708,12 +2741,14 @@ public:
     bool isIfaceParam() const { return m_isIfaceParam; }
     bool isSignal() const { return varType().isSignal(); }
     bool isNet() const { return varType().isNet(); }
+    // True if a net, including a port whose omitted kind defaults to a net
+    bool isNetOrNetPort() const;
     bool isWor() const { return varType().isWor(); }
     bool isWiredNet() const { return varType().isWiredNet(); }
     bool isTemp() const { return varType().isTemp(); }
     bool isClassMember() const { return varType() == VVarType::MEMBER; }
     bool isVirtIface() const {
-        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep(), IfaceRefDType)) {
+        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep()->skipRefp(), IfaceRefDType)) {
             return dtp->isVirtual();
         }
         return false;
@@ -3072,22 +3107,15 @@ public:
 class AstSequence final : public AstNodeFTask {
     // A sequence inside a module
     // TODO when supported might not want to be a NodeFTask
-    bool m_referenced = false;  // Set by V3LinkResolve when referenced; cleared by
-                                // V3AssertPre after inlining; if still set after
-                                // V3AssertPre, the reference is in an unsupported context
 public:
     AstSequence(FileLine* fl, const string& name, AstNode* stmtp)
         : ASTGEN_SUPER_Sequence(fl, name, stmtp) {}
     ASTGEN_MEMBERS_AstSequence;
-    void dump(std::ostream& str) const override;
-    void dumpJson(std::ostream& str) const override;
     bool hasDType() const override VL_MT_SAFE { return true; }
     AstNodeFTask* cloneType(const string& name) override {
         return new AstSequence{fileline(), name, nullptr};
     }
     string verilogKwd() const override { return "sequence"; }
-    bool isReferenced() const { return m_referenced; }
-    void isReferenced(bool flag) { m_referenced = flag; }
 };
 class AstTask final : public AstNodeFTask {
     // A task inside a module
@@ -3339,6 +3367,8 @@ public:
     // Return true if this class is an extension of base class (SLOW)
     // Accepts nullptrs
     static bool isClassExtendedFrom(const AstClass* refClassp, const AstClass* baseClassp);
+    // First reference in this class to the state of the instance declaring it, or nullptr
+    const AstNode* instanceStateRefp() const;
     uint32_t declTokenNum() const override { return m_declTokenNum; }
     void declTokenNumSetMin(uint32_t tokenNum) override {
         m_declTokenNum = std::min(m_declTokenNum, tokenNum);
@@ -3554,10 +3584,15 @@ public:
     ASTGEN_MEMBERS_AstFinal;
 };
 class AstInitial final : public AstNodeProcedure {
+    bool m_fromSource = false;  // An initial procedure in the source, not created internally
 public:
     AstInitial(FileLine* fl, AstNode* stmtsp)
         : ASTGEN_SUPER_Initial(fl, stmtsp) {}
     ASTGEN_MEMBERS_AstInitial;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    bool fromSource() const { return m_fromSource; }
+    void fromSource(bool flag) { m_fromSource = flag; }
 };
 class AstInitialAutomatic final : public AstNodeProcedure {
     // Automatic variable initialization

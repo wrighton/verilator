@@ -1,0 +1,18 @@
+%Error: t/t_func_ref_type_bad.v:25:14: Ref argument requires matching types; port 'r' requires 'real' but connection is 'logic[31:0]'.
+                                     : ... note: In instance 't'
+   25 |     set_real(l);   
+      |              ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_func_ref_type_bad.v:26:14: Ref argument requires matching types; port 'r' requires 'real' but connection is 'int'.
+                                     : ... note: In instance 't'
+   26 |     set_real(i);   
+      |              ^
+%Error: t/t_func_ref_type_bad.v:27:19: Ref argument requires matching types; port 's' requires 'string' but connection is 'int'.
+                                     : ... note: In instance 't'
+   27 |     void'(get_str(i));   
+      |                   ^
+%Error: t/t_func_ref_type_bad.v:28:13: Ref argument requires matching types; port 'o' requires 'string' but connection is 'int'.
+                                     : ... note: In instance 't'
+   28 |     set_str(i);   
+      |             ^
+%Error: Exiting due to

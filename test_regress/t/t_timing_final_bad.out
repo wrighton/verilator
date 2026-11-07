@@ -1,0 +1,43 @@
+%Error: t/t_timing_final_bad.v:40:5: Calling a task that blocks is not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   40 |     t_delay();   
+      |     ^~~~~~~
+        t/t_timing_final_bad.v:12:8: ... Location of blocking task
+   12 |   task t_delay();
+      |        ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_timing_final_bad.v:41:5: Calling a task that blocks is not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   41 |     t_calls_delay();   
+      |     ^~~~~~~~~~~~~
+        t/t_timing_final_bad.v:15:8: ... Location of blocking task
+   15 |   task t_calls_delay();
+      |        ^~~~~~~~~~~~~
+%Error: t/t_timing_final_bad.v:42:5: Calling a task that blocks is not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   42 |     t_join();   
+      |     ^~~~~~
+        t/t_timing_final_bad.v:28:8: ... Location of blocking task
+   28 |   task t_join();
+      |        ^~~~~~
+%Error: t/t_timing_final_bad.v:43:5: Timing controls and fork-join are not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   43 |     @e;   
+      |     ^
+%Error: t/t_timing_final_bad.v:44:5: Timing controls and fork-join are not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   44 |     wait (a);   
+      |     ^~~~
+%Error: t/t_timing_final_bad.v:45:5: Timing controls and fork-join are not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   45 |     fork   
+      |     ^~~~
+%Error: t/t_timing_final_bad.v:48:7: Timing controls and fork-join are not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   48 |     b = @e a;   
+      |       ^
+%Error: t/t_timing_final_bad.v:49:7: Timing controls and fork-join are not legal in final blocks (IEEE 1800-2023 9.2.3)
+                                   : ... note: In instance 't'
+   49 |     b <= @e a;   
+      |       ^~
+%Error: Exiting due to

@@ -17,6 +17,7 @@ module t (
   endclocking
 
   logic a;
+  int cyc = 0;
 
   //PASSES:
   int count_not_stable;  // Counts changes
@@ -29,21 +30,37 @@ module t (
 
   int count_changing_gclk;
   assert property (@(posedge clk) $changing_gclk(a)) count_changing_gclk = count_changing_gclk + 1;
+  else;
 
   int count_falling_gclk;
   assert property (@(posedge clk) $falling_gclk(a)) count_falling_gclk = count_falling_gclk + 1;
+  else;
 
   int count_future_gclk;  // Counts changes
   assert property (@(posedge clk) $future_gclk(a) != a) count_future_gclk = count_future_gclk + 1;
+  else;
 
   int count_rising_gclk;
   assert property (@(posedge clk) $rising_gclk(a)) count_rising_gclk = count_rising_gclk + 1;
+  else;
 
   int count_not_steady_gclk;  // Counts changes
   assert property (@(posedge clk) $steady_gclk(a))
   else count_not_steady_gclk = count_not_steady_gclk + 1;
 
-  int cyc = 0;
+  // A value that does not start at zero, so the first tick is checked against a real value
+  logic [6:0] x = 7'h55;
+  int count_future_eq_fail;
+  assert property (@(posedge clk) $future_gclk(x) == x)
+  else count_future_eq_fail = count_future_eq_fail + 1;
+
+  int count_future_eq_disabled_fail;
+  assert property (@(posedge clk) disable iff (cyc == 5) $future_gclk(x) == x)
+  else count_future_eq_disabled_fail = count_future_eq_disabled_fail + 1;
+
+  int count_steady_x_fail;
+  assert property (@(posedge clk) $steady_gclk(x))
+  else count_steady_x_fail = count_steady_x_fail + 1;
 
   always @(posedge clk) begin
 `ifdef TEST_VERBOSE
@@ -51,6 +68,7 @@ module t (
              count_not_stable_gclk);
 `endif
     cyc <= cyc + 1;
+    if (cyc == 5) x <= x + 7'h1;
     if (cyc <= 3) begin
       a <= 0;
       count_not_stable = 0;
@@ -76,6 +94,9 @@ module t (
       `checkd(count_future_gclk, 2);
       `checkd(count_rising_gclk, 1);
       `checkd(count_not_steady_gclk, 2);
+      `checkd(count_future_eq_fail, 1);
+      `checkd(count_future_eq_disabled_fail, 0);
+      `checkd(count_steady_x_fail, 1);
       $write("*-* All Finished *-*\n");
       $finish;
     end

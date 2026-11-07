@@ -714,8 +714,6 @@ class VtErrorException(Exception):
 
 class VlTest:
 
-    _file_contents_cache = {}
-
     # @lru_cache(maxsize=1024) broken with @staticmethod on older pythons we use
     _cached_aslr_off = None
     _cached_cfg_with_ccache = None
@@ -2824,31 +2822,23 @@ class VlTest:
         self.error(msg)
 
     def file_contents(self, filename: str) -> str:
-        if filename not in self._file_contents_cache:
-            if not os.path.exists(filename):
-                self._file_contents_cache[filename] = "_Already_Errored_"
-                self.error("File_contents file not found: " + filename)
-            else:
-                with open(filename, 'r', encoding='latin-1') as fh:
-                    self._file_contents_cache[filename] = str(fh.read())
-        return self._file_contents_cache[filename]
+        # Not cached, as a test may regenerate a file it already read
+        if not os.path.exists(filename):
+            self.error("File_contents file not found: " + filename)
+            return "_Already_Errored_"
+        with open(filename, 'r', encoding='latin-1') as fh:
+            return fh.read()
 
     @staticmethod
     def _file_contents_static(filename: str) -> str:
-        if filename not in VlTest._file_contents_cache:
-            if not os.path.exists(filename):
-                VlTest._file_contents_cache[filename] = "_Already_Errored_"
-                sys.exit("_file_contents_static file not found: " + filename)
-            else:
-                with open(filename, 'r', encoding='latin-1') as fh:
-                    VlTest._file_contents_cache[filename] = str(fh.read())
-        return VlTest._file_contents_cache[filename]
+        if not os.path.exists(filename):
+            sys.exit("_file_contents_static file not found: " + filename)
+        with open(filename, 'r', encoding='latin-1') as fh:
+            return fh.read()
 
     def write_wholefile(self, filename: str, contents: str) -> None:
         with open(filename, 'wb') as fh:
             fh.write(contents.encode('latin-1'))
-        if filename in self._file_contents_cache:
-            del self._file_contents_cache[filename]
 
     def file_sed(self, in_filename: str, out_filename, edit_lambda) -> None:
         # Read without newline translation, so binary files are preserved exactly

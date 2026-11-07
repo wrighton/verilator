@@ -344,6 +344,11 @@ module t;
         `checkh(arr2d_12[0][1], 12'hdef);
         `checkh(arr2d_12[1][0], 12'h012);
         `checkh(arr2d_12[1][1], 12'h345);
+
+        // Pack (tests VL_PACK_Q_UI)
+        arr2d_12[1][0] = 12'h987;
+        packed_48 = {>>{arr2d_12}};
+        `checkh(packed_48, 48'habcdef_987345);
       end
 
       // 96-bit Test (tests VL_UNPACK_UI_W)
@@ -357,6 +362,67 @@ module t;
         `checkh(arr2d_24[0][1], 24'h789abc);
         `checkh(arr2d_24[1][0], 24'hdef012);
         `checkh(arr2d_24[1][1], 24'h345678);
+
+        // Pack (tests VL_PACK_W_UI)
+        arr2d_24[0][1] = 24'h876543;
+        {>>{packed_96}} = arr2d_24;
+        `checkh(packed_96, 96'h123456_876543_def012_345678);
+      end
+
+      // Descending inner dimensions, still streamed left to right
+      begin
+        automatic logic [1:0] arr_ad [2][1:0];
+        automatic logic [1:0] arr_da [1:0][2];
+        automatic logic [3:0] arr_ddd [1:0][3:2][1:0];
+        automatic logic [3:0] arr_ada [0:1][3:2][0:1];
+        automatic logic [23:0] arr_ad_w [2][2:1];
+        automatic logic [7:0] packed_8;
+        automatic logic [31:0] packed_32;
+        automatic logic [95:0] packed_96;
+
+        packed_8 = 8'hb4;
+        arr_ad = {>>{packed_8}};
+        `checkh(arr_ad[0][1], 2'h2);
+        `checkh(arr_ad[0][0], 2'h3);
+        `checkh(arr_ad[1][1], 2'h1);
+        `checkh(arr_ad[1][0], 2'h0);
+        arr_da = {>>{packed_8}};
+        `checkh(arr_da[1][0], 2'h2);
+        `checkh(arr_da[1][1], 2'h3);
+        `checkh(arr_da[0][0], 2'h1);
+        `checkh(arr_da[0][1], 2'h0);
+        arr_ad = '{'{2'h1, 2'h3}, '{2'h2, 2'h0}};
+        packed_8 = {>>{arr_ad}};
+        `checkh(packed_8, 8'h78);
+        arr_da = '{'{2'h1, 2'h3}, '{2'h2, 2'h0}};
+        {>>{packed_8}} = arr_da;
+        `checkh(packed_8, 8'h78);
+
+        packed_32 = 32'h01234567;
+        arr_ddd = {>>{packed_32}};
+        `checkh(arr_ddd[1][3][1], 4'h0);
+        `checkh(arr_ddd[1][2][0], 4'h3);
+        `checkh(arr_ddd[0][3][1], 4'h4);
+        `checkh(arr_ddd[0][2][0], 4'h7);
+        arr_ddd[1][2][0] = 4'h9;
+        packed_32 = {>>{arr_ddd}};
+        `checkh(packed_32, 32'h01294567);
+        packed_32 = 32'h89abcdef;
+        arr_ada = {>>{packed_32}};
+        `checkh(arr_ada[0][3][0], 4'h8);
+        `checkh(arr_ada[0][2][1], 4'hb);
+        `checkh(arr_ada[1][3][1], 4'hd);
+        `checkh(arr_ada[1][2][0], 4'he);
+        arr_ada[0][2][1] = 4'h1;
+        packed_32 = {>>{arr_ada}};
+        `checkh(packed_32, 32'h89a1cdef);
+
+        packed_96 = 96'h123456_789abc_def012_345678;
+        arr_ad_w = {>>{packed_96}};
+        `checkh(arr_ad_w[0][2], 24'h123456);
+        `checkh(arr_ad_w[0][1], 24'h789abc);
+        `checkh(arr_ad_w[1][2], 24'hdef012);
+        `checkh(arr_ad_w[1][1], 24'h345678);
       end
 
       // 2D Array of QData (64-bit) Elements Test
@@ -368,6 +434,11 @@ module t;
         arr2d_q = { >> {packed_128}};
         `checkh(arr2d_q[0][0], 64'hfadecafedeadbeef);
         `checkh(arr2d_q[0][1], 64'habcd0123456789ab);
+
+        // Pack (tests VL_PACK_W_UQ)
+        arr2d_q[0][0] = 64'h0123456789abcdef;
+        packed_128 = {>>{arr2d_q}};
+        `checkh(packed_128, 128'h0123456789abcdef_abcd0123456789ab);
       end
 
       // 2D Array of Wide (96-bit) Elements Test
@@ -379,6 +450,51 @@ module t;
         arr2d_w = { >> {packed_192}};
         `checkh(arr2d_w[0][0], 96'h123456789abcdef012345678);
         `checkh(arr2d_w[0][1], 96'h9abcdef01234567812345678);
+
+        // Pack (tests VL_PACK_W_UW)
+        arr2d_w[0][1] = 96'h876543210fedcba987654321;
+        packed_192 = {>>{arr2d_w}};
+        `checkh(packed_192, 192'h123456789abcdef012345678_876543210fedcba987654321);
+      end
+
+      // 2D Array of 33-bit Elements Test (tests VL_PACK_Q_UQ)
+      begin
+        automatic logic [32:0] arr2d_33 [1][1];
+        automatic logic [32:0] packed_33;
+
+        arr2d_33[0][0] = 33'h1_2345_6789;
+        packed_33 = {>>{arr2d_33}};
+        `checkh(packed_33, 33'h1_2345_6789);
+      end
+
+      // 3D Array with a descending outer dimension, 7-bit elements, 84 bits
+      begin
+        automatic logic [6:0] arr3d_7 [2:0][2][2];
+        automatic logic [83:0] packed_84;
+
+        packed_84 = 84'h1_2345_6789_abcd_ef01_2345;
+        arr3d_7 = {>>{packed_84}};
+        `checkh(arr3d_7[2][0][0], 7'h09);
+        `checkh(arr3d_7[0][1][1], 7'h45);
+        arr3d_7[1][0][1] = 7'h55;
+        packed_84 = {>>{arr3d_7}};
+        `checkh(packed_84, 84'h1_2345_6789_57cd_ef01_2345);
+      end
+
+      // Wide elements not a multiple of 32 bits, bits above each element cleared
+      begin
+        automatic logic [139:0] packed_140;
+        automatic logic [69:0] arr_w70[2];
+        automatic logic [69:0] q_w70[$];
+
+        packed_140 = {70'h3f_ffff_ffff_ffff_ffff, 70'h1};
+        arr_w70 = { >> {packed_140}};
+        `checkh(arr_w70[0], 70'h3f_ffff_ffff_ffff_ffff);
+        `checkh(arr_w70[1], 70'h1);
+        `checkh(arr_w70[1] == 70'h1, 1'b1);
+        { >> {q_w70}} = packed_140;
+        `checkh(q_w70[1], 70'h1);
+        `checkh(q_w70[1] == 70'h1, 1'b1);
       end
     end
 

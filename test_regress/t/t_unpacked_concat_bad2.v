@@ -23,6 +23,14 @@ module t;
     s2 = {s0, s3};
 
     A9_logic = {A3, 4, 5, A3, 6};
+    begin
+      string sq[$];
+      s1 = {sq};  // Queue of other elements
+    end
+    begin
+      logic [31:0] lq[$];
+      A9_logic = {lq, A3};  // Array of other elements, with a queue of the elements
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -90,5 +98,20 @@ module t;
     qq = {qq, c};
     qq = '{c};
     cqq = {cqq, iq};
+    qq = {qq, 5};
+    cqq = {cqq, 5};
+  end
+
+  typedef struct {int a;} ustruct_t;
+
+  initial begin
+    int dq[][$];
+    ustruct_t s;
+    ustruct_t sq[$];
+    int iq[$];
+    // Singular item of an element type that is an unpacked array or structure
+    dq = {dq, 5};
+    sq = {sq, 5};
+    iq = {iq, s};
   end
 endmodule

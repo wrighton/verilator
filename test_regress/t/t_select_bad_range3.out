@@ -4,4 +4,30 @@
       |                                ^
                    ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
                    ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
+%Warning-SELRANGE: t/t_select_bad_range3.v:21:34: Selection index out of range: 4294967307 outside 12:10
+                                                : ... note: In instance 't'
+   21 |   wire [7:0] wide_index = inwires[64'h1_0000_000b];   
+      |                                  ^
+%Warning-SELRANGE: t/t_select_bad_range3.v:23:38: Selection index out of range: 13 outside 12:10
+                                                : ... note: In instance 't'
+   23 |   wire [7:0] wide_fit_index = inwires[64'd13];   
+      |                                      ^
+%Warning-SELRANGE: t/t_select_bad_range3.v:25:33: Selection index out of range: 4294967280 outside 12:10
+                                                : ... note: In instance 't'
+   25 |   wire [7:0] big_index = inwires[32'hffff_fff0];   
+      |                                 ^
+%Warning-SELRANGE: t/t_select_bad_range3.v:27:30: Selection index out of range: -1 outside 3:0
+                                                : ... note: In instance 't'
+   27 |   wire [7:0] neg_index = lsb0[3'sb111];   
+      |                              ^
+%Warning-SELRANGE: t/t_select_bad_range3.v:32:31: Selection index out of range: 4294967295 outside 3:-2
+                                                : ... note: In instance 't'
+   32 |   wire [7:0] wrap_index = negl[32'hffff_ffff];   
+      |                               ^
+%Warning-WIDTHTRUNC: t/t_select_bad_range3.v:34:30: Bit extraction of array[3:-2] requires 2 bit index, not 40 bits.
+                                                  : ... note: In instance 't'
+   34 |   wire [7:0] u40_index = negl[u40];   
+      |                              ^
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
 %Error: Exiting due to

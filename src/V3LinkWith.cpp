@@ -88,11 +88,6 @@ class LinkWithVisitor final : public VNVisitor {
 
     void visit(AstNodeFTaskRef* nodep) override {
         VL_RESTORER(m_currentRandomizeSelectp);
-        if (nodep->taskp()) {
-            if (AstSequence* const seqp = VN_CAST(nodep->taskp(), Sequence))
-                seqp->isReferenced(true);
-        }
-
         if (nodep->name() == "randomize") {
             if (const AstMethodCall* const methodcallp = VN_CAST(nodep, MethodCall)) {
                 if (m_inRandomizeWith) {
@@ -112,9 +107,10 @@ class LinkWithVisitor final : public VNVisitor {
             // on which the randomize() is called with LambdaArgRef
             // This allows V3Randomize to work properly when
             // constrained variables are referred using that object
+            // Name it as the 'with' argument, as V3Width finds the type by name
             AstNodeExpr* const prevFromp = nodep->fromp();
             AstNodeExpr* const newp
-                = new AstLambdaArgRef{prevFromp->fileline(), prevFromp->name(), false};
+                = new AstLambdaArgRef{prevFromp->fileline(), "__Vrandwith_obj", false};
             prevFromp->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(prevFromp), prevFromp);
         }

@@ -63,4 +63,22 @@ module t;
     int a[3] = '{default: 7};
     return a[i];
   endfunction
+
+  // Slice read out of bounds
+  localparam BSOOB = f_bad_slice_out_of_bounds(64'h1_0000_0000);
+  function automatic integer f_bad_slice_out_of_bounds(input [63:0] i);
+    int a[3] = '{1, 2, 3};
+    int s[2];
+    s = a[i+:2];
+    return s[0];
+  endfunction
+
+  // Array read out of bounds by an index wider than 32 bits
+  localparam BOOBW = f_bad_out_of_bounds_wide(64'h1_0000_0001);
+  function automatic integer f_bad_out_of_bounds_wide(input longint i);
+    int a[4] = '{default: 7};
+    // verilator lint_off WIDTHTRUNC
+    return a[i];
+    // verilator lint_on WIDTHTRUNC
+  endfunction
 endmodule

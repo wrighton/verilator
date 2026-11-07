@@ -16,6 +16,12 @@ package Pkg;
     BAZ
   } enum_t;
 
+  task automatic disable_named;
+    begin : named
+      #1;
+    end
+    disable named;
+  endtask
 endpackage
 package PkgImp;
   import Pkg::*;
@@ -202,6 +208,7 @@ module t (/*AUTOARG*/
     if (|downto_32[48:40]) $write("");
     if (|downto_32[55+:3]) $write("");
     if (|downto_32[60-:7]) $write("");
+    if (array[i1+:2] == array[1:2]) $write("");
     if (the_ifaces[2].ifsig) $write("");
     #1 $write("After #1 delay");
     wait(clk == 1) $write("After wait(clk == 1)");
@@ -284,6 +291,7 @@ module t (/*AUTOARG*/
 
   sub sub(.*);
   seq_event seq_event(.*);
+  defparam_gen dpg();
 
   logic [2:0] pm_out;
   param_mod #(.PT(byte), .PW(3)) pm (
@@ -321,7 +329,7 @@ module t (/*AUTOARG*/
 
   int cyc;
   int fo;
-  int sum;
+  int sum /*verilator forceable*/;
   real r;
   string str;
   int mod_val;
@@ -343,6 +351,7 @@ module t (/*AUTOARG*/
     $fgetc(fd);  //  stmt
     $fflush(fd);
     $fscanf(fd, "%d", sum);
+    $fscanf(fd, str, sum);
     $fdisplay("i = ", sum);
     $fwrite(fd, "hello");
     $readmemh(fd, array);
@@ -386,6 +395,7 @@ module t (/*AUTOARG*/
     $display("struct = %p", ps);
     $display("%% [%t] [%t] to=%o td=%d", $time, $realtime, $time, $time);
     $sscanf("foo=5", "foo=%d", i);
+    $sscanf("foo=5", str, i);
     $printtimescale;
     if (i != 5) $stop;
 
@@ -497,6 +507,7 @@ module t (/*AUTOARG*/
   endproperty
 
   assert property (@(clk) not ##1 in);
+  cover property (@(posedge clk) not strong (in ##1 sum[0]));
 
   initial begin
     assert_simple_immediate_else: assert(0) else $display("fail");
@@ -552,6 +563,7 @@ module t (/*AUTOARG*/
   assert_prop_s_always: assert property (@(posedge clk) s_always [1:2] in);
   assert_prop_overlap_impl: assert property (@(posedge clk) in |-> in);
   assert_prop_nonoverlap_impl: assert property (@(posedge clk) in |=> in);
+  assert_prop_match_item: assert property (@(posedge clk) (in, $display("match")) |-> in);
   assert_prop_overlap_fb: assert property (@(posedge clk) in #-# in);
   assert_prop_nonoverlap_fb: assert property (@(posedge clk) in #=# in);
   assert_prop_accept_on: assert property (@(posedge clk) accept_on (in) in);
@@ -612,6 +624,7 @@ module t (/*AUTOARG*/
       bins t12  = (3'b001 => 3'b010);
       bins talt = (3'b010 => 3'b011), (3'b100 => 3'b101);  // multiple transition sets
       bins trep = (3'b000 => 3'b001 [->2]);  // repetition op -> non-NONE VTransRepType (exercises ascii())
+      bins trng = (3'b000 [*2:3]);  // repetition range
       bins tarr[] = (3'b000 => 3'b001), (3'b001 => 3'b010);  // array transition bins -> m_isArray
     }
   endgroup
@@ -721,6 +734,21 @@ module sub(input logic clk);
   real r;
 endmodule
 
+module defparam_gen;
+  // verilator lint_off DEFPARAM
+  // A defparam path starting with a generate block, that without it names 'dpg.n'
+  defparam_leaf n();
+  if (1) begin : dpg
+    defparam_leaf n();
+  end
+  defparam dpg.n.P = 2;
+  // verilator lint_on DEFPARAM
+endmodule
+
+module defparam_leaf;
+  parameter P = 1;
+endmodule
+
 module seq_event(input logic clk);
   bit a, b, c;
   sequence sq;
@@ -733,6 +761,13 @@ endmodule
 
 package p;
   logic pkgvar;
+  function automatic int ident(int value);
+    return value;
+  endfunction
+  function automatic int uses_const_func();
+    logic [ident(2)-1:0] v;
+    return $bits(v);
+  endfunction
 endpackage
 
 class ClsParamExt extends ClsParam #(bit, 2);

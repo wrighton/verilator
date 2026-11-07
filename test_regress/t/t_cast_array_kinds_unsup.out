@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_cast_array_kinds_unsup.v:21:14: Unsupported: static cast to 'int$[$:1]' from 'int$[]'
+                                                      : ... note: In instance 't'
+   21 |     bq = bq_t'(d);   
+      |              ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_cast_array_kinds_unsup.v:22:14: Unsupported: static cast to 'int$[$:1]' from 'int$[0:2]'
+                                                      : ... note: In instance 't'
+   22 |     bq = bq_t'(f);
+      |              ^
+%Error-UNSUPPORTED: t/t_cast_array_kinds_unsup.v:23:13: Unsupported: static cast to 'int$[]' from 'int$[$:1]'
+                                                      : ... note: In instance 't'
+   23 |     dd = d_t'(bq);   
+      |             ^
+%Error-UNSUPPORTED: t/t_cast_array_kinds_unsup.v:24:13: Unsupported: static cast to 'int$[]' from 'int$[int]'
+                                                      : ... note: In instance 't'
+   24 |     dd = d_t'(aa);   
+      |             ^
+%Error-UNSUPPORTED: t/t_cast_array_kinds_unsup.v:25:14: Unsupported: static cast to 'string$[]' from 'int$[$]'
+                                                      : ... note: In instance 't'
+   25 |     sd = sd_t'(q);   
+      |              ^
+%Error: Exiting due to

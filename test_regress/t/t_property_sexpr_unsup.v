@@ -54,8 +54,6 @@ module t (
 
   assert property (@(posedge clk) val s_until_with (val ##1 val)) $display("[%0t] sequence in until_with, fileline:%d", $time, `__LINE__);
 
-  assert property (@(posedge clk) (val until val) or val) $display("[%0t] until inside or, fileline:%d", $time, `__LINE__);
-
   property prop_implication;
     ##1 cyc == 4 |-> 1;
   endproperty

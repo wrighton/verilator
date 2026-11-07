@@ -1,11 +1,14 @@
-%Error-UNSUPPORTED: t/t_gen_defparam_bad.v:9:11: Unsupported: defparam with no dot
+%Error: t/t_gen_defparam_bad.v:8:24: In defparam, instance id_13 never declared
+    8 |   defparam id_13.id_14 = -id_13,
+      |                        ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_gen_defparam_bad.v:9:11: In defparam, parameter 'id_15' never declared
     9 |     id_15 = id_14;
       |           ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_gen_defparam_bad.v:11:17: Unsupported: defparam with no dot
+%Error: t/t_gen_defparam_bad.v:11:17: In defparam, parameter 'id_8' never declared
    11 |   defparam id_8 = 1, id_9 = 1;
       |                 ^
-%Error-UNSUPPORTED: t/t_gen_defparam_bad.v:11:27: Unsupported: defparam with no dot
+%Error: t/t_gen_defparam_bad.v:11:27: In defparam, parameter 'id_9' never declared
    11 |   defparam id_8 = 1, id_9 = 1;
       |                           ^
 %Error: Exiting due to

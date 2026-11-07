@@ -579,7 +579,18 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
         puts(")");
     }
-    void visit(AstCoverTransItem* nodep) override { iterateChildrenConst(nodep); }
+    void visit(AstCoverTransItem* nodep) override {
+        iterateAndNextConstNull(nodep->valuesp());
+        if (!nodep->repMinp()) return;
+        const string op = nodep->repType().ascii();
+        puts(" " + op.substr(0, op.size() - 1));  // Operator without its ']'
+        iterateConst(nodep->repMinp());
+        if (nodep->repMaxp()) {
+            puts(":");
+            iterateConst(nodep->repMaxp());
+        }
+        puts("]");
+    }
 
     void visit(AstCvtPackString* nodep) override {
         putfs(nodep, "");
@@ -606,14 +617,18 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         puts(")");
     }
     void visitNodeDisplay(AstNode* nodep, AstNode* fileOrStrgp, const string& text,
-                          AstNode* exprsp) {
+                          AstNode* exprsp, AstNode* formatp = nullptr) {
         putfs(nodep, nodep->verilogKwd());
         putbs("(");
         if (fileOrStrgp) {
             iterateConstNull(fileOrStrgp);
             putbs(", ");
         }
-        putsQuoted(text);
+        if (formatp) {
+            iterateConst(formatp);
+        } else {
+            putsQuoted(text);
+        }
         for (AstNode* expp = exprsp; expp; expp = expp->nextp()) {
             puts(", ");
             iterateConstNull(expp);
@@ -628,10 +643,10 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         visitNodeDisplay(nodep, nullptr, nodep->fmtp()->text(), nodep->fmtp()->exprsp());
     }
     void visit(AstFScanF* nodep) override {
-        visitNodeDisplay(nodep, nodep->filep(), nodep->text(), nodep->exprsp());
+        visitNodeDisplay(nodep, nodep->filep(), nodep->text(), nodep->exprsp(), nodep->formatp());
     }
     void visit(AstSScanF* nodep) override {
-        visitNodeDisplay(nodep, nodep->fromp(), nodep->text(), nodep->exprsp());
+        visitNodeDisplay(nodep, nodep->fromp(), nodep->text(), nodep->exprsp(), nodep->formatp());
     }
     void visit(AstSFormat* nodep) override {
         visitNodeDisplay(nodep, nodep->lhsp(), nodep->fmtp()->text(), nodep->fmtp()->exprsp());
@@ -870,6 +885,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         emitNodesWithText(nodep->nodesp(), true, "");
         puts(")");
     }
+    void visit(AstCReturn* nodep) override {
+        putfs(nodep, "return ");
+        iterateConst(nodep->lhsp());
+        puts(";\n");
+    }
     void visit(AstCStmtUser* nodep) override {
         putfs(nodep, "$c(");
         emitNodesWithText(nodep->nodesp(), false, "");
@@ -1095,7 +1115,13 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstSliceSel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
-        puts(cvtToStr(nodep->declRange()));
+        if (VN_IS(nodep->lsbp(), Const)) {
+            puts(cvtToStr(nodep->declRange()));
+        } else {
+            puts("[");
+            iterateAndNextConstNull(nodep->lsbp());
+            puts(" +: " + cvtToStr(nodep->declRange().elements()) + "]");
+        }
     }
     void visit(AstThisRef* /*nodep*/) override { puts("this"); }
     void visit(AstTypedef* nodep) override {
@@ -1472,6 +1498,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateConst(nodep->condp());
         puts(") ");
         iterateConst(nodep->propp());
+    }
+    void visit(AstSStrength* nodep) override {
+        puts(nodep->strength() == VPropStrength::STRONG ? "strong(" : "weak(");
+        iterateConst(nodep->exprp());
+        puts(")");
     }
     void visit(AstSClocked* nodep) override {
         puts("@(");

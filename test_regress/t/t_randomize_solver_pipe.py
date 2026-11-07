@@ -67,21 +67,33 @@ test.file_grep(logfile, r'NPASS=(\d+)', 11)
 test.file_grep_not(logfile, r'Solver failed repeatedly')
 test.file_grep_not(logfile, r'Solver died')
 
+# A solver that rejects a command and then stops answering is replaced
+logfile = test.obj_dir + '/sim_err_mute.log'
+latch = test.obj_dir + '/err_mute.latch'
+if os.path.exists(latch):
+    os.unlink(latch)
+test.execute(logfile=logfile,
+             run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+             'TAMPER=err_mute TAMPER_AT=2 TAMPER_ONCE="' + latch + '" ')
+test.file_grep(logfile, r'NPASS=(\d+)', 11)
+test.file_grep(logfile, r'Solver died or replied unreadably')
+
 # A reply the unigen2 sampler can't read while it measures the solution space.
 # Falls back to the plain solve, so every randomize still succeeds
 logfile = test.obj_dir + '/sim_ug2_estimate.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=model_trunc TAMPER_AT=8 ')
+             'TAMPER=model_trunc TAMPER_AT=12 ')
 test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A value the sampler can't parse, and a status it can't use, seen while it
-# enumerates a cell.
+# enumerates a cell. The solver rejects several commands of that call, and the
+# replies queued behind its first error must not answer later calls.
 logfile = test.obj_dir + '/sim_ug2_value.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=bad_base TAMPER_AT=5 ')
-test.file_grep(logfile, r'NPASS=(\d+)', 9)
+             'TAMPER=bad_base TAMPER_AT=7 ')
+test.file_grep(logfile, r'NPASS=(\d+)', 11)
 
 # A reply naming a variable the sampler didn't ask for.
 logfile = test.obj_dir + '/sim_ug2_var.log'

@@ -148,8 +148,8 @@ Summary:
 .. option:: --bbox-unsup
 
    Black box some unsupported language features, currently UDP tables, the
-   cmos and tran gate primitives, deassign statements, and mixed edge
-   errors. This may enable linting of the rest of the design even when
+   resistive switch and tran gate primitives, deassign statements, and mixed
+   edge errors. This may enable linting of the rest of the design even when
    unsupported constructs are present.
 
    Using this argument will likely cause incorrect simulation.
@@ -1058,7 +1058,9 @@ Summary:
 
    Rarely needed. Disable converting assignments of whole unpacked arrays into
    assignments of the individual elements. Signals that are accessed from
-   SystemC are always converted.
+   SystemC, assignments to a slice of an unpacked array, and assignments to an
+   assignment pattern (e.g. an output port connected to ``'{a, b}``), are
+   always converted.
 
 .. option:: -fno-split
 
@@ -1099,7 +1101,8 @@ Summary:
 
    Rarely needed. Set the maximum array size (number of elements) for slice
    optimization to avoid excessive memory usage. Defaults to 256. A value
-   of 0 removes the limit.
+   of 0 removes the limit. Assignments to a slice of an unpacked array or to
+   an assignment pattern are always converted.
 
 .. option:: --func-recursion-depth <value>
 
@@ -1264,7 +1267,10 @@ Summary:
    function will be inlined if possible.
 
    This allows functions that are called only once or twice to be inlined even
-   if they exceed the small function threshold. The default is 200.
+   if they exceed the small function threshold. The default is 200. This
+   does not apply to a function that must remain in the model regardless,
+   e.g. because it is also called as a method of another class object, as
+   inlining it would only add copies.
 
    See also :vlopt:`--inline-cfuncs` and :vlopt:`-fno-inline-cfuncs`.
 
@@ -1610,9 +1616,11 @@ Summary:
    faster, at a small loss in performance that gets worse with decreasing
    split values. Note that this option is stronger than
    :vlopt:`--output-split` in the sense that :vlopt:`--output-split` will
-   not split inside a function. Timed processes and tasks (coroutines)
-   are also split inside nested statements, such as the items of a case
-   statement, by moving parts of them into separate functions.
+   not split inside a function. Timed processes and tasks (coroutines),
+   and tasks and functions that are not inlined, such as class methods,
+   are also split, including inside nested statements such as the items
+   of a case statement, by moving parts of them into separate functions.
+   Public tasks and functions are not split.
 
    Defaults to the value of :vlopt:`--output-split`, unless explicitly
    specified.

@@ -144,6 +144,10 @@ struct V3ParseBisonYYSType final {
 std::ostream& operator<<(std::ostream& os, const V3ParseBisonYYSType& rhs) VL_MT_DISABLED;
 
 #define YYSTYPE V3ParseBisonYYSType
+// Lets bison grow its stack past YYINITDEPTH by copying
+#define YYSTYPE_IS_TRIVIAL 1
+static_assert(std::is_trivially_copyable<V3ParseBisonYYSType>::value,
+              "YYSTYPE_IS_TRIVIAL requires a trivially copyable YYSTYPE");
 
 //######################################################################
 
@@ -194,8 +198,8 @@ public:
     void tagNodep(AstNode* nodep) { m_tagNodep = nodep; }
     AstNode* tagNodep() const { return m_tagNodep; }
     void lexTimescaleParse(FileLine* fl, const char* textp) VL_MT_DISABLED;
-    AstPragma* createTimescale(FileLine* fl, bool unitSet, double unitVal, bool precSet,
-                               double precVal) VL_MT_DISABLED;
+    AstNode* createTimescale(FileLine* fl, bool unitSet, double unitVal, bool precSet,
+                             double precVal) VL_MT_DISABLED;
     VTimescale timeLastUnit() const { return m_timeLastUnit; }
     VTimescale timeLastPrec() const { return m_timeLastPrec; }
 
@@ -271,6 +275,7 @@ public:
     // Bison sometimes needs error context without a token, so remember last token's line
     // Only use this if do not have and cannot get a token-relevant fileline
     FileLine* bisonLastFileline() const { return m_bisonLastFileline; }
+    int bisonLastToken() const { return m_tokenLastBison.token; }
 
     // Return next token, for bison, since bison isn't class based, use a global THIS
     AstNetlist* rootp() const { return m_rootp; }
@@ -326,6 +331,7 @@ private:
     void tokenPipeline() VL_MT_DISABLED;  // Internal; called from tokenToBison
     int tokenPipelineId(int token) VL_MT_DISABLED;
     void tokenPipelineSym() VL_MT_DISABLED;
+    void tokenPipeEmptyCSet(size_t depth) VL_MT_DISABLED;
     size_t tokenPipeScanIdInst(size_t depth) VL_MT_DISABLED;
     size_t tokenPipeScanIdType(size_t depth) VL_MT_DISABLED;
     size_t tokenPipeScanBracket(size_t depth) VL_MT_DISABLED;

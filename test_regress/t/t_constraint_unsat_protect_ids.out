@@ -25,4 +25,8 @@ Randomization failed.
 %Warning-UNSATCONSTR: PSkxop:26: Unsatisfied constraint
 %Warning-UNSATCONSTR: PSkxop:27: Unsatisfied constraint
 Expected failure: conflicting constraints detected
+
+=== Test 7: Size of an array with rand_mode off ===
+%Warning-UNSATCONSTR: PSkxop:39: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:39: Unsatisfied constraint
 *-* All Finished *-*

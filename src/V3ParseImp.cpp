@@ -68,7 +68,9 @@ void V3ParseImp::importIfInStd(FileLine* fileline, const string& id, bool doImpo
     // Keywords that auto-import to require use of verilated_std.vh.
     // OK if overly sensitive; will over-import and keep std:: around
     // longer than migt otherwise.
-    if (v3Global.usesStdPackage()) return;  // Run once then short-circuit
+    // Run once then short-circuit. Covergroups and 'randomize' keep std:: without the import,
+    // so test that the import was made (which sets the process class), not usesStdPackage().
+    if (v3Global.rootp()->stdPackageProcessp()) return;
     const bool identifierImportsStd = (id == "mailbox" || id == "process" || id == "randomize"
                                        || id == "semaphore" || id == "std");
     if (!identifierImportsStd) return;
@@ -192,15 +194,18 @@ void V3ParseImp::lexTimescaleParse(FileLine* fl, const char* textp) {
     m_timeLastUnit = v3Global.opt.timeComputeUnit(unit);
     m_timeLastPrec = v3Global.opt.timeComputePrec(prec);
 }
-AstPragma* V3ParseImp::createTimescale(FileLine* fl, bool unitSet, double unitVal, bool precSet,
-                                       double precVal) {
-    VTimescale unit{VTimescale::NONE};
+AstNode* V3ParseImp::createTimescale(FileLine* fl, bool unitSet, double unitVal, bool precSet,
+                                     double precVal) {
+    // Returns TIMEUNIT_SET and/or TIMEPRECISION_SET pragmas with the declared values
+    AstNode* resultp = nullptr;
     if (unitSet) {
         bool bad;
-        unit = VTimescale{unitVal, bad /*ref*/};
+        const VTimescale unit{unitVal, bad /*ref*/};
         if (bad) {
             UINFO(1, "Value = " << unitVal);
             fl->v3error("timeunit illegal value");
+        } else {
+            resultp = new AstPragma{fl, VPragmaType::TIMEUNIT_SET, unit};
         }
     }
     VTimescale prec{VTimescale::NONE};
@@ -210,15 +215,13 @@ AstPragma* V3ParseImp::createTimescale(FileLine* fl, bool unitSet, double unitVa
         if (bad) {
             UINFO(1, "Value = " << precVal);
             fl->v3error("timeprecision illegal value");
+        } else {
+            resultp = AstNode::addNextNull(
+                resultp, new AstPragma{fl, VPragmaType::TIMEPRECISION_SET, prec});
         }
     }
     v3Global.rootp()->timeprecisionMerge(fl, prec);
-    if (unit.isNone()) {
-        return nullptr;
-    } else {
-        unit = v3Global.opt.timeComputeUnit(unit);
-        return new AstPragma{fl, unit};
-    }
+    return resultp;
 }
 
 void V3ParseImp::lexVerilatorCmtLintSave(const FileLine* fl) { m_lexLintState.push_back(*fl); }
@@ -527,7 +530,10 @@ size_t V3ParseImp::tokenPipeScanIdInst(size_t depthIn) {
     // Return location of following token, or input if not found
     // yaID/*module_identifier*/ [ '#' '('...')' ] yaID/*name_of_instance*/ [ '['...']' ] '(' ...
     // yaID/*module_identifier*/ [ '#' id|etc ] yaID/*name_of_instance*/ [ '['...']' ] '(' ...
+    // yaID/*udp_identifier*/ '(' strength ... ')' [ '#' ... ] yaID/*name_of_instance*/ ...
     size_t depth = depthIn;
+    if (tokenPeekp(depth)->token == '(' && isStrengthToken(tokenPeekp(depth + 1)->token))
+        depth = tokenPipeScanParens(depth);
     depth = tokenPipeScanParam(depth, true);
 
     if (tokenPeekp(depth)->token != yaID__LEX) return depthIn;
@@ -663,6 +669,17 @@ size_t V3ParseImp::tokenPipeScanParens(size_t depth) {
     return depth;
 }
 
+void V3ParseImp::tokenPipeEmptyCSet(size_t depth) {
+    // An empty IEEE constraint_set '{' '}' after if/foreach/else/'->' is ambiguous with an
+    // empty queue '{' '}' starting an expression, e.g. 'if (a) {} -b < 2;', so mark the '{'
+    // yIF '(' ... ')' '{' '}'
+    //                 ^- depth
+    // yP_MINUSGT '{' '}'
+    //            ^- depth
+    if (tokenPeekp(depth)->token == '{' && tokenPeekp(depth + 1)->token == '}')
+        m_tokensAhead.at(depth).token = yP_CURLY__EMPTY;
+}
+
 size_t V3ParseImp::tokenPipeScanEqNew(size_t depth) {
     // Search around IEEE class_new to see if is expression
     // Return location of following token, or input if not found
@@ -747,9 +764,13 @@ void V3ParseImp::tokenPipeline() {
         || token == ':'  //
         || token == '='  //
         || token == yCONST__LEX  //
+        || token == yELSE  //
+        || token == yFOREACH  //
         || token == yGLOBAL__LEX  //
+        || token == yIF  //
         || token == yLOCAL__LEX  //
         || token == yNEW__LEX  //
+        || token == yP_MINUSGT  //
         || token == ySTATIC__LEX  //
         || token == yTAGGED__LEX  //
         || token == yTYPE__LEX  //
@@ -781,6 +802,12 @@ void V3ParseImp::tokenPipeline() {
             } else {
                 token = yCONST__ETC;
             }
+        } else if (token == yELSE || token == yP_MINUSGT) {
+            VL_RESTORER(yylval);  // Remember value, as about to read ahead
+            tokenPipeEmptyCSet(0);
+        } else if (token == yFOREACH || token == yIF) {
+            VL_RESTORER(yylval);  // Remember value, as about to read ahead
+            tokenPipeEmptyCSet(tokenPipeScanParens(0));
         } else if (token == yGLOBAL__LEX) {
             if (nexttok == yCLOCKING) {
                 token = yGLOBAL__CLOCKING;

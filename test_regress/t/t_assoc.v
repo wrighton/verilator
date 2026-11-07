@@ -69,6 +69,23 @@ module t (
       i = a.prev(k);
       `checkh(i, 0);
       `checkp(a, "'{'h2:\"bared\", 'h3:\"fooed\"}");
+      // From an index not in the array
+      k = 4'd1;
+      i = a.next(k);
+      `checkh(i, 1);
+      `checks(k, 4'd2);
+      k = 4'd9;
+      i = a.prev(k);
+      `checkh(i, 1);
+      `checks(k, 4'd3);
+      k = 4'd9;
+      i = a.next(k);
+      `checkh(i, 0);
+      `checks(k, 4'd9);
+      k = 4'd1;
+      i = a.prev(k);
+      `checkh(i, 0);
+      `checks(k, 4'd1);
 
       a.first(k);
       `checks(k, 4'd2);
@@ -127,6 +144,14 @@ module t (
       `checkh(i, 0);
       `checkp(a["foo"], "\"fooed\"");
       `checkp(a, "'{\"bar\":\"bared\", \"foo\":\"fooed\"}");
+      k = "baz";
+      i = a.next(k);
+      `checkh(i, 1);
+      `checks(k, "foo");
+      k = "baz";
+      i = a.prev(k);
+      `checkh(i, 1);
+      `checks(k, "bar");
 
       a.delete("bar");
       i = a.size();

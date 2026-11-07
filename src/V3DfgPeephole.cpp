@@ -204,6 +204,7 @@ class V3DfgPeephole final : public DfgVisitor {
     const DfgDataType& m_bitDType = DfgDataType::packed(1);  // Common, so grab it up front
     std::vector<DfgVertex*> m_workList;  // List of vertices processed in current interation
     std::vector<DfgVertex*> m_iterList;  // Vertices to start from on next iteration
+    std::vector<DfgVertexVar*> m_removableVarps;  // In visit(DfgVertexVar*), removable sinks
     DfgUserMap<VertexInfo> m_vInfo = m_dfg.makeUserMap<VertexInfo>();  // Map to VertexInfo
     V3DfgCache m_cache{m_dfg};  // Vertex cache to avoid creating redundant vertices
     DfgVertex* m_vtxp = nullptr;  // Currently considered vertex
@@ -299,6 +300,18 @@ class V3DfgPeephole final : public DfgVisitor {
         vInfo.m_iterListIndex = 0;
     }
 
+    // Drop removed entries from the iter list, keeping the order
+    void compactIterList() {
+        size_t size = 1;
+        for (size_t i = 1; i < m_iterList.size(); ++i) {
+            DfgVertex* const vtxp = m_iterList[i];
+            if (!vtxp) continue;
+            m_vInfo[vtxp].m_iterListIndex = size;
+            m_iterList[size++] = vtxp;
+        }
+        m_iterList.resize(size);
+    }
+
     void deleteVertex(DfgVertex* vtxp) {
         UASSERT_OBJ(!m_vInfo[vtxp].m_workListIndex, vtxp, "Deleted Vertex is in work list");
         UASSERT_OBJ(!vtxp->hasSinks(), vtxp, "Should not delete used vertex");
@@ -308,8 +321,10 @@ class V3DfgPeephole final : public DfgVisitor {
         // Invalidate cache entry
         invalidateVertex(vtxp);
 
-        // It might be in the iter list, remove it
+        // It might be in the iter list, remove it. Replacements can add and remove many
+        // vertices in one iteration, so compact the list when it is mostly removed entries.
         removeFromIterList(vtxp);
+        if (m_iterList.size() > 2 * m_dfg.size()) compactIterList();
 
         // Gather source vertices - they might be duplicates, make unique using generation number
         incrementGeneration();
@@ -327,6 +342,9 @@ class V3DfgPeephole final : public DfgVisitor {
             vInfo.m_generation = m_currentGeneration;
             return false;
         });
+
+        // Release its VertexInfo for reuse, as replacements can create many vertices
+        m_vInfo.erase(*vtxp);
 
         // This pass only removes variables that are either not driven in this graph,
         // or are not observable outside the graph. If there is also no external write
@@ -477,6 +495,25 @@ class V3DfgPeephole final : public DfgVisitor {
     static bool isEqOne(const DfgVertex* vtxp) {
         if (const DfgConst* const constp = vtxp->cast<DfgConst>()) return constp->num().isEqOne();
         return false;
+    }
+
+    // True if 'ap' is 'yp', or an operand of 'yp' if 'yp' is an Or, so 'ap | yp' equals 'yp'
+    static bool isOrAbsorbed(const DfgVertex* ap, const DfgVertex* yp) {
+        if (isSame(ap, yp)) return true;
+        const DfgOr* const orp = yp->cast<DfgOr>();
+        return orp && (isSame(ap, orp->lhsp()) || isSame(ap, orp->rhsp()));
+    }
+
+    // If 'vtxp' is '~a & b' or 'b & ~a' with 'isOrAbsorbed(a, yp)', return 'b', otherwise nullptr
+    static DfgVertex* redundantAndNotOperand(const DfgVertex* vtxp, const DfgVertex* yp) {
+        // If so, 'vtxp | yp' equals 'b | yp'.
+        const DfgAnd* const andp = vtxp->cast<DfgAnd>();
+        if (!andp) return nullptr;
+        const DfgNot* const lNotp = andp->lhsp()->cast<DfgNot>();
+        if (lNotp && isOrAbsorbed(lNotp->srcp(), yp)) return andp->rhsp();
+        const DfgNot* const rNotp = andp->rhsp()->cast<DfgNot>();
+        if (rNotp && isOrAbsorbed(rNotp->srcp(), yp)) return andp->lhsp();
+        return nullptr;
     }
 
     static bool areAdjacent(uint32_t& lsb, const DfgSel* lSelp, const DfgSel* rSelp) {
@@ -1996,6 +2033,25 @@ class V3DfgPeephole final : public DfgVisitor {
             }
         }
 
+        {
+            // A | (~A & B) is A | B, and (A | C) | (~A & B) is (A | C) | B. This also removes
+            // the second dependency on 'A', which otherwise makes chains like
+            // 'o1 = o0 | (~o0 & b1); o2 = o1 | (~o1 & b2); ...' (e.g. from a priority encoder
+            // loop) a DAG with exponentially many paths.
+            DfgVertex* yp = lhsp;
+            DfgVertex* bp = redundantAndNotOperand(rhsp, lhsp);
+            if (!bp) {
+                yp = rhsp;
+                bp = redundantAndNotOperand(lhsp, rhsp);
+            }
+            if (bp) {
+                APPLYING(REPLACE_OR_WITH_AND_OF_NOT) {
+                    replace(make<DfgOr>(vtxp, yp, bp));
+                    return;
+                }
+            }
+        }
+
         if (vtxp->dtype() == m_bitDType) {
             if (tryReplaceBitwiseWithReduction(vtxp)) return;
         }
@@ -3390,10 +3446,14 @@ class V3DfgPeephole final : public DfgVisitor {
 
         // Otherwise remove if there is only one sink that is not a removable variable
         bool foundOne = false;
+        m_removableVarps.clear();
         const bool keep = vtxp->srcp()->foreachSink([&](DfgVertex& sink) -> bool {
             // Ignore non-observable variable sinks. These can be eliminated.
-            if (const DfgVertexVar* const varp = sink.cast<DfgVertexVar>()) {
-                if (!varp->hasSinks() && !varp->isObserved()) return false;
+            if (DfgVertexVar* const varp = sink.cast<DfgVertexVar>()) {
+                if (!varp->hasSinks() && !varp->isObserved()) {
+                    if (!varp->defaultp()) m_removableVarps.push_back(varp);
+                    return false;
+                }
             }
             // Keep if found more than one sink
             if (foundOne) return true;
@@ -3401,10 +3461,13 @@ class V3DfgPeephole final : public DfgVisitor {
             foundOne = true;
             return false;
         });
-        if (!keep) {
+        if (keep) return;
+        // This holds for every removable variable of this source, including this one, so
+        // remove them all now. Visiting each would scan all sinks of the source again.
+        for (DfgVertexVar* const varp : m_removableVarps) {
             APPLYING(REMOVE_VAR) {
-                deleteVertex(vtxp);
-                return;
+                removeFromWorkList(varp);
+                deleteVertex(varp);
             }
         }
     }

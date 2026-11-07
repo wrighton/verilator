@@ -8,6 +8,7 @@
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 `define checkr(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got=%f exp=%f\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define STRINGIFY(x) `"x`"
 // verilog_format: on
 
 `timescale 1ns / 100ps
@@ -17,6 +18,7 @@ module main;
   real r;
   integer rc;
   time t;
+  string tfmt = "t";
 
   // verilator lint_off REALCVT
 
@@ -35,6 +37,29 @@ module main;
     `checkd(rc, 1);
     t = r;
     `checkr(t, 8125000);
+
+    begin
+      integer fd;
+      fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/fscanf.log"}, "w");
+      $fdisplay(fd, "2.5 3.5");
+      $fclose(fd);
+      fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/fscanf.log"}, "r");
+      rc = $fscanf(fd, "%t", r);  // in ms
+      `checkd(rc, 1);
+      t = r;
+      `checkr(t, 2500000);
+      // Format known only at runtime
+      tfmt = {"%", tfmt};
+      rc = $fscanf(fd, tfmt, r);
+      $fclose(fd);
+      `checkd(rc, 1);
+      t = r;
+      `checkr(t, 3500000);
+      rc = $sscanf("8.125", tfmt, r);
+      `checkd(rc, 1);
+      t = r;
+      `checkr(t, 8125000);
+    end
 
     $finish;
   end

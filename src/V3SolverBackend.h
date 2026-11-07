@@ -27,9 +27,12 @@
 
 #include "V3Ast.h"
 
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class V3UniqueNames;
@@ -40,6 +43,8 @@ class VMemberMap;
 
 // Separates the levels of the name of a global constraint flattened into a class
 static constexpr const char* GLOBAL_CONSTRAINT_SEPARATOR = "__DT__";
+// Name of the method randomizing the variables the solver does not
+static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
 
 // ######################################################################
 // Stores info about a variable's rand_mode state/a constraint's constraint_mode state
@@ -51,6 +56,33 @@ union RandomizeMode final {
         uint32_t index : 31;  // Index of var/constraint in rand_mode/constraint_mode vector
     };
     uint64_t asUQuad;  // Representation as int to be stored in nodep->user*
+};
+
+// A constraint made by cloning the constraint of an object, or of the objects of an array
+struct ClonedConstraint final {
+    AstNodeExpr* objp;  // The object, or object array, it was cloned for
+    AstConstraint* origp;  // The constraint it was cloned from
+};
+using ClonedConstraints = std::map<const AstConstraint*, ClonedConstraint>;
+
+// The per-element rand_mode() state of arrays, created on first use
+class ElemRandModes final {
+    // MEMBERS
+    const std::unordered_set<AstVar*>& m_arrays;  // Arrays with per-element rand_mode()
+    std::unordered_map<const AstVar*, AstVar*> m_modeVars;  // Array -> its element modes
+    AstAssocArrayDType* m_dtypep = nullptr;  // Type of the element modes
+
+public:
+    // CONSTRUCTORS
+    explicit ElemRandModes(const std::unordered_set<AstVar*>& arrays)
+        : m_arrays{arrays} {}
+    // METHODS
+    // Whether no array has per-element rand_mode()
+    bool empty() const { return m_arrays.empty(); }
+    // Whether arrVarp has per-element rand_mode()
+    bool hasModes(AstVar* arrVarp) const { return m_arrays.count(arrVarp); }
+    // Get or create the per-element rand_mode state of an array, nullptr if it has none
+    AstVar* modeVarp(AstVar* arrVarp) VL_MT_DISABLED;
 };
 
 // The rand_mode/constraint_mode state arrays created by the front end
@@ -84,6 +116,36 @@ public:
 };
 
 //######################################################################
+// Helpers shared by the randomize front end and the back-ends
+
+class RandomizeUtil final {
+public:
+    // Look through unpacked array dimensions to the element type
+    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
+    // Offset of the element at declared index idxp of array arrDtp, as selects and the solver
+    // use
+    static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstNodeDType* arrDtp,
+                                       AstNodeExpr* idxp) VL_MT_DISABLED;
+    // Element of array arrp at declared index idxVarp
+    static AstNodeExpr* newIdxSelp(FileLine* fl, AstNodeExpr* arrp,
+                                   AstVar* idxVarp) VL_MT_DISABLED;
+    // Element of array arrp at the declared indices idxVarps, one for each dimension
+    static AstNodeExpr* newElemSelp(FileLine* fl, AstNodeExpr* arrp,
+                                    const std::vector<AstVar*>& idxVarps) VL_MT_DISABLED;
+    // Whether varp is an unpacked array of class handles
+    static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
+    // Return the random index select into a non-random array that exprp reads through
+    static AstNodeExpr* randIndexSelp(AstNodeExpr* exprp,
+                                      bool (*isRandIndexp)(const AstNodeExpr* indexp))
+        VL_MT_DISABLED;
+    // Whether the array element at indexp has rand_mode off, given the array's modesp
+    static AstNodeExpr* newElemModeOffp(AstNodeExpr* modesp, AstNodeExpr* indexp) VL_MT_DISABLED;
+    // Read reference to member varp of objp, or of 'this' if objp is nullptr
+    static AstNodeExpr* newMemberRefp(FileLine* fl, AstNodeExpr* objp,
+                                      AstVar* varp) VL_MT_DISABLED;
+};
+
+//######################################################################
 // Lowering of the randomize sites of one V3Randomize pass, created by
 // V3SolverBackend::newLowering()
 
@@ -93,14 +155,19 @@ protected:
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
     const RandModeVars& m_modeVars;  // rand_mode/constraint_mode state arrays
+    ElemRandModes& m_elemModes;  // Per-element rand_mode() state
+    const ClonedConstraints& m_cloneObjps;  // Constraints cloned from objects
     VNDeleter& m_deleter;  // Deferred deletion of nodes removed by the back-end
 
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                     const RandModeVars& modeVars, VNDeleter& deleter)
+                     const RandModeVars& modeVars, ElemRandModes& elemModes,
+                     const ClonedConstraints& cloneObjps, VNDeleter& deleter)
         : m_memberMap{memberMap}
         , m_uniqueNames{uniqueNames}
         , m_modeVars{modeVars}
+        , m_elemModes{elemModes}
+        , m_cloneObjps{cloneObjps}
         , m_deleter{deleter} {}
 
     // METHODS
@@ -127,9 +194,23 @@ public:
     virtual AstNodeExpr* lowerClassRandomize(AstClass* classp, AstFunc* randomizep,
                                              AstVar* randModeVarp)
         = 0;
+    // Class randomize(): whether the solver result lowerClassRandomize returned
+    // already includes __VBasicRand, run between a solve of array sizes and the
+    // final solve. The front end then emits only the assignment of the result.
+    virtual bool basicInClassSolve(AstClass* classp) = 0;
     // Class randomize(): add statements that must follow the solver result,
     // after the front end has emitted the assignment that evaluates it
     virtual void addAfterClassSolve(AstClass* classp, AstFunc* randomizep) = 0;
+    // Complete class solver lowering after both result and basic-randomization assignments,
+    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand.
+    virtual void finishClassRandomize(AstClass* classp, AstFunc* randomizep,
+                                      const AstFunc* basicRandomizep)
+        = 0;
+    // Ensure backend-required related classes are lowered before an inline site. The callback
+    // remains front-end-owned so its visitor context is restored across nested class lowering.
+    virtual void prepareInlineRandomize(AstClass* classp,
+                                        const std::function<void(AstClass*)>& lowerClass)
+        = 0;
     // randomize() with {...} called by nodep: lower the captured constraints
     // into randomizeFuncp, and assign its return value from the solver result
     // and basicRandomizeCallp (__VBasicRand()). thisVarp is the captured
@@ -144,6 +225,8 @@ public:
     virtual AstNodeExpr* lowerStdRandomizeWith(AstNodeFTaskRef* nodep, AstFunc* randomizeFuncp,
                                                AstNode* capturedTreep, AstVar* stdrandp)
         = 0;
+    // Complete std::randomize solver lowering after its result assignment, before rollback.
+    virtual void finishStdRandomizeWith(AstFunc* randomizep, AstVar* stdrandp) = 0;
     // randomize(null): add the constraint check to funcp, and return its result
     virtual AstNodeExpr* lowerCheckOnly(AstClass* classp, AstFunc* funcp) = 0;
 };
@@ -165,6 +248,7 @@ public:
     // Lowering for one V3Randomize pass, sharing the given state with the front end
     virtual std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
+                ElemRandModes& elemModes, const ClonedConstraints& cloneObjps,
                 VNDeleter& deleter) const VL_MT_DISABLED
         = 0;
 };

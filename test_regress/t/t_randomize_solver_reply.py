@@ -22,6 +22,7 @@ runs = [
     ('bad_digits', 1, 15),  # digits outside the stated base are not a number
     ('bad_index', 1, 15),  # a malformed array select index
     ('bad_value', 1, 15),  # a value with no base must not commit the earlier one
+    ('bad_value', 4, 16),  # an unusable value in the reply to a spreading query
     ('bare_hash', 1, 15),  # a value that is only "#"
     ('binary', 1, 16),  # binary values
     ('core_junk', 1, 16),  # garbage opens the core reply, then the pipe closes
@@ -30,21 +31,24 @@ runs = [
     ('dup_model', 1, 15),  # the same variable answered twice
     ('err_assume', 1, 16),  # error in place of the unsat assumptions
     ('err_core', 1, 16),  # error in place of the unsat core
+    ('err_extra', 2, 15),  # error replying to an earlier command, ahead of the status
     ('err_multiline', 2, 15),  # solver rejects a command with an error spanning two lines
     ('err_once', 2, 15),  # solver rejects a command instead of answering
     ('err_phase', 1, 15),  # error in place of an intermediate phase value reply
     ('err_reply', 1, 15),  # error in place of an S-expression reply
+    ('err_reply', 5, 16),  # error in place of the reply to a spreading query
     ('err_trunc', 2, 0),  # unterminated error, then the pipe closes
     ('err_unbal', 2, 15),  # a rejection error closing more parens than it opens
     ('err_unbal_cont', 2, 15),  # a rejection error with the extra paren on a continuation line
     ('garbage_assume', 1, 16),  # a bare word in place of the unsat assumptions
     ('garbage_model', 1, 15),  # half-valid model must not reach the variables
     ('garbage_status', 2, 15),  # a word that is not a status
-    ('garbage_status', 8, 15),  # a phased check-sat that does not answer with a status
+    ('garbage_status', 15, 15),  # a phased check-sat that does not answer with a status
     ('high_digit', 1, 15),  # a digit legal for some base but not the stated one
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
+    ('model_trunc', 4, 7),  # unterminated reply to a spreading query, then the pipe closes
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
@@ -54,8 +58,10 @@ runs = [
     ('short_model', 1, 15),  # a model missing a requested variable is not a model
     ('success', 1, 16),  # print-success echo ahead of every reply
     ('unknown_once', 2, 15),  # unknown answers one check-sat
+    ('unknown_once', 9, 16),  # unknown answers a spreading check
     ('unknown_twice', 2, 15),  # a second unknown must not warn again
     ('unknown_var', 1, 15),  # a variable that was never requested
+    ('unknown_var', 4, 16),  # a spreading query answered with too many values
     ('unsupported_once', 2, 15),  # command not supported, so no status ever comes
     ('upper_hex', 1, 16),  # uppercase hex digits
 ]
@@ -74,18 +80,21 @@ for mode, at, npass in runs:
 # soft relaxation and the base check-sat of call 1. To re-derive a TAMPER_AT, log the
 # untampered +MODE=pins conversation and count the replies its mode counts.
 pin_runs = [
-    # Untampered: calls 1 to 4 settle after 4, 7, 5 and 4 rounds
-    (None, 0, 20),
-    # Status 4: the first pin round of call 1, answered unknown
-    ('unknown_once', 4, 17),
+    # Untampered: calls 1 to 4 each settle after 4 rounds: the pin of the variable conflicts,
+    # and so does its check of whether it can change at all
+    (None, 0, 16),
+    # Status 4: the first pin round of call 1, answered unknown, so call 1 checks only the
+    # base solution again
+    ('unknown_once', 4, 14),
     # Unsat-assumptions reply 1: the first pin round of call 1, an error leaving no core
-    ('err_assume', 1, 17),
+    ('err_assume', 1, 14),
     # Unsat-assumptions reply 1: the first pin round of call 1, naming only literals out of
     # range
-    ('oor_assume', 1, 17),
-    # Unsat-assumptions reply 1 on: every pin round names the already dropped a0, so each
-    # call runs out its 8 rounds, one per pin plus one
-    ('stale_assume', 1, 32),
+    ('oor_assume', 1, 14),
+    # Unsat-assumptions reply 1 on: every core names __Va0, which each call drops first anyway;
+    # in the round checking whether it can change, __Va0 is no longer one of the literals, which
+    # ends the rounds as untampered
+    ('stale_assume', 1, 16),
 ]
 
 for mode, at, nrounds in pin_runs:

@@ -29,6 +29,14 @@ EmitCParentModule::EmitCParentModule() {
             if (VN_IS(nodep, CFunc) || VN_IS(nodep, Var) || VN_IS(nodep, NodeCoverDecl)) {
                 nodep->user4p(modp);
             }
+            AstVar* const varp = VN_CAST(nodep, Var);
+            if (varp && !varp->isPrimaryIO()
+                && EmitCBaseVisitorConst::isExplicitlyConstructed(varp)) {
+                varp->user3(modp->user3Inc());
+            }
+            if (varp && EmitCBaseVisitorConst::isNameableTrivial(varp)) {
+                varp->user3(modp->user4Inc());
+            }
         }
     };
     for (AstNode* const modp : v3Global.rootp()->modulespList()) {
@@ -37,7 +45,75 @@ EmitCParentModule::EmitCParentModule() {
 }
 
 //######################################################################
+// EmitCMemberGroups implementation
+
+EmitCMemberGroups::EmitCMemberGroups(const size_t nMembers)
+    : m_lim{static_cast<size_t>(v3Global.opt.compLimitMembers())} {
+    if (!m_lim) return;
+    if (nMembers > (m_lim * m_lim * m_lim)) {
+        m_l3s = (nMembers + (m_lim * m_lim * m_lim) - 1) / (m_lim * m_lim * m_lim);
+        m_l2s = m_lim;
+        m_l1s = m_lim;
+    } else if (nMembers > (m_lim * m_lim)) {
+        m_l2s = (nMembers + (m_lim * m_lim) - 1) / (m_lim * m_lim);
+        m_l1s = m_lim;
+    } else if (nMembers > m_lim) {
+        m_l1s = (nMembers + m_lim - 1) / m_lim;
+    }
+}
+
+std::string EmitCMemberGroups::namedPath(const size_t idx) const {
+    std::string path;
+    if (m_l3s != 1) path += "__Vg" + std::to_string(idx / (m_lim * m_l2s * m_l1s)) + ".";
+    if (m_l2s != 1) path += "__Vg" + std::to_string(idx / (m_lim * m_l1s) % m_l2s) + ".";
+    if (m_l1s != 1) path += "__Vg" + std::to_string(idx / m_lim % m_l1s) + ".";
+    return path;
+}
+
+//######################################################################
 // EmitCUtil implementation
+
+std::string EmitCUtil::unpackReverseCall(const AstNodeDType* dtypep) {
+    // C++ unpacked arrays hold each dimension in element order, lowest index first, but
+    // streaming (IEEE 1800-2023 11.4.14) and %p (21.2.1.7) are left to right, so every
+    // descending dimension must be reversed
+    std::string args;
+    size_t usedLength = 0;  // Length of args up to the last reversed dimension
+    while (const AstUnpackArrayDType* const adtypep
+           = VN_CAST(dtypep->skipRefp(), UnpackArrayDType)) {
+        if (!args.empty()) args += ", ";
+        const bool reverse = !adtypep->declRange().ascending();
+        args += reverse ? "1" : "0";
+        if (reverse) usedLength = args.size();
+        dtypep = adtypep->subDTypep();
+    }
+    if (!usedLength) return "";
+    return "VL_CVT_UNPACK_TO_UNPACK<" + args.substr(0, usedLength) + ">";
+}
+
+std::string EmitCUtil::toStringCall(const AstNodeDType* dtypep, const std::string& expr) {
+    // Reverse descending dimensions as unpackReverseCall, also in the elements of queues,
+    // dynamic and associative arrays, which the run-time to_string converts one by one
+    dtypep = dtypep->skipRefp();
+    if (!dtypep->isNonPackedArray() && !VN_IS(dtypep, WildcardArrayDType)) return "";
+    if (VN_IS(dtypep, UnpackArrayDType)) {
+        const AstNodeDType* leafp = dtypep;
+        while (const AstUnpackArrayDType* const adtypep = VN_CAST(leafp, UnpackArrayDType)) {
+            leafp = adtypep->subDTypep()->skipRefp();
+        }
+        if (toStringCall(leafp, "e").empty()) {
+            const std::string reverseCall = unpackReverseCall(dtypep);
+            if (reverseCall.empty()) return "";
+            return "VL_TO_STRING(" + reverseCall + "(" + expr + "))";
+        }
+    }
+    const std::string elemCall = toStringCall(dtypep->subDTypep(), "e");
+    if (elemCall.empty()) return "";
+    const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType);
+    const bool reverse = adtypep && !adtypep->declRange().ascending();
+    return (reverse ? "VL_CVT_UNPACK_TO_UNPACK<1>(" + expr + ")" : expr)
+           + ".to_string([](const auto& e) { return " + elemCall + "; })";
+}
 
 string EmitCUtil::prefixNameProtect(const AstNode* nodep) VL_MT_STABLE {
     const string prefix = v3Global.opt.modPrefix() + "_" + VIdProtect::protect(nodep->name());

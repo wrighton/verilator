@@ -33,6 +33,14 @@ class TestConflict;
   endfunction
 endclass
 
+class Frozen;
+  rand int q[$];
+  constraint c_size {
+    q.size() == 2;
+    foreach (q[i]) q[i] < 10;
+  }
+endclass
+
 module t_constraint_unsat;
   initial begin
     Packet pkt;
@@ -69,6 +77,17 @@ module t_constraint_unsat;
     else begin
       $display("ERROR: Should have failed with conflicting constraints");
       $stop;
+    end
+
+    // Test 7: Size solve fails, as the array keeps its size
+    $display("\n=== Test 7: Size of an array with rand_mode off ===");
+    begin
+      automatic Frozen f = new;
+      f.q = '{1, 2, 3};
+      f.q.rand_mode(0);
+      if (f.randomize() != 0) $stop;
+      if (f.randomize() with { q[0] < 10; } != 0) $stop;
+      if (f.q != '{1, 2, 3}) $stop;
     end
 
     $write("*-* All Finished *-*\n");

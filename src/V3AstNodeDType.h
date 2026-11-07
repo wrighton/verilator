@@ -153,10 +153,12 @@ public:
     virtual bool isFourstate() const;
     // Originally four-state, converted by V3Unknown to two-state domain
     virtual bool mimicsFourstate() const VL_MT_STABLE;
+    // Whether this type, or the elements of an unpacked array, are 4-state
+    bool isFourstateElement() const;
     // Ideally an IEEE $typename
     virtual string prettyDTypeName(bool) const { return prettyTypeName(); }
     string prettyDTypeNameQ(bool full = false) const { return "'" + prettyDTypeName(full) + "'"; }
-    string stateDTypeName() const { return this->isFourstate() ? "(4-state)" : "(2-state)"; }
+    string stateDTypeName() const { return isFourstateElement() ? "(4-state)" : "(2-state)"; }
     //
     // Changing the width may confuse the data type resolution, so must clear
     // TypeTable cache after use.
@@ -555,6 +557,9 @@ public:
     }
     bool isCovergroupInstHandle() const VL_MT_SAFE {
         return keyword() == VBasicDTypeKwd::COVERGROUP_INSTHANDLE;
+    }
+    bool isMailboxMessage() const VL_MT_SAFE {
+        return keyword() == VBasicDTypeKwd::MAILBOX_MESSAGE;
     }
     bool isOpaque() const VL_MT_SAFE { return keyword().isOpaque(); }
     bool isString() const VL_MT_STABLE { return keyword().isString(); }
@@ -1579,9 +1584,10 @@ public:
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
-    AstBasicDType* basicp() const override VL_MT_STABLE { return subDTypep()->basicp(); }
+    AstBasicDType* basicp() const override VL_MT_STABLE { return nullptr; }
     int widthAlignBytes() const override { return sizeof(std::map<std::string, std::string>); }
     int widthTotalBytes() const override { return sizeof(std::map<std::string, std::string>); }
+    bool isAggregateType() const override { return true; }
     bool isCompound() const override { return true; }
     bool isDynamicallySized() const override { return true; }
 };

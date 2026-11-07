@@ -19,4 +19,15 @@ module t (/*AUTOARG*/
   always @ (posedge rbad) $stop;
   always @ (posedge ebad) $stop;
 
+  class Cls;
+  endclass
+  Cls cbad;
+  always @ (cbad) $stop;  // Value change on a handle is legal
+  always @ (posedge cbad) $stop;
+  always @ (negedge cbad) $stop;
+  always @ (edge cbad) $stop;
+
+  logic uabad[2];
+  always @ (posedge uabad) $stop;
+
 endmodule

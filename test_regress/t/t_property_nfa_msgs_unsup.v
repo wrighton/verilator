@@ -13,7 +13,7 @@ module t (
   bit a = 0, b = 0, c = 0, d = 0, e = 0;
 
   property p_nested;
-    a ##1 b;
+    strong(a ##1 b);
   endproperty
 
   sequence s_nested; a ##1 b; endsequence
@@ -32,12 +32,12 @@ module t (
     $display("pass");
 
   // An unsupported body under an abort reports itself, not an internal error
-  assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 2]));
+  assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 1:2]));
 
   // A body the builder rejects wins over the property if/case message
-  assert property (@(posedge clk) if (a) ((b ##1 c)[*2]) else d) $display("pass");
+  assert property (@(posedge clk) if (a) ((b ##1 c)[*1:2]) else d) $display("pass");
 
-  // A named property instance nested in a composite is rejected, not dropped
+  // A named property instance with a strong body nested in a composite is rejected, not dropped
   assert property (@(posedge clk) p_nested or e);
 
   // A named sequence instance is inlined, not rejected
@@ -56,9 +56,9 @@ module t (
   assert property (a [* 2]);
 
   // An 'and' operand carrying mid-window sources defers to later passes
-  assert property (@(posedge clk) (1'b1 ##[1:2] b) and c);
-  assert property (@(posedge clk) c and (1'b1 ##[1:2] b));
-  assert property (@(posedge clk) (1'b1 ##[1:300] b) and c);
+  assert property (@(posedge clk) (1'b1 ##[1:2] b) and (c ##1 d));
+  assert property (@(posedge clk) (c ##1 d) and (1'b1 ##[1:2] b));
+  assert property (@(posedge clk) (1'b1 ##[1:300] b) and (c ##1 d));
 
   // A boolean 'and' operand of a rejected cover-sequence 'or' is freed
   cover sequence (@(posedge clk) ((a and b) or(c ##1 d)));
@@ -69,5 +69,16 @@ module t (
   assert property (@(posedge clk) a |-> (1 ##[1:258] b) ##1 c);
   assert property (@(posedge clk)
       a |-> ##[1:2] (a | b | c | d | e) ##1 (a | b | c | d | e));
+
+  // A negated implication's vacuous success is tracked only at the end of the property
+  // and for a boolean antecedent
+  assert property (@(posedge clk) not ((a ##1 b) |=> c));
+  assert property (@(posedge clk) not ((a |=> b) or c));
+
+  // A 'not' of a multi-cycle operand below another property operator
+  assert property (@(posedge clk) ((a ##1 b) and (c ##1 d)) or (not (a ##1 b) and not (c ##1 d)));
+
+  // A ranged end of the non-boolean operand of a property 'or'
+  assert property (@(posedge clk) a or (b ##[1:2] c));
 
 endmodule

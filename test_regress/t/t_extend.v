@@ -14,6 +14,8 @@ module t (
   reg [7:0] cyc; initial cyc = 0;
   reg   c_worked;
   reg [8:0] c_wider;
+  reg [31:0] c_deref;
+  reg [31:0] c_head;
 
   wire    one = 1'b1;
 
@@ -34,14 +36,20 @@ module t (
       $c("VL_PRINTF(\"Cyc=%d\\n\",", cyc, ");");
       c_worked <= $c("this->my_function()");
       c_wider <= $c9("0x10");
+      c_deref <= $c32("*(&", cyc, ")");  // The variable itself, not a copy
+      c_head <= $c32(cyc, " - 3 < 0");  // The variable itself, with C int promotion
 `else
       c_worked <= 1'b1;
       c_wider <= 9'h10;
+      c_deref <= 32'd2;
+      c_head <= 32'd1;
 `endif
     end
     if (cyc == 8'd3) begin
       if (c_worked !== 1'b1) $stop;
       if (c_wider !== 9'h10) $stop;
+      if (c_deref !== 32'd2) $stop;
+      if (c_head !== 32'd1) $stop;
       $finish;
     end
   end

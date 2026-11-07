@@ -47,4 +47,16 @@
                                         : ... note: In instance 't'
    43 |     @(posedge clk) a |-> b [= -1: 2];
       |                            ^~
+%Error: t/t_assert_rep_range_bad.v:47:32: Expecting expression to be constant, but variable isn't const: 'n'
+                                        : ... note: In instance 't'
+   47 |     @(posedge clk) a |-> b [-> n:$];
+      |                                ^
+%Error: t/t_assert_rep_range_bad.v:47:28: Goto repetition range bounds must be constant expressions (IEEE 1800-2023 16.9.2)
+                                        : ... note: In instance 't'
+   47 |     @(posedge clk) a |-> b [-> n:$];
+      |                            ^~~
+%Error: t/t_assert_rep_range_bad.v:50:28: Nonconsecutive repetition range min count must be non-negative (IEEE 1800-2023 16.9.2)
+                                        : ... note: In instance 't'
+   50 |     @(posedge clk) a |-> b [= -1:$];
+      |                            ^~
 %Error: Exiting due to

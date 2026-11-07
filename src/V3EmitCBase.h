@@ -28,14 +28,19 @@
 
 //######################################################################
 // Set user4p in all CFunc, Var, and coverage declarations to point to the
-// containing AstNodeModule
+// containing AstNodeModule, and number the members that may be in named structs
 
 class EmitCParentModule final {
     // NODE STATE
     //   AstCFunc::user4p()          AstNodeModule* Parent module pointer
     //   AstVar::user4p()            AstNodeModule* Parent module pointer
     //   AstNodeCoverDecl::user4p()  AstNodeModule* Parent module pointer
+    //   AstVar::user3()             Index of explicitly constructed member in '__Vnontrivs',
+    //                               or of nameable trivially constructible member
+    //   AstNodeModule::user3()      Number of explicitly constructed members in '__Vnontrivs'
+    //   AstNodeModule::user4()      Number of nameable trivially constructible members
     const VNUser4InUse user4InUse;
+    const VNUser3InUse user3InUse;
 
 public:
     EmitCParentModule();
@@ -67,6 +72,10 @@ public:
     static string topClassName() VL_MT_SAFE {  // Return name of top wrapper module
         return v3Global.opt.prefix();
     }
+    // Return a call reversing the descending dimensions of an unpacked array, "" if none
+    static std::string unpackReverseCall(const AstNodeDType* dtypep);
+    // Return a call converting 'expr' to a %p string, "" if VL_TO_STRING(expr) does
+    static std::string toStringCall(const AstNodeDType* dtypep, const std::string& expr);
     // Split a pretty path below the model into the name it is below, as an index into the
     // run-time names (0 for the model, e.g. in a package, else AstNetlist::l2Names() index plus
     // one), and the rest of the path
@@ -106,6 +115,33 @@ public:
     }
     // Return C++ class name for a module/class object
     static string prefixNameProtect(const AstNode* nodep) VL_MT_STABLE;
+    // Forward declaration of a class, guarded so it is declared once per translation unit
+    static string fwdClassDecl(const string& className) {
+        // Each use of a class walks all its redeclarations in clang, so repeating the
+        // declaration in each of thousands of headers is quadratic
+        const string guard = "VL_FWD_" + className;
+        return "#ifndef " + guard + "\n#define " + guard + "\nclass " + className + ";\n#endif\n";
+    }
+};
+
+//######################################################################
+// Nesting of member variables in structs of at most --comp-limit-members members,
+// to avoid C++ compilers parsing large class bodies in quadratic time
+
+class EmitCMemberGroups final {
+    const size_t m_lim;  // Members per innermost struct, or 0 if not nesting
+    size_t m_l3s = 1;  // Number of outermost structs, 1 if there is no struct at this level
+    size_t m_l2s = 1;  // Number of middle structs in each outermost struct, likewise
+    size_t m_l1s = 1;  // Number of innermost structs in each middle struct, likewise
+
+public:
+    explicit EmitCMemberGroups(const size_t nMembers);
+    size_t lim() const { return m_lim; }
+    size_t l3s() const { return m_l3s; }
+    size_t l2s() const { return m_l2s; }
+    size_t l1s() const { return m_l1s; }
+    // Return access prefix of member 'idx' when the structs are named '__Vg<index>'
+    std::string namedPath(size_t idx) const;
 };
 
 //######################################################################
@@ -269,13 +305,41 @@ public:
         // meaning a runtime C++ constructor/destructor invocation is needed
         return !varp->isTriviallyConstructible();
     }
+    // Return whether a member is trivially constructible and may be in named structs
+    static bool isNameableTrivial(const AstVar* varp) VL_MT_STABLE {
+        // Classes keep anonymous structs, as the named structs of a derived class would hide
+        // those of its base class. User code accesses public members by name.
+        const AstNodeModule* const modp = EmitCParentModule::get(varp);
+        return modp && !VN_IS(modp, Class) && varp->isModelState() && !varp->isPrimaryIO()
+               && varp->isTriviallyConstructible() && !varp->isSigPublic();
+    }
+    // Return whether the nameable trivially constructible members of a module are in named structs
+    static bool hasNamedTrivialGroups(const AstNodeModule* modp) VL_MT_STABLE {
+        // Anonymous structs are simpler, but GCC 11 finds a member of an anonymous struct by
+        // searching all members of the class, which makes member access slow in large classes
+        const size_t lim = v3Global.opt.compLimitMembers();
+        return lim && modp->user4() > lim * lim;
+    }
     // Name to access a module member as
     static std::string varName(const AstVar* varp) VL_MT_STABLE {
         const std::string name = varp->nameProtect();
         // Primary IOs live 'union { struct { HERE } __VprimaryPorts; }'
         if (varp->isPrimaryIO()) return "__VprimaryPorts." + name;
-        // Explicitly constructed variables live 'union { struct { HERE } __Vnontrivs; }'
-        if (isExplicitlyConstructed(varp)) return "__Vnontrivs." + name;
+        // Explicitly constructed variables live 'union { struct { HERE } __Vnontrivs; }',
+        // possibly in nested named structs
+        if (isExplicitlyConstructed(varp)) {
+            const EmitCMemberGroups groups{
+                static_cast<size_t>(EmitCParentModule::get(varp)->user3())};
+            return "__Vnontrivs." + groups.namedPath(varp->user3()) + name;
+        }
+        // Trivially constructible variables may live in nested named structs
+        if (isNameableTrivial(varp)) {
+            const AstNodeModule* const modp = EmitCParentModule::get(varp);
+            if (hasNamedTrivialGroups(modp)) {
+                const EmitCMemberGroups groups{static_cast<size_t>(modp->user4())};
+                return groups.namedPath(varp->user3()) + name;
+            }
+        }
         // Otherwise they should be available in the local scope where emitted
         return name;
     }
@@ -301,7 +365,7 @@ public:
                         continue;  // Forward declaration is not necessary
                     }
                     if (usep->useType().containsAny(VUseType::INT_FWD_CLASS)) {
-                        action("class " + EmitCUtil::prefixNameProtect(usep) + ";\n");
+                        action(EmitCUtil::fwdClassDecl(EmitCUtil::prefixNameProtect(usep)));
                     }
                 }
             }

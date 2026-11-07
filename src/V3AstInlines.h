@@ -71,10 +71,12 @@ bool AstNode::isAllOnesV() const {
     return (VN_IS(this, Const) && VN_AS(this, Const)->isEqAllOnesV());
 }
 bool AstNode::sameTree(const AstNode* node2p) const {
-    return sameTreeIter(this, node2p, true, false);
+    SameJumpBlocks blocks;
+    return sameTreeIter(this, node2p, true, false, blocks);
 }
 bool AstNode::sameGateTree(const AstNode* node2p) const {
-    return sameTreeIter(this, node2p, true, true);
+    SameJumpBlocks blocks;
+    return sameTreeIter(this, node2p, true, true, blocks);
 }
 
 int AstNodeArrayDType::left() const VL_MT_STABLE { return rangep()->leftConst(); }
@@ -173,7 +175,8 @@ bool AstVar::sameNode(const AstNode* samep) const {
     const AstVar* const asamep = VN_DBG_AS(samep, Var);
     return m_name == asamep->m_name && varType() == asamep->varType()
            && covergroupRefMember() == asamep->covergroupRefMember()
-           && libInoutId() == asamep->libInoutId() && libInoutEnable() == asamep->libInoutEnable();
+           && forceRdVarp() == asamep->forceRdVarp() && libInoutId() == asamep->libInoutId()
+           && libInoutEnable() == asamep->libInoutEnable();
 }
 
 AstMatchMasked::AstMatchMasked(FileLine* fl, AstNodeExpr* lhsp, AstVarRef* matchp)

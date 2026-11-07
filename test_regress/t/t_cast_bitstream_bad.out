@@ -1,0 +1,26 @@
+%Error: t/t_cast_bitstream_bad.v:20:15: Bit-stream cast to 'logic[3:0]$[1:0]' (8 bits) from 'logic[8:0]' (9 bits) requires types of equal size (IEEE 1800-2023 6.24.3)
+                                      : ... note: In instance 't'
+   20 |     a = pair_t'(v);
+      |               ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_bitstream_bad.v:21:12: Bit-stream cast to 'int' (32 bits) from 'logic[3:0]$[1:0]' (8 bits) requires types of equal size (IEEE 1800-2023 6.24.3)
+                                      : ... note: In instance 't'
+   21 |     n = int'(a);
+      |            ^
+%Error: t/t_cast_bitstream_bad.v:22:13: Bit-stream cast to 'struct t.us_t' (7 bits) from 'logic[3:0]$[1:0]' (8 bits) requires types of equal size (IEEE 1800-2023 6.24.3)
+                                      : ... note: In instance 't'
+   22 |     s = us_t'(a);
+      |             ^
+%Error: t/t_cast_bitstream_bad.v:24:16: Incompatible types to static cast to 'struct t.real_t' from 'bit[63:0]'
+                                      : ... note: In instance 't'
+   24 |     sr = real_t'(64'h0);
+      |                ^
+%Error: t/t_cast_bitstream_bad.v:25:13: Incompatible types to static cast to 'struct t.us_t' from 'real'
+                                      : ... note: In instance 't'
+   25 |     s = us_t'(1.0);
+      |             ^
+%Error: t/t_cast_bitstream_bad.v:26:14: Incompatible types to static cast to 'union t.uu_t' from 'bit[7:0]'
+                                      : ... note: In instance 't'
+   26 |     uu = uu_t'(8'h1);
+      |              ^
+%Error: Exiting due to

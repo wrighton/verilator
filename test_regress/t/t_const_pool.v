@@ -127,6 +127,11 @@ typedef struct {
   int q[$];
 } withQueue_t;
 
+typedef struct {
+  int id;
+  string tags[$];
+} tagged_t;
+
 // Aggregates nested in a constant
 typedef struct {
   bit [255:0] wide;
@@ -287,6 +292,27 @@ module t;
       `checkh(bs.size(), 2);
       `checkh(bs[0].wide[32*(cyc%8)+:32], 32'h5555_6666);
       `checkh(bs[1].narrow, 2);
+    end
+    begin  // Strings in containers, short and longer than the std::string inline buffer
+      string sq[$];
+      string sm[string];
+      tagged_t tq[$];
+      sq = '{
+          "", "short", "a string longer than sixteen chars", "q\"\\", $sformatf("%c%c", 8'h0, "z")
+      };
+      `checkh(sq.size(), 5);
+      `checks(sq[0], "");
+      `checks(sq[1], "short");
+      `checks(sq[2], "a string longer than sixteen chars");
+      `checks(sq[3], {"q", 8'h22, 8'h5c});
+      `checkh(sq[4].len(), 2);  // Keeps the NUL
+      sm = '{"key": "value", "a key longer than sixteen chars": "a value longer than sixteen"};
+      `checks(sm["key"], "value");
+      `checks(sm["a key longer than sixteen chars"], "a value longer than sixteen");
+      tq = '{'{1, '{"tagA", "a tag longer than sixteen chars"}}, '{2, '{"tagB"}}};
+      `checkh(tq[0].tags.size(), 2);
+      `checks(tq[0].tags[1], "a tag longer than sixteen chars");
+      `checks(tq[1].tags[0], "tagB");
     end
     begin  // Keyed patterns, sized by the largest index key
       int qk[$];

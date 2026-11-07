@@ -59,6 +59,11 @@ class B;
   rand int_arr_t arr;
 endclass
 
+class C;
+  rand int x;
+  rand bit [1:0] foo;
+endclass
+
 class Cls2;
   task body();
     int ok;
@@ -101,17 +106,95 @@ class Cls3;
   endtask
 endclass
 
+// Non-random arrays indexed by a random variable
+class Cls4;
+  int_arr_t arr;
+  task body();
+    C c;
+    c = new;
+    arr = new[2];
+    arr[0] = 123;
+    arr[1] = 124;
+    repeat (40) begin
+      if (c.randomize() with {
+            solve foo before x;
+            x == arr[foo];
+            foo <= 1;
+          } != 1)
+        $stop;
+      `checkd(c.x, arr[c.foo]);
+    end
+  endtask
+endclass
+
+class StateHolder;
+  bit [6:0] arr[] = '{7'h0, 7'h0, 7'h0};
+endclass
+
+class Cls5;
+  rand int idx;
+  int unsigned desc[3:1];
+  bit [64:0] wide[$];
+  int unsigned empty[];
+  StateHolder holder = new;
+  constraint c_desc {desc[idx] != 0;}
+endclass
+
+class Cls6;
+  task body();
+    Cls5 c5;
+    int ok;
+    c5 = new;
+    for (int pos = 0; pos < 3; ++pos) begin
+      c5.desc = '{0, 0, 0};
+      c5.desc[pos+1] = pos + 1;
+      c5.wide = {65'h0, 65'h0, 65'h0, 65'h0};
+      c5.wide[pos] = 65'h1_0000_0000_0000_0000;
+      c5.holder.arr[pos] = 7'h41;
+      repeat (4) begin
+        c5.c_desc.constraint_mode(1);
+        ok = c5.randomize() with {idx inside {[1 : 3]};};
+        `checkd(ok, 1);
+        `checkd(c5.idx, pos + 1);
+        c5.c_desc.constraint_mode(0);
+        // Out of range indices read as zero
+        ok = c5.randomize() with {
+          idx inside {[-2 : 5]};
+          wide[idx] != 0;
+        };
+        `checkd(ok, 1);
+        `checkd(c5.idx, pos);
+        ok = c5.randomize() with {
+          idx inside {[-2 : 5]};
+          holder.arr[idx] == 7'h41;
+        };
+        `checkd(ok, 1);
+        `checkd(c5.idx, pos);
+      end
+      c5.holder.arr[pos] = 7'h0;
+    end
+    ok = c5.randomize() with {empty[idx] != 0;};
+    `checkd(ok, 0);
+  endtask
+endclass
+
 module t;
   Cls c;
   Cls2 c2;
   Cls3 c3;
+  Cls4 c4;
+  Cls6 c6;
   initial begin
     c = new;
     c2 = new;
     c3 = new;
+    c4 = new;
+    c6 = new;
     c.body();
     c2.body();
     c3.body();
+    c4.body();
+    c6.body();
     $write("*-* All Finished *-*\n");
     $finish;
   end

@@ -1,0 +1,30 @@
+%Error: t/t_property_arg_unbounded_bad.v:34:20: Formal argument 'r' with '$' actual argument is used other than as a range maximum (IEEE 1800-2023 16.8)
+                                              : ... note: In instance 't'
+   34 |   assert property (p_expr($));
+      |                    ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_arg_unbounded_bad.v:35:20: Formal argument 'r' with '$' actual argument is used other than as a range maximum (IEEE 1800-2023 16.8)
+                                              : ... note: In instance 't'
+   35 |   assert property (p_min($));
+      |                    ^~~~~
+%Error: t/t_property_arg_unbounded_bad.v:36:20: Formal argument 'r' with '$' actual argument is used other than as a range maximum (IEEE 1800-2023 16.8)
+                                              : ... note: In instance 't'
+   36 |   assert property (p_delay($));
+      |                    ^~~~~~~
+%Error: t/t_property_arg_unbounded_bad.v:25:5: Formal argument 'r' with '$' actual argument is used other than as a range maximum (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   25 |     p_expr(r);
+      |     ^~~~~~
+%Error: t/t_property_arg_unbounded_bad.v:38:35: s_always range must be bounded (IEEE 1800-2023 16.12.11)
+                                              : ... note: In instance 't'
+   38 |   assert property (@(posedge clk) p_s_always($));
+      |                                   ^~~~~~~~~~
+%Error: t/t_property_arg_unbounded_bad.v:39:35: Formal argument 'r' with '$' actual argument is used other than as a range maximum (IEEE 1800-2023 16.8)
+                                              : ... note: In instance 't'
+   39 |   assert property (@(posedge clk) s_only($));
+      |                                   ^~~~~~
+%Error: t/t_property_arg_unbounded_bad.v:40:41: Formal argument 'r' with '$' actual argument is used other than as a range maximum (IEEE 1800-2023 16.8)
+                                              : ... note: In instance 't'
+   40 |   assert property (@(posedge clk) a |-> s_only($));
+      |                                         ^~~~~~
+%Error: Exiting due to

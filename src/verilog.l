@@ -307,7 +307,7 @@ vnum    {vnum1}|{vnum2}|{vnum3}|{vnum4}|{vnum5}
   "$realtime"           { FL; return yD_REALTIME; }
   "$realtobits"         { FL; return yD_REALTOBITS; }
   "$recovery"           { FL; return yaTIMINGSPEC; }
-  "$recrem"             { FL; return yaTIMINGSPEC; }
+  "$recrem"             { FL; return yD_RECREM; }
   "$removal"            { FL; return yaTIMINGSPEC; }
   "$rewind"             { FL; return yD_REWIND; }
   "$rtoi"               { FL; return yD_RTOI; }
@@ -1140,9 +1140,9 @@ vnum    {vnum1}|{vnum2}|{vnum3}|{vnum4}|{vnum5}
   "`autoexpand_vectornets"              { FL_FWD; FL_BRK; }  // Verilog-XL compatibility
   "`celldefine"                         { FL_FWD; PARSEP->lexFileline()->celldefineOn(true); FL_BRK; }
   "`default_decay_time"{ws}+[^\n\r]*    { FL_FWD; FL_BRK; }  // Verilog spec - delays only
-  "`default_nettype"{ws}+"wire"         { FL_FWD; PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, true); FL_BRK; }
+  "`default_nettype"{ws}+("tri"|"wire") { FL_FWD; PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, true); FL_BRK; }
   "`default_nettype"{ws}+"none"         { FL_FWD; PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, false); FL_BRK; }
-  "`default_nettype"{ws}+[a-zA-Z0-9]*   { FL; yylval.fl->v3warn(E_UNSUPPORTED, "Unsupported: `default_nettype of other than none or wire: '"
+  "`default_nettype"{ws}+[a-zA-Z0-9]*   { FL; yylval.fl->v3warn(E_UNSUPPORTED, "Unsupported: `default_nettype of other than none, tri or wire: '"
                                                                 << yytext << "'");
                                           FL_BRK; }
   "`default_trireg_strength"{ws}+[^\n\r]*   { FL; yylval.fl->v3warn(E_UNSUPPORTED, "Unsupported: Verilog optional directive not implemented: '"
@@ -1186,22 +1186,22 @@ vnum    {vnum1}|{vnum2}|{vnum3}|{vnum4}|{vnum5}
   "`uselib"{ws}+[^\n\r]*                { FL_FWD; FL_BRK; }  // Verilog-XL compatibility
 
   /* See also setLanguage below */
-  "`begin_keywords"[ \t]*\"1364-1995\"          { FL_FWD; yy_push_state(V95); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1364-2001\"          { FL_FWD; yy_push_state(V01C); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1364-2001-noconfig\" { FL_FWD; yy_push_state(V01NC); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1364-2005\"          { FL_FWD; yy_push_state(V05); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"VAMS[-0-9.]*\"       { FL_FWD; yy_push_state(VA5); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1800-2005\"          { FL_FWD; yy_push_state(S05); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1800-2009\"          { FL_FWD; yy_push_state(S09); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1800-2012\"          { FL_FWD; yy_push_state(S12); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1800-2017\"          { FL_FWD; yy_push_state(S17); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1800-2023\"          { FL_FWD; yy_push_state(S23); PARSEP->lexPushKeywords(YY_START); FL_BRK; }
-  "`begin_keywords"[ \t]*\"1800[+]VAMS\"        { FL_FWD; yy_push_state(SAX); PARSEP->lexPushKeywords(YY_START); FL_BRK; }  /*Latest SV*/
+  "`begin_keywords"[ \t]*\"1364-1995\"          { FL; yy_push_state(V95); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1364-2001\"          { FL; yy_push_state(V01C); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1364-2001-noconfig\" { FL; yy_push_state(V01NC); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1364-2005\"          { FL; yy_push_state(V05); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"VAMS[-0-9.]*\"       { FL; yy_push_state(VA5); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1800-2005\"          { FL; yy_push_state(S05); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1800-2009\"          { FL; yy_push_state(S09); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1800-2012\"          { FL; yy_push_state(S12); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1800-2017\"          { FL; yy_push_state(S17); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1800-2023\"          { FL; yy_push_state(S23); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }
+  "`begin_keywords"[ \t]*\"1800[+]VAMS\"        { FL; yy_push_state(SAX); PARSEP->lexPushKeywords(YY_START); return yaT_BEGIN_KEYWORDS; }  /*Latest SV*/
   "`end_keywords"                               { FL;
                                                   if (!PARSEP->lexPopKeywords()) {
                                                       yylval.fl->v3error("`end_keywords when not inside `begin_keywords block");
                                                   } else { yy_pop_state(); }
-                                                  FL_BRK; }
+                                                  return yaT_END_KEYWORDS; }
 
   /* Verilator */
   /* See also V3ParseImp::preprocDumps() */

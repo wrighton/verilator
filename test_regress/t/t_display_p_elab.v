@@ -53,6 +53,109 @@ module t;
   initial `checks(SS, ">'{f:10, s:20}<");
 `endif
 
+  // Descending ranges print left to right, as an assignment pattern (IEEE 1800-2023 21.2.1.7)
+  parameter int UD[1:0] = '{5, 6};
+  parameter string UDS = $sformatf(">%p<", UD);
+  initial `checks(UDS, ">'{'h5, 'h6}<");
+  parameter int MD[1:0][0:1] = '{'{1, 2}, '{3, 4}};
+  parameter string MDS = $sformatf(">%p<", MD);
+  initial `checks(MDS, ">'{'{'h1, 'h2}, '{'h3, 'h4}}<");
+
+  typedef struct {byte b[2:1];} sd_t;
+  class Cd;
+    int a[0:1][2:1];
+  endclass
+  typedef int ud_t[1:0];
+  ud_t ud;
+  int md[2:1][1:0];
+  int sl[7:0];
+  sd_t sd;
+  Cd cd;
+  initial begin
+    string ds;
+    #1;
+    ud[1] = `no_optimize(5);
+    ud[0] = `no_optimize(6);
+    ds = $sformatf(">%p<", ud);
+    `checks(ds, ">'{'h5, 'h6}<");
+    md[2][1] = `no_optimize(1);
+    md[2][0] = `no_optimize(2);
+    md[1][1] = `no_optimize(3);
+    md[1][0] = `no_optimize(4);
+    ds = $sformatf(">%p<", md);
+    `checks(ds, ">'{'{'h1, 'h2}, '{'h3, 'h4}}<");
+    for (int i = 0; i < 8; ++i) sl[i] = `no_optimize(i);
+    ds = $sformatf(">%p<", sl[6:4]);
+    `checks(ds, ">'{'h6, 'h5, 'h4}<");
+    sd.b[2] = `no_optimize(1);
+    sd.b[1] = `no_optimize(2);
+    ds = $sformatf(">%p<", sd);
+    `checks(ds, ">'{b:'{'h1, 'h2}}<");
+    cd = new;
+    cd.a[0][2] = `no_optimize(1);
+    cd.a[0][1] = `no_optimize(2);
+    cd.a[1][2] = `no_optimize(3);
+    cd.a[1][1] = `no_optimize(4);
+    ds = $sformatf(">%p<", cd);
+    `checks(ds, ">'{a:'{'{'h1, 'h2}, '{'h3, 'h4}}}<");
+  end
+
+  // Descending arrays in queues, dynamic and associative arrays, also nested further
+  typedef int pair_t[1:0];
+  typedef struct {pair_t q[$];} sq_t;
+  class Cq;
+    pair_t aa[string];
+  endclass
+  pair_t pq[$];
+  pair_t pd[];
+  pair_t pa[int];
+  pair_t pw[*];
+  pair_t pqd[1:0][$];
+  pair_t pqa[2][$];
+  pair_t pqq[$][$];
+  sq_t sq;
+  Cq cq;
+  initial begin
+    string ds;
+    pair_t p;
+    #1;
+    p[1] = `no_optimize(5);
+    p[0] = `no_optimize(6);
+    pq.push_back(p);
+    ds = $sformatf(">%p<", pq);
+    `checks(ds, ">'{'{'h5, 'h6}}<");
+    pd = new[1];
+    pd[0] = p;
+    ds = $sformatf(">%p<", pd);
+    `checks(ds, ">'{'{'h5, 'h6}}<");
+    // Element by element, as a whole array assigned to an associative array element warns
+    // SIDEEFFECT
+    pa[3][1] = p[1];
+    pa[3][0] = p[0];
+    cq = new;
+    cq.aa["k"][1] = p[1];
+    cq.aa["k"][0] = p[0];
+    ds = $sformatf(">%p<", pa);
+    `checks(ds, ">'{'h3:'{'h5, 'h6}}<");
+    pw["w"] = p;
+    ds = $sformatf(">%p<", pw);
+    `checks(ds, ">'{\"w\":'{'h5, 'h6}}<");
+    pqd[1].push_back(p);
+    ds = $sformatf(">%p<", pqd);
+    `checks(ds, ">'{'{'{'h5, 'h6}}, '{}}<");
+    pqa[0].push_back(p);
+    ds = $sformatf(">%p<", pqa);
+    `checks(ds, ">'{'{'{'h5, 'h6}}, '{}}<");
+    pqq.push_back(pq);
+    ds = $sformatf(">%p<", pqq);
+    `checks(ds, ">'{'{'{'h5, 'h6}}}<");
+    sq.q.push_back(p);
+    ds = $sformatf(">%p<", sq);
+    `checks(ds, ">'{q:'{'{'h5, 'h6}}}<");
+    ds = $sformatf(">%p<", cq);
+    `checks(ds, ">'{aa:'{\"k\":'{'h5, 'h6}}}<");
+  end
+
   // Original issue
   function integer infofunc();
     $info("%p", U);

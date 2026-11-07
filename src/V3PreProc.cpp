@@ -490,9 +490,18 @@ void V3PreProcImp::comment(const string& text) {
     } else if (VString::startsWith(cp, "synopsys")) {
         cp += std::strlen("synopsys");
         if (*cp == '_') {
-            V3Control::applyIgnores(fileline());
-            fileline()->v3warn(BADVLTPRAGMA, "Extra underscore in meta-comment, ignoring comment;"
-                                             " use /*synopsys {...}*/ not /*synopsys_{...}*/");
+            // Only a misspelling of a directive obeyed below needs a warning; any other
+            // text, e.g. 'synopsys_translate_off', is ignored either way
+            ++cp;
+            while (std::isspace(*cp)) ++cp;
+            string cmd = commentCleanup(string{cp});
+            if (commentTokenMatch(cmd /*ref*/, "full_case")
+                || commentTokenMatch(cmd /*ref*/, "parallel_case")) {
+                V3Control::applyIgnores(fileline());
+                fileline()->v3warn(BADVLTPRAGMA,
+                                   "Extra underscore in meta-comment, ignoring comment;"
+                                   " use /*synopsys {...}*/ not /*synopsys_{...}*/");
+            }
             return;
         }
         synth = true;
@@ -1606,10 +1615,8 @@ int V3PreProcImp::getStateToken() {
             // `ifdef NEVER `DEFUN(`endif)
             const string name(yyourtext() + 1, yyourleng() - 1);
             UINFO(4, "DefRef " << name);
-            if (m_defPutJoin) {
-                m_defPutJoin = false;
-                unputString("``");
-            }
+            const bool putJoin = m_defPutJoin;
+            m_defPutJoin = false;
             if (m_defDepth++ > V3PreProc::DEFINE_RECURSION_LEVEL_MAX) {
                 fileline()->v3error("Recursive `define substitution: `" + name);
                 goto next_tok;
@@ -1629,6 +1636,9 @@ int V3PreProcImp::getStateToken() {
             } else {
                 const string params = defParams(name);
                 if (params == "0" || params == "") {  // Found, as simple substitution
+                    // Join the substitution with what follows. With arguments, the `` instead
+                    // only delimits the name from its '(' (IEEE 1800-2023 22.5.1)
+                    if (putJoin) unputString("``");
                     string out;
                     if (!m_off) {
                         VDefineRef tempref{name, ""};

@@ -1,22 +1,45 @@
-%Error: t/t_class_misstatic_bad.v:23:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
-                                       : ... note: In instance 't'
-   23 |     Cls::nonstatic();   
-      |          ^~~~~~~~~
+%Error: t/t_class_misstatic_bad.v:23:14: Cannot access non-static member variable 'm_var' without object (IEEE 1800-2023 8.10)
+   23 |       return m_var;   
+      |              ^~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_class_misstatic_bad.v:24:10: Cannot call non-static member function 'nonstatic_retcls' without object (IEEE 1800-2023 8.10)
-                                       : ... note: In instance 't'
-   24 |     Cls::nonstatic_retcls();   
+%Error: t/t_class_misstatic_bad.v:30:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
+   30 |     Cls::nonstatic();   
+      |          ^~~~~~~~~
+%Error: t/t_class_misstatic_bad.v:31:10: Cannot call non-static member function 'nonstatic_retcls' without object (IEEE 1800-2023 8.10)
+   31 |     Cls::nonstatic_retcls();   
       |          ^~~~~~~~~~~~~~~~
-%Error: t/t_class_misstatic_bad.v:35:5: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
-                                      : ... note: In instance 't'
-   35 |     nonstatic();   
+%Error: t/t_class_misstatic_bad.v:33:19: Cannot access non-static member variable 'm_var' without object (IEEE 1800-2023 8.10)
+   33 |     $display(Cls::m_var);   
+      |                   ^~~~~
+%Error: t/t_class_misstatic_bad.v:43:5: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
+   43 |     nonstatic();   
       |     ^~~~~~~~~
-%Error: t/t_class_misstatic_bad.v:45:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
+%Error: t/t_class_misstatic_bad.v:57:20: Cannot access non-static member variable 'm_var' from a static variable initializer without object (IEEE 1800-2023 8.10)
                                        : ... note: In instance 't'
-   45 |     Cls::nonstatic();   
-      |          ^~~~~~~~~
-%Error: t/t_class_misstatic_bad.v:51:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
+   57 |   int m_mod = Cls::m_var;   
+      |                    ^~~~~
+%Error: t/t_class_misstatic_bad.v:58:22: Cannot access non-static member variable 'm_var' without object (IEEE 1800-2023 8.10)
                                        : ... note: In instance 't'
-   51 |     Cls::nonstatic();   
+   58 |   sub u_sub (.a(Cls::m_var));   
+      |                      ^~~~~
+%Error: t/t_class_misstatic_bad.v:60:24: Cannot access non-static member variable 'm_var' without object (IEEE 1800-2023 8.10)
+                                       : ... note: In instance 't'
+   60 |   assign m_cont = Cls::m_var;   
+      |                        ^~~~~
+%Error: t/t_class_misstatic_bad.v:62:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
+                                       : ... note: In instance 't'
+   62 |     Cls::nonstatic();   
       |          ^~~~~~~~~
+%Error: t/t_class_misstatic_bad.v:64:19: Cannot access non-static member variable 'm_var' without object (IEEE 1800-2023 8.10)
+                                       : ... note: In instance 't'
+   64 |     $display(Cls::m_var);   
+      |                   ^~~~~
+%Error: t/t_class_misstatic_bad.v:69:10: Cannot call non-static member function 'nonstatic' without object (IEEE 1800-2023 8.10)
+                                       : ... note: In instance 't'
+   69 |     Cls::nonstatic();   
+      |          ^~~~~~~~~
+%Error: t/t_class_misstatic_bad.v:72:19: Cannot access non-static member variable 'm_var' without object (IEEE 1800-2023 8.10)
+                                       : ... note: In instance 't'
+   72 |     $display(Cls::m_var);   
+      |                   ^~~~~
 %Error: Exiting due to

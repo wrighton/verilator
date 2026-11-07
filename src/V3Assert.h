@@ -22,14 +22,25 @@
 
 #include "V3Ast.h"
 
+#include <unordered_map>
+
+class V3UniqueNames;
+
 //============================================================================
 
 class V3AssertCommon final {
 public:
     static void collectDefaultDisable(AstNetlist* nodep) VL_MT_DISABLED;
+    // The default clocking declared directly in a module, or nullptr
+    static AstClocking* moduleDefaultClockingp(const AstNodeModule* modp) VL_MT_DISABLED;
     static void lowerSequenceEvents(AstNetlist* nodep) VL_MT_DISABLED;
+    // Add an event to modp, fired at each end point of sequence instance funcrefp, unless nullptr
+    static AstVar* newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
+                                    AstFuncRef* funcrefp) VL_MT_DISABLED;
     static string assertCtlGetCall(const char* query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;
+    // True if $past, $sampled and $stable can store and compare values of the type
+    static bool isSampledType(const AstNodeDType* dtypep) VL_MT_DISABLED;
     // Check an SVA value is within the implementation limit, else report it on nodep
     static bool checkSvaValueLimit(AstNode* nodep, const AstConst* constp,
                                    const char* what) VL_MT_DISABLED;
@@ -37,11 +48,43 @@ public:
     // elaboration-time constants (IEEE 1800-2023 16.7). If not, report it on errp, and replace
     // them with constants, so later steps do not fail after the error.
     static void checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) VL_MT_DISABLED;
+    // Fold and check the counts of a repetition (IEEE 1800-2023 16.9.2), reporting errors on errp;
+    // emptyOk if the caller reduces a repetition that only matches empty
+    static void checkSvaRepetition(AstSConsRep* nodep, AstNode* errp,
+                                   bool emptyOk = false) VL_MT_DISABLED;
+    static void checkSvaRepetition(AstSGotoRep* nodep, AstNode* errp) VL_MT_DISABLED;
+    static void checkSvaRepetition(AstSNonConsRep* nodep, AstNode* errp) VL_MT_DISABLED;
+    // Fold and check the tick count of a $past (IEEE 1800-2023 16.9.3), reporting errors on errp
+    static void checkSvaPastTicks(AstPast* nodep, AstNode* errp) VL_MT_DISABLED;
+    // Fold and check the bounds of an always range (IEEE 1800-2023 16.12.11)
+    static void checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
-    // Check the cycle delays of a sequence or property instance, after its formal arguments are
-    // replaced with the actual arguments (IEEE 1800-2023 16.8), reporting errors on instp
-    static void checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Check the constants of a sequence or property instance, reporting errors on instp
+    static void checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Create a module variable for each local variable of one sequence or property instance
+    static std::unordered_map<const AstVar*, AstVar*>
+    newSvaLocalVars(const AstNodeFTask* ftaskp, AstNodeModule* modp,
+                    V3UniqueNames& names) VL_MT_DISABLED;
+    // Relink a body inlined at instp to the instancing scope, returning the possibly replaced body
+    static AstNode* relinkSvaInstanceBody(AstNode* bodyp,
+                                          const AstNodeFTaskRef* instp) VL_MT_DISABLED;
+    // Remove the reduction of each single-bit actual argument substituted for a formal argument
+    static void removeActualReductions(const std::vector<AstNodeExpr*>& actualps) VL_MT_DISABLED;
+    // Check the references of formal arguments with a '$' actual argument, before substitution,
+    // returning the possibly replaced body
+    static AstNode*
+    checkSvaUnboundedActuals(AstNode* nodep,
+                             const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
+                             AstNode* instp) VL_MT_DISABLED;
+    // Give the reads of local variables in one property instance their initial value
+    static void lowerSvaLocalVarInits(
+        AstProperty* propp, AstPropSpec* bodyp,
+        const std::unordered_map<const AstVar*, AstVar*>& localVarMap) VL_MT_DISABLED;
+    // Reduce a whole property 'always p' to p
+    static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
+    // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
+    static AstSenItem* inferredClock(const AstAlways* alwaysp) VL_MT_DISABLED;
 };
 
 class V3Assert final {

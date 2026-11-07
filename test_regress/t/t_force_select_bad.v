@@ -27,4 +27,10 @@ module t;
     release vec[bad_index+:1];  // <---- BAD not constant index
   end
 
+  logic [2:-1] var_vec;
+  initial begin
+    // verilator lint_off IEEEMAYDEPRECATE
+    deassign var_vec[bad_index+:1];  // <---- BAD not constant index
+  end
+
 endmodule

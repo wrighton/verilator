@@ -751,8 +751,11 @@ private:
             string comma;
             const AstUnpackArrayDType* const dtypep
                 = VN_AS(valuep->dtypep()->skipRefp(), UnpackArrayDType);
-            for (int n = 0; n < dtypep->elementsConst(); ++n) {
-                result += comma + toStringRecurse(avaluep->valuep(n));
+            const int elements = dtypep->elementsConst();
+            for (int n = 0; n < elements; ++n) {
+                // Left to right, as the C++ VL_TO_STRING
+                const int index = dtypep->declRange().ascending() ? n : elements - 1 - n;
+                result += comma + toStringRecurse(avaluep->valuep(index));
                 comma = ", ";
             }
             result += "}";
@@ -882,6 +885,12 @@ private:
             nodep->v3error(
                 "Constant function may not be declared under generate (IEEE 1800-2023 13.4.3)");
             clearOptimizable(nodep, "Constant function called under generate");
+        }
+        if (nodep->usesConstFunc()) {
+            clearOptimizable(nodep,
+                             "Language violation: Constant function uses a constant function"
+                             " where a constant expression is required (IEEE 1800-2023"
+                             " 13.4.3)");
         }
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
@@ -1239,18 +1248,18 @@ private:
         for (AstNodeExpr* const selp : vlstd::reverse_view(selps)) {
             if (const AstArraySel* const aselp = VN_CAST(selp, ArraySel)) {
                 AstConsArray* const consp = VN_AS(itemp, ConsArray);
-                const AstConst* const indexp = fetchConst(aselp->bitp());
-                if (indexp->num().isFourState()) return;
-                const uint32_t index = indexp->toUInt();
+                const V3Number& indexNum = fetchConst(aselp->bitp())->num();
+                if (indexNum.isFourState()) return;
                 const int elements
                     = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
-                if (index >= static_cast<uint32_t>(elements)) {
+                if (!indexNum.fitsInUInt()
+                    || indexNum.toUInt() >= static_cast<uint32_t>(elements)) {
                     return;  // Ignore a write out of bounds (IEEE 1800-2023 7.4.6)
                 }
-                itemp = consp->valuep(index);
+                itemp = consp->valuep(indexNum.toUInt());
                 if (itemp == consp->defaultp()) {  // Make a defaulted element explicit
                     itemp = itemp->cloneTree(false);
-                    consp->valuep(index, itemp);
+                    consp->valuep(indexNum.toUInt(), itemp);
                 }
             } else {
                 itemp = VN_AS(itemp, ConsStruct)->memberValuep(selp->name());
@@ -1411,8 +1420,8 @@ private:
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
         if (const AstConsArray* const consp = VN_CAST(fetchValueNull(nodep->fromp()), ConsArray)) {
-            const AstConst* const indexp = fetchConst(nodep->bitp());
-            if (indexp->num().isFourState()) {
+            const V3Number& indexNum = fetchConst(nodep->bitp())->num();
+            if (indexNum.isFourState()) {
                 AstNodeExpr* const valuep = defaultOf(nodep->fileline(), nodep->dtypep());
                 if (!valuep) {
                     clearOptimizable(nodep, "Unsupported array element type");
@@ -1422,10 +1431,10 @@ private:
                 VL_DO_DANGLING(valuep->deleteTree(), valuep);
                 return;
             }
-            const uint32_t offset = indexp->num().toUInt();
-            AstNodeExpr* const itemp = consp->valuep(offset);
+            AstNodeExpr* const itemp
+                = indexNum.fitsInUInt() ? consp->valuep(indexNum.toUInt()) : nullptr;
             if (!itemp) {
-                clearOptimizable(nodep, "Array select out of range: " + std::to_string(offset));
+                clearOptimizable(nodep, "Array select out of range: " + indexNum.toDecimalU());
             } else {
                 setValue(nodep, itemp);
             }
@@ -1455,16 +1464,21 @@ private:
         if (m_checkOnly || !optimizable()) return;
         // Fetch the base constant array
         if (const AstConsArray* const consp = VN_CAST(fetchValueNull(nodep->fromp()), ConsArray)) {
-            const VNumRange& sliceRange = nodep->declRange();
-            const uint32_t sliceElements = sliceRange.elements();
-            const int sliceLo = sliceRange.lo();
+            const uint32_t sliceElements = nodep->declRange().elements();
+            const V3Number& lsbNum = fetchConst(nodep->lsbp())->num();
             // Use this node's dtype for the slice array
             AstNodeDType* const dtypep = nodep->dtypep()->skipRefp();
             AstConsArray* const newConsp = new AstConsArray{nodep->fileline(), dtypep};
             // Copy slice elements in ascending order
             for (uint32_t idx = 0; idx < sliceElements; ++idx) {
-                const uint32_t baseIdx = sliceLo + idx;
-                newConsp->valuep(idx, consp->valuep(baseIdx)->cloneTree(false));
+                AstNodeExpr* const itemp
+                    = lsbNum.fitsInUInt() ? consp->valuep(lsbNum.toUInt() + idx) : nullptr;
+                if (!itemp) {
+                    VL_DO_DANGLING(newConsp->deleteTree(), newConsp);
+                    clearOptimizable(nodep, "Slice select out of range");
+                    return;
+                }
+                newConsp->valuep(idx, itemp->cloneTree(false));
             }
             // Assign the new constant array and track it for later deletion
             setValue(nodep, newConsp);

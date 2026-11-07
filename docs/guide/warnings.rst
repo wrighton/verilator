@@ -116,9 +116,10 @@ List Of Warnings
 
 .. option:: ALWNEVER
 
-   Warning that an `always @*` statement has no variables being read,
-   therefore the event list is empty, and as there are no events to wake
-   the process up, the always will never execute.
+   Warning that an `always @*` statement has no variables being read
+   (variables read only by event controls or wait statements in it do not
+   count), therefore the event list is empty, and as there are no events to
+   wake the process up, the always will never execute.
 
    Faulty example:
 
@@ -208,7 +209,9 @@ List Of Warnings
       assign a = 1'b1;
 
    Ignoring this warning will only suppress the lint check; it will
-   simulate correctly.
+   simulate correctly, except for an input port of net kind written inside
+   its module that is neither coerced to inout nor drives the net connected
+   to it, see Tri/Inout in :ref:`Language Limitations`.
 
 
 .. option:: BADSTDPRAGMA
@@ -1441,10 +1444,18 @@ List Of Warnings
 
    Warns that the specified signal has multiple drivers.
 
-   One case is when a variable written in an ``always_comb`` or
-   ``always_ff`` block is also written by another process. IEEE 1800
-   requires variables written in these specialized always blocks to be
-   written only by that process.
+   One case is when a variable written in an ``always_comb``,
+   ``always_latch``, or ``always_ff`` block is also written by another
+   process. IEEE 1800 requires variables written in these specialized
+   always blocks to be written only by that process. A ``force`` or
+   ``release`` of such a variable is not reported, as it overrides rather
+   than drives the variable, nor is a ``$readmemb`` or ``$readmemh`` load of
+   a memory.
+   An unpacked array element written with a non-constant index, or a slice
+   written at a non-constant position, counts as a write of the whole array
+   (its longest static prefix), so conflicts with any other write of the
+   array; elements written with constant indices are not compared with each
+   other.
 
    Faulty example:
 
@@ -1484,6 +1495,13 @@ List Of Warnings
    nets are excluded, as they resolve multiple drivers by design, and the
    initializer of a ``logic``/``var`` variable is not a net driver, so
    neither triggers this check.
+
+   It also warns when a whole variable is driven by more than one
+   continuous assignment or instance output port, or is driven by an
+   instance output port and also written by a procedural assignment in an
+   ``initial`` or ``always`` block. IEEE 1800-2023 6.5 and 23.3.3.2 do not
+   permit these combinations of drivers on a variable; declare the signal
+   as a net if multiple drivers are intended.
 
    Ignoring this warning may hide clock domain crossing, timing, or
    portability bugs. It may also cause longer simulation runtimes due to
@@ -1630,6 +1648,16 @@ List Of Warnings
    equivalent, which might behave differently in corner cases. For example
    ``$psprintf`` system function is replaced by its standard equivalent
    ``$sformatf``.
+
+   Also warns on an inout port declared as a variable, such as ``inout var
+   logic y``, and on a variable connected to an inout port of an instance,
+   which IEEE 1800-2023 23.3.3.2 does not allow. Verilator simulates them as
+   if they were nets. Instead declare or connect a net, such as a ``wire``.
+
+   Also warns on an initializer on an output port that is a net,
+   such as ``output wire y = 1'b1``, which IEEE 1800-2023 23.2.2.2 does not
+   allow. Verilator uses it as the initial value of the net. Instead use a
+   continuous assignment, or declare the port as a variable.
 
    Ignoring this warning will only suppress the lint check; it will
    simulate correctly.
@@ -1792,31 +1820,8 @@ List Of Warnings
 .. option:: PINNOTFOUND
 
    Warns that an instance port or parameter was not found in the module
-   being instantiated. Note that Verilator raises these errors also on
-   instances that should be disabled by generate/if/endgenerate constructs:
-
-   .. code-block:: sv
-      :linenos:
-      :emphasize-lines: 5-6
-
-      module a;
-        localparam A=1;
-        generate
-          if (A==0) begin
-            b b_inst1 (.x(1'b0));  //<--- error nonexistent port
-            b #(.PX(1'b0)) b_inst2 ();  //<--- error nonexistent parameter
-          end
-        endgenerate
-      endmodule
-
-      module b;
-      endmodule
-
-   In the example above, b is instantiated with a port named x, but module
-   b has no such port. In the following line, b is instantiated with a
-   nonexistent PX parameter. Technically, this code is incorrect because of
-   this, but other tools may ignore it because module b is not instantiated
-   due to the generate/if condition being false.
+   being instantiated. Instances in generate blocks that are not
+   elaborated are not checked (IEEE 1800-2023 27.4, 27.5).
 
    This error may be disabled with a lint_off PINNOTFOUND metacomment.
 
@@ -1955,11 +1960,14 @@ List Of Warnings
 .. option:: PROTOTYPEMIS
 
    Error that a function prototype does not match in some respects the
-   out-of-block declaration of that function. IEEE requires this error.
+   out-of-block declaration of that function, or that a virtual method
+   override does not match the method it overrides (including implementations
+   of pure virtual and interface class methods). IEEE requires this error.
 
    The typical solution is to fix the prototype to match the declaration
-   exactly, including in number of arguments, name of arguments, argument
-   data types, and return data type (for functions).
+   exactly, including task versus function, number of arguments, name of
+   arguments, argument directions, argument data types, and return data type
+   (for functions).
 
    Disabling this error will cause Verilator to ignore the prototype and
    may make the code illegal in other tools.

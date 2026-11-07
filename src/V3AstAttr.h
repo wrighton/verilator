@@ -524,6 +524,7 @@ public:
         RANDOM_GENERATOR,
         RANDOM_STDGENERATOR,
         COVERGROUP_INSTHANDLE,
+        MAILBOX_MESSAGE,
         // Unsigned and two state; fundamental types
         UINT32,
         UINT64,
@@ -564,6 +565,7 @@ public:
                                                       "VlRandomizer",
                                                       "VlStdRandomizer",
                                                       "VlCovInstHandle",
+                                                      "VlMailboxMessage",
                                                       "IData",
                                                       "QData",
                                                       "LOGIC_IMPLICIT",
@@ -609,6 +611,7 @@ public:
                                                       "%E-rand-gen",
                                                       "%E-stdrand-gen",
                                                       "%E-cg-insthandle",
+                                                      "%E-mbx-msg",
                                                       "IData",
                                                       "QData",
                                                       "%E-logic-implct",
@@ -656,6 +659,7 @@ public:
         case RANDOM_GENERATOR: return 0;  // opaque
         case RANDOM_STDGENERATOR: return 0;  // opaque
         case COVERGROUP_INSTHANDLE: return 0;  // opaque
+        case MAILBOX_MESSAGE: return 64;  // opaque, nonzero for width checks of queue elements
         case UINT32: return 32;
         case UINT64: return 64;
         default: return 0;
@@ -700,8 +704,8 @@ public:
                 || m_e == DELAY_SCHEDULER || m_e == TRIGGER_SCHEDULER
                 || m_e == DYNAMIC_TRIGGER_SCHEDULER || m_e == NBA_GENERIC_QUEUE || m_e == FORK_SYNC
                 || m_e == PROCESS_REFERENCE || m_e == RANDOM_GENERATOR
-                || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE || m_e == DOUBLE
-                || m_e == UNTYPED);
+                || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE
+                || m_e == MAILBOX_MESSAGE || m_e == DOUBLE || m_e == UNTYPED);
     }
     bool isCHandle() const VL_MT_SAFE { return m_e == CHANDLE; }
     bool isDouble() const VL_MT_SAFE { return m_e == DOUBLE; }
@@ -795,6 +799,7 @@ public:
             /* RANDOM_GENERATOR:          */ "",  // Should not be traced
             /* RANDOM_STD_GENERATOR:      */ "",  // Should not be traced
             /* COVERGROUP_INSTHANDLE:     */ "",  // Should not be traced
+            /* MAILBOX_MESSAGE:           */ "",  // Should not be traced
             /* UINT32:                    */ "BIT",
             /* UINT64:                    */ "BIT",
             /* LOGIC_IMPLICIT:            */ "",  // Should not be traced
@@ -959,6 +964,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(ARRAY_SORT,                         "sort",                   false,  CLEAN,  false,      "") \
     macro(ARRAY_UNIQUE,                       "unique",                 PURE,   CLEAN,  false,      "") \
     macro(ARRAY_UNIQUE_INDEX,                 "unique_index",           PURE,   CLEAN,  false,      "") \
+    macro(ASSOC_AT_WRITE,                     "atWrite",                false,  CLEAN,  false,      "r") \
     macro(ASSOC_CLEAR,                        "clear",                  false,  CLEAN,  false,      "") \
     macro(ASSOC_ERASE,                        "erase",                  false,  CLEAN,  false,      "r") \
     macro(ASSOC_EXISTS,                       "exists",                 PURE,   CLEAN,  false,      "r") \
@@ -976,7 +982,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_ADD_SINGLE_NAMER,        "addSingleNamer",         false,  CLEAN,  false,      "r+") \
     macro(COVERGROUP_ATTACH,                  "attach",                 false,  CLEAN,  false,      "r") \
     macro(COVERGROUP_CLEAR_HIT_LIST,          "clearHitList",           false,  CLEAN,  false,      "") \
-    macro(COVERGROUP_COVERAGE,                "coverage",               false,  CLEAN,  false,      "") \
+    macro(COVERGROUP_COVERAGE,                "coverage",               false,  CLEAN,  false,      "ww") \
     macro(COVERGROUP_CROSS_WITH_BEGIN,        "withBegin",              false,  CLEAN,  false,      "r+") \
     macro(COVERGROUP_CROSS_WITH_END,          "withEnd",                false,  CLEAN,  false,      "") \
     macro(COVERGROUP_CROSS_WITH_TEST,         "withTest",               false,  CLEAN,  false,      "r") \
@@ -987,7 +993,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_INIT,                    "init",                   false,  CLEAN,  false,      "r+") \
     macro(COVERGROUP_INST_P,                  "p",                      PURE,   CLEAN,  false,      "") \
     macro(COVERGROUP_LEND_WEIGHT,             "lendWeight",             false,  CLEAN,  false,      "rr") \
-    macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "r") \
+    macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "rww") \
     macro(COVERGROUP_RECORD_HIT,              "recordHit",              false,  CLEAN,  false,      "r") \
     macro(COVERGROUP_REGISTER_BINS,           "registerBins",           false,  CLEAN,  false,      "rrrrr") \
     macro(COVERGROUP_SAMPLE,                  "sample",                 false,  CLEAN,  false,      "") \
@@ -1011,7 +1017,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_TRANSITION_SAMPLE,       "transitionSample",       false,  CLEAN,  false,      "rr") \
     macro(COVERGROUP_TRANSITION_SAMPLE_W,     "transitionSampleW",      false,  CLEAN,  false,      "rr") \
     macro(COVERGROUP_TRANSITION_TABLE,        "transitionTable",        false,  CLEAN,  false,      "r") \
-    macro(COVERGROUP_TYPE_COVERAGE,           "typeCoverage",           false,  CLEAN,  false,      "rrrr") \
+    macro(COVERGROUP_TYPE_COVERAGE,           "typeCoverage",           false,  CLEAN,  false,      "rrrrww") \
     macro(COVERGROUP_TYPE_WEIGHT,             "typeWeight",             false,  CLEAN,  false,      "r") \
     macro(COVERGROUP_VALUE_EXCLUDED,          "valueExcluded",          PURE,   CLEAN,  false,      "r") \
     macro(COVERGROUP_VALUE_EXCLUDED_W,        "valueExcludedW",         PURE,   CLEAN,  false,      "r") \
@@ -1049,8 +1055,10 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(DYN_SLICE_ASSIGN,                   "sliceAssign",            false,  CLEAN,  false,      "rrr") \
     macro(DYN_SLICE_ASSIGN_BACK_BACK,         "sliceAssignBackBack",    false,  CLEAN,  false,      "rrr") \
     macro(DYN_SLICE_ASSIGN_FRONT_BACK,        "sliceAssignFrontBack",   false,  CLEAN,  false,      "rrr") \
+    macro(DYN_SLICE_ASSIGN_PLUS,              "sliceAssignPlus",        false,  CLEAN,  false,      "rrr") \
     macro(DYN_SLICE_BACK_BACK,                "sliceBackBack",          PURE,   CLEAN,  false,      "rr") \
     macro(DYN_SLICE_FRONT_BACK,               "sliceFrontBack",         PURE,   CLEAN,  false,      "rr") \
+    macro(DYN_SLICE_PLUS,                     "slicePlus",              PURE,   CLEAN,  false,      "rr") \
     macro(EVENT_CLEAR_FIRED,                  "clearFired",             false,  CLEAN,  false,      "") \
     macro(EVENT_CLEAR_TRIGGERED,              "clearTriggered",         false,  CLEAN,  false,      "") \
     macro(EVENT_FIRE,                         "fire",                   false,  CLEAN,  false,      "") \
@@ -1070,8 +1078,18 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_BASIC_STD_RANDOMIZATION, "basicStdRandomization",  false,  CLEAN,  false,      "mr") \
     macro(RANDOMIZER_CLEARCONSTRAINTS,        "clearConstraints",       false,  CLEAN,  false,      "") \
     macro(RANDOMIZER_CLEARALL,                "clearAll",               false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_CLEAR_ELEM_VARS,         "clear_elem_vars",        false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_CLEAR_VAR,               "clear_var",              false,  CLEAN,  false,      "r") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr") \
+    macro(RANDOMIZER_FUNC_ARGS_READY,         "func_args_ready",        false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_FUNC_ROUND_END,          "func_round_end",         false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_FUNC_ROUND_FINAL,        "func_round_final",       false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_FUNC_ROUND_NEXT,         "func_round_next",        false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_FUNC_ROUND_START,        "func_round_start",       false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_HARD,                    "hard",                   false,  CLEAN,  false,      "r+") \
+    macro(RANDOMIZER_PIN_FROZEN,              "pin_frozen",             false,  CLEAN,  false,      "rr") \
+    macro(RANDOMIZER_RANDC_HISTORY_FROM,      "randc_history_from",     false,  CLEAN,  false,      "r") \
     macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrr") \
     macro(RANDOMIZER_UNIQUE,                  "rand_unique",            false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_MARK_RANDC,              "markRandc",              false,  CLEAN,  false,      "r") \
@@ -1257,6 +1275,7 @@ public:
     enum en : uint8_t {
         NONE,  // Unknown or not applicable
         CTOR_VAR_RESET_CALL,
+        KEEP_THIS,  // VL_KEEP_THIS, keeping 'this' alive while a coroutine runs
         _ENUM_MAX  // Leave last
     };
 
@@ -1278,7 +1297,7 @@ public:
         : m_e(static_cast<en>(_e)) {}  // Need () or GCC 4.8 false warning
     constexpr operator en() const { return m_e; }
     const char* ascii() const VL_PURE {
-        static constexpr const char* const names[] = {"none", "ctor_var_reset_call"};
+        static constexpr const char* const names[] = {"none", "ctor_var_reset_call", "keep_this"};
         return names[m_e];
     }
     bool isNone() const { return m_e == NONE; }
@@ -2097,6 +2116,7 @@ public:
         PUBLIC_MODULE,
         PUBLIC_TASK,
         THREADS_GROUP,
+        TIMEPRECISION_SET,
         TIMEUNIT_SET,
         UNROLL_DISABLE,
         UNROLL_FULL,
@@ -2117,6 +2137,7 @@ public:
             "PUBLIC_MODULE",  //
             "PUBLIC_TASK",  //
             "THREADS_GROUP",  //
+            "TIMEPRECISION_SET",  //
             "TIMEUNIT_SET",  //
             "UNROLL_DISABLE",  //
             "UNROLL_FULL",  //

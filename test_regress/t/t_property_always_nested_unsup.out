@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_property_always_nested_unsup.v:15:64: Unsupported: unbounded 'always' in complex property expression
+                                                            : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) sync_reject_on (abrt) (a and always [1:$] b));
+      |                                                                ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_always_nested_unsup.v:16:39: Unsupported: unbounded 'always' in a negated property
+                                                            : ... note: In instance 't'
+   16 |   assert property (@(posedge clk) not always a);
+      |                                       ^~~~~~
+%Error-UNSUPPORTED: t/t_property_always_nested_unsup.v:17:45: Unsupported: unbounded 'always' in a negated property
+                                                            : ... note: In instance 't'
+   17 |   assert property (@(posedge clk) a |-> not always b);
+      |                                             ^~~~~~
+%Error: Exiting due to
