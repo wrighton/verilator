@@ -926,6 +926,8 @@ static uint64_t readVarValueU64(const void* datap, int width) {
 }
 
 void VlRandomizer::recordRandcValues() {
+    // Only the final solve picks the values
+    if (m_sizeSolve) return;
     for (const auto& name : m_randcVarNames) {
         const auto varIt = m_vars.find(name);
         if (varIt == m_vars.end()) continue;
@@ -962,7 +964,9 @@ bool VlRandomizer::next_check_only(VlRNGReseeds& rngr) { return nextRandomize(rn
 
 bool VlRandomizer::next(VlRNGReseeds& rngr) { return nextRandomize(rngr, false); }
 
-bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
+bool VlRandomizer::next_size(VlRNGReseeds& rngr) { return nextRandomize(rngr, false, true); }
+
+bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
     // No rand variables: randomize() still checks the constraints (IEEE 1800-2023 18.11.1)
     if (!checkOnly && m_vars.empty() && m_uniqueArrays.empty() && m_constraints.empty()) {
         return true;
@@ -971,17 +975,19 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
+    m_sizeSolve = sizeSolve;
     const std::vector<std::string> uniqueExprs = buildUniqueExprs();
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
     if (!m_randcVarNames.empty()) {
         const size_t currentHash = hashConstraints(uniqueExprs);
+        // The final solve continues the history its size solve checked, though the resize
+        // changes the hash
+        const bool sizeSolved = std::exchange(m_sizeSolved, false);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
-        if (currentHash != m_randcConstraintHash) {
-            m_randcUsedValues.clear();
-            m_randcConstraintHash = currentHash;
-        }
+        if (currentHash != m_randcConstraintHash && !sizeSolved) m_randcUsedValues.clear();
+        m_randcConstraintHash = currentHash;
     }
 
     // Reseeded from outside, so everything cached came from the old seed.
@@ -996,6 +1002,8 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     }
     m_ug2.rngReseeds = rngr.reseeds();
     m_checkOnly = false;
+    m_sizeSolve = false;
+    m_sizeSolved = sizeSolve && result;
     return result;
 }
 
