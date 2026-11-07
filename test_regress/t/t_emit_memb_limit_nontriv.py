@@ -15,6 +15,10 @@ test.scenarios('vlt')
 
 LIMIT = 3
 
+# The accepted large limit must not overflow the grouping geometry's cubic bound.
+test.compile(verilator_flags2=["--comp-limit-members", "4194304", "--vpi"])
+test.execute()
+
 test.compile(verilator_flags2=["--comp-limit-members", str(LIMIT), "--vpi"])
 
 test.execute()
