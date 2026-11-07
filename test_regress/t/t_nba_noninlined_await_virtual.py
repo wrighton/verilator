@@ -15,4 +15,8 @@ test.compile(verilator_flags2=['--binary', '--stats'])
 
 test.execute()
 
+# The NBA after virtual/recursive awaits commits through the global queue,
+# independently of the removed per-call cached sensitivity-domain sets.
+test.file_grep(test.stats, r'NBA, variables using GenericGlobal scheme\s+(\d+)', 1)
+
 test.passes()
