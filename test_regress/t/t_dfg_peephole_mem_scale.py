@@ -7,7 +7,6 @@
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
-import os
 import re
 
 import vltest_bootstrap
@@ -39,10 +38,6 @@ def gen(filename):
 
 gen(test.top_filename)
 
-if test.have_dev_asan:
-    # Freed memory in the AddressSanitizer quarantine would count as peak memory
-    test.setenv("ASAN_OPTIONS", os.environ.get("ASAN_OPTIONS", "") + ":quarantine_size_mb=0")
-
 test.compile(verilator_flags2=["--stats"], make_main=False, verilator_make_gmake=False)
 
 # Peak memory after each stage, in stage order
@@ -53,7 +48,10 @@ for i, (stage, peak) in enumerate(peaks):
         growth += float(peak) - float(peaks[i - 1][1])
 if not any(stage == "dfg-peephole" for stage, _ in peaks):
     test.error("DFG peephole stage not found in " + test.stats)
-if growth > MAX_GROWTH_MB:
+print(f"Peak memory growth in DFG peephole with {N_BITS} bits: {growth:.1f} MB")
+# With AddressSanitizer, peak memory also holds freed memory in its quarantine, so the limit
+# applies only without it; Verilator is still checked for memory errors and leaks
+if growth > MAX_GROWTH_MB and not test.have_dev_asan:
     test.error(f"Peak memory grew {growth:.1f} MB in DFG peephole with {N_BITS} bits " +
                f"(over {MAX_GROWTH_MB} MB)")
 
