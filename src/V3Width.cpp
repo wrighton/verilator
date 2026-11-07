@@ -8627,8 +8627,12 @@ class WidthVisitor final : public VNVisitor {
     void checkDeferredAction(const AstNodeCoverOrAssert* nodep, const AstNode* stmtsp) {
         // IEEE 1800-2023 16.4: A deferred assertion action is a single subroutine call.
         // Rejects each other statement kind, as system task calls have too many node types.
-        // V3Assert checks the action of an observed deferred assertion as it lowers it.
-        if (!nodep->userType().containsAny(VAssertType::FINAL_DEFERRED_IMMEDIATE)) return;
+        // V3Assert checks the action of an observed deferred assertion as it lowers it, but
+        // not of a cover it removes without --coverage-user.
+        if (!nodep->userType().containsAny(VAssertType::FINAL_DEFERRED_IMMEDIATE)
+            && !(VN_IS(nodep, Cover)
+                 && nodep->userType().containsAny(VAssertType::OBSERVED_DEFERRED_IMMEDIATE)))
+            return;
         for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
             // A null statement, 'else;', is an empty implied block (see elseAction)
             const AstBegin* const beginp = VN_CAST(stmtp, Begin);

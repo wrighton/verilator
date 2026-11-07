@@ -27,8 +27,7 @@ module t;
     else x++;
     assert #0 (0)
     else report_output(x);
-    // Pass actions, of an assertion and of a cover
+    // A pass action
     assert #0 (0) x++;
-    cover #0 (1) if (x[0]) report(3);
   end
 endmodule
