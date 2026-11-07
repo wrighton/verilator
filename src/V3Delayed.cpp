@@ -125,8 +125,12 @@
 //   }
 // All writes to a target must qualify; otherwise keep its existing scheme,
 // so constant-index writes cannot be reordered relative to other updates.
-// Sparse or single-site writes and consecutive NBAs to a target conservatively
-// retain the shared flag scheme; eligibility does not predict later flag reuse.
+// Sparse or single-site writes retain the shared flag scheme. As a cost heuristic,
+// consecutive sites also keep that scheme: one group can share a flag set/test,
+// instead of setting and testing a flag for every element. This target-wide choice
+// can leave other dense sites unoptimized, e.g. alongside an adjacent reset group.
+// Shared arrays can serialize their writers under --threads; fewer model members
+// do not by themselves establish a simulation speedup.
 //
 // "Generic" scheme is the most general, and uses a queue of closures, which
 // when committed performs the update to the target variable in the order they were
