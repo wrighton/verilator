@@ -473,12 +473,39 @@ class ConstraintExprVisitor final : public VNVisitor {
             return newElementNamep(fl, new AstConst{fl, AstConst::String{}, baseName},
                                    selp->bitp());
         }
-        // Packed struct member: SEL(ARRAYSEL(...)) -- bit select on array element.
-        // Solver registers the whole element, so promote to array element level.
-        if (const AstSel* const bitSelp = VN_CAST(exprp, Sel)) {
-            return buildSolveBeforeNameExpr(fl, bitSelp->fromp());
-        }
         return nullptr;
+    }
+    // Add the solver name, lsb and width (0 for all bits) of solve-before operand 'exprp'
+    void addSolveBeforePins(AstCMethodHard* const callp, AstNodeExpr* exprp) {
+        // A packed struct member or another part of a variable is a select, possibly of a
+        // select
+        FileLine* const fl = exprp->fileline();
+        AstNodeExpr* lsbp = nullptr;
+        AstNodeExpr* validp = nullptr;  // Whether each select of a select is in its range
+        uint32_t width = 0;
+        while (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            AstNodeExpr* partLsbp = selp->lsbp()->cloneTreePure(false);
+            if (partLsbp->width() < 32) partLsbp = new AstExtend{fl, partLsbp, 32};
+            // The runtime checks the select of the variable, not one of a select, which out of
+            // range would select bits next to that select
+            if (const AstSel* const fromSelp = VN_CAST(selp->fromp(), Sel)) {
+                AstNodeExpr* const inRangep
+                    = new AstLte{fl, partLsbp->cloneTreePure(false),
+                                 new AstConst{fl, static_cast<uint32_t>(fromSelp->widthConst()
+                                                                        - selp->widthConst())}};
+                validp = validp ? new AstLogAnd{fl, validp, inRangep} : inRangep;
+            }
+            lsbp = lsbp ? new AstAdd{fl, lsbp, partLsbp} : partLsbp;
+            if (!width) width = selp->widthConst();
+            exprp = selp->fromp();
+        }
+        // An lsb past the end of any variable, which the runtime does not order
+        if (validp) lsbp = new AstCond{fl, validp, lsbp, new AstConst{fl, ~0U}};
+        AstNodeExpr* const namep = buildSolveBeforeNameExpr(fl, exprp);
+        UASSERT_OBJ(namep, exprp, "Unexpected expression type in solve...before");
+        callp->addPinsp(namep);
+        callp->addPinsp(lsbp ? lsbp : new AstConst{fl, 0});
+        callp->addPinsp(new AstConst{fl, width});
     }
 
     AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
@@ -2159,24 +2186,13 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeModule* const genModp = VN_AS(m_genp->user2p(), NodeModule);
 
         for (AstNodeExpr* const lhsp : nodep->lhsspList()) {
-            AstNodeExpr* const lhsTestp = buildSolveBeforeNameExpr(fl, lhsp);
-            if (!lhsTestp) {
-                lhsp->v3fatalSrc("Unexpected expression type in solve...before lhs");
-                continue;
-            }
-            VL_DO_DANGLING(lhsTestp->deleteTree(), lhsTestp);
             for (AstNodeExpr* const rhsp : nodep->rhsspList()) {
-                AstNodeExpr* const rhsNamep = buildSolveBeforeNameExpr(fl, rhsp);
-                if (!rhsNamep) {
-                    rhsp->v3fatalSrc("Unexpected expression type in solve...before rhs");
-                    continue;
-                }
                 AstCMethodHard* const callp = new AstCMethodHard{
                     fl, new AstVarRef{fl, genModp, m_genp, VAccess::READWRITE},
                     VCMethod::RANDOMIZER_SOLVE_BEFORE};
                 callp->dtypeSetVoid();
-                callp->addPinsp(buildSolveBeforeNameExpr(fl, lhsp));
-                callp->addPinsp(rhsNamep);
+                addSolveBeforePins(callp, lhsp);
+                addSolveBeforePins(callp, rhsp);
                 nodep->addHereThisAsNext(callp->makeStmt());
             }
         }

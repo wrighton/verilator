@@ -280,8 +280,22 @@ class VlRandomizer VL_NOT_FINAL {
     std::map<std::string, std::set<uint64_t>>
         m_randcUsedValues;  // Previously used values per randc var (exclusion-based cycling)
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
-    std::vector<std::pair<std::string, std::string>>
-        m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
+    // A solve-before operand: bits [lsb, lsb + width) of a variable, all if width is 0
+    struct SolveBeforeRef final {
+        std::string name;
+        IData lsb;
+        IData width;
+    };
+    std::vector<std::pair<SolveBeforeRef, SolveBeforeRef>>
+        m_solveBefore;  // Solve-before ordering pairs (before, after)
+    // Bits [lo, hi) of a variable that a solve-before operand orders
+    struct SolveBeforeBits final {
+        const VlRandomVar* rootp;  // Variable
+        IData lo;  // First bit
+        IData hi;  // Bit after the last
+    };
+    // Parts of variables that solve-before pairs order, as variables of their solver terms
+    std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeParts;
     bool m_checkOnly = false;  // Set for randomize(null)
     bool isFrozenVar(const std::string& name,
                      const VlRandomVar& var) const;  // true if this var is currently frozen
@@ -364,8 +378,12 @@ class VlRandomizer VL_NOT_FINAL {
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess);
     void solveDiversityPins(VlRNG& rngr, VlSolverSession& sess);
     void solveDiversityXor(VlRNG& rngr, VlSolverSession& sess);
-    // Layers of solve...before variables in dependency order
+    // Layers of the solve...before variables and parts of them in dependency order
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
+    // The variable or part of a variable a solve...before layer name names, nullptr if none
+    const VlRandomVar* solveBeforeVarp(const std::string& name) const;
+    // Resolve a solve-before operand to its bits, false if it names none
+    bool solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr) const;
     const char* phasedLogic() const;
     bool nextPhased(VlRNG& rngr, VlSolverSession& sess,
                     const std::vector<std::string>& uniqueExprs);
@@ -964,8 +982,10 @@ public:
     void clearConstraints();
     void clearAll();  // Clear both constraints and variables
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
-    void solveBefore(const std::string& beforeName,
-                     const std::string& afterName);  // Register solve-before ordering
+    /// Register solve-before ordering of bits [lsb, lsb + width) of variables, all bits if
+    /// width is 0
+    void solveBefore(const std::string& beforeName, IData beforeLsb, IData beforeWidth,
+                     const std::string& afterName, IData afterLsb, IData afterWidth);
     void set_randmode(const VlQueue<CData>& randmode) { m_randmodep = &randmode; }
     // Shared across all instances; consulted instead of m_randmodep for vars marked via
     // mark_var_static().

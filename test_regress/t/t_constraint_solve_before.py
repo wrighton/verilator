@@ -16,6 +16,22 @@ if not test.have_solver:
 
 test.compile()
 
-test.execute()
+solver_log = test.obj_dir + "/solver.log"
+
+# The golden has the warnings of the Verilator-only circular orderings
+if test.vlt_all:
+    test.execute(all_run_flags=['+verilator+solver+file+' + solver_log],
+                 expect_filename=test.golden_filename)
+else:
+    test.execute()
+
+# Test 4, nested select: with j = 6, bit 6 of pa2 is solved first
+if test.vlt_all:
+    test.file_grep(solver_log, r'\(get-value \(\(\(_ extract 6 6\) pa2\) \)\)')
+
+# Test 5: the bits not after mz, of mx only, are solved with mz, then the part after mz
+if test.vlt_all:
+    test.file_grep(solver_log, r'\(get-value \(\(\(_ extract 6 4\) mx\) mz \)\)')
+    test.file_grep(solver_log, r'\(get-value \(\(\(_ extract 3 0\) mx\) \)\)')
 
 test.passes()
