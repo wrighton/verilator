@@ -558,9 +558,21 @@ class ForkVisitor final : public VNVisitor {
         // before the task
         m_tasksp = AstNode::addNext(taskp, m_tasksp);
         if (itemp->declsp()) taskp->addStmtsp(itemp->declsp()->unlinkFrBackWithNext());
-        if (itemp->stmtsp()) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBackWithNext());
         AstTaskRef* const callp = new AstTaskRef{flp, taskp, m_capturedArgsp};
-        itemp->addStmtsp(callp->makeStmt());
+        AstBegin* const beginp
+            = itemp->stmtsp() ? VN_CAST(itemp->stmtsp()->lastp(), Begin) : nullptr;
+        if (beginp && !beginp->name().empty()) {
+            // A named block stays at the fork with the call, so V3Begin keeps its scope for
+            // hierarchical references recorded relative to it (see BeginXRefScopeVisitor)
+            if (beginp->declsp()) taskp->addStmtsp(beginp->declsp()->unlinkFrBackWithNext());
+            // Statements before the block, e.g. the start sentinel, still run first
+            while (itemp->stmtsp() != beginp) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBack());
+            if (beginp->stmtsp()) taskp->addStmtsp(beginp->stmtsp()->unlinkFrBackWithNext());
+            beginp->addStmtsp(callp->makeStmt());
+        } else {
+            if (itemp->stmtsp()) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBackWithNext());
+            itemp->addStmtsp(callp->makeStmt());
+        }
 
         // Variables were moved under the task, so make sure they are marked as funcLocal
         for (AstVar* const localp : m_forkLocalsp) localp->funcLocal(true);
