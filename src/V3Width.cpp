@@ -438,6 +438,8 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_writtenInputps;  // Input net ports written by a reference
     std::unordered_set<const AstVar*> m_procWrittenps;  // Those written other than continuously
     std::unordered_set<const AstVar*> m_foreachVars;  // Loop variables of enclosing foreaches
+    std::unordered_set<const AstVar*>
+        m_valueConnectedPortps;  // Ports connected to value expressions
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -4238,9 +4240,8 @@ class WidthVisitor final : public VNVisitor {
                    && !VN_IS(m_writerp, Release)
                    // An alias joins nets, it does not drive them (IEEE 1800-2023 10.11)
                    && !VN_IS(m_writerp, Alias)) {
-            // Skip ASSIGNIN for continuous assignments to net-type input ports
-            // via hierarchical reference. Net ports allow multiple continuous
-            // drivers (IEEE 1800-2023 23.3.3.3).
+            // Hierarchical net input ports allow continuous, pin and clocking drivers
+            // (IEEE 1800-2023 23.3.3.3); local drives still issue ASSIGNIN.
             const bool hierRef = !m_curModVars.count(nodep->varp());
             const bool netPort = nodep->varp()->isNetOrNetPort();
             const bool contAssign = VN_IS(m_writerp, AssignW);
@@ -4250,7 +4251,7 @@ class WidthVisitor final : public VNVisitor {
                 m_writtenInputps.emplace(nodep->varp());
                 if (!contDriver) m_procWrittenps.emplace(nodep->varp());
             }
-            if (!(hierRef && netPort && (contAssign || pinConn))) {
+            if (!(hierRef && netPort && contDriver)) {
                 nodep->v3warn(ASSIGNIN,
                               "Assigning to input/const variable: " << nodep->prettyNameQ());
                 // A net input port driven inside its module is coerced to inout, so the
@@ -8841,6 +8842,13 @@ class WidthVisitor final : public VNVisitor {
             // Very much like like an assignment, but which side is LH/RHS
             // depends on pin being a in/output/inout.
             const VDirection pinDirection = nodep->modVarp()->direction();
+            // Widthing can erase value-only syntax, e.g. lowering a pattern to a concat.
+            // Remember it before typing so it cannot become an inout destination later.
+            if (pinDirection.isInput() && nodep->modVarp()->isNetOrNetPort()
+                && nodep->modVarp()->dtypep()->skipRefp()->isIntegralOrPacked()
+                && !isNetLValueSyntax(nodep->exprp())) {
+                m_valueConnectedPortps.emplace(nodep->modVarp());
+            }
             if (VN_IS(nodep->exprp(), NodeStream) && pinDirection.isInoutOrRef()) {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
                                         << pinDirection.prettyName()
@@ -10127,8 +10135,8 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstClockingItem* nodep) override {
-        nodep->exprp()->foreach(
-            [nodep](AstVarRef* const refp) { refp->access(nodep->direction().pinAccess()); });
+        // Indices compute a destination; they are not additional clocking outputs.
+        V3LinkLValue::linkLValueSet(nodep->exprp(), nodep->direction().pinAccess());
         VL_RESTORER(m_writerp);
         m_writerp = nodep;
         userIterateChildren(nodep, WidthVP{SELF, PRELIM}.p());
@@ -13395,6 +13403,27 @@ class WidthVisitor final : public VNVisitor {
         netps.push_back(refp->varp());
         return true;
     }
+    // Syntax that can denote a net destination. Select indices are checked after typing.
+    // Unlike a net concatenation, a pattern or cast produces a value even when Width
+    // later lowers it to references to nets.
+    static bool isNetLValueSyntax(const AstNode* exprp) {
+        if (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
+            return isNetLValueSyntax(selp->fromp());
+        }
+        if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            return isNetLValueSyntax(selp->fromp());
+        }
+        if (const AstMemberSel* const selp = VN_CAST(exprp, MemberSel)) {
+            return isNetLValueSyntax(selp->fromp());
+        }
+        if (const AstConcat* const catp = VN_CAST(exprp, Concat)) {
+            return isNetLValueSyntax(catp->lhsp()) && isNetLValueSyntax(catp->rhsp());
+        }
+        if (const AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
+            return isNetLValueSyntax(repp->srcp());
+        }
+        return VN_IS(exprp, NodeVarRef);
+    }
 
 public:
     // CONSTRUCTORS
@@ -13485,6 +13514,7 @@ public:
             if (!pair.second) continue;
             // V3Tristate cannot resolve a procedural driver
             bool ok = !topPortps.count(varp) && !m_procWrittenps.count(varp)
+                      && !m_valueConnectedPortps.count(varp)
                       && varp->dtypep()->skipRefp()->isIntegralOrPacked();
             for (AstPin* const pinp : pinps[varp]) {
                 std::vector<AstVar*> netps;

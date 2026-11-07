@@ -6695,10 +6695,11 @@ public:
     bool cleanOut() const override { return true; }
     int instrCount() const override { return widthInstrs(); }
     bool sameNode(const AstNode* samep) const override {
-        const AstVarXRef* asamep = VN_DBG_AS(samep, VarXRef);
+        const AstVarXRef* const asamep = VN_DBG_AS(samep, VarXRef);
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
                 && name() == asamep->name() && dotted() == asamep->dotted()
-                && inlinedDots() == asamep->inlinedDots());
+                && inlinedDots() == asamep->inlinedDots()
+                && readOnlyModport() == asamep->readOnlyModport());
     }
 };
 

@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+`timescale 1ns/1ps
+
 // verilog_format: off
 `define stop $stop
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
@@ -15,9 +17,35 @@
 // verilator lint_off ASSIGNIN
 
 typedef logic [1:0] pair_t;
+typedef struct packed {
+  logic hi;
+  logic lo;
+} packed_pair_t;
 
 interface net_if;
   wire [1:0] x;
+endinterface
+
+class view_payload;
+  int value;
+  function void put(int v);
+    value = v;
+  endfunction
+endclass
+
+interface view_if;
+  wire [1:0] a;
+  view_payload h = new;
+  modport ro(input a, h);
+  modport rw(inout a, input h);
+endinterface
+
+// The index is read to select a variable, not driven by the clocking output.
+interface index_if(input logic clk, input wire [2:0] sel_index);
+  logic [6:0] local_data = 0;
+  clocking cb @(posedge clk);
+    output o = local_data[sel_index];
+  endclocking
 endinterface
 
 // Driven by a clocking block output
@@ -48,6 +76,77 @@ module tri_drv (
     input logic [1:0] v
 );
   assign a = en ? v : 2'bzz;
+endmodule
+
+module ro_view_drv (
+    input wire [1:0] a,
+    input logic en,
+    input logic [1:0] v
+);
+  assign a = en ? v : 2'bzz;
+endmodule
+
+module ro_view_wrap (
+    view_if.ro bus,
+    input logic en,
+    input logic [1:0] v
+);
+  ro_view_drv u (.a({bus.a[1], bus.a[0]}), .en(en), .v(v));
+  // Mutating the object does not rebind the readonly handle.
+  initial begin
+    #1;
+    bus.h.put(7);
+    `checkh(bus.h.value, 7);
+  end
+endmodule
+
+module rw_view_wrap (
+    view_if.rw bus,
+    input logic en,
+    input logic [1:0] v
+);
+  tri_drv u (.a({bus.a[1], bus.a[0]}), .en(en), .v(v));
+endmodule
+
+// Independent readonly-array drivers prevent scalar-view exclusions masking this path.
+module ro_array_drv (
+    input wire [1:0] a,
+    input logic en,
+    input logic [1:0] v
+);
+  assign a = en ? v : 2'bzz;
+endmodule
+module ro_array_wrap (
+    view_if.ro buses[2],
+    input logic en,
+    input logic [1:0] v
+);
+  ro_array_drv u0 (.a({buses[0].a[1], buses[0].a[0]}), .en(en), .v(v));
+  ro_array_drv u1 (.a({buses[1].a[1], buses[1].a[0]}), .en(en), .v(v));
+endmodule
+module rw_array_wrap (
+    view_if.rw buses[2],
+    input logic en,
+    input logic [1:0] v
+);
+  tri_drv u0 (.a({buses[0].a[1], buses[0].a[0]}), .en(en), .v(v));
+  tri_drv u1 (.a({buses[1].a[1], buses[1].a[0]}), .en(en), .v(v));
+endmodule
+
+module seven_drv (
+    input wire [6:0] a,
+    input logic en,
+    input logic [6:0] v
+);
+  assign a = en ? v : 7'bzzzzzzz;
+endmodule
+
+module bit_drv (
+    input wire a,
+    input logic en,
+    input logic v
+);
+  assign a = en ? v : 1'bz;
 endmodule
 
 // Connected to coerced ports of instances
@@ -145,6 +244,16 @@ module rep_drv (
 );
   assign a = 2'b11;
 endmodule
+module pattern_drv (
+    input wire packed_pair_t a
+);
+  assign a = 2'b11;
+endmodule
+module cast_drv (
+    input wire [1:0] a
+);
+  assign a = 2'b11;
+endmodule
 
 // Not coerced, so the parent port it connects to is not either, unless
 // driven inside its module too
@@ -188,6 +297,13 @@ endmodule
 module dut (
     input logic d,
     output logic q
+);
+  assign q = d;
+endmodule
+
+module hier_dut (
+    input wire d,
+    output wire q
 );
   assign q = d;
 endmodule
@@ -243,6 +359,10 @@ module t (
   tri_drv u_wide (.a(widew), .en(en1), .v(v1));
   // verilator lint_on WIDTHTRUNC
   tri_drv u_if (.a(ni.x), .en(en1), .v(v1));
+  wire packed_pair_t pw;
+  tri_drv u_packed (.a(pw), .en(en1), .v(v1));
+  wire packed_pair_t mw;
+  drv_if di_member (.clk(clk), .d(mw.hi));
   tri_drv u_unc (.a(), .en(en1), .v(v1));
   // Instance array connected to a concatenation
   wire [1:0] c0, c1;
@@ -271,11 +391,105 @@ module t (
   cat_drv u_cat1 (.a({1'b0, ncw1}));
   cat2_drv u_cat2 (.a({ncw2, 1'b0}));
   rep_drv u_rep (.a({2{ncw3}}));
+  wire npw1, npw2;
+  // An assignment pattern is a read expression, not an inout destination.
+  pattern_drv u_pattern (.a('{hi: npw1, lo: npw2}));
+  wire ncastw1, ncastw2;
+  cast_drv u_cast (.a(pair_t'({ncastw1, ncastw2})));
   unpacked_drv u_unpacked (.a(uw), .v(cv));
+
+  // Readonly view exclusion and writable-view control have independent drivers.
+  logic view_en = 0;
+  logic [1:0] view_value = 0;
+  view_if read_view ();
+  view_if write_view ();
+  view_if read_array[2] ();
+  view_if write_array[2] ();
+  ro_view_wrap u_read_view (.bus(read_view), .en(view_en), .v(view_value));
+  rw_view_wrap u_write_view (.bus(write_view), .en(view_en), .v(view_value));
+  ro_array_wrap u_read_array (.buses(read_array), .en(view_en), .v(view_value));
+  rw_array_wrap u_write_array (.buses(write_array), .en(view_en), .v(view_value));
+  initial begin
+    #1;
+    view_en = 1;
+    view_value = 2'b10;
+    #1;
+    `checkh(read_view.a, 2'bzz);
+    `checkh(write_view.a, 2'b10);
+    `checkh(read_array[0].a, 2'bzz);
+    `checkh(read_array[1].a, 2'bzz);
+    `checkh(write_array[0].a, 2'b10);
+    `checkh(write_array[1].a, 2'b10);
+    view_value = 2'b01;
+    #1;
+    `checkh(read_array[0].a, 2'bzz);
+    `checkh(read_array[1].a, 2'bzz);
+    `checkh(write_array[0].a, 2'b01);
+    `checkh(write_array[1].a, 2'b01);
+    view_en = 0;
+    #1;
+    `checkh(write_view.a, 2'bzz);
+    `checkh(write_array[0].a, 2'bzz);
+    `checkh(write_array[1].a, 2'bzz);
+  end
+
+  // Constant normalized offsets include subtraction and packed-array strides.
+  logic select_en = 0;
+  logic [6:0] select_value = 0;
+  // Ascending bounds are intentional coverage of constant index normalization.
+  // verilator lint_off ASCRANGE
+  wire [1:3] ascending;
+  // verilator lint_on ASCRANGE
+  wire [3:1][6:0] packed_array;
+  bit_drv u_ascending (.a(ascending[2]), .en(select_en), .v(select_value[0]));
+  seven_drv u_packed_array (.a(packed_array[2]), .en(select_en), .v(select_value));
+  initial begin
+    #1;
+    select_en = 1;
+    select_value = 7'h65;
+    #1;
+    `checkh(ascending, 3'bz1z);
+    `checkh(packed_array[2], 7'h65);
+    select_value = 7'h2a;
+    #1;
+    `checkh(ascending, 3'bz0z);
+    `checkh(packed_array[2], 7'h2a);
+    select_en = 0;
+    #1;
+    `checkh(packed_array[2], 7'bzzzzzzz);
+  end
+
+  // An external hierarchical clocking drive is legal, not a local ASSIGNIN drive.
+  wire hier_q;
+  hier_dut u_hier (.d(), .q(hier_q));
+  clocking hier_cb @(posedge clk);
+    output d = u_hier.d;
+  endclocking
+  initial begin
+    @(posedge clk);
+    hier_cb.d <= 1'b1;
+    repeat (2) @(posedge clk);
+    `checkh(hier_q, 1'b1);
+    hier_cb.d <= 1'b0;
+    repeat (2) @(posedge clk);
+    `checkh(hier_q, 1'b0);
+  end
+
+  // The driver also checks the width tree: sel_index must remain an INPUT.
+  wire [2:0] index_net = 3'd2;
+  index_if u_index (.clk(clk), .sel_index(index_net));
+  initial begin
+    @(posedge clk);
+    u_index.cb.o <= 1'b1;
+    repeat (2) @(posedge clk);
+    `checkh(u_index.local_data, 7'h04);
+  end
 
   initial begin
     static driver drv = new(di);
     #1;
+    // The clocking-created net driver is released until a synchronous drive (14.16).
+    `checkh(w, 1'bz);
     `checkh(tw, 2'bzz);
     `checkh(iow, 2'bzz);
     `checkh(ow, 2'bzz);
@@ -294,6 +508,11 @@ module t (
     `checkh(onw, 2'b10);
     `checkh(widew, 4'bzz10);
     `checkh(ni.x, 2'b10);
+    `checkh(pw, 2'b10);
+    `checkh(npw1, 1'bz);
+    `checkh(npw2, 1'bz);
+    `checkh(ncastw1, 1'bz);
+    `checkh(ncastw2, 1'bz);
     `checkh(u_unc.a, 2'b10);
     `checkh(c0, 2'b10);
     `checkh(c1, 2'b10);
@@ -315,6 +534,7 @@ module t (
 
     @(posedge clk);
     drv.drive(1'b1);
+    di_member.cb.d <= 1'b1;
     di0.cb.d <= 1'b1;
     di1.cb.d <= 1'b0;
     dia[0].cb.d <= 1'b1;
@@ -323,23 +543,33 @@ module t (
     repeat (2) @(posedge clk);
     `checkh(w, 1'b1);
     `checkh(q, 1'b1);
+    `checkh(mw, 2'b1z);
     `checkh(bus, 2'b01);
     `checkh(da0, 1'b1);
     `checkh(da1, 1'b0);
     `checkh(sw, 2'b1z);
     drv.drive(1'b0);
+    di_member.cb.d <= 1'b0;
     di0.cb.d <= 1'b0;
     di1.cb.d <= 1'b1;
     dia[0].cb.d <= 1'b0;
     dia[1].cb.d <= 1'b1;
     si.cb.d <= 1'b0;
+    // The output changes after its 1 ns skew, not at the clocking event.
+    #500ps;
+    `checkh(sw, 2'b1z);
+    #501ps;
+    `checkh(sw, 2'b0z);
     repeat (2) @(posedge clk);
     `checkh(w, 1'b0);
     `checkh(q, 1'b0);
+    `checkh(mw, 2'b0z);
     `checkh(bus, 2'b10);
     `checkh(da0, 1'b0);
     `checkh(da1, 1'b1);
     `checkh(sw, 2'b0z);
+    // Allow the other positive-edge checks to complete before termination.
+    #1ps;
     $write("*-* All Finished *-*\n");
     $finish;
   end

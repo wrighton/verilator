@@ -6123,6 +6123,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 AstVar* const varp
                     = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr;
                 nodep->varp(varp);
+                // A re-resolved read net endpoint can become writable during Width's
+                // port coercion. Keep its input-only view, without extending handle or
+                // variable permissions to their pointee accesses.
+                if (m_statep->forParamed() && varp && varp->isNetOrNetPort()
+                    && nodep->access().isReadOnly()) {
+                    if (const AstModportVarRef* const mvarp
+                        = VN_CAST(foundp->nodep(), ModportVarRef)) {
+                        if (mvarp->direction().isReadOnly()) nodep->readOnlyModport(true);
+                    }
+                }
                 updateVarUse(nodep->varp());
                 UINFO(7, indent() << "Resolved " << nodep);  // Also prints varp
                 // If found, check if it's ok to access in case it's in a hier_block

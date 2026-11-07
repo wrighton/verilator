@@ -25,6 +25,7 @@
 
 #include "V3Assert.h"
 #include "V3Const.h"
+#include "V3LinkLValue.h"
 #include "V3Task.h"
 #include "V3Timing.h"
 #include "V3UniqueNames.h"
@@ -557,10 +558,11 @@ private:
             // Initialize the clockvar
             AstVarRef* const skewedWriteRefp = new AstVarRef{flp, varp, VAccess::WRITE};
             skewedWriteRefp->user1(true);
-            AstNodeExpr* const initValuep = exprp->cloneTreePure(false);
-            initValuep->foreach([](AstNodeVarRef* refp) { refp->access(VAccess::READ); });
+            // The output expression is a destination, but its initializer only reads it.
+            AstNodeExpr* const initExprp = exprp->cloneTreePure(false);
+            V3LinkLValue::linkLValueSet(initExprp, VAccess::READ);
             AstInitialStatic* const initClockvarp
-                = new AstInitialStatic{flp, new AstAssign{flp, skewedWriteRefp, initValuep}};
+                = new AstInitialStatic{flp, new AstAssign{flp, skewedWriteRefp, initExprp}};
             m_modp->addStmtsp(initClockvarp);
             // Each drive sets a flag, so the signal is also assigned when driven with the same
             // value again, e.g. after another assignment to the signal (IEEE 1800-2023 14.16.2)
