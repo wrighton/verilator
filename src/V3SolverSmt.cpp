@@ -4256,15 +4256,15 @@ class SolverSmtLowering final : public V3SolverLowering {
         // Evaluate the 64-bit offset once before wide expansion can duplicate operands.
         // A C cast is only to a basic C type; a wider result needs zero extension.
         if (distWidth > VL_QUADSIZE) {
-            AstVar* const offsetVarp = new AstVar{fl, VVarType::BLOCKTEMP,
-                                                  m_uniqueNames.get("__Vdist_offset"),
-                                                  distp->findUInt64DType()};
+            AstVar* const offsetVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vdist_offset"),
+                             distp->findUInt64DType()};
             offsetVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-            AstBegin* const blockp = new AstBegin{
-                fl, m_uniqueNames.get("__Vdist_offset_block"), nullptr, true};
+            AstBegin* const blockp
+                = new AstBegin{fl, m_uniqueNames.get("__Vdist_offset_block"), nullptr, true};
             blockp->addDeclsp(offsetVarp);
-            blockp->addStmtsp(new AstAssign{
-                fl, new AstVarRef{fl, offsetVarp, VAccess::WRITE}, offsetp});
+            blockp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, offsetVarp, VAccess::WRITE}, offsetp});
             offsetp = new AstExprStmt{
                 fl, blockp,
                 new AstExtend{fl, new AstVarRef{fl, offsetVarp, VAccess::READ}, distWidth}};
