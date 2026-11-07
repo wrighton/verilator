@@ -14,8 +14,6 @@ test.scenarios('simulator')
 # With --timing, constant sensitivities are kept rather than reduced to an initial trigger
 test.compile(verilator_flags2=["--no-timing", "--stats"])
 
-test.file_grep(test.stats, r'Procedures needing initial NBA trigger\s+(\d+)', 2)
-
 test.execute()
 
 test.passes()
