@@ -235,13 +235,13 @@ class CastVisitor final : public VNVisitor {
         }
     }
     void visit(AstVarRef* nodep) override {
-        // Call arguments, which may be passed by reference, and C text take the variable itself.
-        // abovep is null for a later element of a list, which is of such arguments or C text.
+        // Call arguments, which may be passed by reference, and $c text take the variable itself.
+        // abovep is null for a later element of a list, such as of arguments or C text.
         const AstNode* const abovep = nodep->firstAbovep();
         if (nodep->access().isReadOnly() && VN_IS(abovep, NodeExpr) && !VN_IS(abovep, CCast)
             && !VN_IS(abovep, NodeCCall) && !VN_IS(abovep, CMethodHard) && !VN_IS(abovep, SFormatF)
             && !VN_IS(abovep, ArraySel) && !VN_IS(abovep, StructSel) && !VN_IS(abovep, RedXor)
-            && !VN_IS(abovep, CExpr) && !VN_IS(abovep, CExprUser)
+            && !VN_IS(abovep, CExprUser)
             && (nodep->varp()->basicp() && !nodep->varp()->basicp()->isForkSync()
                 && !nodep->varp()->basicp()->isProcessRef() && !nodep->varp()->basicp()->isEvent())
             && abovep->width() && castSize(nodep) != castSize(nodep->varp())) {
