@@ -34,6 +34,28 @@ class A;
   constraint c_a { m_u inside {[0:9]}; }
 endclass
 
+typedef class NullArrayA;
+
+class NullArrayB;
+  rand int v;
+  rand NullArrayA a;
+  int pre_count;
+  int post_count;
+  constraint c_v {v inside {[0:9]};}
+  function void pre_randomize();
+    ++pre_count;
+  endfunction
+  function void post_randomize();
+    ++post_count;
+  endfunction
+endclass
+
+class NullArrayA;
+  rand int u;
+  rand NullArrayB bs[1];
+  constraint c_u {u inside {[0:9]};}
+endclass
+
 module t;
   initial begin
     A a;
@@ -70,6 +92,52 @@ module t;
     `checkd(ok, 1);
     ok = b.randomize();
     `checkd(ok, 1);
+    // An array/backlink cycle must use the selected leaf's null and phase flag.
+    begin
+      NullArrayA na;
+      NullArrayB nb;
+      na = new;
+      nb = new;
+      na.u = 3;
+      nb.v = 4;
+      na.bs[0] = nb;
+      nb.a = na;
+      ok = na.randomize(null);
+      `checkd(ok, 1);
+      `checkd(nb.pre_count, 1);
+      `checkd(nb.post_count, 1);
+      `checkd(na.u, 3);
+      `checkd(nb.v, 4);
+      nb.v = 20;
+      ok = na.randomize(null);
+      `checkd(ok, 0);
+      `checkd(nb.pre_count, 2);
+      `checkd(nb.post_count, 1);
+      `checkd(nb.v, 20);
+      na.bs.rand_mode(0);
+      ok = na.randomize(null);
+      `checkd(ok, 1);
+      `checkd(nb.pre_count, 2);
+      `checkd(nb.post_count, 1);
+      `checkd(nb.v, 20);
+      na.bs.rand_mode(1);
+      nb.v = 4;
+      ok = nb.randomize(null);
+      `checkd(ok, 1);
+      `checkd(nb.pre_count, 3);
+      `checkd(nb.post_count, 2);
+      `checkd(na.u, 3);
+      `checkd(nb.v, 4);
+      na.bs[0] = null;
+      ok = na.randomize(null);
+      `checkd(ok, 1);
+      `checkd(nb.pre_count, 3);
+      na.bs[0] = nb;
+      ok = na.randomize(null);
+      `checkd(ok, 1);
+      `checkd(nb.pre_count, 4);
+      `checkd(nb.post_count, 3);
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end

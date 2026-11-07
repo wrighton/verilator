@@ -2014,7 +2014,7 @@ class RandomizeVisitor final : public VNVisitor {
                 new AstAnd{fl, new AstVarRef{fl, outputVarp, VAccess::READ}, callp}};
             AstNodeExpr* condp
                 = new AstNeq{fl, exprp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
-            // Each object of a cycle of rand handles is randomized once per call
+            // Guard the selected object during ordinary randomize and each null phase.
             if (AstVar* const flagVarp = getRandomizingVarIfCycle(classRefDtp->classp())) {
                 condp = new AstLogAnd{
                     fl, condp,
@@ -2894,19 +2894,8 @@ class RandomizeVisitor final : public VNVisitor {
                 if (!VN_IS(RandomizeUtil::arrayElementDTypep(memberVarp->dtypep()), ClassRefDType))
                     return;
                 AstVarRef* const refp = new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ};
-                AstNodeStmt* stmtp = newRandStmtsp(fl, refp, nullptr, fvarp);
-                if (inRandHandleCycle(memberVarp, classp)) {
-                    stmtp = new AstIf{
-                        fl,
-                        new AstLogAnd{
-                            fl,
-                            new AstNeq{fl,
-                                       new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
-                                       new AstConst{fl, AstConst::Null{}}},
-                            new AstNot{fl, newRandomizingSelp(fl, ownerClassp, memberVarp,
-                                                              VAccess::READ)}},
-                        stmtp};
-                }
+                // The selected leaf's null and cycle flag are checked in newRandStmtsp.
+                AstNodeStmt* const stmtp = newRandStmtsp(fl, refp, nullptr, fvarp);
                 funcp->addStmtsp(wrapIfRandMode(
                     classp, memberVarp,
                     new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), stmtp, false}));
