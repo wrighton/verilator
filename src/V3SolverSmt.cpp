@@ -3814,6 +3814,46 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
     }
 
+    // Clone a list of constraint items with the dist preambles of their foreach items
+    static AstNode* cloneWithDistPreambles(AstNode* const nodep) {
+        // The preambles are off-tree, so are cloned separately. Their references to the loop
+        // indices, also of enclosing loops, are moved to the indices of the cloned loops. The
+        // dist variables they assign are declared in the function, shared by both.
+        AstNode* const clonep = nodep->cloneTree(true);
+        std::unordered_map<const AstVar*, AstVar*> idxVarps;  // Index var -> its clone
+        // Each foreach with a preamble, and its clone
+        std::vector<std::pair<AstConstraintForeach*, AstConstraintForeach*>> withPreambleps;
+        nodep->foreachAndNext([&](AstConstraintForeach* const foreachp) {
+            AstConstraintForeach* const clonedForeachp = foreachp->clonep();
+            AstNode* clonedElemp = clonedForeachp->headerp()->elementsp();
+            for (AstNode* const elemp : foreachp->headerp()->elementspList()) {
+                if (AstVar* const varp = VN_CAST(elemp, Var)) {
+                    idxVarps.emplace(varp, VN_AS(clonedElemp, Var));
+                }
+                clonedElemp = clonedElemp->nextp();
+            }
+            if (foreachp->user3p()) withPreambleps.emplace_back(foreachp, clonedForeachp);
+        });
+        for (const auto& pair : withPreambleps) {
+            AstNode* const preamblep = pair.first->user3p()->cloneTree(true);
+            preamblep->foreachAndNext([&](AstVarRef* const refp) {
+                const auto it = idxVarps.find(refp->varp());
+                if (it != idxVarps.end()) refp->varp(it->second);
+            });
+            pair.second->user3p(preamblep);
+        }
+        return clonep;
+    }
+    // Delete the off-tree dist preambles of the foreach items under nodep
+    static void deleteDistPreambles(AstNode* const nodep) {
+        nodep->foreach([](AstConstraintForeach* const foreachp) {
+            if (AstNode* const preamblep = foreachp->user3p()) {
+                foreachp->user3p(nullptr);
+                VL_DO_DANGLING(preamblep->deleteTree(), preamblep);
+            }
+        });
+    }
+
     static bool isDynArrOfClassTypeRecurse(const AstNodeDType* const dtypep) {
         const AstNodeDType* const refp = dtypep->skipRefp();
         if (VN_IS(refp, DynArrayDType) || VN_IS(refp, QueueDType)) {
@@ -4329,10 +4369,10 @@ public:
             }
         }
 
-        // A pristine copy of the with-block's own constraint tree, taken before any
-        // mutation, in case a size phase (below) needs to re-lower it a second time
-        // against post-resize arrays.
-        AstBegin* const capturedClonep = holderp->cloneTree(false);
+        // Keep an independent copy of the lowered with-block constraints to rebuild
+        // them against post-resize arrays if a size phase is needed below.
+        AstBegin* const capturedClonep
+            = SmtUtil::newItemsHolderp(nodep->fileline(), cloneWithDistPreambles(capturedTreep));
 
         // Arrays that gain a size var from THIS with-block's own inline .size()==expr
         // constraint (as opposed to a class-level one) and are also referenced by a
@@ -4526,6 +4566,8 @@ public:
                                       new AstVarRef{fl, sizeOkVarp, VAccess::READ}},
                            new AstVarRef{fl, finalOkVarp, VAccess::READ}}});
         } else {
+            // Preambles held in user3p are off-tree, so are not freed with the copy
+            deleteDistPreambles(capturedClonep);
             VL_DO_DANGLING(capturedClonep->deleteTree(), capturedClonep);
 
             // Call the solver and set return value
