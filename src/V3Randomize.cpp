@@ -8061,12 +8061,13 @@ class RandomizeVisitor final : public VNVisitor {
         funcp->addStmtsp(endp->makeStmt());
     }
 
-    static AstCExpr* newSolverCallp(AstVar* const genp) {
+    // sizeSolve for the solve of array sizes before the final solve
+    static AstCExpr* newSolverCallp(AstVar* const genp, const bool sizeSolve = false) {
         AstCExpr* const callp = new AstCExpr{genp->fileline()};
         callp->dtypeSetBit();
         callp->add(new AstVarRef{genp->fileline(), VN_CAST(genp->user2p(), NodeModule), genp,
                                  VAccess::READWRITE});
-        callp->add(".next(__Vm_rng)");
+        callp->add(sizeSolve ? ".next_size(__Vm_rng)" : ".next(__Vm_rng)");
         return callp;
     }
     // Solve for the element values if the size solve succeeded
@@ -8085,7 +8086,7 @@ class RandomizeVisitor final : public VNVisitor {
         sizeOkVarp->funcLocal(true);
         randomizep->addStmtsp(sizeOkVarp);
         randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, sizeOkVarp, VAccess::WRITE},
-                                            newSolverCallp(genp)});
+                                            newSolverCallp(genp, true)});
         return sizeOkVarp;
     }
 

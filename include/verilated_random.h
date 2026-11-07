@@ -292,6 +292,8 @@ class VlRandomizer VL_NOT_FINAL {
     // Array elements that solve-before pairs name, as variables of their solver terms
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeElems;
     bool m_checkOnly = false;  // Set for randomize(null)
+    bool m_sizeSolve = false;  // Set for the solve of array sizes before the final solve
+    bool m_sizeSolved = false;  // The sizes are solved, so the final solve is next
     // Function argument variable solved in an earlier round (IEEE 1800-2023 18.5.11)
     struct FuncArgRound final {
         std::string name;  // Solver name of the variable
@@ -321,7 +323,7 @@ class VlRandomizer VL_NOT_FINAL {
     void emitRandcExclusions(std::ostream& os) const;  // Emit randc exclusion constraints
     void recordRandcValues();  // Record solved randc values for future exclusion
     size_t hashConstraints(const std::vector<std::string>& extras, bool randcOnly = false) const;
-    bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly);
+    bool nextRandomize(VlRNGReseeds& rngr, bool checkOnly, bool sizeSolve = false);
     // "(distinct ...)" expression per unique-constrained array
     std::vector<std::string> buildUniqueExprs() const;
     void emitDefines(std::ostream& os) const;
@@ -417,6 +419,8 @@ public:
     // Validate the constraints against the current runtime values of every
     // registered rand variable without picking new ones.
     bool next_check_only(VlRNGReseeds& rngr);
+    /// Finds the sizes of the arrays for a final next(), without advancing randc cycles
+    bool next_size(VlRNGReseeds& rngr);
 
     // ---  Process the key for associative array  ---
 
