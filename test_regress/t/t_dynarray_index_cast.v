@@ -15,12 +15,17 @@ module t (
   input clk
 );
   initial begin
-    automatic int d[] = '{10, 11, 12, 13};
-    automatic int q[$] = '{20, 21, 22, 23};
+    typedef int index_t;
+    typedef int dyn_t[];
+    typedef dyn_t dyn_alias_t;
+    typedef int queue_t[$];
+    typedef queue_t queue_alias_t;
+    automatic dyn_alias_t d = '{10, 11, 12, 13};
+    automatic queue_alias_t q = '{20, 21, 22, 23};
     automatic bit [6:0] i;
     for (int k = 0; k < 4; k++) begin
       i = 7'(k + 4);
-      `checkd(d[int'(i[1:0])], 10 + k);
+      `checkd(d[index_t'(i[1:0])], 10 + k);
       `checkd(d[2'(i)], 10 + k);
       `checkd(q[bit'(i) + 2'(i[1])], 20 + k[0] + k[1]);
       `checkd(q[$ - int'(i[1:0])], 23 - k);
@@ -32,6 +37,11 @@ module t (
     end
     `checkd(d[3], 33);
     `checkd(q[2], 42);
+    for (int k = 0; k < 4; k++) begin
+      i = 7'(k + 4);
+      q[$ - index_t'(i[1:0])] = 50 + k;
+      `checkd(q[$ - k], 50 + k);
+    end
   end
 
   // Cast as a queue slice bound (bounds already finalized in V3WidthSel)
@@ -54,7 +64,8 @@ module t (
     end
   end
 
-  // Real index, rounded as for an unpacked array
+  // Real index, rounded as for an unpacked array (Verilator consistency check).
+`ifdef VERILATOR
   initial begin
     automatic int u[4] = '{30, 31, 32, 33};
     automatic int d[] = '{10, 11, 12, 13};
@@ -69,6 +80,7 @@ module t (
       // verilator lint_on REALCVT
     end
   end
+`endif
 
   // Module-scope queue indexed through a function called from always_comb
   logic [3:0] mq[$];
