@@ -3654,18 +3654,12 @@ class SolverSmtLowering final : public V3SolverLowering {
                               AstVar* randModeVarp, AstConstraintForeach* foreachp = nullptr) {
         // When inside a foreach, bucket preamble stmts are stored in foreachp->user3p()
         // (as a linked list) so visit(AstConstraintForeach*) can inject them into the
-        // real AstForeach body. Outside a foreach, they go directly into taskp. The
-        // variables are always declared in taskp, assigned before use in each iteration.
-        AstNodeStmt* foreachTailp = nullptr;
+        // real AstForeach body. Recursive branches share and append to the same list.
+        // Outside a foreach, they go directly into taskp. The variables are always declared
+        // in taskp, assigned before use in each iteration.
         auto addStmt = [&](AstNodeStmt* nodep) {
             if (foreachp) {
-                if (!foreachTailp) {
-                    foreachp->user3p(nodep);
-                    foreachTailp = nodep;
-                } else {
-                    foreachTailp->addNext(nodep);
-                    foreachTailp = nodep;
-                }
+                foreachp->user3p(AstNode::addNext(foreachp->user3p(), nodep));
             } else {
                 taskp->addStmtsp(nodep);
             }
