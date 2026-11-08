@@ -76,6 +76,26 @@ module t;
       if (q.size() != 1) $stop;
     end
 
+    begin
+      // An unseeded random source is evaluated once, not once per element
+      int rows[4][2];
+      int row[2];
+      int s[4];
+      int pos;
+      foreach (rows[i, j]) rows[i][j] = 10 * i + j;
+      for (int seed = 1; seed <= 20; seed++) begin
+        void'($urandom(seed));
+        row = rows[2'($urandom())];
+        void'($urandom(seed));
+        pos = 32'(2'($urandom()));
+        if (row[0] != rows[pos][0] || row[1] != rows[pos][1]) $stop;
+        // Written to a slice
+        void'($urandom(seed));
+        s[1+:2] = rows[2'($urandom())];
+        if (s[1] != rows[pos][0] || s[2] != rows[pos][1]) $stop;
+      end
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
