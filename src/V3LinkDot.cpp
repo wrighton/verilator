@@ -2319,6 +2319,7 @@ class LinkDotFindVisitor final : public VNVisitor {
             AstLambdaArgRef* const indexArgRefp
                 = new AstLambdaArgRef{argFl, name + "__DOT__index", true};
             AstLambdaArgRef* const valueArgRefp = new AstLambdaArgRef{argFl, name, false};
+            valueArgRefp->randomizeTarget(funcrefp->name() == "randomize");
             AstWith* const newp
                 = new AstWith{nodep->fileline(), indexArgRefp, valueArgRefp, nullptr};
             // Harvest the identifier_list into AstWith; grammar guarantees AstParseRef.
@@ -4667,6 +4668,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     UINFO(9, indent() << "randomize-with fromSym " << foundp->nodep());
                     AstLambdaArgRef* const lambdaRefp
                         = new AstLambdaArgRef{nodep->fileline(), "__Vrandwith_obj", false};
+                    lambdaRefp->randomizeTarget(true);
                     AstMemberRef* newp = new AstMemberRef{nodep->fileline(), lambdaRefp,
                                                           VFlagChildDType{}, nodep->name()};
                     nodep->replaceWith(newp);
@@ -5712,10 +5714,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         argsp = nodep->argsp()->unlinkFrBackWithNext();
                     }
                     if (m_ds.m_dotPos != DP_NONE) m_ds.m_dotPos = DP_MEMBER;
+                    AstLambdaArgRef* const lambdaRefp
+                        = new AstLambdaArgRef{nodep->fileline(), "__Vrandwith_obj", false};
+                    lambdaRefp->randomizeTarget(true);
                     AstNode* const newp = new AstMethodCall{
-                        nodep->fileline(),
-                        new AstLambdaArgRef{nodep->fileline(), "__Vrandwith_obj", false},
-                        VFlagChildDType{}, nodep->name(), argsp};
+                        nodep->fileline(), lambdaRefp, VFlagChildDType{}, nodep->name(), argsp};
                     nodep->replaceWith(newp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     return;

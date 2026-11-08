@@ -393,6 +393,7 @@ class WidthVisitor final : public VNVisitor {
     AstNodeProcedure* m_procedurep = nullptr;  // Current final/always
     const AstNode* m_writerp = nullptr;  // Assignment, release or pin whose lvalue is iterated
     const AstWith* m_withp = nullptr;  // Current 'with' statement
+    const AstWith* m_randomizeWithp = nullptr;  // Enclosing randomize-with object scope
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     const AstNodeExpr* m_randomizeFromp = nullptr;  // Current randomize method call fromp
@@ -9219,7 +9220,9 @@ class WidthVisitor final : public VNVisitor {
         // Should otherwise be underneath a method call
         AstNodeDType* const vdtypep = m_vup->dtypeNullSkipRefp();
         VL_RESTORER(m_withp);
+        VL_RESTORER(m_randomizeWithp);
         m_withp = nodep;
+        if (nodep->valueArgRefp()->randomizeTarget()) m_randomizeWithp = nodep;
         userIterateChildren(nodep->indexArgRefp(), nullptr);
         userIterateChildren(nodep->valueArgRefp(), nullptr);
         if (!nodep->exprp()) {
@@ -9245,11 +9248,12 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     void visit(AstLambdaArgRef* nodep) override {
-        UASSERT_OBJ(m_withp, nodep, "LambdaArgRef not underneath 'with' lambda");
+        const AstWith* const withp = nodep->randomizeTarget() ? m_randomizeWithp : m_withp;
+        UASSERT_OBJ(withp, nodep, "LambdaArgRef not underneath 'with' lambda");
         if (nodep->index()) {
-            nodep->dtypeFrom(m_withp->indexArgRefp());
+            nodep->dtypeFrom(withp->indexArgRefp());
         } else {
-            nodep->dtypeFrom(m_withp->valueArgRefp());
+            nodep->dtypeFrom(withp->valueArgRefp());
         }
     }
     void visit(AstNetlist* nodep) override {

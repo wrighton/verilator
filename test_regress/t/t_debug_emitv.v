@@ -742,5 +742,9 @@ endpackage
 class ClsParamExt extends ClsParam #(bit, 2);
 endclass
 
+function int rand_reduce(Cls obj);
+  return obj.randomize() with { rarray.sum() with (item + rmember1) > 0; };
+endfunction
+
 `verilator_config
 threads_group -module "sub"
