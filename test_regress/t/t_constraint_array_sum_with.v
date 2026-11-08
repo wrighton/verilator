@@ -182,6 +182,39 @@ class test_xor;
   endfunction
 endclass
 
+typedef enum bit [7:0] {SEND = 8'h88, RECV = 8'h89, WRITE = 8'h8a} kind_e;
+
+class sum_item;
+  rand kind_e kind;
+
+  function int weight();
+    return 1;
+  endfunction
+endclass
+
+class sum_items;
+  rand sum_item items[];
+  rand int unsigned n;
+
+  function int two();
+    return 2;
+  endfunction
+
+  function new();
+    items = new[4];
+    foreach (items[i]) items[i] = new;
+  endfunction
+endclass
+
+class inherited_sum_items extends sum_item;
+  rand sum_item items[];
+
+  function new();
+    items = new[4];
+    foreach (items[i]) items[i] = new;
+  endfunction
+endclass
+
 module t;
   test_sum sum_inst;
   test_product product_inst;
@@ -214,6 +247,72 @@ module t;
     xor_inst = new();
     repeat (20) xor_inst.verify();
     $display("xor test PASSED");
+
+    // Inline reductions of element-class members keep the iterator receiver.
+    begin
+      sum_items g;
+      int ok;
+      int sends;
+      int recvs;
+      g = new;
+      repeat (20) begin
+        ok = g.randomize() with {
+          n inside {[2:4]};
+          items.sum() with (int'(item.kind == SEND)) > 0;
+          items.sum() with (int'(item.kind == RECV)) > 0;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        recvs = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+          recvs += int'(g.items[i].kind == RECV);
+        end
+        `checkd(sends > 0, 1'b1);
+        `checkd(recvs > 0, 1'b1);
+        `checkd(g.n inside {[2:4]}, 1'b1);
+
+        // The named iterator and the target's field may occur in the same expression.
+        ok = g.randomize() with {
+          n == two();
+          items.sum(elem) with (int'(elem.kind == SEND) + n + elem.weight()) == 14;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+        end
+        `checkd(g.n, 2);
+        `checkd(sends, 2);
+      end
+    end
+
+    // The element and the target may inherit the same member declaration.
+    begin
+      inherited_sum_items g;
+      int ok;
+      int sends;
+      g = new;
+      repeat (20) begin
+        ok = g.randomize() with {
+          kind == SEND;
+          items.sum() with (int'(item.kind == kind)) == 1;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        `checkd(g.kind, SEND);
+        sends = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+        end
+        `checkd(sends, 1);
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
