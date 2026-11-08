@@ -1765,15 +1765,21 @@ class TristateVisitor final : public TristateBaseVisitor {
 
             // A procedurally written element of an unpacked array, queue or structure, or member
             // of an object, has no enable to hold z, so a z written to it is stored as two-state
-            // like x bits, as in functions and tasks
+            // like x bits, as in functions and tasks. A z compared with ===, !==, ==? or !=? is
+            // not written, but a test of an enable.
+            const auto writesZ = [](const AstConst* constp) {
+                const AstNode* const backp = constp->backp();
+                return constp->num().hasZ()
+                       && !(VN_IS(backp, EqCase) || VN_IS(backp, NeqCase) || VN_IS(backp, EqWild)
+                            || VN_IS(backp, NeqWild));
+            };
             const AstNodeExpr* lhsBasep = nodep->lhsp();
             while (const AstSel* const selp = VN_CAST(lhsBasep, Sel)) lhsBasep = selp->fromp();
             if (m_procedurep
                 && (VN_IS(lhsBasep, ArraySel) || VN_IS(lhsBasep, AssocSel)
                     || VN_IS(lhsBasep, WildcardSel) || VN_IS(lhsBasep, CMethodHard)
                     || VN_IS(lhsBasep, StructSel) || VN_IS(lhsBasep, MemberRef))
-                && nodep->rhsp()->exists(
-                    [](const AstConst* constp) { return constp->num().hasZ(); })) {
+                && nodep->rhsp()->exists(writesZ)) {
                 return;
             }
             if (nodep->user2() & U2_GRAPHING) return;
