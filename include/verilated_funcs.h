@@ -3863,8 +3863,9 @@ inline void _vl_insert_W_elem(WDataOutP owp, const VlWide<N_Words>& ld, int hbit
     _vl_insert_WW(owp, ld, hbit, lbit);
 }
 // Convert the stream of a queue or dynamic array to a string, '<<' if rd is nonzero
-template <typename T>
-inline std::string VL_CVT_PACK_STR_NR(int lbits, IData rd, const VlQueue<T>& q) VL_MT_SAFE {
+template <typename T, size_t N_MaxSize>
+inline std::string VL_CVT_PACK_STR_NR(int lbits, IData rd,
+                                      const VlQueue<T, N_MaxSize>& q) VL_MT_SAFE {
     // Pack the elements, the first one most significant, as for a packed value
     const int obits = q.size() * lbits;
     if (!obits) return "";
