@@ -35,7 +35,7 @@ class LinkWithVisitor final : public VNVisitor {
     const char* m_randcIllegalWhyp = nullptr;  // Why randc illegal
     AstNode* m_randcIllegalp = nullptr;  // Node causing randc illegal
     AstNodeExpr* m_currentRandomizeSelectp = nullptr;  // fromp() of current `randomize()` call
-    bool m_inRandomizeWith = false;  // If in randomize() with (and no other with afterwards)
+    bool m_inRandomizeWith = false;  // Inside enclosing randomize-with constraints
 
     // VISITORS
     void visit(AstConstraint* nodep) override {
@@ -126,9 +126,7 @@ class LinkWithVisitor final : public VNVisitor {
     void visit(AstWith* nodep) override {
         VL_RESTORER(m_inRandomizeWith);
         if (const AstMethodCall* const methodCallp = VN_CAST(nodep->backp(), MethodCall)) {
-            m_inRandomizeWith = methodCallp->name() == "randomize";
-        } else {
-            m_inRandomizeWith = false;
+            m_inRandomizeWith = m_inRandomizeWith || methodCallp->name() == "randomize";
         }
         iterateChildren(nodep);
     }
