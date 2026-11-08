@@ -16,7 +16,7 @@ test.lint(
     # Likewise XML
     v_flags=[
         "--lint-only",
-        # Keep unsupported-bin diagnostics visible in the strict full-fixture gate.
+        # This also hides the goto-repetition bin's COVERIGN, checked by t_debug_emitv_addrids
         "--bbox-unsup",  # Continue after the set-expression bin to cover its dump and emission
         "--timing",
         "--rtmd",  # Also dump the run time model descriptors
