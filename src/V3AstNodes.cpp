@@ -2222,13 +2222,15 @@ void AstLambdaArgRef::selfTest() {
     AstLambdaArgRef* const valuep = new AstLambdaArgRef{flp, "item", false};
     AstLambdaArgRef* const indexp = new AstLambdaArgRef{flp, "item", true};
     AstLambdaArgRef* const indexClonep = indexp->cloneTree(false);
-    AstLambdaArgRef* const namedp = new AstLambdaArgRef{flp, "other", false};
+    AstLambdaArgRef* const namedp = new AstLambdaArgRef{flp, "long_iterator_argument", false};
+    AstLambdaArgRef* const sameSizeNamedp = new AstLambdaArgRef{flp, "temp", false};
     AstLambdaArgRef* const targetp = valuep->cloneTree(false);
     targetp->randomizeTarget(true);
     AstLambdaArgRef* const clonep = targetp->cloneTree(false);
     UASSERT_OBJ(valuep->sameNode(valuep) && clonep->sameNode(targetp), clonep,
                 "Lambda argument identity must survive cloning");
-    UASSERT_OBJ(!valuep->sameNode(namedp) && !valuep->sameNode(indexClonep)
+    UASSERT_OBJ(!valuep->sameNode(namedp) && !namedp->sameNode(valuep)
+                    && !valuep->sameNode(sameSizeNamedp) && !valuep->sameNode(indexClonep)
                     && !indexClonep->sameNode(valuep),
                 valuep, "Lambda argument name and index affect identity");
     UASSERT_OBJ(!valuep->sameNode(targetp) && !targetp->sameNode(valuep), targetp,
@@ -2237,6 +2239,7 @@ void AstLambdaArgRef::selfTest() {
     VL_DO_DANGLING(indexp->deleteTree(), indexp);
     VL_DO_DANGLING(indexClonep->deleteTree(), indexClonep);
     VL_DO_DANGLING(namedp->deleteTree(), namedp);
+    VL_DO_DANGLING(sameSizeNamedp->deleteTree(), sameSizeNamedp);
     VL_DO_DANGLING(targetp->deleteTree(), targetp);
     VL_DO_DANGLING(clonep->deleteTree(), clonep);
 }

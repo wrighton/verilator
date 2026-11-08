@@ -1866,7 +1866,7 @@ public:
     void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode* samep) const override {
         const AstLambdaArgRef* const sp = VN_DBG_AS(samep, LambdaArgRef);
-        return name() == sp->name() && index() == sp->index()
+        return m_name == sp->m_name && index() == sp->index()
                && randomizeTarget() == sp->randomizeTarget();
     }
     string emitVerilog() override { return name(); }
