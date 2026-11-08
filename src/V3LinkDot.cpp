@@ -5983,8 +5983,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
 
             if (m_statep->forPrimary() && m_ds.m_dotPos != DP_PACKAGE) {
-                // Usually resolved by the parser, so look up for the check
-                if (const VSymEnt* const foundp = m_ds.m_dotSymp->findIdFallback(nodep->name())) {
+                // Usually resolved by the parser, so look up for the check. Only an entry of
+                // the class or package referenced, as e.g. a variable of the same name is in
+                // another name space (IEEE 1800-2023 3.13).
+                const VSymEnt* const foundp = m_ds.m_dotSymp->findIdFallback(nodep->name());
+                if (foundp && foundp->nodep() == nodep->classOrPackageNodep()) {
                     checkWildcardImportRef(nodep, foundp);
                 }
             }
