@@ -94,9 +94,9 @@ class SliceVisitor final : public VNVisitor {
             elements = 1;
             elemIdx = 0;
         }
-        if (rvalue && !nodep->isPure() && !VN_IS(nodep, ExprStmt)) {
-            // Evaluate an impure value once, for the first element, into a temporary that
-            // replaces it, so the other elements read the temporary
+        if (rvalue && !nodep->isRepeatable() && !VN_IS(nodep, ExprStmt)) {
+            // Evaluate a value that is not repeatable once, for the first element, into a
+            // temporary that replaces it, so the other elements read the temporary
             UASSERT_OBJ(m_scopep, nodep, "Not under scope");
             FileLine* const flp = nodep->fileline();
             AstVarScope* const vscp = m_tmps.make(flp, m_scopep, nodep->dtypep());
@@ -240,9 +240,9 @@ class SliceVisitor final : public VNVisitor {
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
         const bool consLhs = VN_IS(nodep->lhsp(), ConsArray);
-        // Slicing would evaluate an impure side once per element, so copy the whole array,
-        // unless writing a slice, which is only done element by element
-        const bool impure = !nodep->lhsp()->isPure() || !nodep->rhsp()->isPure();
+        // Slicing would evaluate a side that is not repeatable once per element, so copy the
+        // whole array, unless writing a slice, which is only done element by element
+        const bool impure = !nodep->lhsp()->isRepeatable() || !nodep->rhsp()->isRepeatable();
         if (!hasSc && !lhsSlice && !consLhs && (!v3Global.opt.fSlice() || impure)) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
