@@ -4625,7 +4625,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             })) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: sequence method 'triggered' on a sequence"
                                          " instance referencing a non-module-scope declaration");
-            VL_DO_DANGLING(pushDeletep(funcrefp), funcrefp);
+            VL_DO_CLEAR(pushDeletep(funcrefp), funcrefp = nullptr);  // Null: no sequence to fire
         }
         AstVar* const eventp = V3AssertCommon::newSequenceEvent(
             nodep->fileline(), m_modp, m_seqTriggeredNames.get(nodep), funcrefp);
