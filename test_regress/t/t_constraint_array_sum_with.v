@@ -363,6 +363,10 @@ class sum_items;
   endfunction
 endclass
 
+class sum_holder;
+  sum_items b;
+endclass
+
 class same_sum_items;
   rand kind_e kind;
   rand same_sum_items items[];
@@ -437,10 +441,13 @@ module t;
     // Inline reductions of element-class members keep the iterator receiver.
     begin
       sum_items g;
+      sum_holder a;
       int ok;
       int sends;
       int recvs;
       g = new;
+      a = new;
+      a.b = g;
       repeat (20) begin
         ok = g.randomize() with {
           n inside {[2:4]};
@@ -474,6 +481,38 @@ module t;
           sends += int'(g.items[i].kind == SEND);
         end
         `checkd(g.n, 2);
+        `checkd(sends, 2);
+
+        // Explicit target paths within 'with' use the solved value, not the stale sentinel.
+        g.n = 100;
+        ok = g.randomize() with {
+          n == two();
+          items.sum(elem) with (int'(elem.kind == SEND) + g.n + elem.weight()) == 14;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+        end
+        `checkd(g.n, 2);
+        `checkd(sends, 2);
+
+        // The iterator shadows the caller's handle; the structured target stays distinct.
+        a.b.n = 100;
+        ok = a.b.randomize() with {
+          n == two();
+          items.sum(g) with (int'(g.kind == SEND) + a.b.n + g.weight()) == 14;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        foreach (a.b.items[i]) begin
+          `checkd((a.b.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(a.b.items[i].kind == SEND);
+        end
+        `checkd(a.b.n, 2);
         `checkd(sends, 2);
       end
     end
