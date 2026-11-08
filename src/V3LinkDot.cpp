@@ -3684,7 +3684,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<std::string, const VSymEnt*> m_ifForwards;
     // References to names imported through a wildcard package export
     struct WildcardExportRef final {
-        const AstNode* nodep;  // Reference
+        // Not the reference itself, which may be deleted before the check
+        FileLine* fileline;  // Reference location
+        std::string name;  // Reference name
         const VSymEnt* foundp;  // Entry it found
         VSymEnt* lookupSymp;  // Scope it was looked up from
     };
@@ -4321,7 +4323,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // IEEE 1800-2023 26.6: Checked once all references are known, see constructor.
         // Later passes do not look up all references again, so cannot check this.
         if (m_statep->forPrimary() && foundp->exportedWildcardp()) {
-            m_wildcardExportRefs.push_back({nodep, foundp, m_curSymp});
+            m_wildcardExportRefs.push_back({nodep->fileline(), nodep->name(), foundp, m_curSymp});
         }
     }
     // Whether a reference finds the declaration of foundp also through an enclosing scope
@@ -4329,7 +4331,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // A name a wildcard export does not export is not a candidate of the importing scope,
         // so the lookup continues upward (IEEE 1800-2023 26.6), e.g. to a wildcard import in
         // $unit. The scopes up to the one holding the entry found have no entry of the name.
-        const string& name = ref.nodep->name();
+        const string& name = ref.name;
         VSymEnt* symp = ref.lookupSymp;
         while (symp && symp->findIdFlatNoRef(name) != ref.foundp) symp = symp->fallbackp();
         for (symp = symp ? symp->fallbackp() : nullptr; symp; symp = symp->fallbackp()) {
@@ -7794,17 +7796,18 @@ public:
         // A wildcard export only exports names its package references (IEEE 1800-2023 26.6)
         std::stable_sort(m_wildcardExportRefs.begin(), m_wildcardExportRefs.end(),
                          [](const WildcardExportRef& a, const WildcardExportRef& b) {
-                             return a.nodep->fileline()->operatorCompare(*b.nodep->fileline()) < 0;
+                             return a.fileline->operatorCompare(*b.fileline) < 0;
                          });
         for (const WildcardExportRef& ref : m_wildcardExportRefs) {
             if (ref.foundp->exportedWildcardp()->referenced() || foundOtherwise(ref)) continue;
             const AstNode* const declp = ref.foundp->nodep();
             const AstNode* const exporterp = ref.foundp->exporterp()->nodep();
-            ref.nodep->v3error("Reference to " << declp->prettyNameQ() << " through the wildcard"
-                                               << " export of package " << exporterp->prettyNameQ()
-                                               << ", but " << exporterp->prettyNameQ()
-                                               << " does not reference it, so does not export it"
-                                                  " (IEEE 1800-2023 26.6)");
+            ref.fileline->v3error("Reference to "
+                                  << declp->prettyNameQ() << " through the wildcard"
+                                  << " export of package " << exporterp->prettyNameQ() << ", but "
+                                  << exporterp->prettyNameQ()
+                                  << " does not reference it, so does not export it"
+                                     " (IEEE 1800-2023 26.6)");
         }
     }
     ~LinkDotResolveVisitor() override = default;
