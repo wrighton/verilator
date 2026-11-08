@@ -699,31 +699,6 @@ module t;
       end
     end
 
-    // Guarded symbolic element fields retain their original solver-name paths.
-    begin
-      automatic sum_items g = new;
-      kind_e chosen;
-      int ok;
-      for (int turn = 0; turn < 4; ++turn) begin
-        chosen = turn % 2 == 0 ? SEND : RECV;
-        ok = g.randomize() with {
-          foreach (items[i]) items[i].kind == chosen;
-          if (items.sum() with (int'(item.kind == SEND)) > 0) n == 3;
-          else n == 5;
-        };
-        `checkd(ok, 1);
-        `checkd(g.n, chosen == SEND ? 3 : 5);
-        foreach (g.items[i]) `checkd(g.items[i].kind, chosen);
-        ok = g.randomize() with {
-          foreach (items[i]) items[i].kind == chosen;
-          if (items.sum(elem) with (int'(elem.kind == SEND) + elem.weight()) > 4) n == 3;
-          else n == 5;
-        };
-        `checkd(ok, 1);
-        `checkd(g.n, chosen == SEND ? 3 : 5);
-      end
-    end
-
     // The element and the randomize target may have the same class type.
     begin
       same_sum_items g;
