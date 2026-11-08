@@ -93,9 +93,9 @@ class SliceVisitor final : public VNVisitor {
             elements = 1;
             elemIdx = 0;
         }
-        if (rvalue && !nodep->isPure() && !VN_IS(nodep, ExprStmt)) {
-            // Evaluate an impure value once, for the first element, into a temporary that
-            // replaces it, so the other elements read the temporary
+        if (rvalue && !nodep->isRepeatable() && !VN_IS(nodep, ExprStmt)) {
+            // Evaluate a value that is not repeatable once, for the first element, into a
+            // temporary that replaces it, so the other elements read the temporary
             UASSERT_OBJ(m_scopep, nodep, "Not under scope");
             FileLine* const flp = nodep->fileline();
             AstVarScope* const vscp = m_tmps.make(flp, m_scopep, nodep->dtypep());
