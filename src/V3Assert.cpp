@@ -224,19 +224,30 @@ void V3AssertCommon::checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) {
     }
 }
 
+// Replace an invalid repetition count, so later steps do not fail, or expand it, after the error
+static void replaceSvaRepCount(AstNodeExpr* countp) {
+    countp->replaceWith(new AstConst{countp->fileline(), 1});
+    VL_DO_DANGLING(countp->deleteTree(), countp);
+}
+
 void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) {
     // The counts must be valid elaboration-time constants.
     V3Const::constifyParamsEdit(nodep->countp());
-    const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
+    const AstConst* minConstp = VN_CAST(nodep->countp(), Const);
     if (!minConstp) {
         errp->v3error("Consecutive repetition count must be constant expression"
                       " (IEEE 1800-2023 16.9.2)");
     } else if (minConstp->toSInt() < 0) {
         errp->v3error("Consecutive repetition count must be non-negative"
                       " (IEEE 1800-2023 16.9.2)");
-    } else if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1) {
-        errp->v3warn(E_UNSUPPORTED, "Unsupported: [*0] consecutive repetition");
+    } else if (checkSvaValueLimit(errp, minConstp, "SVA repetition count")) {
+        if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1) {
+            errp->v3warn(E_UNSUPPORTED, "Unsupported: [*0] consecutive repetition");
+        }
+    } else {
+        minConstp = nullptr;  // Over the limit
     }
+    if (!minConstp) replaceSvaRepCount(nodep->countp());
     if (!nodep->maxCountp()) return;
     V3Const::constifyParamsEdit(nodep->maxCountp());
     const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
@@ -246,16 +257,16 @@ void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) {
     } else if (minConstp && maxConstp->toSInt() < minConstp->toSInt()) {
         errp->v3error("Consecutive repetition max count must be >= min count"
                       " (IEEE 1800-2023 16.9.2)");
-    } else if (maxConstp->toSInt() < 1) {
-        errp->v3warn(E_UNSUPPORTED, "Unsupported: [*N:0] consecutive repetition"
-                                    " with zero max count");
+    } else if (checkSvaValueLimit(errp, maxConstp, "SVA repetition count")) {
+        if (maxConstp->toSInt() < 1) {
+            errp->v3warn(E_UNSUPPORTED, "Unsupported: [*N:0] consecutive repetition"
+                                        " with zero max count");
+        }
+        return;
     }
-}
-
-// Replace a non-constant repetition count, so later steps do not fail after the error
-static void replaceSvaRepCount(AstNodeExpr* countp) {
-    countp->replaceWith(new AstConst{countp->fileline(), 1});
-    VL_DO_DANGLING(countp->deleteTree(), countp);
+    // The min count is then at most 1 too
+    replaceSvaRepCount(nodep->maxCountp());
+    if (minConstp) replaceSvaRepCount(nodep->countp());
 }
 
 // Goto repetition [->N] or nonconsecutive repetition [=N], with the kind named in messages
@@ -272,10 +283,12 @@ static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* er
         } else if (constp->dtypep()->isSigned() && constp->num().isNegative()) {
             errp->v3error("Repetition count must be non-negative"
                           " (IEEE 1800-2023 16.9.2)");
+            replaceSvaRepCount(nodep->countp());
         } else if (constp->num().mostSetBitP1() > 31) {
             errp->v3warn(
                 E_UNSUPPORTED,
                 "Unsupported: SVA repetition count exceeds implementation limit of 2147483647");
+            replaceSvaRepCount(nodep->countp());
         } else if (constp->isZero()) {
             errp->v3warn(E_UNSUPPORTED, "Unsupported: zero repetition count"
                                         " (IEEE 1800-2023 16.9.2)");
@@ -297,10 +310,14 @@ static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* er
         errp->v3error(std::string{kind}
                       + " repetition range min count must be non-negative"
                         " (IEEE 1800-2023 16.9.2)");
+        replaceSvaRepCount(nodep->countp());
+        replaceSvaRepCount(nodep->maxCountp());
     } else if (maxConstp->toSInt() < minConstp->toSInt()) {
         errp->v3error(std::string{kind}
                       + " repetition range max count must be >= min count"
                         " (IEEE 1800-2023 16.9.2)");
+        replaceSvaRepCount(nodep->countp());
+        replaceSvaRepCount(nodep->maxCountp());
     } else if (minConstp->isZero()) {
         errp->v3warn(E_UNSUPPORTED, "Unsupported: zero min count in "s + kind
                                         + " repetition range (IEEE 1800-2023 16.9.2)");
@@ -324,12 +341,11 @@ void V3AssertCommon::checkSvaPastTicks(AstPast* nodep, AstNode* errp) {
     } else if (constp->toSInt() < 1) {
         constp->v3error("$past tick value must be >= 1 (IEEE 1800-2023 16.9.3)");
         nodep->ticksp()->unlinkFrBack()->deleteTree();
-    } else if (checkSvaValueLimit(nodep, constp, "$past tick value")) {
-        if (constp->toSInt() > 10) {
-            constp->v3warn(TICKCOUNT, "$past tick value of "
-                                          << constp->toSInt()
-                                          << " may have a large performance cost");
-        }
+    } else if (!checkSvaValueLimit(nodep, constp, "$past tick value")) {
+        nodep->ticksp()->unlinkFrBack()->deleteTree();
+    } else if (constp->toSInt() > 10) {
+        constp->v3warn(TICKCOUNT, "$past tick value of " << constp->toSInt()
+                                                         << " may have a large performance cost");
     }
 }
 
