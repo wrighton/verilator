@@ -519,7 +519,9 @@ void V3AssertCommon::checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) {
             if (!refsSvaFormal(exprp)) exprps.push_back(exprp);
         }
     });
-    for (AstNodeExpr* const exprp : exprps) {
+    // Inner ones first, as checking an outer one may delete an invalid count holding them
+    for (auto it = exprps.rbegin(); it != exprps.rend(); ++it) {
+        AstNodeExpr* const exprp = *it;
         if (AstSConsRep* const repp = VN_CAST(exprp, SConsRep)) {
             checkSvaRepetition(repp, instp);
         } else if (AstSGotoRep* const repp = VN_CAST(exprp, SGotoRep)) {
