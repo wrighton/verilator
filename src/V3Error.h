@@ -786,7 +786,8 @@ void v3errorEnd(std::ostringstream& sstr) VL_RELEASE(V3Error::s().m_mutex) VL_MT
         if (VL_UNCOVERABLE(!(condition))) { \
             std::cerr << "Internal Error: " << __FILE__ << ":" << std::dec << __LINE__ << ":" \
                       << (stmsg) << std::endl; \
-            V3Error::vlAbort(); \
+            VL_GCOV_DUMP(); \
+            std::abort(); \
         } \
     } while (false)
 /// Check self test values for expected value.  Safe from side-effects.
