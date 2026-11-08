@@ -2700,7 +2700,7 @@ public:
     bool isPrimaryInish() const { return isPrimaryIO() && isNonOutput(); }
     bool isPrimaryClock() const VL_MT_SAFE { return m_primaryClock; }
     void setPrimaryClock() { m_primaryClock = true; }
-    bool isIfaceRef() const { return varType() == VVarType::IFACEREF; }
+    bool isIfaceRef() const VL_MT_SAFE { return varType() == VVarType::IFACEREF; }
     void setIfaceRef() {
         m_direction = VDirection::NONE;
         m_varType = VVarType::IFACEREF;
@@ -2709,14 +2709,14 @@ public:
     bool isIfaceArraySplit() const { return m_isIfaceArraySplit; }
     bool isInternal() const { return m_isInternal; }
     bool isIfaceParam() const { return m_isIfaceParam; }
-    bool isSignal() const { return varType().isSignal(); }
+    bool isSignal() const VL_MT_SAFE { return varType().isSignal(); }
     bool isNet() const { return varType().isNet(); }
     // True if a net, including a port whose omitted kind defaults to a net
     bool isNetOrNetPort() const;
     bool isWor() const { return varType().isWor(); }
     bool isWiredNet() const { return varType().isWiredNet(); }
-    bool isTemp() const { return varType().isTemp(); }
-    bool isClassMember() const { return varType() == VVarType::MEMBER; }
+    bool isTemp() const VL_MT_SAFE { return varType().isTemp(); }
+    bool isClassMember() const VL_MT_SAFE { return varType() == VVarType::MEMBER; }
     bool isVirtIface() const {
         if (AstIfaceRefDType* const dtp = VN_CAST(dtypep()->skipRefp(), IfaceRefDType)) {
             return dtp->isVirtual();
@@ -2727,13 +2727,13 @@ public:
     bool isXTemp() const { return varType() == VVarType::XTEMP; }
     bool isParam() const { return varType().isParam(); }
     bool isGParam() const { return varType() == VVarType::GPARAM; }
-    bool isGenVar() const { return varType() == VVarType::GENVAR; }
+    bool isGenVar() const VL_MT_SAFE { return varType() == VVarType::GENVAR; }
     // Return whether this variable is emitted as a member of its module's C++ class
-    bool isModelState() const {
+    bool isModelState() const VL_MT_STABLE {
         return isIO() || isSignal() || isClassMember() || isTemp() || isGenVar();
     }
     // Variable needs no C++ constructor/destructor function run when default initialized/deleted
-    bool isTriviallyConstructible() const {
+    bool isTriviallyConstructible() const VL_MT_STABLE {
         return !isSc() && dtypep()->isTriviallyConstructible();
     }
     bool isBitLogic() const {
@@ -2751,7 +2751,7 @@ public:
     bool isScUintBool() const;
     bool isScBigUint() const VL_MT_STABLE;
     bool isScSensitive() const { return m_scSensitive; }
-    bool isSigPublic() const;
+    bool isSigPublic() const VL_MT_STABLE;
     bool isSigModPublic() const { return m_sigModPublic && !isIfaceRef(); }
     bool isSigUserRdPublic() const { return m_sigUserRdPublic && !isIfaceRef(); }
     bool isSigUserRWPublic() const { return m_sigUserRWPublic && !isIfaceRef(); }

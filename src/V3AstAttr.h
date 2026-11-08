@@ -2451,7 +2451,7 @@ public:
         return names[m_e];
     }
     bool isParam() const { return m_e == GPARAM || m_e == LPARAM; }
-    bool isSignal() const {
+    bool isSignal() const VL_MT_SAFE {
         return (m_e == WIRE || m_e == WREAL || m_e == TRIWIRE || m_e == TRI0 || m_e == TRI1
                 || m_e == PORT || m_e == SUPPLY0 || m_e == SUPPLY1 || m_e == VAR || m_e == TRIOR
                 || m_e == TRIAND);
@@ -2473,7 +2473,7 @@ public:
                 || m_e == MODULETEMP || m_e == STMTTEMP || m_e == XTEMP || m_e == IFACEREF
                 || m_e == MEMBER);
     }
-    bool isTemp() const {
+    bool isTemp() const VL_MT_SAFE {
         return (m_e == BLOCKTEMP || m_e == MODULETEMP || m_e == STMTTEMP || m_e == XTEMP);
     }
     bool isVPIAccessible() const {
