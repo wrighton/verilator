@@ -114,8 +114,9 @@ class LinkWithVisitor final : public VNVisitor {
             // This allows V3Randomize to work properly when
             // constrained variables are referred using that object
             AstNodeExpr* const prevFromp = nodep->fromp();
-            AstNodeExpr* const newp
+            AstLambdaArgRef* const newp
                 = new AstLambdaArgRef{prevFromp->fileline(), prevFromp->name(), false};
+            newp->randomizeTarget(true);
             prevFromp->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(prevFromp), prevFromp);
         }
