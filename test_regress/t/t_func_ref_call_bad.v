@@ -14,6 +14,7 @@ endpackage
 
 class Cls;
   int m_q[$];
+  int m_x;
   function int get_m();
     return 2;
   endfunction
@@ -50,6 +51,13 @@ module t;
   function automatic int size(const ref byte unsigned b[$]);
     return b.size();
   endfunction
+  function automatic int peek(const ref int r);
+    return r;
+  endfunction
+  Cls gc = new;
+  function automatic Cls get_c();
+    return gc;
+  endfunction
 
   initial begin
     Cls c;
@@ -69,5 +77,7 @@ module t;
     set(i);
     c.set(c.m_q[0]);
     i = size(b);
+    set(get_c().m_x);  // A class property (IEEE 1800-2023 13.5.2)
+    i = peek(get_c().m_x);
   end
 endmodule
