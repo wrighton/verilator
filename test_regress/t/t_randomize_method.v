@@ -206,6 +206,7 @@ module t;
   DeriveClsWithInt der_int;
   DeriveAndContainClsWithInt der_contain;
   ClsContainUsedOnlyHere cls_cont_used;
+  int nonEnumMember[7];  // Times a packed struct or union enum member holds no enum value
 
   initial begin
     derived1 = new;
@@ -224,24 +225,23 @@ module t;
       void'(der_int.randomize());
       void'(der_contain.randomize());
       if (!(derived1.l inside {ONE, TWO, THREE, FOUR})) $stop;
-      if (!(other.str.j.s.c inside {ONE, TWO, THREE, FOUR})) $stop;
-      if (!(other.str.j.y inside {ONE, TWO, THREE, FOUR})) $stop;
+      // Enum members of a packed struct or union are not restricted (IEEE 1800-2023 18.4)
+      if (!(other.str.j.s.c inside {ONE, TWO, THREE, FOUR})) nonEnumMember[0]++;
+      if (!(other.str.j.y inside {ONE, TWO, THREE, FOUR})) nonEnumMember[1]++;
       if (!(other.str.k inside {ONE, TWO, THREE, FOUR})) $stop;
       if (!(other.we inside {W0, W1, W2})) $stop;
       foreach (other.wa[i]) if (!(other.wa[i] inside {W0, W1, W2})) $stop;
-      if (!(other.str.j.s.d inside {ONE, TWO, THREE, FOUR})) $stop;
+      if (!(other.str.j.s.d inside {ONE, TWO, THREE, FOUR})) nonEnumMember[2]++;
       if (!(other.ea inside {ONE, TWO, THREE, FOUR})) $stop;
       foreach (other.pa[i]) if (!(other.pa[i] inside {ONE, TWO, THREE, FOUR})) $stop;
       foreach (other.paa[i]) if (!(other.paa[i] inside {ONE, TWO, THREE, FOUR})) $stop;
       foreach (other.pa2[i, j]) if (!(other.pa2[i][j] inside {ONE, TWO, THREE, FOUR})) $stop;
       foreach (other.upa[i, j]) if (!(other.upa[i][j] inside {ONE, TWO, THREE, FOUR})) $stop;
-      if (!(other.us.u.a inside {ONE, TWO, THREE, FOUR})) $stop;
-      foreach (other.ua[i]) if (!(other.ua[i].a inside {ONE, TWO, THREE, FOUR})) $stop;
+      if (!(other.us.u.a inside {ONE, TWO, THREE, FOUR})) nonEnumMember[3]++;
+      if (!(other.ua[1].a inside {ONE, TWO, THREE, FOUR})) nonEnumMember[4]++;
       if (!(other.rea inside {ONE, TWO, THREE, FOUR})) $stop;
-      foreach (other.psa[i]) begin
-        if (!(other.psa[i].c inside {ONE, TWO, THREE, FOUR})) $stop;
-        if (!(other.psa[i].d inside {ONE, TWO, THREE, FOUR})) $stop;
-      end
+      if (!(other.psa[1].c inside {ONE, TWO, THREE, FOUR})) nonEnumMember[5]++;
+      if (!(other.psa[0].d inside {ONE, TWO, THREE, FOUR})) nonEnumMember[6]++;
       if (derived1.i.e != 0) $stop;
       if (derived1.k != 0) $stop;
       if (other.v != 0) $stop;
@@ -252,6 +252,8 @@ module t;
       if (der_contain.cls1.b != 0) $stop;
       if (der_contain.b != 0) $stop;
     end
+    // Each misses the non-enum values with probability (4/2**16)**10
+    foreach (nonEnumMember[k]) if (nonEnumMember[k] == 0) $stop;
     `check_rand(derived1, derived1.i.a);
     `check_rand(derived1, derived1.i.b);
     `check_rand(derived1, derived1.i.c);
