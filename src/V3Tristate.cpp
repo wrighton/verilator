@@ -1994,6 +1994,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                     || VN_IS(lhsBasep, WildcardSel) || VN_IS(lhsBasep, CMethodHard)
                     || VN_IS(lhsBasep, StructSel) || VN_IS(lhsBasep, MemberRef))
                 && nodep->rhsp()->exists(writesZ)) {
+                for (const AstNode* basep = lhsBasep; basep; basep = basep->op1p()) {
+                    if (const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef)) {
+                        m_varAux(refp->varp()).elemZ = true;  // Its base variable
+                    }
+                }
                 return;
             }
             if (nodep->user2() & U2_GRAPHING) return;
