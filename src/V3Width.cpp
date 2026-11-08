@@ -9608,9 +9608,10 @@ class WidthVisitor final : public VNVisitor {
                 if (!pinp) continue;  // Argument error we'll find later
                 // Before width and string conversion, as calls may then become other
                 // expressions. Other non-variables are found in V3Task, after which calls are
-                // already lifted into temporaries.
+                // already lifted into temporaries. A member of a call result, e.g. a class
+                // property, is not walked over.
                 if ((portp->isRef() || portp->isConstRef())
-                    && VN_IS(pinp->baseFromp(true), NodeFTaskRef)) {
+                    && VN_IS(pinp->baseFromp(false), NodeFTaskRef)) {
                     pinp->v3error("Ref argument " << portp->prettyNameQ()
                                                   << " requires a variable, but connection is"
                                                      " from a function call result (IEEE"
