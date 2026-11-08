@@ -557,6 +557,13 @@ void AstNode::dumpTreeJson(std::ostream& os, const string& indent) const {
     os << "}";
 }
 
+bool AstNode::isRepeatable() {
+    if (!isPure()) return false;
+    const auto isRandom = [](const AstNodeExpr* const nodep) {
+        return VN_IS(nodep, Rand) || VN_IS(nodep, RandRNG);
+    };
+    return !exists(isRandom);
+}
 bool AstNode::isDisableQueuePushSelfStmt() {
     // Detect LinkJump-generated registration:
     // __VprocessQueue_*.push_back(std::process::self())
