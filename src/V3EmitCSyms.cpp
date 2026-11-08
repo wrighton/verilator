@@ -19,6 +19,7 @@
 #include "V3EmitC.h"
 #include "V3EmitCBase.h"
 #include "V3ExecGraph.h"
+#include "V3Hash.h"
 #include "V3LanguageWords.h"
 #include "V3StackCount.h"
 #include "V3Stats.h"
@@ -107,6 +108,14 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     using ScopeModPair = std::pair<const AstScope*, AstNodeModule*>;
     using ModVarPair = std::pair<const AstNodeModule*, const AstVar*>;
     using ScopedVar = std::pair<const AstScope*, const AstVar*>;
+    struct ScopedVarHash final {
+        std::size_t operator()(const ScopedVar& pair) const {
+            V3Hash hash;
+            hash += pair.first;
+            hash += pair.second;
+            return hash.value();
+        }
+    };
 
     // STATE
     AstCFunc* m_cfuncp = nullptr;  // Current function
@@ -117,7 +126,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     std::vector<ModVarPair> m_modVars;  // Each public {mod,var}
     std::map<const std::string, ScopeFuncData> m_scopeFuncs;  // Each {scope,dpi-export-func}
     std::map<const std::string, ScopeVarData> m_scopeVars;  // Each {scope,public-var}
-    std::map<ScopedVar, ScopeVarData*> m_scopeVarsByVar;  // Registered variable identities
+    std::unordered_map<ScopedVar, ScopeVarData*, ScopedVarHash>
+        m_scopeVarsByVar;  // Registered variable identities
     ScopeNames m_scopeNames;  // Each unique AstScopeName. Dpi scopes added later
     ScopeNames m_dpiScopeNames;  // Each unique AstScopeName for a DPI context import or export
     ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
