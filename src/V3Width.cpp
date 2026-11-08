@@ -10140,7 +10140,7 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstClockingItem* nodep) override {
         // Indices compute a destination; they are not additional clocking outputs.
-        V3LinkLValue::linkLValueSet(nodep->exprp(), nodep->direction().pinAccess());
+        V3LinkLValue::linkLValueSet(nodep->exprp(), nodep->direction().pinAccess(), &m_memberMap);
         VL_RESTORER(m_writerp);
         m_writerp = nodep;
         userIterateChildren(nodep, WidthVP{SELF, PRELIM}.p());
