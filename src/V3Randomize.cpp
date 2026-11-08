@@ -1190,7 +1190,8 @@ class CaptureVisitor final : public VNVisitor {
 
     template <typename T_Node>
     bool isReferenceToInnerMember(T_Node nodep) {
-        return VN_IS(nodep->fromp(), LambdaArgRef);
+        const AstLambdaArgRef* const refp = VN_CAST(nodep->fromp(), LambdaArgRef);
+        return refp && refp->randomizeTarget();
     }
 
     AstVar* importThisp(FileLine* fl) {

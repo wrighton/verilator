@@ -2210,9 +2210,11 @@ void AstJumpGo::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
 void AstLambdaArgRef::dump(std::ostream& str) const {
     Super::dump(str);
     if (index()) str << "[INDEX]";
+    if (randomizeTarget()) str << " [RANDWITHTARGET]";
 }
 void AstLambdaArgRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolIf(str, "index", index());
+    dumpJsonBoolFuncIf(str, randomizeTarget);
     dumpJsonGen(str);
 }
 void AstLogNot::dump(std::ostream& str) const {

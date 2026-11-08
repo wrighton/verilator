@@ -1854,6 +1854,7 @@ class AstLambdaArgRef final : public AstNodeExpr {
     // optimizations and AstVar's are painful to remove.
     string m_name;  // Name of variable
     bool m_index;  // Index, not value
+    bool m_randomizeTarget = false;  // Implicit randomize-with object, not an array iterator
 
 public:
     AstLambdaArgRef(FileLine* fl, const string& name, bool index)
@@ -1865,7 +1866,8 @@ public:
     void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode* samep) const override {
         const AstLambdaArgRef* const sp = VN_DBG_AS(samep, LambdaArgRef);
-        return name() == sp->name() && index() == sp->index();
+        return name() == sp->name() && index() == sp->index()
+               && randomizeTarget() == sp->randomizeTarget();
     }
     string emitVerilog() override { return name(); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
@@ -1874,6 +1876,8 @@ public:
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     void name(const string& name) override { m_name = name; }
     bool index() const { return m_index; }
+    bool randomizeTarget() const { return m_randomizeTarget; }
+    void randomizeTarget(bool flag) { m_randomizeTarget = flag; }
     bool isExprCoverageEligible() const override { return false; }
 };
 class AstMatchMasked final : public AstNodeExpr {
