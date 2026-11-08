@@ -10,6 +10,47 @@
 `define check_range(gotv,minv,maxv) do if ((gotv) < (minv) || (gotv) > (maxv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d-%0d\n", `__FILE__,`__LINE__, (gotv), (minv), (maxv)); `stop; end while(0);
 // verilog_format: on
 
+typedef enum bit [1:0] {M_FIFO, M_SLOT, M_FIXED} mode_e;
+
+class Parg;
+  bit valid;
+  int val;
+  function bit is_valid();
+    return valid;
+  endfunction
+  function int get_val();
+    return val;
+  endfunction
+endclass
+
+class Child;
+  Parg depth_arg;
+  Parg mode_arg;
+  rand bit [3:0] depth;
+  rand mode_e mode;
+  constraint c_cfg {
+    if (depth_arg.is_valid()) {int'(depth) == depth_arg.get_val();}
+    else {depth dist {[0:2] :/ 10, [3:8] :/ 60, [9:15] :/ 30};}
+    if (mode_arg.is_valid()) {mode == mode_e'(mode_arg.get_val());}
+    else {mode dist {M_FIFO :/ 40, M_SLOT :/ 30, M_FIXED :/ 30};}
+  }
+  function new();
+    depth_arg = new;
+    mode_arg = new;
+  endfunction
+endclass
+
+class Parent;
+  rand Child kids[];
+  rand bit is_fifo[];
+  constraint c_p {foreach (is_fifo[i]) is_fifo[i] == (kids[i].mode == M_FIFO);}
+  function new();
+    kids = new[3];
+    is_fifo = new[3];
+    foreach (kids[i]) kids[i] = new;
+  endfunction
+endclass
+
 module t;
 
   class branch_item;
@@ -146,6 +187,22 @@ module t;
       `check_range(hits, N * 65 / 100, N * 85 / 100);
       `check_range(before_hits, N * 65 / 100, N * 85 / 100);
       `check_range(after_hits, N * 65 / 100, N * 85 / 100);
+    end
+
+    begin
+      // Global coupling clones both conditional distributions into one foreach.
+      automatic Parent par = new;
+      par.kids[1].depth_arg.valid = 1;
+      par.kids[1].depth_arg.val = 11;
+      par.kids[2].mode_arg.valid = 1;
+      par.kids[2].mode_arg.val = int'(M_SLOT);
+      repeat (5) begin
+        randomize_result = par.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(par.kids[1].depth, 4'd11);
+        `checkd(par.kids[2].mode, M_SLOT);
+        foreach (par.kids[i]) `checkd(par.is_fifo[i], (par.kids[i].mode == M_FIFO));
+      end
     end
 
     $write("*-* All Finished *-*\n");
