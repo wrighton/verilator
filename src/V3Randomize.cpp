@@ -114,17 +114,13 @@ static AstVar* randModeElemArrayp(AstNodeExpr* fromp) {
     return varp;
 }
 
-// Whether a packed type holds an enum, possibly inside packed arrays, structs or unions
+// Whether a packed type is an enum or a packed array of enums. An enum member of a packed
+// struct or union is not restricted to its values (IEEE 1800-2023 18.4).
 static bool packedHasEnum(const AstNodeDType* dtypep) {
     dtypep = dtypep->skipRefToEnump();
     if (VN_IS(dtypep, EnumDType)) return true;
     if (const AstPackArrayDType* const arrayDtp = VN_CAST(dtypep, PackArrayDType)) {
         return packedHasEnum(arrayDtp->subDTypep());
-    }
-    if (const AstNodeUOrStructDType* const structDtp = VN_CAST(dtypep, NodeUOrStructDType)) {
-        for (const AstMemberDType* const memberp : structDtp->memberspList()) {
-            if (packedHasEnum(memberp->subDTypep())) return true;
-        }
     }
     return false;
 }
@@ -1971,8 +1967,10 @@ class RandomizeVisitor final : public VNVisitor {
     }
     AstNodeStmt* newRandStmtsp(FileLine* fl, AstNodeExpr* exprp, AstVar* randcVarp,
                                AstVar* const outputVarp, int lsb = 0,
-                               AstNodeDType* fieldDtp = nullptr) {
-        // With fieldDtp, randomize only the packed field of that type at bit lsb of exprp
+                               AstNodeDType* fieldDtp = nullptr, bool enumValues = true) {
+        // With fieldDtp, randomize only the packed field of that type at bit lsb of exprp.
+        // An enum gets one of its values, unless in a packed struct or union (enumValues false,
+        // IEEE 1800-2023 18.4)
         if (!fieldDtp) fieldDtp = exprp->dtypep();
         AstNodeDType* const memberDtp = fieldDtp->skipRefp();
         const AstPackArrayDType* const packArrayDtp = VN_CAST(memberDtp, PackArrayDType);
@@ -1981,9 +1979,9 @@ class RandomizeVisitor final : public VNVisitor {
             for (AstMemberDType* const smemberp : structDtp->memberspList()) {
                 AstNodeStmt* randp = nullptr;
                 if (structDtp->packed()) {
-                    randp
-                        = newRandStmtsp(fl, stmtsp ? exprp->cloneTree(false) : exprp, nullptr,
-                                        outputVarp, lsb + smemberp->lsb(), smemberp->subDTypep());
+                    randp = newRandStmtsp(fl, stmtsp ? exprp->cloneTree(false) : exprp, nullptr,
+                                          outputVarp, lsb + smemberp->lsb(), smemberp->subDTypep(),
+                                          false);
                 } else if (smemberp->rand().isRandomizable()) {
                     // IEEE 1800-2023 18.4: an unpacked struct member is only
                     // randomized if its own declaration carries rand/randc.
@@ -2001,7 +1999,7 @@ class RandomizeVisitor final : public VNVisitor {
             // case; nothing valid to build a randomize statement for here.
             if (!unionDtp->packed()) return nullptr;
             return newRandStmtsp(fl, exprp, nullptr, outputVarp, lsb,
-                                 unionDtp->membersp()->subDTypep());
+                                 unionDtp->membersp()->subDTypep(), false);
         } else if (const AstClassRefDType* const classRefDtp = VN_CAST(memberDtp, ClassRefDType)) {
             AstFunc* const memberFuncp
                 = m_nullPhase != NullPhase::NONE
@@ -2026,7 +2024,7 @@ class RandomizeVisitor final : public VNVisitor {
             return createArrayForeachLoop(fl, memberDtp, exprp, [&](AstNodeExpr* elemp) {
                 return newRandStmtsp(fl, elemp, nullptr, outputVarp);
             });
-        } else if (packArrayDtp && packedHasEnum(packArrayDtp)) {
+        } else if (packArrayDtp && enumValues && packedHasEnum(packArrayDtp)) {
             // A loop over the elements, so each enum gets one of its values
             AstNodeDType* const elemDtp = packArrayDtp->subDTypep();
             AstVar* const idxVarp
@@ -2059,7 +2057,9 @@ class RandomizeVisitor final : public VNVisitor {
         } else {
             AstNodeExpr* valp;
             AstNode* randStmtsp = nullptr;  // Draws the random value, before the assignment
-            if (AstEnumDType* const enumDtp = VN_CAST(fieldDtp->skipRefToEnump(), EnumDType)) {
+            AstEnumDType* const enumDtp
+                = enumValues ? VN_CAST(fieldDtp->skipRefToEnump(), EnumDType) : nullptr;
+            if (enumDtp) {
                 // Random value in a variable: a wide value is copied word by word, each word
                 // evaluating the table index again
                 AstVar* const randVarp
