@@ -1890,6 +1890,18 @@ class RandomizeVisitor final : public VNVisitor {
         if (!tempElementp->backp()) VL_DO_DANGLING(pushDeletep(tempElementp), tempElementp);
         return new AstForeach{fl, headerp, randStmtsp};
     }
+    // Randomize member memberVarp through refp, element by element if its elements have a
+    // rand_mode each
+    AstNodeStmt* newMemberRandStmtsp(FileLine* fl, AstVar* memberVarp, AstVarRef* refp,
+                                     AstVar* randcVarp, AstVar* const outputVarp) {
+        AstVar* const modeVarp = elemModeVarp(memberVarp);
+        AstNodeStmt* const stmtp
+            = modeVarp ? createArrayForeachLoop(fl, memberVarp->dtypep()->skipRefp(), refp,
+                                                outputVarp, modeVarp)
+                       : newRandStmtsp(fl, refp, randcVarp, outputVarp);
+        if (!refp->backp()) VL_DO_DANGLING(refp->deleteTree(), refp);
+        return stmtp;
+    }
     AstNodeStmt* newRandStmtsp(FileLine* fl, AstNodeExpr* exprp, AstVar* randcVarp,
                                AstVar* const outputVarp, int offset = 0,
                                AstMemberDType* memberp = nullptr) {
@@ -2401,12 +2413,8 @@ class RandomizeVisitor final : public VNVisitor {
                 AstVar* const randcVarp = newRandcVarsp(memberVarp, nodep);
                 AstVarRef* const refp
                     = new AstVarRef{memberVarp->fileline(), classp, memberVarp, VAccess::WRITE};
-                AstVar* const modeVarp = elemModeVarp(memberVarp);
                 AstNodeStmt* const stmtp
-                    = modeVarp ? createArrayForeachLoop(fl, memberVarp->dtypep()->skipRefp(), refp,
-                                                        basicFvarp, modeVarp)
-                               : newRandStmtsp(fl, refp, randcVarp, basicFvarp);
-                if (!refp->backp()) VL_DO_DANGLING(refp->deleteTree(), refp);
+                    = newMemberRandStmtsp(fl, memberVarp, refp, randcVarp, basicFvarp);
                 AstNodeStmt* blockp
                     = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), stmtp, false};
                 // Elements check the array's rand_mode themselves, unless they are objects
@@ -2764,7 +2772,7 @@ class RandomizeVisitor final : public VNVisitor {
                 if (!VN_IS(RandomizeUtil::arrayElementDTypep(memberVarp->dtypep()), ClassRefDType))
                     return;
                 AstVarRef* const refp = new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ};
-                AstNodeStmt* stmtp = newRandStmtsp(fl, refp, nullptr, fvarp);
+                AstNodeStmt* stmtp = newMemberRandStmtsp(fl, memberVarp, refp, nullptr, fvarp);
                 if (inRandHandleCycle(memberVarp, classp)) {
                     stmtp = new AstIf{
                         fl,
