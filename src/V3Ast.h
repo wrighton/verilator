@@ -1045,6 +1045,9 @@ public:
     virtual bool isPure() { return true; }
     // Iff isPure on current node and any nextp()
     bool isPureAndNext() { return isPure() && (!nextp() || nextp()->isPure()); }
+    // Iff the tree gives the same value when evaluated again, with no side effects; unlike
+    // isPure, false with an unseeded $random, which gives a new value each evaluation
+    bool isRepeatable();
     // An event control, delay, wait, etc.
     virtual bool isTimingControl() const { return false; }
     // isUnlikely handles $stop or similar statement which means an above IF

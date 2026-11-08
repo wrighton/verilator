@@ -165,7 +165,8 @@ class UnknownVisitor final : public VNVisitor {
     }
 
     AstNodeExpr* newExprStmtOrClone(AstNodeExpr*& exprp) {
-        if (!exprp->isPure()) {
+        // A clone evaluates the expression again
+        if (!exprp->isRepeatable()) {
             AstVar* const varp = createAddTemp(exprp);
             FileLine* const fl = exprp->fileline();
             exprp = new AstExprStmt{
