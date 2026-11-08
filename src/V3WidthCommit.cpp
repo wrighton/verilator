@@ -336,14 +336,18 @@ private:
         // Propagate value from extends/implements
         for (AstClassExtends* const extendsp : classp->extendspList()) {
             const AstClass* const eclassp = extendsp->classp();
+            // A derived declaration must not make a nonvirtual ancestor virtual.
+            bool baseVirtual = false;
             if (AstNodeFTask* const fbasep
                 = VN_CAST(m_memberMap.findMember(eclassp, nodep->name()), NodeFTask)) {
                 if (fbasep != nodep) {
-                    virtualRecurse(fbasep, eclassp, isVirtualr);
+                    virtualRecurse(fbasep, eclassp, baseVirtual);
+                    isVirtualr |= baseVirtual;
                     continue;
                 }
             }
-            virtualRecurse(nodep, eclassp, isVirtualr);
+            virtualRecurse(nodep, eclassp, baseVirtual);
+            isVirtualr |= baseVirtual;
         }
         if (isVirtualr) {
             nodep->isVirtual(true);
