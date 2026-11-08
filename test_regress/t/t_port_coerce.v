@@ -15,6 +15,10 @@
 // verilator lint_off ASSIGNIN
 
 typedef logic [1:0] pair_t;
+typedef struct packed {
+  logic hi;
+  logic lo;
+} packed_pair_t;
 
 interface net_if;
   wire [1:0] x;
@@ -145,6 +149,16 @@ module rep_drv (
 );
   assign a = 2'b11;
 endmodule
+module pattern_drv (
+    input wire packed_pair_t a
+);
+  assign a = 2'b11;
+endmodule
+module cast_drv (
+    input wire [1:0] a
+);
+  assign a = 2'b11;
+endmodule
 
 // Not coerced, so the parent port it connects to is not either, unless
 // driven inside its module too
@@ -271,6 +285,11 @@ module t (
   cat_drv u_cat1 (.a({1'b0, ncw1}));
   cat2_drv u_cat2 (.a({ncw2, 1'b0}));
   rep_drv u_rep (.a({2{ncw3}}));
+  wire npw1, npw2;
+  // An assignment pattern is a read expression, not an inout destination.
+  pattern_drv u_pattern (.a('{hi: npw1, lo: npw2}));
+  wire ncastw1, ncastw2;
+  cast_drv u_cast (.a(pair_t'({ncastw1, ncastw2})));
   unpacked_drv u_unpacked (.a(uw), .v(cv));
 
   initial begin
@@ -300,6 +319,10 @@ module t (
     `checkh(ncw1, 1'bz);
     `checkh(ncw2, 1'bz);
     `checkh(ncw3, 1'bz);
+    `checkh(npw1, 1'bz);
+    `checkh(npw2, 1'bz);
+    `checkh(ncastw1, 1'bz);
+    `checkh(ncastw2, 1'bz);
     `checkh(idxw, 2'bzz);
     `checkh(co, 1'b1);
     `checkh(uw[0], 1'b1);
