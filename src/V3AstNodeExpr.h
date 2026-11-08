@@ -1887,6 +1887,7 @@ public:
     bool index() const { return m_index; }
     bool randomizeTarget() const { return m_randomizeTarget; }
     void randomizeTarget(bool flag) { m_randomizeTarget = flag; }
+    static void selfTest();
     bool isExprCoverageEligible() const override { return false; }
 };
 class AstMatchMasked final : public AstNodeExpr {
