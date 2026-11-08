@@ -464,6 +464,7 @@ module t;
         ok = g.randomize() with {
           n == two();
           items.sum(elem) with (int'(elem.kind == SEND) + n + elem.weight()) == 14;
+          items.sum(elem) with (int'(elem.index)) == 6;
           foreach (items[i]) items[i].kind inside {SEND, RECV};
         };
         `checkd(ok, 1);
