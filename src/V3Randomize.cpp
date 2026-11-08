@@ -2809,24 +2809,17 @@ static std::string enumDomainTerm(const AstNodeDType* dtypep, const std::string&
         }
         return terms.empty() ? "false" : smtJoin("or", terms);
     }
-    // Enums inside packed arrays and packed structs constrain their bit slice
-    const auto addSlice = [&](const AstNodeDType* sliceDtp, int lsb) {
-        const std::string term
-            = enumDomainTerm(sliceDtp, "((_ extract " + cvtToStr(lsb + sliceDtp->width() - 1) + " "
-                                           + cvtToStr(lsb) + ") " + valueExpr + ")");
-        if (!term.empty()) terms.push_back(term);
-        return !term.empty();
-    };
+    // Enums inside packed arrays constrain their bit slice; not enum members of a packed
+    // struct or union (IEEE 1800-2023 18.4)
     if (const AstPackArrayDType* const arrayDtp = VN_CAST(dtypep, PackArrayDType)) {
         const AstNodeDType* const elemDtp = arrayDtp->subDTypep();
+        const int width = elemDtp->width();
         for (int i = 0; i < arrayDtp->elementsConst(); ++i) {
-            if (!addSlice(elemDtp, i * elemDtp->width())) break;  // No element holds an enum
-        }
-    } else if (const AstStructDType* const structDtp = VN_CAST(dtypep, StructDType)) {
-        if (structDtp->packed()) {
-            for (const AstMemberDType* const memberp : structDtp->memberspList()) {
-                addSlice(memberp->subDTypep(), memberp->lsb());
-            }
+            const std::string term
+                = enumDomainTerm(elemDtp, "((_ extract " + cvtToStr(i * width + width - 1) + " "
+                                              + cvtToStr(i * width) + ") " + valueExpr + ")");
+            if (term.empty()) break;  // No element holds an enum
+            terms.push_back(term);
         }
     }
     return terms.empty() ? "" : smtJoin("and", terms);
