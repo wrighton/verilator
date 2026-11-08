@@ -4846,7 +4846,7 @@ bool AstVar::isScUint() const {
 bool AstVar::isScUintBool() const {
     return (isSc() && v3Global.opt.pinsScUintBool() && width() == 1);
 }
-bool AstVar::isSigPublic() const {
+bool AstVar::isSigPublic() const VL_MT_STABLE {
     return (m_sigPublic || (v3Global.opt.allPublic() && !isTemp() && !isGenVar()))
            && !isIfaceRef();
 }
