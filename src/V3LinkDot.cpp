@@ -5770,9 +5770,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (const AstLambdaArgRef* const argrefp
                        = VN_CAST(foundp->nodep(), LambdaArgRef)) {
                 if (allowVar) {
-                    AstLambdaArgRef* const newp
+                    AstNode* const newp
                         = new AstLambdaArgRef{nodep->fileline(), argrefp->name(), false};
-                    newp->randomizeTarget(argrefp->randomizeTarget());
                     nodep->replaceWith(newp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     ok = true;
