@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -104,6 +105,7 @@ private:
         int m_lsb;  // Inclusive lower bit for scalar path or element index for unpacked
         int m_msb;  // Inclusive upper bit for scalar path or element index for unpacked
         int m_rhsLsb;  // Destination index that maps to RHS index 0
+        int m_rhsWidth;  // Original RHS bit span, retained when active ranges are trimmed
         const void* m_rhsDatap;  // Pointer to RHS storage
         int m_bitLsb = 0;  // Bit's LSB
         int m_bitMsb = 0;  // Bit's MSB
@@ -117,7 +119,8 @@ private:
                                    [](const Entry& e, int bit) { return e.m_msb < bit; });
         while (it != m_entries.end() && it->m_lsb <= msb) {
             if (it->m_lsb < lsb && it->m_msb > msb) {
-                const Entry right{msb + 1, it->m_msb, it->m_rhsLsb, it->m_rhsDatap};
+                const Entry right{msb + 1, it->m_msb, it->m_rhsLsb, it->m_rhsWidth,
+                                  it->m_rhsDatap};
                 it->m_msb = lsb - 1;
                 return m_entries.insert(++it, right);
             }
@@ -170,14 +173,24 @@ private:
         return static_cast<std::size_t>(ins - m_entries.begin());
     }
 
+    template <typename Scalar>
+    static QData loadRhsScalar(const Entry& entry) {
+        Scalar value;
+        std::memcpy(&value, entry.m_rhsDatap, sizeof(value));
+        return static_cast<QData>(value);
+    }
+
     static QData extractRhsChunk(const Entry& entry, int rhsLsb, int width) {
         assert(width > 0 && width <= VL_QUADSIZE);
         assert(rhsLsb >= 0);
 
         const QData mask = static_cast<QData>(VL_MASK_Q(width));
-        const int rhsWidth = entry.m_msb - entry.m_rhsLsb + 1;
+        const int rhsWidth = entry.m_rhsWidth;
         if (rhsWidth <= VL_QUADSIZE) {
-            const QData rhsVal = static_cast<QData>(*static_cast<const QData*>(entry.m_rhsDatap));
+            const QData rhsVal = rhsWidth <= 8              ? loadRhsScalar<CData>(entry)
+                                 : rhsWidth <= 16           ? loadRhsScalar<SData>(entry)
+                                 : rhsWidth <= VL_IDATASIZE ? loadRhsScalar<IData>(entry)
+                                                            : loadRhsScalar<QData>(entry);
             return (rhsVal >> rhsLsb) & mask;
         }
 
@@ -234,7 +247,8 @@ private:
     template <typename Elem>
     static typename std::enable_if<!VlIsVlWide<Elem>::value, Elem>::type
     blendElem(Elem cur, const Entry& e) {
-        const Entry bitEntry{e.m_bitLsb, e.m_bitMsb, e.m_rhsLsb, e.m_rhsDatap, 0, 0, 0};
+        const Entry bitEntry{e.m_bitLsb,   e.m_bitMsb, e.m_rhsLsb, e.m_rhsWidth,
+                             e.m_rhsDatap, 0,          0,          0};
         return applyEntry(cur, bitEntry);
     }
 
@@ -242,7 +256,8 @@ private:
     static typename std::enable_if<VlIsVlWide<Elem>::value, Elem>::type blendElem(Elem cur,
                                                                                   const Entry& e) {
         Elem res = cur;
-        const Entry bitEntry{e.m_bitLsb, e.m_bitMsb, e.m_rhsLsb, e.m_rhsDatap, 0, 0, 0};
+        const Entry bitEntry{e.m_bitLsb,   e.m_bitMsb, e.m_rhsLsb, e.m_rhsWidth,
+                             e.m_rhsDatap, 0,          0,          0};
         applyEntry(res, bitEntry, e.m_bitLsb, e.m_bitMsb, 0);
         return res;
     }
@@ -348,7 +363,7 @@ public:
         assert(rhsLsb <= lsb);
 
         auto it = trimEntries(lsb, msb);
-        m_entries.insert(it, {lsb, msb, rhsLsb, rhsDatap});
+        m_entries.insert(it, {lsb, msb, rhsLsb, msb - rhsLsb + 1, rhsDatap});
     }
 
     void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int bitLsb, int bitMsb,
@@ -358,8 +373,8 @@ public:
         assert(elemWidth > 0);
         assert(0 <= bitLsb && bitLsb <= bitMsb && bitMsb < elemWidth);
         const std::size_t at = trimElementBitRange(lsb, bitLsb, bitMsb);
-        m_entries.insert(m_entries.begin() + at,
-                         Entry{lsb, msb, rhsLsb, rhsDatap, bitLsb, bitMsb, elemWidth});
+        m_entries.insert(m_entries.begin() + at, Entry{lsb, msb, rhsLsb, bitMsb - rhsLsb + 1,
+                                                       rhsDatap, bitLsb, bitMsb, elemWidth});
     }
 
     void release(int lsb, int msb) {
