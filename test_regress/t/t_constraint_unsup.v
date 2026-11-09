@@ -14,13 +14,49 @@ class Wildcard;
   constraint c { w[3] == 5; }
 endclass
 
+class Elem;
+  rand bit [3:0] y;
+endclass
+
+class DisableRandIndex;
+  rand bit idx;
+  rand Elem elems[2];
+  constraint c_soft {
+    soft elems[0].y == 4'h5;
+    soft elems[1].y == 4'h6;
+  }
+  constraint c_disable { disable soft elems[idx].y; }
+  function new();
+    foreach (elems[i]) elems[i] = new;
+  endfunction
+endclass
+
+typedef struct {
+  rand Elem h;
+} holder_t;
+
+class DisableStructHandle;
+  rand holder_t holders[2];
+  constraint c_disable { disable soft holders[1].h.y; }
+  function new();
+    foreach (holders[i]) holders[i].h = new;
+  endfunction
+endclass
+
 module t;
   Packet p;
   Wildcard w;
+  DisableRandIndex d;
+  DisableStructHandle s;
+
   initial begin
     p = new;
     w = new;
     void'(p.randomize());
     void'(w.randomize());
+    d = new;
+    void'(d.randomize());
+    s = new;
+    void'(s.randomize());
   end
 endmodule
