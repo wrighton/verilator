@@ -3,26 +3,26 @@
 
 === Test: addr out of range ===
 %Warning-UNSATCONSTR: PSkxop:11: Unsatisfied constraint
-%Warning-UNSATCONSTR: PSkxop:16: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:17: Unsatisfied constraint
 Randomization failed.
 
 === Test: data out of range (too small) ===
 %Warning-UNSATCONSTR: PSkxop:12: Unsatisfied constraint
-%Warning-UNSATCONSTR: PSkxop:16: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:17: Unsatisfied constraint
 Randomization failed.
 
 === Test: data out of range (too large) ===
 %Warning-UNSATCONSTR: PSkxop:12: Unsatisfied constraint
-%Warning-UNSATCONSTR: PSkxop:16: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:17: Unsatisfied constraint
 Randomization failed.
 
 === Test: Both constraints violated ===
 %Warning-UNSATCONSTR: PSkxop:11: Unsatisfied constraint
-%Warning-UNSATCONSTR: PSkxop:16: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:17: Unsatisfied constraint
 Randomization failed.
 
 === Test: Conflicting constraints (x > 100 && x < 50) ===
-%Warning-UNSATCONSTR: PSkxop:26: Unsatisfied constraint
 %Warning-UNSATCONSTR: PSkxop:27: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:28: Unsatisfied constraint
 Expected failure: conflicting constraints detected
 *-* All Finished *-*

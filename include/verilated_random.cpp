@@ -1768,17 +1768,39 @@ void VlRandomizer::hard(std::string constraint, std::initializer_list<const char
     }
 }
 
-void VlRandomizer::soft(std::string constraint, const char* /*filename*/, uint32_t /*linenum*/,
-                        const char* /*source*/) {
+void VlRandomizer::soft(std::string constraint, std::initializer_list<std::string> varNames,
+                        const char* /*filename*/, uint32_t /*linenum*/, const char* /*source*/) {
     m_softConstraints.emplace_back(std::move(constraint));
+    m_softVarNames.insert(m_softVarNames.end(), varNames.begin(), varNames.end());
+    m_softVarEnds.push_back(m_softVarNames.size());
 }
 
 void VlRandomizer::disable_soft(const std::string& varName) {
-    // IEEE 1800-2023 18.5.13: Remove all soft constraints referencing the variable
-    m_softConstraints.erase(
-        std::remove_if(m_softConstraints.begin(), m_softConstraints.end(),
-                       [&](const std::string& c) { return c.find(varName) != std::string::npos; }),
-        m_softConstraints.end());
+    // IEEE 1800-2023 18.5.13.2: Remove the soft constraints the variable directly appears in,
+    // in one pass keeping the order of the others
+    size_t kept = 0;
+    size_t keptNames = 0;
+    size_t begin = 0;
+    for (size_t i = 0; i < m_softConstraints.size(); ++i) {
+        const size_t end = m_softVarEnds[i];
+        const bool named
+            = std::find(m_softVarNames.begin() + begin, m_softVarNames.begin() + end, varName)
+              != m_softVarNames.begin() + end;
+        if (!named) {
+            if (kept != i) m_softConstraints[kept] = std::move(m_softConstraints[i]);
+            // Names move only once an earlier constraint was removed, never onto themselves
+            if (keptNames != begin) {
+                std::move(m_softVarNames.begin() + begin, m_softVarNames.begin() + end,
+                          m_softVarNames.begin() + keptNames);
+            }
+            keptNames += end - begin;
+            m_softVarEnds[kept++] = keptNames;
+        }
+        begin = end;
+    }
+    m_softConstraints.resize(kept);
+    m_softVarNames.resize(keptNames);
+    m_softVarEnds.resize(kept);
 }
 
 void VlRandomizer::clearConstraints() {
@@ -1788,6 +1810,8 @@ void VlRandomizer::clearConstraints() {
     m_constraints_line.clear();
     m_solveBefore.clear();
     m_softConstraints.clear();
+    m_softVarNames.clear();
+    m_softVarEnds.clear();
     m_uniqueArrays.clear();  // Re-registered by constraint setup
     // Keep m_vars for class member randomization
 }
@@ -1797,6 +1821,8 @@ void VlRandomizer::clearAll() {
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();
     m_softConstraints.clear();
+    m_softVarNames.clear();
+    m_softVarEnds.clear();
     m_vars.clear();
     m_randcVarNames.clear();
     m_randcUsedValues.clear();

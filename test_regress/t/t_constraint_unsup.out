@@ -3,4 +3,12 @@
     9 |   constraint cons { x + 1.0 > 0.0; }
       |                             ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:23:50: Unsupported: 'disable soft' of 'y' of an object selected by a random index
+                                                : ... note: In instance 't'
+   23 |   constraint c_disable { disable soft elems[idx].y; }
+      |                                                  ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:35:52: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+                                                : ... note: In instance 't'
+   35 |   constraint c_disable { disable soft holders[1].h.y; }
+      |                                                    ^
 %Error: Exiting due to

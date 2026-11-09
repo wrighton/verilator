@@ -24,4 +24,8 @@ test.compile(verilator_flags2=["--protect-ids", "--protect-key SECRET_KEY"])
 
 test.execute(expect_filename=test.golden_filename)
 
+# The source filename of a hard or soft constraint is protected in the generated code
+for filename in test.glob_some(test.obj_dir + "/*.[ch]*"):
+    test.file_grep_not(filename, r't_constraint_unsat\.v')
+
 test.passes()
