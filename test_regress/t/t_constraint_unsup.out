@@ -3,16 +3,20 @@
     9 |   constraint cons { x + 1.0 > 0.0; }
       |                             ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:23:50: Unsupported: 'disable soft' of 'y' of an object selected by a random index
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:26:29: Unsupported: 'disable soft' of 'y' of an object selected by a random index
                                                 : ... note: In instance 't'
-   23 |   constraint c_disable { disable soft elems[idx].y; }
-      |                                                  ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:37:27: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+   26 |     disable soft elems[idx].y;
+      |                             ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:27:32: Unsupported: 'disable soft' of 'y' of an object selected by a random index
                                                 : ... note: In instance 't'
-   37 |     disable soft holder.h.y;
+   27 |     disable soft dynElems[idx].y;
+      |                                ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:44:27: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+                                                : ... note: In instance 't'
+   44 |     disable soft holder.h.y;
       |                           ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:38:31: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:45:31: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
                                                 : ... note: In instance 't'
-   38 |     disable soft holders[1].h.y;
+   45 |     disable soft holders[1].h.y;
       |                               ^
 %Error: Exiting due to
