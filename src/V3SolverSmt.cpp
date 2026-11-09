@@ -375,18 +375,14 @@ class ConstraintExprVisitor final : public VNVisitor {
     // of its payload, and each field of an object in an array named as registered
     static AstCExpr* newSoftVarsListp(FileLine* fl, const std::set<std::string>& vars,
                                       ElemNames& elemNames) {
-        std::string text = constraintVarsList(vars);
-        // The array of an object field is among the variables
-        UASSERT(elemNames.namesp.empty() || !vars.empty(), "Object field without its array");
-        text.pop_back();  // The list continues with the field names
-        AstCExpr* const listp = new AstCExpr{fl, AstCExpr::Pure{}};
+        // Each field name is followed by a comma, which a braced list allows before its end
+        AstCExpr* const listp = new AstCExpr{fl, AstCExpr::Pure{}, "{"};
         for (AstNodeExpr* const namep : elemNames.namesp) {
-            listp->add(text + ", ");
             listp->add(namep);
-            text.clear();
+            listp->add(", ");
         }
         elemNames.namesp.clear();
-        listp->add(text + "}");
+        listp->add(constraintVarsList(vars).substr(1));
         return listp;
     }
     // Append to fmt and argsp the solver name of the variable, object field or object exprp
@@ -401,46 +397,52 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         const AstNodeExpr* fromp;
         std::string partFmt;  // Appended after the name of fromp
-        AstNodeExpr* idxp = nullptr;  // Index or key the part formats
+        AstNodeExpr* indexp = nullptr;  // Index or key the part formats
+        const AstCMethodHard* dynSelp = nullptr;  // Element of a dynamic array or queue
         if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
             fromp = selp->fromp();
             partFmt = "." + selp->name();
         } else if (const AstArraySel* const arraySelp = VN_CAST(exprp, ArraySel)) {
             fromp = arraySelp->fromp();
             partFmt = ".%0x";
-            idxp = arraySelp->bitp()->cloneTreePure(false);
+            indexp = arraySelp->bitp();
         } else if (const AstAssocSel* const assocSelp = VN_CAST(exprp, AssocSel)) {
             fromp = assocSelp->fromp();
-            partFmt = "." + keyHexFormat(assocSelp->bitp()->dtypep()->skipRefp());
-            idxp = assocSelp->bitp()->cloneTreePure(false);
+            indexp = assocSelp->bitp();
+            partFmt = "." + keyHexFormat(indexp->dtypep()->skipRefp());
         } else if (const AstCMethodHard* const atp = VN_CAST(exprp, CMethodHard)) {
-            // The element of a dynamic array or queue, registered by a 32-bit index
-            const bool back = atp->method() == VCMethod::ARRAY_AT_BACK;
-            UASSERT_OBJ(back || atp->method() == VCMethod::ARRAY_AT, atp,
-                        "Selects of a 'disable soft' variable are elements and members");
+            UASSERT_OBJ(atp->method() == VCMethod::ARRAY_AT
+                            || atp->method() == VCMethod::ARRAY_AT_BACK,
+                        atp, "Selects of a 'disable soft' variable are elements and members");
             fromp = atp->fromp();
             partFmt = "." + keyHexFormat(atp->findUInt32DType());
-            FileLine* const fl = atp->fileline();
-            idxp = atp->pinsp()->cloneTreePure(false);
+            indexp = atp->pinsp();
+            dynSelp = atp;
+        } else {
+            return false;
+        }
+        if (!addSolverPathFormat(fromp, fmt, argsp)) return false;
+        fmt += partFmt;
+        if (!indexp) return true;
+        FileLine* const fl = indexp->fileline();
+        AstNodeExpr* idxp = indexp->cloneTreePure(false);
+        if (dynSelp) {
+            // Registered by a 32-bit index
             if (idxp->width() < 32) {
                 idxp = new AstExtend{fl, idxp, 32};
             } else if (idxp->width() > 32) {
                 idxp = new AstSel{fl, idxp, 0, 32};
             }
-            if (back) {
+            if (dynSelp->method() == VCMethod::ARRAY_AT_BACK) {
                 // As atBack(): of the elements the queue has when its objects are registered
                 AstCMethodHard* const sizep = new AstCMethodHard{
-                    fl, atp->fromp()->cloneTreePure(false), VCMethod::DYN_SIZE};
+                    fl, dynSelp->fromp()->cloneTreePure(false), VCMethod::DYN_SIZE};
                 sizep->dtypeSetUInt32();
                 idxp = new AstSub{fl, new AstSub{fl, sizep, new AstConst{fl, 1}}, idxp};
             }
-        } else {
-            return false;
         }
-        const bool named = addSolverPathFormat(fromp, fmt, argsp);
-        fmt += partFmt;
-        if (idxp) argsp = AstNode::addNextNull(argsp, idxp);
-        return named;
+        argsp = AstNode::addNextNull(argsp, idxp);
+        return true;
     }
     // Whether an element on the select chain of selp is chosen by a random index or key
     static bool hasRandIndexSel(const AstMemberRef* selp) {
@@ -3042,7 +3044,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                 keyp = argsp ? static_cast<AstNodeExpr*>(new AstSFormatF{fl, fmt, false, argsp})
                              : new AstConst{fl, AstConst::String{}, fmt};
             } else {
-                if (argsp) VL_DO_DANGLING(argsp->deleteTree(), argsp);
+                // Nothing was formatted below the part not named
+                UASSERT_OBJ(!argsp, mselp, "Indices formatted for an unnamed object");
                 mselp->v3warn(E_UNSUPPORTED, "Unsupported: 'disable soft' of "
                                                  << mselp->prettyNameQ()
                                                  << " of an object not selected only by"
