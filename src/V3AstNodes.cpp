@@ -2210,10 +2210,38 @@ void AstJumpGo::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
 void AstLambdaArgRef::dump(std::ostream& str) const {
     Super::dump(str);
     if (index()) str << "[INDEX]";
+    if (randomizeTarget()) str << " [RANDWITHTARGET]";
 }
 void AstLambdaArgRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolIf(str, "index", index());
+    dumpJsonBoolFuncIf(str, randomizeTarget);
     dumpJsonGen(str);
+}
+void AstLambdaArgRef::selfTest() {
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    AstLambdaArgRef* const valuep = new AstLambdaArgRef{flp, "item", false};
+    AstLambdaArgRef* const indexp = new AstLambdaArgRef{flp, "item", true};
+    AstLambdaArgRef* const indexClonep = indexp->cloneTree(false);
+    AstLambdaArgRef* const namedp = new AstLambdaArgRef{flp, "long_iterator_argument", false};
+    AstLambdaArgRef* const sameSizeNamedp = new AstLambdaArgRef{flp, "temp", false};
+    AstLambdaArgRef* const targetp = valuep->cloneTree(false);
+    targetp->randomizeTarget(true);
+    AstLambdaArgRef* const clonep = targetp->cloneTree(false);
+    UASSERT_OBJ(valuep->sameNode(valuep) && clonep->sameNode(targetp), clonep,
+                "Lambda argument identity must survive cloning");
+    UASSERT_OBJ(!valuep->sameNode(namedp) && !namedp->sameNode(valuep)
+                    && !valuep->sameNode(sameSizeNamedp) && !valuep->sameNode(indexClonep)
+                    && !indexClonep->sameNode(valuep),
+                valuep, "Lambda argument name and index affect identity");
+    UASSERT_OBJ(!valuep->sameNode(targetp) && !targetp->sameNode(valuep), targetp,
+                "Randomize target must have distinct lambda identity");
+    VL_DO_DANGLING(valuep->deleteTree(), valuep);
+    VL_DO_DANGLING(indexp->deleteTree(), indexp);
+    VL_DO_DANGLING(indexClonep->deleteTree(), indexClonep);
+    VL_DO_DANGLING(namedp->deleteTree(), namedp);
+    VL_DO_DANGLING(sameSizeNamedp->deleteTree(), sameSizeNamedp);
+    VL_DO_DANGLING(targetp->deleteTree(), targetp);
+    VL_DO_DANGLING(clonep->deleteTree(), clonep);
 }
 void AstLogNot::dump(std::ostream& str) const {
     Super::dump(str);

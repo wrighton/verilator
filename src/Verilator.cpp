@@ -739,6 +739,7 @@ static bool verilate(const string& argString) {
     VBasicDTypeKwd::selfTest();
     if (v3Global.opt.debugSelfTest()) {
         AstClassRefDType::selfTest();
+        AstLambdaArgRef::selfTest();
         V3Os::selfTest();
         V3Number::selfTest();
         VString::selfTest();

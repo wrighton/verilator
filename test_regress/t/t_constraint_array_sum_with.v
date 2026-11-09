@@ -339,6 +339,46 @@ class test_nested;
   endfunction
 endclass
 
+typedef enum bit [7:0] {SEND = 8'h88, RECV = 8'h89, WRITE = 8'h8a} kind_e;
+
+class sum_item;
+  rand kind_e kind;
+
+  function int weight();
+    return 1;
+  endfunction
+endclass
+
+class sum_items;
+  rand sum_item items[];
+  rand int unsigned n;
+
+  function int two();
+    return 2;
+  endfunction
+
+  function new();
+    items = new[4];
+    foreach (items[i]) items[i] = new;
+  endfunction
+endclass
+
+class sum_holder;
+  sum_items b;
+endclass
+
+class same_sum_items;
+  rand kind_e kind;
+  rand same_sum_items items[];
+
+  function new(bit populate = 1);
+    if (populate) begin
+      items = new[4];
+      foreach (items[i]) items[i] = new(0);
+    end
+  endfunction
+endclass
+
 module t;
   test_sum sum_inst;
   test_product product_inst;
@@ -397,6 +437,108 @@ module t;
     nested_inst = new();
     repeat (20) nested_inst.verify();
     $display("nested test PASSED");
+
+    // Inline reductions of element-class members keep the iterator receiver.
+    begin
+      sum_items g;
+      sum_holder a;
+      int ok;
+      int sends;
+      int recvs;
+      g = new;
+      a = new;
+      a.b = g;
+      repeat (20) begin
+        ok = g.randomize() with {
+          n inside {[2:4]};
+          items.sum() with (int'(item.kind == SEND)) > 0;
+          items.sum() with (int'(item.kind == RECV)) > 0;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        recvs = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+          recvs += int'(g.items[i].kind == RECV);
+        end
+        `checkd(sends > 0, 1'b1);
+        `checkd(recvs > 0, 1'b1);
+        `checkd(g.n inside {[2:4]}, 1'b1);
+
+        // The named iterator and the target's field may occur in the same expression.
+        ok = g.randomize() with {
+          n == two();
+          items.sum(elem) with (int'(elem.kind == SEND) + n + elem.weight()) == 14;
+          items.sum(elem) with (int'(elem.index)) == 6;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+        end
+        `checkd(g.n, 2);
+        `checkd(sends, 2);
+
+        // Explicit target paths within 'with' use the solved value, not the stale sentinel.
+        g.n = 100;
+        ok = g.randomize() with {
+          n == two();
+          items.sum(elem) with (int'(elem.kind == SEND) + g.n + elem.weight()) == 14;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+        end
+        `checkd(g.n, 2);
+        `checkd(sends, 2);
+
+        // The iterator shadows the caller's handle; the structured target stays distinct.
+        a.b.n = 100;
+        ok = a.b.randomize() with {
+          n == two();
+          items.sum(g) with (int'(g.kind == SEND) + a.b.n + g.weight()) == 14;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        sends = 0;
+        foreach (a.b.items[i]) begin
+          `checkd((a.b.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(a.b.items[i].kind == SEND);
+        end
+        `checkd(a.b.n, 2);
+        `checkd(sends, 2);
+      end
+    end
+
+    // The element and the randomize target may have the same class type.
+    begin
+      same_sum_items g;
+      int ok;
+      int sends;
+      g = new;
+      repeat (20) begin
+        ok = g.randomize() with {
+          kind == SEND;
+          items.sum() with (int'(item.kind == kind)) == 1;
+          foreach (items[i]) items[i].kind inside {SEND, RECV};
+        };
+        `checkd(ok, 1);
+        `checkd(g.kind, SEND);
+        sends = 0;
+        foreach (g.items[i]) begin
+          `checkd((g.items[i].kind inside {SEND, RECV}), 1'b1);
+          sends += int'(g.items[i].kind == SEND);
+        end
+        `checkd(sends, 1);
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
