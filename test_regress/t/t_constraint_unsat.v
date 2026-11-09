@@ -10,6 +10,7 @@ class Packet;
 
   constraint addr_range { addr < 127; }
   constraint data_range { data > 10 && data < 200; }
+  constraint data_pref { soft data == 8'd77; }
 
   function void check(bit [7:0] a, bit [7:0] d);
     /* verilator lint_off WIDTHTRUNC */
