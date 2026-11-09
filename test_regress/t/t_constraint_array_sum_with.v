@@ -452,6 +452,78 @@ class test_guard_iterators;
   endfunction
 endclass
 
+class test_guard_contexts;
+  rand bit [6:0] a[];
+  rand bit pick;
+  rand bit [6:0] out;
+  state_sub child;
+  bit enabled = 1;
+
+  function new();
+    a = new[3];
+    child = new;
+    child.k = 1;
+  endfunction
+
+  constraint size_c {a.size() == 3;}
+  constraint index_c {
+    // A bound dynamic-array index can select state values without a receiver error.
+    if (a.sum() with (int'(item.index < 2 ? 1 : 0)) == 2) out == 7'd47;
+  }
+  constraint nested_c {
+    if (pick) {
+      if (a.sum() with (child.k * int'(item)) > 0) out == 7'd47;
+    }
+  }
+  constraint soft_c {
+    soft !((a.sum() with (child.k * int'(item)) > 0) -> (out == 7'd47));
+  }
+  constraint sift_c {
+    if (enabled && (a.sum() with (child.k * int'(item)) > 0)) out == 7'd47;
+  }
+endclass
+
+class test_guard_state_reductions;
+  bit [6:0] a[3];
+  state_sub children[3];
+  rand bit [6:0] out;
+  rand bit pick;
+  bit enabled = 1;
+
+  function new();
+    foreach (children[i]) begin
+      a[i] = 7'(i + 1);
+      children[i] = new;
+      children[i].k = 1;
+    end
+  endfunction
+
+  constraint plain_c {
+    if (a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6)
+      out == 7'd23;
+  }
+  constraint and_left_c {
+    if (enabled && (a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6))
+      out == 7'd23;
+  }
+  constraint and_right_c {
+    if ((a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6) && enabled)
+      out == 7'd23;
+  }
+  constraint or_left_c {
+    if (enabled || (a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6))
+      out == 7'd23;
+  }
+  constraint or_right_c {
+    if ((a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6) || enabled)
+      out == 7'd23;
+  }
+  constraint mixed_c {
+    if ((a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6) || pick)
+      out == 7'd23;
+  }
+endclass
+
 module t;
   test_sum sum_inst;
   test_product product_inst;
@@ -617,21 +689,118 @@ module t;
     begin
       automatic test_guard_iterators g = new;
       int ok;
+      automatic int selected = 0;
       for (int turn = 0; turn < 8; ++turn) g.verify(turn);
-      // Inline target fields are not confused with the reduction's named iterator.
-      ok = g.randomize() with {
-        if (a.sum(elem) with (children[elem.index].k != 0 ? int'(elem) : 0) == expected)
-          g.guarded == 7'd23;
-        else
-          g.guarded == 7'd29;
-      };
-      `checkd(ok, 1);
-      `checkd(g.guarded, 7'd29);
+      // Isolate the inline guard from the class constraints and force both outcomes.
+      g.c.constraint_mode(0);
+      foreach (g.children[i]) if (g.children[i].k != 0) selected += i + g.bias;
+      for (int branch = 0; branch < 2; ++branch) begin
+        g.expected = selected + branch;
+        g.guarded = branch == 0 ? 7'd29 : 7'd23;
+        ok = g.randomize() with {
+          foreach (a[i]) a[i] == 7'(i + bias);
+          if (a.sum(elem) with (children[elem.index].k != 0 ? int'(elem) : 0) == expected)
+            guarded == 7'd23;
+          else
+            guarded == 7'd29;
+        };
+        `checkd(ok, 1);
+        `checkd(g.guarded, branch == 0 ? 7'd23 : 7'd29);
+      end
+      g.c.constraint_mode(1);
+      // Active receiver errors fail the call and do not survive restoration.
+      begin
+        automatic state_sub saved = g.children[1];
+        g.children[1] = null;
+        ok = g.randomize();
+        `checkd(ok, 0);
+        g.children[1] = saved;
+        g.verify(0);
+      end
+      begin
+        automatic state_sub saved = g.left;
+        g.left = null;
+        ok = g.randomize();
+        `checkd(ok, 0);
+        g.left = saved;
+        g.verify(1);
+      end
       // A disabled state guard still eliminates invalid receivers entirely.
       g.enabled = 0;
       foreach (g.children[i]) g.children[i] = null;
       g.left = null;
       g.right = null;
+      ok = g.randomize();
+      `checkd(ok, 1);
+    end
+
+    // Iterator-bound ERROR remains hard even beneath random, negated, or soft guards.
+    begin
+      automatic test_guard_contexts g = new;
+      int ok;
+      g.nested_c.constraint_mode(0);
+      g.soft_c.constraint_mode(0);
+      g.sift_c.constraint_mode(0);
+      ok = g.randomize();
+      `checkd(ok, 1);
+      `checkd(g.out, 7'd47);
+      g.index_c.constraint_mode(0);
+      g.child = null;
+      g.nested_c.constraint_mode(1);
+      ok = g.randomize() with {pick == 0;};
+      `checkd(ok, 0);
+      g.nested_c.constraint_mode(0);
+      g.soft_c.constraint_mode(1);
+      ok = g.randomize();
+      `checkd(ok, 0);
+      g.soft_c.constraint_mode(0);
+      g.sift_c.constraint_mode(1);
+      g.enabled = 0;
+      ok = g.randomize();
+      `checkd(ok, 1);
+    end
+
+    // Native STATE reductions report ERROR before truth/falsity is sampled.
+    begin
+      automatic test_guard_state_reductions g = new;
+      state_sub saved;
+      int ok;
+      g.and_left_c.constraint_mode(0);
+      g.and_right_c.constraint_mode(0);
+      g.or_left_c.constraint_mode(0);
+      g.or_right_c.constraint_mode(0);
+      g.mixed_c.constraint_mode(0);
+      ok = g.randomize();
+      `checkd(ok, 1);
+      `checkd(g.out, 7'd23);
+      saved = g.children[1];
+      g.children[1] = null;
+      ok = g.randomize();
+      `checkd(ok, 0);
+      g.children[1] = saved;
+      ok = g.randomize();
+      `checkd(ok, 1);
+      g.plain_c.constraint_mode(0);
+      g.children[1] = null;
+      g.enabled = 0;
+      g.and_left_c.constraint_mode(1);
+      g.and_right_c.constraint_mode(1);
+      ok = g.randomize();
+      `checkd(ok, 1);
+      g.and_left_c.constraint_mode(0);
+      g.and_right_c.constraint_mode(0);
+      g.enabled = 1;
+      g.or_left_c.constraint_mode(1);
+      g.or_right_c.constraint_mode(1);
+      ok = g.randomize();
+      `checkd(ok, 1);
+      `checkd(g.out, 7'd23);
+      g.or_left_c.constraint_mode(0);
+      g.or_right_c.constraint_mode(0);
+      g.mixed_c.constraint_mode(1);
+      ok = g.randomize() with {pick == 1;};
+      `checkd(ok, 0);
+      g.children[1] = saved;
       ok = g.randomize();
       `checkd(ok, 1);
     end

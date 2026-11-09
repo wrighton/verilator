@@ -345,6 +345,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstVar* errorVarp = nullptr;  // Out-of-band ERROR of this active constraint item
     };
     GuardItem* m_guardItemp = nullptr;  // Shared by nested formatting within one item
+    // Residual guard predicates validate reduction receivers after their iterators are bound.
+    bool m_inGuardPredicate = false;
     AstVar* m_foldErrorVarp = nullptr;  // Error status taken over with m_foldTakerp
     // Where the variable references being lowered record their solver names. Set by
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
@@ -2314,15 +2316,50 @@ class ConstraintExprVisitor final : public VNVisitor {
     static AstNodeExpr* newNoGuardErrorp(AstVar* const errorVarp) {
         return new AstLogNot{errorVarp->fileline(), newGuardRefp(errorVarp)};
     }
+    static bool isStateReductionWith(const AstCMethodHard* const nodep) {
+        const VCMethod method = nodep->method();
+        return !nodep->user1() && nodep->withp()
+               && (method == VCMethod::ARRAY_R_SUM || method == VCMethod::ARRAY_R_PRODUCT
+                   || method == VCMethod::ARRAY_R_AND || method == VCMethod::ARRAY_R_OR
+                   || method == VCMethod::ARRAY_R_XOR);
+    }
+    // Native STATE reductions keep checks in the callback that binds their iterators.
+    GuardRead sampleNativeGuardWith(AstWith* const withp, AstVar* const errorVarp) {
+        FileLine* const fl = withp->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardWith"), nullptr, true};
+        AstBegin* const wrapperp
+            = new AstBegin{fl, "[GuardRead]", withp->exprp()->unlinkFrBack(), false};
+        const GuardRead read
+            = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp, true, true);
+        AstNodeExpr* const exprp = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
+        VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
+        if (!read.sampled) {
+            withp->addExprp(exprp);
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
+            return read;
+        }
+        AstVar* const valueVarp = newGuardVarp(fl, blockp, withp->dtypep());
+        blockp->addStmtsp(
+            new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
+                          new AstConst{fl, AstConst::WidthedValue{}, withp->width(), 0}});
+        blockp->addStmtsp(
+            new AstIf{fl, newNoGuardErrorp(errorVarp),
+                      new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE), exprp}});
+        withp->addExprp(new AstExprStmt{fl, blockp, newGuardRefp(valueVarp)});
+        return read;
+    }
     // Move receivers out of one cloned leaf in postorder. Every prefix is sampled once;
     // neither prefix scans nor cloning a prefix at every member selection are necessary.
     GuardRead editGuardReceivers(AstNode* const nodep, AstBegin* const blockp,
-                                 AstVar* const errorVarp) {
+                                 AstVar* const errorVarp, const bool boundIterators = false,
+                                 const bool nativeCallbacks = false) {
         FileLine* const fl = nodep->fileline();
         if (AstCond* const condp = VN_CAST(nodep, Cond)) {
             const bool stateCond = !condp->condp()->user1();
             const bool stateValue = !condp->user1();
-            GuardRead result = editGuardReceivers(condp->condp(), blockp, errorVarp);
+            GuardRead result = editGuardReceivers(condp->condp(), blockp, errorVarp,
+                                                  boundIterators, nativeCallbacks);
             if (!stateCond || result.unresolved) {
                 // The selected arm cannot be sampled before the condition is bound/solved.
                 result.unresolved = true;
@@ -2332,8 +2369,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = new AstBegin{fl, m_uniqueNames.get("__VguardThen"), nullptr, true};
             AstBegin* const elseBlockp
                 = new AstBegin{fl, m_uniqueNames.get("__VguardElse"), nullptr, true};
-            const GuardRead thenRead = editGuardReceivers(condp->thenp(), thenBlockp, errorVarp);
-            const GuardRead elseRead = editGuardReceivers(condp->elsep(), elseBlockp, errorVarp);
+            const GuardRead thenRead = editGuardReceivers(condp->thenp(), thenBlockp, errorVarp,
+                                                          boundIterators, nativeCallbacks);
+            const GuardRead elseRead = editGuardReceivers(condp->elsep(), elseBlockp, errorVarp,
+                                                          boundIterators, nativeCallbacks);
             result.checked |= thenRead.checked || elseRead.checked;
             result.unresolved |= thenRead.unresolved || elseRead.unresolved;
             if (stateValue && !result.unresolved) {
@@ -2363,6 +2402,19 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
             return result;
         }
+        if (nativeCallbacks) {
+            if (AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
+                if (isStateReductionWith(methodp)) {
+                    GuardRead result = editGuardReceivers(methodp->fromp(), blockp, errorVarp,
+                                                          boundIterators, nativeCallbacks);
+                    const GuardRead body = sampleNativeGuardWith(methodp->withp(), errorVarp);
+                    result.unresolved |= body.unresolved;
+                    result.sampled |= body.sampled;
+                    result.checked |= body.checked;
+                    return result;
+                }
+            }
+        }
         AstNodeExpr* fromp = nullptr;
         if (AstMemberSel* const selp = VN_CAST(nodep, MemberSel)) {
             fromp = selp->fromp();
@@ -2374,7 +2426,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         for (AstNode* const opp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
             for (AstNode *childp = opp, *nextp; childp; childp = nextp) {
                 nextp = childp->nextp();
-                const GuardRead child = editGuardReceivers(childp, blockp, errorVarp);
+                const GuardRead child = editGuardReceivers(childp, blockp, errorVarp,
+                                                           boundIterators, nativeCallbacks);
                 if (childp == fromp) fromUnresolved = child.unresolved;
                 result.unresolved |= child.unresolved;
                 result.sampled |= child.sampled;
@@ -2389,8 +2442,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         } else if (const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef)) {
             result.unresolved |= callp->user1() != 0;
         } else if (VN_IS(nodep, LambdaArgRef)) {
-            // Reduction iterators are bound per element, not where the guard is sampled.
-            result.unresolved = true;
+            // Native with callbacks already bind iterators; SMT binding occurs later.
+            result.unresolved |= !boundIterators;
         }
         // The child's root may have become a sampled conditional value.
         if (AstMemberSel* const selp = VN_CAST(nodep, MemberSel)) {
@@ -2481,7 +2534,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         // A single clone is edited by moving receiver paths, not cloning each path prefix.
         // Ordinary cloning also preserves legal state calls that are not classified pure.
         AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp->cloneTree(false), false};
-        const GuardRead read = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp);
+        const GuardRead read
+            = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp, false, !exprp->user1());
         AstNodeExpr* const valuep = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
         VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
         AstNodeExpr* const errorp = read.checked ? newGuardRefp(errorVarp) : nullptr;
@@ -2501,8 +2555,18 @@ class ConstraintExprVisitor final : public VNVisitor {
                                         new AstConst{fl, AstConst::BitFalse{}}});
         blockp->addStmtsp(new AstAssign{fl, newGuardRefp(falseVarp, VAccess::WRITE),
                                         new AstConst{fl, AstConst::BitFalse{}}});
+        AstNodeExpr* sampledValuep = valuep;
+        if (errorp) {
+            // Native reductions may set ERROR during evaluation. Neither truth proof may be
+            // assigned until the complete leaf has been evaluated and its status rechecked.
+            AstVar* const valueVarp = newGuardVarp(fl, blockp, valuep->dtypep());
+            blockp->addStmtsp(
+                new AstIf{fl, newNoGuardErrorp(errorVarp),
+                          new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE), valuep}});
+            sampledValuep = newGuardRefp(valueVarp);
+        }
         AstNode* samplep = new AstAssign{fl, newGuardRefp(trueVarp, VAccess::WRITE),
-                                         new AstLogNot{fl, new AstLogNot{fl, valuep}}};
+                                         new AstLogNot{fl, new AstLogNot{fl, sampledValuep}}};
         samplep->addNext(new AstAssign{fl, newGuardRefp(falseVarp, VAccess::WRITE),
                                        new AstLogNot{fl, newGuardRefp(trueVarp)}});
         if (errorp) samplep = new AstIf{fl, newNoGuardErrorp(errorVarp), samplep};
@@ -2511,7 +2575,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         recordGuardFlags(exprp, result, flags);
         return result;
     }
-    AstNode* newGuardErrorReturnp(AstNode* const nodep) {
+    AstNode* newGuardErrorSetp(AstNode* const nodep) {
         UASSERT_OBJ(m_guardItemp, nodep, "Guard formatting outside a constraint item");
         FileLine* const fl = nodep->fileline();
         if (!m_guardItemp->errorVarp) {
@@ -2522,9 +2586,12 @@ class ConstraintExprVisitor final : public VNVisitor {
             varp->noSubst(true);
             m_guardItemp->errorVarp = varp;
         }
-        AstNode* const reportp
-            = new AstAssign{fl, newGuardRefp(m_guardItemp->errorVarp, VAccess::WRITE),
-                            new AstConst{fl, AstConst::BitTrue{}}};
+        return new AstAssign{fl, newGuardRefp(m_guardItemp->errorVarp, VAccess::WRITE),
+                             new AstConst{fl, AstConst::BitTrue{}}};
+    }
+    AstNode* newGuardErrorReturnp(AstNode* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        AstNode* const reportp = newGuardErrorSetp(nodep);
         // The string is only transport. The item status forces a hard failure outside any
         // negation, soft constraint, or RANDOM guard that could otherwise mask this ERROR.
         reportp->addNext(new AstCReturn{fl, new AstSFormatF{fl, "#b0", false, nullptr}});
@@ -2553,6 +2620,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             smtp = getConstFormat(newGuardRefp(proof.trueVarp));
             VL_DO_DANGLING(pushDeletep(exprp), exprp);
         } else {
+            VL_RESTORER(m_inGuardPredicate);
+            m_inGuardPredicate = true;
             smtp = VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
         }
         if (!proof.trueVarp && !proof.falseVarp && !proof.errorVarp) return smtp;
@@ -2574,6 +2643,59 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         blockp->addStmtsp(new AstCReturn{fl, smtp});
         return newReturnedTextp(fl, blockp);
+    }
+    // Format a bound reduction element of a guard, carrying receiver ERROR to its item.
+    AstNodeExpr* formatGuardElementValue(AstNodeExpr* const exprp) {
+        FileLine* const fl = exprp->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardElement"), nullptr, true};
+        AstVar* const errorVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::BitFalse{}}});
+        // Sampling can replace a root conditional; keep it owned until the walk is finished.
+        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp, false};
+        const GuardRead read = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp);
+        AstNodeExpr* const valuep = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
+        VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
+        if (!read.sampled) {
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
+            return VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr);
+        }
+        if (read.checked) {
+            blockp->addStmtsp(
+                new AstIf{fl, newGuardRefp(errorVarp), newGuardErrorReturnp(blockp)});
+        }
+        blockp->addStmtsp(new AstCReturn{fl, VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr)});
+        return newReturnedTextp(fl, blockp);
+    }
+    // STATE reductions nested in a residual RANDOM predicate still report guard ERROR.
+    AstNodeExpr* formatNativeGuardValue(AstNodeExpr* const exprp) {
+        FileLine* const fl = exprp->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardNative"), nullptr, true};
+        AstVar* const errorVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::BitFalse{}}});
+        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp, false};
+        const GuardRead read
+            = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp, false, true);
+        AstNodeExpr* const valuep = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
+        VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
+        if (!read.sampled) {
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
+            return getConstFormat(valuep);
+        }
+        AstVar* const valueVarp = newGuardVarp(fl, blockp, valuep->dtypep());
+        blockp->addStmtsp(
+            new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
+                          new AstConst{fl, AstConst::WidthedValue{}, valuep->width(), 0}});
+        blockp->addStmtsp(
+            new AstIf{fl, newNoGuardErrorp(errorVarp),
+                      new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE), valuep}});
+        if (read.checked) {
+            blockp->addStmtsp(new AstIf{fl, newGuardRefp(errorVarp), newGuardErrorSetp(blockp)});
+        }
+        return getConstFormat(new AstExprStmt{fl, blockp, newGuardRefp(valueVarp)});
     }
     void visit(AstLogIf* nodep) override {
         // The caller knows this is a constraint implication, not a value conditional.
@@ -3697,6 +3819,12 @@ class ConstraintExprVisitor final : public VNVisitor {
         return new AstCExpr{fl, AstCExpr::Pure{}, list + "}"};
     }
     void visit(AstCMethodHard* nodep) override {
+        if (m_inGuardPredicate && isStateReductionWith(nodep)) {
+            VNRelinker handle;
+            nodep->unlinkFrBack(&handle);
+            handle.relink(formatNativeGuardValue(nodep));
+            return;
+        }
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
@@ -3967,8 +4095,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                 bodyp = new AstAssign{
                     fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
                     new AstConcatN{fl, openp, new AstConst{fl, AstConst::String{}, " "}}};
-                bodyp->addNext(newTextAppendp(
-                    fl, textVarp, VN_AS(iterateSubtreeReturnEdits(perElemExprp), NodeExpr)));
+                AstNodeExpr* const elementTextp
+                    = m_inGuardPredicate
+                          ? formatGuardElementValue(VN_AS(perElemExprp, NodeExpr))
+                          : VN_AS(iterateSubtreeReturnEdits(perElemExprp), NodeExpr);
+                bodyp->addNext(newTextAppendp(fl, textVarp, elementTextp));
                 bodyp->addNext(
                     newTextAppendp(fl, textVarp, new AstConst{fl, AstConst::String{}, ")"}));
             } else {
