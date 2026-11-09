@@ -3861,9 +3861,9 @@ class ConstraintExprVisitor final : public VNVisitor {
             // ones) is reduced like 'with (item)'; only an array variable is registered whole
             const bool perElem = withp || !VN_IS(nodep->fromp(), VarRef);
 
-            // Create loop variable and header
-            AstVar* const loopVarp
-                = new AstVar{fl, VVarType::BLOCKTEMP, "__Vreduce", nodep->findIntDType()};
+            // Keep nested indices distinct when compared before scoping in constifyEdit.
+            AstVar* const loopVarp = new AstVar{
+                fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vreduce"), nodep->findIntDType()};
             AstForeachHeader* const headerp
                 = new AstForeachHeader{fl, nodep->fromp()->cloneTreePure(false), loopVarp};
 
