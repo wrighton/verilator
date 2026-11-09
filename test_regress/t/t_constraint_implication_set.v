@@ -854,6 +854,81 @@ module t;
       end
     end
 
+    begin
+      automatic DisSoftDirect dsd = new();
+      automatic bit rFree = 1'b0;
+      automatic bit ayFree = 1'b0;
+      repeat (16) begin
+        ok = dsd.randomize();
+        `checkd(ok, 1);
+        `checkh(dsd.p, 1'b1);
+        `checkh(dsd.q, 7'd9);
+        `checkh(dsd.b.y, 4'h4);
+        if (dsd.r != 7'd11) rFree = 1'b1;
+        if (dsd.a.y != 4'h3) ayFree = 1'b1;
+      end
+      `checkh(rFree, 1'b1);
+      `checkh(ayFree, 1'b1);
+    end
+
+    begin
+      automatic DisSoftElems dse = new();
+      automatic bit fixedFree = 1'b0;
+      automatic bit dynFree = 1'b0;
+      automatic bit dynWideFree = 1'b0;
+      automatic bit midFree = 1'b0;
+      automatic bit gridFree = 1'b0;
+      automatic bit qFree = 1'b0;
+      automatic bit amapFree = 1'b0;
+      repeat (16) begin
+        ok = dse.randomize();
+        `checkd(ok, 1);
+        `checkh(dse.fixedArr[6].y, 4'h7);
+        `checkh(dse.fixedArr[16].y, 4'h6);
+        `checkh(dse.mids[1].inner.y, 4'h5);
+        if (dse.mids[10].inner.y != 4'h6) midFree = 1'b1;
+        `checkh(dse.grid[4][2].y, 4'h3);
+        if (dse.grid[4][3].y != 4'h4) gridFree = 1'b1;
+        `checkh(dse.q[0].y, 4'h2);
+        if (dse.q[2].y != 4'h9) qFree = 1'b1;
+        `checkh(dse.amap[-7].y, 4'h8);
+        if (dse.amap[7].y != 4'ha) amapFree = 1'b1;
+        if (dse.fixedArr[15].y != 4'h5) fixedFree = 1'b1;
+        foreach (dse.dynArr[i]) begin
+          if (i == 10) begin
+            if (dse.dynArr[i].y != 4'h1) dynFree = 1'b1;
+          end
+          else if (i == 4) begin
+            if (dse.dynArr[i].y != 4'h1) dynWideFree = 1'b1;
+          end
+          else begin
+            `checkh(dse.dynArr[i].y, 4'h1);
+          end
+        end
+      end
+      `checkh(fixedFree, 1'b1);
+      `checkh(dynFree, 1'b1);
+      `checkh(dynWideFree, 1'b1);
+      `checkh(midFree, 1'b1);
+      `checkh(gridFree, 1'b1);
+      `checkh(qFree, 1'b1);
+      `checkh(amapFree, 1'b1);
+    end
+
+    begin
+      automatic DisSoftBinder dsb = new();
+      automatic bit widened = 1'b0;
+      repeat (16) begin
+        ok = dsb.randomize();
+        `checkd(ok, 1);
+        foreach (dsb.objs[i]) begin
+          `checkh(dsb.objs[i].y == 4'h1 || dsb.objs[i].y == 4'h2, 1'b1);
+          if (dsb.objs[i].y == 4'h2) widened = 1'b1;
+        end
+      end
+      `checkh(widened, 1'b1);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
