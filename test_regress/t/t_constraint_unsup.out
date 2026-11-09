@@ -6,16 +6,20 @@
 %Error-UNSUPPORTED: t/t_constraint_unsup.v:14:19: Unsupported expression inside constraint
    14 |   constraint c { w[3] == 5; }
       |                   ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:28:50: Unsupported: 'disable soft' of 'y' of an object selected by a random index
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:31:29: Unsupported: 'disable soft' of 'y' of an object selected by a random index
                                                 : ... note: In instance 't'
-   28 |   constraint c_disable { disable soft elems[idx].y; }
-      |                                                  ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:42:27: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+   31 |     disable soft elems[idx].y;
+      |                             ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:32:32: Unsupported: 'disable soft' of 'y' of an object selected by a random index
                                                 : ... note: In instance 't'
-   42 |     disable soft holder.h.y;
+   32 |     disable soft dynElems[idx].y;
+      |                                ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:49:27: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+                                                : ... note: In instance 't'
+   49 |     disable soft holder.h.y;
       |                           ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:43:31: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:50:31: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
                                                 : ... note: In instance 't'
-   43 |     disable soft holders[1].h.y;
+   50 |     disable soft holders[1].h.y;
       |                               ^
 %Error: Exiting due to
