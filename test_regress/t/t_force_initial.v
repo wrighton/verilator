@@ -21,6 +21,7 @@ interface force_ifc;
   logic [127:0][15:0] halfwords;
   force_packed_item_t [2:1][7:3] records;
   logic [63:0] counter;
+  logic [95:0] unforced_wide;
   real unforced_real;
 endinterface
 
@@ -33,6 +34,9 @@ class ForceReader;
   endfunction
   function logic [3:0] get();
     return vif.sig;
+  endfunction
+  function logic [2:0] get_low();
+    return vif.sig[2:0];
   endfunction
   function logic [127:0] get_wide();
     return vif.wide;
@@ -70,6 +74,12 @@ class ForceReader;
   function logic [63:0] get_counter();
     return vif.counter;
   endfunction
+  function logic [30:0] get_unforced_slice(int start);
+    return vif.unforced_wide[start +: 31];
+  endfunction
+  function void set_halfword(int index, logic [15:0] value);
+    vif.halfwords[index] = value;
+  endfunction
   function real get_unforced_real();
     return vif.unforced_real;
   endfunction
@@ -91,6 +101,7 @@ module t;
     `checkh(i.sig, 4'h3);
     `checkh(r.vif.sig, 4'h3);
     `checkh(r.get(), 4'h3);
+    `checkh(r.get_low(), 3'h3);
     `checkh(r.pick().sig, 4'h3);
     `checkh(r.calls, 1);
     src = 4'ha;
@@ -172,7 +183,9 @@ module t;
     `checkh(packed_reader.get_halfword(37), 16'hffff);
     `checkh(packed_reader.get_count(1, 3), 32'hffffffff);
     packed_reader.vif = k;
-    packed_reader.vif.halfwords[37] = 16'h8bad;
+    packed_reader.set_halfword(37, 16'h8bad);
+    k.unforced_wide = 96'hfedcba987654321001234567;
+    `checkh(packed_reader.get_unforced_slice(17), k.unforced_wide[17 +: 31]);
     `checkh(packed_reader.get_halfword(37), 16'h8bad);
     if (packed_reader.get_unforced_real() != 9.0) `stop;
     packed_reader.vif = i;
