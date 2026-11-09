@@ -539,6 +539,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* indexp = nullptr;  // Index or key the part formats
         const AstCMethodHard* dynSelp = nullptr;  // Element of a dynamic array or queue
         if (const AstMemberSel* const selp = VN_CAST(exprp, MemberSel)) {
+            // A member of the object being randomized, named like the payload names it
+            if (isCapturedThisSel(selp)) {
+                fmt += selp->name();
+                return true;
+            }
             fromp = selp->fromp();
             partFmt = "." + selp->name();
         } else if (const AstArraySel* const arraySelp = VN_CAST(exprp, ArraySel)) {
@@ -583,26 +588,35 @@ class ConstraintExprVisitor final : public VNVisitor {
         argsp = AstNode::addNextNull(argsp, idxp);
         return true;
     }
-    // Whether an element on the select chain of selp is chosen by a random index or key
-    static bool hasRandIndexSel(const AstMemberSel* selp) {
+    // The call result the select chain of selp selects from, which a constraint_primary does
+    // not allow (IEEE 1800-2023 A.1.10), else nullptr; sets randIndex if an element of the chain
+    // before it is chosen by a random index or key
+    static const AstNodeExpr* findSelCallp(const AstMemberSel* selp, bool& randIndex) {
         for (const AstNodeExpr* exprp = selp->fromp();;) {
             if (const AstMemberSel* const memberSelp = VN_CAST(exprp, MemberSel)) {
                 exprp = memberSelp->fromp();
+            } else if (const AstStructSel* const structSelp = VN_CAST(exprp, StructSel)) {
+                exprp = structSelp->fromp();
             } else if (const AstNodeSel* const nodeSelp = VN_CAST(exprp, NodeSel)) {
-                if (isRandIndex(nodeSelp->bitp())) return true;
+                randIndex |= isRandIndex(nodeSelp->bitp());
                 exprp = nodeSelp->fromp();
             } else if (const AstCMethodHard* const atp = VN_CAST(exprp, CMethodHard)) {
-                if (isRandIndex(atp->pinsp())) return true;
+                if (atp->method() != VCMethod::ARRAY_AT
+                    && atp->method() != VCMethod::ARRAY_AT_BACK)
+                    return atp;
+                randIndex |= isRandIndex(atp->pinsp());
                 exprp = atp->fromp();
             } else {
-                return false;
+                return VN_IS(exprp, NodeFTaskRef) ? exprp : nullptr;
             }
         }
     }
     // Whether selp is a solver variable field of an object in an array, selected by state
     // indices only, so its solver name is a value fixed before solving
     static bool isStateElemField(const AstMemberSel* selp) {
-        return !VN_IS(selp->dtypep()->skipRefp(), ClassRefDType) && !hasRandIndexSel(selp);
+        bool randIndex = false;
+        findSelCallp(selp, randIndex);
+        return !VN_IS(selp->dtypep()->skipRefp(), ClassRefDType) && !randIndex;
     }
     // Record the solver name namep formats of an object field, as the payload names it
     void addElemName(const AstNode* nodep, AstNodeExpr* namep) {
@@ -4281,7 +4295,15 @@ class ConstraintExprVisitor final : public VNVisitor {
             // The name of its registration and of the soft constraints it appears in
             std::string fmt;
             AstNodeExpr* argsp = nullptr;
-            if (hasRandIndexSel(mselp)) {
+            bool randIndex = false;
+            if (const AstNodeExpr* const callp = findSelCallp(mselp, randIndex)) {
+                callp->v3error("'disable soft' of "
+                               << mselp->prettyNameQ()
+                               << " selects from the result of a call, but its"
+                                  " operand must be a constraint primary"
+                                  " (IEEE 1800-2023 18.5.13.2, A.1.10)");
+                keyp = new AstConst{fl, AstConst::String{}, ""};  // Not run: compiling stops
+            } else if (randIndex) {
                 // The soft constraints are removed at setup, before the solver picks the
                 // object, so its field has no name yet
                 mselp->v3warn(E_UNSUPPORTED, "Unsupported: 'disable soft' of "
