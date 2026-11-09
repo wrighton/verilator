@@ -31,9 +31,14 @@ typedef struct {
 } holder_t;
 
 class DisableStructHandle;
+  rand holder_t holder;
   rand holder_t holders[2];
-  constraint c_disable { disable soft holders[1].h.y; }
+  constraint c_disable {
+    disable soft holder.h.y;
+    disable soft holders[1].h.y;
+  }
   function new();
+    holder.h = new;
     foreach (holders[i]) holders[i].h = new;
   endfunction
 endclass
