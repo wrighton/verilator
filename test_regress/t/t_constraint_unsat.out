@@ -3,26 +3,26 @@
 
 === Test: addr out of range ===
 %Warning-UNSATCONSTR: t/t_constraint_unsat.v:11: Unsatisfied constraint: 'constraint addr_range { addr < 127; }'
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:16: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:17: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
 Randomization failed.
 
 === Test: data out of range (too small) ===
 %Warning-UNSATCONSTR: t/t_constraint_unsat.v:12: Unsatisfied constraint: 'constraint data_range { data > 10 && data < 200; }'
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:16: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:17: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
 Randomization failed.
 
 === Test: data out of range (too large) ===
 %Warning-UNSATCONSTR: t/t_constraint_unsat.v:12: Unsatisfied constraint: 'constraint data_range { data > 10 && data < 200; }'
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:16: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:17: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
 Randomization failed.
 
 === Test: Both constraints violated ===
 %Warning-UNSATCONSTR: t/t_constraint_unsat.v:11: Unsatisfied constraint: 'constraint addr_range { addr < 127; }'
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:16: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:17: Unsatisfied constraint: 'if (!randomize() with { addr == a; data == d; }) begin'
 Randomization failed.
 
 === Test: Conflicting constraints (x > 100 && x < 50) ===
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:26: Unsatisfied constraint: 'constraint c1 { x > 100; }'
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:27: Unsatisfied constraint: 'constraint c2 { x < 50; }'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:27: Unsatisfied constraint: 'constraint c1 { x > 100; }'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:28: Unsatisfied constraint: 'constraint c2 { x < 50; }'
 Expected failure: conflicting constraints detected
 *-* All Finished *-*
