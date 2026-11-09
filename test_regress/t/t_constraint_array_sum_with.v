@@ -456,13 +456,15 @@ class test_guard_contexts;
   rand bit [6:0] a[];
   rand bit pick;
   rand bit [6:0] out;
-  state_sub child;
+  state_sub children[3];
   bit enabled = 1;
 
   function new();
     a = new[3];
-    child = new;
-    child.k = 1;
+    foreach (children[i]) begin
+      children[i] = new;
+      children[i].k = 1;
+    end
   endfunction
 
   constraint size_c {a.size() == 3;}
@@ -472,20 +474,21 @@ class test_guard_contexts;
   }
   constraint nested_c {
     if (pick) {
-      if (a.sum() with (child.k * int'(item)) > 0) out == 7'd47;
+      if (a.sum() with (children[item.index].k * int'(item)) > 0) out == 7'd47;
     }
   }
   constraint soft_c {
-    soft !((a.sum() with (child.k * int'(item)) > 0) -> (out == 7'd47));
+    soft !((a.sum() with (children[item.index].k * int'(item)) > 0) -> (out == 7'd47));
   }
   constraint sift_c {
-    if (enabled && (a.sum() with (child.k * int'(item)) > 0)) out == 7'd47;
+    if (enabled && (a.sum() with (children[item.index].k * int'(item)) > 0)) out == 7'd47;
   }
 endclass
 
 class test_guard_state_reductions;
   bit [6:0] a[3];
   state_sub children[3];
+  rand int gate;
   rand bit [6:0] out;
   rand bit pick;
   bit enabled = 1;
@@ -516,6 +519,34 @@ class test_guard_state_reductions;
   }
   constraint or_right_c {
     if ((a.sum() with (children[item.index].k == 1 ? int'(item) : 0) == 6) || enabled)
+      out == 7'd23;
+  }
+  constraint atomic_c {
+    // Each STATE reduction is a value inside a RANDOM comparison, not a STATE leaf.
+    if (a.sum() with (children[item.index].k != 0 ? int'(item) : 0) == gate)
+      out == 7'd23;
+    if (a.product() with (children[item.index].k != 0 ? int'(item) : 1) == gate)
+      out == 7'd23;
+    if (a.and() with (children[item.index].k != 0 ? int'(item) : -1) == gate)
+      out == 7'd23;
+    if (a.or() with (children[item.index].k != 0 ? int'(item) : 0) == gate)
+      out == 7'd23;
+    if (a.xor() with (children[item.index].k != 0 ? int'(item) : 0) == gate)
+      out == 7'd23;
+  }
+  constraint pure_c {
+    if (a.sum() with (int'(item)) == gate) out == 7'd23;
+  }
+  constraint wrapped_c {
+    if ((a.sum() with (children[item.index].k * int'(item))) + 1 == gate)
+      out == 7'd23;
+  }
+  constraint unary_c {
+    if (-(a.sum() with (children[item.index].k * int'(item))) == gate)
+      out == 7'd23;
+  }
+  constraint cond_c {
+    if ((enabled ? a.sum() with (children[item.index].k * int'(item)) : 0) == gate)
       out == 7'd23;
   }
   constraint mixed_c {
@@ -662,6 +693,31 @@ module t;
       end
     end
 
+    // Guarded symbolic element fields retain their original solver-name paths.
+    begin
+      automatic sum_items g = new;
+      kind_e chosen;
+      int ok;
+      for (int turn = 0; turn < 4; ++turn) begin
+        chosen = turn % 2 == 0 ? SEND : RECV;
+        ok = g.randomize() with {
+          foreach (items[i]) items[i].kind == chosen;
+          if (items.sum() with (int'(item.kind == SEND)) > 0) n == 3;
+          else n == 5;
+        };
+        `checkd(ok, 1);
+        `checkd(g.n, chosen == SEND ? 3 : 5);
+        foreach (g.items[i]) `checkd(g.items[i].kind, chosen);
+        ok = g.randomize() with {
+          foreach (items[i]) items[i].kind == chosen;
+          if (items.sum(elem) with (int'(elem.kind == SEND) + elem.weight()) > 4) n == 3;
+          else n == 5;
+        };
+        `checkd(ok, 1);
+        `checkd(g.n, chosen == SEND ? 3 : 5);
+      end
+    end
+
     // The element and the randomize target may have the same class type.
     begin
       same_sum_items g;
@@ -745,7 +801,7 @@ module t;
       `checkd(ok, 1);
       `checkd(g.out, 7'd47);
       g.index_c.constraint_mode(0);
-      g.child = null;
+      g.children[1] = null;
       g.nested_c.constraint_mode(1);
       ok = g.randomize() with {pick == 0;};
       `checkd(ok, 0);
@@ -770,6 +826,11 @@ module t;
       g.or_left_c.constraint_mode(0);
       g.or_right_c.constraint_mode(0);
       g.mixed_c.constraint_mode(0);
+      g.atomic_c.constraint_mode(0);
+      g.pure_c.constraint_mode(0);
+      g.wrapped_c.constraint_mode(0);
+      g.unary_c.constraint_mode(0);
+      g.cond_c.constraint_mode(0);
       ok = g.randomize();
       `checkd(ok, 1);
       `checkd(g.out, 7'd23);
@@ -803,6 +864,44 @@ module t;
       g.children[1] = saved;
       ok = g.randomize();
       `checkd(ok, 1);
+      g.mixed_c.constraint_mode(0);
+      g.atomic_c.constraint_mode(1);
+      ok = g.randomize() with {gate == 6;};
+      `checkd(ok, 1);
+      `checkd(g.out, 7'd23);
+      g.children[1] = null;
+      ok = g.randomize() with {gate == 6;};
+      `checkd(ok, 0);
+      g.children[1] = saved;
+      g.atomic_c.constraint_mode(0);
+      g.pure_c.constraint_mode(1);
+      ok = g.randomize() with {gate == 6;};
+      `checkd(ok, 1);
+      `checkd(g.out, 7'd23);
+      g.pure_c.constraint_mode(0);
+      for (int mode = 0; mode < 3; ++mode) begin
+        automatic int expected = mode == 0 ? 7 : mode == 1 ? -6 : 6;
+        g.wrapped_c.constraint_mode(mode == 0);
+        g.unary_c.constraint_mode(mode == 1);
+        g.cond_c.constraint_mode(mode == 2);
+        g.enabled = 1;
+        ok = g.randomize() with {gate == expected;};
+        `checkd(ok, 1);
+        `checkd(g.out, 7'd23);
+        g.children[1] = null;
+        ok = g.randomize() with {gate == expected;};
+        `checkd(ok, 0);
+        g.children[1] = saved;
+        ok = g.randomize() with {gate == expected;};
+        `checkd(ok, 1);
+        `checkd(g.out, 7'd23);
+      end
+      // A STATE conditional must not evaluate its unselected native callback.
+      g.enabled = 0;
+      g.children[1] = null;
+      ok = g.randomize() with {gate == 0;};
+      `checkd(ok, 1);
+      `checkd(g.out, 7'd23);
     end
 
     $write("*-* All Finished *-*\n");

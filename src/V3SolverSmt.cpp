@@ -663,7 +663,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Replace computable expression with SMT constant
         VNRelinker handle;
         nodep->unlinkFrBack(&handle);
-        handle.relink(getConstFormat(nodep));
+        handle.relink(m_inGuardPredicate ? formatStateGuardValue(nodep) : getConstFormat(nodep));
         return true;
     }
     // Make the current constraint hold only while a solver-sized array keeps its size
@@ -2340,9 +2340,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             return read;
         }
         AstVar* const valueVarp = newGuardVarp(fl, blockp, withp->dtypep());
-        blockp->addStmtsp(
-            new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
-                          new AstConst{fl, AstConst::WidthedValue{}, withp->width(), 0}});
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::DTyped{}, withp->dtypep()}});
         blockp->addStmtsp(
             new AstIf{fl, newNoGuardErrorp(errorVarp),
                       new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE), exprp}});
@@ -2653,42 +2652,50 @@ class ConstraintExprVisitor final : public VNVisitor {
         blockp->addStmtsp(new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
                                         new AstConst{fl, AstConst::BitFalse{}}});
         // Sampling can replace a root conditional; keep it owned until the walk is finished.
-        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp, false};
+        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp->cloneTree(false), false};
         const GuardRead read = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp);
-        AstNodeExpr* const valuep = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
+        AstNode* const sampledClonep = wrapperp->stmtsp()->unlinkFrBack();
         VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
+        VL_DO_DANGLING(sampledClonep->deleteTree(), sampledClonep);
+        // Keep symbolic receiver paths intact for solver registration and member naming.
         if (!read.sampled) {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
-            return VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr);
+            return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
         }
         if (read.checked) {
             blockp->addStmtsp(
                 new AstIf{fl, newGuardRefp(errorVarp), newGuardErrorReturnp(blockp)});
         }
-        blockp->addStmtsp(new AstCReturn{fl, VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr)});
+        blockp->addStmtsp(new AstCReturn{fl, VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr)});
         return newReturnedTextp(fl, blockp);
     }
-    // STATE reductions nested in a residual RANDOM predicate still report guard ERROR.
-    AstNodeExpr* formatNativeGuardValue(AstNodeExpr* const exprp) {
+    // Validate a complete STATE subtree before it becomes a residual guard constant.
+    AstNodeExpr* formatStateGuardValue(AstNodeExpr* const exprp) {
+        // Leaves cannot dereference a receiver or contain a reduction callback.
+        if (VN_IS(exprp, Const) || VN_IS(exprp, VarRef) || VN_IS(exprp, LambdaArgRef)) {
+            return getConstFormat(exprp);
+        }
         FileLine* const fl = exprp->fileline();
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VguardNative"), nullptr, true};
         AstVar* const errorVarp = newGuardVarp(fl, blockp, blockp->findBitDType());
         blockp->addStmtsp(new AstAssign{fl, newGuardRefp(errorVarp, VAccess::WRITE),
                                         new AstConst{fl, AstConst::BitFalse{}}});
-        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp, false};
+        AstBegin* const wrapperp = new AstBegin{fl, "[GuardRead]", exprp->cloneTree(false), false};
         const GuardRead read
             = editGuardReceivers(wrapperp->stmtsp(), blockp, errorVarp, false, true);
         AstNodeExpr* const valuep = VN_AS(wrapperp->stmtsp()->unlinkFrBack(), NodeExpr);
         VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
         if (!read.sampled) {
+            VL_DO_DANGLING(valuep->deleteTree(), valuep);
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
-            return getConstFormat(valuep);
+            return getConstFormat(exprp);
         }
+        // The current visitor may still own exprp; edit only its fresh clone.
+        VL_DO_DANGLING(pushDeletep(exprp), exprp);
         AstVar* const valueVarp = newGuardVarp(fl, blockp, valuep->dtypep());
-        blockp->addStmtsp(
-            new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
-                          new AstConst{fl, AstConst::WidthedValue{}, valuep->width(), 0}});
+        blockp->addStmtsp(new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE),
+                                        new AstConst{fl, AstConst::DTyped{}, valuep->dtypep()}});
         blockp->addStmtsp(
             new AstIf{fl, newNoGuardErrorp(errorVarp),
                       new AstAssign{fl, newGuardRefp(valueVarp, VAccess::WRITE), valuep}});
@@ -3819,12 +3826,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         return new AstCExpr{fl, AstCExpr::Pure{}, list + "}"};
     }
     void visit(AstCMethodHard* nodep) override {
-        if (m_inGuardPredicate && isStateReductionWith(nodep)) {
-            VNRelinker handle;
-            nodep->unlinkFrBack(&handle);
-            handle.relink(formatNativeGuardValue(nodep));
-            return;
-        }
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
