@@ -1506,6 +1506,8 @@ private:
                 sizep->dtypeSetUInt32();
                 idxp = new AstSub{fl, new AstSub{fl, sizep, new AstConst{fl, 1}}, idxp};
             }
+        } else {
+            return false;
         }
         argsp = AstNode::addNextNull(argsp, idxp);
         return true;
