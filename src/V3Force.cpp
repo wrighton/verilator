@@ -1421,8 +1421,7 @@ class ForceReplaceVisitor final : public VNVisitor {
     void visit(AstSel* nodep) override {
         // Preserve the selected-read fast path for a packed virtual-interface member.
         if (AstMemberRef* const memberp = VN_CAST(nodep->fromp(), MemberRef)) {
-            if (!memberp->user1() && memberp->access().isReadOnly()
-                && memberp->dtypep()->skipRefp()->isIntegralOrPacked() && memberp->isWide()) {
+            if (memberp->access().isReadOnly() && memberp->isWide()) {
                 if (AstVar* const vecVarp = m_state.forceVecVarp(memberp->varp())) {
                     iterateAndNextNull(memberp->fromp());
                     iterateAndNextNull(nodep->lsbp());
