@@ -1040,6 +1040,28 @@
                     {"type":"VARREF","name":"__Vguard__10","addr":"(PT)","loc":"d,57:5,57:7","dtypep":"(HB)","access":"RD","varp":"(AS)"}
                   ],
                    "lhsp": [
+                    {"type":"VARREF","name":"__Vguard__8","addr":"(IT)","loc":"d,57:5,57:7","dtypep":"(R)","access":"RD","varp":"(YR)"}
+                  ]}
+                ],
+                 "thensp": [
+                  {"type":"ASSIGN","addr":"(JT)","loc":"d,57:5,57:7","dtypep":"(HB)",
+                   "rhsp": [
+                    {"type":"CONST","name":"\\\"#b1\\\"","addr":"(KT)","loc":"d,57:5,57:7","dtypep":"(HB)"}
+                  ],
+                   "lhsp": [
+                    {"type":"VARREF","name":"__Vguard__11","addr":"(LT)","loc":"d,57:5,57:7","dtypep":"(HB)","access":"WR","varp":"(BS)"}
+                  ]}
+                ]},
+                {"type":"IF","addr":"(MT)","loc":"d,57:5,57:7",
+                 "condp": [
+                  {"type":"VARREF","name":"__Vguard__8","addr":"(NT)","loc":"d,57:5,57:7","dtypep":"(R)","access":"RD","varp":"(YR)"}
+                ],
+                 "thensp": [
+                  {"type":"ASSIGN","addr":"(OT)","loc":"d,57:5,57:7","dtypep":"(HB)",
+                   "rhsp": [
+                    {"type":"VARREF","name":"__Vguard__10","addr":"(PT)","loc":"d,57:5,57:7","dtypep":"(HB)","access":"RD","varp":"(AS)"}
+                  ],
+                   "lhsp": [
                     {"type":"VARREF","name":"__Vtext","addr":"(QT)","loc":"d,57:5,57:7","dtypep":"(HB)","access":"WR","varp":"(CS)"}
                   ]}
                 ],
