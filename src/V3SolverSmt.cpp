@@ -3313,12 +3313,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         return new AstCExpr{fl, AstCExpr::Pure{}, list + "}"};
     }
     void visit(AstCMethodHard* nodep) override {
-        if (m_inGuardPredicate && isStateReductionWith(nodep)) {
-            VNRelinker handle;
-            nodep->unlinkFrBack(&handle);
-            handle.relink(formatNativeGuardValue(nodep));
-            return;
-        }
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
 
