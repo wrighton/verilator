@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2026 Cameron Waite
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 // Test for null pointer dereference when sensitivity expressions reference
 // class members. Verilator evaluates trigger expressions at simulation start,
 // even for tasks that haven't been called yet. This caused null pointer
@@ -89,7 +94,7 @@ module t;
     wide_offset = 2;
     intf.wide = 128'(5) << 4;
     #10;
-    if (wide_count != 2) $stop;
+    `checkd(wide_count, 2);
   end
 
   my_pkg::my_driver initialized_drv = new(intf);
@@ -100,7 +105,7 @@ module t;
     #10 initialized_drv.words.push_back(1);
     #10 initialized_drv.words.push_back(2);
     #10;
-    if (size_count != 2) $stop;
+    `checkd(size_count, 2);
   end
 
   int event_count;
