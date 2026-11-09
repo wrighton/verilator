@@ -264,6 +264,11 @@ class VlRandomizer VL_NOT_FINAL {
     std::vector<std::string>
         m_constraints_line;  // fileline content of the constraint for unsat constraints
     std::vector<std::string> m_softConstraints;  // Soft constraints
+    // Solver variables the soft constraints are disabled by, flattened in m_softConstraints
+    // order; copied, as the name of an object in an array is formatted at runtime
+    std::vector<std::string> m_softVarNames;
+    // Per soft constraint, the end of its names in m_softVarNames
+    std::vector<size_t> m_softVarEnds;
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_vars;  // Solver-dependent
     // Scratch buffer for randomConstraint(), reused across calls
     std::vector<const VlRandomVar*> m_randomConstraintVars;
@@ -951,8 +956,9 @@ public:
     // clearConstraints(), so they must live that long (the generated code passes literals)
     void hard(std::string constraint, std::initializer_list<const char*> varNames = {},
               const char* filename = "", uint32_t linenum = 0, const char* source = "");
-    void soft(std::string constraint, const char* filename = "", uint32_t linenum = 0,
-              const char* source = "");
+    // varNames are the solver variables a disable_soft() removes the constraint by
+    void soft(std::string constraint, std::initializer_list<std::string> varNames,
+              const char* filename = "", uint32_t linenum = 0, const char* source = "");
     // name is kept without copying until clearConstraints(), like hard()'s varNames, so it
     // must live that long (the generated code passes literals)
     void pin_var(const char* name, int width, uint64_t value) {
