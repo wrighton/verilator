@@ -95,6 +95,13 @@ private:
     // Note: Returns a pointer into the original tree - caller must clone if needed
     static const AstNodeExpr* getBaseNullableRef(const AstNodeExpr* exprp) {
         while (exprp) {
+            if (const AstCMethodHard* const callp = VN_CAST(exprp, CMethodHard)) {
+                if (callp->method() == VCMethod::FORCE_READ
+                    || callp->method() == VCMethod::FORCE_READ_SEL) {
+                    exprp = callp->fromp();
+                    continue;
+                }
+            }
             if (const AstMemberSel* const mselp = VN_CAST(exprp, MemberSel)) {
                 const AstNodeExpr* const fromp = mselp->fromp();
                 if (isNullableRef(fromp)) {
