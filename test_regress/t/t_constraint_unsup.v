@@ -16,13 +16,20 @@ endclass
 class DisableRandIndex;
   rand bit idx;
   rand Elem elems[2];
+  rand Elem dynElems[];
   constraint c_soft {
     soft elems[0].y == 4'h5;
     soft elems[1].y == 4'h6;
+    soft dynElems[idx].y == 4'h7;
   }
-  constraint c_disable { disable soft elems[idx].y; }
+  constraint c_disable {
+    disable soft elems[idx].y;
+    disable soft dynElems[idx].y;
+  }
   function new();
     foreach (elems[i]) elems[i] = new;
+    dynElems = new[2];
+    foreach (dynElems[i]) dynElems[i] = new;
   endfunction
 endclass
 
