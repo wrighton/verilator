@@ -207,6 +207,32 @@ class DisSoftElems;
   endfunction
 endclass
 
+// `disable soft` in a restricted inline constraint of the object's own method: names not in
+// the identifier list resolve in the caller's scope (IEEE 1800-2023 18.7), here this object's
+// own random variables, so their lower priority soft constraints are removed.
+class DisSoftRestricted;
+  rand bit [3:0] x;
+  rand bit [3:0] y;
+  rand Inner objs[3];
+  constraint c_pref {
+    soft x != 4'h8;
+    soft objs[1].y != 4'h8;
+    soft objs[2].y == 4'h2;
+  }
+  function new();
+    foreach (objs[i]) objs[i] = new();
+  endfunction
+  function int widen();
+    return randomize() with (y) {
+      y < 4'hf;
+      disable soft x;
+      disable soft objs[1].y;
+      soft x inside {4'h5, 4'h8};
+      soft objs[1].y inside {4'h5, 4'h8};
+    };
+  endfunction
+endclass
+
 class DisSoftBinder;
   rand Inner objs[];
   constraint c_pref { foreach (objs[i]) soft objs[i].y == 4'h1; }
@@ -415,6 +441,23 @@ module t;
         end
       end
       `checkh(widened, 1'b1);
+    end
+
+    begin
+      automatic DisSoftRestricted dsr = new();
+      automatic bit xWidened = 1'b0;
+      automatic bit objWidened = 1'b0;
+      repeat (16) begin
+        ok = dsr.widen();
+        `checkd(ok, 1);
+        `checkh(dsr.x == 4'h5 || dsr.x == 4'h8, 1'b1);
+        `checkh(dsr.objs[1].y == 4'h5 || dsr.objs[1].y == 4'h8, 1'b1);
+        `checkh(dsr.objs[2].y, 4'h2);
+        if (dsr.x == 4'h8) xWidened = 1'b1;
+        if (dsr.objs[1].y == 4'h8) objWidened = 1'b1;
+      end
+      `checkh(xWidened, 1'b1);
+      `checkh(objWidened, 1'b1);
     end
 
     $write("*-* All Finished *-*\n");
