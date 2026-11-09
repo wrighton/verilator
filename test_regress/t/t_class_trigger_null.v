@@ -23,6 +23,7 @@ package my_pkg;
   class my_driver;
     virtual my_if vif;
     event my_event;
+    int words[$];
 
     function new(virtual my_if vif_in);
       vif = vif_in;
@@ -77,13 +78,29 @@ module t;
   my_pkg::my_driver drv;
   virtual my_if vif;
   int wide_count = 0;
-  always @(vif.wide[15:0]) if ($time > 0) wide_count <= wide_count + 1;
+  int wide_offset = 0;
+  always @(vif.wide[wide_offset * 2 +: 15]) if ($time > 0) wide_count <= wide_count + 1;
   initial begin
     intf.wide = 0;
-    #10 intf.wide[15:0] = 3;
-    #10 intf.wide[15:0] = 5;
+    #10;
+    wide_offset = 1;
+    intf.wide = 128'(3) << 2;
+    #10;
+    wide_offset = 2;
+    intf.wide = 128'(5) << 4;
     #10;
     if (wide_count != 2) $stop;
+  end
+
+  my_pkg::my_driver initialized_drv = new(intf);
+  int size_count = 0;
+  // An unrelated hard method keeps the original non-force nullable path unchanged.
+  always @(initialized_drv.words.size()) if ($time > 0) size_count <= size_count + 1;
+  initial begin
+    #10 initialized_drv.words.push_back(1);
+    #10 initialized_drv.words.push_back(2);
+    #10;
+    if (size_count != 2) $stop;
   end
 
   int event_count;
