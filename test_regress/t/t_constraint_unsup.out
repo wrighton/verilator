@@ -10,8 +10,12 @@
                                                 : ... note: In instance 't'
    28 |   constraint c_disable { disable soft elems[idx].y; }
       |                                                  ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:40:52: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:42:27: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
                                                 : ... note: In instance 't'
-   40 |   constraint c_disable { disable soft holders[1].h.y; }
-      |                                                    ^
+   42 |     disable soft holder.h.y;
+      |                           ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:43:31: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
+                                                : ... note: In instance 't'
+   43 |     disable soft holders[1].h.y;
+      |                               ^
 %Error: Exiting due to
