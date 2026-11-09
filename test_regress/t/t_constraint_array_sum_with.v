@@ -379,6 +379,79 @@ class same_sum_items;
   endfunction
 endclass
 
+class test_guard_iterators;
+  rand bit [6:0] a[3];
+  rand bit [6:0] guarded;
+  rand bit [6:0] arms;
+  rand bit [6:0] nested;
+  state_sub children[3];
+  state_sub left;
+  state_sub right;
+  int inner[2];
+  int bias;
+  int expected;
+  int expected_arms;
+  int expected_nested;
+  bit enabled = 1;
+
+  function new();
+    foreach (children[i]) children[i] = new;
+    left = new;
+    right = new;
+    inner = '{1, 2};
+  endfunction
+
+  constraint c {
+    foreach (a[i]) a[i] == 7'(i + bias);
+    if (enabled) {
+      // The receiver index is bound inside the reduction, not in the outer guard.
+      if (a.sum() with (children[item.index].k != 0 ? int'(item) : 0) == expected)
+        guarded == 7'd23;
+      else
+        guarded == 7'd29;
+      // Neither arm may be sampled before its iterator-dependent selector is bound.
+      if (a.sum() with (item.index == 1 ? left.k * int'(item) : right.k * int'(item))
+          == expected_arms)
+        arms == 7'd31;
+      else
+        arms == 7'd37;
+      // Inner and outer named iterators keep distinct bindings.
+      if (a.sum(outer) with (inner.sum(elem) with
+          (children[elem.index].k * int'(outer)))
+          == expected_nested)
+        nested == 7'd41;
+      else
+        nested == 7'd43;
+    }
+  }
+
+  function void verify(int turn);
+    int ok;
+    int selected = 0;
+    int weighted = 0;
+    int nested_weighted = 0;
+    bias = turn + 1;
+    left.k = turn + 2;
+    right.k = turn + 3;
+    foreach (children[i]) children[i].k = (i + turn) % 2;
+    foreach (children[i]) begin
+      if (children[i].k != 0) selected += i + bias;
+      weighted += (i == 1 ? left.k : right.k) * (i + bias);
+      nested_weighted += (children[0].k + children[1].k) * (i + bias);
+    end
+    // Both outcomes are checked; the random guards must not become unconstrained.
+    expected = selected + turn % 2;
+    expected_arms = weighted + turn % 2;
+    expected_nested = nested_weighted + turn % 2;
+    ok = randomize();
+    `checkd(ok, 1);
+    `checkd(guarded, turn % 2 == 0 ? 7'd23 : 7'd29);
+    `checkd(arms, turn % 2 == 0 ? 7'd31 : 7'd37);
+    `checkd(nested, turn % 2 == 0 ? 7'd41 : 7'd43);
+    foreach (a[i]) `checkd(a[i], 7'(i + bias));
+  endfunction
+endclass
+
 module t;
   test_sum sum_inst;
   test_product product_inst;
@@ -538,6 +611,29 @@ module t;
         end
         `checkd(sends, 1);
       end
+    end
+
+    // Guarded reductions must keep item and item.index inside their binding loops.
+    begin
+      automatic test_guard_iterators g = new;
+      int ok;
+      for (int turn = 0; turn < 8; ++turn) g.verify(turn);
+      // Inline target fields are not confused with the reduction's named iterator.
+      ok = g.randomize() with {
+        if (a.sum(elem) with (children[elem.index].k != 0 ? int'(elem) : 0) == expected)
+          g.guarded == 7'd23;
+        else
+          g.guarded == 7'd29;
+      };
+      `checkd(ok, 1);
+      `checkd(g.guarded, 7'd29);
+      // A disabled state guard still eliminates invalid receivers entirely.
+      g.enabled = 0;
+      foreach (g.children[i]) g.children[i] = null;
+      g.left = null;
+      g.right = null;
+      ok = g.randomize();
+      `checkd(ok, 1);
     end
 
     $write("*-* All Finished *-*\n");

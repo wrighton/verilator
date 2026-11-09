@@ -2323,7 +2323,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             const bool stateCond = !condp->condp()->user1();
             const bool stateValue = !condp->user1();
             GuardRead result = editGuardReceivers(condp->condp(), blockp, errorVarp);
-            if (!stateCond) {
+            if (!stateCond || result.unresolved) {
+                // The selected arm cannot be sampled before the condition is bound/solved.
                 result.unresolved = true;
                 return result;
             }
@@ -2387,6 +2388,9 @@ class ConstraintExprVisitor final : public VNVisitor {
             result.unresolved |= atp->method() == VCMethod::ARRAY_AT && atp->pinsp()->user1();
         } else if (const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef)) {
             result.unresolved |= callp->user1() != 0;
+        } else if (VN_IS(nodep, LambdaArgRef)) {
+            // Reduction iterators are bound per element, not where the guard is sampled.
+            result.unresolved = true;
         }
         // The child's root may have become a sampled conditional value.
         if (AstMemberSel* const selp = VN_CAST(nodep, MemberSel)) {
