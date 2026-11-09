@@ -15,6 +15,7 @@
 
 interface my_if;
   logic sig;
+  logic [127:0] wide;
 endinterface
 
 package my_pkg;
@@ -68,8 +69,22 @@ endpackage
 
 module t;
   my_if intf ();
+  my_if forced_intf ();
+  initial begin
+    force forced_intf.sig = 1'b1;
+    force forced_intf.wide = '1;
+  end
   my_pkg::my_driver drv;
   virtual my_if vif;
+  int wide_count = 0;
+  always @(vif.wide[15:0]) if ($time > 0) wide_count <= wide_count + 1;
+  initial begin
+    intf.wide = 0;
+    #10 intf.wide[15:0] = 3;
+    #10 intf.wide[15:0] = 5;
+    #10;
+    if (wide_count != 2) $stop;
+  end
 
   int event_count;
   int posedge_count;
