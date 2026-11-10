@@ -1,0 +1,119 @@
+# Run the repository formatters (clang-format, yapf) over the files each fork
+# branch changes relative to upstream master, and optionally push the result.
+# Triggered by a push to this branch (uses branches.txt and push.txt) or manually.
+name: format-sweep
+on:
+  push:
+    branches: [ci-format-sweep]
+  workflow_dispatch:
+    inputs:
+      branches:
+        description: 'Space-separated branch names, or "all"'
+        type: string
+        default: all
+      push:
+        description: 'Commit and push formatting fixes'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: format-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 300
+    steps:
+      - name: Checkout sweep config
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          path: sweep
+
+      - name: Checkout upstream master (formatter configuration and tools)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          repository: verilator/verilator
+          ref: master
+          path: repo
+          fetch-depth: 0
+
+      - name: Install packages for format
+        uses: ./repo/.github/actions/install-deps
+        with:
+          stage: format
+
+      - name: Configure
+        working-directory: repo
+        run: |
+          autoconf
+          ./configure
+
+      - name: Set up Python venv
+        uses: ./repo/.github/actions/setup-venv
+
+      - name: Sweep branches
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_BRANCHES: ${{ inputs.branches }}
+          IN_PUSH: ${{ inputs.push }}
+        run: |
+          set -uo pipefail
+          BRANCHES="${IN_BRANCHES:-$(cat ../sweep/branches.txt)}"
+          PUSH="${IN_PUSH:-$(cat ../sweep/push.txt)}"
+          source .venv/bin/activate
+          clang-format-21 --version
+          yapf --version
+          git config user.name "Michael Wrighton"
+          git config user.email "39321357+wrighton@users.noreply.github.com"
+          git remote add fork "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          UP=$(git rev-parse HEAD)
+          if [ "$BRANCHES" = all ]; then
+            BRANCHES=$(git ls-remote --heads fork | sed 's#.*refs/heads/##' | grep -v -x -e master -e ci-format-sweep)
+          fi
+          CF_RE='^(src/[^/]*\.(cpp|h|y|l)|include/[^/]*\.(cpp|h)|examples/[^/]*/[^/]*\.cpp|test_regress/t/[^/]*\.(c[^/]*|h))$'
+          PY_RE='^(test_regress/t/[^/]*\.(py|pf)|test_regress/[^/]*\.py|ci/[^/]*\.py|bin/verilator_(ccache_report|difftree|gantt|includer|profcfunc)|src/(astgen|bisonpre|config_rev|flexfix|vlcovgen|\.gdbinit\.py)|nodist/[^/]+|docs/bin/[^/]+|docs/guide/conf\.py)$'
+          : > ../clean.txt; : > ../needs.txt; : > ../pushed.txt; : > ../errors.txt
+          for b in $BRANCHES; do
+            if ! git fetch -q fork "+refs/heads/$b:refs/remotes/fork/$b"; then echo "$b fetch" >> ../errors.txt; continue; fi
+            git checkout -q -f --detach "fork/$b"
+            if ! mb=$(git merge-base HEAD "$UP"); then echo "$b merge-base" >> ../errors.txt; continue; fi
+            files=$(git diff --name-only --diff-filter=AM "$mb" HEAD)
+            cf=$(printf '%s\n' "$files" | grep -E "$CF_RE" | grep -v -x -e src/config_package.h -e src/config_rev.h || true)
+            py=$(printf '%s\n' "$files" | grep -E "$PY_RE" || true)
+            [ -n "$cf" ] && clang-format-21 -i $cf
+            [ -n "$py" ] && yapf -i $py
+            if git diff --quiet; then echo "$b" >> ../clean.txt; continue; fi
+            echo "$b: $(git diff --name-only | tr '\n' ' ')" >> ../needs.txt
+            if [ "$PUSH" = true ]; then
+              if git commit -q -a -m "Apply 'make format'" && git push -q fork "HEAD:refs/heads/$b"; then
+                echo "$b $(git rev-parse --short HEAD)" >> ../pushed.txt
+              else
+                echo "$b push" >> ../errors.txt
+              fi
+            fi
+            git checkout -q -f "$UP"
+          done
+          {
+            echo "## format-sweep (push=$PUSH, upstream ${UP:0:10})"
+            echo "clean: $(wc -l < ../clean.txt)  needs-format: $(wc -l < ../needs.txt)  pushed: $(wc -l < ../pushed.txt)  errors: $(wc -l < ../errors.txt)"
+            echo; echo '### Needs format'; sed 's/^/- /' ../needs.txt
+            echo; echo '### Pushed'; sed 's/^/- /' ../pushed.txt
+            echo; echo '### Errors'; sed 's/^/- /' ../errors.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat ../needs.txt ../errors.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: format-sweep
+          path: |
+            clean.txt
+            needs.txt
+            pushed.txt
+            errors.txt
