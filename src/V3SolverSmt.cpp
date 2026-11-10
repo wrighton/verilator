@@ -3284,9 +3284,6 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstSFormatF* nodep) override {}
     void visit(AstStmtExpr* nodep) override {}
     void visit(AstCStmt* nodep) override {}
-    void visit(AstIf* nodep) override {
-        // Guarded disable_soft statements made by hoistGuardedSoftItems(); already lowered
-    }
     // Move soft items of a constraint 'if' out to guarded soft constraints after 'lastp'
     void hoistGuardedSofts(AstNode*& lastp, AstConstraintIf* ifp, AstNodeExpr* outerCondp) {
         // The 'if' folds into one hard expression, so each soft item needs its own
@@ -3325,8 +3322,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             if (exprp && exprp->isDisableSoft()) {
                 // Runs in the setup task in its place among the soft constraints, so it
                 // removes only those registered before it (IEEE 1800-2023 18.5.13.2)
-                hoistp
-                    = new AstIf{fl, condp->cloneTreePure(false), buildDisableSoftCallStmt(exprp)};
+                hoistp = newGuardedDisableSoftp(condp, exprp);
                 VL_DO_DANGLING(exprp->deleteTree(), exprp);
             } else if (foreachp) {
                 // 'if (c) foreach (...) body' is 'foreach (...) if (c) body'
@@ -3341,6 +3337,41 @@ class ConstraintExprVisitor final : public VNVisitor {
             lastp = hoistp;
         }
         VL_DO_DANGLING(condp->deleteTree(), condp);
+    }
+    // Setup statements applying a 'disable soft' under guard condp, which is sampled like a
+    // constraint guard (IEEE 1800-2023 18.5.12): ERROR fails randomize(), TRUE applies the
+    // directive and FALSE drops it. With random variables in the guard and neither proven, the
+    // guard is read before solving, as it was before its state parts were sampled.
+    AstBegin* newGuardedDisableSoftp(AstNodeExpr* const condp, AstConstraintExpr* const exprp) {
+        FileLine* const fl = exprp->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardDisable"), nullptr, true};
+        GuardFlagsMap flags;  // Unused: no predicate is formatted from these proofs
+        GuardResult result = newGuardResult(condp, blockp, flags);
+        AstNode* const disablep = buildDisableSoftCallStmt(exprp);
+        AstNode* stmtp = nullptr;
+        if (condp->user1()) {
+            stmtp = new AstIf{fl, condp->cloneTreePure(false), disablep->cloneTree(false)};
+            if (result.falsep) stmtp = new AstIf{fl, new AstLogNot{fl, result.falsep}, stmtp};
+        } else {
+            VL_DO_DANGLING(result.falsep->deleteTree(), result.falsep);
+        }
+        if (result.truep) {
+            stmtp = new AstIf{fl, result.truep, disablep, stmtp};
+        } else {
+            VL_DO_DANGLING(disablep->deleteTree(), disablep);
+        }
+        if (result.errorp) {
+            AstCMethodHard* const failp = new AstCMethodHard{
+                fl,
+                new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_HARD, new AstSFormatF{fl, "#b0", false, nullptr}};
+            failp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "{}"});
+            failp->dtypeSetVoid();
+            stmtp = new AstIf{fl, result.errorp, failp->makeStmt(), stmtp};
+        }
+        blockp->addStmtsp(stmtp);
+        return blockp;
     }
     // Negated condition of a constraint 'if'
     static AstNodeExpr* newNotCond(const AstConstraintIf* ifp) {

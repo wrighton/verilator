@@ -316,6 +316,42 @@ class DisSoftIfForeach;
   endfunction
 endclass
 
+// A guard reading through a null handle is ERROR, failing randomize(), unless the other
+// operand decides it; the directive then follows the guard (IEEE 1800-2023 18.5.12)
+class DisSoftNullGuard;
+  Inner h;
+  rand bit [6:0] p;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_error {
+    foreach (d[i]) {
+      if (h.y == 4'h1) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_true {
+    foreach (d[i]) {
+      if (h.y == 4'h1 || h == null) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_false {
+    foreach (d[i]) {
+      if (h.y == 4'h1 && h != null) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
 module t;
   Forms obj;
   DisSoft ds;
@@ -602,6 +638,31 @@ module t;
         ok = dsi.randomize();
         `checkd(ok, 1);
         `checkd(dsi.p, 5);
+      end
+    end
+
+    begin
+      automatic DisSoftNullGuard dsn = new();
+      automatic bit widened = 1'b0;
+      dsn.c_true.constraint_mode(0);
+      dsn.c_false.constraint_mode(0);
+      ok = dsn.randomize();
+      `checkd(ok, 0);
+      dsn.c_error.constraint_mode(0);
+      dsn.c_true.constraint_mode(1);
+      repeat (32) begin
+        ok = dsn.randomize();
+        `checkd(ok, 1);
+        `checkh(dsn.p == 7'd5 || dsn.p == 7'd8, 1'b1);
+        if (dsn.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsn.c_true.constraint_mode(0);
+      dsn.c_false.constraint_mode(1);
+      repeat (8) begin
+        ok = dsn.randomize();
+        `checkd(ok, 1);
+        `checkd(dsn.p, 5);
       end
     end
 
