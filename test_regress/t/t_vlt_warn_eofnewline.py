@@ -16,12 +16,17 @@ LATCH = "  always_latch if (c) q <= d;  // COMBDLY\n"
 
 # Module name -> file contents; all but the last have no newline at end of file
 SOURCES = {
-    "cmt": "module cmt (input c, input d, output logic q);\n" + LATCH + "endmodule\n// Comment",
-    "blk": "module blk (input c, input d, output logic q);\n" + LATCH + "endmodule\n/* Comment */",
-    "code": "module code (input c, input d, output logic q);\n" + LATCH + "endmodule",
-    "one": "module one (input c, input d, output logic q); always_latch if (c) q <= d; endmodule",
-    "pragma": "/*verilator_bad*/ module pragma (input c, input d, output logic q);\n" + LATCH
-    + "endmodule\n",
+    "cmt":
+    "module cmt (input c, input d, output logic q);\n" + LATCH + "endmodule\n// Comment",
+    "blk":
+    "module blk (input c, input d, output logic q);\n" + LATCH + "endmodule\n/* Comment */",
+    "code":
+    "module code (input c, input d, output logic q);\n" + LATCH + "endmodule",
+    "one":
+    "module one (input c, input d, output logic q); always_latch if (c) q <= d; endmodule",
+    "pragma":
+    "/*verilator_bad*/ module pragma (input c, input d, output logic q);\n" + LATCH +
+    "endmodule\n",
 }
 
 
