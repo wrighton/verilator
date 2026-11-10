@@ -447,13 +447,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* cloneName() { return m_nestedNameFormatTopp->cloneTree(false); }
 
         void error() {
-            VL_DO_DANGLING(m_topNestedArrayMemberSelp->deleteTree(), m_topNestedArrayMemberSelp);
+            VL_DO_CLEAR(m_topNestedArrayMemberSelp->deleteTree(),
+                        m_topNestedArrayMemberSelp = nullptr);
         }
 
         NestedAccessPath(AstMemberSel* topMemberSelp, AstNode** pointerToFirstExprp)
             : m_topNestedArrayMemberSelp{topMemberSelp}
             , m_firstExpressionInsideIndexPointerp{pointerToFirstExprp} {}
         ~NestedAccessPath() {
+            // Not registered, as for a state expression or an already written variable
+            if (m_topNestedArrayMemberSelp) {
+                VL_DO_DANGLING(m_topNestedArrayMemberSelp->deleteTree(),
+                               m_topNestedArrayMemberSelp);
+            }
             if (m_nestedNameFormatp) {
                 VL_DO_CLEAR(m_nestedNameFormatTopp->deleteTree(),
                             m_nestedNameFormatTopp = nullptr);
@@ -1970,11 +1976,10 @@ class ConstraintExprVisitor final : public VNVisitor {
             const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
             return atp && atp->method() == VCMethod::ARRAY_AT && !VN_IS(atp->pinsp(), Const);
         });
-        const bool alreadyWritten = runtimeIndexPath     ? false
-                                    : m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
-                                    : perClass           ? m_writtenVars.count(smtName) > 0
-                                                         : !m_newWrittenVarsp->insert(varp).second;
-        const bool shouldWriteVar = !alreadyWritten;
+        const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
+                                    : perClass         ? m_writtenVars.count(smtName) > 0
+                                                       : !m_newWrittenVarsp->insert(varp).second;
+        const bool shouldWriteVar = runtimeIndexPath || !alreadyWritten;
         if (shouldWriteVar) {
             // Track this variable path as written
             if (m_inlineInitBlockp)
@@ -2025,8 +2030,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
             }
         } else {
-            // Variable already written, clean up cloned memberselp if any
-            if (memberselp) VL_DO_DANGLING(memberselp->deleteTree(), memberselp);
+            // Variable already written, clean up cloned memberselp if any; a nested access
+            // path's own is freed with it
+            if (memberselp && !m_nestedAccessp) {
+                VL_DO_DANGLING(memberselp->deleteTree(), memberselp);
+            }
             // Delete nodep if it's a global constraint (not deleted yet)
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
         }
@@ -3443,18 +3451,18 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstConstraintForeach* nodep) override {
         // Convert to plain foreach
         FileLine* const fl = nodep->fileline();
+        // Registrations referencing the index are appended to nodep's body
+        VL_RESTORER(m_foreachp);
+        VL_RESTORER_COPY(m_foreachIdxVars);
+        m_foreachp = nodep;
+        for (AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
+        }
 
         if (!nodep->bodyp()) {
             nodep->unlinkFrBack();
         } else if (m_wantSingle) {
-            // Registrations referencing the index are appended to nodep's body, which
-            // editSingle has moved out to fold
-            VL_RESTORER(m_foreachp);
-            VL_RESTORER_COPY(m_foreachIdxVars);
-            m_foreachp = nodep;
-            for (AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
-                if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
-            }
+            // editSingle moves the items out to the fold, leaving the registrations
             AstNodeExpr* const itemp = editSingle(fl, nodep->bodyp());
             if (!itemp) {  // All items were ignored with a warning
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
@@ -3467,12 +3475,6 @@ class ConstraintExprVisitor final : public VNVisitor {
                 fl, textVarp, "", new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp},
                 newTextApplyp(fl, textVarp, "bvand", "#b1")));
         } else {
-            VL_RESTORER(m_foreachp);
-            VL_RESTORER_COPY(m_foreachIdxVars);
-            m_foreachp = nodep;
-            for (AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
-                if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
-            }
             iterateAndNextNull(nodep->bodyp());
             if (!nodep->bodyp()) {  // All items were ignored with a warning
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
