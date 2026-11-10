@@ -194,6 +194,11 @@ void V3ParseImp::lexTimescaleParse(FileLine* fl, const char* textp) {
     m_timeLastUnit = v3Global.opt.timeComputeUnit(unit);
     m_timeLastPrec = v3Global.opt.timeComputePrec(prec);
 }
+void V3ParseImp::lexTimescaleReset() {
+    // Reset directive defaults, not the accumulated precision of already parsed scopes.
+    m_timeLastUnit = v3Global.opt.timeDefaultUnit();
+    m_timeLastPrec = v3Global.opt.timeDefaultPrec();
+}
 AstNode* V3ParseImp::createTimescale(FileLine* fl, bool unitSet, double unitVal, bool precSet,
                                      double precVal) {
     // Returns TIMEUNIT_SET and/or TIMEPRECISION_SET pragmas with the declared values
