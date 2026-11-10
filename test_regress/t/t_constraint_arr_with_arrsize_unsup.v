@@ -39,6 +39,27 @@ class Cls;
   endfunction
 endclass
 
+class Leaf;
+  rand int v;
+endclass
+
+class Node;
+  rand Leaf leaf;
+
+  function new();
+    leaf = new;
+  endfunction
+endclass
+
+// A field of an object of the last element or of a method result's element
+class NodeQueue;
+  rand Node q[$];
+  constraint c_state {
+    q[$].leaf.v < 5;
+    q.unique()[0].leaf.v < 5;
+  }
+endclass
+
 module t;
   Cls c;
   Indep i;
@@ -53,5 +74,10 @@ module t;
   initial begin
     automatic Holder h = new;
     void'(h.randomize() with {s[0].arr.size() == 2;});
+  end
+
+  initial begin
+    automatic NodeQueue n = new;
+    void'(n.randomize());
   end
 endmodule
