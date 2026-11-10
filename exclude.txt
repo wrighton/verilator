@@ -1,0 +1,7 @@
+# Branch-name regexes the sweep never pushes to (integration/automation branches)
+^master$
+^ci-
+^integ
+^router
+^cand_
+^rt_
