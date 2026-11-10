@@ -14,8 +14,7 @@ test.top_filename = "t/t_EXAMPLE.v"
 
 test.lint(v_flags=["--debugi 3 --verilate-jobs 2 --debug-self-test --debug-fatalsrc-worker"],
           fails='any')
-test.file_grep(test.compile_log_filename,
-               r'%Error: Internal Error: .*: --debug-fatalsrc-worker')
+test.file_grep(test.compile_log_filename, r'%Error: Internal Error: .*: --debug-fatalsrc-worker')
 test.file_grep(test.compile_log_filename, r'Aborting since under --debug')
 test.file_grep_not(test.compile_log_filename, r'Resource deadlock avoided|std::system_error')
 
