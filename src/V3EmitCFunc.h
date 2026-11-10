@@ -88,7 +88,7 @@ class EmitCLazyDecls final : public VNVisitorConst {
     void visit(AstVarRef* nodep) override {
         AstVar* const varp = nodep->varp();
         // Only constant pool symbols are lazy declared for now ...
-        if (EmitCParentModule::get(varp)->isConstPool()) lazyDeclareConstPoolVar(varp);
+        if (varp->constPoolEntry()) lazyDeclareConstPoolVar(varp);
     }
 
     void visit(AstExecGraph* nodep) override {
