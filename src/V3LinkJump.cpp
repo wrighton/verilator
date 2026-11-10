@@ -305,11 +305,10 @@ class LinkJumpVisitor final : public VNVisitor {
             FileLine* const gopFl = gop->fileline();
             gop->addHereThisAsNext(new AstAssign{
                 gopFl, new AstVarRef{gopFl, flagp, VAccess::WRITE}, new AstConst{gopFl, jumpNum}});
-            wrapp->addStmtsp(
-                new AstIf{gopFl,
-                          new AstEq{gopFl, new AstVarRef{gopFl, flagp, VAccess::READ},
-                                    new AstConst{gopFl, jumpNum}},
-                          new AstJumpGo{gopFl, gop->blockp()}});
+            wrapp->addStmtsp(new AstIf{gopFl,
+                                       new AstEq{gopFl, new AstVarRef{gopFl, flagp, VAccess::READ},
+                                                 new AstConst{gopFl, jumpNum}},
+                                       new AstJumpGo{gopFl, gop->blockp()}});
             gop->replaceWith(new AstJumpGo{gopFl, endBlockp});
             VL_DO_DANGLING(pushDeletep(gop), gop);
         }
