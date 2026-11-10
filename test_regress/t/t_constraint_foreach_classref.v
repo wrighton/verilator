@@ -83,6 +83,20 @@ class NestedDynGated;
   endfunction
 endclass
 
+// An element of an associative array whose key is computed by a method call
+class NestedAssocKey;
+  rand NestedHolder amap[int];
+  int keys[$];
+  constraint c_key {amap[keys.size() - 1].inner.val == 8'h21;}
+
+  function new();
+    for (int i = 0; i < 3; ++i) begin
+      amap[i] = new();
+      keys.push_back(i);
+    end
+  endfunction
+endclass
+
 // The same objects with no class constraint, so an inline constraint registers them
 class NestedDynFree;
   rand NestedHolder rows[];
@@ -244,6 +258,16 @@ module t;
           `checkd(nf.rows[i].inner.val inside {[8'h40 : 8'h4f]}, 1);
           if (i < 2) `checkd(nf.rows[i].inner.val != 8'h4d, 1);
         end
+      end
+    end
+
+    begin
+      automatic NestedAssocKey na = new;
+      automatic int result;
+      repeat (2) begin
+        result = na.randomize();
+        `checkd(result, 1);
+        `checkd(na.amap[2].inner.val, 8'h21);
       end
     end
 
