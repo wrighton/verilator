@@ -100,6 +100,67 @@ class test_product;
   endfunction
 endclass
 
+class test_nested_indices;
+  rand bit [6:0] a[3];
+  int inner[2];
+  rand int equal_sum;
+  rand int unequal_sum;
+  rand int delta_sum;
+  rand bit [6:0] shifted[3:1];
+  int ascending[2:3];
+  rand int shifted_sum;
+  int bias;
+
+  function new();
+    inner = '{1, 2};
+    ascending = '{5, 6};
+  endfunction
+
+  constraint c {
+    foreach (a[i]) a[i] == 7'(i + bias);
+    // Different reduction indices must not compare equal before their loops are scoped.
+    equal_sum == a.sum(outer) with (inner.sum(elem) with
+        (elem.index == outer.index ? int'(outer) : 0));
+    unequal_sum == a.sum(outer) with (inner.sum(elem) with
+        (elem.index != outer.index ? int'(outer) : 0));
+    delta_sum == a.sum(outer) with (inner.sum(elem) with
+        ((elem.index - outer.index) * int'(outer)));
+    // Compare declared indices, not storage offsets, across differently directed ranges.
+    foreach (shifted[i]) shifted[i] == 7'(i + bias);
+    shifted_sum == shifted.sum(outer) with (ascending.sum(elem) with
+        (elem.index == outer.index ? int'(outer) : 0));
+  }
+
+  function void verify(int turn);
+    int ok;
+    int expected_equal = 0;
+    int expected_unequal = 0;
+    int expected_delta = 0;
+    int expected_shifted = 0;
+    bias = turn + 1;
+    ok = randomize();
+    `checkd(ok, 1);
+    foreach (a[i]) begin
+      `checkd(a[i], 7'(i + bias));
+      foreach (inner[j]) begin
+        if (i == j) expected_equal += int'(a[i]);
+        else expected_unequal += int'(a[i]);
+        expected_delta += (j - i) * int'(a[i]);
+      end
+    end
+    foreach (shifted[i]) begin
+      `checkd(shifted[i], 7'(i + bias));
+      foreach (ascending[j]) if (i == j) expected_shifted += int'(shifted[i]);
+    end
+    `checkd(equal_sum, expected_equal);
+    `checkd(unequal_sum, expected_unequal);
+    `checkd(delta_sum, expected_delta);
+    `checkd(shifted_sum, expected_shifted);
+    // At turn zero, the original {1, 2, 3} reproducer sums to 3, not 12.
+    `checkd(equal_sum, 2 * bias + 1);
+  endfunction
+endclass
+
 class state_sub;
   rand int r;
   int k;
@@ -379,67 +440,6 @@ class same_sum_items;
   endfunction
 endclass
 
-class test_nested_indices;
-  rand bit [6:0] a[3];
-  int inner[2];
-  rand int equal_sum;
-  rand int unequal_sum;
-  rand int delta_sum;
-  rand bit [6:0] shifted[3:1];
-  int ascending[2:3];
-  rand int shifted_sum;
-  int bias;
-
-  function new();
-    inner = '{1, 2};
-    ascending = '{5, 6};
-  endfunction
-
-  constraint c {
-    foreach (a[i]) a[i] == 7'(i + bias);
-    // Different reduction indices must not compare equal before their loops are scoped.
-    equal_sum == a.sum(outer) with (inner.sum(elem) with
-        (elem.index == outer.index ? int'(outer) : 0));
-    unequal_sum == a.sum(outer) with (inner.sum(elem) with
-        (elem.index != outer.index ? int'(outer) : 0));
-    delta_sum == a.sum(outer) with (inner.sum(elem) with
-        ((elem.index - outer.index) * int'(outer)));
-    // Compare declared indices, not storage offsets, across differently directed ranges.
-    foreach (shifted[i]) shifted[i] == 7'(i + bias);
-    shifted_sum == shifted.sum(outer) with (ascending.sum(elem) with
-        (elem.index == outer.index ? int'(outer) : 0));
-  }
-
-  function void verify(int turn);
-    int ok;
-    int expected_equal = 0;
-    int expected_unequal = 0;
-    int expected_delta = 0;
-    int expected_shifted = 0;
-    bias = turn + 1;
-    ok = randomize();
-    `checkd(ok, 1);
-    foreach (a[i]) begin
-      `checkd(a[i], 7'(i + bias));
-      foreach (inner[j]) begin
-        if (i == j) expected_equal += int'(a[i]);
-        else expected_unequal += int'(a[i]);
-        expected_delta += (j - i) * int'(a[i]);
-      end
-    end
-    foreach (shifted[i]) begin
-      `checkd(shifted[i], 7'(i + bias));
-      foreach (ascending[j]) if (i == j) expected_shifted += int'(shifted[i]);
-    end
-    `checkd(equal_sum, expected_equal);
-    `checkd(unequal_sum, expected_unequal);
-    `checkd(delta_sum, expected_delta);
-    `checkd(shifted_sum, expected_shifted);
-    // At turn zero, the original {1, 2, 3} reproducer sums to 3, not 12.
-    `checkd(equal_sum, 2 * bias + 1);
-  endfunction
-endclass
-
 module t;
   test_sum sum_inst;
   test_product product_inst;
@@ -493,6 +493,12 @@ module t;
     xor_inst = new();
     repeat (20) xor_inst.verify();
     $display("xor test PASSED");
+
+    // Nested reduction indices keep independent bindings without guards or handles.
+    begin
+      automatic test_nested_indices g = new;
+      for (int turn = 0; turn < 8; ++turn) g.verify(turn);
+    end
 
     // Test nested 'with'
     nested_inst = new();
@@ -599,12 +605,6 @@ module t;
         end
         `checkd(sends, 1);
       end
-    end
-
-    // Nested reduction indices keep independent bindings without guards or handles.
-    begin
-      automatic test_nested_indices g = new;
-      for (int turn = 0; turn < 8; ++turn) g.verify(turn);
     end
 
     $write("*-* All Finished *-*\n");
