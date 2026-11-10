@@ -5036,8 +5036,12 @@ class WidthVisitor final : public VNVisitor {
                    || nodep->name() == "unique_index"  //
                    || nodep->name() == "find_index" || nodep->name() == "find_first_index"
                    || nodep->name() == "find_last_index") {
+            // IEEE 1800-2023 7.8.1 forbids methods returning wildcard array indices.
             nodep->v3error("Array method " << nodep->prettyNameQ()
                                            << " not legal on wildcard associative arrays");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::Signed32{}, 0});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
         } else if (nodep->name() == "exists") {  // function int exists(input index)
             // IEEE really should have made this a "bit" return
             methodOkArguments(nodep, 1, 1);
