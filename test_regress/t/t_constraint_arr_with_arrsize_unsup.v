@@ -60,6 +60,21 @@ class NodeQueue;
   }
 endclass
 
+// Two state paths with unnamed indices in one constraint
+class NodeQueueIdx;
+  rand Node q[$];
+  int idx;
+  constraint c_state {q.unique()[idx + 1].leaf.v == q.unique()[idx + 2].leaf.v;}
+
+  function new();
+    Node n;
+    for (int i = 0; i < 3; ++i) begin
+      n = new;
+      q.push_back(n);
+    end
+  endfunction
+endclass
+
 module t;
   Cls c;
   Indep i;
@@ -78,6 +93,11 @@ module t;
 
   initial begin
     automatic NodeQueue n = new;
+    void'(n.randomize());
+  end
+
+  initial begin
+    automatic NodeQueueIdx n = new;
     void'(n.randomize());
   end
 endmodule
