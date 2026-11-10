@@ -386,6 +386,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNode** m_firstExpressionInsideIndexPointerp
             = nullptr;  // First expression with no name, used for "Multiple expressions inside
                         // indices of complex expression in constraint" error
+        AstNode* m_firstExpressionp = nullptr;  // This path's part recorded there, if any
 
         std::string m_smtName;  // string name for shouldWriteVar checking
 
@@ -414,6 +415,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                                 << nodep->warnContextSecondary());
                 }
                 *m_firstExpressionInsideIndexPointerp = nodep;
+                m_firstExpressionp = nodep;
             }
         }
 
@@ -461,6 +463,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                                m_topNestedArrayMemberSelp);
             }
             if (m_nestedNameFormatp) {
+                // The recorded part is in the format being freed
+                if (m_firstExpressionp
+                    && *m_firstExpressionInsideIndexPointerp == m_firstExpressionp) {
+                    *m_firstExpressionInsideIndexPointerp = nullptr;
+                }
                 VL_DO_CLEAR(m_nestedNameFormatTopp->deleteTree(),
                             m_nestedNameFormatTopp = nullptr);
                 m_nestedNameFormatp = nullptr;
@@ -1972,6 +1979,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         const bool runtimeIndexPath = memberselp && memberselp->exists([](const AstNode* selp) {
             if (const AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) {
                 return !VN_IS(arraySelp->bitp(), Const);
+            }
+            if (const AstAssocSel* const assocSelp = VN_CAST(selp, AssocSel)) {
+                return !VN_IS(assocSelp->bitp(), Const);
             }
             const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
             return atp && atp->method() == VCMethod::ARRAY_AT && !VN_IS(atp->pinsp(), Const);

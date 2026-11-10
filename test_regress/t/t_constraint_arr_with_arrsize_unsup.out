@@ -1,9 +1,9 @@
-%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:76:32: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
-   76 |     void'(h.randomize() with {s[0].arr.size() == 2;});
+%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:91:32: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
+   91 |     void'(h.randomize() with {s[0].arr.size() == 2;});
       |                                ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:76:40: Unsupported: randomizing this expression, treating as state
-   76 |     void'(h.randomize() with {s[0].arr.size() == 2;});
+%Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:91:40: Unsupported: randomizing this expression, treating as state
+   91 |     void'(h.randomize() with {s[0].arr.size() == 2;});
       |                                        ^~~~
                         ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
                         ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
@@ -16,4 +16,10 @@
 %Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:59:7: Unsupported: randomizing this expression, treating as state
    59 |     q.unique()[0].leaf.v < 5;
       |       ^~~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:67:25: Unsupported: randomizing this expression, treating as state
+   67 |   constraint c_state {q.unique()[idx + 1].leaf.v == q.unique()[idx + 2].leaf.v;}
+      |                         ^~~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:67:55: Unsupported: randomizing this expression, treating as state
+   67 |   constraint c_state {q.unique()[idx + 1].leaf.v == q.unique()[idx + 2].leaf.v;}
+      |                                                       ^~~~~~
 %Error: Exiting due to
