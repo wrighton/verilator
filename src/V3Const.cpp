@@ -2685,7 +2685,7 @@ class ConstVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(cvtp), cvtp);
             replaceAssignToFixedAggregate(nodep, nodep->lhsp()->unlinkFrBack(), srcp);
             return true;
-        } else if (m_doV && VN_IS(nodep->rhsp(), StreamR)
+        } else if (m_doV && VN_IS(nodep->rhsp(), StreamR) && !VN_IS(nodep->lhsp(), NodeStream)
                    && !VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)) {
             // The right-streaming operator on rhs of assignment does not
             // change the order of bits. Eliminate stream but keep its lhsp.
