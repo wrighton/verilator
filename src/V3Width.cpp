@@ -5408,8 +5408,12 @@ class WidthVisitor final : public VNVisitor {
             }
         } else if (nodep->name() == "sort" || nodep->name() == "rsort"
                    || nodep->name() == "reverse" || nodep->name() == "shuffle") {
+            // Ordering methods exclude associative arrays (IEEE 1800-2023 7.12.2).
             nodep->v3error("Array method " << nodep->prettyNameQ()
                                            << " not legal on associative arrays");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::Signed32{}, 0});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
         } else if (nodep->name() == "and" || nodep->name() == "or" || nodep->name() == "xor"
                    || nodep->name() == "sum" || nodep->name() == "product") {
             // All value return
@@ -5543,8 +5547,12 @@ class WidthVisitor final : public VNVisitor {
             }
         } else if (nodep->name() == "sort" || nodep->name() == "rsort"
                    || nodep->name() == "reverse" || nodep->name() == "shuffle") {
+            // Ordering methods exclude associative arrays (IEEE 1800-2023 7.12.2).
             nodep->v3error("Array method " << nodep->prettyNameQ()
                                            << " not legal on associative arrays");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::Signed32{}, 0});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
         } else if (nodep->name() == "and" || nodep->name() == "or" || nodep->name() == "xor"
                    || nodep->name() == "sum" || nodep->name() == "product") {
             // All value return
