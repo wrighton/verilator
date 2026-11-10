@@ -45,8 +45,7 @@ def life_seconds(n):
     gen(test.top_filename, n)
     # Disable other passes that are slow on this code, to keep the test fast
     test.compile(verilator_flags2=[
-        "--stats", "--no-debug-check", "-fno-dfg", "-fno-merge-cond", "-fno-reloop",
-        "-fno-split"
+        "--stats", "--no-debug-check", "-fno-dfg", "-fno-merge-cond", "-fno-reloop", "-fno-split"
     ],
                  make_main=False,
                  verilator_make_gmake=False)
