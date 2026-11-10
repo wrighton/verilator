@@ -44,4 +44,35 @@ module t;
 
     a.bad_not_defined();
   end
+
+  // Index-returning methods are illegal even when used as expressions
+  // (IEEE 1800-2023 7.8.1, 7.9.4-7.9.7). Report each error without an internal error.
+  class C;
+    int mm[*];
+    function void walk();
+      int id;
+      if (mm.first(id)) begin
+        do begin
+          mm[id] = 0;
+        end while (mm.next(id));
+      end
+    endfunction
+  endclass
+
+  initial begin
+    C c;
+    c = new;
+    c.walk();
+  end
+
+  typedef int wildcard_t[*];
+  initial begin
+    wildcard_t mm;
+    int id;
+    if (mm.last(id)) begin
+      do begin
+        mm[id] = 0;
+      end while (mm.prev(id));
+    end
+  end
 endmodule
