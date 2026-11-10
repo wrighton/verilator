@@ -463,11 +463,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                                m_topNestedArrayMemberSelp);
             }
             if (m_nestedNameFormatp) {
-                // The recorded part is in the format being freed
-                if (m_firstExpressionp
-                    && *m_firstExpressionInsideIndexPointerp == m_firstExpressionp) {
-                    *m_firstExpressionInsideIndexPointerp = nullptr;
-                }
+                // The recorded part is in the format being freed. This live helper is the only
+                // writer of the slot while it exists, and a nested constraint restores the slot
+                // before returning, so the slot still holds the part recorded here.
+                if (m_firstExpressionp) *m_firstExpressionInsideIndexPointerp = nullptr;
                 VL_DO_CLEAR(m_nestedNameFormatTopp->deleteTree(),
                             m_nestedNameFormatTopp = nullptr);
                 m_nestedNameFormatp = nullptr;
@@ -1983,8 +1982,10 @@ class ConstraintExprVisitor final : public VNVisitor {
             if (const AstAssocSel* const assocSelp = VN_CAST(selp, AssocSel)) {
                 return !VN_IS(assocSelp->bitp(), Const);
             }
+            // Other methods on the path make it state, and a method in an index is under a select
+            // seen first, so a method here is an element select
             const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
-            return atp && atp->method() == VCMethod::ARRAY_AT && !VN_IS(atp->pinsp(), Const);
+            return atp && !VN_IS(atp->pinsp(), Const);
         });
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
