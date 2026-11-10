@@ -100,12 +100,21 @@ static AstNodeExpr* newHandlesActivep(VMemberMap& memberMap, AstNodeExpr* objp, 
     // randomized. objp is a chain of member and element selects from a member of 'this'.
     AstNodeExpr* condp = nullptr;
     while (objp) {
+        AstNodeExpr* elemArrayp = nullptr;  // Array of the element objp selects
         if (AstNodeSel* const nodeSelp = VN_CAST(objp, NodeSel)) {
-            objp = nodeSelp->fromp();  // An element
-            continue;
+            elemArrayp = nodeSelp->fromp();
+        } else if (AstCMethodHard* const atp = VN_CAST(objp, CMethodHard)) {
+            elemArrayp = atp->fromp();
         }
-        if (AstCMethodHard* const atp = VN_CAST(objp, CMethodHard)) {
-            objp = atp->fromp();  // An element
+        if (elemArrayp) {
+            // An element handle is checked like a member handle, after its owners
+            if (nonNull && VN_IS(objp->dtypep()->skipRefp(), ClassRefDType)) {
+                FileLine* const fl = objp->fileline();
+                AstNodeExpr* const levelp
+                    = new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+                condp = condp ? new AstLogAnd{fl, levelp, condp} : levelp;
+            }
+            objp = elemArrayp;
             continue;
         }
         AstMemberSel* const selp = VN_CAST(objp, MemberSel);
@@ -379,6 +388,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNode** m_firstExpressionInsideIndexPointerp
             = nullptr;  // First expression with no name, used for "Multiple expressions inside
                         // indices of complex expression in constraint" error
+        AstNode* m_firstExpressionp = nullptr;  // This path's part recorded there, if any
 
         std::string m_smtName;  // string name for shouldWriteVar checking
 
@@ -407,6 +417,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                                 << nodep->warnContextSecondary());
                 }
                 *m_firstExpressionInsideIndexPointerp = nodep;
+                m_firstExpressionp = nodep;
             }
         }
 
@@ -440,14 +451,24 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* cloneName() { return m_nestedNameFormatTopp->cloneTree(false); }
 
         void error() {
-            VL_DO_DANGLING(m_topNestedArrayMemberSelp->deleteTree(), m_topNestedArrayMemberSelp);
+            VL_DO_CLEAR(m_topNestedArrayMemberSelp->deleteTree(),
+                        m_topNestedArrayMemberSelp = nullptr);
         }
 
         NestedAccessPath(AstMemberSel* topMemberSelp, AstNode** pointerToFirstExprp)
             : m_topNestedArrayMemberSelp{topMemberSelp}
             , m_firstExpressionInsideIndexPointerp{pointerToFirstExprp} {}
         ~NestedAccessPath() {
+            // Not registered, as for a state expression or an already written variable
+            if (m_topNestedArrayMemberSelp) {
+                VL_DO_DANGLING(m_topNestedArrayMemberSelp->deleteTree(),
+                               m_topNestedArrayMemberSelp);
+            }
             if (m_nestedNameFormatp) {
+                // The recorded part is in the format being freed. This live helper is the only
+                // writer of the slot while it exists, and a nested constraint restores the slot
+                // before returning, so the slot still holds the part recorded here.
+                if (m_firstExpressionp) *m_firstExpressionInsideIndexPointerp = nullptr;
                 VL_DO_CLEAR(m_nestedNameFormatTopp->deleteTree(),
                             m_nestedNameFormatTopp = nullptr);
                 m_nestedNameFormatp = nullptr;
@@ -1954,10 +1975,24 @@ class ConstraintExprVisitor final : public VNVisitor {
         // variable keys on user3(). Inline 'with' dedups per function (own solver).
         // The objects of a handle array are registered by each class's randomize().
         const bool perClass = isGlobalConstrained || memberselp || isClassRefArray;
+        // A path through a runtime index is named by the index's expression, not the element,
+        // so it is registered at each reference, in its own loop; write_var() ignores repeats
+        const bool runtimeIndexPath = memberselp && memberselp->exists([](const AstNode* selp) {
+            if (const AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) {
+                return !VN_IS(arraySelp->bitp(), Const);
+            }
+            if (const AstAssocSel* const assocSelp = VN_CAST(selp, AssocSel)) {
+                return !VN_IS(assocSelp->bitp(), Const);
+            }
+            // Other methods on the path make it state, and a method in an index is under a select
+            // seen first, so a method here is an element select
+            const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
+            return atp && !VN_IS(atp->pinsp(), Const);
+        });
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
                                                        : !m_newWrittenVarsp->insert(varp).second;
-        const bool shouldWriteVar = !alreadyWritten;
+        const bool shouldWriteVar = runtimeIndexPath || !alreadyWritten;
         if (shouldWriteVar) {
             // Track this variable path as written
             if (m_inlineInitBlockp)
@@ -2008,8 +2043,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
             }
         } else {
-            // Variable already written, clean up cloned memberselp if any
-            if (memberselp) VL_DO_DANGLING(memberselp->deleteTree(), memberselp);
+            // Variable already written, clean up cloned memberselp if any; a nested access
+            // path's own is freed with it
+            if (memberselp && !m_nestedAccessp) {
+                VL_DO_DANGLING(memberselp->deleteTree(), memberselp);
+            }
             // Delete nodep if it's a global constraint (not deleted yet)
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
         }
@@ -3287,16 +3325,29 @@ class ConstraintExprVisitor final : public VNVisitor {
                 rootNodep = selp->fromp();
             }
 
-            AstNodeSel* arraySelp = VN_CAST(rootNodep, ArraySel);
-            if (!arraySelp) arraySelp = VN_CAST(rootNodep, AssocSel);
+            // Element select at the root, and the array it selects from. A field of the object
+            // of a dynamic array element (ARRAY_AT) is handled below, unless deeper in it.
+            AstNodeExpr* arraySelp = nullptr;
+            AstNodeExpr* selArrayp = nullptr;
+            if (AstNodeSel* const nodeSelp = VN_CAST(rootNodep, ArraySel)) {
+                arraySelp = nodeSelp;
+                selArrayp = nodeSelp->fromp();
+            } else if (AstNodeSel* const assocSelp = VN_CAST(rootNodep, AssocSel)) {
+                arraySelp = assocSelp;
+                selArrayp = assocSelp->fromp();
+            } else if (AstCMethodHard* const atp = VN_CAST(rootNodep, CMethodHard)) {
+                if (atp->method() == VCMethod::ARRAY_AT && nodep->fromp() != rootNodep) {
+                    arraySelp = atp;
+                    selArrayp = atp->fromp();
+                }
+            }
 
             if (arraySelp) {
-                AstNodeDType* const arrayDtp = arraySelp->fromp()->dtypep()->skipRefp();
+                AstNodeDType* const arrayDtp = selArrayp->dtypep()->skipRefp();
                 AstNodeDType* const elemDtp
                     = arrayDtp->subDTypep() ? arrayDtp->subDTypep()->skipRefp() : nullptr;
                 if (elemDtp && VN_IS(elemDtp, ClassRefDType)) {
-                    const bool isSimple
-                        = nodep->fromp() == rootNodep && VN_IS(arraySelp->fromp(), VarRef);
+                    const bool isSimple = nodep->fromp() == rootNodep && VN_IS(selArrayp, VarRef);
                     if (!isSimple && !m_nestedAccessp) {
                         m_nestedAccessp = new NestedAccessPath(nodep->cloneTree(false),
                                                                &m_firstExpressionInsideIndexp);
@@ -3312,9 +3363,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                     AstNodeExpr* const origp = nodep->cloneTree(false);
                     // The fields of the objects of an inactive array are state variables
                     AstNodeExpr* const activep
-                        = isSimple
-                              ? newHandlesActivep(m_memberMap, arraySelp->fromp(), true, false)
-                              : nullptr;
+                        = isSimple ? newHandlesActivep(m_memberMap, selArrayp, true, false)
+                                   : nullptr;
                     const bool stateField = isStateElemField(nodep);  // Before formatting
                     iterateChildren(nodep);
                     AstSFormatF* const newp = new AstSFormatF{fl, "%s." + nodep->name(), false,
@@ -3545,27 +3595,30 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstConstraintForeach* nodep) override {
         // Convert to plain foreach
         FileLine* const fl = nodep->fileline();
+        // Registrations referencing the index are appended to nodep's body
+        VL_RESTORER(m_foreachp);
+        VL_RESTORER_COPY(m_foreachIdxVars);
+        m_foreachp = nodep;
+        for (AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
+        }
 
         if (!nodep->bodyp()) {
             nodep->unlinkFrBack();
         } else if (m_wantSingle) {
+            // editSingle moves the items out to the fold, leaving the registrations
             AstNodeExpr* const itemp = editSingle(fl, nodep->bodyp());
             if (!itemp) {  // All items were ignored with a warning
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
                 return;
             }
             AstVar* const textVarp = newTextVarp(nodep);
-            AstNode* const bodyp = prependDistPreamble(nodep, newTermAppendp(fl, textVarp, itemp));
+            AstNode* bodyp = prependDistPreamble(nodep, newTermAppendp(fl, textVarp, itemp));
+            if (nodep->bodyp()) bodyp = nodep->bodyp()->unlinkFrBackWithNext()->addNext(bodyp);
             nodep->replaceWith(newTextBuildp(
                 fl, textVarp, "", new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp},
                 newTextApplyp(fl, textVarp, "bvand", "#b1")));
         } else {
-            VL_RESTORER(m_foreachp);
-            VL_RESTORER_COPY(m_foreachIdxVars);
-            m_foreachp = nodep;
-            for (AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
-                if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
-            }
             iterateAndNextNull(nodep->bodyp());
             if (!nodep->bodyp()) {  // All items were ignored with a warning
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
