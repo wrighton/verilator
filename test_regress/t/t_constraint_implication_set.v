@@ -317,10 +317,12 @@ class DisSoftIfForeach;
 endclass
 
 // A guard reading through a null handle is ERROR, failing randomize(), unless the other
-// operand decides it; the directive then follows the guard (IEEE 1800-2023 18.5.12)
+// operand decides it; the directive then follows the guard. A random operand does not
+// decide it (IEEE 1800-2023 18.5.12)
 class DisSoftNullGuard;
   Inner h;
   rand bit [6:0] p;
+  rand bit [6:0] r;
   rand bit [6:0] d[];
   constraint c_pref { soft p == 7'd5; }
   constraint c_error {
@@ -342,6 +344,22 @@ class DisSoftNullGuard;
   constraint c_false {
     foreach (d[i]) {
       if (h.y == 4'h1 && h != null) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_error_and {
+    foreach (d[i]) {
+      if (h.y == 4'h1 && r != 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_error_or {
+    foreach (d[i]) {
+      if (r != 7'd0 || h.y == 4'h1) {
         disable soft p;
         soft p inside {7'd5, 7'd8};
       }
@@ -646,9 +664,19 @@ module t;
       automatic bit widened = 1'b0;
       dsn.c_true.constraint_mode(0);
       dsn.c_false.constraint_mode(0);
+      dsn.c_error_and.constraint_mode(0);
+      dsn.c_error_or.constraint_mode(0);
       ok = dsn.randomize();
       `checkd(ok, 0);
       dsn.c_error.constraint_mode(0);
+      dsn.c_error_and.constraint_mode(1);
+      ok = dsn.randomize();
+      `checkd(ok, 0);
+      dsn.c_error_and.constraint_mode(0);
+      dsn.c_error_or.constraint_mode(1);
+      ok = dsn.randomize();
+      `checkd(ok, 0);
+      dsn.c_error_or.constraint_mode(0);
       dsn.c_true.constraint_mode(1);
       repeat (32) begin
         ok = dsn.randomize();
