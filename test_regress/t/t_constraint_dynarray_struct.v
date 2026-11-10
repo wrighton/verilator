@@ -73,6 +73,54 @@ class ReallocStructArray;
   }
 endclass
 
+typedef struct {
+  rand int x;
+  rand int y;
+} IndexedEntry;
+
+// A state index is bound after a size solve, not to the array's old allocation.
+class StateIndexedStructArray;
+  rand IndexedEntry values[];
+  int count = 3;
+  int unsigned unsigned_index = 2;
+  int signed_index = 2;
+  int bias;
+  bit enabled = 1;
+
+  constraint c_size {values.size() == count;}
+  constraint c_values {
+    foreach (values[i]) {
+      values[i].x inside {0, bias + 9};
+      values[i].y == i + bias;
+    }
+  }
+  constraint c_selected {
+    if (enabled) {
+      values[unsigned_index].x == bias + 9;
+      values[signed_index].x == bias + 9;
+    }
+    else soft values[unsigned_index].x == bias + 9;
+  }
+
+  function void verify(int turn);
+    int ok;
+    count = 3 + turn % 3;
+    unsigned_index = unsigned'(count - 1);
+    signed_index = turn % count;
+    bias = turn;
+    enabled = turn % 2 == 0;
+    ok = randomize();
+    `checkd(ok, 1)
+    `checkd(values.size(), count)
+    `checkd(values[unsigned_index].x, bias + 9)
+    if (enabled) `checkd(values[signed_index].x, bias + 9)
+    foreach (values[i]) begin
+      `checkd(values[i].x inside {0, bias + 9}, 1)
+      `checkd(values[i].y, i + bias)
+    end
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic int randomize_result;
@@ -150,6 +198,61 @@ module t;
       `checkd(randomize_result, 1)
       foreach (realloc_array.values[i]) `checkd(realloc_array.values[i].value inside {[1 : 9]}, 1)
       foreach (realloc_array.queue[i]) `checkd(realloc_array.queue[i].value inside {[1 : 9]}, 1)
+    end
+
+    // STATE-index reads must wait for the solved size, including grow and shrink calls.
+    begin
+      automatic StateIndexedStructArray indexed_array = new;
+      automatic StateIndexedStructArray preallocated_array = new;
+      int old_size;
+      int ok;
+      for (int turn = 0; turn < 20; ++turn) indexed_array.verify(turn);
+      preallocated_array.values = new[3];
+      for (int turn = 0; turn < 20; ++turn) preallocated_array.verify(turn);
+
+      // Disabled arrays keep their size; the size gate cannot waive that contradiction.
+      old_size = indexed_array.values.size();
+      indexed_array.count = old_size + 1;
+      indexed_array.values.rand_mode(0);
+      ok = indexed_array.randomize();
+      `checkd(ok, 0)
+      `checkd(indexed_array.values.size(), old_size)
+      indexed_array.values.rand_mode(1);
+
+      // The final solve must still reject a state index outside its requested allocation.
+      indexed_array.count = 2;
+      indexed_array.unsigned_index = 2;
+      indexed_array.signed_index = 0;
+      indexed_array.enabled = 1;
+      ok = indexed_array.randomize();
+      `checkd(ok, 0)
+      indexed_array.count = 3;
+      indexed_array.unsigned_index = 0;
+      indexed_array.signed_index = -1;
+      ok = indexed_array.randomize();
+      `checkd(ok, 0)
+
+      // Restoring feasible indices after failures enforces the payload again.
+      indexed_array.verify(20);
+      indexed_array.count = indexed_array.values.size() + 1;
+      indexed_array.unsigned_index = unsigned'(indexed_array.count - 1);
+      ok = indexed_array.randomize() with {values[unsigned_index].x == 0;};
+      `checkd(ok, 0)
+      indexed_array.verify(21);
+    end
+
+    // Inline target fields use the same direct array binding, starting from an empty array.
+    begin
+      automatic StateIndexedStructArray inline_indexed_array = new;
+      int ok;
+      ok = inline_indexed_array.randomize() with {values[unsigned_index].x == 9;};
+      `checkd(ok, 1)
+      `checkd(inline_indexed_array.values.size(), 3)
+      `checkd(inline_indexed_array.values[2].x, 9)
+      foreach (inline_indexed_array.values[i]) begin
+        `checkd(inline_indexed_array.values[i].x inside {0, 9}, 1)
+        `checkd(inline_indexed_array.values[i].y, i)
+      end
     end
 
     $write("*-* All Finished *-*\n");
