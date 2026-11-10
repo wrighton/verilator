@@ -328,9 +328,9 @@ private:
         propExprp = substitutePropertyCall(propExprp);
         // Clone subtree after substitution. It is needed, because property might be called
         // multiple times with different arguments.
-        propExprp = VN_AS(
-            V3AssertCommon::relinkSvaInstanceBody(propExprp->cloneTree(false), schemaRefp),
-            PropSpec);
+        propExprp
+            = VN_AS(V3AssertCommon::relinkSvaInstanceBody(propExprp->cloneTree(false), schemaRefp),
+                    PropSpec);
         // Build substitution maps for formal arguments and property-local
         // variables, then perform a single foreach to apply all replacements.
         // Map port vars to their actual argument expressions
