@@ -97,6 +97,30 @@ class NestedAssocKey;
   endfunction
 endclass
 
+// A shorter domain of keys first, over an associative array
+class NestedAssocShort;
+  rand NestedHolder amap[int];
+  rand NestedHolder subset[int];
+  constraint c_short {foreach (subset[k]) amap[k].inner.val != 8'hfe;}
+  constraint c_all {foreach (amap[k]) amap[k].inner.val inside {[8'hf0 : 8'hff]};}
+
+  function new();
+    for (int i = 0; i < 4; ++i) amap[i] = new();
+    subset[0] = new();
+  endfunction
+endclass
+
+// The same associative arrays with no class constraint
+class NestedAssocFree;
+  rand NestedHolder amap[int];
+  rand NestedHolder subset[int];
+
+  function new();
+    for (int i = 0; i < 4; ++i) amap[i] = new();
+    subset[0] = new();
+  endfunction
+endclass
+
 // The same objects with no class constraint, so an inline constraint registers them
 class NestedDynFree;
   rand NestedHolder rows[];
@@ -268,6 +292,31 @@ module t;
         result = na.randomize();
         `checkd(result, 1);
         `checkd(na.amap[2].inner.val, 8'h21);
+      end
+    end
+
+    begin
+      automatic NestedAssocShort ns = new;
+      automatic int result;
+      repeat (16) begin
+        result = ns.randomize();
+        `checkd(result, 1);
+        foreach (ns.amap[k]) `checkd(ns.amap[k].inner.val >= 8'hf0, 1);
+        `checkd(ns.amap[0].inner.val != 8'hfe, 1);
+      end
+    end
+
+    begin
+      automatic NestedAssocFree nf = new;
+      automatic int result;
+      repeat (16) begin
+        result = nf.randomize() with {
+          foreach (subset[k]) amap[k].inner.val != 8'h4d;
+          foreach (amap[k]) amap[k].inner.val inside {[8'h40 : 8'h4f]};
+        };
+        `checkd(result, 1);
+        foreach (nf.amap[k]) `checkd(nf.amap[k].inner.val inside {[8'h40 : 8'h4f]}, 1);
+        `checkd(nf.amap[0].inner.val != 8'h4d, 1);
       end
     end
 
