@@ -296,6 +296,26 @@ class DisSoftForeachIf;
   endfunction
 endclass
 
+// Likewise in a foreach under an 'if', whose first item is the directive
+class DisSoftIfForeach;
+  bit en;
+  rand bit [6:0] p;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_widen {
+    if (en) {
+      foreach (d[i]) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+        d[i] != 7'd0;
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
 module t;
   Forms obj;
   DisSoft ds;
@@ -562,6 +582,26 @@ module t;
         ok = dsf.randomize();
         `checkd(ok, 1);
         `checkd(dsf.p, 5);
+      end
+    end
+
+    begin
+      automatic DisSoftIfForeach dsi = new();
+      automatic bit widened = 1'b0;
+      dsi.en = 1'b1;
+      repeat (32) begin
+        ok = dsi.randomize();
+        `checkd(ok, 1);
+        `checkh(dsi.p == 7'd5 || dsi.p == 7'd8, 1'b1);
+        foreach (dsi.d[i]) `checkh(dsi.d[i] != 7'd0, 1'b1);
+        if (dsi.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsi.en = 1'b0;
+      repeat (8) begin
+        ok = dsi.randomize();
+        `checkd(ok, 1);
+        `checkd(dsi.p, 5);
       end
     end
 
