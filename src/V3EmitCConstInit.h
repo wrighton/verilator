@@ -233,7 +233,8 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         puts(typeName + " result{");
         emitKeyedConsItems<T_Item>(sizep, defaultp, nullptr);
         puts("};\n");
-        for (int n = 0; n < nChunks; ++n) puts(name + "__Vinit" + std::to_string(n) + "(result);\n");
+        for (int n = 0; n < nChunks; ++n)
+            puts(name + "__Vinit" + std::to_string(n) + "(result);\n");
         puts("return result;\n}\n");
         putns(varp, "extern const " + typeName + " " + name + " = " + name + "__Vinit();\n");
         splitSizeIncValue(varp);
