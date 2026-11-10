@@ -49,6 +49,19 @@ class ConstrainedDynamicQueueArray;
     \array_w[ith_es]cape [0][0] == 6;
   }
 
+  // Arrays whose names differ by a trailing digit, so 'a[10]' and 'a1[0]' are distinct
+  rand int a[];
+  rand int a1[];
+  rand int b[11];
+  rand int b1[2];
+
+  constraint name_digit_constraints {
+    foreach (a[i]) a[i] == i + 100;
+    foreach (a1[i]) a1[i] == i + 200;
+    foreach (b[i]) b[i] == i + 300;
+    foreach (b1[i]) b1[i] == i + 400;
+  }
+
   // Constructor
   function new();
     queue_1d = {1, 2, 3, 4};
@@ -70,6 +83,9 @@ class ConstrainedDynamicQueueArray;
     unp_queue[0] = {17, 18};
     unp_queue[1] = {19};
     unp_queue[2] = {20};
+
+    a = new[11];
+    a1 = new[2];
   endfunction
 
   // Self-check function
@@ -94,6 +110,11 @@ class ConstrainedDynamicQueueArray;
     `checkh(unp_queue[2][0], (2 * 5) + 0 + 1)
 
     `checkh(\array_w[ith_es]cape [0][0], 6)
+
+    foreach (a[i]) `checkh(a[i], i + 100)
+    foreach (a1[i]) `checkh(a1[i], i + 200)
+    foreach (b[i]) `checkh(b[i], i + 300)
+    foreach (b1[i]) `checkh(b1[i], i + 400)
   endfunction
 endclass
 
