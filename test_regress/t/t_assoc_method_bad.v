@@ -81,7 +81,7 @@ module t;
     wildcard_t mm;
     int result;
 
-    // Exercise typedef-wrapped wildcard expression calls as well as statements.
+    // Exercise typedef-wrapped wildcard expression calls.
     result = mm.sort();
     result = mm.rsort();
     result = mm.reverse();
