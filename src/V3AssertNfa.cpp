@@ -3800,10 +3800,9 @@ class AssertNfaVisitor final : public VNVisitor {
         const bool replayThreads = replayFails || replayPasses;
         // Counting threads counts the failed attempts when each attempt has one thread
         const bool exactCounts = replayFails && oneThreadPerAttempt(seqBodyp, true);
-        const auto signals
-            = m_loweringp->lower(assertp, graph, senTreep, result.finalCondp, disableExprp,
-                                 replayThreads, replayThreads, exactCounts,
-                                 exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr);
+        const auto signals = m_loweringp->lower(
+            assertp, graph, senTreep, result.finalCondp, disableExprp, replayThreads,
+            replayThreads, exactCounts, exactCounts ? VN_CAST(seqBodyp, AbortOn) : nullptr);
         AstNodeExpr* matchExprp = nullptr;
         AstNodeExpr* const outputExprp = m_loweringp->assembleResult(
             assertp, negated, result.finalCondp, signals, needMatch ? &matchExprp : nullptr);
