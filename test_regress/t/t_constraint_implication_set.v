@@ -248,6 +248,54 @@ class DisSoftBinder;
   endfunction
 endclass
 
+// A conditional `disable soft` removes only the lower priority soft constraints, those
+// before it, even when they agree with the later ones (IEEE 1800-2023 18.5.13.1, 18.5.13.2)
+class DisSoftOrdered;
+  bit en;
+  rand bit [6:0] p;
+  rand bit [6:0] q;
+  rand bit [6:0] r;
+  constraint c_pref {
+    soft p == 7'd5;
+    soft q == 7'd5;
+    soft r == 7'd5;
+  }
+  constraint c_widen {
+    if (en) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+    if (!en) q < 7'd100;
+    else {
+      disable soft q;
+      soft q inside {7'd5, 7'd8};
+    }
+    en -> disable soft r;
+    soft r inside {7'd5, 7'd8};
+  }
+  constraint c_later { soft p == 7'd13; }
+endclass
+
+// Likewise under an 'if' in a foreach, which folds into one constraint per element
+class DisSoftForeachIf;
+  bit en;
+  rand bit [6:0] p;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_widen {
+    foreach (d[i]) {
+      if (en) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+        d[i] != 7'd0;
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
 module t;
   Forms obj;
   DisSoft ds;
@@ -458,6 +506,63 @@ module t;
       end
       `checkh(xWidened, 1'b1);
       `checkh(objWidened, 1'b1);
+    end
+
+    begin
+      automatic DisSoftOrdered dso = new();
+      automatic int widened[3] = '{0, 0, 0};
+      dso.c_later.constraint_mode(0);
+      dso.en = 1'b1;
+      repeat (32) begin
+        ok = dso.randomize();
+        `checkd(ok, 1);
+        `checkh(dso.p == 7'd5 || dso.p == 7'd8, 1'b1);
+        `checkh(dso.q == 7'd5 || dso.q == 7'd8, 1'b1);
+        `checkh(dso.r == 7'd5 || dso.r == 7'd8, 1'b1);
+        if (dso.p == 7'd8) ++widened[0];
+        if (dso.q == 7'd8) ++widened[1];
+        if (dso.r == 7'd8) ++widened[2];
+      end
+      foreach (widened[i]) `checkh(widened[i] > 0, 1'b1);
+      dso.en = 1'b0;
+      repeat (8) begin
+        ok = dso.randomize();
+        `checkd(ok, 1);
+        `checkd(dso.p, 5);
+        `checkd(dso.q, 5);
+        `checkd(dso.r, 5);
+      end
+      dso.en = 1'b1;
+      dso.c_widen.constraint_mode(0);
+      ok = dso.randomize();
+      `checkd(ok, 1);
+      `checkd(dso.p, 5);
+      `checkd(dso.r, 5);
+      dso.c_widen.constraint_mode(1);
+      dso.c_later.constraint_mode(1);
+      ok = dso.randomize();
+      `checkd(ok, 1);
+      `checkd(dso.p, 13);
+    end
+
+    begin
+      automatic DisSoftForeachIf dsf = new();
+      automatic bit widened = 1'b0;
+      dsf.en = 1'b1;
+      repeat (32) begin
+        ok = dsf.randomize();
+        `checkd(ok, 1);
+        `checkh(dsf.p == 7'd5 || dsf.p == 7'd8, 1'b1);
+        foreach (dsf.d[i]) `checkh(dsf.d[i] != 7'd0, 1'b1);
+        if (dsf.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsf.en = 1'b0;
+      repeat (8) begin
+        ok = dsf.randomize();
+        `checkd(ok, 1);
+        `checkd(dsf.p, 5);
+      end
     end
 
     $write("*-* All Finished *-*\n");
