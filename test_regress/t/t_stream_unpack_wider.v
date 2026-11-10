@@ -48,6 +48,27 @@ module t;
     gotv = $sformatf("%p", dst_1);
     `checks(gotv, expv);
 
+    // Both source and target stream: consume the source's most-significant prefix.
+    begin
+      int trial;
+      logic [5:0] got;
+      for (trial = 0; trial < 2; ++trial) begin
+        src_1 = trial == 0 ? 8'ha3 : 8'h5c;
+        {>>{dst_1}} = {>>{src_1}};
+        got = {dst_1[0], dst_1[1], dst_1[2]};
+        `checkh(got, trial == 0 ? 6'h28 : 6'h17);
+        {<<{dst_1}} = {>>{src_1}};
+        got = {dst_1[0], dst_1[1], dst_1[2]};
+        `checkh(got, trial == 0 ? 6'h05 : 6'h3a);
+        {>>{dst_1}} = {<<{src_1}};
+        got = {dst_1[0], dst_1[1], dst_1[2]};
+        `checkh(got, trial == 0 ? 6'h31 : 6'h0e);
+        {<<{dst_1}} = {<<{src_1}};
+        got = {dst_1[0], dst_1[1], dst_1[2]};
+        `checkh(got, trial == 0 ? 6'h23 : 6'h1c);
+      end
+    end
+
     // Unpack as source, StreamR
     dst_2 = {>>{src_2}};
     exp_2 = 8'b10101000;
