@@ -56,7 +56,9 @@ public:
         , m_indices{indices}
         , m_idxWidths{idxWidths} {}
 };
-using ArrayInfoMap = std::map<std::string, std::shared_ptr<const ArrayInfo>>;
+// Keyed by the array's base name and the element's ordinal, kept apart so that, e.g.,
+// element 10 of 'a' and element 0 of 'a1' are distinct
+using ArrayInfoMap = std::map<std::pair<std::string, int>, std::shared_ptr<const ArrayInfo>>;
 
 class VlRandomVar VL_NOT_FINAL {
     std::string m_name;  // Variable name
@@ -102,15 +104,14 @@ public:
         if (VL_LIKELY(count_cache.find(base_name) != count_cache.end()))
             return count_cache[base_name];
         int count = 0;
-        for (int index = 0; arr_vars.find(base_name + std::to_string(index)) != arr_vars.end();
-             ++index) {
+        for (int index = 0; arr_vars.find({base_name, index}) != arr_vars.end(); ++index) {
             ++count;
         }
         count_cache[base_name] = count;
         return count;
     }
     bool hasMatchingElements(const ArrayInfoMap& arr_vars, const std::string& base_name) const {
-        return arr_vars.find(base_name + "0") != arr_vars.end();
+        return arr_vars.find({base_name, 0}) != arr_vars.end();
     }
 };
 // SMT key width per associative-array level (string = 128, integral = 8 * sizeof).
@@ -136,8 +137,7 @@ public:
         : VlRandomVar{name, width, datap, dimension, randModeIdx}
         , m_fallbackIdxWidths{idxWidths} {}
     void* datap(int idx) const override {
-        const std::string indexed_name = name() + std::to_string(idx);
-        const auto it = m_arrVarsRefp->find(indexed_name);
+        const auto it = m_arrVarsRefp->find({name(), idx});
         if (VL_LIKELY(it != m_arrVarsRefp->end())) return it->second->m_datap;
         VL_FATAL_MT(__FILE__, __LINE__, "randomize", "indexed_name not found in m_arr_vars");
         return nullptr;  // LCOV_EXCL_BR_LINE
@@ -173,8 +173,7 @@ public:
     void emitGetValue(std::ostream& s) const override {
         const int elementCounts = countMatchingElements(*m_arrVarsRefp, name());
         for (int i = 0; i < elementCounts; ++i) {
-            const std::string indexed_name = name() + std::to_string(i);
-            const auto it = m_arrVarsRefp->find(indexed_name);
+            const auto it = m_arrVarsRefp->find({name(), i});
             if (it != m_arrVarsRefp->end()) {
                 const std::vector<IData>& indices = it->second->m_indices;
                 const std::vector<size_t>& idxWidths = it->second->m_idxWidths;
@@ -186,8 +185,7 @@ public:
         }
     }
     void emitType(std::ostream& s) const override {
-        const std::string indexed_name = name() + std::to_string(0);
-        const auto it = m_arrVarsRefp->find(indexed_name);
+        const auto it = m_arrVarsRefp->find({name(), 0});
         if (it != m_arrVarsRefp->end()) {
             const std::vector<size_t>& idxWidths = it->second->m_idxWidths;
             if (dimension() > 0) {
@@ -219,8 +217,7 @@ public:
         return width() * elementCounts;
     }
     void emitElement(std::ostream& s, int j) const override {
-        const std::string indexed_name = name() + std::to_string(j);
-        const auto it = m_arrVarsRefp->find(indexed_name);
+        const auto it = m_arrVarsRefp->find({name(), j});
         // Callers take j from totalWidth(), which counts these same keys, so the element
         // should always be there
         if (VL_UNCOVERABLE(it == m_arrVarsRefp->end())) {
@@ -236,8 +233,7 @@ public:
         const int j = i / width();
         i = i % width();
         s << " ((_ extract " << i << ' ' << i << ')';
-        const std::string indexed_name = name() + std::to_string(j);
-        const auto it = m_arrVarsRefp->find(indexed_name);
+        const auto it = m_arrVarsRefp->find({name(), j});
         if (it != m_arrVarsRefp->end()) {
             const std::vector<IData>& indices = it->second->m_indices;
             const std::vector<size_t>& idxWidths = it->second->m_idxWidths;
@@ -599,16 +595,15 @@ public:
     typename std::enable_if<!std::is_class<T>::value || VlIsVlWide<T>::value, void>::type
     record_arr_table(T& var, const std::string& name, int /*dimension*/,
                      std::vector<IData> indices, std::vector<size_t> idxWidths) {
-        const std::string key = generateKey(name, m_index);
-        m_arr_vars[key] = std::make_shared<ArrayInfo>(name, &var, m_index, indices, idxWidths);
+        m_arr_vars[generateKey(name, m_index)]
+            = std::make_shared<ArrayInfo>(name, &var, m_index, indices, idxWidths);
         ++m_index;
     }
 
     template <typename T>
     typename std::enable_if<!std::is_class<T>::value || VlIsVlWide<T>::value, void>::type
     update_arr_table(T& var, const std::string& name, int /*dimension*/) {
-        const std::string key = generateKey(name, m_index++);
-        const auto it = m_arr_vars.find(key);
+        const auto it = m_arr_vars.find(generateKey(name, m_index++));
         assert(it != m_arr_vars.end());
         const ArrayInfo& arrayInfo = *it->second;
         it->second = std::make_shared<const ArrayInfo>(arrayInfo.m_name, &var, arrayInfo.m_index,
@@ -926,22 +921,19 @@ public:
     }
 
     // Helper: Generate unique variable key from name and index
-    static std::string generateKey(const std::string& name, int idx) {
+    static std::pair<std::string, int> generateKey(const std::string& name, int idx) {
         if (!name.empty() && name[0] == '\\') {
             const size_t space_pos = name.find(' ');
-            return (space_pos != std::string::npos ? name.substr(0, space_pos) : name)
-                   + std::to_string(idx);
+            return {space_pos != std::string::npos ? name.substr(0, space_pos) : name, idx};
         }
         const size_t bracket_pos = name.find('[');
-        return (bracket_pos != std::string::npos ? name.substr(0, bracket_pos) : name)
-               + std::to_string(idx);
+        return {bracket_pos != std::string::npos ? name.substr(0, bracket_pos) : name, idx};
     }
 
     // Helper: Clear existing array element entries for a base name
     void clear_arr_table(const std::string& name) {
         for (int index = 0;; ++index) {
-            const std::string key = generateKey(name, index);
-            const auto it = m_arr_vars.find(key);
+            const auto it = m_arr_vars.find(generateKey(name, index));
             if (it == m_arr_vars.end()) break;
             m_arr_vars.erase(it);
         }

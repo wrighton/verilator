@@ -900,7 +900,8 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras) con
     }
     // Keys are one per array element, so a resized queue gets a different hash.
     for (const auto& elem : m_arr_vars) {
-        h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<std::string>{}(elem.first.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(elem.first.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
     }
     return h;
 }
