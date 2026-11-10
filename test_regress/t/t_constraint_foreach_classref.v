@@ -6,6 +6,11 @@
 
 // Test: Inline foreach constraints on dynamic arrays and queues of class objects
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
+// verilog_format: on
+
 class Inner;
   rand bit [7:0] val;
   rand bit [3:0] tag;
@@ -34,6 +39,72 @@ class OuterQueue;
       tmp = new();
       items.push_back(tmp);
     end
+  endfunction
+endclass
+
+// A field of an object inside an object of a dynamic array element
+class NestedHolder;
+  rand Inner inner;
+
+  function new();
+    inner = new();
+  endfunction
+endclass
+
+class NestedDyn;
+  rand NestedHolder rows[];
+  rand NestedHolder others[];
+  // The same index over a shorter array is seen first
+  constraint c_short {foreach (others[i]) rows[i].inner.val != 8'hfe;}
+  constraint c_all {foreach (rows[i]) rows[i].inner.val inside {[8'hf0 : 8'hff]};}
+  constraint c_const {rows[1].inner.tag == 4'h9;}
+
+  function new();
+    rows = new[12];
+    foreach (rows[i]) rows[i] = new();
+    others = new[2];
+    foreach (others[i]) others[i] = new();
+  endfunction
+endclass
+
+// Only under an 'if', which folds the foreach into one expression
+class NestedDynGated;
+  rand NestedHolder rows[];
+  bit gate;
+  constraint c_gated {
+    if (gate) {
+      foreach (rows[i]) rows[i].inner.val < 8'h10;
+    }
+  }
+
+  function new();
+    rows = new[5];
+    foreach (rows[i]) rows[i] = new();
+  endfunction
+endclass
+
+// The same objects with no class constraint, so an inline constraint registers them
+class NestedDynFree;
+  rand NestedHolder rows[];
+  rand NestedHolder others[];
+
+  function new();
+    rows = new[12];
+    foreach (rows[i]) rows[i] = new();
+    others = new[2];
+    foreach (others[i]) others[i] = new();
+  endfunction
+endclass
+
+// A null element, whose constraint its guard eliminates (IEEE 1800-2023 18.5.12)
+class NestedDynNull;
+  rand NestedHolder rows[];
+  constraint c {foreach (rows[i]) if (rows[i] != null) rows[i].inner.val == 8'h33;}
+
+  function new();
+    rows = new[3];
+    rows[0] = new();
+    rows[2] = new();
   endfunction
 endclass
 
@@ -126,6 +197,63 @@ module t;
                  i, od_arr[i].items[0].tag);
         $stop;
       end
+    end
+
+    begin
+      automatic NestedDyn nd = new;
+      automatic int result;
+      repeat (8) begin
+        result = nd.randomize();
+        `checkd(result, 1);
+        `checkd(nd.rows[1].inner.tag, 4'h9);
+        foreach (nd.rows[i]) begin
+          `checkd(nd.rows[i].inner.val >= 8'hf0, 1);
+          if (i < 2) `checkd(nd.rows[i].inner.val != 8'hfe, 1);
+        end
+      end
+    end
+
+    begin
+      automatic NestedDynGated ng = new;
+      automatic int result;
+      automatic int high = 0;
+      repeat (4) begin
+        result = ng.randomize();
+        `checkd(result, 1);
+        foreach (ng.rows[i]) if (ng.rows[i].inner.val >= 8'h10) ++high;
+      end
+      `checkd(high > 0, 1);
+      ng.gate = 1'b1;
+      repeat (8) begin
+        result = ng.randomize();
+        `checkd(result, 1);
+        foreach (ng.rows[i]) `checkd(ng.rows[i].inner.val < 8'h10, 1);
+      end
+    end
+
+    begin
+      automatic NestedDynFree nf = new;
+      automatic int result;
+      repeat (8) begin
+        result = nf.randomize() with {
+          foreach (others[i]) rows[i].inner.val != 8'h4d;
+          foreach (rows[i]) rows[i].inner.val inside {[8'h40 : 8'h4f]};
+        };
+        `checkd(result, 1);
+        foreach (nf.rows[i]) begin
+          `checkd(nf.rows[i].inner.val inside {[8'h40 : 8'h4f]}, 1);
+          if (i < 2) `checkd(nf.rows[i].inner.val != 8'h4d, 1);
+        end
+      end
+    end
+
+    begin
+      automatic NestedDynNull nn = new;
+      automatic int result;
+      result = nn.randomize();
+      `checkd(result, 1);
+      `checkd(nn.rows[0].inner.val, 8'h33);
+      `checkd(nn.rows[2].inner.val, 8'h33);
     end
 
     $write("*-* All Finished *-*\n");

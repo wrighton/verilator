@@ -100,12 +100,21 @@ static AstNodeExpr* newHandlesActivep(VMemberMap& memberMap, AstNodeExpr* objp, 
     // randomized. objp is a chain of member and element selects from a member of 'this'.
     AstNodeExpr* condp = nullptr;
     while (objp) {
+        AstNodeExpr* elemArrayp = nullptr;  // Array of the element objp selects
         if (AstNodeSel* const nodeSelp = VN_CAST(objp, NodeSel)) {
-            objp = nodeSelp->fromp();  // An element
-            continue;
+            elemArrayp = nodeSelp->fromp();
+        } else if (AstCMethodHard* const atp = VN_CAST(objp, CMethodHard)) {
+            elemArrayp = atp->fromp();
         }
-        if (AstCMethodHard* const atp = VN_CAST(objp, CMethodHard)) {
-            objp = atp->fromp();  // An element
+        if (elemArrayp) {
+            // An element handle is checked like a member handle, after its owners
+            if (nonNull && VN_IS(objp->dtypep()->skipRefp(), ClassRefDType)) {
+                FileLine* const fl = objp->fileline();
+                AstNodeExpr* const levelp
+                    = new AstNeq{fl, objp->cloneTree(false), new AstConst{fl, AstConst::Null{}}};
+                condp = condp ? new AstLogAnd{fl, levelp, condp} : levelp;
+            }
+            objp = elemArrayp;
             continue;
         }
         AstMemberSel* const selp = VN_CAST(objp, MemberSel);
@@ -1952,9 +1961,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         // variable keys on user3(). Inline 'with' dedups per function (own solver).
         // The objects of a handle array are registered by each class's randomize().
         const bool perClass = isGlobalConstrained || memberselp || isClassRefArray;
-        const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
-                                    : perClass         ? m_writtenVars.count(smtName) > 0
-                                                       : !m_newWrittenVarsp->insert(varp).second;
+        // A path through a runtime index is named by the index's expression, not the element,
+        // so it is registered at each reference, in its own loop; write_var() ignores repeats
+        const bool runtimeIndexPath = memberselp && memberselp->exists([](const AstNode* selp) {
+            if (const AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) {
+                return !VN_IS(arraySelp->bitp(), Const);
+            }
+            const AstCMethodHard* const atp = VN_CAST(selp, CMethodHard);
+            return atp && atp->method() == VCMethod::ARRAY_AT && !VN_IS(atp->pinsp(), Const);
+        });
+        const bool alreadyWritten = runtimeIndexPath     ? false
+                                    : m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
+                                    : perClass           ? m_writtenVars.count(smtName) > 0
+                                                         : !m_newWrittenVarsp->insert(varp).second;
         const bool shouldWriteVar = !alreadyWritten;
         if (shouldWriteVar) {
             // Track this variable path as written
@@ -3154,16 +3173,29 @@ class ConstraintExprVisitor final : public VNVisitor {
                 rootNodep = selp->fromp();
             }
 
-            AstNodeSel* arraySelp = VN_CAST(rootNodep, ArraySel);
-            if (!arraySelp) arraySelp = VN_CAST(rootNodep, AssocSel);
+            // Element select at the root, and the array it selects from. A field of the object
+            // of a dynamic array element (ARRAY_AT) is handled below, unless deeper in it.
+            AstNodeExpr* arraySelp = nullptr;
+            AstNodeExpr* selArrayp = nullptr;
+            if (AstNodeSel* const nodeSelp = VN_CAST(rootNodep, ArraySel)) {
+                arraySelp = nodeSelp;
+                selArrayp = nodeSelp->fromp();
+            } else if (AstNodeSel* const assocSelp = VN_CAST(rootNodep, AssocSel)) {
+                arraySelp = assocSelp;
+                selArrayp = assocSelp->fromp();
+            } else if (AstCMethodHard* const atp = VN_CAST(rootNodep, CMethodHard)) {
+                if (atp->method() == VCMethod::ARRAY_AT && nodep->fromp() != rootNodep) {
+                    arraySelp = atp;
+                    selArrayp = atp->fromp();
+                }
+            }
 
             if (arraySelp) {
-                AstNodeDType* const arrayDtp = arraySelp->fromp()->dtypep()->skipRefp();
+                AstNodeDType* const arrayDtp = selArrayp->dtypep()->skipRefp();
                 AstNodeDType* const elemDtp
                     = arrayDtp->subDTypep() ? arrayDtp->subDTypep()->skipRefp() : nullptr;
                 if (elemDtp && VN_IS(elemDtp, ClassRefDType)) {
-                    const bool isSimple
-                        = nodep->fromp() == rootNodep && VN_IS(arraySelp->fromp(), VarRef);
+                    const bool isSimple = nodep->fromp() == rootNodep && VN_IS(selArrayp, VarRef);
                     if (!isSimple && !m_nestedAccessp) {
                         m_nestedAccessp = new NestedAccessPath(nodep->cloneTree(false),
                                                                &m_firstExpressionInsideIndexp);
@@ -3179,9 +3211,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                     AstNodeExpr* const origp = nodep->cloneTree(false);
                     // The fields of the objects of an inactive array are state variables
                     AstNodeExpr* const activep
-                        = isSimple
-                              ? newHandlesActivep(m_memberMap, arraySelp->fromp(), true, false)
-                              : nullptr;
+                        = isSimple ? newHandlesActivep(m_memberMap, selArrayp, true, false)
+                                   : nullptr;
                     const bool stateField = isStateElemField(nodep);  // Before formatting
                     iterateChildren(nodep);
                     AstSFormatF* const newp = new AstSFormatF{fl, "%s." + nodep->name(), false,
@@ -3416,13 +3447,22 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (!nodep->bodyp()) {
             nodep->unlinkFrBack();
         } else if (m_wantSingle) {
+            // Registrations referencing the index are appended to nodep's body, which
+            // editSingle has moved out to fold
+            VL_RESTORER(m_foreachp);
+            VL_RESTORER_COPY(m_foreachIdxVars);
+            m_foreachp = nodep;
+            for (AstNode* elemp = nodep->headerp()->elementsp(); elemp; elemp = elemp->nextp()) {
+                if (const AstVar* const varp = VN_CAST(elemp, Var)) m_foreachIdxVars.insert(varp);
+            }
             AstNodeExpr* const itemp = editSingle(fl, nodep->bodyp());
             if (!itemp) {  // All items were ignored with a warning
                 VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
                 return;
             }
             AstVar* const textVarp = newTextVarp(nodep);
-            AstNode* const bodyp = prependDistPreamble(nodep, newTermAppendp(fl, textVarp, itemp));
+            AstNode* bodyp = prependDistPreamble(nodep, newTermAppendp(fl, textVarp, itemp));
+            if (nodep->bodyp()) bodyp = nodep->bodyp()->unlinkFrBackWithNext()->addNext(bodyp);
             nodep->replaceWith(newTextBuildp(
                 fl, textVarp, "", new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp},
                 newTextApplyp(fl, textVarp, "bvand", "#b1")));
