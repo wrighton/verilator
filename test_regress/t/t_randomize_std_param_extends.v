@@ -92,7 +92,7 @@ module t;
       items.shuffle();
       ok = std::randomize(profile) with {
         profile inside {[0:2]};
-        profile != items[0].profile;
+        profile != int'(items[0].profile);
       };
       `checkd(ok, 1);
       got = profile;
