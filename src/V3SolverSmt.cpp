@@ -4078,6 +4078,12 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
                 const AstVarRef* const baseRefp
                     = m_structSel ? VN_CAST(nodep->fromp()->baseFromp(true), VarRef) : nullptr;
+                if (m_structSel && !indexIsRand
+                    && VN_IS(nodep->fromp()->dtypep()->skipRefp(), DynArrayDType)
+                    && VN_IS(nodep->dtypep()->skipRefp(), StructDType)) {
+                    // A state-selected field must not constrain an array's pre-resize size solve.
+                    gateOnCurrentSize(nodep->fromp());
+                }
                 if (baseRefp && VN_IS(nodep->pinsp(), Const)
                     && VN_IS(baseRefp->varp()->dtypep()->skipRefp(), DynArrayDType)
                     && m_prepareConstrainedArraysp) {
