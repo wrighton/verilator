@@ -27,8 +27,8 @@ def const_seconds(terms):
     with open(test.top_filename, "w", encoding="utf8") as fh:
         fh.write(f"module t (input [{terms - 1}:0] a, output o_or, output o_and);\n")
         for out, op in (("o_or", "||"), ("o_and", "&&")):
-            fh.write(f"  assign {out} = " + f"\n    {op} ".join(f"a[{i}]" for i in range(terms)) +
-                     ";\n")
+            fh.write(f"  assign {out} = " + f"\n    {op} ".join(f"a[{i}]"
+                                                                for i in range(terms)) + ";\n")
         fh.write("endmodule\n")
     test.compile(verilator_flags2=["--stats", "--no-debug-check", "--unlimited-stack"],
                  make_main=False,
