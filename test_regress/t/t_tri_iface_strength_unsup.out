@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_tri_iface_strength_unsup.v:9:8: Unsupported: Unable to resolve unequal strength specifier across interface contributions.
+                                                      : ... note: In instance 't.active'
+    9 |   wire value;
+      |        ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
