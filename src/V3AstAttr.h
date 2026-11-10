@@ -533,6 +533,7 @@ public:
         RANDOM_GENERATOR,
         RANDOM_STDGENERATOR,
         COVERGROUP_INSTHANDLE,
+        MAILBOX_MESSAGE,
         // Unsigned and two state; fundamental types
         UINT32,
         UINT64,
@@ -573,6 +574,7 @@ public:
                                                       "VlRandomizer",
                                                       "VlStdRandomizer",
                                                       "VlCovInstHandle",
+                                                      "VlMailboxMessage",
                                                       "IData",
                                                       "QData",
                                                       "LOGIC_IMPLICIT",
@@ -588,40 +590,14 @@ public:
         }
     }
     const char* dpiType() const {
-        static constexpr const char* const names[] = {"%E-unk",
-                                                      "svBit",
-                                                      "char",
-                                                      "void*",
-                                                      "void",
-                                                      "null",
-                                                      "char",
-                                                      "int",
-                                                      "%E-integer",
-                                                      "%E-integer",
-                                                      "svLogic",
-                                                      "svLogic",
-                                                      "long long",
-                                                      "double",
-                                                      "short",
-                                                      "%E-time",
-                                                      "%E-time",
-                                                      "const char*",
-                                                      "%E-untyped",
-                                                      "dpiScope",
-                                                      "const char*",
-                                                      "%E-dly-sched",
-                                                      "%E-trig-sched",
-                                                      "%E-dyn-sched",
-                                                      "%E-nba-queue",
-                                                      "%E-fork",
-                                                      "%E-proc-ref",
-                                                      "%E-rand-gen",
-                                                      "%E-stdrand-gen",
-                                                      "%E-cg-insthandle",
-                                                      "IData",
-                                                      "QData",
-                                                      "%E-logic-implct",
-                                                      " MAX"};
+        static constexpr const char* const names[] = {
+            "%E-unk",      "svBit",        "char",          "void*",           "void",
+            "null",        "char",         "int",           "%E-integer",      "%E-integer",
+            "svLogic",     "svLogic",      "long long",     "double",          "short",
+            "%E-time",     "%E-time",      "const char*",   "%E-untyped",      "dpiScope",
+            "const char*", "%E-dly-sched", "%E-trig-sched", "%E-dyn-sched",    "%E-nba-queue",
+            "%E-fork",     "%E-proc-ref",  "%E-rand-gen",   "%E-stdrand-gen",  "%E-cg-insthandle",
+            "%E-mbx-msg",  "IData",        "QData",         "%E-logic-implct", " MAX"};
         return names[m_e];
     }
     static void selfTest() {
@@ -665,6 +641,7 @@ public:
         case RANDOM_GENERATOR: return 0;  // opaque
         case RANDOM_STDGENERATOR: return 0;  // opaque
         case COVERGROUP_INSTHANDLE: return 0;  // opaque
+        case MAILBOX_MESSAGE: return 64;  // opaque, nonzero for width checks of queue elements
         case UINT32: return 32;
         case UINT64: return 64;
         default: return 0;
@@ -709,8 +686,8 @@ public:
                 || m_e == DELAY_SCHEDULER || m_e == TRIGGER_SCHEDULER
                 || m_e == DYNAMIC_TRIGGER_SCHEDULER || m_e == NBA_GENERIC_QUEUE || m_e == FORK_SYNC
                 || m_e == PROCESS_REFERENCE || m_e == RANDOM_GENERATOR
-                || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE || m_e == DOUBLE
-                || m_e == UNTYPED);
+                || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE
+                || m_e == MAILBOX_MESSAGE || m_e == DOUBLE || m_e == UNTYPED);
     }
     bool isCHandle() const VL_MT_SAFE { return m_e == CHANDLE; }
     bool isDouble() const VL_MT_SAFE { return m_e == DOUBLE; }
@@ -804,6 +781,7 @@ public:
             /* RANDOM_GENERATOR:          */ "",  // Should not be traced
             /* RANDOM_STD_GENERATOR:      */ "",  // Should not be traced
             /* COVERGROUP_INSTHANDLE:     */ "",  // Should not be traced
+            /* MAILBOX_MESSAGE:           */ "",  // Should not be traced
             /* UINT32:                    */ "BIT",
             /* UINT64:                    */ "BIT",
             /* LOGIC_IMPLICIT:            */ "",  // Should not be traced
@@ -995,8 +973,9 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(COVERGROUP_INCREMENT_BIN,           "incrementBin",           false,  CLEAN,  false,      "r") \
     macro(COVERGROUP_INIT,                    "init",                   false,  CLEAN,  false,      "r+") \
     macro(COVERGROUP_INST_P,                  "p",                      PURE,   CLEAN,  false,      "") \
+    macro(COVERGROUP_ITEM_COVERAGE,           "coverage",               false,  CLEAN,  false,      "ww") \
     macro(COVERGROUP_LEND_WEIGHT,             "lendWeight",             false,  CLEAN,  false,      "rr") \
-    macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "r") \
+    macro(COVERGROUP_MERGED_COVERAGE,         "mergedCoverage",         false,  CLEAN,  false,      "rww") \
     macro(COVERGROUP_RECORD_HIT,              "recordHit",              false,  CLEAN,  false,      "r") \
     macro(COVERGROUP_REGISTER_BINS,           "registerBins",           false,  CLEAN,  false,      "rrrrr") \
     macro(COVERGROUP_SAMPLE,                  "sample",                 false,  CLEAN,  false,      "") \
@@ -1079,8 +1058,17 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_BASIC_STD_RANDOMIZATION, "basicStdRandomization",  false,  CLEAN,  false,      "mr") \
     macro(RANDOMIZER_CLEARCONSTRAINTS,        "clearConstraints",       false,  CLEAN,  false,      "") \
     macro(RANDOMIZER_CLEARALL,                "clearAll",               false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_CLEAR_ELEM_VARS,         "clear_elem_vars",        false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_CLEAR_VAR,               "clear_var",              false,  CLEAN,  false,      "r") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr") \
+    macro(RANDOMIZER_FUNC_ARGS_READY,         "func_args_ready",        false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_FUNC_ROUND_END,          "func_round_end",         false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_FUNC_ROUND_FINAL,        "func_round_final",       false,  CLEAN,  false,      "") \
+    macro(RANDOMIZER_FUNC_ROUND_NEXT,         "func_round_next",        false,  CLEAN,  false,      "r") \
+    macro(RANDOMIZER_FUNC_ROUND_START,        "func_round_start",       false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_HARD,                    "hard",                   false,  CLEAN,  false,      "r+") \
+    macro(RANDOMIZER_PIN_FROZEN,              "pin_frozen",             false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrr") \
     macro(RANDOMIZER_UNIQUE,                  "rand_unique",            false,  CLEAN,  false,      "rr") \
     macro(RANDOMIZER_MARK_RANDC,              "markRandc",              false,  CLEAN,  false,      "r") \
@@ -2471,7 +2459,7 @@ public:
         return names[m_e];
     }
     bool isParam() const { return m_e == GPARAM || m_e == LPARAM; }
-    bool isSignal() const {
+    bool isSignal() const VL_MT_SAFE {
         return (m_e == WIRE || m_e == WREAL || m_e == TRIWIRE || m_e == TRI0 || m_e == TRI1
                 || m_e == PORT || m_e == SUPPLY0 || m_e == SUPPLY1 || m_e == VAR || m_e == TRIOR
                 || m_e == TRIAND);
@@ -2493,7 +2481,7 @@ public:
                 || m_e == MODULETEMP || m_e == STMTTEMP || m_e == XTEMP || m_e == IFACEREF
                 || m_e == MEMBER);
     }
-    bool isTemp() const {
+    bool isTemp() const VL_MT_SAFE {
         return (m_e == BLOCKTEMP || m_e == MODULETEMP || m_e == STMTTEMP || m_e == XTEMP);
     }
     bool isVPIAccessible() const {

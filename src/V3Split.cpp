@@ -51,13 +51,24 @@
 //   - Read: statement -> variable. For an 'if', only the reads in its own
 //     condition count, not those in its branches.
 //   - Impure statement: statement -> a vertex shared by all of them, so that
-//     $display, DPI calls, etc stay in one block, in order.
+//     $display, DPI calls, etc stay in one block, in order. The enclosing
+//     statements have such an edge too.
+//   - Enclosing: a statement that writes, or encloses a write, -> its nearest
+//     enclosing statement that is kept (see below), so that a kept 'if' holds
+//     its whole body together.
 //
 // A variable with no blocking write is an input to the block, so its vertex is
 // removed, and with it the dependencies on it, as two statements both reading
 // an input need not stay together. An 'if' left with no dependencies of its
 // own is removed likewise, so that the statements under it can separate, each
 // taking a copy of the condition.
+//
+// The copies of the conditions can make the split blocks much larger than the
+// original. In a long if/else chain with a different variable written under
+// each 'if', as V3Case makes of a case statement decoding register writes,
+// they grow with the square of the length of the chain. So a clocked block is
+// not split if that would make more than SPLIT_MAX_IF_COPIES copies of 'if's
+// per statement in the block.
 //
 //*************************************************************************
 
@@ -68,6 +79,8 @@
 #include "V3Graph.h"
 #include "V3Stats.h"
 
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -106,12 +119,24 @@ public:
 
 class SplitStmtVertex final : public SplitNodeVertex {
     VL_RTTI_IMPL(SplitStmtVertex, SplitNodeVertex)
+    SplitStmtVertex* const m_parentp;  // Vertex of the enclosing statement, or nullptr
+    SplitStmtVertex* m_keptp = nullptr;  // This, or if removed, the nearest kept enclosing vertex
+    bool m_writes = false;  // This statement, or one under it, writes a variable
+    bool m_impure = false;  // Has an edge to the impure vertex
 
     std::string dotColor() const override { return "yellow"; }
 
 public:
-    SplitStmtVertex(V3Graph* graphp, AstNode* nodep)
-        : SplitNodeVertex{graphp, nodep} {}
+    SplitStmtVertex(V3Graph* graphp, AstNode* nodep, SplitStmtVertex* parentp)
+        : SplitNodeVertex{graphp, nodep}
+        , m_parentp{parentp} {}
+    SplitStmtVertex* parentp() const { return m_parentp; }
+    SplitStmtVertex* keptp() const { return m_keptp; }
+    void keptp(SplitStmtVertex* vtxp) { m_keptp = vtxp; }
+    bool writes() const { return m_writes; }
+    void setWrites() { m_writes = true; }
+    bool impure() const { return m_impure; }
+    void setImpure() { m_impure = true; }
 };
 
 class SplitVarStdVertex final : public SplitNodeVertex {
@@ -136,6 +161,9 @@ public:
 };
 
 class SplitVisitor final : public VNVisitor {
+    // Splitting a clocked block may add up to this many copies of 'if's per statement
+    static constexpr size_t SPLIT_MAX_IF_COPIES = 4;
+
     // NODE STATE - Only under AstAlways
     // AstVarScope::user1p  -> SplitVarStdVertex*: Regular program-flow variable vertex
     // AstVarScope::user2p  -> SplitVarPostVertex*: NBA written delayed variable vertex
@@ -148,11 +176,14 @@ class SplitVisitor final : public VNVisitor {
     // STATE
     V3Graph* m_graphp = nullptr;  // Dependency graph to analyze statement connectivity
     std::vector<SplitStmtVertex*> m_stmtStackps;  // Current statements being tracked
+    std::vector<SplitStmtVertex*> m_nonIfStackps;  // m_stmtStackps without the 'if's
     SplitImpureVertex* m_impureVtxp = nullptr;  // Vertex connecting impure statements
     const char* m_noSplitWhy = nullptr;  // Reason current block cannot be split
     bool m_inDly = false;  // Inside AstAssignDly Lhs
     const AstIf* m_currIfp = nullptr;  // The AstIf whose condition is currently visited
+    bool m_clocked = false;  // Under a clocked AstActive
     VDouble0 m_statSplits;  // Statistic tracking
+    VDouble0 m_statDeclined;  // Statistic tracking
 
     // METHODS
     void addEdge(V3GraphVertex* fromp, V3GraphVertex* top) {
@@ -168,11 +199,17 @@ class SplitVisitor final : public VNVisitor {
             // own, which would be subsequently deleted as it does nothing.
             if (VN_IS(stmtp, Comment)) continue;
             UASSERT_OBJ(!stmtp->user1p(), stmtp, "user1p should not be set");
-            SplitStmtVertex* const vtxp = new SplitStmtVertex{m_graphp, stmtp};
+            SplitStmtVertex* const parentp
+                = m_stmtStackps.empty() ? nullptr : m_stmtStackps.back();
+            SplitStmtVertex* const vtxp = new SplitStmtVertex{m_graphp, stmtp, parentp};
             stmtp->user1p(vtxp);
+            const bool isIf = VN_IS(stmtp, If);
             m_stmtStackps.push_back(vtxp);
+            if (!isIf) m_nonIfStackps.push_back(vtxp);
             iterate(stmtp);
+            if (!isIf) m_nonIfStackps.pop_back();
             m_stmtStackps.pop_back();
+            if (vtxp->writes() && parentp) parentp->setWrites();
         }
     }
 
@@ -195,8 +232,6 @@ class SplitVisitor final : public VNVisitor {
         }
         if (dumpGraphLevel() >= 9) m_graphp->dumpDotFilePrefixed("splitg_noinputs", false);
 
-        // A statement under an 'if' also has an edge to the 'if' itself, from
-        // each variable it writes, so an 'if' holds its whole body together.
         // An 'if' has out edges only for what its own condition reads. If
         // after the pruning of block inputs above, an 'if' has no remaining
         // out edges (dependencies of its condition), then it constrains
@@ -204,15 +239,32 @@ class SplitVisitor final : public VNVisitor {
         // its contents can split apart, each part taking a copy of the
         // condition.  This is what allows splitting within an if/else at all,
         // and is what breaks up the reset tree in the example at the top of
-        // this file.
-        for (V3GraphVertex* const vtxp : m_graphp->vertices().unlinkable()) {
-            SplitStmtVertex* const stmtVtxp = vtxp->cast<SplitStmtVertex>();
-            if (!stmtVtxp || !VN_IS(stmtVtxp->nodep(), If)) continue;
+        // this file. Each statement that writes is then connected to its
+        // nearest kept enclosing statement, so a kept 'if' holds its whole
+        // body together. Vertices were created parents first, so the parent
+        // of each vertex is already decided when it is reached.
+        std::vector<SplitStmtVertex*> removedps;
+        for (V3GraphVertex& vtx : m_graphp->vertices()) {
+            SplitStmtVertex* const stmtVtxp = vtx.cast<SplitStmtVertex>();
+            if (!stmtVtxp) continue;
+            SplitStmtVertex* const parentp = stmtVtxp->parentp();
+            SplitStmtVertex* const keptParentp = parentp ? parentp->keptp() : nullptr;
             // Can't remove if dependent on a variable written in the block
-            if (!stmtVtxp->outEmpty()) continue;
-            // Depends only on block inputs, so can be split. Remove the vertex.
-            stmtVtxp->nodep()->user1p(nullptr);
-            stmtVtxp->unlinkDelete(m_graphp);
+            if (VN_IS(stmtVtxp->nodep(), If) && stmtVtxp->outEmpty()) {
+                // A condition writing a variable is impure, so has an edge to m_impureVtxp
+                UASSERT_OBJ(stmtVtxp->inEmpty(), stmtVtxp->nodep(), "Pure condition writes");
+                // Depends only on block inputs, so can be split. Remove the vertex.
+                stmtVtxp->keptp(keptParentp);
+                removedps.push_back(stmtVtxp);
+                continue;
+            }
+            stmtVtxp->keptp(stmtVtxp);
+            if (keptParentp && stmtVtxp->writes()) addEdge(stmtVtxp, keptParentp);
+        }
+        // This leaves m_parentp of their children dangling, it is not used after this
+        for (SplitStmtVertex* const vtxp : removedps) {
+            vtxp->nodep()->user1p(nullptr);
+            vtxp->unlinkDelete(m_graphp);
         }
         if (dumpGraphLevel() >= 9) m_graphp->dumpDotFilePrefixed("splitg_nofreeifs", false);
 
@@ -222,9 +274,42 @@ class SplitVisitor final : public VNVisitor {
         return numColors;
     }
 
+    // Add the colors in 'otherColors' to 'colors', destroying 'otherColors'
+    static void addColors(std::set<uint32_t>& colors, std::set<uint32_t>& otherColors) {
+        // Inserting the smaller set into the larger, the total work is O(n * log(n)^2)
+        if (colors.size() < otherColors.size()) std::swap(colors, otherColors);
+        colors.insert(otherColors.begin(), otherColors.end());
+    }
+
+    // Return the colors the statements of the given list would be split into
+    static std::set<uint32_t> splitColors(AstNode* stmtsp, size_t& stmts, size_t& ifCopies) {
+        // Also counts the statements in 'stmts', and the copies of 'if's the
+        // split would make in 'ifCopies'
+        std::set<uint32_t> colors;
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            if (VN_IS(stmtp, Comment)) continue;
+            ++stmts;
+            const SplitStmtVertex* const vtxp = stmtp->user1u().to<SplitStmtVertex*>();
+            std::set<uint32_t> stmtColors;
+            if (const AstIf* const ifp = VN_CAST(stmtp, If)) {
+                stmtColors = splitColors(ifp->thensp(), stmts, ifCopies);
+                std::set<uint32_t> elseColors = splitColors(ifp->elsesp(), stmts, ifCopies);
+                addColors(stmtColors, elseColors);
+                // The 'if' is copied for each color but one
+                if (stmtColors.size() > 1) ifCopies += stmtColors.size() - 1;
+                // An empty 'if' leaves its condition in the color of the 'if', see below
+                if (stmtColors.empty() && vtxp) stmtColors.emplace(vtxp->color());
+            } else {
+                stmtColors.emplace(vtxp->color());
+            }
+            addColors(colors, stmtColors);
+        }
+        return colors;
+    }
+
     // Take the statements of the given list, and return them distributed into one list per color.
-    static std::vector<AstNodeStmt*> splitStatements(AstNode* stmtsp, uint32_t numColors) {
-        std::vector<AstNodeStmt*> result{numColors, nullptr};
+    static std::map<uint32_t, AstNodeStmt*> splitStatements(AstNode* stmtsp) {
+        std::map<uint32_t, AstNodeStmt*> result;
         for (AstNode* const stmtp : VNList<AstNode>{stmtsp}) {
             // Comments are dropped if the block is split
             if (VN_IS(stmtp, Comment)) continue;
@@ -234,18 +319,22 @@ class SplitVisitor final : public VNVisitor {
 
             // If statements are duplicated for each split branch
             if (AstIf* const ifp = VN_CAST(stmtp, If)) {
-                const auto thens = splitStatements(ifp->thensp(), numColors);
-                const auto elses = splitStatements(ifp->elsesp(), numColors);
+                // The then and else statements of each color
+                std::map<uint32_t, std::pair<AstNodeStmt*, AstNodeStmt*>> branches;
+                for (const auto& item : splitStatements(ifp->thensp())) {
+                    branches[item.first].first = item.second;
+                }
+                for (const auto& item : splitStatements(ifp->elsesp())) {
+                    branches[item.first].second = item.second;
+                }
                 FileLine* const flp = ifp->fileline();
                 // Rebuild the 'if' for each color present in either branch
-                bool empty = true;
-                for (uint32_t color = 0; color < numColors; ++color) {
-                    if (!thens[color] && !elses[color]) continue;
-                    empty = false;
+                for (const auto& item : branches) {
+                    const uint32_t color = item.first;
                     // The condition is cloned for each color. An impure condition
                     // keeps the 'if' and all it holds in one component, so just once.
                     AstIf* const clonep = new AstIf{flp, ifp->condp()->cloneTree(true),
-                                                    thens[color], elses[color]};
+                                                    item.second.first, item.second.second};
                     // Preserve pragmas from unique if's so assertions work properly
                     clonep->uniquePragma(ifp->uniquePragma());
                     clonep->unique0Pragma(ifp->unique0Pragma());
@@ -258,7 +347,7 @@ class SplitVisitor final : public VNVisitor {
                 // 'if' can go. Otherwise the condition might have a side
                 // effect, so keep just the condition, evaluated as a
                 // statement, under the color of the 'if' itself.
-                if (empty && vtxp) {
+                if (branches.empty() && vtxp) {
                     const uint32_t color = vtxp->color();
                     AstNodeExpr* const condp = ifp->condp();
                     condp->unlinkFrBack();
@@ -310,11 +399,27 @@ class SplitVisitor final : public VNVisitor {
 
         UINFO(6, "  splitting always " << nodep);
 
+        // Copying the 'if's for each color can be quadratic, e.g. for a long
+        // if/else chain with a different variable written under each 'if',
+        // which is what V3Case makes of a register write decoder. Do not split
+        // a clocked block if that makes too many copies. A combinational block
+        // is always split, as that can be needed to avoid a combinational loop.
+        if (m_clocked) {
+            size_t stmts = 0;
+            size_t ifCopies = 0;
+            splitColors(nodep->stmtsp(), stmts, ifCopies);
+            if (ifCopies > SPLIT_MAX_IF_COPIES * stmts) {
+                UINFO(6, "  NoSplitBlock because too many copies " << nodep);
+                ++m_statDeclined;
+                return;
+            }
+        }
+
         // Count the number of new blocks inserted into the Ast: '1 -> n' split, so 'n - 1' extra
         m_statSplits += numColors - 1;
 
         // Unpick the statements out of the original block, into one list per color
-        const auto lists = splitStatements(nodep->stmtsp(), numColors);
+        const std::map<uint32_t, AstNodeStmt*> lists = splitStatements(nodep->stmtsp());
         UASSERT_OBJ(lists.size() == numColors, nodep, "Inconsistent split");
 
         // Whatever 'splitStatements' did not take, (comments, empty ifs) is not needed any more
@@ -324,19 +429,22 @@ class SplitVisitor final : public VNVisitor {
 
         // Every color has a statement in it. Reuse the original block for the
         // first color, and add a new block after it for each of the rest.
-        UASSERT_OBJ(lists.front(), nodep, "Color with no statements");
-        nodep->addStmtsp(lists.front());
+        nodep->addStmtsp(lists.begin()->second);
         AstNode* lastp = nodep;
         FileLine* const flp = nodep->fileline();
         const VAlwaysKwd kwd = nodep->keyword();
-        for (size_t i = 1; i < numColors; ++i) {
-            AstNodeStmt* const stmtsp = lists[i];
-            UASSERT_OBJ(stmtsp, nodep, "Color with no statements");
-            AstAlways* const newp = new AstAlways{flp, kwd, nullptr, stmtsp};
+        for (auto it = std::next(lists.begin()); it != lists.end(); ++it) {
+            AstAlways* const newp = new AstAlways{flp, kwd, nullptr, it->second};
             newp->user3(1);  // Do not split again
             lastp->addNextHere(newp);
             lastp = newp;
         }
+    }
+
+    void visit(AstActive* nodep) override {
+        VL_RESTORER(m_clocked);
+        m_clocked = nodep->hasClocked();
+        iterateChildren(nodep);
     }
 
     void visit(AstIf* nodep) override {
@@ -401,25 +509,24 @@ class SplitVisitor final : public VNVisitor {
             // so add only a write edge to a separate 'post' vertex.
             if (!vscp->user2p()) vscp->user2p(new SplitVarPostVertex{m_graphp, vscp});
             SplitVarPostVertex* const vpostp = vscp->user2u().to<SplitVarPostVertex*>();
-            for (SplitStmtVertex* const vtxp : m_stmtStackps) addEdge(vpostp, vtxp);
+            addEdge(vpostp, m_stmtStackps.back());
+            m_stmtStackps.back()->setWrites();
         } else if (nodep->access().isWriteOrRW()) {
             // Regular (non-blocking) write: Need to maintain program-flow order
             if (!vscp->user1p()) vscp->user1p(new SplitVarStdVertex{m_graphp, vscp});
             SplitVarStdVertex* const vstdp = vscp->user1u().to<SplitVarStdVertex*>();
-            for (SplitStmtVertex* const vtxp : m_stmtStackps) addEdge(vstdp, vtxp);
+            addEdge(vstdp, m_stmtStackps.back());
+            m_stmtStackps.back()->setWrites();
         } else {
             // Regular (non-blocking) read: Need to maintain program-flow order
             if (!vscp->user1p()) vscp->user1p(new SplitVarStdVertex{m_graphp, vscp});
             SplitVarStdVertex* const vstdp = vscp->user1u().to<SplitVarStdVertex*>();
-            for (SplitStmtVertex* const vtxp : m_stmtStackps) {
-                // If this is an if statement it only depends on refs in its
-                // own condition only (not those in its branches). For other
-                // statements, just record the referene as normal.
-                if (const AstIf* const ifp = VN_CAST(vtxp->nodep(), If)) {
-                    if (ifp != m_currIfp) continue;
-                }
-                addEdge(vtxp, vstdp);
+            // An if statement only depends on refs in its own condition (not
+            // those in its branches). Other statements depend on all refs under them.
+            if (m_currIfp && m_currIfp->user1p()) {
+                addEdge(m_currIfp->user1u().to<SplitStmtVertex*>(), vstdp);
             }
+            for (SplitStmtVertex* const vtxp : m_nonIfStackps) addEdge(vtxp, vstdp);
         }
     }
 
@@ -445,8 +552,13 @@ class SplitVisitor final : public VNVisitor {
             if (!m_impureVtxp) m_impureVtxp = new SplitImpureVertex{m_graphp, nodep};
             // One edge is enough to find the weakly connected components, but
             // it must point at the impure vertex, so it is an out edge (input
-            // dependency) of any enclosing 'if' to prevent pruning.
-            for (SplitStmtVertex* const vtxp : m_stmtStackps) addEdge(vtxp, m_impureVtxp);
+            // dependency) of any enclosing 'if' to prevent pruning. A statement
+            // that has one already is enclosed by statements that have one.
+            for (SplitStmtVertex* vtxp = m_stmtStackps.back(); vtxp && !vtxp->impure();
+                 vtxp = vtxp->parentp()) {
+                vtxp->setImpure();
+                addEdge(vtxp, m_impureVtxp);
+            }
         }
 
         iterateChildren(nodep);
@@ -454,7 +566,10 @@ class SplitVisitor final : public VNVisitor {
 
     // CONSTRUCTORS
     explicit SplitVisitor(AstNetlist* nodep) { iterate(nodep); }
-    ~SplitVisitor() override { V3Stats::addStat("Optimizations, Split always", m_statSplits); }
+    ~SplitVisitor() override {
+        V3Stats::addStat("Optimizations, Split always", m_statSplits);
+        V3Stats::addStat("Optimizations, Split always declined as too large", m_statDeclined);
+    }
     VL_UNCOPYABLE(SplitVisitor);
 
 public:

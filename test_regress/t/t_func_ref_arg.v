@@ -22,6 +22,15 @@ function int get_val_set_5(ref int x);
   return y;
 endfunction
 
+function int get_val(const ref int x);
+  return x;
+endfunction
+
+function automatic int set_get(ref int aa[int], input int k, const ref int x);
+  aa[k] = 7;
+  return x;
+endfunction
+
 class Cls;
   function int get_val_set_2(ref int x);
     automatic int y = x;
@@ -88,6 +97,53 @@ module t;
     b = cls.get_val_set_2(st.arr[1][2][0].x);
     `checkh(st.arr[1][2][0].x, 2);
     `checkh(b, 5);
+
+    // Elements by a variable index, which may exceed the array
+    for (int i = 0; i < 1; ++i) `checkh(get_val(arr[i]), 2);
+    begin
+      int arr3[3];
+      int idx;
+      for (int i = 0; i < 3; ++i) begin
+        arr3[i] = i + 10;
+        `checkh(get_val(arr3[i]), i + 10);
+      end
+      // Out of bounds, reads the default value (IEEE 1800-2023 7.4.6)
+      idx = $c(3);
+      b = 5;
+      b = get_val(arr3[idx]);
+      `checkh(b, 0);
+    end
+
+    begin
+      int assoc[int];
+      int wild[*];
+      int assoc_2d[string][int];
+      assoc[-3] = 10;
+      b = get_val_set_5(assoc[-3]);
+      `checkh(assoc[-3], 5);
+      `checkh(b, 10);
+      b = cls.get_val_set_2(assoc[-3]);
+      `checkh(assoc[-3], 2);
+      `checkh(b, 5);
+      // Missing element is created
+      b = get_val_set_5(assoc[a]);
+      `checkh(assoc[2], 5);
+      `checkh(b, 0);
+      `checkh(assoc.size(), 2);
+      // A const ref sees a write made to the element during the call
+      b = set_get(assoc, -3, assoc[-3]);
+      `checkh(b, 7);
+
+      wild[8'h7] = 10;
+      b = get_val_set_5(wild[8'h7]);
+      `checkh(wild[8'h7], 5);
+      `checkh(b, 10);
+
+      assoc_2d["k"][1] = 10;
+      b = cls.get_val_set_2(assoc_2d["k"][1]);
+      `checkh(assoc_2d["k"][1], 2);
+      `checkh(b, 10);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

@@ -80,8 +80,9 @@ public:
     // Bins covered / effective total (Normal set only) for the coverage calc
     virtual void coverageParts(double& covered, double& total) const = 0;
     /// Coverage of this item in its covergroup instance, as returned by the item's
-    /// get_inst_coverage(), in 0..100 (IEEE 1800-2023 19.11.1, 19.11.2)
-    double coverage() const;
+    /// get_inst_coverage(), in 0..100 (IEEE 1800-2023 19.11.1, 19.11.2); and its covered
+    /// bins and all its bins, which get_inst_coverage() assigns its arguments (19.8)
+    double coverage(IData& covered, IData& total) const;
     /// Weight of this item in its covergroup instance's coverage (option.weight,
     /// IEEE 1800-2023 19.11)
     int32_t weight() const {

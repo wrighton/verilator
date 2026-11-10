@@ -21,5 +21,11 @@ class Cls2 extends Pkg::NotFound2;  // BAD: not found
   endfunction
 endclass
 
+interface class Ifc;
+endclass
+
+class Cls3 extends IsNotFound3 implements Ifc;  // BAD: not found
+endclass
+
 module t;
 endmodule

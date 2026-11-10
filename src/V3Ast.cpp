@@ -1266,11 +1266,15 @@ bool AstNode::sameTreeIter(const AstNode* node1p, const AstNode* node2p, bool ig
         if (!node1p && !node2p) return true;
         if (!node1p || !node2p) return false;
         if (node1p->type() != node2p->type()) return false;
-        UASSERT_OBJ(
-            (!node1p->dtypep() && !node2p->dtypep()) || (node1p->dtypep() && node2p->dtypep()),
-            node1p,
-            "Comparison of a node with dtypep() with a node without dtypep()\n-node2=" << node2p);
-        if (node1p->dtypep() && !node1p->dtypep()->similarDType(node2p->dtypep())) return false;
+        if (!node1p->dtypep() != !node2p->dtypep()) {
+            // Before data types are resolved only some nodes have one, e.g. a reference to a
+            // parameter linked after V3Param widthed it, but not one linked before.
+            UASSERT_OBJ(!v3Global.assertDTypesResolved(), node1p,
+                        "Comparison of a node with dtypep() with a node without dtypep()\n-node2="
+                            << node2p);
+        } else if (node1p->dtypep() && !node1p->dtypep()->similarDType(node2p->dtypep())) {
+            return false;
+        }
         if (!node1p->sameNode(node2p) || (gateOnly && !node1p->isGateOptimizable())) return false;
         if (!sameTreeIter(node1p->m_op1p, node2p->m_op1p, false, gateOnly)
             || !sameTreeIter(node1p->m_op2p, node2p->m_op2p, false, gateOnly)

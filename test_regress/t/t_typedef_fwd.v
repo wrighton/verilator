@@ -36,6 +36,15 @@ package P;
 
   typedef int generic_t;
 
+  function automatic int f();
+`ifndef TEST_NO_TYPEDEFS
+    typedef local_t;
+`endif
+    local_t v = 1;  // <--- Error need forward decl (if TEST_NO_TYPEDEFS)
+    typedef int local_t;
+    return v;
+  endfunction
+
 endpackage
 
 module t;

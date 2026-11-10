@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_gen_defparam_early_unsup.v:18:18: Unsupported: defparam into a generate block that is not elaborated, whose path also names a scope outside it (IEEE 1800-2023 23.10.4.2)
+   18 |   defparam t.n.p = 1;   
+      |                  ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_gen_defparam_early_unsup.v:30:18: Unsupported: defparam into a generate block that is not elaborated, whose path also names a scope outside it (IEEE 1800-2023 23.10.4.2)
+   30 |   defparam x.n.p = 4;   
+      |                  ^
+%Error-UNSUPPORTED: t/t_gen_defparam_early_unsup.v:39:18: Unsupported: defparam into a generate block that is not elaborated, whose path also names a scope outside it (IEEE 1800-2023 23.10.4.2)
+   39 |   defparam y.n.p = 5;   
+      |                  ^
+%Error: Exiting due to

@@ -110,7 +110,10 @@ const VBasicDTypeKwd LOGIC_IMPLICIT = VBasicDTypeKwd::LOGIC_IMPLICIT;
         GRAMMARP->m_varDeclTyped = true; \
     }
 #define VARDTYPE_NDECL(dtypep) \
-    { GRAMMARP->setDType(dtypep); }  // Port that is range or signed only (not a decl)
+    { \
+        GRAMMARP->setDType(dtypep); \
+        GRAMMARP->m_varDeclTyped = false; \
+    }  // Port that is range or signed only (not a decl)
 
 #define VARDONEA(fl, name, array, attrs) GRAMMARP->createVariable((fl), (name), (array), (attrs))
 #define VARDONEP(portp, array, attrs) \
@@ -323,7 +326,7 @@ BISONPRE_VERSION(3.7,%define api.header.include {"V3ParseBison.h"})
 %token<fl>              '['
 %token<fl>              ']'
 %token<fl>              '^'
-%token<fl>              '{'
+%token<fl>              '{'  // See also yP_CURLY__EMPTY
 %token<fl>              '|'
 %token<fl>              '}'
 %token<fl>              '~'
@@ -842,6 +845,7 @@ BISONPRE_VERSION(3.7,%define api.header.include {"V3ParseBison.h"})
 
 %token<fl>              yP_COLON__BEGIN ":-then-begin"
 %token<fl>              yP_COLON__FORK  ":-then-fork"
+%token<fl>              yP_CURLY__EMPTY "{-then-}"      // Used when constraint_set is '{' '}'
 %token<fl>              yP_EQ__NEW      "=-then-new"
 %token<fl>              yP_PAR__IGNORE  "(-ignored"     // Used when sequence_expr:expr:( is ignored
 %token<fl>              yP_PAR__STRENGTH "(-for-strength"
@@ -1549,6 +1553,9 @@ intFront<nodeModulep>:
                         { $$ = new AstIface{$<fl>3, *$3, PARSEP->libname()};
                           $$->inLibrary(true);
                           $$->lifetime($2);
+                          $$->timeunit(PARSEP->timeLastUnit());
+                          PARSEP->rootp()->timeprecisionMerge($$->fileline(),
+                                                              PARSEP->timeLastPrec());
                           PARSEP->rootp()->addModulesp($$); }
         |       intFront sigAttrScope                   { $$ = $1; }
         ;
@@ -3252,12 +3259,13 @@ defparam_assignment<nodep>:     // ==IEEE: defparam_assignment
                 defparamIdRangeList '.' idAnyAsParseRef '=' expr
                         { $$ = new AstDefParam{$4, $1, $3, $5}; }
         |       idAnyAsParseRef '=' expr
-                        { $$ = nullptr; BBUNSUP($2, "Unsupported: defparam with no dot");
-                          DEL($3); }
+                        { $$ = new AstDefParam{$2, nullptr, $1, $3}; }
         ;
 
 defparamIdRangeList<nodeExprp>:  // IEEE: part of defparam_assignment
                 defparamIdRange                     { $$ = $1; }
+        |       yD_ROOT '.' defparamIdRange
+                        { $$ = new AstDot{$2, false, new AstParseRef{$<fl>1, "$root"}, $3}; }
         |       defparamIdRangeList '.' defparamIdRange
                         { $$ = new AstDot{$2, false, $1, $3}; }
         ;
@@ -4214,6 +4222,14 @@ task_subroutine_callNoMethod<nodeExprp>:    // function_subroutine_callNoMethod 
                                                               = new AstWithParse{$2, $1, $4, $6};
                                                           withParsep->restricted(true);
                                                           $$ = withParsep; }
+        //                      // IEEE: randomize_call without parentheses
+        |       idRandomize yWITH__CUR constraint_block
+                        { $$ = new AstWithParse{$2, new AstFuncRef{$<fl>1, *$1}, nullptr, $3}; }
+        |       idRandomize yWITH__PAREN_CUR '(' inlineConstraintIdListE ')' constraint_block
+                        { AstWithParse* const withParsep
+                              = new AstWithParse{$2, new AstFuncRef{$<fl>1, *$1}, $4, $6};
+                          withParsep->restricted(true);
+                          $$ = withParsep; }
         ;
 
 function_subroutine_callNoMethod<nodeExprp>:        // IEEE: function_subroutine_call (as function)
@@ -4240,6 +4256,14 @@ function_subroutine_callNoMethodNoWith<nodeExprp>:  // IEEE: part of function_su
                                                               = new AstWithParse{$2, $1, $4, $6};
                                                           withParsep->restricted(true);
                                                           $$ = withParsep; }
+        //                      // IEEE: randomize_call without parentheses
+        |       idRandomize yWITH__CUR constraint_block
+                        { $$ = new AstWithParse{$2, new AstFuncRef{$<fl>1, *$1}, nullptr, $3}; }
+        |       idRandomize yWITH__PAREN_CUR '(' inlineConstraintIdListE ')' constraint_block
+                        { AstWithParse* const withParsep
+                              = new AstWithParse{$2, new AstFuncRef{$<fl>1, *$1}, $4, $6};
+                          withParsep->restricted(true);
+                          $$ = withParsep; }
         ;
 
 system_t_stmt_call<nodeStmtp>:  // IEEE: part of system_tf_call (as task returning statement)
@@ -6978,6 +7002,11 @@ sexpr<nodeExprp>:  // ==IEEE: sequence_expr  (The name sexpr is important as reg
         //                      // '(' sequence_expr {',' sequence_match_item } ')' [ boolean_abbrev ]
         //                      // "'(' sexpr ')' boolean_abbrev" matches "[sexpr:'(' expr ')'] boolean_abbrev" so we can drop it
         |       '(' ~p~sexpr ')'                        { $$ = $2; }
+        //                      // IEEE: '(' sequence_expr ')' with sequence_expr ::= clocking_event sequence_expr
+        //                      // and through the pexpr copy, the same for property_expr
+        //                      // Clocking event as supported by property_spec
+        |       '(' '@' '(' senitem ')' ~p~sexpr ')'    { $$ = new AstSClocked{$<fl>2, $4, $6}; }
+        |       '(' '@' senitemVar ~p~sexpr ')'         { $$ = new AstSClocked{$<fl>2, $3, $4}; }
         |       '(' ~p~sexpr ',' sequence_match_itemList ')'
                         { $$ = new AstExprStmt{$3, $4, $2}; }
         //
@@ -8308,6 +8337,8 @@ constraint_expression<nodeConstraintItemp>:  // ==IEEE: constraint_expression
         //                      // item V3Randomize already knows how to
         //                      // lower (with disable-soft hoisted by the
         //                      // ConstraintExprVisitor pre-pass).
+        |       expr yP_MINUSGT yP_CURLY__EMPTY '}'
+                        { $$ = new AstConstraintIf{$2, $1, nullptr, nullptr}; }
         |       expr yP_MINUSGT '{' constraint_expressionList '}'
                         { $$ = new AstConstraintIf{$2, $1, $4, nullptr}; }
         |       expr yP_MINUSGT yIF '(' expr ')' constraint_set %prec prLOWER_THAN_ELSE
@@ -8352,6 +8383,7 @@ constraint_expression<nodeConstraintItemp>:  // ==IEEE: constraint_expression
 
 constraint_set<nodeConstraintItemp>:  // ==IEEE: constraint_set
                 constraint_expression                   { $$ = $1; }
+        |       yP_CURLY__EMPTY '}'                     { $$ = nullptr; }
         |       '{' constraint_expressionList '}'       { $$ = $2; }
         //
         |       '{' error '}'                           { $$ = nullptr; }  // LCOV_EXCL_LINE
