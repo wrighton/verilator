@@ -211,21 +211,11 @@ private:
             new AstVarRef{m_procp->fileline(), m_instance.m_handlep, VAccess::WRITE}, newp};
     }
 
-    // Wrap Fork in Begin
+    // Declare the dynamic scope in the Fork and create it before the Fork's initializers
     void linkNodesOfFork(VMemberMap& memberMap, AstFork* forkp) {
-        // Replace the Fork with a Begin
-        const std::string name = "_Vwrapped_"  //
-                                 + (forkp->name().empty() ? "" : forkp->name() + "_")  //
-                                 + std::to_string(m_id);
-        AstBegin* const beginp = new AstBegin{forkp->fileline(), name, nullptr, true};
-        beginp->addDeclsp(m_instance.m_handlep);
-        forkp->replaceWith(beginp);
-        // Create the dynamic scope in the Begin
-        beginp->addStmtsp(instantiateDynScope(memberMap));
-        // Move all sequential statements there
-        if (forkp->stmtsp()) beginp->addStmtsp(forkp->stmtsp()->unlinkFrBackWithNext());
-        // Put the Fork back at the end of the Begin
-        beginp->addStmtsp(forkp);
+        // A wrapping block would add its name to %m and to the names of the Fork's variables
+        forkp->addDeclsp(m_instance.m_handlep);
+        forkp->prependStmtsp(instantiateDynScope(memberMap));
         m_modp->addStmtsp(m_instance.m_classp);
     }
 
@@ -310,6 +300,7 @@ class DynScopeVisitor final : public VNVisitor {
         AstMemberRef* const memberRefp = new AstMemberRef{
             refp->fileline(), new AstVarRef{refp->fileline(), dynScope.m_handlep, refp->access()},
             refp->varp()};
+        memberRefp->access(refp->access());
         if (refp->varp()->direction().isAny()) {
             memberRefp->varp(
                 VN_AS(m_memberMap.findMember(dynScope.m_classp, refp->varp()->name()), Var));
@@ -329,25 +320,6 @@ class DynScopeVisitor final : public VNVisitor {
         auto r = m_frames.emplace(nodep, framep);
         if (r.second) m_frameOrder.push_back(nodep);
     }
-    void bindInitIterate(AstNode* stmtsp, ForkDynScopeFrame* framep) {
-        for (AstNode* const stmtp : VNList<AstNode>{stmtsp}) {
-            if (AstAssign* const asgnp = VN_CAST(stmtp, Assign)) {
-                bindNodeToDynScope(asgnp->lhsp(), framep);
-                iterate(asgnp->rhsp());
-            } else if (AstInitialAutomaticStmt* astmtp
-                       = VN_CAST(stmtp, InitialAutomaticStmt)) {  // Moves in V3Begin
-                // Underlying assign RHS might use function argument, so can't just
-                // move whole thing into the new class's constructor/statements
-                bindInitIterate(astmtp->stmtsp(), framep);
-            } else if (AstInitialStaticStmt* astmtp
-                       = VN_CAST(stmtp, InitialStaticStmt)) {  // Moves in V3Begin
-                bindInitIterate(astmtp->stmtsp(), framep);
-            } else {
-                stmtp->v3fatalSrc("Invalid node under block item initialization part of fork");
-            }
-        }
-    }
-
     bool needsDynScope(const AstVarRef* refp) const {
         const AstVar* const varp = refp->varp();
         return
@@ -400,6 +372,7 @@ class DynScopeVisitor final : public VNVisitor {
 
         // This can be probably optimized to detect cases in which dynscopes could be avoided
         for (AstNode* const declp : nodep->declspList()) {
+            if (VN_IS(declp, Typedef)) continue;  // V3Begin lifts it to the module
             AstVar* const varp = VN_CAST(declp, Var);
             UASSERT_OBJ(varp, declp, "Invalid node under block item initialization part of fork");
             UASSERT_OBJ(!varp->lifetime().isNone(), nodep, "Variable's lifetime is unknown");
@@ -409,7 +382,7 @@ class DynScopeVisitor final : public VNVisitor {
                 bindNodeToDynScope(varp, framep);
             }
         }
-        bindInitIterate(nodep->stmtsp(), framep);
+        iterateAndNextNull(nodep->stmtsp());
 
         for (AstNode* const stmtp : nodep->forkspList()) {
             m_afterTimingControl = false;
@@ -574,16 +547,31 @@ class ForkVisitor final : public VNVisitor {
         const std::string name = "__VforkTask_" + std::to_string(m_nForkTasks++);
         AstTask* const taskp = new AstTask{flp, name};
         taskp->addDeclsp(m_capturedVarsp);
+        taskp->forkBranch(true);
         // A branch that spawns another process must hand its captured variables over to it
         if (m_hasNestedFork) {
             taskp->classMethod(VN_IS(m_modp, Class));
             taskp->isStatic(m_ftaskp && m_ftaskp->isStatic());
         }
-        m_tasksp = AstNode::addNext(m_tasksp, taskp);
+        // Prepend, so each task precedes those of forks nested in it, and V3Begin visits its call
+        // before the task
+        m_tasksp = AstNode::addNext(taskp, m_tasksp);
         if (itemp->declsp()) taskp->addDeclsp(itemp->declsp()->unlinkFrBackWithNext());
-        if (itemp->stmtsp()) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBackWithNext());
         AstTaskRef* const callp = new AstTaskRef{flp, taskp, m_capturedArgsp};
-        itemp->addStmtsp(callp->makeStmt());
+        AstBegin* const beginp
+            = itemp->stmtsp() ? VN_CAST(itemp->stmtsp()->lastp(), Begin) : nullptr;
+        if (beginp && !beginp->name().empty()) {
+            // A named block stays at the fork with the call, so V3Begin keeps its scope for
+            // hierarchical references recorded relative to it (see BeginXRefScopeVisitor)
+            if (beginp->declsp()) taskp->addDeclsp(beginp->declsp()->unlinkFrBackWithNext());
+            // Statements before the block, e.g. the start sentinel, still run first
+            while (itemp->stmtsp() != beginp) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBack());
+            if (beginp->stmtsp()) taskp->addStmtsp(beginp->stmtsp()->unlinkFrBackWithNext());
+            beginp->addStmtsp(callp->makeStmt());
+        } else {
+            if (itemp->stmtsp()) taskp->addStmtsp(itemp->stmtsp()->unlinkFrBackWithNext());
+            itemp->addStmtsp(callp->makeStmt());
+        }
 
         // Variables were moved under the task, so make sure they are marked as funcLocal
         for (AstVar* const localp : m_forkLocalsp) localp->funcLocal(true);

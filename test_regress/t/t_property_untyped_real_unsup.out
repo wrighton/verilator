@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_property_untyped_real_unsup.v:18:27: Unsupported: real argument for untyped formal 'x'
+                                                           : ... note: In instance 't'
+   18 |   assert property (p_bool(r));   
+      |                           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

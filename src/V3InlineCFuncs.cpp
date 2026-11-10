@@ -272,6 +272,8 @@ class InlineCFuncsVisitor final : public VNVisitor {
             const bool doIt = [&]() {
                 // Inline if small enough
                 if (calleeVtxp->size() <= m_sizeThreshold) return true;
+                // A kept function is not removed, so its inlined copies are all bloat
+                if (calleeVtxp->keep()) return false;
                 // Inline if not too much bloat
                 const size_t nCalls = calleeVtxp->inEdges().size();
                 if (nCalls * calleeVtxp->size() <= m_prodThreshold) return true;

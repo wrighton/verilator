@@ -28,6 +28,22 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 #include "V3ParseBison.c"
 
 //======================================================================
+// Functions requiring bison state
+
+void yyerror(const char* errmsg) {
+    FileLine* const fl = PARSEP->bisonLastFileline();
+    const int token = PARSEP->bisonLastToken();
+    if (token == yaT_BEGIN_KEYWORDS || token == yaT_END_KEYWORDS) {
+        fl->v3error(errmsg << '\n'
+                           << fl->warnMore()
+                           << "... `begin_keywords and `end_keywords are only allowed outside a"
+                              " design element (IEEE 1800-2023 22.14)");
+    } else {
+        fl->v3error(errmsg);
+    }
+}
+
+//======================================================================
 // V3ParseImp functions requiring bison state
 
 int V3ParseImp::bisonParse() {
@@ -104,6 +120,43 @@ AstAssignW* V3ParseGrammar::createSupplyExpr(FileLine* fileline, const string& n
         = new AstStrengthSpec{fileline, VStrength::SUPPLY, VStrength::SUPPLY};
     assignp->strengthSpecp(strengthSpecp);
     return assignp;
+}
+
+void V3ParseGrammar::checkTimeunits(const AstNodeModule* modp, const AstNode* itemsp) {
+    // IEEE 1800-2023 3.14.2.2: timeunit and timeprecision declarations precede all other items
+    // of a design element's body, and any later repeat must match the earlier declaration.
+    // Checked here as only the parser knows where the header ends and the body begins.
+    VTimescale unit{VTimescale::NONE};
+    VTimescale prec{VTimescale::NONE};
+    bool itemSeen = false;
+    for (const AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
+        const AstPragma* const pragp = VN_CAST(nodep, Pragma);
+        if (!pragp) {
+            itemSeen = true;
+            continue;
+        }
+        if (!pragp->isTimescale()) continue;
+        const bool isUnit = pragp->pragType() == VPragmaType::TIMEUNIT_SET;
+        const char* const kwd = isUnit ? "timeunit" : "timeprecision";
+        VTimescale& declared = isUnit ? unit : prec;
+        if (!declared.isNone()) {
+            if (!(pragp->timescale() == declared)) {
+                pragp->v3error(kwd << " '" << pragp->timescale() << "' does not match previous "
+                                   << kwd << " '" << declared << "' (IEEE 1800-2023 3.14.2.2)");
+            }
+            continue;
+        }
+        if (itemSeen) {
+            pragp->v3error(kwd << " declaration must precede other items in the "
+                               << modp->verilogKwd() << " (IEEE 1800-2023 3.14.2.2)");
+        }
+        declared = pragp->timescale();
+        if (!unit.isNone() && !prec.isNone() && unit < prec) {
+            pragp->v3error("timeunit '" << unit << "' must be greater than or equal to"
+                                        << " timeprecision '" << prec
+                                        << "' (IEEE 1800-2023 3.14)");
+        }
+    }
 }
 
 AstRange* V3ParseGrammar::scrubRangeMulti(AstNodeRange* nrangep) {
@@ -196,7 +249,11 @@ AstVar* V3ParseGrammar::createVariable(FileLine* fileline, const string& name,
     if (GRAMMARP->m_varIO == VDirection::NONE  // In non-ANSI port list
         && GRAMMARP->m_varDecl == VVarType::PORT) {
         // Just a port list with variable name (not v2k format); AstPort already created
-        if (arrayp) VL_DO_DANGLING(arrayp->deleteTree(), arrayp);
+        if (arrayp) {
+            arrayp->v3warn(E_UNSUPPORTED, "Unsupported: non-ANSI port reference with select"
+                                          " (IEEE 1800-2023 23.2.2.1)");
+            VL_DO_DANGLING(arrayp->deleteTree(), arrayp);
+        }
         if (attrsp) {
             // TODO: Merge attributes across list? Or warn attribute is ignored
             VL_DO_DANGLING(attrsp->deleteTree(), attrsp);

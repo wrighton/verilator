@@ -9,7 +9,7 @@ class Base1;
   extern task nodef();  // <--- Error: duplicate
 endclass
 
-task Base1::noproto();  // <--- Error: Missing prototype
+task Base1::noproto(int a);  // <--- Error: Missing prototype
 endtask
 
 module t;

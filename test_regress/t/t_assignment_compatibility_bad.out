@@ -5,7 +5,7 @@
    35 |   logic unpackedF[3] = unpackedA;
       |                        ^~~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assignment_compatibility_bad.v:36:31: Assignment between 2-state and 4-state types requires equivalent element types (IEEE 1800-2023 6.22.2, 7.6)
+%Error: t/t_assignment_compatibility_bad.v:36:31: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
                                                 : ... note: In instance 't'
                                                 : ... Left-hand data type: 'bit$[0:1]' (2-state)
                                                 : ... Right-hand data type: 'logic$[0:1]' (4-state)
@@ -49,14 +49,14 @@
       |                       ^
 %Error: t/t_assignment_compatibility_bad.v:43:20: Illegal assignment: Associative arrays are assignment compatible only with associative arrays (IEEE 1800-2023 7.6)
                                                 : ... note: In instance 't'
-                                                : ... Left-hand data type: 'logic$[0:1]' (4-state)
-                                                : ... Right-hand data type: 'logic$[string]' (2-state)
+                                                : ... Left-hand data type: 'logic$[0:1]'
+                                                : ... Right-hand data type: 'logic$[string]'
    43 |   assign unpackedA = assocArrayA;
       |                    ^
 %Error: t/t_assignment_compatibility_bad.v:44:17: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
                                                 : ... note: In instance 't'
-                                                : ... Left-hand data type: 'logic$[$]'
-                                                : ... Right-hand data type: 'bit$[$]'
+                                                : ... Left-hand data type: 'logic$[$]' (4-state)
+                                                : ... Right-hand data type: 'bit$[$]' (2-state)
    44 |   assign queueA = queueB;
       |                 ^
 %Error: t/t_assignment_compatibility_bad.v:46:24: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
@@ -111,4 +111,217 @@
                                                 : ... Right-hand data type: 'logic$[0:1][0:1]'
    58 |   assign rows3 = rows2;
       |                ^
+%Error: t/t_assignment_compatibility_bad.v:66:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[string]'
+                                                : ... Right-hand data type: 'int$[int]'
+   66 |     assocStrA = assocIntA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:67:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]$[string]'
+                                                : ... Right-hand data type: 'int$[byte]$[string]'
+   67 |     assocNestA = assocNestB;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:68:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[integer]'
+   68 |     assocIntA = assocIntegerA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:82:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[string]'
+   82 |     assocIntA = assocStrA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:83:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[real]'
+                                                : ... Right-hand data type: 'int$[int]'
+   83 |     assocRealA = assocIntA;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:84:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[class Cls1]'
+                                                : ... Right-hand data type: 'int$[class Cls2]'
+   84 |     assocCls1A = assocCls2A;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:85:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[class Cls1]'
+   85 |     assocIntA = assocCls1A;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:86:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[class Cls1]'
+                                                : ... Right-hand data type: 'int$[int]'
+   86 |     assocCls1A = assocIntA;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:87:14: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'real$[]'
+                                                : ... Right-hand data type: 'int$[]'
+   87 |     dynRealA = dynIntA;
+      |              ^
+%Error: t/t_assignment_compatibility_bad.v:88:14: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'real$[]' (2-state)
+                                                : ... Right-hand data type: 'logic[3:0][1:0]$[]' (4-state)
+   88 |     dynRealA = dynPackA;
+      |              ^
+%Error: t/t_assignment_compatibility_bad.v:89:14: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'logic[3:0][1:0]$[]' (4-state)
+                                                : ... Right-hand data type: 'real$[]' (2-state)
+   89 |     dynPackA = dynRealA;
+      |              ^
+%Error: t/t_assignment_compatibility_bad.v:104:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[int]'
+                                                 : ... Right-hand data type: 'int$[byte]'
+  104 |     assocIntA = holder.assocByteA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:105:21: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[]'
+                                                 : ... Right-hand data type: 'int$[]'
+  105 |     holder.dynRealA = dynIntA;
+      |                     ^
+%Error: t/t_assignment_compatibility_bad.v:106:13: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[]'
+                                                 : ... Right-hand data type: 'byte$[]'
+  106 |     dynIntA = getBytes();
+      |             ^
+%Error: t/t_assignment_compatibility_bad.v:107:21: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[]' (2-state)
+                                                 : ... Right-hand data type: 'logic' (4-state)
+  107 |     holder.dynRealA = nonAggregate;
+      |                     ^
+%Error: t/t_assignment_compatibility_bad.v:108:18: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic' (4-state)
+                                                 : ... Right-hand data type: 'real$[]' (2-state)
+  108 |     nonAggregate = holder.dynRealA;
+      |                  ^
+%Error: t/t_assignment_compatibility_bad.v:109:34: Illegal assignment betwen unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic[1:0]' (4-state)
+                                                 : ... Right-hand data type: 'real$[]' (2-state)
+  109 |     {nonAggregate, unpackedA[0]} = holder.dynRealA;
+      |                                  ^
+%Error: t/t_assignment_compatibility_bad.v:110:34: Illegal assignment betwen unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic[1:0]' (4-state)
+                                                 : ... Right-hand data type: 'byte$[]' (2-state)
+  110 |     {nonAggregate, unpackedA[0]} = getBytes();
+      |                                  ^
+%Error: t/t_assignment_compatibility_bad.v:111:34: Illegal assignment betwen unpacked aggregate and integral type (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'logic[1:0]' (4-state)
+                                                 : ... Right-hand data type: 'int$[]' (2-state)
+  111 |     {nonAggregate, unpackedA[0]} = dynIntA;
+      |                                  ^
+%Error: t/t_assignment_compatibility_bad.v:115:17: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[0:1]'
+                                                 : ... Right-hand data type: 'int$[0:1]'
+  115 |   initial realU = intU[0:1];
+      |                 ^
+%Error: t/t_assignment_compatibility_bad.v:123:15: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Pin data type: 'logic[31:0]$[0:1]' (4-state)
+                                                 : ... Expression data type: 'int$[0:1]' (2-state)
+  123 |   sub u_sel (.p(portRows[0]));
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:124:15: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                 : ... note: In instance 't'
+                                                 : ... Pin data type: 'logic[31:0]$[0:1]' (4-state)
+                                                 : ... Expression data type: 'int$[0:1]' (2-state)
+  124 |   sub u_mem (.p(portHolder.m));
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:127:19: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[$]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  127 |   int queueI[$] = 5;
+      |                   ^
+%Error: t/t_assignment_compatibility_bad.v:128:24: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[$]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  128 |   int queueQ[$][$] = '{5};
+      |                        ^
+%Error: t/t_assignment_compatibility_bad.v:128:24: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                                 : ... Element data type: 'int$[$]'
+                                                 : ... Item data type: 'bit[31:0]'
+  128 |   int queueQ[$][$] = '{5};
+      |                        ^
+%Error: t/t_assignment_compatibility_bad.v:130:20: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[$]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  130 |   queue_t queueT = 5;
+      |                    ^
+%Error: t/t_assignment_compatibility_bad.v:138:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[$]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  138 |     queueI = 5;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:139:24: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[$]' (2-state)
+                                                 : ... Right-hand data type: 'logic' (4-state)
+  139 |     queueQ = '{queueI, nonAggregate};
+      |                        ^~~~~~~~~~~~
+%Error: t/t_assignment_compatibility_bad.v:139:24: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                                 : ... Element data type: 'int$[$]' (2-state)
+                                                 : ... Item data type: 'logic' (4-state)
+  139 |     queueQ = '{queueI, nonAggregate};
+      |                        ^~~~~~~~~~~~
+%Error: t/t_assignment_compatibility_bad.v:140:10: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[]' (2-state)
+                                                 : ... Right-hand data type: 'logic' (4-state)
+  140 |     dynI = nonAggregate;
+      |          ^
+%Error: t/t_assignment_compatibility_bad.v:141:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[int]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  141 |     assocI = 5;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:142:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[0:2]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  142 |     fixedI = 5;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:143:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'real$[$]'
+                                                 : ... Right-hand data type: 'real'
+  143 |     queueR = 1.5;
+      |            ^
+%Warning-REALCVT: t/t_assignment_compatibility_bad.v:143:14: Implicit conversion of real to integer
+  143 |     queueR = 1.5;
+      |              ^~~
+                  ... For warning description see https://verilator.org/warn/REALCVT?v=latest
+                  ... Use "/* verilator lint_off REALCVT */" and lint_on around source to disable this message.
+%Error: t/t_assignment_compatibility_bad.v:144:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'string$[$]'
+                                                 : ... Right-hand data type: 'string'
+  144 |     queueS = str;
+      |            ^
+%Error: t/t_assignment_compatibility_bad.v:146:21: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                                 : ... note: In instance 't'
+                                                 : ... Left-hand data type: 'int$[$]'
+                                                 : ... Right-hand data type: 'bit[31:0]'
+  146 |   sub_queue u_sub (.queueP(5));
+      |                     ^~~~~~
 %Error: Exiting due to

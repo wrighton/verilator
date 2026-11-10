@@ -156,11 +156,13 @@ module t (
   // `VL_DO_DANGLING(pushDeletep(passsp), passsp)` branch in the needAccept path.
   assert property (@(posedge clk) not (a ##1 b))
     $display("negated with pass action");
+    else;
 
   // Negated assert ending in state machine (matchCondp null, rejectBasep only):
   // exercises the `else if (rejectBasep)` branch of notPMatchp assembly.
   assert property (@(posedge clk) not (a ##1 (b[*2])))
     $display("negated state-end with pass");
+    else;
 
   // Negated assert throughout with state-ending RHS (matchCondp null,
   // throughoutRejectp non-null): exercises the `if (throughoutRejectp)` branch.
@@ -173,5 +175,6 @@ module t (
   // branch of notPMatchp assembly.
   assert property (@(posedge clk) not (a throughout (b ##1 c)))
     $display("negated throughout with pass action");
+    else;
 
 endmodule

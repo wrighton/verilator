@@ -372,6 +372,27 @@ class ThisHandleMonitor;
 endclass
 `endif
 
+class ExprClockMonitor;
+  bit clk;
+  bit prev_clk;
+  bit [3:0] sampled;
+
+  // The event signal is only assigned within expressions
+  covergroup expr_cg @(posedge clk);
+    cp_expr: coverpoint sampled {bins lo = {[0 : 7]}; bins hi = {[8 : 15]};}
+  endgroup
+
+  function new();
+    expr_cg = new;
+  endfunction
+
+  function void observe(bit [3:0] v);
+    sampled = v;
+    prev_clk = clk++;
+    prev_clk = clk--;
+  endfunction
+endclass
+
 class ClockEvent;
   bit clk;
 endclass
@@ -438,6 +459,28 @@ class VectorClockMonitor;
   function void observe_bit(bit next_clk, bit [3:0] value);
     sampled = value;
     clk_vec[0] = next_clk;
+  endfunction
+endclass
+
+class IffClockMonitor;
+  bit clk;
+  bit enable;
+  bit [3:0] sampled;
+
+  // IEEE 1800-2023 9.4.2.3: the 'iff' guard, here also reading an argument, gates the event
+  covergroup iff_cg(bit arg_enable) @(posedge clk iff (enable && arg_enable));
+    cp_iff: coverpoint sampled {bins lo = {[0 : 7]}; bins hi = {[8 : 15]};}
+  endgroup
+
+  function new(bit arg_enable);
+    iff_cg = new(arg_enable);
+  endfunction
+
+  function void observe(bit en, bit [3:0] v);
+    enable = en;
+    sampled = v;
+    clk = 0;
+    clk = 1;
   endfunction
 endclass
 
@@ -601,11 +644,14 @@ module t;
   ParameterizedDerivedMonitor parameterized;
   ThisMonitor this_mon;
   ThisSampleMonitor this_sample_mon;
+  ExprClockMonitor expr_clock_mon;
 `ifdef VERILATOR
   ThisHandleMonitor this_handle_mon;
 `endif
   ClockMonitor clock_mon;
   VectorClockMonitor vector_clock_mon;
+  IffClockMonitor iff_on_mon;
+  IffClockMonitor iff_off_mon;
   CopyMonitor copy_src;
   CopyMonitor copy_dst;
   GlobalCgHolder global_src;
@@ -634,11 +680,14 @@ module t;
     parameterized = new;
     this_mon = new;
     this_sample_mon = new;
+    expr_clock_mon = new;
 `ifdef VERILATOR
     this_handle_mon = new;
 `endif
     clock_mon = new;
     vector_clock_mon = new;
+    iff_on_mon = new(1);
+    iff_off_mon = new(0);
     copy_src = new;
     global_src = new;
     clone_src = new;
@@ -667,15 +716,21 @@ module t;
       parameterized.observe(i[3:0]);
       this_mon.observe(i[3:0]);
       this_sample_mon.observe(i[3:0]);
+      expr_clock_mon.observe(i[3:0]);
 `ifdef VERILATOR
       this_handle_mon.observe(i[3:0]);
 `endif
       clock_mon.observe(i[3:0]);
+      iff_on_mon.observe(i < 8, i[3:0]);  // Only the bin lo
+      iff_off_mon.observe(1, i[3:0]);
       static_mon.observe(i[3:0]);
       static_only_mon.observe(i[3:0]);
       multiple_mon.observe(i[3:0], 15 - i[3:0]);
       nested_mon.observe(i[3:0]);
     end
+
+    `checkd(int'(iff_on_mon.iff_cg.get_inst_coverage()), 50);
+    `checkd(int'(iff_off_mon.iff_cg.get_inst_coverage()), 0);
 
     vector_clock_mon.observe(3'b010, 4'hf);
     vector_clock_mon.observe(3'b011, 4'h1);

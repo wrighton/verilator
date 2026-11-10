@@ -1259,25 +1259,47 @@ bool AstNode::gateTreeIter() const {
 }
 
 bool AstNode::sameTreeIter(const AstNode* node1p, const AstNode* node2p, bool ignNext,
-                           bool gateOnly) {
+                           bool gateOnly, SameJumpBlocks& blocks) {
     // private: Return true if the two trees are identical
     // Iterate over the list, rather than recurse, as lists might be long
     while (true) {
         if (!node1p && !node2p) return true;
         if (!node1p || !node2p) return false;
         if (node1p->type() != node2p->type()) return false;
-        UASSERT_OBJ(
-            (!node1p->dtypep() && !node2p->dtypep()) || (node1p->dtypep() && node2p->dtypep()),
-            node1p,
-            "Comparison of a node with dtypep() with a node without dtypep()\n-node2=" << node2p);
-        if (node1p->dtypep() && !node1p->dtypep()->similarDType(node2p->dtypep())) return false;
-        if (!node1p->sameNode(node2p) || (gateOnly && !node1p->isGateOptimizable())) return false;
-        if (!sameTreeIter(node1p->m_op1p, node2p->m_op1p, false, gateOnly)
-            || !sameTreeIter(node1p->m_op2p, node2p->m_op2p, false, gateOnly)
-            || !sameTreeIter(node1p->m_op3p, node2p->m_op3p, false, gateOnly)
-            || !sameTreeIter(node1p->m_op4p, node2p->m_op4p, false, gateOnly)) {
+        if (!node1p->dtypep() != !node2p->dtypep()) {
+            // Before data types are resolved only some nodes have one, e.g. a reference to a
+            // parameter linked after V3Param widthed it, but not one linked before.
+            UASSERT_OBJ(!v3Global.assertDTypesResolved(), node1p,
+                        "Comparison of a node with dtypep() with a node without dtypep()\n-node2="
+                            << node2p);
+        } else if (node1p->dtypep() && !node1p->dtypep()->similarDType(node2p->dtypep())) {
             return false;
         }
+        if (const AstJumpGo* const jump1p = VN_CAST(node1p, JumpGo)) {
+            // Same if branching after corresponding blocks in the trees, or after the same
+            // block enclosing both trees, so identical code in two copies compares the same
+            const AstJumpBlock* const block1p = jump1p->blockp();
+            const AstJumpBlock* const block2p = VN_DBG_AS(node2p, JumpGo)->blockp();
+            const auto it = std::find_if(blocks.begin(), blocks.end(), [&](const auto& pair) {
+                return pair.first == block1p || pair.second == block2p;
+            });
+            if (it == blocks.end() ? block1p != block2p
+                                   : (it->first != block1p || it->second != block2p)) {
+                return false;
+            }
+        } else if (!node1p->sameNode(node2p)) {
+            return false;
+        }
+        if (gateOnly && !node1p->isGateOptimizable()) return false;
+        const bool isBlock = VN_IS(node1p, JumpBlock);
+        if (isBlock) blocks.emplace_back(VN_AS(node1p, JumpBlock), VN_AS(node2p, JumpBlock));
+        if (!sameTreeIter(node1p->m_op1p, node2p->m_op1p, false, gateOnly, blocks)
+            || !sameTreeIter(node1p->m_op2p, node2p->m_op2p, false, gateOnly, blocks)
+            || !sameTreeIter(node1p->m_op3p, node2p->m_op3p, false, gateOnly, blocks)
+            || !sameTreeIter(node1p->m_op4p, node2p->m_op4p, false, gateOnly, blocks)) {
+            return false;
+        }
+        if (isBlock) blocks.pop_back();
         if (ignNext) return true;
         node1p = node1p->m_nextp;
         node2p = node2p->m_nextp;
@@ -1592,18 +1614,22 @@ string AstNode::instanceStr() const {
     // in case we have some circular reference bug.
     constexpr unsigned maxIterations = 10000;
     unsigned iterCount = 0;
-    // Walk 'backp' chain
-    for (const AstNode* currp = this; currp; currp = currp->backp(), ++iterCount) {
+    // Walk 'backp' chain, but from a module, class or package to its parent, not to the
+    // previous module in the netlist, so code in a package or $unit class reports no instance
+    for (const AstNode* currp = this; currp;
+         currp = VN_IS(currp, NodeModule) ? currp->aboveLoopp() : currp->backp(), ++iterCount) {
         if (VL_UNCOVERABLE(iterCount >= maxIterations)) return "";  // LCOV_EXCL_LINE
         // Prefer the enclosing scope, if there is one. This is always under the enclosing module,
         // so just pick it up when encountered
         if (const AstScope* const scopep = VN_CAST(currp, Scope)) {
             return scopep->isTop() ? "" : "... note: In instance " + scopep->prettyNameQ();
         }
-        // If scopes don't exist, report an example instance of the enclosing module
-        if (const AstModule* const modp = VN_CAST(currp, Module)) {
-            const string instanceName = modp->someInstanceName();
-            return instanceName.empty() ? "" : "... note: In instance '" + instanceName + "'";
+        // If scopes don't exist, report an example instance of the enclosing module or
+        // interface
+        if (VN_IS(currp, Module) || VN_IS(currp, Iface)) {
+            const string instanceName = VN_AS(currp, NodeModule)->someInstanceName();
+            return instanceName.empty() ? ""
+                                        : "... note: In instance " + prettyNameQ(instanceName);
         }
     }
     return "";
@@ -1772,6 +1798,11 @@ static const AstNodeDType* computeCastableBase(const AstNodeDType* nodep) {
     }
 }
 
+// Whether an unpacked struct or union
+static bool isUnpackedUOrStruct(const AstNodeDType* dtypep) {
+    return VN_IS(dtypep, NodeUOrStructDType) && dtypep->isCompound();
+}
+
 static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDType* fromDtp,
                                     const AstNode* fromConstp, const bool checkIfaceArgCompat) {
     const VCastable castable = VCastable::UNSUPPORTED;
@@ -1792,15 +1823,37 @@ static VCastable computeCastableImp(const AstNodeDType* toDtp, const AstNodeDTyp
 
     if (toBaseDtp == fromBaseDtp) return VCastable::COMPATIBLE;
 
+    // An unpacked struct or union is not assignment compatible with a basic type, so converts
+    // only by a bit-stream cast, which needs an integral type or (unsupported) a string
+    // (IEEE 1800-2023 6.24.1, 6.24.3)
+    const AstBasicDType* const structOtherBasicp
+        = isUnpackedUOrStruct(fromBaseDtp) ? VN_CAST(toBaseDtp, BasicDType)
+          : isUnpackedUOrStruct(toBaseDtp) ? VN_CAST(fromBaseDtp, BasicDType)
+                                           : nullptr;
+    if (structOtherBasicp && !structOtherBasicp->isIntegralOrPacked()) {
+        return structOtherBasicp->isString() ? VCastable::UNSUPPORTED : VCastable::INCOMPATIBLE;
+    }
+
     if (toNumericable) {
-        if (fromNumericable) return VCastable::COMPATIBLE;
+        if (fromNumericable) {
+            // A string and a real are neither assignment compatible nor both bit-stream types
+            // (IEEE 1800-2023 6.24.1, 6.24.3)
+            if ((toBaseDtp->isString() && fromBaseDtp->isDouble())
+                || (toBaseDtp->isDouble() && fromBaseDtp->isString())) {
+                return VCastable::INCOMPATIBLE;
+            }
+            return VCastable::COMPATIBLE;
+        }
     } else if (VN_IS(toBaseDtp, EnumDType)) {
         if (VN_IS(fromBaseDtp, EnumDType) && toDtp->sameTree(fromDtp))
             return VCastable::ENUM_IMPLICIT;
         if (fromNumericable) return VCastable::ENUM_EXPLICIT;
     } else if (VN_IS(toDtp, QueueDType)
                && (VN_IS(fromDtp, BasicDType) || VN_IS(fromDtp, StreamDType))) {
-        return VCastable::COMPATIBLE;
+        // The elements are taken from the bits, so must be of a bit-stream type (6.24.3)
+        const AstNodeDType* const elemDtp = toDtp->subDTypep()->skipRefp();
+        if (elemDtp->isDouble()) return VCastable::INCOMPATIBLE;
+        if (elemDtp->isIntegralOrPacked()) return VCastable::COMPATIBLE;
     } else if (VN_IS(toDtp, ClassRefDType) && VN_IS(fromConstp, Const)) {
         if (fromConstp->isNull()) return VCastable::COMPATIBLE;
     } else if (VN_IS(toDtp, ClassRefDType) && VN_IS(fromDtp, ClassRefDType)) {

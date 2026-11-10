@@ -1,0 +1,86 @@
+%Error: t/t_sequence_inst_operand_bad.v:34:12: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   34 |     a ##1 (s1 == 1);
+      |            ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_inst_operand_bad.v:47:20: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   47 |   assert property (s1 + 1);
+      |                    ^~
+%Error: t/t_sequence_inst_operand_bad.v:48:26: Illegal use of sequence instance 's2' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   48 |   assert property ($rose(s2));
+      |                          ^~
+%Error: t/t_sequence_inst_operand_bad.v:49:20: Illegal use of sequence instance 's2' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   49 |   assert property (s2 == 1);
+      |                    ^~
+%Error: t/t_sequence_inst_operand_bad.v:50:21: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   50 |   assert property (~s1);
+      |                     ^~
+%Error: t/t_sequence_inst_operand_bad.v:51:26: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   51 |   assert property ($past(s1));
+      |                          ^~
+%Error: t/t_sequence_inst_operand_bad.v:52:26: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   52 |   assert property ($fell(s1));
+      |                          ^~
+%Error: t/t_sequence_inst_operand_bad.v:53:28: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   53 |   assert property ($stable(s1));
+      |                            ^~
+%Error: t/t_sequence_inst_operand_bad.v:54:29: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   54 |   assert property ($sampled(s1));
+      |                             ^~
+%Error: t/t_sequence_inst_operand_bad.v:55:27: Illegal use of property instance 'p1' inside an expression (IEEE 1800-2023 16.12)
+                                             : ... note: In instance 't'
+   55 |   assert property (b |-> (p1 != 0));
+      |                           ^~
+%Error: t/t_sequence_inst_operand_bad.v:56:20: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   56 |   assert property (s1 && b);
+      |                    ^~
+%Error: t/t_sequence_inst_operand_bad.v:57:20: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   57 |   assert property (s1 -> b);
+      |                    ^~
+%Error: t/t_sequence_inst_operand_bad.v:58:33: Illegal use of sequence instance 's2' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   58 |   assert property ($rising_gclk(s2));
+      |                                 ^~
+%Error: t/t_sequence_inst_operand_bad.v:59:34: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   59 |   assert property ($falling_gclk(s1));
+      |                                  ^~
+%Error: t/t_sequence_inst_operand_bad.v:60:33: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   60 |   assert property ($future_gclk(s1));
+      |                                 ^~
+%Error: t/t_sequence_inst_operand_bad.v:61:33: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   61 |   assert property ($steady_gclk(s1));
+      |                                 ^~
+%Error: t/t_sequence_inst_operand_bad.v:62:35: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   62 |   assert property ($changing_gclk(s1));
+      |                                   ^~
+%Error: t/t_sequence_inst_operand_bad.v:63:24: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   63 |   assert property (b ? s1 : s2);
+      |                        ^~
+%Error: t/t_sequence_inst_operand_bad.v:63:29: Illegal use of sequence instance 's2' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   63 |   assert property (b ? s1 : s2);
+      |                             ^~
+%Error: t/t_sequence_inst_operand_bad.v:64:20: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   64 |   assert property (s1 inside {1'b1});
+      |                    ^~
+%Error: t/t_sequence_inst_operand_bad.v:65:22: Illegal use of sequence instance 's1' inside an expression (IEEE 1800-2023 16.8)
+                                             : ... note: In instance 't'
+   65 |   assert property (f(s1));
+      |                      ^~
+%Error: Exiting due to

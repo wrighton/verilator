@@ -78,6 +78,7 @@ class LinkParseVisitor final : public VNVisitor {
     bool m_hasTimingControl = false;  // If current task has timing control
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
+    std::set<std::string> m_genblkDeclNames;  // Names declared in current generate scope
 
     // STATE - Statistic tracking
     VDouble0 m_statModules;  // Number of modules seen
@@ -141,6 +142,43 @@ class LinkParseVisitor final : public VNVisitor {
                 && !nodep->nextp()  // No other statements under upper genif else/case item
                 && (VN_IS(nodep->itemsp(), GenIf))  // Begin has if underneath
                 && !nodep->itemsp()->nextp());  // Has only one item
+    }
+    bool implicitlyNamed(AstGenBlock* nodep) {  // Unnamed block that gets a 'genblk<n>' name
+        const AstNode* const backp = nodep->backp();
+        return nodep->genforp()
+               || ((VN_IS(backp, GenCaseItem) || VN_IS(backp, GenIf)) && !nestedIfBegin(nodep));
+    }
+    void collectGenblkDeclNames(AstNode* nodep) {
+        // Collect names declared in the current generate scope, which an implicit
+        // generate block name must not conflict with (IEEE 1800-2023 27.6)
+        for (; nodep; nodep = nodep->nextp()) {
+            if (AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
+                if (!blockp->unnamed()) {
+                    m_genblkDeclNames.emplace(blockp->name());
+                } else if (!implicitlyNamed(blockp)) {  // Not a new scope
+                    collectGenblkDeclNames(blockp->itemsp());
+                }
+            } else if (const AstGenIf* const ifp = VN_CAST(nodep, GenIf)) {
+                collectGenblkDeclNames(ifp->thensp());
+                collectGenblkDeclNames(ifp->elsesp());
+            } else if (const AstGenCase* const casep = VN_CAST(nodep, GenCase)) {
+                for (AstNode* itemp = casep->itemsp(); itemp; itemp = itemp->nextp()) {
+                    collectGenblkDeclNames(VN_AS(itemp, GenCaseItem)->itemsp());
+                }
+            } else if (const AstNodeProcedure* const procp = VN_CAST(nodep, NodeProcedure)) {
+                collectGenblkDeclNames(procp->stmtsp());  // Named blocks
+            } else if (VN_IS(nodep, Var) || VN_IS(nodep, Typedef)) {
+                m_genblkDeclNames.emplace(nodep->name());
+                // Enum items of its type are declared in the same scope
+                nodep->foreach(
+                    [&](const AstEnumItem* itemp) { m_genblkDeclNames.emplace(itemp->name()); });
+            } else if (VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, NodeFTask)
+                       || VN_IS(nodep, TypedefFwd) || VN_IS(nodep, Class)
+                       || VN_IS(nodep, Covergroup) || VN_IS(nodep, Clocking)
+                       || VN_IS(nodep, Modport)) {
+                m_genblkDeclNames.emplace(nodep->name());
+            }
+        }
     }
 
     void checkIndent(AstNode* nodep, AstNode* childp) {
@@ -360,7 +398,27 @@ class LinkParseVisitor final : public VNVisitor {
             AstRefDType* const refp = VN_AS(nodep->childDTypep(), RefDType);
             refp->name(AstClass::embeddedCovergroupTypeName(refp->name()));
         }
+        if (nodep->valuep() && nodep->direction().isOutput() && nodep->isNet()) {
+            nodep->valuep()->v3warn(NONSTD, "Initializer on output port "
+                                                << nodep->prettyNameQ()
+                                                << " that is a net (IEEE 1800-2023 23.2.2.2)\n"
+                                                << nodep->valuep()->warnMore()
+                                                << "... Suggest use a continuous assignment, or"
+                                                   " declare the port as a variable");
+        }
         if (nodep->valuep()) nodep->hasUserInit(true);
+        if (m_ftaskp && m_ftaskp->dpiImport() && (nodep->isRef() || nodep->isConstRef())) {
+            nodep->v3error("DPI import argument cannot be 'ref' (IEEE 1800-2023 35.5.4): "
+                           << nodep->prettyNameQ());
+        }
+        if (classp && !m_ftaskp && nodep->isConst() && nodep->lifetime().isStaticExplicit()
+            && !nodep->valuep()) {
+            nodep->v3error("Static constant class property requires an initial value"
+                           " (IEEE 1800-2023 8.19): "
+                           << nodep->prettyNameQ() << '\n'
+                           << nodep->warnMore()
+                           << "... Instance constants, without initial value, cannot be static");
+        }
         // IEEE 1800-2023 6.21: for loop variables are automatic. verilog.y is
         // responsible for marking those.
         if (nodep->valuep() && nodep->lifetime().isNone() && m_lifetime.isStatic()
@@ -868,6 +926,8 @@ class LinkParseVisitor final : public VNVisitor {
 
         VL_RESTORER_COPY(m_portDups);
         collectPorts(nodep->stmtsp());
+        VL_RESTORER_CLEAR(m_genblkDeclNames);
+        collectGenblkDeclNames(nodep->stmtsp());
 
         iterateChildren(nodep);
         if (AstModule* const modp = VN_CAST(nodep, Module)) {
@@ -896,21 +956,14 @@ class LinkParseVisitor final : public VNVisitor {
         cleanFileline(nodep);
         VL_RESTORER(m_beginDepth);
         ++m_beginDepth;
-        const AstNode* const backp = nodep->backp();
-        // IEEE says directly nested item is not a new block
-        // The genblk name will get attached to the if true/false LOWER begin block(s)
-        const bool nestedIf = nestedIfBegin(nodep);
         // It's not FOR(BEGIN(...)) but we earlier changed it to BEGIN(FOR(...))
-        int assignGenBlkNum = -1;
-        if (nodep->genforp()) {
-            ++m_genblkNum;
-            if (nodep->name() == "") assignGenBlkNum = m_genblkNum;
-        } else if (nodep->name() == "" && (VN_IS(backp, GenCaseItem) || VN_IS(backp, GenIf))
-                   && !nestedIf) {
-            assignGenBlkNum = m_genblkAbove;
-        }
-        if (assignGenBlkNum != -1) {
-            nodep->name("genblk" + cvtToStr(assignGenBlkNum));
+        if (nodep->genforp()) ++m_genblkNum;
+        if (implicitlyNamed(nodep) && nodep->name() == "") {
+            const string num = cvtToStr(nodep->genforp() ? m_genblkNum : m_genblkAbove);
+            // IEEE 1800-2023 27.6: Add leading zeros until no conflict with a declared name
+            string zeros;
+            while (m_genblkDeclNames.count("genblk" + zeros + num)) zeros += '0';
+            nodep->name("genblk" + zeros + num);
             if (nodep->itemsp()) {
                 nodep->v3warn(GENUNNAMED,
                               "Unnamed generate block "
@@ -923,8 +976,12 @@ class LinkParseVisitor final : public VNVisitor {
         if (nodep->name() != "") {
             VL_RESTORER(m_genblkAbove);
             VL_RESTORER(m_genblkNum);
+            VL_RESTORER_CLEAR(m_genblkDeclNames);
             m_genblkAbove = 0;
             m_genblkNum = 0;
+            collectGenblkDeclNames(nodep->itemsp());
+            if (nodep->genforp())
+                collectGenblkDeclNames(nodep->genforp()->itemsp());
             iterateChildren(nodep);
         } else {
             iterateChildren(nodep);
@@ -1018,8 +1075,8 @@ class LinkParseVisitor final : public VNVisitor {
     void visit(AstDot* nodep) override {
         cleanFileline(nodep);
         iterateChildren(nodep);
-        if (VN_IS(nodep->lhsp(), ParseRef) && nodep->lhsp()->name() == "super"
-            && VN_IS(nodep->rhsp(), New)) {
+        const AstParseRef* const lhsRefp = VN_CAST(nodep->lhsp(), ParseRef);
+        if (lhsRefp && lhsRefp->isSuper() && VN_IS(nodep->rhsp(), New)) {
             // Look for other statements until hit function start
             AstNode* scanp = nodep;
             // Skip over the New's statement
@@ -1059,6 +1116,11 @@ class LinkParseVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstSFormatF* nodep) override {
+        cleanFileline(nodep);
+        iterateChildren(nodep);
+        nodep->timeunit(m_modp->timeunit());
+    }
+    void visit(AstFScanF* nodep) override {
         cleanFileline(nodep);
         iterateChildren(nodep);
         nodep->timeunit(m_modp->timeunit());
@@ -1106,6 +1168,19 @@ class LinkParseVisitor final : public VNVisitor {
             if (nodep->stmtsp()) alwaysp->addStmtsp(nodep->stmtsp()->unlinkFrBackWithNext());
             VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
         }
+    }
+    void visit(AstPropSpec* nodep) override {
+        cleanFileline(nodep);
+        // A parenthesized clocking event leading the property, '(' clocking_event property_expr
+        // ')' (IEEE 1800-2023 16.12), clocks the property as if not parenthesized
+        if (!nodep->sensesp()) {
+            if (AstSClocked* const clockedp = VN_CAST(nodep->propp(), SClocked)) {
+                nodep->addSensesp(clockedp->sensesp()->unlinkFrBackWithNext());
+                clockedp->replaceWith(clockedp->exprp()->unlinkFrBack());
+                VL_DO_DANGLING(pushDeletep(clockedp), clockedp);
+            }
+        }
+        iterateChildren(nodep);
     }
     void visit(AstClocking* nodep) override {
         cleanFileline(nodep);
@@ -1221,7 +1296,7 @@ class LinkParseVisitor final : public VNVisitor {
             if (readOnlyRefs && origVarp->isRef()) paramp->direction(VDirection::CONSTREF);
             funcp->addDeclsp(paramp);
             AstNodeExpr* const lhsp = new AstDot{
-                origVarp->fileline(), false, new AstParseRef{origVarp->fileline(), "this"},
+                origVarp->fileline(), false, AstParseRef::newThis(origVarp->fileline()),
                 new AstParseRef{origVarp->fileline(), origVarp->name()}};
             AstNodeExpr* const rhsp = new AstParseRef{paramp->fileline(), paramp->name()};
             copiesp = AstNode::addNext(copiesp, new AstAssign{origVarp->fileline(), lhsp, rhsp});
@@ -1298,10 +1373,10 @@ class LinkParseVisitor final : public VNVisitor {
             nodep->addMembersp(funcp);
             for (const string& varname : {"covered_bins"s, "total_bins"s}) {
                 AstVar* const varp = new AstVar{nodep->fileline(), VVarType::MEMBER, varname,
-                                                nodep->findStringDType()};
+                                                nodep->findIntDType()};
                 varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
                 varp->funcLocal(true);
-                varp->direction(VDirection::INPUT);
+                varp->direction(VDirection::REF);
                 varp->valuep(new AstVarRef{nodep->fileline(), defaultVarp, VAccess::READ});
                 funcp->addDeclsp(varp);
             }

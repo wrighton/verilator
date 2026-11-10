@@ -8,5 +8,8 @@
 class Cls;
   task t;
     i.super.i = 1;  // <--- BAD: cannot dot a reference to get super
+    i = i.super.i;  // <--- BAD: cannot dot a reference to get super
+    i = i.i.super.i;  // <--- BAD: cannot dot a reference to get super
+    \this .super.i = 1;  // <--- BAD: an escaped identifier is not the keyword
   endtask
 endclass

@@ -106,6 +106,9 @@ module t;
             if ((| downto_32[60:54])) begin
                 $write("");
             end
+            if ((array[i1 +: 2] == array[1:2])) begin
+                $write("");
+            end
             if (the_ifaces[2].ifsig) begin
                 $write("");
             end
@@ -290,6 +293,8 @@ module t;
             $fflush(fd);
             $fscanf(fd, "%d", sum);
             ;
+            $fscanf(fd, str, sum);
+            ;
             $fdisplay("i = ", "%d", sum);
             $fwrite(fd, "hello");
             $readmemh(string'(fd), array);
@@ -378,6 +383,8 @@ module t;
                      $realtime, $time, $time);
             $sscanf("foo=5", "foo=%d", i);
             ;
+            $sscanf("foo=5", str, i);
+            ;
             $printtimescale;
             if ((i != 32'sh5)) begin
                 $stop;
@@ -395,7 +402,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh191, SUB_B, 2'h1);
+                               32'sh19b, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -448,7 +455,7 @@ module t;
                 $write("");
             end
             sum = dpi_exported(32'sh3);
-            if (((cls_arr[2'h0]) == null)) begin
+            if (((cls_arr[32'sh0]) == null)) begin
                 $write("");
             end
             if ((PP != 32'sh2)) begin
@@ -468,13 +475,13 @@ module t;
             if ((uns_int > 32'sh0)) begin
                 $write("");
             end
-            if (((usarr.marr[1'h0]) != 32'sh0)) begin
+            if (((usarr.marr[32'sh0]) != 32'sh0)) begin
                 $write("");
             end
-            if ((((arraymanyd[4'h0])[4'h0])[4'h0])[$unsigned(5'(
-                                                                (32'h4 
-                                                                 * 
-                                                                 32'sh1)))
+            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[$unsigned(5'(
+                                                                      (32'h4 
+                                                                       * 
+                                                                       32'sh1)))
                 +:4][$unsigned(4'((32'h2 * 32'sh1)))
                 +:2][2]) begin
                 $write("");
@@ -581,6 +588,10 @@ module t;
     ) begin
     end
     else begin
+    end
+    cover property (@(posedge clk) (! strong(in##1 
+                                             sum[0]))
+    ) begin
     end
     initial begin
         begin
@@ -897,6 +908,18 @@ module t;
         else begin
         end
     end
+    begin : assert_prop_match_item
+        assert property (@(posedge clk) 
+            ???? // IMPLICATION
+            $_EXPRSTMT(
+                $display("match");
+                , in);
+            in
+        ) begin
+        end
+        else begin
+        end
+    end
     begin : assert_prop_overlap_fb
         assert property (@(posedge clk) 
             ???? // IMPLICATION
@@ -1037,13 +1060,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1100,13 +1123,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1127,7 +1150,8 @@ module t;
             bins t01 = (3'h0 => 3'h1);
             bins t12 = (3'h1 => 3'h2);
             bins talt = (3'h2 => 3'h3), (3'h4 => 3'h5);
-            bins trep = (3'h0 => 3'h1);
+            bins trep = (3'h0 => 3'h1 [->32'sh2]);
+            bins trng = (3'h0 [*32'sh2:32'sh3]);
             bins tarr[] = (3'h0 => 3'h1), (3'h1 => 
                                            3'h2);
         };
@@ -1162,13 +1186,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1222,13 +1246,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1303,13 +1327,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1400,13 +1424,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1485,13 +1509,13 @@ module t;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1559,14 +1583,14 @@ class Cls;
     ???? // CONSTRAINT 'array_values'
 
     ???? // CONSTRAINTBEFORE
-    (rarray[2'h0])rmember1
+    (rarray[32'sh0])rmember1
     ???? // CONSTRAINTFOREACH
 
     ???? // FOREACHHEADER
     rarrayint i;
 
     ???? // CONSTRAINTEXPR
-    ((rarray[i[1:0]]) == (rmember1 + i))covergroup __vlAnonCG_cg_in_class;
+    ((rarray[i]) == (rmember1 + i))covergroup __vlAnonCG_cg_in_class;
     @(posedge cg_clk)function new;
         cp_m: coverpoint member {
             bins one = {32'sh1};
@@ -1603,13 +1627,13 @@ class Cls;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1662,13 +1686,13 @@ class Cls;
     function stop;
     endfunction
     function get_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_coverage = /*CRESET*/;
     endfunction
     function get_inst_coverage;
-        input string covered_bins;
-        input string total_bins;
+        ref int covered_bins = __Vint;
+        ref int total_bins = __Vint;
         get_inst_coverage = /*CRESET*/;
     endfunction
     function set_inst_name;
@@ -1762,6 +1786,20 @@ class ClsParamExt extends ClsParam__Tz7d09f080_P2;
         new();
     endfunction
 endclass
+function rand_reduce;
+    input Cls obj;
+    begin : label9
+        rand_reduce = obj.randomize() with (
+            ???? // CONSTRAINTEXPR
+            (__Vrandwith_obj.rarray.r_sum() with ((
+                                                   item 
+                                                   + 
+                                                   __Vrandwith_obj.rmember1))  
+             > 32'sh0)) ;
+        disable label9;
+    end
+endfunction
+process __VprocessQueue_named__0[$];
 package __Vconstpool;
     const string CONSARRAY_0[1:0] = '{0:"ZERO", 1:"ONE"};
 endpackage
@@ -1789,13 +1827,13 @@ module sub;
     endtask
     function f;
         input int v;
-        begin : label9
+        begin : label10
             if ((v == 32'sh0)) begin
                 f = 32'sh21;
-                disable label9;
+                disable label10;
             end
             f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
-            disable label9;
+            disable label10;
         end
     endfunction
     real r;
@@ -1817,7 +1855,28 @@ module seq_event;
 endmodule
 package p;
     logic pkgvar;
+    function ident;
+        input int value;
+        begin : label11
+            ident = /*CRESET*/;
+            ident = value;
+            disable label11;
+        end
+    endfunction
+    function uses_const_func;
+        logic [1:0]  v;
+        begin : label12
+            uses_const_func = /*CRESET*/;
+            v = /*CRESET*/;
+            uses_const_func = 32'h2;
+            disable label12;
+        end
+    endfunction
 endpackage
+module defparam_gen__pie9c2606d;
+    /* generate */ begin : dpg
+    end : dpg
+endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
     input byte pin;
@@ -1839,7 +1898,7 @@ package std;
         protected chandle m_process;
         function self;
             process p;
-            begin : label10
+            begin : label13
                 self = /*CRESET*/;
                 p = /*CRESET*/;
                 $c(vlProcess->initFromSelf(p););
@@ -1851,7 +1910,7 @@ package std;
                     end
                 end
                 self = p;
-                disable label10;
+                disable label13;
             end
         endfunction
         task set_status;
@@ -1859,10 +1918,10 @@ package std;
             $c(m_process->state(s););
         endtask
         function status;
-            begin : label11
+            begin : label14
                 status = /*CRESET*/;
                 status = $c(m_process->state());
-                disable label11;
+                disable label14;
             end
         endfunction
         task kill;
@@ -1898,12 +1957,12 @@ package std;
         endtask
         function get_randstate;
             string s;
-            begin : label12
+            begin : label15
                 get_randstate = /*CRESET*/;
                 s = string'($c(0));
                 $c(s = m_process->randstate(););
                 get_randstate = s;
-                disable label12;
+                disable label15;
             end
         endfunction
         task set_randstate;
@@ -1942,7 +2001,7 @@ package std;
         endtask
         task get;
             input int keyCount;
-            begin : label13
+            begin : label16
                 dropKilled();
                 if (((m_keyCount >= keyCount) && ((
                                                    m_queue.size() 
@@ -1955,7 +2014,7 @@ package std;
                     begin
                         m_keyCount = (m_keyCount - 
                                       keyCount);
-                        disable label13;
+                        disable label16;
                     end
                 end
                 m_queue.push_back(
@@ -1982,15 +2041,15 @@ package std;
         endtask
         function try_get;
             input int keyCount;
-            begin : label14
+            begin : label17
                 try_get = /*CRESET*/;
                 if ((m_keyCount < keyCount)) begin
                     try_get = 32'sh0;
-                    disable label14;
+                    disable label17;
                 end
                 m_keyCount = (m_keyCount - keyCount);
                 try_get = 32'sh1;
-                disable label14;
+                disable label17;
             end
         endfunction
     endclass
@@ -2054,4 +2113,22 @@ package Pkg;
         BAR = 32'h1,
         BAZ = 32'h2
     } enum_t;
+    task disable_named;
+        begin : named
+            fork
+            begin
+                __VprocessQueue_named__0.push_back(
+                                                   self());
+                #1;
+            end
+            join
+        end
+        killQueue(__VprocessQueue_named__0);
+    endtask
 endpackage
+module defparam_leaf;
+    parameter bit signed [31:0]  P = 32'sh1;
+endmodule
+module defparam_leaf__P2;
+    parameter bit signed [31:0]  P = 32'sh2;
+endmodule

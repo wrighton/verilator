@@ -1,0 +1,20 @@
+%Error: t/t_udp_initial_bad.v:15:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+   15 |   initial q = 1'bz;   
+      |               ^~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_udp_initial_bad.v:25:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+   25 |   initial q = 2'b01;   
+      |               ^~~~~
+%Error: t/t_udp_initial_bad.v:35:20: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+   35 |   initial q = 1'b1 & 1'b1;   
+      |                    ^
+%Error: t/t_udp_initial_bad.v:45:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+   45 |   initial q = '1;   
+      |               ^~
+%Error: t/t_udp_initial_bad.v:55:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+   55 |   initial q = 2;   
+      |               ^
+%Error: t/t_udp_initial_bad.v:65:15: UDP initial value must be 1'b0, 1'b1, 1'bx, 1 or 0 (IEEE 1800-2023 29.7)
+   65 |   initial q = 1.0;   
+      |               ^~~
+%Error: Exiting due to

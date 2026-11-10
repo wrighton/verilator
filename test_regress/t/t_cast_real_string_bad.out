@@ -1,0 +1,20 @@
+%Error: t/t_cast_real_string_bad.v:15:13: Incompatible types to static cast to 'real' from 'string'
+                                        : ... note: In instance 't'
+   15 |     r = real'(s);
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_real_string_bad.v:16:15: Incompatible types to static cast to 'real' from 'string'
+                                        : ... note: In instance 't'
+   16 |     r = real_t'(s);
+      |               ^
+%Error: t/t_cast_real_string_bad.v:18:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'real'
+                                        : ... Item data type: 'string'
+   18 |     rq = {rq, s};
+      |               ^
+%Error: t/t_cast_real_string_bad.v:19:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                        : ... Element data type: 'string'
+                                        : ... Item data type: 'real'
+   19 |     sq = {sq, r};
+      |               ^
+%Error: Exiting due to

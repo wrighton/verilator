@@ -386,6 +386,7 @@ public:
     void warnLintOff(bool turnOff);
     void warnStyleOff(bool turnOff);
     void warnStateFrom(const FileLine& from) { m_msgEnIdx = from.m_msgEnIdx; }
+    msgEnSetIdx_t warnStateIdx() const { return m_msgEnIdx; }
     void warnResetDefault() { warnStateFrom(defaultFileLine()); }
 
     // Specific flag ACCESSORS/METHODS

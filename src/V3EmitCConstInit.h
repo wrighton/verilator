@@ -51,7 +51,7 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         puts("\n");
         for (uint64_t n = 0; n < size; ++n) {
             if (n) puts((n % tabMod) ? ", " : ",\n");
-            emitValue(nodep->valuep(n));
+            emitElement(nodep->valuep(n));
         }
         puts("\n");
         ofp()->putsNoTracking("}");
@@ -71,14 +71,20 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         puts("{");
         for (T_Item* const itemp : VNList<T_Item>{itemsp}) {
             if (itemp != itemsp) puts(",");
-            puts("\n{");
-            emitValue(itemp->keyp());
-            puts(", ");
-            emitValue(itemp->valuep());
-            puts("}");
+            puts("\n");
+            emitKeyedItem(itemp);
         }
         puts("\n}");
         puts("\n");
+    }
+    // '{key, value}'
+    template <typename T_Item>
+    void emitKeyedItem(T_Item* itemp) {
+        puts("{");
+        emitValue(itemp->keyp());
+        puts(", ");
+        emitValue(itemp->valuep());
+        puts("}");
     }
 
     // The items, 'tabMod' per line if all are constants, otherwise one per line
@@ -92,10 +98,30 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         uint64_t n = 0;
         for (T_Item* const itemp : VNList<T_Item>{itemsp}) {
             if (n) puts((n % tabMod) ? ", " : ",\n");
-            emitValue(itemp->valuep());
+            emitElement(itemp->valuep());
             ++n;
         }
         puts("\n");
+    }
+
+    // Emit an element of an array or queue, or a member of a struct
+    void emitElement(AstNodeExpr* nodep) {
+        // A string as a C string, converted by the container or struct, which saves the
+        // std::string temporary and its destruction at each element, most of the code that
+        // builds constant containers of strings. Not for keyed items, as {"key", "value"} of a
+        // string-keyed array would match the iterator range constructor of std::string, nor for
+        // a string with a NUL, which needs the length.
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (constp && constp->num().isString()) {
+            const std::string str = constp->num().toString();
+            if (str.find('\0') == std::string::npos) {
+                putns(constp, "static_cast<const char*>(\""
+                                  + V3OutFormatter::quoteNameControls(str, V3OutFormatter::LA_C)
+                                  + "\")");
+                return;
+            }
+        }
+        emitValue(nodep);
     }
 
     // Emit a value
@@ -196,7 +222,72 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         puts("}");
     }
 
+    // Emit a container constant's definition in parts if it has many items
+    template <typename T_Item>
+    bool emitConstDefnInParts(const AstVar* varp, const std::string& name, bool keyed,
+                              AstNodeExpr* sizep, AstNodeExpr* defaultp, T_Item* itemsp) {
+        int nItems = 0;
+        for (const AstNode* itemp = itemsp; itemp; itemp = itemp->nextp()) ++nItems;
+        if (nItems <= CHUNK_ITEMS) return false;
+        // 'const Type name = name__Vinit()', which calls functions adding CHUNK_ITEMS each
+        const std::string typeName = varp->dtypep()->cType("", false, false);
+        int nChunks = 0;
+        for (T_Item* itemp = itemsp; itemp;) {
+            puts("static void " + name + "__Vinit" + std::to_string(nChunks++) + "(" + typeName
+                 + "& result) {\n");
+            puts(keyed ? "result.addItems({" : "result.appendItems(");
+            for (int n = 0; itemp && n < CHUNK_ITEMS;
+                 ++n, itemp = AstNode::as<T_Item>(itemp->nextp())) {
+                if (n) puts(",");
+                puts("\n");
+                if (keyed) {
+                    emitKeyedItem(itemp);
+                } else {
+                    emitValue(itemp->valuep());
+                }
+            }
+            puts(keyed ? "\n});\n}\n" : "\n);\n}\n");
+        }
+        puts("static " + typeName + " " + name + "__Vinit() {\n");
+        puts(typeName + " result{");
+        emitKeyedConsItems<T_Item>(sizep, defaultp, nullptr);
+        puts("};\n");
+        for (int n = 0; n < nChunks; ++n)
+            puts(name + "__Vinit" + std::to_string(n) + "(result);\n");
+        puts("return result;\n}\n");
+        putns(varp, "extern const " + typeName + " " + name + " = " + name + "__Vinit();\n");
+        splitSizeIncValue(varp);
+        return true;
+    }
+
 protected:
+    // Items in each part of a long constant container's initialization, as one long
+    // initializer is too much for C++ compilers
+    static constexpr int CHUNK_ITEMS = 256;
+
+    // Emit the constant pool entry's definition in parts, and return true, if it is long
+    bool emitChunkedConstDefn(const AstVar* varp) {
+        const std::string name = EmitCUtil::constPoolName(varp);
+        AstNodeExpr* const valuep = VN_AS(varp->valuep(), NodeExpr);
+        if (AstConsAssoc* const assocp = VN_CAST(valuep, ConsAssoc)) {
+            return emitConstDefnInParts(varp, name, true, nullptr, assocp->defaultp(),
+                                        assocp->itemsp());
+        }
+        if (AstConsWildcard* const wildp = VN_CAST(valuep, ConsWildcard)) {
+            return emitConstDefnInParts(varp, name, true, nullptr, wildp->defaultp(),
+                                        wildp->itemsp());
+        }
+        if (AstConsDynArray* const dynp = VN_CAST(valuep, ConsDynArray)) {
+            return emitConstDefnInParts(varp, name, dynp->sizep() != nullptr, dynp->sizep(),
+                                        dynp->defaultp(), dynp->itemsp());
+        }
+        if (AstConsQueue* const queuep = VN_CAST(valuep, ConsQueue)) {
+            return emitConstDefnInParts(varp, name, queuep->sizep() != nullptr, queuep->sizep(),
+                                        queuep->defaultp(), queuep->itemsp());
+        }
+        return false;
+    }
+
     // Emit a C++ value constructor: 'Type{...}'
     void emitValCons(AstNodeCons* nodep) {
         putnbs(nodep, nodep->dtypep()->cType("", false, false));
@@ -211,7 +302,10 @@ protected:
                                            + "::" + varp->nameProtect();
         putnbs(varp, varp->dtypep()->cType(name, false, false));
         emitInitializer(VN_AS(varp->valuep(), NodeExpr));
-        // Account for file splitting
+        splitSizeIncValue(varp);
+    }
+    // Account for file splitting
+    void splitSizeIncValue(const AstVar* varp) {
         varp->valuep()->foreach([this](const AstConst* constp) {
             if (constp->num().isString()) {
                 splitSizeInc(AstNode::INSTR_COUNT_STR);

@@ -56,6 +56,8 @@ $unit::DerivedMonitor::derived_cg.cp_inherited.hi: 8
 $unit::DerivedMonitor::derived_cg.cp_inherited.lo: 8
 $unit::DerivedMonitor::derived_cg.cp_this_inherited.hi: 8
 $unit::DerivedMonitor::derived_cg.cp_this_inherited.lo: 8
+$unit::ExprClockMonitor::expr_cg.cp_expr.hi: 8
+$unit::ExprClockMonitor::expr_cg.cp_expr.lo: 8
 $unit::GlobalCg.cp_global.auto_0: 0
 $unit::GlobalCg.cp_global.auto_1: 0
 $unit::GlobalCg.cp_global.auto_10: 0
@@ -72,6 +74,8 @@ $unit::GlobalCg.cp_global.auto_6: 0
 $unit::GlobalCg.cp_global.auto_7: 0
 $unit::GlobalCg.cp_global.auto_8: 0
 $unit::GlobalCg.cp_global.auto_9: 0
+$unit::IffClockMonitor::iff_cg.cp_iff.hi: 0
+$unit::IffClockMonitor::iff_cg.cp_iff.lo: 8
 $unit::LeafMonitor::leaf_cg.cp_cross.<hi,hi> [cross]: 0
 $unit::LeafMonitor::leaf_cg.cp_cross.<hi,lo> [cross]: 8
 $unit::LeafMonitor::leaf_cg.cp_cross.<lo,hi> [cross]: 8

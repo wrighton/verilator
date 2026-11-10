@@ -56,4 +56,102 @@ module t;
   row3_t rows3[2];
   row2_t rows2[2];
   assign rows3 = rows2;
+
+  int assocIntA[int];
+  int assocStrA[string];
+  int assocNestA[string][int];
+  int assocNestB[string][byte];
+  int assocIntegerA[integer];
+  initial begin
+    assocStrA = assocIntA;
+    assocNestA = assocNestB;
+    assocIntA = assocIntegerA;
+  end
+
+  class Cls1;
+  endclass
+  class Cls2;
+  endclass
+  int assocRealA[real];
+  int assocCls1A[Cls1];
+  int assocCls2A[Cls2];
+  real dynRealA[];
+  int dynIntA[];
+  logic [1:0][3:0] dynPackA[];
+  initial begin
+    assocIntA = assocStrA;
+    assocRealA = assocIntA;
+    assocCls1A = assocCls2A;
+    assocIntA = assocCls1A;
+    assocCls1A = assocIntA;
+    dynRealA = dynIntA;
+    dynRealA = dynPackA;
+    dynPackA = dynRealA;
+  end
+
+  // Expressions other than variables
+  class Holder;
+    int assocByteA[byte];
+    real dynRealA[];
+  endclass
+  typedef byte bytes_t[];
+  function automatic bytes_t getBytes();
+    return '{1, 2};
+  endfunction
+  Holder holder;
+  initial begin
+    holder = new;
+    assocIntA = holder.assocByteA;
+    holder.dynRealA = dynIntA;
+    dynIntA = getBytes();
+    holder.dynRealA = nonAggregate;
+    nonAggregate = holder.dynRealA;
+    {nonAggregate, unpackedA[0]} = holder.dynRealA;
+    {nonAggregate, unpackedA[0]} = getBytes();
+    {nonAggregate, unpackedA[0]} = dynIntA;
+  end
+  real realU[2];
+  int intU[4];
+  initial realU = intU[0:1];
+
+  // Port connections other than variables
+  typedef struct {
+    int m[2];
+  } portHolder_t;
+  portHolder_t portHolder;
+  int portRows[2][2];
+  sub u_sel (.p(portRows[0]));
+  sub u_mem (.p(portHolder.m));
+
+  // Singular values assigned to unpacked arrays
+  int queueI[$] = 5;
+  int queueQ[$][$] = '{5};
+  typedef int queue_t[$];
+  queue_t queueT = 5;
+  initial begin
+    int dynI[];
+    int assocI[int];
+    int fixedI[3];
+    real queueR[$];
+    string queueS[$];
+    string str;
+    queueI = 5;
+    queueQ = '{queueI, nonAggregate};
+    dynI = nonAggregate;
+    assocI = 5;
+    fixedI = 5;
+    queueR = 1.5;
+    queueS = str;
+  end
+  sub_queue u_sub (.queueP(5));
+endmodule
+
+module sub (
+    input logic [31:0] p[2]
+);
+endmodule
+
+module sub_queue (
+    input int queueP[$]
+);
 endmodule

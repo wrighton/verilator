@@ -239,10 +239,11 @@ bool EmitCFunc::displayEmitHeader(AstNode* nodep) {
 }
 
 void EmitCFunc::displayNode(AstNode* nodep, AstSFormatF* fmtp,  // fmtp is nullptr for AstScan
-                            const string& vformat, AstNode* exprsp, bool isScan) {
+                            const string& vformat, AstNode* exprsp, bool isScan,
+                            AstNode* scanFormatp) {
     // Check format, if it exists
-    const bool exprFormat = fmtp && fmtp->exprFormat();
-    bool needsScope = exprFormat;
+    const bool exprFormat = (fmtp && fmtp->exprFormat()) || scanFormatp;
+    bool needsScope = exprFormat && !isScan;  // No %m in scans
     bool needsTimescale = exprFormat;
     int formatArgs = 0;
     if (!exprFormat) {
@@ -283,7 +284,9 @@ void EmitCFunc::displayNode(AstNode* nodep, AstSFormatF* fmtp,  // fmtp is nullp
 
     const bool isStmt = displayEmitHeader(nodep);
 
-    if (exprFormat) {
+    if (scanFormatp) {
+        iterateConst(scanFormatp);
+    } else if (exprFormat) {
         UASSERT_OBJ(exprsp, nodep, "Missing format expression");
         iterateConst(exprsp);
         emitDatap(exprsp);
@@ -331,13 +334,15 @@ void EmitCFunc::displayNode(AstNode* nodep, AstSFormatF* fmtp,  // fmtp is nullp
             timeunit = anodep->fmtp()->timeunit();
         } else if (const AstSFormat* const anodep = VN_CAST(nodep, SFormat)) {
             timeunit = anodep->fmtp()->timeunit();
+        } else if (const AstFScanF* const anodep = VN_CAST(nodep, FScanF)) {
+            timeunit = anodep->timeunit();
         } else if (const AstSScanF* const anodep = VN_CAST(nodep, SScanF)) {
             timeunit = anodep->timeunit();
         } else if (const AstSFormatF* const anodep = VN_CAST(nodep, SFormatF)) {
             timeunit = anodep->timeunit();
         }
         UASSERT_OBJ(!timeunit.isNone(), nodep,
-                    "Use of %t must be under AstDisplay, AstSFormat, or AstSFormatF, or "
+                    "Use of %t must be under AstDisplay, AstSFormat, AstSFormatF, FScanF, or "
                     "SScanF, and timeunit set");
         ofp()->puts(", '"s + VFormatAttr{VFormatAttr::TIMEUNIT}.ascii() + "'");
         ofp()->puts(","s + cvtToStr((int)timeunit.powerOfTen()));
@@ -432,8 +437,22 @@ void EmitCFunc::emitCvtPackStr(AstNode* nodep) {
     if (const AstConst* const constp = VN_CAST(nodep, Const)) {
         emitConstantString(constp);
     } else if (VN_IS(nodep->dtypep(), StreamDType)) {
-        putnbs(nodep, "VL_CVT_PACK_STR_ND(");
-        iterateAndNextConstNull(nodep);
+        const AstNodeStream* const streamp = VN_AS(nodep, NodeStream);
+        const AstNodeDType* const elemDtp
+            = streamp->lhsp()->dtypep()->skipRefp()->subDTypep()->skipRefp();
+        if (elemDtp->isIntegralOrPacked()) {
+            // A queue or dynamic array of packed elements, as V3Const packs fixed-size operands
+            putnbs(nodep, "VL_CVT_PACK_STR_NR(");
+            puts(cvtToStr(elemDtp->width()));
+            puts(", ");
+            puts(VN_IS(streamp, StreamL) ? cvtToStr(VN_AS(streamp->rhsp(), Const)->toUInt())
+                                         : "0");
+            puts(", ");
+            iterateAndNextConstNull(streamp->lhsp());
+        } else {
+            putnbs(nodep, "VL_CVT_PACK_STR_ND(");
+            iterateAndNextConstNull(nodep);
+        }
         puts(")");
     } else {
         putnbs(nodep, "VL_CVT_PACK_STR_N");
@@ -576,8 +595,8 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
         return "";
     } else if (basicp && (basicp->isRandomGenerator() || basicp->isStdRandomGenerator())) {
         return "";
-    } else if (basicp && basicp->isCovergroupInstHandle()) {
-        // The handle's own constructor deals with it.
+    } else if (basicp && (basicp->isCovergroupInstHandle() || basicp->isMailboxMessage())) {
+        // The type's own constructor deals with it.
         return "";
     } else if (basicp && (basicp->isEvent())) {
         return "VlAssignableEvent{};\n";

@@ -73,6 +73,69 @@ module t (
   endproperty
   cover property (p_init_local);
 
+  // --- Scenario 7: sequence-local variable (IEEE 1800-2023 16.8, 16.10) ---
+  // Captured by a match item, referenced after a cycle delay in the same
+  // sequence. Each instance gets its own variable.
+  sequence s_capture;
+    int t;
+    (1, t = cyc) ##1 (cyc == t + 1);
+  endsequence
+  assert property (@(posedge clk) valid |-> s_capture);
+  assert property (@(posedge clk) 1 |-> s_capture);
+
+  // --- Scenario 8: failing check on a sequence-local variable ---
+  // Fails once per valid only if t holds cyc of two cycles earlier; with the
+  // current value of cyc it would never fail.
+  int seq_fail = 0;
+  sequence s_capture_late;
+    int t;
+    (1, t = cyc) ##2 (cyc != t + 2);
+  endsequence
+  assert property (@(posedge clk) valid |-> s_capture_late)
+  else seq_fail++;
+
+  // --- Scenario 9: sequence port, and a later match item updating a local ---
+  // t = k at cycle k, t = k + (k + 2) at cycle k + 2; at k + 3, 2 * sig == t + 4.
+  sequence s_update(int sig);
+    int t;
+    (1, t = sig) ##2 (1, t = t + sig) ##1 (2 * sig == t + 4);
+  endsequence
+  assert property (@(posedge clk) valid |=> s_update(counter_x));
+
+  // --- Scenario 10: property-local variable referenced within a sequence ---
+  property p_seq_local;
+    int t;
+    @(posedge clk) valid |-> (1, t = cyc) ##1 (cyc > 0) ##1 (1, t = t + 1) ##1 (cyc == t + 2);
+  endproperty
+  assert property (p_seq_local);
+
+  // --- Scenario 11: match item ending a sequence, its value never read ---
+  sequence s_trailing;
+    int t;
+    (1, t = cyc) ##1 (cyc == t + 1, t = t + 1);
+  endsequence
+  assert property (@(posedge clk) valid |-> s_trailing);
+  // A match item ending an antecedent, read by the consequent
+  property p_trailing_read;
+    int u, t;
+    @(posedge clk) (1, u = cyc) ##1 (valid, t = u) |-> (cyc == t + 1);
+  endproperty
+  assert property (p_trailing_read);
+
+  // --- Scenario 12: sequence-local variable through a property instance ---
+  int nested_fail = 0, ref_nested_fail = 0;
+  sequence s_nested;
+    int t;
+    (valid, t = cyc);
+  endsequence
+  property p_nested;
+    s_nested;
+  endproperty
+  assert property (@(posedge clk) 1 |-> p_nested)
+  else nested_fail++;
+  assert property (@(posedge clk) 1 |-> valid)
+  else ref_nested_fail++;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     counter_x <= counter_x + 1;
@@ -84,6 +147,8 @@ module t (
     if (cyc == 100) begin
       if (overlap_fail > 0) $stop;
       if (nonoverlap_fail > 0) $stop;
+      if (seq_fail != 3) $stop;
+      if (nested_fail != ref_nested_fail || ref_nested_fail != 97) $stop;
       $write("*-* All Finished *-*\n");
       $finish;
     end

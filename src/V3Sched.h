@@ -446,6 +446,11 @@ public:
     };
 
     std::vector<TriggerEntry> m_triggers;
+    // Interface to the interfaces of the virtual interface variables declared in it
+    std::map<const AstIface*, std::set<const AstIface*>> m_memberIfaces;
+
+    // Return the interfaces whose members a read through a virtual interface may reach
+    std::set<const AstIface*> reachableIfaces(const AstIface* ifacep) const;
 
     void addTrigger(const AstIface* ifacep, const AstVar* memberp, AstVarScope* vscp) {
         m_triggers.push_back(TriggerEntry{ifacep, memberp, vscp});

@@ -15,20 +15,28 @@
                                                         : ... note: In instance 't'
    27 |     @clk a
       |     ^
-%Error: t/t_assert_seq_clocking_unsup.v:32:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:31:5: Unsupported: clocking event inside sequence expression
+                                                        : ... note: In instance 't'
+   31 |     @(posedge clk) b;
+      |     ^
+%Error-UNSUPPORTED: t/t_assert_seq_clocking_unsup.v:53:5: Unsupported: clocking event inside sequence expression
+                                                        : ... note: In instance 't.u_sub'
+   53 |     @(posedge clk) a;
+      |     ^
+%Error: t/t_assert_seq_clocking_unsup.v:36:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                             : ... note: In instance 't'
                                             : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
-   32 |   assert property (s_nest ##1 a);
+   36 |   assert property (s_nest ##1 a);
       |   ^~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assert_seq_clocking_unsup.v:33:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+%Error: t/t_assert_seq_clocking_unsup.v:37:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                             : ... note: In instance 't'
                                             : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
-   33 |   assert property (s_level);
+   37 |   assert property (s_level);
       |   ^~~~~~
-%Error: t/t_assert_seq_clocking_unsup.v:34:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+%Error: t/t_assert_seq_clocking_unsup.v:38:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                             : ... note: In instance 't'
                                             : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
-   34 |   assert property (s_level2);
+   38 |   assert property (s_level2);
       |   ^~~~~~
 %Error: Exiting due to

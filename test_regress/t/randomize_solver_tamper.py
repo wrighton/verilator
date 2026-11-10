@@ -12,7 +12,7 @@
 # Input arguments from environment variables:
 # TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | binary
 #         | core_junk | crlf | die_at | die_status_at | diversity_model
-#         | dup_model | err_assume | err_core | err_multiline | err_once
+#         | dup_model | err_assume | err_core | err_extra | err_multiline | err_mute | err_once
 #         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
@@ -33,7 +33,10 @@
 #   dup_model        - replace the Nth model reply with one answering a variable twice
 #   err_assume       - replace the first unsat-assumptions reply with (error ...)
 #   err_core         - replace the first unsat-core reply with (error ...)
+#   err_extra        - send an (error ...) line ahead of the Nth status, as for a rejected
+#                      earlier command
 #   err_multiline    - answer the Nth status with an (error ...) split over two lines
+#   err_mute         - answer the Nth status with (error ...), then close the reply pipe as mute_at
 #   err_once         - answer the Nth status with one (error ...) line
 #   err_phase        - replace the first phase value reply with (error ...)
 #   err_reply        - replace the Nth S-expression reply with (error ...)
@@ -57,7 +60,7 @@
 #   phase_model      - replace the final phased model reply with (error ...)
 #   phase_trunc      - answer an unterminated phase value reply and close the pipe
 #   short_model      - replace the Nth model reply with one omitting a requested variable
-#   stale_assume     - answer every unsat assumptions reply from the Nth with the literal a0
+#   stale_assume     - answer every unsat assumptions reply from the Nth with the literal __Va0
 #   success          - echo a print-success line before every reply
 #   unknown_once     - answer the Nth status with unknown
 #   unknown_twice    - answer two statuses with unknown
@@ -84,9 +87,9 @@ at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
-STATUS_MODES = ("die_status_at", "err_multiline", "err_once", "err_trunc", "err_unbal",
-                "err_unbal_cont", "garbage_status", "unknown_once", "unknown_twice",
-                "unsupported_once")
+STATUS_MODES = ("die_status_at", "err_extra", "err_multiline", "err_mute", "err_once",
+                "err_trunc", "err_unbal", "err_unbal_cont", "garbage_status", "unknown_once",
+                "unknown_twice", "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
@@ -95,9 +98,9 @@ SELECT_MODES = ("bad_index", "diversity_model")
 RECHECK_MODES = ("unsat_recheck", )
 # phase_model acts on the final phased model; the others on any phase value reply
 PHASE_MODES = ("err_phase", "phase_model", "phase_trunc")
-# Modes acting on an unsat-assumptions reply, which lists a<N> literals
+# Modes acting on an unsat-assumptions reply, which lists __Va<N> literals
 ASSUME_MODES = ("err_assume", "garbage_assume", "oor_assume", "stale_assume")
-# Modes acting on an unsat-core reply, which lists cons<N> names
+# Modes acting on an unsat-core reply, which lists __Vcons<N> names
 CORE_MODES = ("core_junk", "err_core")
 # Modes rewriting every line, so they never consume the index
 STREAM_MODES = ("crlf", "indent", "multiline", "success")
@@ -162,6 +165,17 @@ def read_full(first):
     return chunks
 
 
+def mute():
+    """Close the reply pipe but keep running until the runtime gives up on this solver"""
+    os.close(1)
+    proc.kill()
+    proc.wait()
+    parent = os.getppid()
+    while os.getppid() == parent:
+        time.sleep(0.05)
+    sys.exit(0)
+
+
 def swallow(first):
     """Drop the rest of a real S-expression reply that was replaced"""
     read_full(first)
@@ -190,9 +204,9 @@ for line in proc.stdout:
     elif mode in PHASE_MODES:
         counted = at_reply_start and line.startswith("((x")
     elif mode in ASSUME_MODES:
-        counted = at_reply_start and re.match(r"\(a\d", line) is not None
+        counted = at_reply_start and re.match(r"\(__Va\d", line) is not None
     elif mode in CORE_MODES:
-        counted = at_reply_start and line.startswith("(cons")
+        counted = at_reply_start and line.startswith("(__Vcons")
     else:
         counted = at_reply_start and line.startswith("((")
     if line == "unsat":
@@ -237,7 +251,7 @@ for line in proc.stdout:
         swallow(line)
         continue
     if mode == "core_junk":
-        emit("junk((cons0))")
+        emit("junk((__Vcons0))")
         proc.kill()
         proc.wait()
         sys.exit(0)
@@ -258,6 +272,10 @@ for line in proc.stdout:
         emit('(error "injected core error")')
         swallow(line)
         continue
+    if mode == "err_extra":
+        emit('(error "injected earlier command rejected")')
+        forward(line, at_reply_start)
+        continue
     if mode == "err_multiline":
         emit('(error "injected')
         emit('multiline error")')
@@ -265,6 +283,9 @@ for line in proc.stdout:
     if mode == "err_once":
         emit('(error "injected command rejected")')
         continue
+    if mode == "err_mute":
+        emit('(error "injected command rejected")')
+        mute()
     # The first phase value reply always precedes the final phased model
     if mode == "err_phase":
         emit('(error "injected phase value error")')
@@ -325,7 +346,7 @@ for line in proc.stdout:
         swallow(line)
         continue
     if mode == "oor_assume":
-        emit("(a99999999999999)")
+        emit("(__Va99999999999999)")
         swallow(line)
         continue
     # Only the final phase queries every variable, so only that reply names y
@@ -348,11 +369,11 @@ for line in proc.stdout:
         emit("((a #x0b))")
         swallow(line)
         continue
-    # Naming the already dropped a0 leaves the real conflict in place, so every round
+    # Naming the already dropped __Va0 leaves the real conflict in place, so every round
     # stays unsat up to the round limit; it keeps acting instead of latching
     if mode == "stale_assume":
         done = False
-        emit("(a0)")
+        emit("(__Va0)")
         swallow(line)
         continue
     if mode == "unknown_once":
@@ -387,10 +408,4 @@ for line in proc.stdout:
         proc.wait()
         sys.exit(0)
     if mode == "mute_at":
-        os.close(1)
-        proc.kill()
-        proc.wait()
-        parent = os.getppid()
-        while os.getppid() == parent:
-            time.sleep(0.05)
-        sys.exit(0)
+        mute()

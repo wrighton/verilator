@@ -1,0 +1,8 @@
+%Error: t/t_param_array_const_bad.v:11:20: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                         : ... note: In instance 't'
+                                         : ... Left-hand data type: 'logic$[1:0]' (4-state)
+                                         : ... Right-hand data type: 'bit' (2-state)
+   11 |   localparam logic P[1:0] = 1'b1;   
+      |                    ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

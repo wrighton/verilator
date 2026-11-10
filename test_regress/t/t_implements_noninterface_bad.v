@@ -16,6 +16,28 @@ endclass
 class ClsBad2 extends Icls;
 endclass
 
+// An interface class may extend only interface classes (IEEE 1800-2023 8.26.2).
+interface class BadPlain extends NotIcls;
+endclass
+
+typedef NotIcls NotIclsAlias;
+interface class BadAlias extends NotIclsAlias;
+endclass
+
+interface class FnIcls;
+  pure virtual function void f();
+endclass
+
+virtual class VirtualNotIcls;
+  virtual function void f();
+  endfunction
+  pure constraint pc;
+endclass
+
+// The reported case: a virtual class provides a method and a pure constraint.
+interface class BadVirtual extends VirtualNotIcls, FnIcls;
+endclass
+
 module t;
   ClsBad2 c;
 endmodule

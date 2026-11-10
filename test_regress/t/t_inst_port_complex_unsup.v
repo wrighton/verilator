@@ -52,6 +52,15 @@ module nansi_concat (
   assign bo = bi;
 endmodule
 
+module nansi_concat_select (
+  {ci[3:0], ci[7:4]},
+  co
+);
+  input [7:0] ci;
+  output [7:0] co;
+  assign co = ci;
+endmodule
+
 module nansi_concat_named (
   .abi({ai, bi}),
   .abo({ao, bo})
