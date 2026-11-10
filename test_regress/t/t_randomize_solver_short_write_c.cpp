@@ -9,8 +9,9 @@
 //
 //*************************************************************************
 
-#include <sys/syscall.h>
 #include <unistd.h>
+
+#include <sys/syscall.h>
 
 // Replaces write(), as used for the solver's pipe, with one that writes at most a few bytes
 // per call, as write() may
