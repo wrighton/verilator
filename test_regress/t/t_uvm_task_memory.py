@@ -24,11 +24,10 @@ if test.have_dev_asan:
 # converted class method until it finished, raising the peak by about 8% here; now under 1%.
 MAX_GROWTH = 0.03
 
-test.compile(v_flags2=[
-    "--timing", "--stats", "+incdir+t/uvm", "t/uvm/uvm_pkg_all_v2020_3_1_nodpi.svh"
-],
-             make_main=False,
-             verilator_make_gmake=False)
+test.compile(
+    v_flags2=["--timing", "--stats", "+incdir+t/uvm", "t/uvm/uvm_pkg_all_v2020_3_1_nodpi.svh"],
+    make_main=False,
+    verilator_make_gmake=False)
 
 with open(test.stats, 'r', encoding="utf8") as fh:
     peaks = re.findall(r'Stage, Memory peak \(MB\), \d+_(\S+)\s+(\S+)', fh.read())
