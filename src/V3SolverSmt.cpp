@@ -352,6 +352,18 @@ class ConstraintExprVisitor final : public VNVisitor {
     // visit(AstConstraintExpr*), the only visit reaching a variable reference: the other
     // constraint items either move their expressions into one or never iterate them.
     std::set<std::string>* m_constraintVarsp = nullptr;
+    // Solver names of the fields of objects in arrays that a constraint payload names,
+    // formatted as createWriteVarForClassFields registers them. Collected like
+    // m_constraintVars, which has only the names of the arrays.
+    struct ElemNames final {
+        std::vector<AstNodeExpr*> namesp;  // Field name expressions, owned until used
+        void clear() {
+            for (AstNodeExpr* namep : namesp) VL_DO_DANGLING(namep->deleteTree(), namep);
+            namesp.clear();
+        }
+    };
+    ElemNames m_foldElemNames;  // Of a fold, until its taker takes them over
+    ElemNames* m_elemNamesp = nullptr;  // Where the current constraint records them
     bool m_inFuncArg = false;  // Registering the random variables of a function argument
     std::set<std::string> m_funcArgNames;  // Random function arguments in the current item
     std::set<std::string> m_itemVarNames;  // Other random variables in the current item
@@ -499,6 +511,119 @@ class ConstraintExprVisitor final : public VNVisitor {
             list += "\"" + name + "\"";
         }
         return list + "}";
+    }
+    // C++ initializer list of the names a soft constraint is disabled by: the solver variables
+    // of its payload, and each field of an object in an array named as registered
+    static AstCExpr* newSoftVarsListp(FileLine* fl, const std::set<std::string>& vars,
+                                      ElemNames& elemNames) {
+        // Each field name is followed by a comma, which a braced list allows before its end
+        AstCExpr* const listp = new AstCExpr{fl, AstCExpr::Pure{}, "{"};
+        for (AstNodeExpr* const namep : elemNames.namesp) {
+            listp->add(namep);
+            listp->add(", ");
+        }
+        elemNames.namesp.clear();
+        listp->add(constraintVarsList(vars).substr(1));
+        return listp;
+    }
+    // Append to fmt and argsp the solver name of the variable, object field or object exprp
+    // selects by state indices, with each object of an array by its index or key as
+    // createWriteVarForClassFields and the nested access path register it; false if a part of
+    // exprp is not one of these
+    static bool addSolverPathFormat(const AstNodeExpr* exprp, std::string& fmt,
+                                    AstNodeExpr*& argsp) {
+        if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
+            fmt += refp->name();
+            return true;
+        }
+        const AstNodeExpr* fromp;
+        std::string partFmt;  // Appended after the name of fromp
+        AstNodeExpr* indexp = nullptr;  // Index or key the part formats
+        const AstCMethodHard* dynSelp = nullptr;  // Element of a dynamic array or queue
+        if (const AstMemberSel* const selp = VN_CAST(exprp, MemberSel)) {
+            // A member of the object being randomized, named like the payload names it
+            if (isCapturedThisSel(selp)) {
+                fmt += selp->name();
+                return true;
+            }
+            fromp = selp->fromp();
+            partFmt = "." + selp->name();
+        } else if (const AstArraySel* const arraySelp = VN_CAST(exprp, ArraySel)) {
+            fromp = arraySelp->fromp();
+            partFmt = ".%0x";
+            indexp = arraySelp->bitp();
+        } else if (const AstAssocSel* const assocSelp = VN_CAST(exprp, AssocSel)) {
+            fromp = assocSelp->fromp();
+            indexp = assocSelp->bitp();
+            partFmt = "." + keyHexFormat(indexp->dtypep()->skipRefp());
+        } else if (const AstCMethodHard* const atp = VN_CAST(exprp, CMethodHard)) {
+            UASSERT_OBJ(atp->method() == VCMethod::ARRAY_AT
+                            || atp->method() == VCMethod::ARRAY_AT_BACK,
+                        atp, "Selects of a 'disable soft' variable are elements and members");
+            fromp = atp->fromp();
+            partFmt = "." + keyHexFormat(atp->findUInt32DType());
+            indexp = atp->pinsp();
+            dynSelp = atp;
+        } else {
+            return false;
+        }
+        if (!addSolverPathFormat(fromp, fmt, argsp)) return false;
+        fmt += partFmt;
+        if (!indexp) return true;
+        FileLine* const fl = indexp->fileline();
+        AstNodeExpr* idxp = indexp->cloneTreePure(false);
+        if (dynSelp) {
+            // Registered by a 32-bit index
+            if (idxp->width() < 32) {
+                idxp = new AstExtend{fl, idxp, 32};
+            } else if (idxp->width() > 32) {
+                idxp = new AstSel{fl, idxp, 0, 32};
+            }
+            if (dynSelp->method() == VCMethod::ARRAY_AT_BACK) {
+                // As atBack(): of the elements the queue has when its objects are registered
+                AstCMethodHard* const sizep = new AstCMethodHard{
+                    fl, dynSelp->fromp()->cloneTreePure(false), VCMethod::DYN_SIZE};
+                sizep->dtypeSetUInt32();
+                idxp = new AstSub{fl, new AstSub{fl, sizep, new AstConst{fl, 1}}, idxp};
+            }
+        }
+        argsp = AstNode::addNextNull(argsp, idxp);
+        return true;
+    }
+    // The call result the select chain of selp selects from, which a constraint_primary does
+    // not allow (IEEE 1800-2023 A.1.10), else nullptr; sets randIndex if an element of the chain
+    // before it is chosen by a random index or key
+    static const AstNodeExpr* findSelCallp(const AstMemberSel* selp, bool& randIndex) {
+        for (const AstNodeExpr* exprp = selp->fromp();;) {
+            if (const AstMemberSel* const memberSelp = VN_CAST(exprp, MemberSel)) {
+                exprp = memberSelp->fromp();
+            } else if (const AstStructSel* const structSelp = VN_CAST(exprp, StructSel)) {
+                exprp = structSelp->fromp();
+            } else if (const AstNodeSel* const nodeSelp = VN_CAST(exprp, NodeSel)) {
+                randIndex |= isRandIndex(nodeSelp->bitp());
+                exprp = nodeSelp->fromp();
+            } else if (const AstCMethodHard* const atp = VN_CAST(exprp, CMethodHard)) {
+                if (atp->method() != VCMethod::ARRAY_AT
+                    && atp->method() != VCMethod::ARRAY_AT_BACK)
+                    return atp;
+                randIndex |= isRandIndex(atp->pinsp());
+                exprp = atp->fromp();
+            } else {
+                return VN_IS(exprp, NodeFTaskRef) ? exprp : nullptr;
+            }
+        }
+    }
+    // Whether selp is a solver variable field of an object in an array, selected by state
+    // indices only, so its solver name is a value fixed before solving
+    static bool isStateElemField(const AstMemberSel* selp) {
+        bool randIndex = false;
+        findSelCallp(selp, randIndex);
+        return !VN_IS(selp->dtypep()->skipRefp(), ClassRefDType) && !randIndex;
+    }
+    // Record the solver name namep formats of an object field, as the payload names it
+    void addElemName(const AstNode* nodep, AstNodeExpr* namep) {
+        UASSERT_OBJ(m_elemNamesp, nodep, "Object field outside a constraint expression");
+        m_elemNamesp->namesp.push_back(namep->cloneTreePure(false));
     }
 
     static AstNodeExpr* getFromp(const AstNodeExpr* const nodep) {
@@ -3190,9 +3315,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                         = isSimple
                               ? newHandlesActivep(m_memberMap, arraySelp->fromp(), true, false)
                               : nullptr;
+                    const bool stateField = isStateElemField(nodep);  // Before formatting
                     iterateChildren(nodep);
                     AstSFormatF* const newp = new AstSFormatF{fl, "%s." + nodep->name(), false,
                                                               nodep->fromp()->unlinkFrBack()};
+                    if (stateField) addElemName(nodep, newp);
                     if (activep) {
                         AstCond* const condp
                             = new AstCond{fl, activep, newp, getConstFormat(origp)};
@@ -3249,6 +3376,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeExpr* const activep
                     = newHandlesActivep(m_memberMap, cmethodp->fromp(), true, false);
                 AstNodeExpr* const origp = activep ? nodep->cloneTree(false) : nullptr;
+                const bool stateField = isStateElemField(nodep);  // Before formatting
                 iterateChildren(nodep);
                 FileLine* const fl = nodep->fileline();
                 AstNodeExpr* newp = nullptr;
@@ -3260,6 +3388,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                         newp = new AstSFormatF{fl, fromp->name() + "." + nodep->name(), false,
                                                nullptr};
                     }
+                    if (stateField) addElemName(nodep, newp);
                 } else {
                     newp = new AstSFormatF{fl, nodep->name(), false, nullptr};
                 }
@@ -3360,8 +3489,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_guardItemp);
         GuardItem item;
         if (foldOwner) m_guardItemp = &item;
-        UASSERT_OBJ(!foldOwner || m_constraintVars.empty(), nodep,
-                    "Constraint names of an earlier fold were not taken over");
+        UASSERT_OBJ(!foldOwner || (m_constraintVars.empty() && m_foldElemNames.namesp.empty()),
+                    nodep, "Constraint names of an earlier fold were not taken over");
         AstNodeExpr* newp = nullptr;
         FileLine* const fl = nodep->fileline();
         // A single soft item under 'if' without 'else' stays soft, as made by hoistGuardedSofts
@@ -3701,7 +3830,12 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const oldTextp = failp->pinsp();
         oldTextp->replaceWith(new AstSFormatF{fl, "#b0", false, nullptr});
         VL_DO_DANGLING(pushDeletep(oldTextp), oldTextp);
-        if (wasSoft) { failp->pinsp()->addNextHere(new AstCExpr{fl, AstCExpr::Pure{}, "{}"}); }
+        if (wasSoft) {
+            // A soft's list is what disable soft removes it by, not solver dependencies
+            AstNode* const oldNamesp = failp->pinsp()->nextp();
+            oldNamesp->replaceWith(new AstCExpr{fl, AstCExpr::Pure{}, "{}"});
+            VL_DO_DANGLING(pushDeletep(oldNamesp), oldNamesp);
+        }
         blockp->addStmtsp(new AstIf{fl, newGuardRefp(errorVarp), failp->makeStmt(), stmtp});
         return blockp;
     }
@@ -3718,18 +3852,33 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Outside a fold this constraint is emitted here with only its own names: those it
         // records, plus the folded names when it replaces an if (see visit(AstConstraintIf*))
         std::set<std::string> vars;
+        // Solver variables directly in a soft payload, which 'disable soft' removes it by
+        // (IEEE 1800-2023 18.5.13.2). Not those of a guard folded around it.
+        std::set<std::string> softVars;
+        ElemNames elemNames;  // Like vars
+        ElemNames softElemNames;  // Like softVars
+        const bool foldTaker = nodep == m_foldTakerp;
         if (!m_wantSingle) {
-            if (nodep == m_foldTakerp) {
+            if (foldTaker) {
                 vars.swap(m_constraintVars);
+                std::swap(elemNames, m_foldElemNames);
+                // A soft fold has only its payload's names so far; its guard is formatted
+                // below
+                if (nodep->isSoft()) {
+                    softVars = vars;
+                    std::swap(softElemNames, elemNames);
+                }
                 item.errorVarp = m_foldErrorVarp;
                 m_foldErrorVarp = nullptr;
                 m_foldTakerp = nullptr;
             }
-            UASSERT_OBJ(m_constraintVars.empty(), nodep,
+            UASSERT_OBJ(m_constraintVars.empty() && m_foldElemNames.namesp.empty(), nodep,
                         "Constraint names carried over from another constraint");
         }
         VL_RESTORER(m_constraintVarsp);
         m_constraintVarsp = m_wantSingle ? &m_constraintVars : &vars;
+        VL_RESTORER(m_elemNamesp);
+        m_elemNamesp = m_wantSingle ? &m_foldElemNames : &elemNames;
         if (nodep->isDisableSoft()) {
             nodep->replaceWith(buildDisableSoftCallStmt(nodep));
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
@@ -3752,6 +3901,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_sizeGatep);
         m_sizeGatep = nullptr;
         iterateChildren(nodep);
+        // Before any size gate is added around the payload
+        if (!foldTaker && nodep->isSoft()) {
+            softVars = vars;
+            std::swap(softElemNames, elemNames);
+        }
         if (m_sizeGatep) {
             AstLogIf* const gatedp
                 = new AstLogIf{nodep->fileline(), m_sizeGatep, nodep->exprp()->unlinkFrBack()};
@@ -3774,11 +3928,14 @@ class ConstraintExprVisitor final : public VNVisitor {
                           VAccess::READWRITE},
             method, nodep->exprp()->unlinkFrBack()};
         callp->dtypeSetVoid();
-        if (method == VCMethod::RANDOMIZER_HARD) {
-            // hard() pin layout is asserted in EmitCFunc: the variable list is always pin 2
-            callp->addPinsp(
-                new AstCExpr{nodep->fileline(), AstCExpr::Pure{}, constraintVarsList(vars)});
-        }
+        // The variable list is always pin 2 (EmitCFunc locates the filename after it): a hard
+        // constraint's solver dependencies, or the solver variables a soft payload names, which
+        // disable soft removes it by (IEEE 1800-2023 18.5.13.2)
+        callp->addPinsp(
+            nodep->isSoft()
+                ? newSoftVarsListp(nodep->fileline(), softVars, softElemNames)
+                : new AstCExpr{nodep->fileline(), AstCExpr::Pure{}, constraintVarsList(vars)});
+        elemNames.clear();
         // Pass filename, lineno, and source as separate arguments
         // This allows EmitC to call protect() on filename, similar to VL_STOP
         // Add filename parameter
@@ -4266,20 +4423,47 @@ class ConstraintExprVisitor final : public VNVisitor {
     // variable referenced by the given AstConstraintExpr.  Parser enforces
     // constraint_primary operand (verilog.y, IEEE 1800-2023 18.5.13).
     AstNode* buildDisableSoftCallStmt(AstConstraintExpr* nodep) {
-        std::string varName;
+        FileLine* const fl = nodep->fileline();
+        AstNodeExpr* keyp = nullptr;
         if (const AstNodeVarRef* const vrefp = VN_CAST(nodep->exprp(), NodeVarRef)) {
-            varName = vrefp->name();
+            keyp = new AstConst{fl, AstConst::String{}, vrefp->name()};
         } else if (const AstMemberSel* const mselp = VN_CAST(nodep->exprp(), MemberSel)) {
-            varName = mselp->name();
+            // The name of its registration and of the soft constraints it appears in
+            std::string fmt;
+            AstNodeExpr* argsp = nullptr;
+            bool randIndex = false;
+            if (const AstNodeExpr* const callp = findSelCallp(mselp, randIndex)) {
+                callp->v3error("'disable soft' of "
+                               << mselp->prettyNameQ()
+                               << " selects from the result of a call, but its"
+                                  " operand must be a constraint primary"
+                                  " (IEEE 1800-2023 18.5.13.2, A.1.10)");
+                keyp = new AstConst{fl, AstConst::String{}, ""};  // Not run: compiling stops
+            } else if (randIndex) {
+                // The soft constraints are removed at setup, before the solver picks the
+                // object, so its field has no name yet
+                mselp->v3warn(E_UNSUPPORTED, "Unsupported: 'disable soft' of "
+                                                 << mselp->prettyNameQ()
+                                                 << " of an object selected by a random index");
+                keyp = new AstConst{fl, AstConst::String{}, ""};  // Not run: compiling stops
+            } else if (addSolverPathFormat(mselp, fmt, argsp)) {
+                keyp = argsp ? static_cast<AstNodeExpr*>(new AstSFormatF{fl, fmt, false, argsp})
+                             : new AstConst{fl, AstConst::String{}, fmt};
+            } else {
+                // Nothing was formatted below the part not named
+                UASSERT_OBJ(!argsp, mselp, "Indices formatted for an unnamed object");
+                mselp->v3warn(E_UNSUPPORTED, "Unsupported: 'disable soft' of "
+                                                 << mselp->prettyNameQ()
+                                                 << " of an object not selected only by"
+                                                    " members and array elements");
+                keyp = new AstConst{fl, AstConst::String{}, ""};  // Not run: compiling stops
+            }
         } else {
             nodep->v3fatalSrc("Unexpected expression type in disable soft");
         }
         AstCMethodHard* const callp = new AstCMethodHard{
-            nodep->fileline(),
-            new AstVarRef{nodep->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
-                          VAccess::READWRITE},
-            VCMethod::RANDOMIZER_DISABLE_SOFT,
-            new AstConst{nodep->fileline(), AstConst::String{}, varName}};
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_DISABLE_SOFT, keyp};
         callp->dtypeSetVoid();
         return callp->makeStmt();
     }

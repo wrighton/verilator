@@ -92,6 +92,23 @@ class std_randomize_struct_class;
 endclass
 
 module t_scope_std_randomize;
+
+  // `disable soft` of the first argument keeps the soft constraint of the tenth,
+  // whose name the first's is a prefix of (IEEE 1800-2023 18.5.13.2)
+  task automatic disable_soft_prefix();
+    bit [6:0] a1, a2, a3, a4, a5, a6, a7, a8, a9, a10;
+    int ok;
+    repeat (16) begin
+      ok = std::randomize(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) with {
+        soft a10 == 7'd13;
+        disable soft a1;
+        soft a1 inside {7'd5, 7'd8};
+      };
+      `checkd(ok, 1);
+      `checkh(a1 == 7'd5 || a1 == 7'd8, 1'b1);
+      `checkd(a10, 13);
+    end
+  endtask
   bit [7:0] addr;
   bit [15:0] data;
   int limit[10];
@@ -309,6 +326,7 @@ module t_scope_std_randomize;
     if (arr1[0] != 42) $stop;
 
     test_struct();
+    disable_soft_prefix();
 
     $write("*-* All Finished *-*\n");
     $finish;
