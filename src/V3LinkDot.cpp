@@ -5638,8 +5638,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             // Visit arguments at the beginning.
             // They may be visitted even if the current node can't be linked now.
             VL_RESTORER(m_randSymp);
-            // An in-class 'randomize() with' targets this object (IEEE 1800-2023 18.7)
-            if (nodep->name() == "randomize" && m_ds.m_dotPos != DP_PACKAGE) {
+            // An in-class 'randomize() with' targets this object (IEEE 1800-2023 18.7).
+            // A deferred package call retains its package link, but not its dot position.
+            if (nodep->name() == "randomize" && m_ds.m_dotPos != DP_PACKAGE
+                && !VN_IS(nodep->classOrPackagep(), Package)) {
                 // Inherited members are unavailable until the base class is specialized.
                 // Defer the call rather than binding names of the 'with' in the caller.
                 if (m_statep->forPrimary() && m_insideClassExtParam) return;
