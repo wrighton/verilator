@@ -408,7 +408,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     AstNodeExpr* m_elementSizeGatep = nullptr;
     bool m_booleanRegion = false;  // Logical operands are independent predicate regions
     bool m_negativeBoolean = false;  // Relax an unavailable atom to FALSE under negation
-    bool m_allowElementDeferral = true;  // Never defer a control predicate or value conditional
+    bool m_allowElementDeferral = true;  // Never defer a control predicate or synthetic phase gate
+    AstBegin* m_valuePreparationp = nullptr;  // Owns value/readiness pairs before their relation
     std::set<std::string> m_foldSizeGuardVars;  // Auxiliary names carried by a folded constraint
     std::set<std::string>* m_sizeGuardVarsp = nullptr;  // Not part of soft payload identity
 
@@ -984,6 +985,15 @@ class ConstraintExprVisitor final : public VNVisitor {
         m_elementSizeGatep->user1(true);
         if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
     }
+    // Keep pair preparation ahead of every use, inside one owned expression block.
+    AstNodeExpr* finishValuePreparation(AstNodeExpr* const exprp, AstBegin* const blockp) {
+        if (!blockp->stmtsp()) {
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
+            return exprp;
+        }
+        blockp->addStmtsp(new AstCReturn{exprp->fileline(), exprp});
+        return newReturnedTextp(exprp->fileline(), blockp);
+    }
     // Format one predicate region; arithmetic operands remain values, not constraints.
     AstNodeExpr* formatBooleanRegion(AstNodeExpr* exprp, const bool negative = false) {
         FileLine* const fl = exprp->fileline();
@@ -997,13 +1007,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_negativeBoolean);
         VL_RESTORER(m_elementSizeGatep);
         VL_RESTORER(m_conditionp);
+        VL_RESTORER(m_valuePreparationp);
+        AstBegin* const preparationp
+            = new AstBegin{fl, m_uniqueNames.get("__VvaluePairRegion"), nullptr, true};
+        m_valuePreparationp = preparationp;
         m_booleanRegion = true;
         m_negativeBoolean = negative;
         m_elementSizeGatep = nullptr;
         m_conditionp = nullptr;
         exprp = VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
         exprp = wrapWithCond(exprp, m_conditionp, 1);
-        if (!m_elementSizeGatep) return exprp;
+        if (!m_elementSizeGatep) return finishValuePreparation(exprp, preparationp);
 
         // Only the original payload names identify a soft. Keep phase-guard names separate.
         std::set<std::string> guardVars;
@@ -1022,7 +1036,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         exprp = VN_AS(iterateSubtreeReturnEdits(condp), NodeExpr);
         UASSERT_OBJ(m_sizeGuardVarsp, exprp, "Size guard outside a constraint");
         m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
-        return exprp;
+        return finishValuePreparation(exprp, preparationp);
     }
 
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
@@ -3063,7 +3077,89 @@ class ConstraintExprVisitor final : public VNVisitor {
         blockp->addStmtsp(new AstCReturn{fl, smtp});
         relinker.relink(newReturnedTextp(fl, blockp));
     }
+    // Lower one numeric arm, keeping its preparation and range default inside that arm.
+    AstBegin* newValueConditionalArm(AstNodeExpr* exprp, AstVar* const valueVarp,
+                                     AstVar* const readyVarp) {
+        FileLine* const fl = exprp->fileline();
+        const int width = exprp->width();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VvaluePairArm"), nullptr, true};
+        VL_RESTORER(m_valuePreparationp);
+        VL_RESTORER(m_elementSizeGatep);
+        VL_RESTORER(m_conditionp);
+        VL_RESTORER(m_booleanRegion);
+        m_valuePreparationp = blockp;
+        m_elementSizeGatep = nullptr;
+        m_conditionp = nullptr;
+        m_booleanRegion = false;
+        exprp = VN_AS(iterateSubtreeReturnEdits(exprp->unlinkFrBack()), NodeExpr);
+        blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, valueVarp, VAccess::WRITE},
+                                        wrapWithCond(exprp, m_conditionp, width)});
+        AstNodeExpr* readyTextp = new AstSFormatF{fl, "#b1", false, nullptr};
+        if (m_elementSizeGatep) {
+            VL_DO_DANGLING(readyTextp->deleteTree(), readyTextp);
+            std::set<std::string> guardVars;
+            VL_RESTORER(m_constraintVarsp);
+            VL_RESTORER(m_allowElementDeferral);
+            m_constraintVarsp = &guardVars;
+            m_allowElementDeferral = false;
+            readyTextp = VN_AS(iterateSubtreeReturnEdits(m_elementSizeGatep), NodeExpr);
+            UASSERT_OBJ(m_sizeGuardVarsp, readyTextp, "Value readiness outside a constraint");
+            m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
+        }
+        blockp->addStmtsp(
+            new AstAssign{fl, new AstVarRef{fl, readyVarp, VAccess::WRITE}, readyTextp});
+        return blockp;
+    }
+    // A native STATE selector chooses both the numeric term and its phase readiness once.
+    void editStateValueConditional(AstCond* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        UASSERT_OBJ(m_valuePreparationp, nodep, "Value conditional outside a predicate region");
+        AstVar* const selectorp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VvalueSelector"),
+                         nodep->condp()->dtypep()};
+        AstVar* const valuep
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VselectedValue"),
+                         nodep->findStringDType()};
+        AstVar* const readyp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VselectedReady"),
+                         nodep->findStringDType()};
+        selectorp->funcLocal(true);
+        valuep->funcLocal(true);
+        readyp->funcLocal(true);
+        selectorp->noSubst(true);
+        valuep->noSubst(true);
+        readyp->noSubst(true);
+        m_valuePreparationp->addDeclsp(selectorp);
+        m_valuePreparationp->addDeclsp(valuep);
+        m_valuePreparationp->addDeclsp(readyp);
+        m_valuePreparationp->addStmtsp(new AstAssign{
+            fl, new AstVarRef{fl, selectorp, VAccess::WRITE}, nodep->condp()->unlinkFrBack()});
+        AstBegin* const thenp = newValueConditionalArm(nodep->thenp(), valuep, readyp);
+        AstBegin* const elsep = newValueConditionalArm(nodep->elsep(), valuep, readyp);
+        m_valuePreparationp->addStmtsp(
+            new AstIf{fl, new AstVarRef{fl, selectorp, VAccess::READ}, thenp, elsep});
+        AstNodeExpr* const selectedReady
+            = new AstSFormatF{fl, "%s", false, new AstVarRef{fl, readyp, VAccess::READ}};
+        selectedReady->user1(true);  // It is an SMT predicate term, not a native string condition.
+        if (m_elementSizeGatep) {
+            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, selectedReady};
+            m_elementSizeGatep->user1(true);
+        } else {
+            m_elementSizeGatep = selectedReady;
+        }
+        nodep->replaceWith(
+            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, valuep, VAccess::READ}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstCond* nodep) override {
+        // A synthetic phase gate or symbolic selector keeps its existing lowering. Native
+        // selectors choose an owned value/readiness pair without relaxing the selector itself.
+        if (m_allowElementDeferral && m_valuePreparationp && nodep->user1()
+            && !nodep->condp()->user1() && !isRandModeGate(nodep->condp())) {
+            editStateValueConditional(nodep);
+            return;
+        }
         // Value conditionals retain ordinary value semantics. In particular, an invalid value
         // arm must not become boolean FALSE merely because constraint guards use that status.
         VL_RESTORER(m_allowElementDeferral);

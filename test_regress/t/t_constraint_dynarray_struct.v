@@ -189,6 +189,43 @@ class SoftStructArray;
   constraint c_higher {soft (values[idx].x == 11) && (values[idx].y == 22);}
 endclass
 
+class ValueConditionalArray;
+  rand PhaseEntry values[];
+  rand PhaseEntry other[];
+  int choose = 1;
+  bit inner = 1;
+  int idx = 2;
+  int other_idx = 1;
+  int target = 9;
+  constraint c_size {values.size() == 3; other.size() == 2;}
+  constraint c_value {
+    (choose != 0 ? int'(values[idx].x) : values[idx].y) == target;
+    (choose != 0 ? values[idx].x : other[other_idx].x) == 7'(target);
+    (choose != 0 ? 7'(values[idx].x + 0) : (inner ? other[other_idx].x : 7'(target))) == 7'(target);
+  }
+endclass
+
+class ValueConditionalLeaf;
+  int value;
+endclass
+
+class LazyValueConditional;
+  rand PhaseEntry values[];
+  ValueConditionalLeaf absent;
+  int choose = 2;
+  int idx = 2;
+  constraint c_size {values.size() == 3;}
+  constraint c_value {(choose != 0 ? int'(values[idx].x) : absent.value) == 9;}
+endclass
+
+class DefaultValueConditional;
+  rand PhaseEntry values[];
+  int choose = 1;
+  int idx = 4;
+  constraint c_size {values.size() == 1;}
+  constraint c_value {(choose != 0 ? values[idx].x : 7'b0) == 0;}
+endclass
+
 module t;
   initial begin
     automatic int randomize_result;
@@ -401,6 +438,43 @@ module t;
         `checkd(soft_array.values.size(), 3)
         `checkd(soft_array.values[soft_array.idx].x, 0)
         `checkd(soft_array.values[soft_array.idx].y, 7)
+      end
+    end
+
+    // Numeric payload arms retain their values and only the chosen allocation readiness.
+    begin
+      automatic ValueConditionalArray value_array = new;
+      automatic LazyValueConditional lazy_array = new;
+      automatic DefaultValueConditional default_array = new;
+      automatic int choices[4] = '{0, 1, 2, -1};
+      int ok;
+      for (int turn = 0; turn < 20; ++turn) begin
+        value_array.values.delete();
+        value_array.other.delete();
+        value_array.choose = choices[turn % 4];
+        value_array.inner = turn % 2 != 0;
+        value_array.other_idx = value_array.choose != 0 ? 7 : 1;
+        value_array.target = 9 + turn;
+        ok = value_array.randomize();
+        `checkd(ok, 1)
+        `checkd(value_array.values.size(), 3)
+        `checkd(value_array.other.size(), 2)
+        if (value_array.choose != 0) `checkd(value_array.values[2].x, 7'(value_array.target))
+        else begin
+          `checkd(value_array.values[2].y, value_array.target)
+          `checkd(value_array.other[1].x, 7'(value_array.target))
+        end
+        lazy_array.values.delete();
+        lazy_array.choose = turn % 2 == 0 ? 2 : -1;
+        ok = lazy_array.randomize();
+        `checkd(ok, 1)
+        `checkd(lazy_array.values.size(), 3)
+        `checkd(lazy_array.values[2].x, 9)
+        default_array.values.delete();
+        default_array.choose = choices[turn % 4];
+        ok = default_array.randomize();
+        `checkd(ok, 1)
+        `checkd(default_array.values.size(), 1)
       end
     end
 
