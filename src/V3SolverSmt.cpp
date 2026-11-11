@@ -3568,14 +3568,18 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeStmt* const phaseChoicep = new AstIf{
             fl, new AstVarRef{fl, group.phasep, VAccess::READ}, new AstCReturn{fl, possibleTextp},
             new AstCReturn{fl, wrapWithCond(canonicalp, actualRangep, memberp->width())}};
-        AstBegin* const blockp = new AstBegin{
-            fl, m_uniqueNames.get("__Vstaged_read"),
-            modeChoicep ? static_cast<AstNodeStmt*>(new AstIf{fl, modeChoicep, phaseChoicep,
-                                                              new AstCReturn{fl, frozenp}})
-                        : phaseChoicep,
-            true};
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__Vstaged_read"), phaseChoicep, true};
         AstSFormatF* const returnedp = newReturnedTextp(fl, blockp);
-        relinker.relink(returnedp);
+        AstNodeExpr* resultp = returnedp;
+        if (modeChoicep) {
+            // Both operands already carry formatted SMT text. Keep the native mode
+            // choice outside the returned-text block's single conditional-return shape.
+            AstCond* const modep = new AstCond{fl, modeChoicep, returnedp, frozenp};
+            modep->user1(true);
+            resultp = modep;
+        }
+        relinker.relink(resultp);
         if (!modeChoicep) VL_DO_DANGLING(pushDeletep(origp), origp);
         if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
     }
