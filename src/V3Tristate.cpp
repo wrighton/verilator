@@ -501,12 +501,17 @@ class TristateVisitor final : public TristateBaseVisitor {
     AstNodeAssign* m_assignp = nullptr;  // Current assignment
     const AstNodeProcedure* m_procedurep = nullptr;  // Current procedural process
     TristateGraph m_tgraph;  // Logic graph
+    struct IfaceRankBucket final {
+        AstNodeExpr* datap = nullptr;  // Scratch roots consumed by the rank assignments
+        AstNodeExpr* enp = nullptr;
+    };
     struct IfaceExportContext final {
         AstNodeModule* modp;  // Module containing the driver
         AstVar* targetp;  // Canonical interface net
         string dotted;
         string inlinedDots;
         AstModport* modportp;
+        std::array<IfaceRankBucket, VStrength::SUPPLY + 1> ranks{};
     };
     struct IfaceContribution final {
         VStrength strength;  // Rank preserved until all instance drivers meet
@@ -515,12 +520,13 @@ class TristateVisitor final : public TristateBaseVisitor {
     };
     // The key groups interface templates; slot VarXRefs retain actual instance identity.
     std::unordered_map<AstVar*, std::vector<IfaceContribution>> m_ifaceContribs;
-    // Retain first contribution order rather than iterating the unordered lookup map.
-    // This retains the existing upstream tristate-variable processing order.
+    // Retain first-discovery order instead of iterating the unordered lookup map.
+    // No absolute address-independent traversal order is claimed here.
     std::vector<AstVar*> m_ifaceContribVarps;
 
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
+    VDouble0 m_statIfacePairs;  // External rank pairs, not individual drivers
 
     // METHODS
     string dbgState() const {
@@ -953,7 +959,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     void aggregateTriSameStrength(AstNodeModule* nodep, AstVar* const varp, AstVar* const envarp,
                                   RefStrengthVec::iterator beginStrength,
                                   RefStrengthVec::iterator endStrength,
-                                  const IfaceExportContext* const ifacep = nullptr) {
+                                  IfaceExportContext* const ifacep = nullptr) {
         // Separate procedural processes are independent drivers, but ordered assignments within
         // one process form a single driver. Create data and enable variables for each driver, then
         // aggregate independent drivers using | to form assignments to varp and envarp.
@@ -1054,8 +1060,8 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
 
             if (ifacep) {
-                // Export each physical driver before any OR can discard its value-specific rank.
-                exportIfaceDriver(*ifacep, *driver.m_refsp.front(), newLhsp, newEnLhsp);
+                // Split each driver before accumulating components at their actual ranks.
+                collectIfaceDriver(*ifacep, *driver.m_refsp.front(), newLhsp, newEnLhsp);
                 continue;
             }
             // Append this driver to the resolution logic.
@@ -1139,6 +1145,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
         AstNodeModule* const ifaceModp = findParentModule(invarp);
         UASSERT_OBJ(ifaceModp, invarp, "Interface contribution without owning module");
+        ++m_statIfacePairs;
         FileLine* const fl = invarp->fileline();
         const string name = invarp->name() + "__VtriContrib" + cvtToStr(contribs.size());
         // These slots exist in every instance of the template, including idle siblings.
@@ -1168,11 +1175,49 @@ class TristateVisitor final : public TristateBaseVisitor {
         contribs.push_back({strength, contribEnp, contribOutp});
     }
 
-    void exportIfaceDriver(const IfaceExportContext& ctx, const RefStrength& ref,
-                           AstVar* const datap, AstVar* const enp) {
+    static void addIfaceRank(IfaceExportContext& ctx, const VStrength strength,
+                             AstVar* const datap, AstVar* const enp) {
+        IfaceRankBucket& bucket = ctx.ranks[strength];
+        FileLine* const fl = ctx.targetp->fileline();
+        AstNodeExpr* const dataTermp = new AstAnd{fl, new AstVarRef{fl, datap, VAccess::READ},
+                                                  new AstVarRef{fl, enp, VAccess::READ}};
+        AstNodeExpr* const enTermp = new AstVarRef{fl, enp, VAccess::READ};
+        bucket.datap = bucket.datap ? new AstOr{fl, bucket.datap, dataTermp} : dataTermp;
+        bucket.enp = bucket.enp ? new AstOr{fl, bucket.enp, enTermp} : enTermp;
+    }
+
+    void flushIfaceRanks(IfaceExportContext& ctx) {
+        FileLine* const fl = ctx.targetp->fileline();
+        for (int rank = VStrength::SUPPLY; rank >= VStrength::HIGHZ; --rank) {
+            IfaceRankBucket& bucket = ctx.ranks[rank];
+            if (!bucket.enp) continue;
+            const string name = "__VtriRank" + cvtToStr(m_unique++);
+            AstVar* const datap = new AstVar{fl, VVarType::MODULETEMP, name, ctx.targetp};
+            AstVar* const enp = new AstVar{fl, VVarType::MODULETEMP, name + "__en",
+                                           VFlagBitPacked{}, ctx.targetp->width()};
+            datap->setDfgTriLowered();
+            enp->setDfgTriLowered();
+            ctx.modp->addStmtsp(datap);
+            ctx.modp->addStmtsp(enp);
+            AstAssignW* const dataAssignp
+                = new AstAssignW{fl, new AstVarRef{fl, datap, VAccess::WRITE}, bucket.datap};
+            AstAssignW* const enAssignp
+                = new AstAssignW{fl, new AstVarRef{fl, enp, VAccess::WRITE}, bucket.enp};
+            bucket.datap = nullptr;  // The assignments now own both scratch roots.
+            bucket.enp = nullptr;
+            dataAssignp->user2Or(U2_BOTH);
+            enAssignp->user2Or(U2_BOTH);
+            ctx.modp->addStmtsp(new AstAlways{dataAssignp});
+            ctx.modp->addStmtsp(new AstAlways{enAssignp});
+            exportIfaceStrength(ctx, VStrength{rank}, datap, enp);
+        }
+    }
+
+    void collectIfaceDriver(IfaceExportContext& ctx, const RefStrength& ref, AstVar* const datap,
+                            AstVar* const enp) {
         if (ref.m_procedurep || ref.m_strength0 == ref.m_strength1
             || ref.m_strength0 == VStrength::HIGHZ || ref.m_strength1 == VStrength::HIGHZ) {
-            exportIfaceStrength(ctx, ref.m_strength, datap, enp);
+            addIfaceRank(ctx, ref.m_strength, datap, enp);
             return;
         }
         // Split each continuous driver's actual value before same-rank OR can erase a zero.
@@ -1191,7 +1236,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                  new AstAnd{fl, new AstVarRef{fl, enp, VAccess::READ}, valuep}};
             maskAssignp->user2Or(U2_BOTH);
             ctx.modp->addStmtsp(new AstAlways{maskAssignp});
-            exportIfaceStrength(ctx, value ? ref.m_strength1 : ref.m_strength0, datap, maskp);
+            addIfaceRank(ctx, value ? ref.m_strength1 : ref.m_strength0, datap, maskp);
         }
     }
 
@@ -1252,6 +1297,9 @@ class TristateVisitor final : public TristateBaseVisitor {
             return a.m_strength > b.m_strength;
         });
 
+        // Keep actual-rank accumulation across every nominal source-strength group in this
+        // target/path partition. Only the interface route uses these scratch roots.
+        IfaceExportContext ctx{nodep, invarp, ifaceDottedPath, ifaceInlinedDots, ifaceModportp};
         RefStrengthVec::iterator beginStrength = refsp->begin();
         while (beginStrength != refsp->end()) {
             RefStrengthVec::iterator endStrength = beginStrength + 1;
@@ -1260,8 +1308,6 @@ class TristateVisitor final : public TristateBaseVisitor {
                 ++endStrength;
 
             if (isIfaceTri) {
-                const IfaceExportContext ctx{nodep, invarp, ifaceDottedPath, ifaceInlinedDots,
-                                             ifaceModportp};
                 aggregateTriSameStrength(nodep, invarp, invarp, beginStrength, endStrength, &ctx);
                 beginStrength = endStrength;
                 continue;
@@ -1305,7 +1351,10 @@ class TristateVisitor final : public TristateBaseVisitor {
             beginStrength = endStrength;
         }
 
-        if (isIfaceTri) return;  // Each strength group was exported before local collapse.
+        if (isIfaceTri) {
+            flushIfaceRanks(ctx);  // Export at most one pair per actual rank in this partition.
+            return;
+        }
 
         // Apply pull formula: final = orp | (~enp & pull_value)
         // Always run at top level (!outvarp) so that the strength-enable expression (enp)
@@ -2793,6 +2842,7 @@ public:
     }
     ~TristateVisitor() override {
         V3Stats::addStat("Tristate, Tristate resolved nets", m_statTriSigs);
+        V3Stats::addStat("Tristate, External interface rank pairs", m_statIfacePairs);
     }
 };
 
