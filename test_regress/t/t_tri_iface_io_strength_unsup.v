@@ -7,7 +7,6 @@
 interface port_strength (
     inout wire value
 );
-  timeunit 1ns; timeprecision 1ps;
   bit ea = 0;
   bit eb = 0;
   bit a = 0;
@@ -25,7 +24,6 @@ interface output_strength (
 endinterface
 
 module t;
-  timeunit 1ns; timeprecision 1ps;
   wire value;
   port_strength io (value);
   bit data = 0;
