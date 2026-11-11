@@ -589,7 +589,9 @@ class UndrivenVisitor final : public VNVisitorConst {
                 // V3WidthSel already normalized the index. Never clip wide/X/Z values.
                 const AstUnpackArrayDType* const arrayp
                     = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
-                if (!constp || constp->num().isFourState() || !constp->num().fitsInUInt()
+                if (!constp || constp->num().isFourState()
+                    || (constp->isSigned() && constp->num().isNegative())
+                    || !constp->num().fitsInUInt()
                     || constp->toUInt() >= static_cast<uint32_t>(arrayp->elementsConst()))
                     break;
                 prefix.push_back("[" + cvtToStr(constp->toUInt()) + "]");
@@ -1080,7 +1082,11 @@ class UndrivenVisitor final : public VNVisitorConst {
                 if (m_inInitialStatic && !entryp->initStaticp()) entryp->initStaticp(nodep);
                 if (m_inInitial && !entryp->initialp()) entryp->initialp(nodep);
                 if (m_inContAssign && !entryp->contAssignp()) entryp->contAssignp(nodep);
-                if (usr == 1 && VN_IS(nodep->varp()->dtypep()->skipRefp(), UnpackArrayDType)) {
+                const AstNodeDType* const rootDtypep = nodep->varp()->dtypep()->skipRefp();
+                const AstStructDType* const rootStructp = VN_CAST(rootDtypep, StructDType);
+                if (usr == 1
+                    && (VN_IS(rootDtypep, UnpackArrayDType)
+                        || (rootStructp && !rootStructp->packed()))) {
                     const bool initial
                         = nodep->varp()->hasUserInit() ? m_inInitialStatic : m_inInitial;
                     if (initial || m_inContAssign)
