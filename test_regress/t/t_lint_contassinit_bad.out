@@ -143,4 +143,28 @@
                     t/t_lint_contassinit_bad.v:96:10: ... Location of continuous assignment
    96 |   assign wide_index[0] = out;
       |          ^~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:102:11: Continuous assignment to variable with initial value: 'slice_overlap'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  102 |   initial slice_overlap[0:1] = '{default: 0};
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:101:10: ... Location of continuous assignment
+  101 |   assign slice_overlap[0] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:113:26: Continuous assignment to variable with initial value: 'argument'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  113 |   initial sample = touch(argument) [0];
+      |                          ^~~~~~~~
+                    t/t_lint_contassinit_bad.v:112:10: ... Location of continuous assignment
+  112 |   assign argument[0] = out;
+      |          ^~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:122:11: Continuous assignment to variable with initial value: 'aliases'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  122 |   initial aliases[0].b = 0;
+      |           ^~~~~~~
+                    t/t_lint_contassinit_bad.v:121:10: ... Location of continuous assignment
+  121 |   assign aliases[0].a = out;
+      |          ^~~~~~~
 %Error: Exiting due to
