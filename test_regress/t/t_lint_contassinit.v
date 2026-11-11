@@ -107,6 +107,44 @@ module t;
       @(posedge clk);
     end
 
+  // The same independent-field rule applies when an unpacked struct is the root.
+  fields_alias_t root_fields;
+  assign root_fields.x = scalar_end;
+  initial
+    forever begin
+      root_fields.y = 0;
+      @visibility_ev;
+      root_fields.y = 1;
+      @(posedge clk);
+    end
+
+  typedef struct {
+    logic elements[3];
+    logic side;
+  } nested_t;
+  nested_t root_nested;
+  assign root_nested.elements[0] = scalar_end;
+  initial
+    forever begin
+      root_nested.elements[1] = 0;
+      @visibility_ev;
+      root_nested.elements[1] = 1;
+      @(posedge clk);
+    end
+  initial
+    forever begin
+      root_nested.elements[2] = 0;
+      @render_ev;
+      root_nested.elements[2] = 1;
+      @(posedge clk);
+    end
+  initial root_nested.side = 0;
+
+  // Unsigned two-bit 3 is a valid element, unlike signed two-bit -1.
+  logic narrow_index[4];
+  assign narrow_index[0] = scalar_end;
+  initial narrow_index[2'b11] = 0;
+
   int checks;
   task automatic check(input bit [2:0] expected);
     #1;
@@ -121,6 +159,14 @@ module t;
     `checkh(reverse_axes[7][-3], expected[2]);
     `checkh(fields[1].x, expected[0]);
     `checkh(fields[1].y, expected[1]);
+    `checkh(root_fields.x, expected[0]);
+    `checkh(root_fields.y, expected[1]);
+    `checkh(root_nested.elements[0], expected[0]);
+    `checkh(root_nested.elements[1], expected[1]);
+    `checkh(root_nested.elements[2], expected[2]);
+    `checkh(root_nested.side, 1'b0);
+    `checkh(narrow_index[0], expected[0]);
+    `checkh(narrow_index[3], 1'b0);
     checks++;
   endtask
 
