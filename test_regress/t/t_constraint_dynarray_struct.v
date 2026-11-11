@@ -121,6 +121,74 @@ class StateIndexedStructArray;
   endfunction
 endclass
 
+// A size constraint can be disabled without waiving independent hard field relations.
+class RetainedStructArray;
+  rand Entry values[];
+  int idx = 2;
+  int count = 3;
+  constraint c_size {values.size() == count;}
+  constraint c_value {values[idx].value == 9;}
+  constraint c_conflict {values[idx].value == 0;}
+  function new();
+    values = new[3];
+    values[2].value = 23;
+  endfunction
+endclass
+
+class CompoundStructArray;
+  rand Entry values[];
+  int idx = 1;
+  bit enabled = 1;
+  constraint c_domain {values.size() inside {[1 : 4]};}
+  constraint c_together {
+    if (enabled) (values.size() == 3) && (values[idx].value == 31);
+  }
+  function new();
+    values = new[2];
+  endfunction
+endclass
+
+class SizedStructQueue;
+  rand Entry values[$];
+  int count = 3;
+  int idx = 2;
+  constraint c_size {values.size() == count;}
+  constraint c_value {values[idx].value == 31;}
+  constraint c_domain {foreach (values[i]) values[i].value inside {[1 : 31]};}
+endclass
+
+typedef struct {
+  rand bit [6:0] x;
+  rand int y;
+} PhaseEntry;
+typedef PhaseEntry PhaseEntries[];
+
+class BooleanStructArray;
+  rand PhaseEntries values;
+  int count = 3;
+  int idx = 2;
+  int expected = 13;
+  constraint c_domain {values.size() inside {[1 : 5]};}
+  constraint c_selected {
+    !(values.size() != count || values[idx].x != 7'(expected));
+  }
+  constraint c_fields {
+    foreach (values[i]) {
+      values[i].x inside {7'(expected), 7'(expected + 1)};
+      values[i].y == i + expected;
+    }
+  }
+endclass
+
+class SoftStructArray;
+  rand PhaseEntry values[];
+  int idx = 1;
+  constraint c_size {values.size() == 3;}
+  constraint c_hard {values[idx].x == 0; values[idx].y inside {7, 22};}
+  constraint c_lower {soft values[idx].y == 7;}
+  constraint c_higher {soft (values[idx].x == 11) && (values[idx].y == 22);}
+endclass
+
 module t;
   initial begin
     automatic int randomize_result;
@@ -252,6 +320,87 @@ module t;
       foreach (inline_indexed_array.values[i]) begin
         `checkd(inline_indexed_array.values[i].x inside {0, 9}, 1)
         `checkd(inline_indexed_array.values[i].y, i)
+      end
+    end
+
+    // Inactive sizing must not discard hard relations or mutate retained allocation.
+    begin
+      automatic RetainedStructArray retained = new;
+      int ok;
+      retained.c_size.constraint_mode(0);
+      ok = retained.randomize();
+      `checkd(ok, 0)
+      `checkd(retained.values.size(), 3)
+      `checkd(retained.values[2].value, 23)
+      retained.c_conflict.constraint_mode(0);
+      ok = retained.randomize();
+      `checkd(ok, 1)
+      `checkd(retained.values.size(), 3)
+      `checkd(retained.values[2].value, 9)
+      ok = retained.randomize() with {values[idx].value == 9;};
+      `checkd(ok, 1)
+      `checkd(retained.values.size(), 3)
+      retained.idx = 4;
+      ok = retained.randomize() with {values.size() == 5; values[idx].value == 9;};
+      `checkd(ok, 1)
+      `checkd(retained.values.size(), 5)
+      `checkd(retained.values[4].value, 9)
+      retained.c_size.constraint_mode(1);
+      retained.count = 4;
+      retained.idx = 3;
+      ok = retained.randomize();
+      `checkd(ok, 1)
+      `checkd(retained.values.size(), 4)
+      `checkd(retained.values[3].value, 9)
+
+      // A literal invalid read compares its default to zero without allocating storage.
+      retained.c_size.constraint_mode(0);
+      retained.c_value.constraint_mode(0);
+      retained.values.delete();
+      ok = retained.randomize() with {values[2].value == 0;};
+      `checkd(ok, 1)
+      `checkd(retained.values.size(), 0)
+    end
+
+    begin
+      automatic CompoundStructArray compound = new;
+      int ok;
+      repeat (10) begin
+        ok = compound.randomize();
+        `checkd(ok, 1)
+        `checkd(compound.values.size(), 3)
+        `checkd(compound.values[1].value, 31)
+      end
+    end
+
+    begin
+      automatic SizedStructQueue queue = new;
+      automatic BooleanStructArray boolean_array = new;
+      automatic SoftStructArray soft_array = new;
+      int ok;
+      for (int turn = 0; turn < 20; ++turn) begin
+        queue.count = 3 + turn % 3;
+        queue.idx = queue.count - 1;
+        ok = queue.randomize();
+        `checkd(ok, 1)
+        `checkd(queue.values.size(), queue.count)
+        `checkd(queue.values[queue.idx].value, 31)
+        foreach (queue.values[i]) `checkd(queue.values[i].value inside {[1 : 31]}, 1)
+        boolean_array.count = 3 + turn % 3;
+        boolean_array.idx = boolean_array.count - 1;
+        boolean_array.expected = 13 + turn;
+        ok = boolean_array.randomize();
+        `checkd(ok, 1)
+        `checkd(boolean_array.values.size(), boolean_array.count)
+        `checkd(boolean_array.values[boolean_array.idx].x, 7'(boolean_array.expected))
+        foreach (boolean_array.values[i]) begin
+          `checkd(boolean_array.values[i].y, i + boolean_array.expected)
+        end
+        ok = soft_array.randomize();
+        `checkd(ok, 1)
+        `checkd(soft_array.values.size(), 3)
+        `checkd(soft_array.values[soft_array.idx].x, 0)
+        `checkd(soft_array.values[soft_array.idx].y, 7)
       end
     end
 
