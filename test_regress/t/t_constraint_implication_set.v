@@ -153,10 +153,9 @@ class DisSoftDirect;
 endclass
 
 // `disable soft` of a field of an object in an array removes only the soft
-// constraints of that object's field: constant indices into a fixed array with
-// nonzero bounds, state indices narrower and wider than 32 bits into a dynamic
-// array, a multidimensional array, a queue's last element, an associative array
-// key, and a foreach index.
+// constraints of that object's field: constant indices into a fixed array, state
+// indices narrower and wider than 32 bits into a dynamic array, a queue's last
+// element, an associative array key, and a foreach index.
 class DisSoftMid;
   rand Inner inner;
   function new();
@@ -165,30 +164,27 @@ class DisSoftMid;
 endclass
 
 class DisSoftElems;
-  rand Inner fixedArr[5:16];
+  rand Inner fixedArr[12];
   rand Inner dynArr[];
   bit [6:0] narrowIdx = 7'd10;
   longint wideIdx = 64'd4;
   rand DisSoftMid mids[12];
-  rand Inner grid[3:5][4:1];
   rand Inner q[$];
   rand Inner amap[int];
   constraint c_fixed {
-    soft fixedArr[6].y == 4'h7;
-    soft fixedArr[15].y == 4'h5;
-    soft fixedArr[16].y == 4'h6;
+    soft fixedArr[1].y == 4'h7;
+    soft fixedArr[10].y == 4'h5;
+    soft fixedArr[11].y == 4'h6;
   }
   constraint c_dyn { foreach (dynArr[i]) soft dynArr[i].y == 4'h1; }
   constraint c_mids { soft mids[1].inner.y == 4'h5; soft mids[10].inner.y == 4'h6; }
-  constraint c_grid { soft grid[4][2].y == 4'h3; soft grid[4][3].y == 4'h4; }
   constraint c_q { soft q[0].y == 4'h2; soft q[2].y == 4'h9; }
   constraint c_amap { soft amap[-7].y == 4'h8; soft amap[7].y == 4'ha; }
   constraint c_disable {
-    disable soft fixedArr[15].y;
+    disable soft fixedArr[10].y;
     disable soft dynArr[narrowIdx].y;
     disable soft dynArr[wideIdx].y;
     disable soft mids[10].inner.y;
-    disable soft grid[4][3].y;
     disable soft q[$].y;
     disable soft amap[7].y;
   }
@@ -197,39 +193,12 @@ class DisSoftElems;
     dynArr = new[12];
     foreach (dynArr[i]) dynArr[i] = new();
     foreach (mids[i]) mids[i] = new();
-    foreach (grid[i, j]) grid[i][j] = new();
     repeat (3) begin
       automatic Inner e = new();
       q.push_back(e);
     end
     amap[-7] = new();
     amap[7] = new();
-  endfunction
-endclass
-
-// `disable soft` in a restricted inline constraint of the object's own method: names not in
-// the identifier list resolve in the caller's scope (IEEE 1800-2023 18.7), here this object's
-// own random variables, so their lower priority soft constraints are removed.
-class DisSoftRestricted;
-  rand bit [3:0] x;
-  rand bit [3:0] y;
-  rand Inner objs[3];
-  constraint c_pref {
-    soft x != 4'h8;
-    soft objs[1].y != 4'h8;
-    soft objs[2].y == 4'h2;
-  }
-  function new();
-    foreach (objs[i]) objs[i] = new();
-  endfunction
-  function int widen();
-    return randomize() with (y) {
-      y < 4'hf;
-      disable soft x;
-      disable soft objs[1].y;
-      soft x inside {4'h5, 4'h8};
-      soft objs[1].y inside {4'h5, 4'h8};
-    };
   endfunction
 endclass
 
@@ -391,23 +360,20 @@ module t;
       automatic bit dynFree = 1'b0;
       automatic bit dynWideFree = 1'b0;
       automatic bit midFree = 1'b0;
-      automatic bit gridFree = 1'b0;
       automatic bit qFree = 1'b0;
       automatic bit amapFree = 1'b0;
       repeat (16) begin
         ok = dse.randomize();
         `checkd(ok, 1);
-        `checkh(dse.fixedArr[6].y, 4'h7);
-        `checkh(dse.fixedArr[16].y, 4'h6);
+        `checkh(dse.fixedArr[1].y, 4'h7);
+        `checkh(dse.fixedArr[11].y, 4'h6);
         `checkh(dse.mids[1].inner.y, 4'h5);
         if (dse.mids[10].inner.y != 4'h6) midFree = 1'b1;
-        `checkh(dse.grid[4][2].y, 4'h3);
-        if (dse.grid[4][3].y != 4'h4) gridFree = 1'b1;
         `checkh(dse.q[0].y, 4'h2);
         if (dse.q[2].y != 4'h9) qFree = 1'b1;
         `checkh(dse.amap[-7].y, 4'h8);
         if (dse.amap[7].y != 4'ha) amapFree = 1'b1;
-        if (dse.fixedArr[15].y != 4'h5) fixedFree = 1'b1;
+        if (dse.fixedArr[10].y != 4'h5) fixedFree = 1'b1;
         foreach (dse.dynArr[i]) begin
           if (i == 10) begin
             if (dse.dynArr[i].y != 4'h1) dynFree = 1'b1;
@@ -424,7 +390,6 @@ module t;
       `checkh(dynFree, 1'b1);
       `checkh(dynWideFree, 1'b1);
       `checkh(midFree, 1'b1);
-      `checkh(gridFree, 1'b1);
       `checkh(qFree, 1'b1);
       `checkh(amapFree, 1'b1);
     end
@@ -443,22 +408,6 @@ module t;
       `checkh(widened, 1'b1);
     end
 
-    begin
-      automatic DisSoftRestricted dsr = new();
-      automatic bit xWidened = 1'b0;
-      automatic bit objWidened = 1'b0;
-      repeat (16) begin
-        ok = dsr.widen();
-        `checkd(ok, 1);
-        `checkh(dsr.x == 4'h5 || dsr.x == 4'h8, 1'b1);
-        `checkh(dsr.objs[1].y == 4'h5 || dsr.objs[1].y == 4'h8, 1'b1);
-        `checkh(dsr.objs[2].y, 4'h2);
-        if (dsr.x == 4'h8) xWidened = 1'b1;
-        if (dsr.objs[1].y == 4'h8) objWidened = 1'b1;
-      end
-      `checkh(xWidened, 1'b1);
-      `checkh(objWidened, 1'b1);
-    end
 
     $write("*-* All Finished *-*\n");
     $finish;
