@@ -299,6 +299,26 @@ class ReentrantStageArray extends MixedEmptyStructArray;
   endfunction
 endclass
 
+// Signed STATE indices retain their values when widened for array bounds.
+class SignedStateIndexStructArray;
+  rand Entry values[];
+  bit signed [6:0] narrow_idx = -1;
+  bit [6:0] unsigned_idx = 127;
+  int idx = 127;
+  int negative_idx = -2;
+  longint negative_wide_idx = -64;
+  longint huge_idx = 64'h1_0000_007f;
+  constraint c_size {values.size() == 128;}
+  constraint c_fields {
+    values[idx].value == 9;
+    values[narrow_idx].value == 0;
+    values[unsigned_idx].value == 9;
+    values[negative_idx].value == 0;
+    values[negative_wide_idx].value == 0;
+    values[huge_idx].value == 0;
+  }
+endclass
+
 class CanonicalIndexStructArray;
   rand Entry values[];
   bit [6:0] narrow_idx = 2;
@@ -681,6 +701,44 @@ module t;
           `checkd(outer.peer.values.size(), outer.peer.idx + 1)
           `checkd(outer.peer.values[outer.peer.idx].value, outer.peer.expected)
         end
+      end
+    end
+
+    // A negative signed 7-bit index is not the valid unsigned element with the same bits.
+    begin
+      automatic SignedStateIndexStructArray signed_indices = new;
+      automatic int choices[5] = '{-1, -2, -64, 0, 63};
+      int ok;
+      signed_indices.values = new[128];
+      signed_indices.values[127].value = 9;
+      ok = signed_indices.randomize();
+      `checkd(ok, 1)
+      `checkd(signed_indices.values[127].value, 9)
+      signed_indices.values.rand_mode(0);
+      ok = signed_indices.randomize();
+      `checkd(ok, 1)
+      `checkd(signed_indices.values[127].value, 9)
+      signed_indices.values.rand_mode(1);
+      for (int turn = 0; turn < 5; ++turn) begin
+        signed_indices.values.delete();
+        signed_indices.narrow_idx = 7'(choices[turn]);
+        signed_indices.negative_idx = turn == 4 ? int'(32'h8000_0000) : -turn - 1;
+        signed_indices.negative_wide_idx = turn == 4 ? longint'(64'h8000_0000_0000_0000) : -longint'(turn) - 1;
+        ok = signed_indices.randomize();
+        `checkd(ok, 1)
+        `checkd(signed_indices.values.size(), 128)
+        `checkd(signed_indices.values[127].value, 9)
+        if (signed_indices.narrow_idx >= 0) begin
+          `checkd(signed_indices.values[int'(signed_indices.narrow_idx)].value, 0)
+        end
+        signed_indices.values.rand_mode(0);
+        ok = signed_indices.randomize();
+        `checkd(ok, 1)
+        `checkd(signed_indices.values[127].value, 9)
+        ok = signed_indices.randomize() with {values[narrow_idx].value == 9;};
+        `checkd(ok, 0)
+        `checkd(signed_indices.values[127].value, 9)
+        signed_indices.values.rand_mode(1);
       end
     end
 
