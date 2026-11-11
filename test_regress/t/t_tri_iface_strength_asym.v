@@ -130,7 +130,28 @@ endmodule
 `undef FLAT128
 `undef FLAT256
 
+interface many_asym_defaults;
+  wire value;
+  assign (pull0, pull1) value = 1'b0;
+  modport drive(inout value);
+endinterface
+
+module many_asym_driver #(
+    parameter int N = 256
+) (
+    many_asym_defaults.drive p,
+    input bit [N-1:0] enable,
+    data
+);
+  for (genvar g = 0; g < N; ++g) begin
+    assign (supply0, strong1) p.value = enable[g] ? data[g] : 1'bz;
+  end
+endmodule
+
 module t;
+  bit scalar_done = 0;
+  bit many_done = 0;
+  bit many_asym_done = 0;
   // Retain the exact former Unsupported shape, now with an actual value oracle.
   asymmetric active ();
   assign active.value = 1'b1;
@@ -154,36 +175,6 @@ module t;
       second,
       packed_data
   );
-  many_defaults count128 ();
-  many_defaults count256 ();
-  bit [6:0] chosen128;
-  bit [7:0] chosen256;
-  many_driver #(128) many128 (
-      count128,
-      second,
-      first,
-      chosen128
-  );
-  many_driver #(256) many256 (
-      count256,
-      second,
-      first,
-      chosen256
-  );
-  many_defaults flat_count128 ();
-  many_defaults flat_count256 ();
-  flat_driver #(128) flat128 (
-      flat_count128,
-      second,
-      first,
-      chosen128
-  );
-  flat_driver #(256) flat256 (
-      flat_count256,
-      second,
-      first,
-      chosen256
-  );
   external_net sole_a ();
   external_net sole_b ();
   external_net paired ();
@@ -201,6 +192,7 @@ module t;
       second
   );
 
+  // Scalar and packed polarity cases have their own stimulus and checking process.
   initial begin
     bit [101:7] expected_packed;
     for (int i = 0; i < 16; ++i) begin
@@ -213,8 +205,6 @@ module t;
       with_inactive.data = first;
       old_i.data = first;
       old_o.data = first;
-      chosen128 = 7'(i * 17);
-      chosen256 = 8'(i * 17);
       packed_case.enable = first;
       packed_case.data = 7'(i * 29 + 3);
       packed_data = 7'(i * 17 + 11);
@@ -239,11 +229,118 @@ module t;
       `checkh(legacy_i, first);
       `checkh(legacy_o, first);
       `checkh(packed_case.value, expected_packed);
-      `checkh(count128.value, second ? first : 1'b0);
-      `checkh(count256.value, second ? first : 1'b0);
-      `checkh(flat_count128.value, second ? first : 1'b0);
-      `checkh(flat_count256.value, second ? first : 1'b0);
     end
+    scalar_done = 1;
+  end
+
+  many_defaults count128 ();
+  many_defaults count256 ();
+  many_defaults flat_count128 ();
+  many_defaults flat_count256 ();
+  bit many_data = 0;
+  bit many_enable = 0;
+  bit [6:0] chosen128;
+  bit [7:0] chosen256;
+  many_driver #(128) many128 (
+      count128,
+      many_enable,
+      many_data,
+      chosen128
+  );
+  many_driver #(256) many256 (
+      count256,
+      many_enable,
+      many_data,
+      chosen256
+  );
+  flat_driver #(128) flat128 (
+      flat_count128,
+      many_enable,
+      many_data,
+      chosen128
+  );
+  flat_driver #(256) flat256 (
+      flat_count256,
+      many_enable,
+      many_data,
+      chosen256
+  );
+
+  // Preserve both generated-context and flat rank-compression stress independently.
+  initial begin
+    for (int i = 0; i < 16; ++i) begin
+      many_data = i[0];
+      many_enable = i[1];
+      chosen128 = 7'(i * 17);
+      chosen256 = 8'(i * 17);
+      #2;
+      `checkh(count128.value, many_enable ? many_data : 1'b0);
+      `checkh(count256.value, many_enable ? many_data : 1'b0);
+      `checkh(flat_count128.value, many_enable ? many_data : 1'b0);
+      `checkh(flat_count256.value, many_enable ? many_data : 1'b0);
+    end
+    many_done = 1;
+  end
+
+  many_asym_defaults many_asym ();
+  bit [255:0] asym_enable;
+  bit [255:0] asym_data;
+  many_asym_driver asym256 (
+      many_asym,
+      asym_enable,
+      asym_data
+  );
+
+  // Unlike one-hot same-DATA drivers, mixed enabled values must split before OR.
+  // A supply0 from ANY enabled zero dominates every strong1; all-Z releases to pull0.
+  initial begin
+    bit [255:0] selected;
+    bit expected;
+    for (int i = 0; i < 32; ++i) begin
+      selected = 256'b1 << 8'(i * 17);
+      case (i & 7)
+        0: begin
+          asym_enable = 0;
+          asym_data = '1;
+        end
+        1: begin
+          asym_enable = '1;
+          asym_data = '1;
+        end
+        2: begin
+          asym_enable = '1;
+          asym_data = 0;
+        end
+        3: begin
+          asym_enable = '1;
+          asym_data = ~selected;
+        end
+        4: begin
+          asym_enable = selected;
+          asym_data = 0;
+        end
+        5: begin
+          asym_enable = selected;
+          asym_data = selected;
+        end
+        6: begin
+          asym_enable = {128{2'b10}};
+          asym_data = asym_enable | selected;
+        end
+        default: begin
+          asym_enable = {128{2'b01}};
+          asym_data = asym_enable & ~selected;
+        end
+      endcase
+      expected = (asym_enable != 0) && ((asym_enable & ~asym_data) == 0);
+      #3;
+      `checkh(many_asym.value, expected);
+    end
+    many_asym_done = 1;
+  end
+
+  initial begin
+    wait (scalar_done && many_done && many_asym_done);
     $write("*-* All Finished *-*\n");
     $finish;
   end
