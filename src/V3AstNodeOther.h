@@ -1376,7 +1376,7 @@ class AstDefParam final : public AstNode {
     // A defparam assignment
     // Parents: MODULE
     // @astgen op1 := rhsp : AstNodeExpr
-    // @astgen op2 := pathp : AstNodeExpr
+    // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if in the defparam's own scope
     // @astgen op3 := targetp : AstNodeExpr
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNodeExpr* rhsp)
@@ -1386,6 +1386,7 @@ public:
         this->targetp(targetp);
     }
     ASTGEN_MEMBERS_AstDefParam;
+    string name() const override VL_MT_STABLE;  // Name of the parameter set, from targetp
     bool sameNode(const AstNode*) const override { return true; }
 };
 class AstDefaultClocking final : public AstNode {
@@ -1783,8 +1784,9 @@ class AstPin final : public AstNode {
     // @astgen ptr := m_modPTypep : Optional[AstParamTypeDType]  // Param type connects to on sub
     int m_pinNum;  // Pin number
     string m_name;  // Pin name, or "" for number based interconnect
-    string m_paramPath;  // Original defparam cell path, if this pin came from a defparam
+    string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
+    bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
 public:
@@ -1812,6 +1814,8 @@ public:
     void param(bool flag) { m_param = flag; }
     const string& paramPath() const { return m_paramPath; }
     void paramPath(const string& path) { m_paramPath = path; }
+    bool defparamGenAlt() const { return m_defparamGenAlt; }
+    void defparamGenAlt(bool flag) { m_defparamGenAlt = flag; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
@@ -2758,7 +2762,7 @@ public:
     bool isPrimaryInish() const { return isPrimaryIO() && isNonOutput(); }
     bool isPrimaryClock() const VL_MT_SAFE { return m_primaryClock; }
     void setPrimaryClock() { m_primaryClock = true; }
-    bool isIfaceRef() const { return varType() == VVarType::IFACEREF; }
+    bool isIfaceRef() const VL_MT_SAFE { return varType() == VVarType::IFACEREF; }
     void setIfaceRef() {
         m_direction = VDirection::NONE;
         m_varType = VVarType::IFACEREF;
@@ -2767,14 +2771,16 @@ public:
     bool isIfaceArraySplit() const { return m_isIfaceArraySplit; }
     bool isInternal() const { return m_isInternal; }
     bool isIfaceParam() const { return m_isIfaceParam; }
-    bool isSignal() const { return varType().isSignal(); }
+    bool isSignal() const VL_MT_SAFE { return varType().isSignal(); }
     bool isNet() const { return varType().isNet(); }
+    // True if a net, including a port whose omitted kind defaults to a net
+    bool isNetOrNetPort() const;
     bool isWor() const { return varType().isWor(); }
     bool isWiredNet() const { return varType().isWiredNet(); }
-    bool isTemp() const { return varType().isTemp(); }
-    bool isClassMember() const { return varType() == VVarType::MEMBER; }
+    bool isTemp() const VL_MT_SAFE { return varType().isTemp(); }
+    bool isClassMember() const VL_MT_SAFE { return varType() == VVarType::MEMBER; }
     bool isVirtIface() const {
-        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep(), IfaceRefDType)) {
+        if (AstIfaceRefDType* const dtp = VN_CAST(dtypep()->skipRefp(), IfaceRefDType)) {
             return dtp->isVirtual();
         }
         return false;
@@ -2783,13 +2789,13 @@ public:
     bool isXTemp() const { return varType() == VVarType::XTEMP; }
     bool isParam() const { return varType().isParam(); }
     bool isGParam() const { return varType() == VVarType::GPARAM; }
-    bool isGenVar() const { return varType() == VVarType::GENVAR; }
+    bool isGenVar() const VL_MT_SAFE { return varType() == VVarType::GENVAR; }
     // Return whether this variable is emitted as a member of its module's C++ class
-    bool isModelState() const {
+    bool isModelState() const VL_MT_STABLE {
         return isIO() || isSignal() || isClassMember() || isTemp() || isGenVar();
     }
     // Variable needs no C++ constructor/destructor function run when default initialized/deleted
-    bool isTriviallyConstructible() const {
+    bool isTriviallyConstructible() const VL_MT_STABLE {
         return !isSc() && dtypep()->isTriviallyConstructible();
     }
     bool isBitLogic() const {
@@ -2807,7 +2813,7 @@ public:
     bool isScUintBool() const;
     bool isScBigUint() const VL_MT_STABLE;
     bool isScSensitive() const { return m_scSensitive; }
-    bool isSigPublic() const;
+    bool isSigPublic() const VL_MT_STABLE;
     bool isSigModPublic() const { return m_sigModPublic && !isIfaceRef(); }
     bool isSigUserRdPublic() const { return m_sigUserRdPublic && !isIfaceRef(); }
     bool isSigUserRWPublic() const { return m_sigUserRWPublic && !isIfaceRef(); }

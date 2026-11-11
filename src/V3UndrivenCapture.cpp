@@ -104,9 +104,6 @@ private:
 V3UndrivenCapture::V3UndrivenCapture(AstNetlist* netlistp) {
     gather(netlistp);
 
-    // Compute summaries for all tasks
-    for (const auto& kv : m_info) (void)computeWriteSummary(kv.first);
-
     // Release the filter memory
     for (auto& kv : m_info) {
         kv.second.calleesSet.clear();
@@ -123,55 +120,29 @@ void V3UndrivenCapture::gather(AstNetlist* netlistp) {
 
 const std::vector<AstVar*>& V3UndrivenCapture::writeSummary(const AstNodeFTask* taskp) {
     // Ensure entry exists even if empty
-    (void)m_info[taskp];
-    return computeWriteSummary(taskp);
-}
-
-const std::vector<AstVar*>& V3UndrivenCapture::computeWriteSummary(const AstNodeFTask* taskp) {
     FTaskInfo& info = m_info[taskp];
+    if (info.summarized) return info.writeSummary;
+    info.summarized = true;
 
-    if (info.state == State::DONE) {
-        UINFO(9, "undriven capture writeSummary cached size="
-                     << info.writeSummary.size() << " for " << CaptureUtil::taskNameQ(taskp));
-        return info.writeSummary;
-    }
-    if (info.state == State::VISITING) {
-        UINFO(9, "undriven capture recursion detected at "
-                     << CaptureUtil::taskNameQ(taskp)
-                     << " returning directWrites size=" << info.directWrites.size());
-        // Cycle detected. return directWrites only to guarantee termination.
-        if (info.writeSummary.empty()) info.writeSummary = info.directWrites;
-        return info.writeSummary;
-    }
-
-    info.state = State::VISITING;
-
-    info.writeSummary.clear();
-
-    // Prevent duplicates across all sources that can contribute to a write summary (direct writes
-    // and call chains)
+    // Walk the call graph from this task/function only. Caching the summary of every
+    // task/function reached would take memory of the number of tasks/functions times the number
+    // of variables they reach. Visit in depth-first preorder, so variables are in call order.
+    std::unordered_set<const AstNodeFTask*> visited;
     std::unordered_set<AstVar*> seen;
-
-    // Simple lambda for filtering duplicates
-    auto addVar = [&](AstVar* vp) {
-        if (seen.insert(vp).second) info.writeSummary.push_back(vp);
-    };
-
-    // Start with direct writes
-    for (AstVar* vp : info.directWrites) addVar(vp);
-
-    // Add callee summaries
-    for (const AstNodeFTask* calleep : info.callees) {
-        if (m_info.find(calleep) == m_info.end()) continue;
-        const std::vector<AstVar*>& sub = computeWriteSummary(calleep);
-        for (AstVar* vp : sub) addVar(vp);
+    std::vector<const AstNodeFTask*> stack{taskp};
+    while (!stack.empty()) {
+        const AstNodeFTask* const curp = stack.back();
+        stack.pop_back();
+        if (!visited.insert(curp).second) continue;
+        const FTaskInfo& curInfo = m_info.at(curp);
+        for (AstVar* const varp : curInfo.directWrites) {
+            if (seen.insert(varp).second) info.writeSummary.push_back(varp);
+        }
+        stack.insert(stack.end(), curInfo.callees.rbegin(), curInfo.callees.rend());
     }
 
     UINFO(9, "undriven capture writeSummary computed size=" << info.writeSummary.size() << " for "
                                                             << CaptureUtil::taskNameQ(taskp));
-
-    // We are done, so set the m_info state correctly and return the vector of variables
-    info.state = State::DONE;
     return info.writeSummary;
 }
 

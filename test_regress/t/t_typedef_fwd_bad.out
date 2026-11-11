@@ -41,4 +41,11 @@
         t/t_typedef_fwd.v:37:15: ... Location of original declaration
    37 |   typedef int generic_t;
       |               ^~~~~~~~~
+%Error: t/t_typedef_fwd.v:43:5: Reference to 'local_t' before declaration (IEEE 1800-2023 6.18)
+                              : ... Suggest move the declaration before the reference, or use a forward typedef
+   43 |     local_t v = 1;   
+      |     ^~~~~~~
+        t/t_typedef_fwd.v:44:17: ... Location of original declaration
+   44 |     typedef int local_t;
+      |                 ^~~~~~~
 %Error: Exiting due to
