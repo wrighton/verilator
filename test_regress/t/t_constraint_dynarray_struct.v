@@ -164,6 +164,17 @@ typedef struct {
 } PhaseEntry;
 typedef PhaseEntry PhaseEntries[];
 
+typedef struct {rand bit flag;} BareFlagEntry;
+
+class BareFieldStructArray;
+  rand BareFlagEntry values[];
+  rand bit other;
+  int idx = 1;
+  constraint c_size {values.size() == 2;}
+  constraint c_field {values[idx].flag;}
+  constraint c_other {other;}
+endclass
+
 class BooleanStructArray;
   rand PhaseEntries values;
   int count = 3;
@@ -629,6 +640,38 @@ module t;
         `checkd(soft_array.values.size(), 3)
         `checkd(soft_array.values[soft_array.idx].x, 0)
         `checkd(soft_array.values[soft_array.idx].y, 7)
+      end
+    end
+
+    // Bare one-bit field constraints consume their range without affecting a later bit.
+    begin
+      automatic BareFieldStructArray bare = new;
+      int ok;
+      for (int turn = 0; turn < 4; ++turn) begin
+        bare.values.delete();
+        bare.idx = 1;
+        bare.other = 0;
+        ok = bare.randomize();
+        `checkd(ok, 1)
+        `checkd(bare.values.size(), 2)
+        `checkd(bare.values[1].flag, 1'b1)
+        `checkd(bare.other, 1'b1)
+        bare.idx = turn % 2 == 0 ? -1 : 9;
+        bare.other = 0;
+        ok = bare.randomize();
+        `checkd(ok, 0)
+        bare.c_field.constraint_mode(0);
+        ok = bare.randomize();
+        `checkd(ok, 1)
+        `checkd(bare.values.size(), 2)
+        `checkd(bare.other, 1'b1)
+        bare.c_field.constraint_mode(1);
+        bare.idx = 1;
+        ok = bare.randomize();
+        `checkd(ok, 1)
+        `checkd(bare.values.size(), 2)
+        `checkd(bare.values[1].flag, 1'b1)
+        `checkd(bare.other, 1'b1)
       end
     end
 
