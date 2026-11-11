@@ -3398,12 +3398,24 @@ class ConstraintExprVisitor final : public VNVisitor {
         return canonicalStateMemberp(selp);
     }
 
+    // Bounds use the original STATE index's value; name normalization is separate.
+    static AstNodeExpr* newFieldIndexWidthp(AstNodeExpr* const indexp, const int width) {
+        UASSERT_OBJ(width >= indexp->width(), indexp, "Field index bounds must not truncate");
+        if (width == indexp->width()) return indexp;
+        FileLine* const fl = indexp->fileline();
+        AstNodeExpr* const resultp
+            = indexp->isSigned() ? static_cast<AstNodeExpr*>(new AstExtendS{fl, indexp, width})
+                                 : new AstExtend{fl, indexp, width};
+        resultp->dtypeChgSigned(indexp->dtypep()->skipRefp()->numeric());
+        return resultp;
+    }
+
     // The nonnegative signed-int size proxy cannot select an index at or above INT_MAX.
     // Keep the full index for this test; narrowing is only for a guarded canonical name.
     static AstNodeExpr* newPossibleFieldIndexp(AstNodeExpr* indexp) {
         FileLine* const fl = indexp->fileline();
         const int width = std::max(32, indexp->width());
-        indexp = adjustWidth(fl, indexp, width, indexp->dtypep()->numeric());
+        indexp = newFieldIndexWidthp(indexp, width);
         return new AstLogAnd{
             fl,
             new AstLteS{fl, new AstConst{fl, AstConst::WidthedValue{}, width, 0},
@@ -3480,8 +3492,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         indexFormatp->addExprsp(newStagedRefp(fl, savedIndexp, VAccess::READ));
         normalizeFieldNameIndex(savedNamep);
         const int width = std::max(indexp->width(), sizeVarp->width());
-        AstNodeExpr* const indexTermp = adjustWidth(
-            fl, newStagedRefp(fl, savedIndexp, VAccess::READ), width, indexp->dtypep()->numeric());
+        AstNodeExpr* const indexTermp
+            = newFieldIndexWidthp(newStagedRefp(fl, savedIndexp, VAccess::READ), width);
         AstVarRef* const sizeRefp
             = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
         sizeRefp->user1(true);
@@ -3513,8 +3525,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         valuep->dtypep(memberp->subDTypep());
         valuep->user1(true);
         AstNodeExpr* const textp = VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr);
-        AstNodeExpr* const currentIndexp = adjustWidth(
-            fl, newStagedRefp(fl, savedIndexp, VAccess::READ), width, indexp->dtypep()->numeric());
+        AstNodeExpr* const currentIndexp
+            = newFieldIndexWidthp(newStagedRefp(fl, savedIndexp, VAccess::READ), width);
         AstCMethodHard* const currentSizep = new AstCMethodHard{
             fl, new AstVarRef{fl, VN_AS(arrVarp->user2p(), NodeModule), arrVarp, VAccess::READ},
             VCMethod::DYN_SIZE};
@@ -4745,8 +4757,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                : std::max(originalPinp->width(), sizep->width());
                     AstNodeExpr* const rangeIndexp
                         = indexIsRand ? originalPinp->cloneTreePure(false)
-                                      : adjustWidth(fl, originalPinp->cloneTreePure(false),
-                                                    rangeWidth, originalPinp->dtypep()->numeric());
+                                      : newFieldIndexWidthp(originalPinp->cloneTreePure(false),
+                                                            rangeWidth);
                     AstNodeExpr* const rangeSizep
                         = indexIsRand
                               ? sizep
