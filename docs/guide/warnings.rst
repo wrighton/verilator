@@ -1379,6 +1379,10 @@ List Of Warnings
    ignores blocks with ``begin``/``end``, as the ``end`` visually indicates
    the earlier statement's end.
 
+   Verilator also warns when a statement follows an ``end`` that starts its
+   line, on that same line, and the following line is indented deeper, as
+   this suggests an ``else`` was intended between them.
+
    Ignoring this warning will only suppress the lint check; it will
    simulate correctly.
 
@@ -1391,6 +1395,17 @@ List Of Warnings
       if (something)
         statement_in_if;
         statement_not_in_if;  //<--- Warning
+
+   or
+
+   .. code-block:: sv
+      :linenos:
+      :emphasize-lines: 3
+
+      if (something) begin
+      end begin  //<--- Warning, was 'end' indented to be 'end else'?
+        statement;
+      end
 
    Results in:
 

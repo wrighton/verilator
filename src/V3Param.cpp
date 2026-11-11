@@ -1879,7 +1879,7 @@ class ParamProcessor final {
                         skipWidthForTemplateStruct = true;
                         V3Stats::addStatSum("Param, Template struct width skips", 1);
                         UINFO(9, "SKIP-WIDTH-TEMPLATE: struct="
-                                     << resolvedp->prettyTypeName() << " templateOwner="
+                                     << resolvedp->prettyTypeNameQ() << " templateOwner="
                                      << ownerModp->prettyNameQ() << " pin=" << pinp->prettyNameQ()
                                      << " of " << nodep->prettyNameQ()
                                      << " srcMod=" << srcModp->prettyNameQ());
@@ -2364,12 +2364,13 @@ class ParamProcessor final {
             }
         }
 
-        // Delete the parameters from the cell; they're not relevant any longer. Keep any not
-        // found in the module, reported by V3LinkDot::linkDotParamed.
+        // Detach the parameters from the cell; they're not relevant any longer. Keep any not
+        // found in the module, reported by V3LinkDot::linkDotParamed. Defer deletion because
+        // m_cellps in ParamVisitor may still contain references below a parameter pin.
         for (AstPin *nextp, *pinp = paramsp; pinp; pinp = nextp) {
             nextp = VN_AS(pinp->nextp(), Pin);
             if (pinp->modVarp() || pinp->modPTypep()) {
-                VL_DO_DANGLING(pinp->unlinkFrBack()->deleteTree(), pinp);
+                VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
             }
         }
         return newModp;

@@ -46,11 +46,11 @@
                                                 : ... note: In instance 'sub'
    32 |     i = {6{1.2}};   
       |       ^
-%Warning-REALCVT: t/t_lint_realcvt_bad.v:41:25: Implicit conversion of real to integer; expected integral input to CMETHODHARD 'at'
+%Warning-REALCVT: t/t_lint_realcvt_bad.v:41:25: Implicit conversion of real to integer; expected integral input to 'array or queue element selection'
                                               : ... note: In instance 'sub'
    41 |     $write("%0d %0d", d[r], q[r]);
       |                         ^
-%Warning-REALCVT: t/t_lint_realcvt_bad.v:41:31: Implicit conversion of real to integer; expected integral input to CMETHODHARD 'at'
+%Warning-REALCVT: t/t_lint_realcvt_bad.v:41:31: Implicit conversion of real to integer; expected integral input to 'array or queue element selection'
                                               : ... note: In instance 'sub'
    41 |     $write("%0d %0d", d[r], q[r]);
       |                               ^

@@ -156,7 +156,7 @@ public:
     // Whether this type, or the elements of an unpacked array, are 4-state
     bool isFourstateElement() const;
     // Ideally an IEEE $typename
-    virtual string prettyDTypeName(bool) const { return prettyTypeName(); }
+    virtual string prettyDTypeName(bool) const { return prettyTypeNameQ(); }
     string prettyDTypeNameQ(bool full = false) const { return "'" + prettyDTypeName(full) + "'"; }
     string stateDTypeName() const { return isFourstateElement() ? "(4-state)" : "(2-state)"; }
     //

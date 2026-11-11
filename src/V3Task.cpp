@@ -2775,7 +2775,7 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
                 if (tconnects[it->second].second && makeChanges) {
                     argp->v3error("Duplicate argument " << argp->prettyNameQ()
                                                         << " in function call to "
-                                                        << calleep->prettyTypeName());
+                                                        << calleep->prettyTypeNameQ());
                     tconnects[it->second].second->unlinkFrBack()->deleteTree();
                 }
                 tconnects[it->second].second = argp;
@@ -2817,7 +2817,7 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
             if (!portp->valuep()) {
                 nodep->v3error("Missing argument on non-defaulted argument "
                                << portp->prettyNameQ() << " in function call to "
-                               << calleep->prettyTypeName());
+                               << calleep->prettyTypeNameQ());
                 newvaluep = new AstConst{nodep->fileline(), AstConst::Unsized32{}, 0};
             } else if (VN_IS(calleep, Property) || VN_IS(calleep, Sequence)) {
                 // Substituted textually, so resolved in the declaration scope
@@ -2859,7 +2859,7 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
                             E_UNSUPPORTED,
                             "Unsupported: Non-constant default value in missing argument "
                                 << portp->prettyNameQ() << " in function call to "
-                                << calleep->prettyTypeName());
+                                << calleep->prettyTypeNameQ());
                         newvaluep = new AstConst{nodep->fileline(), AstConst::Unsized32{}, 0};
                     }
                 }
@@ -2991,7 +2991,7 @@ AstNodeFTask* V3Task::taskConnectWrapNew(AstNodeFTask* taskp, const string& newn
         newCallInsertp = new AstStmtExpr{taskp->fileline(), newCallp};
     } else {
         taskp->v3fatalSrc("Unsupported: Non-constant default value in missing argument in a "
-                          << taskp->prettyTypeName());
+                          << taskp->prettyTypeNameQ());
     }
     newTaskp->propagateAttrFrom(taskp);
     taskp->addNextHere(newTaskp);

@@ -370,7 +370,7 @@ static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* er
         replaceSvaRepCount(nodep->countp());
         replaceSvaRepCount(nodep->maxCountp());
     } else if (minConstp->isZero()) {
-        errp->v3warn(E_UNSUPPORTED, std::string{"Unsupported: zero min count in "} + kind
+        errp->v3warn(E_UNSUPPORTED, "Unsupported: zero min count in "s + kind
                                         + " repetition range (IEEE 1800-2023 16.9.2)");
     }
 }
