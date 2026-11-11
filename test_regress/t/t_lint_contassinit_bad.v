@@ -95,4 +95,29 @@ module t (
   logic wide_index[2];
   assign wide_index[0] = out;
   initial wide_index[80'h10000000000] = 0;
+
+  // A constant array slice includes the continuously assigned element.
+  logic slice_overlap[3];
+  assign slice_overlap[0] = out;
+  initial slice_overlap[0:1] = '{default: 0};
+
+  // The selected function result is not the writable full-array argument's prefix.
+  typedef logic returned_array_t[2];
+  function automatic returned_array_t touch(ref returned_array_t value);
+    value[1] = 1'b1;
+    return value;
+  endfunction
+  returned_array_t argument;
+  logic sample;
+  assign argument[0] = out;
+  initial sample = touch(argument) [0];
+
+  // Unpacked union fields alias the same storage, unlike struct fields.
+  typedef union {
+    logic a;
+    logic b;
+  } union_t;
+  union_t aliases[2];
+  assign aliases[0].a = out;
+  initial aliases[0].b = 0;
 endmodule
