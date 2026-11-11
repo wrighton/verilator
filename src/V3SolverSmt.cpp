@@ -3487,7 +3487,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         // The 'if' folds into one hard expression, so each soft item needs its own
         // 'if (guard) soft item' (IEEE 1800-2023 18.5.14). Order is kept, as later soft
         // constraints have priority.
-        if (!ifp->exists([](const AstConstraintExpr* const exprp) { return exprp->isSoft(); })) {
+        if (!ifp->exists([](const AstConstraintExpr* const exprp) {
+                return exprp->isSoft() || exprp->isDisableSoft();
+            })) {
             return;
         }
         hoistGuardedSoftItems(lastp, ifp->thensp(),
@@ -3504,18 +3506,23 @@ class ConstraintExprVisitor final : public VNVisitor {
                 hoistGuardedSofts(lastp, ifp, condp);
                 continue;
             }
-            const AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr);
+            AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr);
             AstConstraintForeach* const foreachp = VN_CAST(itemp, ConstraintForeach);
-            if (!(exprp && exprp->isSoft())
+            if (!(exprp && (exprp->isSoft() || exprp->isDisableSoft()))
                 && !(foreachp && foreachp->exists([](const AstConstraintExpr* const softp) {
-                       return softp->isSoft();
+                       return softp->isSoft() || softp->isDisableSoft();
                    }))) {
                 continue;
             }
             FileLine* const fl = itemp->fileline();
             itemp->replaceWith(new AstConstraintExpr{fl, new AstConst{fl, AstConst::BitTrue{}}});
-            AstNodeConstraintItem* hoistp;
-            if (foreachp) {
+            AstNode* hoistp;
+            if (exprp && exprp->isDisableSoft()) {
+                // Runs in the setup task in its place among the soft constraints, so it
+                // removes only those registered before it (IEEE 1800-2023 18.5.13.2)
+                hoistp = newGuardedDisableSoftp(condp, exprp);
+                VL_DO_DANGLING(pushDeletep(exprp), exprp);
+            } else if (foreachp) {
                 // 'if (c) foreach (...) body' is 'foreach (...) if (c) body'
                 foreachp->addBodyp(new AstConstraintIf{fl, condp->cloneTreePure(false),
                                                        foreachp->bodyp()->unlinkFrBackWithNext(),
@@ -3528,6 +3535,77 @@ class ConstraintExprVisitor final : public VNVisitor {
             lastp = hoistp;
         }
         VL_DO_DANGLING(condp->deleteTree(), condp);
+    }
+    // Setup statements applying a 'disable soft' under guard condp, which is sampled like a
+    // constraint guard (IEEE 1800-2023 18.5.12): ERROR fails randomize(), TRUE applies the
+    // directive and FALSE drops it. With random variables in the guard and neither proven, the
+    // guard is read before solving, as it was before its state parts were sampled.
+    AstBegin* newGuardedDisableSoftp(AstNodeExpr* const condp, AstConstraintExpr* const exprp) {
+        FileLine* const fl = exprp->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VguardDisable"), nullptr, true};
+        GuardFlagsMap flags;
+        GuardResult result = newGuardResult(condp, blockp, flags);
+        AstNodeStmt* const disablep = buildDisableSoftCallStmt(exprp);
+        AstNodeStmt* stmtp = nullptr;
+        if (condp->user1()) {
+            stmtp = new AstIf{fl, newGuardResidualp(condp, flags), disablep->cloneTree(false)};
+            if (result.falsep) stmtp = new AstIf{fl, new AstLogNot{fl, result.falsep}, stmtp};
+        } else {
+            VL_DO_DANGLING(result.falsep->deleteTree(), result.falsep);
+        }
+        if (result.truep) {
+            stmtp = new AstIf{fl, result.truep, disablep, stmtp};
+        } else {
+            VL_DO_DANGLING(disablep->deleteTree(), disablep);
+        }
+        if (result.errorp) {
+            AstCMethodHard* const failp = new AstCMethodHard{
+                fl,
+                new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_HARD, new AstSFormatF{fl, "#b0", false, nullptr}};
+            failp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "{}"});
+            failp->dtypeSetVoid();
+            stmtp = new AstIf{fl, result.errorp, failp->makeStmt(), stmtp};
+        }
+        blockp->addStmtsp(stmtp);
+        return blockp;
+    }
+    // Value of guard exprp read before solving, from the proofs newGuardResult recorded in
+    // flags: a part proven TRUE or FALSE, or of state only, is its sampled truth, so a receiver
+    // that the proofs made irrelevant is not read again (IEEE 1800-2023 18.5.12). Only the
+    // parts depending on random variables are read natively, as their current values. A part
+    // decided by its proofs selects its constant with a Cond, which does not read the rest.
+    static AstNodeExpr* newGuardResidualp(AstNodeExpr* const exprp, const GuardFlagsMap& flags) {
+        FileLine* const fl = exprp->fileline();
+        const auto it = flags.find(exprp);
+        UASSERT_OBJ(it != flags.end(), exprp, "Missing guard proofs for guard part");
+        const GuardFlags& proof = it->second;
+        if (proof.state) {
+            UASSERT_OBJ(proof.trueVarp, exprp, "State guard part without a truth proof");
+            return newGuardRefp(proof.trueVarp);
+        }
+        AstNodeExpr* valuep;
+        if (AstLogNot* const notp = VN_CAST(exprp, LogNot)) {
+            valuep = new AstLogNot{fl, newGuardResidualp(notp->lhsp(), flags)};
+        } else if (AstLogAnd* const andp = VN_CAST(exprp, LogAnd)) {
+            valuep = new AstLogAnd{fl, newGuardResidualp(andp->lhsp(), flags),
+                                   newGuardResidualp(andp->rhsp(), flags)};
+        } else if (AstLogOr* const orp = VN_CAST(exprp, LogOr)) {
+            valuep = new AstLogOr{fl, newGuardResidualp(orp->lhsp(), flags),
+                                  newGuardResidualp(orp->rhsp(), flags)};
+        } else {
+            valuep = new AstLogNot{fl, new AstLogNot{fl, exprp->cloneTreePure(false)}};
+        }
+        if (proof.falseVarp) {
+            valuep = new AstCond{fl, newGuardRefp(proof.falseVarp),
+                                 new AstConst{fl, AstConst::BitFalse{}}, valuep};
+        }
+        if (proof.trueVarp) {
+            valuep = new AstCond{fl, newGuardRefp(proof.trueVarp),
+                                 new AstConst{fl, AstConst::BitTrue{}}, valuep};
+        }
+        return valuep;
     }
     // Negated condition of a constraint 'if'
     static AstNodeExpr* newNotCond(const AstConstraintIf* ifp) {
@@ -3914,9 +3992,9 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstConstraintExpr* nodep) override {
         // IEEE 1800-2023 18.5.13: 'disable soft' is a meta-level directive on
         // the constraint graph, lowered to a void RANDOMIZER_DISABLE_SOFT
-        // call.  Conditional occurrences (if / foreach / implication body)
-        // are rewritten by extractConditionalDisableSofts() before this
-        // visitor runs, so anything we see here is unconditional.
+        // call.  Conditional occurrences (if / implication body) are moved out
+        // of the folded 'if' by hoistGuardedSofts(), so anything seen here is
+        // unconditional.
         VL_RESTORER(m_firstExpressionInsideIndexp);
         VL_RESTORER(m_guardItemp);
         GuardItem item;
@@ -3952,6 +4030,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_elemNamesp);
         m_elemNamesp = m_wantSingle ? &m_foldElemNames : &elemNames;
         if (nodep->isDisableSoft()) {
+            UASSERT_OBJ(!m_wantSingle, nodep, "Conditional disable soft was not hoisted");
             nodep->replaceWith(buildDisableSoftCallStmt(nodep));
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
@@ -4541,61 +4620,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         return callp->makeStmt();
     }
 
-    // Pre-pass: for every AstConstraintExpr(isDisableSoft) nested inside an
-    // AstConstraintIf subtree (any depth), return a list of runtime AstIf
-    // statements `if (accumulated_cond) randomizer.disable_soft(var);` where
-    // accumulated_cond AND-folds the enclosing then/else branch conditions.
-    // The original ConstraintExpr is replaced with `1'b1` so editSingle()
-    // folds the surrounding boolean cleanly.  Caller appends the returned
-    // list to the constraint-items chain; that chain becomes the setup task
-    // body, which runs before the solver on every randomize() call -- giving
-    // disable-soft real conditional semantics per IEEE 1800-2023 18.5.13.
-    AstNode* extractConditionalDisableSofts(AstNode* itemsp, AstNodeExpr* outerCondp) {
-        AstNode* hoistListp = nullptr;
-        for (AstNode* const stmtp : VNList<AstNode>{itemsp}) {
-            if (AstConstraintIf* const ifp = VN_CAST(stmtp, ConstraintIf)) {
-                // then branch: accumulated = outer && this.cond
-                AstNodeExpr* const thenCondp
-                    = newGuardAnd(outerCondp, ifp->condp()->cloneTree(false));
-                if (AstNode* const thenHoistp
-                    = extractConditionalDisableSofts(ifp->thensp(), thenCondp)) {
-                    hoistListp
-                        = hoistListp ? AstNode::addNext(hoistListp, thenHoistp) : thenHoistp;
-                }
-                VL_DO_DANGLING(thenCondp->deleteTree(), thenCondp);
-                if (ifp->elsesp()) {
-                    // else branch: accumulated = outer && !this.cond
-                    AstNodeExpr* const elseCondp = newGuardAnd(outerCondp, newNotCond(ifp));
-                    if (AstNode* const elseHoistp
-                        = extractConditionalDisableSofts(ifp->elsesp(), elseCondp)) {
-                        hoistListp
-                            = hoistListp ? AstNode::addNext(hoistListp, elseHoistp) : elseHoistp;
-                    }
-                    VL_DO_DANGLING(elseCondp->deleteTree(), elseCondp);
-                }
-            } else if (AstConstraintExpr* const exprp = VN_CAST(stmtp, ConstraintExpr)) {
-                if (exprp->isDisableSoft() && outerCondp) {
-                    FileLine* const fl = exprp->fileline();
-                    AstIf* const hoistIfp = new AstIf{fl, outerCondp->cloneTreePure(false),
-                                                      buildDisableSoftCallStmt(exprp), nullptr};
-                    hoistListp = hoistListp ? AstNode::addNext(hoistListp,
-                                                               static_cast<AstNode*>(hoistIfp))
-                                            : static_cast<AstNode*>(hoistIfp);
-                    // Replace in-tree disable-soft with a no-op boolean
-                    // constraint so editSingle() folds cleanly.
-                    AstConstraintExpr* const truep
-                        = new AstConstraintExpr{fl, new AstConst{fl, AstConst::BitTrue{}}};
-                    exprp->replaceWith(truep);
-                    VL_DO_DANGLING(exprp->deleteTree(), exprp);
-                }
-            }
-            // foreach/unique bodies are left untouched: disable-soft inside
-            // a foreach would need per-iteration condition support, and
-            // unique cannot legally contain disable-soft.
-        }
-        return hoistListp;
-    }
-
 public:
     // CONSTRUCTORS
     explicit ConstraintExprVisitor(AstClass* classp, VMemberMap& memberMap, AstNode* nodep,
@@ -4618,14 +4642,6 @@ public:
         , m_prepareConstrainedArraysp{prepareConstrainedArraysp}
         , m_uniqueConstraintIdp{uniqueConstraintIdp}
         , m_uniqueNames{uniqueNames} {
-        // Pre-pass before SMT lowering: extract conditional disable-soft
-        // directives as runtime AstIf statements and append them to the
-        // constraint-items chain so they reach the setup task body.  The SMT
-        // visitor skips these via visit(AstNodeStmt) above.
-        if (AstNode* const hoistListp
-            = nodep ? extractConditionalDisableSofts(nodep, nullptr) : nullptr) {
-            nodep->addNext(hoistListp);
-        }
         iterateAndNextNull(nodep);
     }
     // Constraint items calling functions with random arguments

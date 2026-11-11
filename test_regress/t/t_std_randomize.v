@@ -109,6 +109,32 @@ module t_scope_std_randomize;
       `checkd(a10, 13);
     end
   endtask
+  // Under a condition on a caller variable, it removes only the soft constraints before it
+  task automatic disable_soft_guarded();
+    bit [6:0] a;
+    bit en;
+    int ok;
+    int widened = 0;
+    for (int i = 0; i < 40; ++i) begin
+      en = i < 32;
+      ok = std::randomize(a) with {
+        soft a == 7'd5;
+        if (en) {
+          disable soft a;
+          soft a inside {7'd5, 7'd8};
+        }
+      };
+      `checkd(ok, 1);
+      if (en) begin
+        `checkh(a == 7'd5 || a == 7'd8, 1'b1);
+        if (a == 7'd8) ++widened;
+      end
+      else begin
+        `checkd(a, 5);
+      end
+    end
+    `checkh(widened > 0, 1'b1);
+  endtask
   bit [7:0] addr;
   bit [15:0] data;
   int limit[10];
@@ -327,6 +353,7 @@ module t_scope_std_randomize;
 
     test_struct();
     disable_soft_prefix();
+    disable_soft_guarded();
 
     $write("*-* All Finished *-*\n");
     $finish;

@@ -79,8 +79,7 @@ class Forms;
   }
 endclass
 
-// Conditional `disable soft` is meta-level: V3Randomize hoists it into a
-// runtime AstIf attached to the setup task so the directive only fires
+// Conditional `disable soft` is meta-level: the directive only fires
 // when its outer condition is true.  When override_flag==0, the soft
 // `x == 4'h5` wins; when override_flag==1, the implication fires the
 // disable AND the override `x == 4'hc`, so x must be 4'hc.
@@ -111,9 +110,8 @@ class DisSoftMember;
   function new(); inner = new(); endfunction
 endclass
 
-// `disable soft` in BOTH then and else arms of a single if.  Exercises the
-// hoist-list concat path in the else branch (a then-arm hoist already
-// exists when the else-arm hoist is appended).  The hard constraint in each
+// `disable soft` in BOTH then and else arms of a single if, each applied
+// only under its own arm's condition.  The hard constraint in each
 // arm fires under its `pick` condition, and the soft constraint of the other
 // variable is kept.  The condition variable `pick` is non-rand so the setup
 // task sees its current value before the solver runs.
@@ -245,6 +243,207 @@ class DisSoftBinder;
   function new();
     objs = new[12];
     foreach (objs[i]) objs[i] = new();
+  endfunction
+endclass
+
+// A conditional `disable soft` removes only the lower priority soft constraints, those
+// before it, even when they agree with the later ones (IEEE 1800-2023 18.5.13.1, 18.5.13.2)
+class DisSoftOrdered;
+  bit en;
+  rand bit [6:0] p;
+  rand bit [6:0] q;
+  rand bit [6:0] r;
+  constraint c_pref {
+    soft p == 7'd5;
+    soft q == 7'd5;
+    soft r == 7'd5;
+  }
+  constraint c_widen {
+    if (en) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+    if (!en) q < 7'd100;
+    else {
+      disable soft q;
+      soft q inside {7'd5, 7'd8};
+    }
+    en -> disable soft r;
+    soft r inside {7'd5, 7'd8};
+  }
+  constraint c_later { soft p == 7'd13; }
+endclass
+
+// Likewise under an 'if' in a foreach, which folds into one constraint per element
+class DisSoftForeachIf;
+  bit en;
+  rand bit [6:0] p;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_widen {
+    foreach (d[i]) {
+      if (en) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+        d[i] != 7'd0;
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
+// Likewise in a foreach under an 'if', whose first item is the directive
+class DisSoftIfForeach;
+  bit en;
+  rand bit [6:0] p;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_widen {
+    if (en) {
+      foreach (d[i]) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+        d[i] != 7'd0;
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
+// A guard reading through a null handle is ERROR, failing randomize(), unless the other
+// operand decides it; the directive then follows the guard. A random operand does not
+// decide it (IEEE 1800-2023 18.5.12)
+class DisSoftNullGuard;
+  Inner h;
+  rand bit [6:0] p;
+  rand bit [6:0] r;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_error {
+    foreach (d[i]) {
+      if (h.y == 4'h1) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_true {
+    foreach (d[i]) {
+      if (h.y == 4'h1 || h == null) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_false {
+    foreach (d[i]) {
+      if (h.y == 4'h1 && h != null) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_error_and {
+    foreach (d[i]) {
+      if (h.y == 4'h1 && r != 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_error_or {
+    foreach (d[i]) {
+      if (r != 7'd0 || h.y == 4'h1) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
+// A guard operand decided by state proofs is not read again, so a null receiver it masks
+// does not abort randomize() (IEEE 1800-2023 18.5.12)
+class DisSoftMaskedGuard;
+  Inner h;
+  bit off;
+  rand bit [6:0] p;
+  rand bit [6:0] r;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_r { r == 7'd0; }
+  // ERROR && FALSE is FALSE, so the directive follows r alone
+  constraint c_or {
+    if (r != 7'd0 || (h.y == 4'h1 && off)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  constraint c_or_swap {
+    foreach (d[i]) {
+      if ((off && h.y == 4'h1) || r != 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  // ERROR || TRUE is TRUE, so the directive follows r alone
+  constraint c_and {
+    foreach (d[i]) {
+      if (r == 7'd0 && (h.y == 4'h1 || !off)) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  // A part with random operands decided by its state operand is not read again either
+  bit on = 1'b1;
+  rand bit [3:0] r4;
+  rand bit [6:0] r2;
+  constraint c_r2 { r2 == 7'd0; }
+  constraint c_deep_and {
+    if (r2 != 7'd0 || (h.y == r4 && off)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  constraint c_deep_or {
+    if (r2 == 7'd0 && (h.y == r4 || on)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  constraint c_deep_not {
+    if (!((h.y == r4 && off) || r2 != 7'd0)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  // With a valid receiver: TRUE applies the directive and FALSE drops it, whatever r is
+  constraint c_true_rand {
+    foreach (d[i]) {
+      if (h.y == 4'h1 || r != 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_false_rand {
+    foreach (d[i]) {
+      if (h.y == 4'h1 && r == 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  function new();
+    d = new[3];
   endfunction
 endclass
 
@@ -458,6 +657,199 @@ module t;
       end
       `checkh(xWidened, 1'b1);
       `checkh(objWidened, 1'b1);
+    end
+
+    begin
+      automatic DisSoftOrdered dso = new();
+      automatic int widened[3] = '{0, 0, 0};
+      dso.c_later.constraint_mode(0);
+      dso.en = 1'b1;
+      repeat (32) begin
+        ok = dso.randomize();
+        `checkd(ok, 1);
+        `checkh(dso.p == 7'd5 || dso.p == 7'd8, 1'b1);
+        `checkh(dso.q == 7'd5 || dso.q == 7'd8, 1'b1);
+        `checkh(dso.r == 7'd5 || dso.r == 7'd8, 1'b1);
+        if (dso.p == 7'd8) ++widened[0];
+        if (dso.q == 7'd8) ++widened[1];
+        if (dso.r == 7'd8) ++widened[2];
+      end
+      foreach (widened[i]) `checkh(widened[i] > 0, 1'b1);
+      dso.en = 1'b0;
+      repeat (8) begin
+        ok = dso.randomize();
+        `checkd(ok, 1);
+        `checkd(dso.p, 5);
+        `checkd(dso.q, 5);
+        `checkd(dso.r, 5);
+      end
+      dso.en = 1'b1;
+      dso.c_widen.constraint_mode(0);
+      ok = dso.randomize();
+      `checkd(ok, 1);
+      `checkd(dso.p, 5);
+      `checkd(dso.r, 5);
+      dso.c_widen.constraint_mode(1);
+      dso.c_later.constraint_mode(1);
+      ok = dso.randomize();
+      `checkd(ok, 1);
+      `checkd(dso.p, 13);
+    end
+
+    begin
+      automatic DisSoftForeachIf dsf = new();
+      automatic bit widened = 1'b0;
+      dsf.en = 1'b1;
+      repeat (32) begin
+        ok = dsf.randomize();
+        `checkd(ok, 1);
+        `checkh(dsf.p == 7'd5 || dsf.p == 7'd8, 1'b1);
+        foreach (dsf.d[i]) `checkh(dsf.d[i] != 7'd0, 1'b1);
+        if (dsf.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsf.en = 1'b0;
+      repeat (8) begin
+        ok = dsf.randomize();
+        `checkd(ok, 1);
+        `checkd(dsf.p, 5);
+      end
+    end
+
+    begin
+      automatic DisSoftIfForeach dsi = new();
+      automatic bit widened = 1'b0;
+      dsi.en = 1'b1;
+      repeat (32) begin
+        ok = dsi.randomize();
+        `checkd(ok, 1);
+        `checkh(dsi.p == 7'd5 || dsi.p == 7'd8, 1'b1);
+        foreach (dsi.d[i]) `checkh(dsi.d[i] != 7'd0, 1'b1);
+        if (dsi.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsi.en = 1'b0;
+      repeat (8) begin
+        ok = dsi.randomize();
+        `checkd(ok, 1);
+        `checkd(dsi.p, 5);
+      end
+    end
+
+    begin
+      automatic DisSoftNullGuard dsn = new();
+      automatic bit widened = 1'b0;
+      dsn.c_true.constraint_mode(0);
+      dsn.c_false.constraint_mode(0);
+      dsn.c_error_and.constraint_mode(0);
+      dsn.c_error_or.constraint_mode(0);
+      ok = dsn.randomize();
+      `checkd(ok, 0);
+      dsn.c_error.constraint_mode(0);
+      dsn.c_error_and.constraint_mode(1);
+      ok = dsn.randomize();
+      `checkd(ok, 0);
+      dsn.c_error_and.constraint_mode(0);
+      dsn.c_error_or.constraint_mode(1);
+      ok = dsn.randomize();
+      `checkd(ok, 0);
+      dsn.c_error_or.constraint_mode(0);
+      dsn.c_true.constraint_mode(1);
+      repeat (32) begin
+        ok = dsn.randomize();
+        `checkd(ok, 1);
+        `checkh(dsn.p == 7'd5 || dsn.p == 7'd8, 1'b1);
+        if (dsn.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsn.c_true.constraint_mode(0);
+      dsn.c_false.constraint_mode(1);
+      repeat (8) begin
+        ok = dsn.randomize();
+        `checkd(ok, 1);
+        `checkd(dsn.p, 5);
+      end
+    end
+
+    begin
+      automatic DisSoftMaskedGuard dsm = new();
+      automatic bit widened = 1'b0;
+      dsm.c_or_swap.constraint_mode(0);
+      dsm.c_and.constraint_mode(0);
+      dsm.c_true_rand.constraint_mode(0);
+      dsm.c_false_rand.constraint_mode(0);
+      dsm.c_deep_and.constraint_mode(0);
+      dsm.c_deep_or.constraint_mode(0);
+      dsm.c_deep_not.constraint_mode(0);
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
+      dsm.c_or.constraint_mode(0);
+      dsm.c_or_swap.constraint_mode(1);
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
+      dsm.c_or_swap.constraint_mode(0);
+      dsm.c_and.constraint_mode(1);
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_and.constraint_mode(0);
+      dsm.c_deep_and.constraint_mode(1);
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
+      dsm.c_deep_and.constraint_mode(0);
+      dsm.c_deep_or.constraint_mode(1);
+      widened = 1'b0;
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_deep_or.constraint_mode(0);
+      dsm.c_deep_not.constraint_mode(1);
+      widened = 1'b0;
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_deep_not.constraint_mode(0);
+      dsm.c_r.constraint_mode(0);
+      dsm.c_true_rand.constraint_mode(1);
+      dsm.h = new();
+      dsm.h.y = 4'h1;
+      widened = 1'b0;
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_true_rand.constraint_mode(0);
+      dsm.c_false_rand.constraint_mode(1);
+      dsm.h.y = 4'h0;
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
     end
 
     $write("*-* All Finished *-*\n");
