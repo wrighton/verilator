@@ -1,0 +1,8 @@
+%Error: t/t_defparam_genarray_range_bad.v:15:21: In defparam, the path names no instance
+   15 |   defparam g[2].u.P = 2;   
+      |                     ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_genarray_range_bad.v:16:35: In defparam, the path names no instance
+   16 |   defparam g[40'h1_0000_0001].u.P = 2;   
+      |                                   ^
+%Error: Exiting due to

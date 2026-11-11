@@ -52,12 +52,21 @@ module t (clk);
   //   which persist beyond FixDataHazards should persist in the final
   //   generated C code.
 
+  // With TEST_PROFILED, each block also calls a DPI import given profile data, which must not
+  // hide the hazard of the unprofiled call (t_dpi_threads_profiled.py).
+
   always @ (posedge clk) begin
     $dpii_sys();
+`ifdef TEST_PROFILED
+    void'($dpii_failure());
+`endif
   end
 
   always @ (posedge clk) begin
     $dpii_sys();
+`ifdef TEST_PROFILED
+    void'($dpii_failure());
+`endif
   end
 
 endmodule

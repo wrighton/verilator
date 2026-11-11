@@ -1,0 +1,26 @@
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:30:19: Unsupported: defparam to 'tblk.P' in the instance containing the defparam or above it
+   30 |   defparam tblk.P = 2;   
+      |                   ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:31:16: Unsupported: defparam to 't.Q' in the instance containing the defparam or above it
+   31 |   defparam t.Q = 2;   
+      |                ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:32:22: Unsupported: defparam to '$root.t.Q' in the instance containing the defparam or above it
+   32 |   defparam $root.t.Q = 4;   
+      |                      ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:12:16: Unsupported: defparam to 't.Q' in the instance containing the defparam or above it
+   12 |   defparam t.Q = 3;   
+      |                ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:13:18: Unsupported: defparam to 'mid.M' in the instance containing the defparam or above it
+   13 |   defparam mid.M = 3;   
+      |                  ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:14:18: Unsupported: defparam to 'sub.S' in the instance containing the defparam or above it
+   14 |   defparam sub.S = 2;   
+      |                  ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:15:16: Unsupported: defparam to 'u.S' in the instance containing the defparam or above it
+   15 |   defparam u.S = 2;   
+      |                ^
+%Error-UNSUPPORTED: t/t_defparam_scope_unsup.v:16:19: Unsupported: defparam to 'sblk.P' in the instance containing the defparam or above it
+   16 |   defparam sblk.P = 2;   
+      |                   ^
+%Error: Exiting due to

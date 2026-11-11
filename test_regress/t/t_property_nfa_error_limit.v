@@ -57,6 +57,7 @@ module t (
   else boolean_ant_fail++;
 
   assert property (@(posedge clk) not (1'b1 ##1 1'b1)) impossible_pass++;
+  else;
   assert property (@(posedge clk) not (1'b1 ##1 1'b0))
   else impossible_fail++;
 

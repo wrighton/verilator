@@ -1,0 +1,11 @@
+%Error: t/t_implements_type_param_bad.v:12:44: Type parameter 'T' cannot be implemented by a class (IEEE 1800-2023 8.26.4).
+   12 | class Concrete #(type T = Icls) implements T;
+      |                                            ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_implements_type_param_bad.v:15:52: Type parameter 'T' cannot be implemented by a class (IEEE 1800-2023 8.26.4).
+   15 | virtual class Abstract #(type T = Icls) implements T;
+      |                                                    ^
+%Error: t/t_implements_type_param_bad.v:18:50: Type parameter 'T' cannot be extended by an interface class (IEEE 1800-2023 8.26.4).
+   18 | interface class Derived #(type T = Icls) extends T;
+      |                                                  ^
+%Error: Exiting due to

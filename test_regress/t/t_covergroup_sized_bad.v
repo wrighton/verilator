@@ -24,6 +24,12 @@ module t;
       bins set_zero[0] = values;  // <--- Bad: zero
       bins set_negative[-1] = values;  // <--- Bad: negative
       bins set_unbounded[UNBOUNDED] = values;  // <--- Bad: '$'
+      bins value = {$};  // <--- Bad: '$'
+      bins array_value[] = {1, $};  // <--- Bad: '$'
+      ignore_bins ignore_value = {UNBOUNDED};  // <--- Bad: '$'
+      bins value_with = {$} with (item > 1);  // <--- Bad: '$'
+      bins param_with = {1, UNBOUNDED} with (item > 0);  // <--- Bad: '$'
+      bins range_with = {[1 : $]} with (item > 1);
     }
   endgroup
 

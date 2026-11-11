@@ -113,10 +113,9 @@ endclass
 
 // `disable soft` in BOTH then and else arms of a single if.  Exercises the
 // hoist-list concat path in the else branch (a then-arm hoist already
-// exists when the else-arm hoist is appended).  We only check that the
-// hard constraint in each arm fires correctly under its `pick` condition;
-// soft enforcement priority is not asserted (Verilator's soft solver is
-// best-effort).  The condition variable `pick` is non-rand so the setup
+// exists when the else-arm hoist is appended).  The hard constraint in each
+// arm fires under its `pick` condition, and the soft constraint of the other
+// variable is kept.  The condition variable `pick` is non-rand so the setup
 // task sees its current value before the solver runs.
 class DisSoftBothArms;
   bit [1:0] pick;
@@ -128,6 +127,125 @@ class DisSoftBothArms;
     if (pick == 2'd0) { disable soft a; a == 4'h1; }
     else              { disable soft b; b == 4'h2; }
   }
+endclass
+
+// `disable soft` removes only the soft constraints its variable directly
+// appears in (IEEE 1800-2023 18.5.13.2): not one that variable only guards,
+// nor one on the same member of another object.
+class DisSoftDirect;
+  rand bit p;
+  rand bit [6:0] q;
+  rand bit [6:0] r;
+  rand Inner a;
+  rand Inner b;
+  constraint c_p { p; }
+  constraint c_guarded { p -> soft q == 7'd9; }
+  constraint c_direct { soft !p || r == 7'd11; }
+  constraint c_member { soft a.y == 4'h3; soft b.y == 4'h4; }
+  constraint c_disable {
+    disable soft p;
+    disable soft a.y;
+  }
+  function new();
+    a = new();
+    b = new();
+  endfunction
+endclass
+
+// `disable soft` of a field of an object in an array removes only the soft
+// constraints of that object's field: constant indices into a fixed array with
+// nonzero bounds, state indices narrower and wider than 32 bits into a dynamic
+// array, a multidimensional array, a queue's last element, an associative array
+// key, and a foreach index.
+class DisSoftMid;
+  rand Inner inner;
+  function new();
+    inner = new();
+  endfunction
+endclass
+
+class DisSoftElems;
+  rand Inner fixedArr[5:16];
+  rand Inner dynArr[];
+  bit [6:0] narrowIdx = 7'd10;
+  longint wideIdx = 64'd4;
+  rand DisSoftMid mids[12];
+  rand Inner grid[3:5][4:1];
+  rand Inner q[$];
+  rand Inner amap[int];
+  constraint c_fixed {
+    soft fixedArr[6].y == 4'h7;
+    soft fixedArr[15].y == 4'h5;
+    soft fixedArr[16].y == 4'h6;
+  }
+  constraint c_dyn { foreach (dynArr[i]) soft dynArr[i].y == 4'h1; }
+  constraint c_mids { soft mids[1].inner.y == 4'h5; soft mids[10].inner.y == 4'h6; }
+  constraint c_grid { soft grid[4][2].y == 4'h3; soft grid[4][3].y == 4'h4; }
+  constraint c_q { soft q[0].y == 4'h2; soft q[2].y == 4'h9; }
+  constraint c_amap { soft amap[-7].y == 4'h8; soft amap[7].y == 4'ha; }
+  constraint c_disable {
+    disable soft fixedArr[15].y;
+    disable soft dynArr[narrowIdx].y;
+    disable soft dynArr[wideIdx].y;
+    disable soft mids[10].inner.y;
+    disable soft grid[4][3].y;
+    disable soft q[$].y;
+    disable soft amap[7].y;
+  }
+  function new();
+    foreach (fixedArr[i]) fixedArr[i] = new();
+    dynArr = new[12];
+    foreach (dynArr[i]) dynArr[i] = new();
+    foreach (mids[i]) mids[i] = new();
+    foreach (grid[i, j]) grid[i][j] = new();
+    repeat (3) begin
+      automatic Inner e = new();
+      q.push_back(e);
+    end
+    amap[-7] = new();
+    amap[7] = new();
+  endfunction
+endclass
+
+// `disable soft` in a restricted inline constraint of the object's own method: names not in
+// the identifier list resolve in the caller's scope (IEEE 1800-2023 18.7), here this object's
+// own random variables, so their lower priority soft constraints are removed.
+class DisSoftRestricted;
+  rand bit [3:0] x;
+  rand bit [3:0] y;
+  rand Inner objs[3];
+  constraint c_pref {
+    soft x != 4'h8;
+    soft objs[1].y != 4'h8;
+    soft objs[2].y == 4'h2;
+  }
+  function new();
+    foreach (objs[i]) objs[i] = new();
+  endfunction
+  function int widen();
+    return randomize() with (y) {
+      y < 4'hf;
+      disable soft x;
+      disable soft objs[1].y;
+      soft x inside {4'h5, 4'h8};
+      soft objs[1].y inside {4'h5, 4'h8};
+    };
+  endfunction
+endclass
+
+class DisSoftBinder;
+  rand Inner objs[];
+  constraint c_pref { foreach (objs[i]) soft objs[i].y == 4'h1; }
+  constraint c_widen {
+    foreach (objs[i]) {
+      disable soft objs[i].y;
+      soft objs[i].y inside {4'h1, 4'h2};
+    }
+  }
+  function new();
+    objs = new[12];
+    foreach (objs[i]) objs[i] = new();
+  endfunction
 endclass
 
 module t;
@@ -238,6 +356,7 @@ module t;
         ok = dba.randomize();
         `checkd(ok, 1);
         `checkh(dba.a, 4'h1);
+        `checkh(dba.b, 4'h8);
       end
       // pick==1: hard b==2 fires (else arm); hoisted disable_soft(b) runs
       dba.pick = 2'd1;
@@ -245,7 +364,100 @@ module t;
         ok = dba.randomize();
         `checkd(ok, 1);
         `checkh(dba.b, 4'h2);
+        `checkh(dba.a, 4'h7);
       end
+    end
+
+    begin
+      automatic DisSoftDirect dsd = new();
+      automatic bit rFree = 1'b0;
+      automatic bit ayFree = 1'b0;
+      repeat (16) begin
+        ok = dsd.randomize();
+        `checkd(ok, 1);
+        `checkh(dsd.p, 1'b1);
+        `checkh(dsd.q, 7'd9);
+        `checkh(dsd.b.y, 4'h4);
+        if (dsd.r != 7'd11) rFree = 1'b1;
+        if (dsd.a.y != 4'h3) ayFree = 1'b1;
+      end
+      `checkh(rFree, 1'b1);
+      `checkh(ayFree, 1'b1);
+    end
+
+    begin
+      automatic DisSoftElems dse = new();
+      automatic bit fixedFree = 1'b0;
+      automatic bit dynFree = 1'b0;
+      automatic bit dynWideFree = 1'b0;
+      automatic bit midFree = 1'b0;
+      automatic bit gridFree = 1'b0;
+      automatic bit qFree = 1'b0;
+      automatic bit amapFree = 1'b0;
+      repeat (16) begin
+        ok = dse.randomize();
+        `checkd(ok, 1);
+        `checkh(dse.fixedArr[6].y, 4'h7);
+        `checkh(dse.fixedArr[16].y, 4'h6);
+        `checkh(dse.mids[1].inner.y, 4'h5);
+        if (dse.mids[10].inner.y != 4'h6) midFree = 1'b1;
+        `checkh(dse.grid[4][2].y, 4'h3);
+        if (dse.grid[4][3].y != 4'h4) gridFree = 1'b1;
+        `checkh(dse.q[0].y, 4'h2);
+        if (dse.q[2].y != 4'h9) qFree = 1'b1;
+        `checkh(dse.amap[-7].y, 4'h8);
+        if (dse.amap[7].y != 4'ha) amapFree = 1'b1;
+        if (dse.fixedArr[15].y != 4'h5) fixedFree = 1'b1;
+        foreach (dse.dynArr[i]) begin
+          if (i == 10) begin
+            if (dse.dynArr[i].y != 4'h1) dynFree = 1'b1;
+          end
+          else if (i == 4) begin
+            if (dse.dynArr[i].y != 4'h1) dynWideFree = 1'b1;
+          end
+          else begin
+            `checkh(dse.dynArr[i].y, 4'h1);
+          end
+        end
+      end
+      `checkh(fixedFree, 1'b1);
+      `checkh(dynFree, 1'b1);
+      `checkh(dynWideFree, 1'b1);
+      `checkh(midFree, 1'b1);
+      `checkh(gridFree, 1'b1);
+      `checkh(qFree, 1'b1);
+      `checkh(amapFree, 1'b1);
+    end
+
+    begin
+      automatic DisSoftBinder dsb = new();
+      automatic bit widened = 1'b0;
+      repeat (16) begin
+        ok = dsb.randomize();
+        `checkd(ok, 1);
+        foreach (dsb.objs[i]) begin
+          `checkh(dsb.objs[i].y == 4'h1 || dsb.objs[i].y == 4'h2, 1'b1);
+          if (dsb.objs[i].y == 4'h2) widened = 1'b1;
+        end
+      end
+      `checkh(widened, 1'b1);
+    end
+
+    begin
+      automatic DisSoftRestricted dsr = new();
+      automatic bit xWidened = 1'b0;
+      automatic bit objWidened = 1'b0;
+      repeat (16) begin
+        ok = dsr.widen();
+        `checkd(ok, 1);
+        `checkh(dsr.x == 4'h5 || dsr.x == 4'h8, 1'b1);
+        `checkh(dsr.objs[1].y == 4'h5 || dsr.objs[1].y == 4'h8, 1'b1);
+        `checkh(dsr.objs[2].y, 4'h2);
+        if (dsr.x == 4'h8) xWidened = 1'b1;
+        if (dsr.objs[1].y == 4'h8) objWidened = 1'b1;
+      end
+      `checkh(xWidened, 1'b1);
+      `checkh(objWidened, 1'b1);
     end
 
     $write("*-* All Finished *-*\n");

@@ -1,8 +1,32 @@
+%Error: t/t_covergroup_sized_bad.v:23:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   23 |       bins param_value[2] = {UNBOUNDED};   
+      |            ^~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_covergroup_sized_bad.v:27:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   27 |       bins value = {$};   
+      |            ^~~~~
+%Error: t/t_covergroup_sized_bad.v:28:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   28 |       bins array_value[] = {1, $};   
+      |            ^~~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:29:19: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   29 |       ignore_bins ignore_value = {UNBOUNDED};   
+      |                   ^~~~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:30:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   30 |       bins value_with = {$} with (item > 1);   
+      |            ^~~~~~~~~~
+%Error: t/t_covergroup_sized_bad.v:31:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                        : ... note: In instance 't'
+   31 |       bins param_with = {1, UNBOUNDED} with (item > 0);   
+      |            ^~~~~~~~~~
 %Error: t/t_covergroup_sized_bad.v:17:17: Bins array size must be >= 1, got 0 (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
    17 |       bins zero[0] = {[0 : 3]};   
       |                 ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_covergroup_sized_bad.v:18:21: Bins array size must be >= 1, got -1 (IEEE 1800-2023 19.5.1)
                                         : ... note: In instance 't'
    18 |       bins negative[-1] = {[0 : 3]};   
@@ -35,24 +59,20 @@
                                         : ... note: In instance 't'
    21 |       bins four_state_with = {[4'b000x : 4'hf]} with (1);   
       |                               ^
-%Error: t/t_covergroup_sized_bad.v:23:12: Bins value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+%Error: t/t_covergroup_sized_bad.v:41:46: Cross bin 'matches' count must be >= 1, got 0 (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   23 |       bins param_value[2] = {UNBOUNDED};   
-      |            ^~~~~~~~~~~
-%Error: t/t_covergroup_sized_bad.v:35:46: Cross bin 'matches' count must be >= 1, got 0 (IEEE 1800-2023 19.6.1.2)
-                                        : ... note: In instance 't'
-   35 |       bins zero = xx with (aa == bb) matches 0;   
+   41 |       bins zero = xx with (aa == bb) matches 0;   
       |                                              ^
-%Error: t/t_covergroup_sized_bad.v:36:50: Cross bin 'matches' count must be >= 1, got -1 (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:42:50: Cross bin 'matches' count must be >= 1, got -1 (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   36 |       bins negative = xx with (aa == bb) matches -1;   
+   42 |       bins negative = xx with (aa == bb) matches -1;   
       |                                                  ^
-%Error: t/t_covergroup_sized_bad.v:37:50: Cross bin 'matches' count must be integral (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:43:50: Cross bin 'matches' count must be integral (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   37 |       bins fraction = xx with (aa == bb) matches 1.5;   
+   43 |       bins fraction = xx with (aa == bb) matches 1.5;   
       |                                                  ^~~
-%Error: t/t_covergroup_sized_bad.v:38:52: Cross bin 'matches' count must be >= 1, got b1x (IEEE 1800-2023 19.6.1.2)
+%Error: t/t_covergroup_sized_bad.v:44:52: Cross bin 'matches' count must be >= 1, got b1x (IEEE 1800-2023 19.6.1.2)
                                         : ... note: In instance 't'
-   38 |       bins four_state = xx with (aa == bb) matches 2'b1x;   
+   44 |       bins four_state = xx with (aa == bb) matches 2'b1x;   
       |                                                    ^~~~~
 %Error: Exiting due to

@@ -35,7 +35,7 @@ class LinkWithVisitor final : public VNVisitor {
     const char* m_randcIllegalWhyp = nullptr;  // Why randc illegal
     AstNode* m_randcIllegalp = nullptr;  // Node causing randc illegal
     AstNodeExpr* m_currentRandomizeSelectp = nullptr;  // fromp() of current `randomize()` call
-    bool m_inRandomizeWith = false;  // If in randomize() with (and no other with afterwards)
+    bool m_inRandomizeWith = false;  // Inside enclosing randomize-with constraints
 
     // VISITORS
     void visit(AstConstraint* nodep) override {
@@ -86,12 +86,6 @@ class LinkWithVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
 
-    void visit(AstSchemaRef* nodep) override {
-        if (AstSequence* const seqp = VN_CAST(nodep->schemap(), Sequence)) {
-            seqp->isReferenced(true);
-        }
-        iterateChildren(nodep);
-    }
     void visit(AstNodeFTaskRef* nodep) override {
         VL_RESTORER(m_currentRandomizeSelectp);
         if (nodep->name() == "randomize") {
@@ -113,9 +107,11 @@ class LinkWithVisitor final : public VNVisitor {
             // on which the randomize() is called with LambdaArgRef
             // This allows V3Randomize to work properly when
             // constrained variables are referred using that object
+            // Name it as the 'with' argument, as V3Width finds the type by name
             AstNodeExpr* const prevFromp = nodep->fromp();
-            AstNodeExpr* const newp
-                = new AstLambdaArgRef{prevFromp->fileline(), prevFromp->name(), false};
+            AstLambdaArgRef* const newp
+                = new AstLambdaArgRef{prevFromp->fileline(), "__Vrandwith_obj", false};
+            newp->randomizeTarget(true);
             prevFromp->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(prevFromp), prevFromp);
         }
@@ -125,9 +121,7 @@ class LinkWithVisitor final : public VNVisitor {
     void visit(AstWith* nodep) override {
         VL_RESTORER(m_inRandomizeWith);
         if (const AstMethodCall* const methodCallp = VN_CAST(nodep->backp(), MethodCall)) {
-            m_inRandomizeWith = methodCallp->name() == "randomize";
-        } else {
-            m_inRandomizeWith = false;
+            m_inRandomizeWith = m_inRandomizeWith || methodCallp->name() == "randomize";
         }
         iterateChildren(nodep);
     }

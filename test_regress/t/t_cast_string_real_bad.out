@@ -1,0 +1,22 @@
+%Error: t/t_cast_string_real_bad.v:16:15: Incompatible types to static cast to 'string' from 'real'
+                                        : ... note: In instance 't'
+   16 |     s = string'(r);
+      |               ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_cast_string_real_bad.v:17:14: Incompatible types to static cast to 'string' from 'real'
+                                        : ... note: In instance 't'
+   17 |     s = str_t'(r);
+      |              ^
+%Error: t/t_cast_string_real_bad.v:18:13: Incompatible types to static cast to 'real' from 'string'
+                                        : ... note: In instance 't'
+   18 |     r = real'(s);
+      |             ^
+%Error: t/t_cast_string_real_bad.v:19:15: Incompatible types to static cast to 'real' from 'string'
+                                        : ... note: In instance 't'
+   19 |     r = real_t'(s);
+      |               ^
+%Error: t/t_cast_string_real_bad.v:20:15: Incompatible types to static cast to 'string' from 'class C'
+                                        : ... note: In instance 't'
+   20 |     s = string'(c);
+      |               ^
+%Error: Exiting due to

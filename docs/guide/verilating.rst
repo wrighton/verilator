@@ -152,7 +152,8 @@ Hierarchy blocks have some limitations, including:
   nested hierarchy block, or from the top level non-hierarchical portions
   of the design if not a nested hierarchy block.
 
-- Modport cannot be used at the hierarchical block boundary.
+- Interface ports, with or without a modport, cannot be used at the
+  hierarchical block boundary.
 
 - The simulation speed is likely not as fast as flat Verilation, in which
   all modules are globally scheduled.

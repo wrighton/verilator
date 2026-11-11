@@ -32,4 +32,8 @@
                                                     : ... note: In instance 't'
    44 |   assert property (@(posedge clk) a [= 32'h80000000] |-> b)
       |                                     ^~
+%Error-UNSUPPORTED: t/t_assert_rep_bad_count.v:49:45: Unsupported: SVA repetition count exceeds implementation limit of 65536 (--max-num-width)
+                                                    : ... note: In instance 't'
+   49 |   assert property (@(posedge clk) (a ##1 b) [*2147483647] |-> b)
+      |                                             ^~
 %Error: Exiting due to

@@ -490,9 +490,18 @@ void V3PreProcImp::comment(const string& text) {
     } else if (VString::startsWith(cp, "synopsys")) {
         cp += std::strlen("synopsys");
         if (*cp == '_') {
-            V3Control::applyIgnores(fileline());
-            fileline()->v3warn(BADVLTPRAGMA, "Extra underscore in meta-comment, ignoring comment;"
-                                             " use /*synopsys {...}*/ not /*synopsys_{...}*/");
+            // Only a misspelling of a directive obeyed below needs a warning; any other
+            // text, e.g. 'synopsys_translate_off', is ignored either way
+            ++cp;
+            while (std::isspace(*cp)) ++cp;
+            string cmd = commentCleanup(string{cp});
+            if (commentTokenMatch(cmd /*ref*/, "full_case")
+                || commentTokenMatch(cmd /*ref*/, "parallel_case")) {
+                V3Control::applyIgnores(fileline());
+                fileline()->v3warn(BADVLTPRAGMA,
+                                   "Extra underscore in meta-comment, ignoring comment;"
+                                   " use /*synopsys {...}*/ not /*synopsys_{...}*/");
+            }
             return;
         }
         synth = true;

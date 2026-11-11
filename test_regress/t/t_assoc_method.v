@@ -79,6 +79,8 @@ module t;
     qi = points_q.unique_index();
     `checkh(qi.size, 3);
 
+    qv = q.unique with (item.index > 11);  // item.index is each element's index
+    `checkp(qv, "'{'h1, 'h2}");
     points_qv = points_q.unique(p) with (p.x);
     `checkh(points_qv.size, 2);
     qi = points_q.unique_index (p) with (p.x + p.y);
@@ -165,6 +167,22 @@ module t;
     `checkp(qwv, "'{}");
     qwv = qwe.max;
     `checkp(qwv, "'{}");
+
+    begin  // item.index has the key type (IEEE 1800-2023 7.12.4)
+      int lq[bit [63:0]];
+      int sq[string];
+      bit [63:0] lqi[$];
+      lq = '{64'h1_0000_0000: 7, 5: 9, 64'h2_0000_0005: 8};
+      qv = lq.max with (item.index);
+      `checkp(qv, "'{'h8}");
+      qv = lq.min with (item.index);
+      `checkp(qv, "'{'h9}");
+      lqi = lq.unique_index with (item.index >> 32);
+      `checkp(lqi, "'{'h5, 'h100000000, 'h200000005}");
+      sq = '{"bb": 1, "a": 2, "ccc": 3};
+      qv = sq.max with (item.index.len());
+      `checkp(qv, "'{'h3}");
+    end
 
     // Reduction methods
     i = q.sum;
@@ -300,6 +318,54 @@ module t;
     `checkp(qv, "'{'h1, 'h2, 'h3}");
     qv = q.map(el) with (el.index * 10);
     `checkp(qv, "'{'ha, 'h14, 'h1e}");
+
+    begin  // Signed keys are ordered as signed numbers (IEEE 1800-2023 7.8.4)
+      int sq[int];
+      typedef shortint key_t;
+      typedef enum {NEG = -2, ZERO = 0, POS = 2} enum_t;
+      int bq[byte];
+      int tq[key_t];
+      int eq[enum_t];
+      int nq[bit signed [4:0]];
+      int wq[bit signed [69:0]];
+      int k;
+      bit signed [69:0] wk;
+      sq = '{1: 1, -1: 2, -5: 3};
+      `checkp(sq, "'{'hfffffffb:'h3, 'hffffffff:'h2, 'h1:'h1}");
+      qi = sq.find_index with (1);
+      `checkp(qi, "'{'hfffffffb, 'hffffffff, 'h1}");
+      `checkh(sq.first(k), 1);
+      `checkh(k, -5);
+      `checkh(sq.next(k), 1);
+      `checkh(k, -1);
+      `checkh(sq.last(k), 1);
+      `checkh(k, 1);
+      `checkh(sq.prev(k), 1);
+      `checkh(k, -1);
+      bq[1] = 1;
+      bq[-1] = 2;
+      bq[-128] = 3;
+      `checkp(bq, "'{'h80:'h3, 'hff:'h2, 'h1:'h1}");
+      tq[1] = 1;
+      tq[-1] = 2;
+      `checkp(tq, "'{'hffff:'h2, 'h1:'h1}");
+      eq[POS] = 1;
+      eq[NEG] = 2;
+      eq[ZERO] = 3;
+      qv = eq.find with (1);
+      `checkp(qv, "'{'h2, 'h3, 'h1}");
+      nq[5'sd15] = 1;
+      nq[-5'sd16] = 2;
+      nq[5'sd0] = 3;
+      `checkp(nq, "'{'h10:'h2, 'h0:'h3, 'hf:'h1}");
+      wq[70'sd3] = 1;
+      wq[-70'sd2] = 2;
+      wq[70'sd0] = 3;
+      `checkh(wq.first(wk), 1);
+      `checkh(wk, -70'sd2);
+      `checkh(wq.last(wk), 1);
+      `checkh(wk, 70'sd3);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

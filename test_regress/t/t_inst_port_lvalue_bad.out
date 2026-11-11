@@ -1,0 +1,54 @@
+%Error: t/t_inst_port_lvalue_bad.v:34:19: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   34 |   sub u_and (.y(a & b));   
+      |                   ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_port_lvalue_bad.v:35:17: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   35 |   sub u_not (.y(~a));   
+      |                 ^
+%Error: t/t_inst_port_lvalue_bad.v:36:23: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   36 |   sub u_cond (.y(a[0] ? a : b));   
+      |                       ^
+%Error: t/t_inst_port_lvalue_bad.v:37:21: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   37 |   sub u_cat_bad (.y({a[0], a[1] | b[1]}));   
+      |                     ^
+%Error: t/t_inst_port_lvalue_bad.v:38:22: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   38 |   sub u_cat_bad2 (.y({~a[0], a[1]}));   
+      |                      ^
+%Error: t/t_inst_port_lvalue_bad.v:39:19: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   39 |   sub u_rep (.y({2{a[0]}}));   
+      |                   ^
+%Error: t/t_inst_port_lvalue_bad.v:40:21: Inout port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   40 |   sub_io u_io (.y(c & d));   
+      |                     ^
+%Error: t/t_inst_port_lvalue_bad.v:41:23: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   41 |   sub u_cat_const (.y({a[0], 1'b0}));   
+      |                       ^
+%Error: t/t_inst_port_lvalue_bad.v:42:25: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   42 |   sub_arr u_pat_bad (.y('{a & b, a}));   
+      |                         ^~
+%Error: t/t_inst_port_lvalue_bad.v:43:25: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   43 |   sub_arr u_pat_key (.y('{0: a, 1: b}));   
+      |                         ^~
+%Error: t/t_inst_port_lvalue_bad.v:44:25: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   44 |   sub_arr u_pat_rep (.y('{2{a}}));   
+      |                         ^~
+%Error: t/t_inst_port_lvalue_bad.v:45:22: Output port 'y' is connected to an expression that cannot be assigned (IEEE 1800-2023 23.3.3)
+                                        : ... note: In instance 't'
+   45 |   sub u_nest_bad (.y({a[0], {~a[1]}}));   
+      |                      ^
+%Error: t/t_inst_port_lvalue_bad.v:55:19: Output port connection 'y' requires constant selection indices (IEEE 1800-2023 23.3.3, 10.2, A.8.5).
+                                        : ... note: In instance 't'
+   55 |   sub u_sel (.y(v[idx+:2]));
+      |                   ^~~
+%Error: Exiting due to

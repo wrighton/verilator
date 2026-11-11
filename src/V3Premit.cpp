@@ -376,6 +376,18 @@ class PremitVisitor final : public VNVisitor {
         iterateChildren(nodep);
         checkNode(nodep);
     }
+    void visit(AstNodeCCall* nodep) override {
+        // A ref argument binds to its actual, so the actual must not be copied to a temporary.
+        // Actuals match the argument variables in order, but either list may end first
+        // (e.g. DPI and trace calls pass some arguments as text, or a result is returned).
+        AstNode* argp = nodep->argsp();
+        AstVar* portp = nodep->funcp()->argsp();
+        for (; argp && portp; argp = argp->nextp(), portp = VN_AS(portp->nextp(), Var)) {
+            const VDirection dir = portp->declDirection();
+            if (dir.isRef() || dir.isConstRef()) argp->user1(true);
+        }
+        iterateChildren(nodep);
+    }
     void visit(AstCvtArrayToPacked* nodep) override {
         iterateChildren(nodep);
         checkNode(nodep);
@@ -412,7 +424,8 @@ class PremitVisitor final : public VNVisitor {
         }
         // ArraySel are just pointer arithmetic and should never be replaced
     }
-    void visit(AstAssocSel* nodep) override {
+    void visit(AstNodeSel* nodep) override {
+        // Associative, wildcard and word selects
         iterateAndNextNull(nodep->fromp());
         {  // Only the 'from' is part of the assignment LHS
             VL_RESTORER(m_assignLhs);

@@ -1122,9 +1122,17 @@ size worth enumerating, then draws one cell and enumerates it, which gives
 a near-uniform sample of the whole space. Both the estimate and the
 leftover solutions are cached, so the following calls are answered without
 asking the solver again. Cases outside its assumptions, such as ``randc``
-variables or soft constraints, fall back to pinning every free bit to a
-random value, or, when arrays are involved, to asserting four random xor
-equations in a row.
+variables, soft constraints, problems over 1024 bits, or the first call with
+a set of constraints, fall back to pinning each variable or array element to
+a random value with assumption literals. A pin that conflicts with the
+constraints is dropped; if its variable can still change, it is pinned again
+in halves, down to single bits. Wide data whose parts cannot change
+independently, such as data limited to a few constants, is not split that far.
+Once the same part of several elements of an array conflicts, it is dropped for
+all the other elements at once, and whether it can change is checked on a few
+of them, so a large array costs a few checks per level rather than one per
+element. One call spends at most a fixed number of solver checks on this, and a
+smaller number of satisfied ones, the slow ones on large problems.
 
 The runtime classes used for handling the randomization are defined in
 ``verilated_random.h`` and ``verilated_random.cpp``.

@@ -11,4 +11,20 @@
                                        : ... note: In instance 't'
    60 |     bad_auto[3:0] <= 2;   
       |     ^~~~~~~~
+%Error: t/t_assign_automatic_bad.v:66:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_a'
+                                       : ... note: In instance 't'
+   66 |     bad_a <= 1;   
+      |     ^~~~~
+%Error: t/t_assign_automatic_bad.v:67:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_o'
+                                       : ... note: In instance 't'
+   67 |     bad_o <= 1;   
+      |     ^~~~~
+%Error: t/t_assign_automatic_bad.v:68:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_r'
+                                       : ... note: In instance 't'
+   68 |     bad_r <= 1;   
+      |     ^~~~~
+%Error: t/t_assign_automatic_bad.v:73:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_m'
+                                       : ... note: In instance 't'
+   73 |       bad_m <= 1;   
+      |       ^~~~~
 %Error: Exiting due to

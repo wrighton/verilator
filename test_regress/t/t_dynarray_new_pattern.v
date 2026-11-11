@@ -360,6 +360,128 @@ module t;
       end
     end
 
+    begin  // Associative arrays to splice, in index order (IEEE 1800-2023 7.8)
+      int q[$];
+      int aa[int];
+      for (int i = 5; i >= 0; --i) aa[i * 7] = i * 3 + 1;
+      q = {q, aa};
+      `checkh(q.size, 6);
+      `checkh(q[0], 'h1);
+      `checkh(q[5], 'h10);
+      aa.delete(14);
+      q = {100, aa, q[0]};
+      `checkh(q.size, 7);
+      `checkh(q[0], 'h64);
+      `checkh(q[3], 'ha);
+      `checkh(q[6], 'h1);
+      q = {aa};
+      `checkh(q.size, 5);
+      `checkh(q[2], 'ha);
+      aa.delete();
+      q = {aa, 5, aa};
+      `checkh(q.size, 1);
+      `checkh(q[0], 'h5);
+    end
+    begin  // Signed keys splice in signed index order
+      int q[$];
+      int aa[int];
+      aa[7] = 7;
+      aa[-7] = 1;
+      aa[0] = 2;
+      q = {aa, 4};
+      `checkh(q.size, 4);
+      `checkh(q[0], 'h1);
+      `checkh(q[1], 'h2);
+      `checkh(q[2], 'h7);
+      begin  // With its elements converted
+        bit [1:0] q2[$];
+        // verilator lint_off WIDTHTRUNC
+        q2 = {aa};
+        // verilator lint_on WIDTHTRUNC
+        `checkh(q2.size, 3);
+        `checkh(q2[0], 2'h1);
+        `checkh(q2[2], 2'h3);
+      end
+    end
+    begin  // An associative array of strings into a dynamic array
+      bit [6:0] d[];
+      bit [6:0] sa[string];
+      sa["b"] = 7'h22;
+      sa["a"] = 7'h11;
+      sa["c"] = 7'h33;
+      d = {sa, d};
+      `checkh(d.size, 3);
+      `checkh(d[0], 7'h11);
+      `checkh(d[2], 7'h33);
+    end
+    begin  // A wildcard associative array of wide values
+      logic [64:0] wq[$];
+      logic [64:0] wa[*];
+      wa[2] = {1'b1, 64'h1};
+      wa[1] = 65'h0_ffff_ffff_ffff_ffff;
+      wq = {wq, wa};
+      `checkh(wq.size, 2);
+      `checkh(wq[0], 65'h0_ffff_ffff_ffff_ffff);
+      `checkh(wq[1], {1'b1, 64'h1});
+    end
+    begin  // Associative arrays of class handles
+      Base bq[$];
+      Base ba[int];
+      Sub sa[int];
+      ba[5] = new(5);
+      sa[2] = new(2);
+      sa[1] = new(1);
+      bq = {ba, bq, sa};
+      `checkh(bq.size, 3);
+      `checkh(bq[0].v, 5);
+      `checkh(bq[1].v, 1);
+      `checkh(bq[2].v, 2);
+      sa.delete();
+      begin
+        Sub sw[*];
+        sw[3] = new(3);
+        bq = {bq, sw};
+        `checkh(bq.size, 4);
+        `checkh(bq[3].v, 3);
+      end
+    end
+    begin  // Elements of a variable of another element type are converted (IEEE 1800-2023 10.10)
+      // verilator lint_off WIDTHEXPAND
+      // verilator lint_off WIDTHTRUNC
+      bit [3:0] q4[$];
+      bit [7:0] q8[$];
+      byte qb[$];
+      int qi[$];
+      bit [5:0] d6[];
+      q8 = '{8'hff, 8'h12};
+      q4 = {q8};
+      `checkh(q4.size, 2);
+      `checkh(q4[0], 4'hf);
+      `checkh(q4[1], 4'h2);
+      qb = '{-8'sd1, 8'sd5};
+      qi = {qb, q4};
+      `checkh(qi.size, 4);
+      `checkh(qi[0], -1);
+      `checkh(qi[3], 2);
+      d6 = {qb, q8};
+      `checkh(d6.size, 4);
+      `checkh(d6[0], 6'h3f);
+      `checkh(d6[3], 6'h12);
+      begin
+        bit [7:0] d8[];
+        bit [7:0] f8[2];
+        d8 = '{8'h3c};
+        f8 = '{8'h5a, 8'ha5};
+        q4 = {d8, f8};
+        `checkh(q4.size, 3);
+        `checkh(q4[0], 4'hc);
+        `checkh(q4[1], 4'ha);
+        `checkh(q4[2], 4'h5);
+      end
+      // verilator lint_on WIDTHTRUNC
+      // verilator lint_on WIDTHEXPAND
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end

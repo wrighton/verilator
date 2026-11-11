@@ -1,0 +1,34 @@
+%Error: t/t_sequence_goto_seq_bad.v:31:25: Nonconsecutive repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   31 |   assert property (s_ab [=2]);
+      |                         ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_goto_seq_bad.v:32:25: Goto repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   32 |   assert property (s_ab [->2] |-> c);
+      |                         ^~~
+%Error: t/t_sequence_goto_seq_bad.v:33:30: Nonconsecutive repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   33 |   assert property ((a ##1 b) [=1]);
+      |                              ^~
+%Error: t/t_sequence_goto_seq_bad.v:34:29: Goto repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   34 |   assert property ((a [*2]) [->1:2]);
+      |                             ^~~
+%Error: t/t_sequence_goto_seq_bad.v:22:7: Goto repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                        : ... note: In instance 't'
+   22 |     q [->1];
+      |       ^~~
+%Error: t/t_sequence_goto_seq_bad.v:28:7: Nonconsecutive repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                        : ... note: In instance 't'
+   28 |     q [=2] |-> c;
+      |       ^~
+%Error: t/t_sequence_goto_seq_bad.v:37:29: Goto repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   37 |   cover sequence ((a ##1 b) [->1]);
+      |                             ^~~
+%Error: t/t_sequence_goto_seq_bad.v:25:10: Goto repetition operand must be a boolean expression, but is a sequence (IEEE 1800-2023 16.9.2)
+                                         : ... note: In instance 't'
+   25 |     s_ab [->1];
+      |          ^~~
+%Error: Exiting due to

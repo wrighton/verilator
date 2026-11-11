@@ -1,14 +1,11 @@
 %Error-UNSUPPORTED: t/t_constraint_global_arr_unsup.v:44:34: Unsupported: Nested array element access in global constraint
-                                                           : ... note: In instance 't_constraint_global_arr_unsup'
    44 |       solve m_mid_arr[((i*2)/2)].m_obj.m_x before m_mid_arr[((i*2)/2) + 1].m_obj.m_x;
       |                                  ^~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_constraint_global_arr_unsup.v:44:76: Unsupported: Nested array element access in global constraint
-                                                           : ... note: In instance 't_constraint_global_arr_unsup'
    44 |       solve m_mid_arr[((i*2)/2)].m_obj.m_x before m_mid_arr[((i*2)/2) + 1].m_obj.m_x;
       |                                                                            ^~~~~
 %Error-UNSUPPORTED: t/t_constraint_global_arr_unsup.v:46:16: Unsupported: Multiple expressions inside indices of complex expression in constraint
-                                                           : ... note: In instance 't_constraint_global_arr_unsup'
    46 |       m_mid_arr[((i*2)/2)].m_obj.m_x != m_mid_arr[((i*2)/2) + 1].m_obj.m_x;
       |                ^
                     t/t_constraint_global_arr_unsup.v:46:50: ... Location of second expression

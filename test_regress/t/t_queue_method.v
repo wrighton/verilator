@@ -165,6 +165,17 @@ module t;
 
     qi = q.find_index with (item.index == 2);
     `checkp(qi, "'{'h2}");
+    // Index results and item.index are int (IEEE 1800-2023 7.12.1, 7.12.4)
+    qi = q.find_last_index with (item == 2);
+    `checkh(qi[0] - 3 < 0, 1'b1);
+    qi = q.unique_index;
+    `checkh(qi[0] - 5 < 0, 1'b1);
+    qi = q.find_index with (item.index - 2 < 0);
+    qi.sort;
+    `checkp(qi, "'{'h0, 'h1}");
+    `checkh(q.sum with (int'(item.index - 2 < 0)), 2);
+    `checks($typename(q.map with (item.index)), "int$[$]");
+    `checks($typename(string_q.find_index with (item == "a")), "int$[$]");
     qi = q.find_index with (item.index == item);
     `checkp(qi, "'{'h2, 'h3, 'h4}");
 
@@ -180,6 +191,18 @@ module t;
     `checkp(qv, "'{}");
     qv = qe.max;
     `checkp(qv, "'{}");
+
+    begin  // item.index is each element's index (IEEE 1800-2023 7.12.4)
+      int iq[$];
+      int iqv[$];
+      iq = '{5, 4, 3, 2, 1};
+      iqv = iq.min with (4 - item.index);
+      `checkp(iqv, "'{'h1}");
+      iqv = iq.max with (item.index);
+      `checkp(iqv, "'{'h1}");
+      iqv = iq.unique with (item.index / 2);
+      `checkp(iqv, "'{'h5, 'h3, 'h1}");
+    end
 
     string_qv = string_q.min;
     `checks(string_qv[0], "A");
@@ -220,6 +243,13 @@ module t;
     `checkh(i, 32'h0);
     i = qe.product with (item + 1);
     `checkh(i, 32'h0);
+
+    begin
+      // Extension, IEEE 1800-2023 7.12.3 only defines reduction of integral elements
+      real rq[$];
+      rq = '{1.5, 2.25};
+      `checkh(rq.sum == 3.75, 1'b1);
+    end
 
     q = '{32'b1100, 32'b1010};
     i = q.and;

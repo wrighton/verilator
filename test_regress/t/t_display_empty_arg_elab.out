@@ -1,0 +1,8 @@
+-Info: t/t_display_empty_arg_elab.v:9:3: empty first
+                                       : ... note: In instance 't'
+    9 |   $info(, "empty first");
+      |   ^~~~~
+-Info: t/t_display_empty_arg_elab.v:10:3: a b
+                                        : ... note: In instance 't'
+   10 |   $info("a", , "b");
+      |   ^~~~~

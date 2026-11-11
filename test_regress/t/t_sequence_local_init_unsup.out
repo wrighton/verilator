@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_sequence_local_init_unsup.v:15:16: Unsupported: initializer of a sequence local variable (IEEE 1800-2023 16.10)
+                                                         : ... note: In instance 't'
+   15 |     int snap = 5;
+      |                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

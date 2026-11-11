@@ -223,21 +223,48 @@ class GraphAlgStrongly final : GraphAlg<> {
         }
     }
 
-    void vertexIterate(V3GraphVertex* vertexp) {
-        const uint32_t thisDfsNum = m_currentDfs++;
-        vertexp->user(thisDfsNum);
-        vertexp->color(0);
-        for (V3GraphEdge& edge : vertexp->outEdges()) {
+    // Color the components reachable from the given vertex
+    void vertexIterate(V3GraphVertex* startp) {
+        // Depth first with an explicit stack, as recursion overflows the stack on long paths
+        struct Frame final {
+            V3GraphVertex* vertexp;
+            uint32_t dfsNum;  // DFS number of vertexp
+            V3GraphEdge::OList::iterator edgeIt;  // Next out edge of vertexp to follow
+        };
+        std::vector<Frame> stack;
+        const auto enter = [&](V3GraphVertex* vertexp) {
+            const uint32_t dfsNum = m_currentDfs++;
+            vertexp->user(dfsNum);
+            vertexp->color(0);
+            V3GraphEdge::OList& edges = vertexp->outEdges();
+            stack.push_back({vertexp, dfsNum, edges.begin()});
+        };
+        enter(startp);
+        while (!stack.empty()) {
+            Frame& frame = stack.back();
+            V3GraphEdge::OList& edges = frame.vertexp->outEdges();
+            if (frame.edgeIt == edges.end()) {
+                vertexFinish(frame.vertexp, frame.dfsNum);
+                stack.pop_back();
+                continue;
+            }
+            V3GraphEdge& edge = *frame.edgeIt;
             if (followEdge(&edge)) {
-                V3GraphVertex* top = edge.top();
-                if (!top->user()) {  // Dest not computed yet
-                    vertexIterate(top);
+                V3GraphVertex* const top = edge.top();
+                if (!top->user()) {  // Dest not computed yet, follow this edge again after it
+                    enter(top);
+                    continue;
                 }
                 if (!top->color()) {  // Dest not in a component
-                    if (vertexp->user() > top->user()) vertexp->user(top->user());
+                    if (frame.vertexp->user() > top->user()) frame.vertexp->user(top->user());
                 }
             }
+            ++frame.edgeIt;
         }
+    }
+
+    // Make a component of the vertex once its edges are followed, if it is the head
+    void vertexFinish(V3GraphVertex* vertexp, uint32_t thisDfsNum) {
         if (vertexp->user() == thisDfsNum) {  // New head of subtree
             vertexp->color(thisDfsNum);  // Mark as component
             while (!m_callTrace.empty()) {
@@ -271,9 +298,41 @@ void V3Graph::stronglyConnected(V3EdgeFuncP edgeFuncp) { GraphAlgStrongly{this, 
 
 class GraphAlgRank final : GraphAlg<> {
     void main() {
-        // Rank each vertex, ignoring cutable edges
+        // Rank each vertex, ignoring cutable edges, with the longest path to it. Visit vertices
+        // in topological order, so each once; raising ranks depth first instead revisits all
+        // vertices after one at each raise, which is quadratic on long paths.
+        // Vertex::m_user: number of predecessors not visited yet
+        size_t nUnvisited = 0;
+        for (V3GraphVertex& vertex : m_graphp->vertices()) {
+            vertex.rank(1);
+            vertex.user(0);
+            ++nUnvisited;
+        }
+        for (V3GraphVertex& vertex : m_graphp->vertices()) {
+            for (V3GraphEdge& edge : vertex.outEdges()) {
+                if (followEdge(&edge)) edge.top()->user(edge.top()->user() + 1);
+            }
+        }
+        std::vector<V3GraphVertex*> readyps;
+        for (V3GraphVertex& vertex : m_graphp->vertices()) {
+            if (!vertex.user()) readyps.push_back(&vertex);
+        }
+        while (!readyps.empty()) {
+            V3GraphVertex* const vertexp = readyps.back();
+            readyps.pop_back();
+            --nUnvisited;
+            const uint32_t rank = vertexp->rank() + vertexp->rankAdder();
+            for (V3GraphEdge& edge : vertexp->outEdges()) {
+                if (!followEdge(&edge)) continue;
+                V3GraphVertex* const topp = edge.top();
+                topp->rank(std::max(topp->rank(), rank));
+                topp->user(topp->user() - 1);
+                if (!topp->user()) readyps.push_back(topp);
+            }
+        }
+        if (!nUnvisited) return;
+        // Vertices on a loop are never ready. Report it as the depth first search does.
         // Vertex::m_user begin: 1 indicates processing, 2 indicates completed
-        // Clear existing ranks
         for (V3GraphVertex& vertex : m_graphp->vertices()) {
             vertex.rank(0);
             vertex.user(0);

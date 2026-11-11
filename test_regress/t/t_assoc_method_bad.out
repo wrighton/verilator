@@ -112,4 +112,36 @@
                                     : ... Argument data type: 'integer' (4-state)
    64 |     void'(by_int.first(four_state_value));   
       |                  ^~~~~
+%Error: t/t_assoc_method_bad.v:73:17: Array method 'sort' not legal on associative arrays
+                                    : ... note: In instance 't'
+   73 |     result = mm.sort();
+      |                 ^~~~
+%Error: t/t_assoc_method_bad.v:74:17: Array method 'rsort' not legal on associative arrays
+                                    : ... note: In instance 't'
+   74 |     result = mm.rsort();
+      |                 ^~~~~
+%Error: t/t_assoc_method_bad.v:75:17: Array method 'reverse' not legal on associative arrays
+                                    : ... note: In instance 't'
+   75 |     result = mm.reverse();
+      |                 ^~~~~~~
+%Error: t/t_assoc_method_bad.v:76:17: Array method 'shuffle' not legal on associative arrays
+                                    : ... note: In instance 't'
+   76 |     result = mm.shuffle();
+      |                 ^~~~~~~
+%Error: t/t_assoc_method_bad.v:85:17: Array method 'sort' not legal on associative arrays
+                                    : ... note: In instance 't'
+   85 |     result = mm.sort();
+      |                 ^~~~
+%Error: t/t_assoc_method_bad.v:86:17: Array method 'rsort' not legal on associative arrays
+                                    : ... note: In instance 't'
+   86 |     result = mm.rsort();
+      |                 ^~~~~
+%Error: t/t_assoc_method_bad.v:87:17: Array method 'reverse' not legal on associative arrays
+                                    : ... note: In instance 't'
+   87 |     result = mm.reverse();
+      |                 ^~~~~~~
+%Error: t/t_assoc_method_bad.v:88:17: Array method 'shuffle' not legal on associative arrays
+                                    : ... note: In instance 't'
+   88 |     result = mm.shuffle();
+      |                 ^~~~~~~
 %Error: Exiting due to

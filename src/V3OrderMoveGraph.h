@@ -104,6 +104,7 @@ class OrderMoveDomScope final {
     // STATE
     OrderMoveVertex::List m_readyVertices;  // Ready vertices in this domain/scope
     V3ListLinks<OrderMoveDomScope> m_links;  // List links to store instances of this class
+    V3ListLinks<OrderMoveDomScope> m_domainLinks;  // List links for lists of the same domain
     bool m_isOnList = false;  // True if DomScope is already on a list through m_listEnt
     const OrderDomain* const m_domainp;  // Domain the vertices belong to
     const AstScope* const m_scopep;  // Scope the vertices belong to
@@ -140,10 +141,13 @@ class OrderMoveDomScope final {
     static DomScopeMap s_dsMap;
 
     V3ListLinks<OrderMoveDomScope>& links() { return m_links; }
+    V3ListLinks<OrderMoveDomScope>& domainLinks() { return m_domainLinks; }
 
 public:
     // List type to store instances of this class
     using List = V3List<OrderMoveDomScope, &OrderMoveDomScope::links>;
+    // List type to store instances of the same domain, also on a List
+    using DomainList = V3List<OrderMoveDomScope, &OrderMoveDomScope::domainLinks>;
 
     // STATIC MEMBERS
     static OrderMoveDomScope& getOrCreate(const OrderDomain* domainp, const AstScope* scopep) {
@@ -178,6 +182,8 @@ public:
 class OrderMoveGraphSerializer final {
     // STATE
     OrderMoveDomScope::List m_readyDomScopeps;  // List of DomScopes which have ready vertices
+    // The same DomScopes, in the same order, for each domain
+    std::unordered_map<const OrderDomain*, OrderMoveDomScope::DomainList> m_readyDomainDomScopeps;
     OrderMoveDomScope* m_nextDomScopep = nullptr;  // Next DomScope to yield from
 
     // METHODS
@@ -192,6 +198,7 @@ class OrderMoveGraphSerializer final {
             if (!domScope.isOnList()) {
                 domScope.isOnList(true);
                 m_readyDomScopeps.linkBack(&domScope);
+                m_readyDomainDomScopeps[domScope.domainp()].linkBack(&domScope);
             }
         } else {  // This is a bit nonsense at this point, but equivalent to the old version
             // Remove dependency on vertex we are returning. This might add vertices to
@@ -239,6 +246,7 @@ public:
         if (currReadyList.empty()) {
             currDomScope.isOnList(false);
             m_readyDomScopeps.unlink(&currDomScope);
+            m_readyDomainDomScopeps[currDomScope.domainp()].unlink(&currDomScope);
         }
 
         // Remove dependency on vertex we are returning. This might add vertices to currReadyList.
@@ -255,13 +263,7 @@ public:
         // If no more ready vertices in the current DomScope, prefer to continue with a new scope
         // under the same domain.
         if (currReadyList.empty()) {
-            m_nextDomScopep = nullptr;
-            for (OrderMoveDomScope& domScope : m_readyDomScopeps) {
-                if (domScope.domainp() == currDomScope.domainp()) {
-                    m_nextDomScopep = &domScope;
-                    break;
-                }
-            }
+            m_nextDomScopep = m_readyDomainDomScopeps[currDomScope.domainp()].frontp();
         }
 
         // Finally yield the selected vertex

@@ -1,0 +1,22 @@
+%Error: t/t_slice_var_bad.v:22:14: Expecting expression to be constant, but variable isn't const: 'p'
+                                 : ... note: In instance 't'
+   22 |     vs = ifs[p+:2];
+      |              ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_slice_var_bad.v:24:12: Slice selection of 7 elements wider than data type's '[6:1]'
+                                 : ... note: In instance 't'
+   24 |     r = arr[p+:7];
+      |            ^
+%Error: t/t_slice_var_bad.v:26:13: Slice selection index '[3:4]' outside data type's '[0:3]'
+                                 : ... note: In instance 't'
+   26 |     vs = ifs[ident(3)+:2];
+      |             ^
+%Error: t/t_slice_var_bad.v:31:15: Slice selection index '[6:6]' outside data type's '[5:5]'
+                                 : ... note: In instance 't'
+   31 |       r1 = one[6:6];
+      |               ^
+%Error: t/t_slice_var_bad.v:32:15: Slice selection index '[4:4]' outside data type's '[5:5]'
+                                 : ... note: In instance 't'
+   32 |       r1 = one[4+:1];
+      |               ^
+%Error: Exiting due to

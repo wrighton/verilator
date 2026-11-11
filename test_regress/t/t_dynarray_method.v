@@ -108,6 +108,17 @@ module t;
     qi = d.find_index with (item.index == 2);
     `checkp(qi, "'{'h2}");
 
+    // Index results and item.index are int (IEEE 1800-2023 7.12.1, 7.12.4)
+    qi = d.find_first_index with (item == 2);
+    `checkh(qi[0] - 2 < 0, 1'b1);
+    qi = d.unique_index;
+    `checkh(qi[0] - 5 < 0, 1'b1);
+    qi = d.find_index with (item.index - 2 < 0);
+    qi.sort;
+    `checkp(qi, "'{'h0, 'h1}");
+    `checkh(d.sum with (int'(item.index - 2 < 0)), 2);
+    `checks($typename(s.find_index with (item == "sad")), "int$[$]");
+
     qv = d.min;
     `checkp(qv, "'{'h1}");
     qv = d.max;

@@ -1,7 +1,5 @@
 t.cg.cp_array.arr: 3
 t.cg.cp_multi_item.multi: 1
-t.cg.cp_reptype.goto_bin: 1
-t.cg.cp_reptype.noncons_bin: 1
 t.cg.cp_trans2.trans1: 1
 t.cg.cp_trans2.trans2: 1
 t.cg.cp_trans2.trans3: 1
@@ -21,6 +19,9 @@ t.cg_alt.cx_two.<one,auto_0> [cross]: 1
 t.cg_alt.cx_two.<one,auto_1> [cross]: 0
 t.cg_alt.cx_two.<seq,auto_0> [cross]: 1
 t.cg_alt.cx_two.<seq,auto_1> [cross]: 0
+t.cg_array.cp_default.others [default]: 3
+t.cg_array.cp_default.three: 1
+t.cg_array.cp_default.tr: 1
 t.cg_array.cp_mix.tr: 1
 t.cg_array.cp_mix.vals[0]: 1
 t.cg_array.cp_mix.vals[1]: 0

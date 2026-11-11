@@ -1,0 +1,5 @@
+%Error: t/t_tri_pull_delay_bad.v:11:10: syntax error, unexpected '#', expecting IDENTIFIER or IDENTIFIER-for-pathpulse or '(' or randomize
+   11 |   pullup #1 (a);
+      |          ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

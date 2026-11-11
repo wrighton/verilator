@@ -16,11 +16,18 @@ module t;
   // 4-state array (should not be assignment compatible for unpacked arrays)
   logic [7:0] arr_4state[3:0];
 
+  // Also for queues and dynamic arrays
+  logic [7:0] arr_4state_q[$];
+  bit [7:0] arr_2state_q[$];
+  logic [7:0] arr_4state_d[];
+
   initial begin
     // Per IEEE 7.6: For unpacked arrays to be assignment compatible,
     // the element types shall be equivalent.
     // bit[7:0] and logic[7:0] are NOT equivalent (one is 2-state, one is 4-state)
     arr_2state = arr_4state;
+    arr_4state_q = arr_2state.find with (item == 1);
+    arr_2state_q = arr_4state_d.find with (item == 1);
     $write("*-* All Coverage *-*\n");
     $stop;
   end

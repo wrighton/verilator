@@ -1,0 +1,5 @@
+%Error: t/t_begin_name_shadow_bad.v:11:11: Found definition of 'blk' as a BEGIN but expected a variable
+   11 |       x = blk;   
+      |           ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
