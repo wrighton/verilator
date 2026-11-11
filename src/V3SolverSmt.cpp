@@ -2406,15 +2406,41 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
+        VL_RESTORER(m_booleanRegion);
+        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
     void visit(AstNodeUniop* nodep) override {
         if (editFormat(nodep)) return;
+        VL_RESTORER(m_booleanRegion);
+        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp());
     }
     void visit(AstNodeTriop* nodep) override {
         if (editFormat(nodep)) return;
+        VL_RESTORER(m_booleanRegion);
+        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
+    }
+    void editBooleanBinary(AstNodeBiop* const nodep) {
+        if (editFormat(nodep)) return;
+        if (!m_booleanRegion) {
+            editSMT(nodep, nodep->lhsp(), nodep->rhsp());
+            return;
+        }
+        AstNodeExpr* const lhsp = formatBooleanRegion(nodep->lhsp(), m_negativeBoolean);
+        AstNodeExpr* const rhsp = formatBooleanRegion(nodep->rhsp(), m_negativeBoolean);
+        editSMT(nodep, lhsp, rhsp);
+    }
+    void visit(AstLogAnd* nodep) override { editBooleanBinary(nodep); }
+    void visit(AstLogOr* nodep) override { editBooleanBinary(nodep); }
+    void visit(AstLogNot* nodep) override {
+        if (editFormat(nodep)) return;
+        if (!m_booleanRegion) {
+            editSMT(nodep, nodep->lhsp());
+            return;
+        }
+        editSMT(nodep, formatBooleanRegion(nodep->lhsp(), !m_negativeBoolean));
     }
     void visit(AstCond* nodep) override {
         if (editFormat(nodep)) return;
