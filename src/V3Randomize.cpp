@@ -825,9 +825,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
     // Give shadowing rand members distinct names before any solver paths are built.
     // Names on the current inheritance path are pushed and popped, so sibling classes
     // do not affect each other and each declaration is visited only once.
-    void nameShadowedRandMembers(AstClass* const classp, std::unordered_set<std::string>& names,
-                                 V3UniqueNames& uniqueNames,
-                                 std::unordered_set<AstVar*>& renamedVars) {
+    void nameShadowedRandMembersRecurse(AstClass* const classp,
+                                        std::unordered_set<std::string>& names,
+                                        V3UniqueNames& uniqueNames,
+                                        std::unordered_set<AstVar*>& renamedVars) {
         std::vector<std::string> addedNames;
         for (AstNode* const memberp : classp->memberspList()) {
             AstVar* const varp = VN_CAST(memberp, Var);
@@ -844,7 +845,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
         const auto it = m_baseToDerivedMap.find(classp);
         if (it != m_baseToDerivedMap.end()) {
             for (AstClass* const derivedp : it->second) {
-                nameShadowedRandMembers(derivedp, names, uniqueNames, renamedVars);
+                nameShadowedRandMembersRecurse(derivedp, names, uniqueNames, renamedVars);
             }
         }
         for (const std::string& name : addedNames) names.erase(name);
@@ -855,15 +856,12 @@ class RandomizeMarkVisitor final : public VNVisitor {
         V3UniqueNames uniqueNames{"__VrandShadow"};
         for (AstClass* const classp : m_classps) {
             if (!classp->extendsp()) {
-                nameShadowedRandMembers(classp, names, uniqueNames, renamedVars);
+                nameShadowedRandMembersRecurse(classp, names, uniqueNames, renamedVars);
             }
         }
-        // VarRef names follow varp(), but MemberRef and VarXRef keep a separate name.
+        // VarRef names follow varp(), but MemberRef keeps a separate name.
         // Refresh only renamed references while all class members are still resolved.
         nodep->foreach([&](AstMemberRef* const refp) {
-            if (renamedVars.count(refp->varp())) refp->name(refp->varp()->name());
-        });
-        nodep->foreach([&](AstVarXRef* const refp) {
             if (renamedVars.count(refp->varp())) refp->name(refp->varp()->name());
         });
     }

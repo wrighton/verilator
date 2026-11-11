@@ -45,6 +45,17 @@ class E extends C;
   constraint x_gt_y { x > y; }
 endclass
 
+// Inline constraints must keep hidden members distinct as well.
+class ShadowBase;
+  rand bit [15:0] addr;
+  constraint base_c { addr inside {[16'h0100:16'h01ff]}; }
+endclass
+
+class ShadowDerived extends ShadowBase;
+  rand bit [15:0] addr;
+  constraint derived_c { addr inside {[16'h8000:16'h80ff]}; }
+endclass
+
 module t;
   initial begin
     automatic B b = new;
@@ -59,6 +70,11 @@ module t;
     `check_rand(d, d.y, z > x && z < y, d.x > 0 && d.x < d.y);
     `check_rand(e, e.x, x inside {[10:20]}, e.x inside {[10:20]} && e.x > e.y);
     `check_rand(e, e.y, x inside {[10:20]}, e.x inside {[10:20]} && e.x > e.y);
+    begin
+      automatic ShadowDerived sd = new;
+      automatic ShadowBase sb = sd;
+      `check_rand(sd, sd.addr, addr < 16'h8040, sd.addr inside {[16'h8000:16'h803f]} && sb.addr inside {[16'h0100:16'h01ff]});
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
