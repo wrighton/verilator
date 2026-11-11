@@ -226,6 +226,37 @@ class DefaultValueConditional;
   constraint c_value {(choose != 0 ? values[idx].x : 7'b0) == 0;}
 endclass
 
+class SymbolicValueConditional;
+  rand PhaseEntry values[];
+  rand PhaseEntry other[$];
+  rand bit choose;
+  rand bit nested_choose;
+  int force_choose = -1;
+  bit native_choose = 1;
+  int other_count = 2;
+  int idx = 2;
+  int other_idx = 1;
+  int target = 9;
+  constraint c_size {values.size() == 3; other.size() == other_count;}
+  constraint c_choose {if (force_choose >= 0) choose == bit'(force_choose);}
+  constraint c_value {
+    (choose ? int'(values[idx].x) : values[idx].y) == target;
+    (choose ? int'(values[idx].x) : other[other_idx].y) == target;
+    (choose ? (native_choose ? values[idx].x : 7'(target)) :
+              (nested_choose ? 7'(other[other_idx].y) : 7'(target))) == 7'(target);
+  }
+endclass
+
+class SymbolicDefaultConditional;
+  rand PhaseEntry values[];
+  rand bit choose;
+  int force_choose;
+  int idx = 4;
+  constraint c_size {values.size() == 1;}
+  constraint c_choose {choose == bit'(force_choose);}
+  constraint c_value {(choose ? values[idx].x : 7'b0) == 0;}
+endclass
+
 module t;
   initial begin
     automatic int randomize_result;
@@ -475,6 +506,36 @@ module t;
         ok = default_array.randomize();
         `checkd(ok, 1)
         `checkd(default_array.values.size(), 1)
+      end
+    end
+
+    // Solver-dependent selectors share one symbolic term for value and readiness.
+    begin
+      automatic SymbolicValueConditional symbolic_array = new;
+      automatic SymbolicDefaultConditional symbolic_default = new;
+      int ok;
+      for (int turn = 0; turn < 20; ++turn) begin
+        symbolic_array.values.delete();
+        symbolic_array.other.delete();
+        symbolic_array.force_choose = turn % 3 - 1;
+        symbolic_array.other_count = symbolic_array.force_choose == 1 ? 0 : 2;
+        symbolic_array.other_idx = symbolic_array.force_choose == 1 ? 7 : 1;
+        symbolic_array.native_choose = turn % 2 != 0;
+        symbolic_array.target = 9 + turn;
+        ok = symbolic_array.randomize();
+        `checkd(ok, 1)
+        `checkd(symbolic_array.values.size(), 3)
+        `checkd(symbolic_array.other.size(), symbolic_array.other_count)
+        if (symbolic_array.choose) `checkd(symbolic_array.values[2].x, 7'(symbolic_array.target))
+        else begin
+          `checkd(symbolic_array.values[2].y, symbolic_array.target)
+          `checkd(symbolic_array.other[1].y, symbolic_array.target)
+        end
+        symbolic_default.values.delete();
+        symbolic_default.force_choose = turn % 2;
+        ok = symbolic_default.randomize();
+        `checkd(ok, 1)
+        `checkd(symbolic_default.values.size(), 1)
       end
     end
 

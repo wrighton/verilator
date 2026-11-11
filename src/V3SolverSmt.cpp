@@ -3152,9 +3152,80 @@ class ConstraintExprVisitor final : public VNVisitor {
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, valuep, VAccess::READ}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    // Symbolic scalar selectors remain SMT terms, shared by value and readiness ites.
+    void editSymbolicValueConditional(AstCond* const nodep) {
+        FileLine* const fl = nodep->fileline();
+        AstVar* const selectorp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
+        AstVar* const thenValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
+        AstVar* const thenReadyp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
+        AstVar* const elseValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
+        AstVar* const elseReadyp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
+        {
+            VL_RESTORER(m_allowElementDeferral);
+            VL_RESTORER(m_booleanRegion);
+            VL_RESTORER(m_conditionp);
+            m_allowElementDeferral = false;
+            m_booleanRegion = false;
+            m_conditionp = nullptr;
+            const int width = nodep->condp()->width();
+            AstNodeExpr* const selectorTextp
+                = VN_AS(iterateSubtreeReturnEdits(nodep->condp()->unlinkFrBack()), NodeExpr);
+            m_valuePreparationp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, selectorp, VAccess::WRITE},
+                              wrapWithCond(selectorTextp, m_conditionp, width)});
+        }
+        m_valuePreparationp->addStmtsp(
+            newValueConditionalArm(nodep->thenp(), thenValuep, thenReadyp));
+        m_valuePreparationp->addStmtsp(
+            newValueConditionalArm(nodep->elsep(), elseValuep, elseReadyp));
+
+        // AstSFormatF holds an already lowered term; do not evaluate its string as C++ truth.
+        AstNodeExpr* const selectorTextp
+            = new AstSFormatF{fl, "%s", false, new AstVarRef{fl, selectorp, VAccess::READ}};
+        selectorTextp->user1(true);  // The condition is a solver term, not native string truth.
+        AstCond* const valueCondp = new AstCond{
+            fl, selectorTextp->cloneTree(false),
+            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenValuep, VAccess::READ}},
+            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseValuep, VAccess::READ}}};
+        valueCondp->dtypep(nodep->dtypep());
+        valueCondp->user1(true);
+        AstCond* const readyCondp = new AstCond{
+            fl, selectorTextp,
+            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenReadyp, VAccess::READ}},
+            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseReadyp, VAccess::READ}}};
+        readyCondp->dtypeSetBit();
+        readyCondp->user1(true);
+        AstNodeExpr* valueTextp;
+        AstNodeExpr* readyTextp;
+        {
+            VL_RESTORER(m_allowElementDeferral);
+            m_allowElementDeferral = false;
+            valueTextp = VN_AS(iterateSubtreeReturnEdits(valueCondp), NodeExpr);
+            readyTextp = VN_AS(iterateSubtreeReturnEdits(readyCondp), NodeExpr);
+        }
+        readyTextp->user1(true);  // Preserve the symbolic predicate through its outer phase gate.
+        if (m_elementSizeGatep) {
+            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, readyTextp};
+            m_elementSizeGatep->user1(true);
+        } else {
+            m_elementSizeGatep = readyTextp;
+        }
+        nodep->replaceWith(valueTextp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     void visit(AstCond* nodep) override {
-        // A synthetic phase gate or symbolic selector keeps its existing lowering. Native
-        // selectors choose an owned value/readiness pair without relaxing the selector itself.
+        // Native selectors choose a pair once; pure symbolic scalar selectors build two ites
+        // of the same solver term. Receiver-bearing selectors retain their baseline path.
+        if (m_allowElementDeferral && m_valuePreparationp && nodep->user1()
+            && nodep->condp()->user1() && !isRandModeGate(nodep->condp())
+            && !nodep->condp()->exists([](const AstNodeExpr* exprp) {
+                   return VN_IS(exprp, MemberRef) || VN_IS(exprp, StructSel)
+                          || VN_IS(exprp, NodeSel) || VN_IS(exprp, CMethodHard)
+                          || VN_IS(exprp, NodeFTaskRef);
+               })) {
+            editSymbolicValueConditional(nodep);
+            return;
+        }
         if (m_allowElementDeferral && m_valuePreparationp && nodep->user1()
             && !nodep->condp()->user1() && !isRandModeGate(nodep->condp())) {
             editStateValueConditional(nodep);
