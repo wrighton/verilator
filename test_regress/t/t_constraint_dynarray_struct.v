@@ -286,6 +286,12 @@ class MixedEmptyStructArray;
   constraint c_mixed {values.size() + values[idx].value == idx + 1 + expected;}
 endclass
 
+class CheckOnlyStageArray extends MixedEmptyStructArray;
+  int invalid_idx = -1;
+  int default_value;
+  constraint c_default {values[invalid_idx].value == default_value;}
+endclass
+
 typedef enum int {
   FALLBACK_ZERO = 0,
   FALLBACK_THIRTY_ONE = 31
@@ -626,7 +632,7 @@ module t;
       end
     end
 
-    // Numeric payload arms retain their values and only the chosen allocation readiness.
+    // Numeric payload arms retain their values and prepare only the selected native arm.
     begin
       automatic ValueConditionalArray value_array = new;
       automatic LazyValueConditional lazy_array = new;
@@ -663,7 +669,7 @@ module t;
       end
     end
 
-    // Solver-dependent selectors share one symbolic term for value and readiness.
+    // Solver-dependent selectors retain one symbolic term for the selected value.
     begin
       automatic SymbolicValueConditional symbolic_array = new;
       automatic SymbolicDefaultConditional symbolic_default = new;
@@ -718,6 +724,64 @@ module t;
         `checkd(ok, 1)
         `checkd(mixed.values.size(), mixed.idx + 1)
         `checkd(mixed.values[mixed.idx].value, mixed.expected)
+      end
+    end
+
+    // Check-only uses real inherited members without resizing or writing staged storage.
+    begin
+      automatic CheckOnlyStageArray checked = new;
+      Entry snapshot[];
+      int ok;
+      for (int turn = 0; turn < 4; ++turn) begin
+        checked.values.delete();
+        checked.invalid_idx = turn % 2 == 0 ? -1 : 9;
+        ok = checked.randomize();
+        `checkd(ok, 1)
+        `checkd(checked.values.size(), 3)
+        `checkd(checked.values[2].value, 31)
+        snapshot = checked.values;
+        ok = checked.randomize(null);
+        `checkd(ok, 1)
+        `checkd(checked.values.size(), snapshot.size())
+        foreach (snapshot[i]) `checkd(checked.values[i].value, snapshot[i].value)
+
+        checked.values[checked.idx].value = 0;
+        snapshot[checked.idx].value = 0;
+        ok = checked.randomize(null);
+        `checkd(ok, 0)
+        `checkd(checked.values.size(), snapshot.size())
+        foreach (snapshot[i]) `checkd(checked.values[i].value, snapshot[i].value)
+        ok = checked.randomize();
+        `checkd(ok, 1)
+        `checkd(checked.values.size(), 3)
+        `checkd(checked.values[2].value, 31)
+
+        checked.values.rand_mode(0);
+        snapshot = checked.values;
+        ok = checked.randomize(null);
+        `checkd(ok, 1)
+        `checkd(checked.values.size(), snapshot.size())
+        foreach (snapshot[i]) `checkd(checked.values[i].value, snapshot[i].value)
+        checked.c_domain.constraint_mode(0);
+        checked.c_field.constraint_mode(0);
+        checked.c_mixed.constraint_mode(0);
+        checked.values.delete();
+        ok = checked.randomize(null);
+        `checkd(ok, 1)
+        `checkd(checked.values.size(), 0)
+        checked.default_value = 9;
+        ok = checked.randomize(null);
+        `checkd(ok, 0)
+        `checkd(checked.values.size(), 0)
+        checked.default_value = 0;
+        checked.values.rand_mode(1);
+        checked.c_domain.constraint_mode(1);
+        checked.c_field.constraint_mode(1);
+        checked.c_mixed.constraint_mode(1);
+        ok = checked.randomize();
+        `checkd(ok, 1)
+        `checkd(checked.values.size(), 3)
+        `checkd(checked.values[2].value, 31)
       end
     end
 

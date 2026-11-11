@@ -458,12 +458,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::vector<ConstraintFuncCall> m_funcCalls;  // Items calling functions with random arguments
     // Condition that the arrays reduced in the current constraint keep their current sizes
     AstNodeExpr* m_sizeGatep = nullptr;
-    // Allocation readiness of a selected struct field, consumed at a Boolean relation boundary.
-    AstNodeExpr* m_elementSizeGatep = nullptr;
-    bool m_booleanRegion = false;  // Logical operands are independent predicate regions
-    bool m_negativeBoolean = false;  // Relax an unavailable atom to FALSE under negation
-    bool m_allowElementDeferral = true;  // Never defer a control predicate or synthetic phase gate
-    AstBegin* m_valuePreparationp = nullptr;  // Owns value/readiness pairs before their relation
+    bool m_allowFieldStaging = true;  // Typed field preparation excludes controls and carriers
+    AstBegin* m_valuePreparationp = nullptr;  // Owns preparation before an expression's use
     StagedFieldGroup* m_stagedFieldsp = nullptr;
     bool m_stagingField = false;  // Canonical name is being lowered for a staged member
     std::set<std::string> m_foldSizeGuardVars;  // Auxiliary names carried by a folded constraint
@@ -1020,40 +1016,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         return newp;
     }
 
-    // Record a field's size dependency without guarding its enclosing size predicates.
-    void gateElementOnCurrentSize(AstVarRef* const arrayp, AstNodeExpr* const indexp) {
-        AstVar* const arrVarp = arrayp->varp();
-        AstVar* const sizeVarp = VN_AS(arrVarp->user4p(), Var);
-        FileLine* const fl = arrayp->fileline();
-        AstVarRef* const sizeRefp
-            = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
-        sizeRefp->user1(true);
-        AstCMethodHard* const currentp
-            = new AstCMethodHard{fl, arrayp->cloneTree(false), VCMethod::DYN_SIZE};
-        currentp->dtypeFrom(sizeVarp);
-        AstEq* const eqp = new AstEq{fl, sizeRefp, currentp};
-        eqp->user1(true);
-        // An already registered field remains live while the solver changes the size. Only
-        // a currently absent field needs relation deferral until the post-resize setup.
-        AstCMethodHard* const lengthp
-            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
-        lengthp->dtypeSetInt();
-        AstLogAnd* const availablep = new AstLogAnd{
-            fl,
-            new AstLteS{fl, new AstConst{fl, AstConst::WidthedValue{}, indexp->width(), 0},
-                        indexp->cloneTreePure(false)},
-            new AstLtS{fl, indexp->cloneTreePure(false), lengthp}};
-        AstLogOr* const readyp = new AstLogOr{fl, availablep, eqp};
-        readyp->user1(true);
-        if (m_elementSizeGatep) {
-            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, readyp};
-        } else {
-            m_elementSizeGatep = readyp;
-        }
-        m_elementSizeGatep->user1(true);
-        if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
-    }
-    // Keep pair preparation ahead of every use, inside one owned expression block.
+    // Keep value preparation ahead of every use, inside one owned expression block.
     AstNodeExpr* finishValuePreparation(AstNodeExpr* const exprp, AstBegin* const blockp) {
         if (!blockp->stmtsp()) {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
@@ -1062,62 +1025,27 @@ class ConstraintExprVisitor final : public VNVisitor {
         blockp->addStmtsp(new AstCReturn{exprp->fileline(), exprp});
         return newReturnedTextp(exprp->fileline(), blockp);
     }
-    // Format one predicate region; arithmetic operands remain values, not constraints.
-    AstNodeExpr* formatBooleanRegion(AstNodeExpr* exprp, const bool negative = false) {
+    // Format one expression with its owned preparation and original range default.
+    AstNodeExpr* formatValueRegion(AstNodeExpr* exprp) {
         FileLine* const fl = exprp->fileline();
         const int width = exprp->width();
         if (exprp->backp()) exprp->unlinkFrBack();
-        if (width > 1 && !exprp->isString()) {
-            exprp = new AstNeq{fl, exprp, new AstConst{fl, V3Number{fl, width, 0}}};
-            exprp->user1(true);
-        }
-        VL_RESTORER(m_booleanRegion);
-        VL_RESTORER(m_negativeBoolean);
-        VL_RESTORER(m_elementSizeGatep);
         VL_RESTORER(m_conditionp);
         VL_RESTORER(m_valuePreparationp);
         AstBegin* const preparationp
-            = new AstBegin{fl, m_uniqueNames.get("__VvaluePairRegion"), nullptr, true};
+            = new AstBegin{fl, m_uniqueNames.get("__VvalueRegion"), nullptr, true};
         m_valuePreparationp = preparationp;
-        m_booleanRegion = true;
-        m_negativeBoolean = negative;
-        m_elementSizeGatep = nullptr;
         m_conditionp = nullptr;
         exprp = VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
-        exprp = wrapWithCond(exprp, m_conditionp, 1);
-        if (!m_elementSizeGatep) return finishValuePreparation(exprp, preparationp);
-
-        // Only the original payload names identify a soft. Keep phase-guard names separate.
-        std::set<std::string> guardVars;
-        VL_RESTORER(m_constraintVarsp);
-        VL_RESTORER(m_allowElementDeferral);
-        m_constraintVarsp = &guardVars;
-        m_allowElementDeferral = false;
-        m_booleanRegion = false;
-        AstNodeExpr* const gatep = m_elementSizeGatep;
-        m_elementSizeGatep = nullptr;
-        AstCond* const condp = new AstCond{
-            fl, gatep, exprp,
-            new AstConst{fl, AstConst::WidthedValue{}, 1, static_cast<uint32_t>(!negative)}};
-        condp->dtypeSetBit();
-        condp->user1(true);
-        exprp = VN_AS(iterateSubtreeReturnEdits(condp), NodeExpr);
-        UASSERT_OBJ(m_sizeGuardVarsp, exprp, "Size guard outside a constraint");
-        m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
-        m_constraintVarsp = VL_RESTORER_PREV(m_constraintVarsp);
-        return finishValuePreparation(exprp, preparationp);
+        return finishValuePreparation(wrapWithCond(exprp, m_conditionp, width), preparationp);
     }
 
     // Runtime loop elements and function values are not independent predicate regions.
     AstNodeExpr* formatCarrierValue(AstNodeExpr* const exprp) {
         VL_RESTORER(m_valuePreparationp);
-        VL_RESTORER(m_booleanRegion);
-        VL_RESTORER(m_allowElementDeferral);
-        VL_RESTORER(m_elementSizeGatep);
+        VL_RESTORER(m_allowFieldStaging);
         m_valuePreparationp = nullptr;
-        m_booleanRegion = false;
-        m_allowElementDeferral = false;
-        m_elementSizeGatep = nullptr;
+        m_allowFieldStaging = false;
         return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
     }
 
@@ -2629,41 +2557,15 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
     void visit(AstNodeUniop* nodep) override {
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp());
     }
     void visit(AstNodeTriop* nodep) override {
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
-    }
-    void editBooleanBinary(AstNodeBiop* const nodep) {
-        if (editFormat(nodep)) return;
-        if (!m_booleanRegion) {
-            editSMT(nodep, nodep->lhsp(), nodep->rhsp());
-            return;
-        }
-        AstNodeExpr* const lhsp = formatBooleanRegion(nodep->lhsp(), m_negativeBoolean);
-        AstNodeExpr* const rhsp = formatBooleanRegion(nodep->rhsp(), m_negativeBoolean);
-        editSMT(nodep, lhsp, rhsp);
-    }
-    void visit(AstLogAnd* nodep) override { editBooleanBinary(nodep); }
-    void visit(AstLogOr* nodep) override { editBooleanBinary(nodep); }
-    void visit(AstLogNot* nodep) override {
-        if (editFormat(nodep)) return;
-        if (!m_booleanRegion) {
-            editSMT(nodep, nodep->lhsp());
-            return;
-        }
-        editSMT(nodep, formatBooleanRegion(nodep->lhsp(), !m_negativeBoolean));
     }
     // State proofs of TRUE/FALSE/ERROR, all absent only when the predicate is RANDOM.
     struct GuardResult final {
@@ -3105,15 +3007,15 @@ class ConstraintExprVisitor final : public VNVisitor {
         GuardFlagsMap flags;
         GuardResult result;
         {
-            VL_RESTORER(m_allowElementDeferral);
-            m_allowElementDeferral = false;
+            VL_RESTORER(m_allowFieldStaging);
+            m_allowFieldStaging = false;
             result = newGuardResult(nodep->condp(), blockp, flags);
             AstNodeExpr* const predicatep = nodep->condp()->unlinkFrBack();
             nodep->condp(formatGuardPredicate(predicatep, flags));
         }
         UASSERT_OBJ(flags.empty(), nodep, "Unconsumed guard predicate proofs");
-        AstNodeExpr* const thenTextp = formatBooleanRegion(nodep->thenp(), m_negativeBoolean);
-        AstNodeExpr* const elseTextp = formatBooleanRegion(nodep->elsep(), m_negativeBoolean);
+        AstNodeExpr* const thenTextp = formatValueRegion(nodep->thenp());
+        AstNodeExpr* const elseTextp = formatValueRegion(nodep->elsep());
         AstSFormatF* const smtp = editSMT(nodep, nodep->condp(), thenTextp, elseTextp);
         if (!result.truep && !result.falsep && !result.errorp) {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
@@ -3160,95 +3062,55 @@ class ConstraintExprVisitor final : public VNVisitor {
         relinker.relink(newReturnedTextp(fl, blockp));
     }
     // Lower one numeric arm, keeping its preparation and range default inside that arm.
-    AstBegin* newValueConditionalArm(AstNodeExpr* exprp, AstVar* const valueVarp,
-                                     AstVar* const readyVarp) {
+    AstBegin* newValueConditionalArm(AstNodeExpr* exprp, AstVar* const valueVarp) {
         FileLine* const fl = exprp->fileline();
         const int width = exprp->width();
-        AstBegin* const blockp
-            = new AstBegin{fl, m_uniqueNames.get("__VvaluePairArm"), nullptr, true};
+        AstBegin* const blockp = new AstBegin{fl, m_uniqueNames.get("__VvalueArm"), nullptr, true};
         VL_RESTORER(m_valuePreparationp);
-        VL_RESTORER(m_elementSizeGatep);
         VL_RESTORER(m_conditionp);
-        VL_RESTORER(m_booleanRegion);
         m_valuePreparationp = blockp;
-        m_elementSizeGatep = nullptr;
         m_conditionp = nullptr;
-        m_booleanRegion = false;
         exprp = VN_AS(iterateSubtreeReturnEdits(exprp->unlinkFrBack()), NodeExpr);
         blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, valueVarp, VAccess::WRITE},
                                         wrapWithCond(exprp, m_conditionp, width)});
-        AstNodeExpr* readyTextp = new AstSFormatF{fl, "#b1", false, nullptr};
-        if (m_elementSizeGatep) {
-            VL_DO_DANGLING(readyTextp->deleteTree(), readyTextp);
-            std::set<std::string> guardVars;
-            VL_RESTORER(m_constraintVarsp);
-            VL_RESTORER(m_allowElementDeferral);
-            m_constraintVarsp = &guardVars;
-            m_allowElementDeferral = false;
-            readyTextp = VN_AS(iterateSubtreeReturnEdits(m_elementSizeGatep), NodeExpr);
-            UASSERT_OBJ(m_sizeGuardVarsp, readyTextp, "Value readiness outside a constraint");
-            m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
-            m_constraintVarsp = VL_RESTORER_PREV(m_constraintVarsp);
-        }
-        blockp->addStmtsp(
-            new AstAssign{fl, new AstVarRef{fl, readyVarp, VAccess::WRITE}, readyTextp});
         return blockp;
     }
-    // A native STATE selector chooses both the numeric term and its phase readiness once.
+    // A native STATE selector is sampled once and prepares only its selected numeric arm.
     void editStateValueConditional(AstCond* const nodep) {
         FileLine* const fl = nodep->fileline();
-        UASSERT_OBJ(m_valuePreparationp, nodep, "Value conditional outside a predicate region");
+        UASSERT_OBJ(m_valuePreparationp, nodep, "Value conditional outside an expression region");
         AstVar* const selectorp
             = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VvalueSelector"),
                          nodep->condp()->dtypep()};
         AstVar* const valuep
             = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VselectedValue"),
                          nodep->findStringDType()};
-        AstVar* const readyp
-            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VselectedReady"),
-                         nodep->findStringDType()};
         selectorp->funcLocal(true);
         valuep->funcLocal(true);
-        readyp->funcLocal(true);
         selectorp->noSubst(true);
         valuep->noSubst(true);
-        readyp->noSubst(true);
         m_valuePreparationp->addDeclsp(selectorp);
         m_valuePreparationp->addDeclsp(valuep);
-        m_valuePreparationp->addDeclsp(readyp);
         m_valuePreparationp->addStmtsp(new AstAssign{
             fl, new AstVarRef{fl, selectorp, VAccess::WRITE}, nodep->condp()->unlinkFrBack()});
-        AstBegin* const thenp = newValueConditionalArm(nodep->thenp(), valuep, readyp);
-        AstBegin* const elsep = newValueConditionalArm(nodep->elsep(), valuep, readyp);
+        AstBegin* const thenp = newValueConditionalArm(nodep->thenp(), valuep);
+        AstBegin* const elsep = newValueConditionalArm(nodep->elsep(), valuep);
         m_valuePreparationp->addStmtsp(
             new AstIf{fl, new AstVarRef{fl, selectorp, VAccess::READ}, thenp, elsep});
-        AstNodeExpr* const selectedReady
-            = new AstSFormatF{fl, "%s", false, new AstVarRef{fl, readyp, VAccess::READ}};
-        selectedReady->user1(true);  // It is an SMT predicate term, not a native string condition.
-        if (m_elementSizeGatep) {
-            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, selectedReady};
-            m_elementSizeGatep->user1(true);
-        } else {
-            m_elementSizeGatep = selectedReady;
-        }
         nodep->replaceWith(
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, valuep, VAccess::READ}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    // Symbolic scalar selectors remain SMT terms, shared by value and readiness ites.
+    // Symbolic scalar selectors remain SMT terms selecting their numeric value.
     void editSymbolicValueConditional(AstCond* const nodep) {
         FileLine* const fl = nodep->fileline();
         AstVar* const selectorp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
         AstVar* const thenValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        AstVar* const thenReadyp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
         AstVar* const elseValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        AstVar* const elseReadyp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
         {
-            VL_RESTORER(m_allowElementDeferral);
-            VL_RESTORER(m_booleanRegion);
+            VL_RESTORER(m_allowFieldStaging);
             VL_RESTORER(m_conditionp);
-            m_allowElementDeferral = false;
-            m_booleanRegion = false;
+            m_allowFieldStaging = false;
             m_conditionp = nullptr;
             const int width = nodep->condp()->width();
             AstNodeExpr* const selectorTextp
@@ -3257,50 +3119,33 @@ class ConstraintExprVisitor final : public VNVisitor {
                 new AstAssign{fl, new AstVarRef{fl, selectorp, VAccess::WRITE},
                               wrapWithCond(selectorTextp, m_conditionp, width)});
         }
-        m_valuePreparationp->addStmtsp(
-            newValueConditionalArm(nodep->thenp(), thenValuep, thenReadyp));
-        m_valuePreparationp->addStmtsp(
-            newValueConditionalArm(nodep->elsep(), elseValuep, elseReadyp));
+        m_valuePreparationp->addStmtsp(newValueConditionalArm(nodep->thenp(), thenValuep));
+        m_valuePreparationp->addStmtsp(newValueConditionalArm(nodep->elsep(), elseValuep));
 
         // AstSFormatF holds an already lowered term; do not evaluate its string as C++ truth.
         AstNodeExpr* const selectorTextp
             = new AstSFormatF{fl, "%s", false, new AstVarRef{fl, selectorp, VAccess::READ}};
         selectorTextp->user1(true);  // The condition is a solver term, not native string truth.
         AstCond* const valueCondp = new AstCond{
-            fl, selectorTextp->cloneTree(false),
+            fl, selectorTextp,
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenValuep, VAccess::READ}},
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseValuep, VAccess::READ}}};
         valueCondp->dtypep(nodep->dtypep());
         valueCondp->user1(true);
-        AstCond* const readyCondp = new AstCond{
-            fl, selectorTextp,
-            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenReadyp, VAccess::READ}},
-            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseReadyp, VAccess::READ}}};
-        readyCondp->dtypeSetBit();
-        readyCondp->user1(true);
         AstNodeExpr* valueTextp;
-        AstNodeExpr* readyTextp;
         {
-            VL_RESTORER(m_allowElementDeferral);
-            m_allowElementDeferral = false;
+            VL_RESTORER(m_allowFieldStaging);
+            m_allowFieldStaging = false;
             valueTextp = VN_AS(iterateSubtreeReturnEdits(valueCondp), NodeExpr);
-            readyTextp = VN_AS(iterateSubtreeReturnEdits(readyCondp), NodeExpr);
-        }
-        readyTextp->user1(true);  // Preserve the symbolic predicate through its outer phase gate.
-        if (m_elementSizeGatep) {
-            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, readyTextp};
-            m_elementSizeGatep->user1(true);
-        } else {
-            m_elementSizeGatep = readyTextp;
         }
         nodep->replaceWith(valueTextp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void visit(AstCond* nodep) override {
-        // Native selectors choose a pair once; pure symbolic scalar selectors build two ites
-        // of the same solver term. Receiver-bearing selectors retain their baseline path.
-        if (m_allowElementDeferral && m_valuePreparationp && nodep->user1()
-            && nodep->condp()->user1() && !isRandModeGate(nodep->condp())
+        // Native selectors sample once; pure symbolic scalar selectors build a value ite.
+        // Receiver-bearing selectors retain their baseline path.
+        if (m_allowFieldStaging && m_valuePreparationp && nodep->user1() && nodep->condp()->user1()
+            && !isRandModeGate(nodep->condp())
             && !nodep->condp()->exists([](const AstNodeExpr* exprp) {
                    return VN_IS(exprp, MemberRef) || VN_IS(exprp, StructSel)
                           || VN_IS(exprp, NodeSel) || VN_IS(exprp, CMethodHard)
@@ -3309,15 +3154,15 @@ class ConstraintExprVisitor final : public VNVisitor {
             editSymbolicValueConditional(nodep);
             return;
         }
-        if (m_allowElementDeferral && m_valuePreparationp && nodep->user1()
+        if (m_allowFieldStaging && m_valuePreparationp && nodep->user1()
             && !nodep->condp()->user1() && !isRandModeGate(nodep->condp())) {
             editStateValueConditional(nodep);
             return;
         }
         // Value conditionals retain ordinary value semantics. In particular, an invalid value
         // arm must not become boolean FALSE merely because constraint guards use that status.
-        VL_RESTORER(m_allowElementDeferral);
-        m_allowElementDeferral = false;
+        VL_RESTORER(m_allowFieldStaging);
+        m_allowFieldStaging = false;
         if (editFormat(nodep)) return;
         if (nodep->condp()->user1()) {
             editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
@@ -3394,7 +3239,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     AstMemberDType* stageableMemberp(const AstStructSel* const selp) {
-        if (!m_stagedFieldsp || m_stagingField || !m_allowElementDeferral || !m_classp
+        if (!m_stagedFieldsp || m_stagingField || !m_allowFieldStaging || !m_classp
             || !m_valuePreparationp)
             return nullptr;
         return canonicalStateMemberp(selp);
@@ -3468,8 +3313,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_stagingField);
         VL_RESTORER(m_deferRandModeHoist);
         VL_RESTORER(m_conditionp);
-        VL_RESTORER(m_allowElementDeferral);
-        VL_RESTORER(m_booleanRegion);
+        VL_RESTORER(m_allowFieldStaging);
         m_stagingField = true;
         m_deferRandModeHoist = true;
         m_conditionp = nullptr;
@@ -3510,8 +3354,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         prospectivep->user1(true);
         VN_AS(prospectivep, LogAnd)->rhsp()->user1(true);
         std::set<std::string> guardVars;
-        m_allowElementDeferral = false;
-        m_booleanRegion = false;
+        m_allowFieldStaging = false;
         AstNodeExpr* guardp;
         {
             VL_RESTORER(m_constraintVarsp);
@@ -3621,9 +3464,9 @@ class ConstraintExprVisitor final : public VNVisitor {
             return;
         }
         const bool normalizeName = canonicalStateMemberp(nodep) != nullptr;
-        // Fields without a staged representation retain baseline preparation and readiness.
-        VL_RESTORER(m_allowElementDeferral);
-        m_allowElementDeferral = m_allowElementDeferral && normalizeName;
+        // Fields without a staged representation retain baseline preparation.
+        VL_RESTORER(m_allowFieldStaging);
+        m_allowFieldStaging = m_allowFieldStaging && normalizeName;
         if (editFormat(nodep)) return;
         const bool outermost = !m_deferRandModeHoist;
         AstNodeExpr* const origp = outermost ? nodep->cloneTree(false) : nullptr;
@@ -4603,7 +4446,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         VL_RESTORER(m_sizeGatep);
         m_sizeGatep = nullptr;
-        nodep->exprp(formatBooleanRegion(nodep->exprp()));
+        nodep->exprp(formatValueRegion(nodep->exprp()));
         // Before any size gate is added around the payload
         if (!foldTaker && nodep->isSoft()) {
             softVars = vars;
@@ -4710,13 +4553,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
                 const AstVarRef* const baseRefp
                     = m_structSel ? VN_CAST(nodep->fromp()->baseFromp(true), VarRef) : nullptr;
-                AstVarRef* const directp = VN_CAST(nodep->fromp(), VarRef);
-                const bool deferElement = m_classp && m_allowElementDeferral && m_structSel
-                                          && !indexIsRand && directp
-                                          && isSizeBackedStructContainer(directp->varp());
-                if (deferElement && !m_stagingField)
-                    gateElementOnCurrentSize(directp, nodep->pinsp());
-                if (baseRefp && !deferElement && !m_stagingField && VN_IS(nodep->pinsp(), Const)
+                if (baseRefp && !m_stagingField && VN_IS(nodep->pinsp(), Const)
                     && VN_IS(baseRefp->varp()->dtypep()->skipRefp(), DynArrayDType)
                     && m_prepareConstrainedArraysp) {
                     AstNodeExpr* const indexp = nodep->pinsp()->cloneTreePure(false);
@@ -5067,13 +4904,9 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     void visit(AstNodeFTaskRef* nodep) override {
         VL_RESTORER(m_valuePreparationp);
-        VL_RESTORER(m_booleanRegion);
-        VL_RESTORER(m_allowElementDeferral);
-        VL_RESTORER(m_elementSizeGatep);
+        VL_RESTORER(m_allowFieldStaging);
         m_valuePreparationp = nullptr;
-        m_booleanRegion = false;
-        m_allowElementDeferral = false;
-        m_elementSizeGatep = nullptr;
+        m_allowFieldStaging = false;
         if (editFormat(nodep)) return;
 
         AstFunc* const funcp = VN_CAST(nodep->taskp(), Func);
@@ -5388,7 +5221,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         return savedp;
     }
 
-    void setStagedPhase(AstFunc* const funcp, StagedFieldGroup& group, AstVar* const savedp) {
+    static void setStagedPhase(AstFunc* const funcp, StagedFieldGroup& group,
+                               AstVar* const savedp) {
         if (!savedp) return;
         AstNodeExpr* const valuep
             = savedp == group.phasep ? static_cast<AstNodeExpr*>(

@@ -169,10 +169,17 @@ class test_value_carriers;
   rand int random_sum;
   rand int random_product;
   rand int logical_value;
+  rand int function_value;
   int bias;
 
   function int keep_value(int value);
     return value;
+  endfunction
+
+  // Multiple returns keep the call's arguments in the function-value carrier path.
+  function int pick_value(bit selected);
+    if (selected) return 23;
+    return 29;
   endfunction
 
   constraint c {
@@ -182,6 +189,7 @@ class test_value_carriers;
     random_sum == a.sum() with (choose ? int'(item) : 0);
     random_product == a.product() with (choose ? int'(item) : 1);
     logical_value == keep_value(int'((a[0] > 0) && (a[2] > 0)));
+    function_value == pick_value(choose);
   }
 
   function void verify(int turn);
@@ -201,6 +209,7 @@ class test_value_carriers;
     `checkd(random_sum, choose ? sum_value : 0);
     `checkd(random_product, choose ? product_value : 1);
     `checkd(logical_value, 1);
+    `checkd(function_value, choose ? 23 : 29);
   endfunction
 endclass
 
