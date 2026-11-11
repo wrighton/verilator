@@ -80,6 +80,29 @@ class ShadowHolder;
   constraint holder_c { h.addr == 16'h80a5; }
 endclass
 
+// Shadowing rand handles keep the constraints of their own objects.
+class ShadowLeaf;
+  rand bit [6:0] x;
+  constraint leaf_c { x inside {[7'd5:7'd20]}; }
+endclass
+
+class HandleBase;
+  rand ShadowLeaf h;
+  function new;
+    h = new;
+  endfunction
+  constraint base_h_c { h.x > 7'd2; }
+endclass
+
+class HandleDerived extends HandleBase;
+  rand ShadowLeaf h;
+  function new;
+    super.new();
+    h = new;
+  endfunction
+  constraint derived_h_c { h.x > 7'd3; }
+endclass
+
 module t;
   initial begin
     automatic B b = new;
@@ -123,6 +146,14 @@ module t;
       automatic ShadowHolder sh = new;
       automatic ShadowBase sb = sh.h;
       `check_rand(sh, sb.addr, sh.h.addr == 16'h80a5 && sb.addr inside {[16'h0100:16'h01ff]});
+    end
+    begin
+      automatic HandleBase hb_alone = new;
+      automatic HandleDerived hd = new;
+      automatic HandleBase hb = hd;
+      `check_rand(hb_alone, hb_alone.h.x, hb_alone.h.x inside {[7'd5:7'd20]});
+      `check_rand(hd, hd.h.x, hd.h.x inside {[7'd5:7'd20]} && hb.h.x inside {[7'd5:7'd20]});
+      `check_rand(hd, hb.h.x, hd.h.x inside {[7'd5:7'd20]} && hb.h.x inside {[7'd5:7'd20]});
     end
     $write("*-* All Finished *-*\n");
     $finish;
