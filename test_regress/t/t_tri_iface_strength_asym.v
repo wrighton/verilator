@@ -95,6 +95,41 @@ module many_driver #(
   end
 endmodule
 
+// Macro expansion keeps independent drivers in one lexical context per specialization.
+// verilog_format: off
+`define FLAT_ONE(k) assign (strong0, strong1) p.value = enable && chosen == $clog2(N)'(k) ? data : 1'bz;
+`define FLAT16(b) \
+  `FLAT_ONE((b)+0) `FLAT_ONE((b)+1) `FLAT_ONE((b)+2) `FLAT_ONE((b)+3) \
+  `FLAT_ONE((b)+4) `FLAT_ONE((b)+5) `FLAT_ONE((b)+6) `FLAT_ONE((b)+7) \
+  `FLAT_ONE((b)+8) `FLAT_ONE((b)+9) `FLAT_ONE((b)+10) `FLAT_ONE((b)+11) \
+  `FLAT_ONE((b)+12) `FLAT_ONE((b)+13) `FLAT_ONE((b)+14) `FLAT_ONE((b)+15)
+`define FLAT128(b) \
+  `FLAT16((b)+0) `FLAT16((b)+16) `FLAT16((b)+32) `FLAT16((b)+48) \
+  `FLAT16((b)+64) `FLAT16((b)+80) `FLAT16((b)+96) `FLAT16((b)+112)
+`define FLAT256(b) `FLAT128(b) `FLAT128((b)+128)
+// verilog_format: on
+
+module flat_driver #(
+    parameter int N = 128
+) (
+    many_defaults.drive p,
+    input bit enable,
+    data,
+    input bit [$clog2(N)-1:0] chosen
+);
+  if (N == 128) begin : flat128
+    `FLAT128(0)
+  end
+  else begin : flat256
+    `FLAT256(0)
+  end
+endmodule
+
+`undef FLAT_ONE
+`undef FLAT16
+`undef FLAT128
+`undef FLAT256
+
 module t;
   // Retain the exact former Unsupported shape, now with an actual value oracle.
   asymmetric active ();
@@ -131,6 +166,20 @@ module t;
   );
   many_driver #(256) many256 (
       count256,
+      second,
+      first,
+      chosen256
+  );
+  many_defaults flat_count128 ();
+  many_defaults flat_count256 ();
+  flat_driver #(128) flat128 (
+      flat_count128,
+      second,
+      first,
+      chosen128
+  );
+  flat_driver #(256) flat256 (
+      flat_count256,
       second,
       first,
       chosen256
@@ -192,6 +241,8 @@ module t;
       `checkh(packed_case.value, expected_packed);
       `checkh(count128.value, second ? first : 1'b0);
       `checkh(count256.value, second ? first : 1'b0);
+      `checkh(flat_count128.value, second ? first : 1'b0);
+      `checkh(flat_count256.value, second ? first : 1'b0);
     end
     $write("*-* All Finished *-*\n");
     $finish;

@@ -14,10 +14,11 @@ test.scenarios('simulator')
 test.compile(verilator_flags2=['--binary', '--x-initial', 'unique', '--stats'])
 
 if test.vlt_all:
-    # Source partitions export: asymmetric 3, inverse 1, sole/pair modules 2+2,
-    # packed module 2, and specialized many-driver modules 1+1. Driver counts
-    # 128/256 do not change their one occupied STRONG rank each.
-    test.file_grep(test.stats, r'Tristate, External interface rank pairs\s+(\d+)', 12)
+    # Other source partitions: asymmetric 3, inverse 1, sole/pair modules 2+2,
+    # packed module 2. Generated drivers keep 128+256 distinct inlined contexts.
+    # Flat specializations each have one context and one occupied STRONG rank.
+    test.file_grep(test.stats, r'Tristate, External interface rank pairs\s+(\d+)',
+                   10 + 128 + 256 + 2)
     test.execute(all_run_flags=['+verilator+rand+reset+2'])
 else:
     test.execute()
