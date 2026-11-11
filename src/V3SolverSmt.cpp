@@ -1904,19 +1904,6 @@ private:
         return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
     }
 
-    // Runtime loop elements and function values are not independent predicate regions.
-    AstNodeExpr* formatCarrierValue(AstNodeExpr* const exprp) {
-        VL_RESTORER(m_valuePreparationp);
-        VL_RESTORER(m_booleanRegion);
-        VL_RESTORER(m_allowElementDeferral);
-        VL_RESTORER(m_elementSizeGatep);
-        m_valuePreparationp = nullptr;
-        m_booleanRegion = false;
-        m_allowElementDeferral = false;
-        m_elementSizeGatep = nullptr;
-        return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
-    }
-
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
         if (!itemsp) return nullptr;
 
@@ -3525,41 +3512,15 @@ private:
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
     void visit(AstNodeUniop* nodep) override {
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp());
     }
     void visit(AstNodeTriop* nodep) override {
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
-    }
-    void editBooleanBinary(AstNodeBiop* const nodep) {
-        if (editFormat(nodep)) return;
-        if (!m_booleanRegion) {
-            editSMT(nodep, nodep->lhsp(), nodep->rhsp());
-            return;
-        }
-        AstNodeExpr* const lhsp = formatBooleanRegion(nodep->lhsp(), m_negativeBoolean);
-        AstNodeExpr* const rhsp = formatBooleanRegion(nodep->rhsp(), m_negativeBoolean);
-        editSMT(nodep, lhsp, rhsp);
-    }
-    void visit(AstLogAnd* nodep) override { editBooleanBinary(nodep); }
-    void visit(AstLogOr* nodep) override { editBooleanBinary(nodep); }
-    void visit(AstLogNot* nodep) override {
-        if (editFormat(nodep)) return;
-        if (!m_booleanRegion) {
-            editSMT(nodep, nodep->lhsp());
-            return;
-        }
-        editSMT(nodep, formatBooleanRegion(nodep->lhsp(), !m_negativeBoolean));
     }
     // State proofs of TRUE/FALSE/ERROR, all absent only when the predicate is RANDOM.
     struct GuardResult final {
@@ -4095,20 +4056,16 @@ private:
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, valuep, VAccess::READ}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    // Symbolic scalar selectors remain SMT terms, shared by value and readiness ites.
+    // Symbolic scalar selectors remain SMT terms selecting their numeric value.
     void editSymbolicValueConditional(AstCond* const nodep) {
         FileLine* const fl = nodep->fileline();
         AstVar* const selectorp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
         AstVar* const thenValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        AstVar* const thenReadyp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
         AstVar* const elseValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        AstVar* const elseReadyp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
         {
-            VL_RESTORER(m_allowElementDeferral);
-            VL_RESTORER(m_booleanRegion);
+            VL_RESTORER(m_allowFieldStaging);
             VL_RESTORER(m_conditionp);
-            m_allowElementDeferral = false;
-            m_booleanRegion = false;
+            m_allowFieldStaging = false;
             m_conditionp = nullptr;
             const int width = nodep->condp()->width();
             AstNodeExpr* const selectorTextp
@@ -4117,41 +4074,24 @@ private:
                 new AstAssign{fl, new AstVarRef{fl, selectorp, VAccess::WRITE},
                               wrapWithCond(selectorTextp, m_conditionp, width)});
         }
-        m_valuePreparationp->addStmtsp(
-            newValueConditionalArm(nodep->thenp(), thenValuep, thenReadyp));
-        m_valuePreparationp->addStmtsp(
-            newValueConditionalArm(nodep->elsep(), elseValuep, elseReadyp));
+        m_valuePreparationp->addStmtsp(newValueConditionalArm(nodep->thenp(), thenValuep));
+        m_valuePreparationp->addStmtsp(newValueConditionalArm(nodep->elsep(), elseValuep));
 
         // AstSFormatF holds an already lowered term; do not evaluate its string as C++ truth.
         AstNodeExpr* const selectorTextp
             = new AstSFormatF{fl, "%s", false, new AstVarRef{fl, selectorp, VAccess::READ}};
         selectorTextp->user1(true);  // The condition is a solver term, not native string truth.
         AstCond* const valueCondp = new AstCond{
-            fl, selectorTextp->cloneTree(false),
+            fl, selectorTextp,
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenValuep, VAccess::READ}},
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseValuep, VAccess::READ}}};
         valueCondp->dtypep(nodep->dtypep());
         valueCondp->user1(true);
-        AstCond* const readyCondp = new AstCond{
-            fl, selectorTextp,
-            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenReadyp, VAccess::READ}},
-            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseReadyp, VAccess::READ}}};
-        readyCondp->dtypeSetBit();
-        readyCondp->user1(true);
         AstNodeExpr* valueTextp;
-        AstNodeExpr* readyTextp;
         {
-            VL_RESTORER(m_allowElementDeferral);
-            m_allowElementDeferral = false;
+            VL_RESTORER(m_allowFieldStaging);
+            m_allowFieldStaging = false;
             valueTextp = VN_AS(iterateSubtreeReturnEdits(valueCondp), NodeExpr);
-            readyTextp = VN_AS(iterateSubtreeReturnEdits(readyCondp), NodeExpr);
-        }
-        readyTextp->user1(true);  // Preserve the symbolic predicate through its outer phase gate.
-        if (m_elementSizeGatep) {
-            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, readyTextp};
-            m_elementSizeGatep->user1(true);
-        } else {
-            m_elementSizeGatep = readyTextp;
         }
         nodep->replaceWith(valueTextp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
