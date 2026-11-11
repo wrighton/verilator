@@ -166,7 +166,7 @@ public:
         return ((isTristate() ? "tri\\n"
                  : feedsTri() ? "feed\\n"
                               : "-\\n")
-                + (nodep()->prettyTypeName() + " " + cvtToHex(nodep())));
+                + (nodep()->prettyTypeNameQ() + " " + cvtToHex(nodep())));
     }
     string dotColor() const override {
         return (varp() ? (isTristate() ? "darkblue"
@@ -288,7 +288,7 @@ public:
                 // Not v3errorSrc as no reason to stop the world
                 vvertex.nodep()->v3warn(E_UNSUPPORTED, "Unsupported tristate construct"
                                                        " (in graph; not converted): "
-                                                           << vvertex.nodep()->prettyTypeName());
+                                                           << vvertex.nodep()->prettyTypeNameQ());
             }
         }
         m_graph.clear();
@@ -341,7 +341,7 @@ public:
             // Not v3errorSrc as no reason to stop the world
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported tristate construct (not in propagation graph): "
-                              << nodep->prettyTypeName());
+                              << nodep->prettyTypeNameQ());
         }
     }
     // ITERATOR METHODS
@@ -710,7 +710,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             // '^a' or '{a, a}' with a driven, non-tristate 'a' is never z, so is fully enabled.
             if (nodep->exists([this](const AstNodeVarRef* refp) { return mayBeZ(refp); })) {
                 nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported tristate construct: " << nodep->prettyTypeName()
+                              "Unsupported tristate construct: " << nodep->prettyTypeNameQ()
                                                                  << " in function " << __func__);
             }
             return newAllZerosOrOnes(nodep, true);
@@ -861,7 +861,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         // pointers that did not get picked up and expanded.
         if (m_alhs && nodep->user1p()) {
             nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported LHS tristate construct: " << nodep->prettyTypeName());
+                          "Unsupported LHS tristate construct: " << nodep->prettyTypeNameQ());
         }
         // Ignore Var because they end up adjacent to statements
         if ((nodep->op1p() && nodep->op1p()->user1p() && !VN_IS(nodep->op1p(), Var))
@@ -869,7 +869,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             || (nodep->op3p() && nodep->op3p()->user1p() && !VN_IS(nodep->op3p(), Var))
             || (nodep->op4p() && nodep->op4p()->user1p() && !VN_IS(nodep->op4p(), Var))) {
             nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported tristate construct: " << nodep->prettyTypeName());
+                          "Unsupported tristate construct: " << nodep->prettyTypeNameQ());
         }
     }
 
@@ -1461,7 +1461,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (isIfaceNetLhs(nodep->lhsp())) return;
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Assignments with signal strength with LHS of type: "
-                              << nodep->lhsp()->prettyTypeName());
+                              << nodep->lhsp()->prettyTypeNameQ());
         }
     }
 
@@ -1678,7 +1678,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         } else {
             if (m_alhs && nodep->user1p()) {
                 nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported LHS tristate construct: " << nodep->prettyTypeName());
+                              "Unsupported LHS tristate construct: " << nodep->prettyTypeNameQ());
                 return;
             }
             iterateChildren(nodep);
@@ -1753,7 +1753,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 UINFO(9, dbgState() << nodep);
                 if (nodep->lsbp()->user1p()) {
                     nodep->v3warn(E_UNSUPPORTED, "Unsupported RHS tristate construct: "
-                                                     << nodep->prettyTypeName());
+                                                     << nodep->prettyTypeNameQ());
                 }
                 if (nodep->fromp()->user1p()) {  // SEL(VARREF, lsb)
                     AstNodeExpr* const en1p = getEnp(nodep->fromp());
@@ -1836,7 +1836,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             UINFOTREE(9, nodep->backp(), "", "bufif");
             if (m_alhs) {
                 nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported LHS tristate construct: " << nodep->prettyTypeName());
+                              "Unsupported LHS tristate construct: " << nodep->prettyTypeNameQ());
                 return;
             }
             m_tgraph.didProcess(nodep);
@@ -1867,7 +1867,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         } else {
             if (m_alhs && nodep->user1p()) {
                 nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported LHS tristate construct: " << nodep->prettyTypeName());
+                              "Unsupported LHS tristate construct: " << nodep->prettyTypeNameQ());
                 return;
             }
             // ANDs and Z's have issues. Earlier optimizations convert
@@ -2149,7 +2149,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         iterateAndNextNull(nodep->lhsp());
         if (nodep->lhsp()->user1p()) {
             nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported LHS tristate construct: " << nodep->prettyTypeName());
+                          "Unsupported LHS tristate construct: " << nodep->prettyTypeNameQ());
             return;
         }
     }
@@ -2197,7 +2197,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 const AstVarRef* const varrefp = VN_CAST(nodep->lhsp(), VarRef);  // Input variable
                 if (!varrefp) {
                     nodep->v3warn(E_UNSUPPORTED, "Unsupported LHS tristate construct: "
-                                                     << nodep->prettyTypeName());
+                                                     << nodep->prettyTypeNameQ());
                     return;
                 }
                 AstVar* const envarp = getCreateEnVarp(varrefp->varp(), false);
@@ -2449,7 +2449,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                     exprrefp = VN_CAST(outpinp->exprp(), VarRef);
                     if (!exprrefp) {
                         nodep->v3warn(E_UNSUPPORTED, "Unsupported tristate port expression: "
-                                                         << nodep->exprp()->prettyTypeName());
+                                                         << nodep->exprp()->prettyTypeNameQ());
                     }
                 }
             } else {
@@ -2458,7 +2458,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                    VarRef);  // This should be the same var as the output pin
                 if (!exprrefp) {
                     nodep->v3warn(E_UNSUPPORTED, "Unsupported tristate port expression: "
-                                                     << nodep->exprp()->prettyTypeName());
+                                                     << nodep->exprp()->prettyTypeNameQ());
                 }
             }
             if (exprrefp) {

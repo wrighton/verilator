@@ -137,7 +137,7 @@ module t;
   initial begin
     int randomize_result;
     static RandArrayIndexTest obj = new();
-    static RandDynIndexCastTest cobj = new();
+    RandDynIndexCastTest cobj;
     static OutOfRangeIndexTest oor = new;
     static OutOfRangeUnsatTest unsat = new;
     repeat (20) begin
@@ -157,6 +157,7 @@ module t;
       `checkd(obj.selected_value, obj.data[obj.idx]);
       `check_range(obj.selected_value, 8'd10, 8'd50)
     end
+    cobj = new();
     repeat (20) begin
       randomize_result = cobj.randomize();
       `checkd(randomize_result, 1);
