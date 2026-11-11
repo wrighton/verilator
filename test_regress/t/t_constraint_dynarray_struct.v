@@ -299,6 +299,30 @@ class EnumMixedStructArray;
   constraint mixed_c {values.size() + int'(values[1].value) == 34;}
 endclass
 
+typedef struct packed {
+  bit [6:0] high;
+  bit [7:0] low;
+} FallbackPackedValue;
+typedef struct {rand FallbackPackedValue value;} PackedFallbackEntry;
+
+class PackedLiteralMixedStructArray;
+  rand PackedFallbackEntry values[];
+  constraint size_c {values.size() inside {[1 : 4]};}
+  constraint field_c {values[1].value == 15'd31;}
+  constraint mixed_c {values.size() + int'(values[1].value) == 34;}
+endclass
+
+class PackedStateMixedStructArray;
+  rand PackedFallbackEntry values[];
+  int idx = 1;
+  constraint size_c {values.size() inside {[1 : 4]};}
+  constraint field_c {values[idx].value == 15'd31;}
+  constraint mixed_c {values.size() + int'(values[idx].value) == 34;}
+  function new();
+    values = new[2];
+  endfunction
+endclass
+
 class ReentrantStageArray extends MixedEmptyStructArray;
   MixedEmptyStructArray peer;
   int nested_ok;
@@ -707,6 +731,25 @@ module t;
         `checkd(ok, 1)
         `checkd(mixed.values.size(), 3)
         `checkd(mixed.values[1].value, FALLBACK_THIRTY_ONE)
+      end
+    end
+
+    // Packed members retain literal preparation and available STATE-index relations.
+    begin
+      automatic PackedLiteralMixedStructArray literal_case = new;
+      automatic PackedStateMixedStructArray state_case = new;
+      int ok;
+      for (int turn = 0; turn < 12; ++turn) begin
+        literal_case.values.delete();
+        ok = literal_case.randomize();
+        `checkd(ok, 1)
+        `checkd(literal_case.values.size(), 3)
+        `checkd(literal_case.values[1].value, 15'd31)
+        state_case.idx = turn % 2;
+        ok = state_case.randomize();
+        `checkd(ok, 1)
+        `checkd(state_case.values.size(), 3)
+        `checkd(state_case.values[state_case.idx].value, 15'd31)
       end
     end
 
