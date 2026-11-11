@@ -3347,10 +3347,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
     // A constrained mark is not a rand qualifier. Only owned scalar STATE-index reads
     // have a stable canonical name and a storage type this staging path can preserve.
-    AstMemberDType* stageableMemberp(const AstStructSel* const selp) {
-        if (!m_stagedFieldsp || m_stagingField || !m_allowElementDeferral || !m_classp
-            || !m_valuePreparationp)
-            return nullptr;
+    AstMemberDType* canonicalStateMemberp(const AstStructSel* const selp) {
         const AstCMethodHard* const atp = VN_CAST(selp->fromp(), CMethodHard);
         if (!atp || atp->method() != VCMethod::ARRAY_AT || isRandIndex(atp->pinsp()))
             return nullptr;
@@ -3375,6 +3372,33 @@ class ConstraintExprVisitor final : public VNVisitor {
             || VN_IS(memberp->subDTypep()->skipRefToEnump(), EnumDType))
             return nullptr;
         return memberp;
+    }
+
+    AstMemberDType* stageableMemberp(const AstStructSel* const selp) {
+        if (!m_stagedFieldsp || m_stagingField || !m_allowElementDeferral || !m_classp
+            || !m_valuePreparationp)
+            return nullptr;
+        return canonicalStateMemberp(selp);
+    }
+
+    // The nonnegative signed-int size proxy cannot select an index at or above INT_MAX.
+    // Keep the full index for this test; narrowing is only for a guarded canonical name.
+    static AstNodeExpr* newPossibleFieldIndexp(AstNodeExpr* indexp) {
+        FileLine* const fl = indexp->fileline();
+        const int width = std::max(32, indexp->width());
+        indexp = adjustWidth(fl, indexp, width, indexp->dtypep()->numeric());
+        return new AstLogAnd{
+            fl,
+            new AstLteS{fl, new AstConst{fl, AstConst::WidthedValue{}, width, 0},
+                        indexp->cloneTreePure(false)},
+            new AstLtS{fl, indexp, new AstConst{fl, AstConst::WidthedValue{}, width, 0x7fffffff}}};
+    }
+
+    // record_struct_arr names every dynamic-array/queue index with eight hex digits.
+    static void normalizeFieldNameIndex(AstSFormatF* const namep) {
+        AstSFormatF* const indexp = VN_AS(namep->exprsp()->nextp(), SFormatF);
+        AstNodeExpr* const valuep = indexp->exprsp()->unlinkFrBack();
+        indexp->addExprsp(new AstCCast{valuep->fileline(), valuep, 32});
     }
 
     void editStagedMember(AstStructSel* const nodep, AstMemberDType* const memberp) {
@@ -3426,6 +3450,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* oldIndexp = indexFormatp->exprsp()->unlinkFrBackWithNext();
         VL_DO_DANGLING(oldIndexp->deleteTree(), oldIndexp);
         indexFormatp->addExprsp(new AstVarRef{fl, savedIndexp, VAccess::READ});
+        normalizeFieldNameIndex(savedNamep);
         const int width = std::max(indexp->width(), sizeVarp->width());
         AstNodeExpr* const indexTermp = adjustWidth(
             fl, new AstVarRef{fl, savedIndexp, VAccess::READ}, width, indexp->dtypep()->numeric());
@@ -3460,7 +3485,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         valuep->dtypep(memberp->subDTypep());
         valuep->user1(true);
         AstNodeExpr* const textp = VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr);
-        AstNodeExpr* const nativeAvailablep = actualRangep->cloneTreePure(false);
+        AstNodeExpr* const currentIndexp = adjustWidth(
+            fl, new AstVarRef{fl, savedIndexp, VAccess::READ}, width, indexp->dtypep()->numeric());
+        AstCMethodHard* const currentSizep = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(arrVarp->user2p(), NodeModule), arrVarp, VAccess::READ},
+            VCMethod::DYN_SIZE};
+        currentSizep->dtypeSetInt();
+        AstNodeExpr* const currentLengthp
+            = adjustWidth(fl, currentSizep, width, currentSizep->dtypep()->numeric());
+        AstNodeExpr* const nativeAvailablep
+            = new AstLogAnd{fl,
+                            new AstLteS{fl, new AstConst{fl, AstConst::WidthedValue{}, width, 0},
+                                        currentIndexp->cloneTreePure(false)},
+                            new AstLtS{fl, currentIndexp, currentLengthp}};
         AstNodeExpr* needp = new AstLogNot{fl, nativeAvailablep};
         const RandomizeMode mode = {.asUQuad = arrVarp->user1()};
         if (mode.usesMode) {
@@ -3497,16 +3534,25 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         AstNodeStmt* const preparep
             = new AstAssign{fl, new AstVarRef{fl, savedIndexp, VAccess::WRITE}, indexp};
-        preparep->addNext(new AstAssign{fl, new AstVarRef{fl, namep, VAccess::WRITE}, savedNamep});
-        preparep->addNext(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE}, needp});
+        preparep->addNext(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE},
+                                        new AstConst{fl, AstConst::BitFalse{}}});
+        AstNodeStmt* const validp
+            = new AstAssign{fl, new AstVarRef{fl, namep, VAccess::WRITE}, savedNamep};
+        validp->addNext(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE}, needp});
+        preparep->addNext(new AstIf{
+            fl, newPossibleFieldIndexp(new AstVarRef{fl, savedIndexp, VAccess::READ}), validp});
         m_valuePreparationp->addStmtsp(
             new AstIf{fl, new AstVarRef{fl, group.phasep, VAccess::READ}, preparep});
-        AstBegin* const blockp = new AstBegin{
-            fl, m_uniqueNames.get("__Vstaged_read"),
-            new AstIf{
-                fl, new AstVarRef{fl, group.phasep, VAccess::READ}, new AstCReturn{fl, textp},
-                new AstCReturn{fl, wrapWithCond(canonicalp, actualRangep, memberp->width())}},
-            true};
+        AstNodeExpr* const possibleTextp = new AstCond{
+            fl, newPossibleFieldIndexp(new AstVarRef{fl, savedIndexp, VAccess::READ}), textp,
+            getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, memberp->width(), 0})};
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__Vstaged_read"),
+                           new AstIf{fl, new AstVarRef{fl, group.phasep, VAccess::READ},
+                                     new AstCReturn{fl, possibleTextp},
+                                     new AstCReturn{fl, wrapWithCond(canonicalp, actualRangep,
+                                                                     memberp->width())}},
+                           true};
         AstSFormatF* const returnedp = newReturnedTextp(fl, blockp);
         relinker.relink(returnedp);
         m_deferRandModeHoist = false;
@@ -3520,6 +3566,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             editStagedMember(nodep, memberp);
             return;
         }
+        const bool normalizeName = canonicalStateMemberp(nodep) != nullptr;
         if (editFormat(nodep)) return;
         const bool outermost = !m_deferRandModeHoist;
         AstNodeExpr* const origp = outermost ? nodep->cloneTree(false) : nullptr;
@@ -3565,6 +3612,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             newp = new AstSFormatF{fl, nodep->fromp()->name() + "." + nodep->name(), false,
                                    nullptr};
         }
+        if (normalizeName) normalizeFieldNameIndex(newp);
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         if (origp && !hoistRandModeOverSelectAndMember(newp, origp)) {
