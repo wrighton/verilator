@@ -257,6 +257,18 @@ class SymbolicDefaultConditional;
   constraint c_value {(choose ? values[idx].x : 7'b0) == 0;}
 endclass
 
+class MixedAvailableStructArray;
+  rand Entry values[];
+  int idx = 1;
+  int target = 31;
+  constraint c_size {values.size() inside {[1 : 4]};}
+  constraint c_field {values[idx].value == target;}
+  constraint c_mixed {values.size() + values[idx].value == 3 + target;}
+  function new();
+    values = new[2];
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic int randomize_result;
@@ -536,6 +548,19 @@ module t;
         ok = symbolic_default.randomize();
         `checkd(ok, 1)
         `checkd(symbolic_default.values.size(), 1)
+      end
+    end
+
+    // A currently available field keeps a mixed size relation live during the first solve.
+    begin
+      automatic MixedAvailableStructArray mixed = new;
+      int ok;
+      for (int turn = 0; turn < 12; ++turn) begin
+        mixed.target = 31 + turn;
+        ok = mixed.randomize();
+        `checkd(ok, 1)
+        `checkd(mixed.values.size(), 3)
+        `checkd(mixed.values[1].value, mixed.target)
       end
     end
 

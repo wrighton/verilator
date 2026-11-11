@@ -965,7 +965,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     // Record a field's size dependency without guarding its enclosing size predicates.
-    void gateElementOnCurrentSize(AstVarRef* const arrayp) {
+    void gateElementOnCurrentSize(AstVarRef* const arrayp, AstNodeExpr* const indexp) {
         AstVar* const arrVarp = arrayp->varp();
         AstVar* const sizeVarp = VN_AS(arrVarp->user4p(), Var);
         FileLine* const fl = arrayp->fileline();
@@ -977,10 +977,22 @@ class ConstraintExprVisitor final : public VNVisitor {
         currentp->dtypeFrom(sizeVarp);
         AstEq* const eqp = new AstEq{fl, sizeRefp, currentp};
         eqp->user1(true);
+        // An already registered field remains live while the solver changes the size. Only
+        // a currently absent field needs relation deferral until the post-resize setup.
+        AstCMethodHard* const lengthp
+            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
+        lengthp->dtypeSetInt();
+        AstLogAnd* const availablep = new AstLogAnd{
+            fl,
+            new AstLteS{fl, new AstConst{fl, AstConst::WidthedValue{}, indexp->width(), 0},
+                        indexp->cloneTreePure(false)},
+            new AstLtS{fl, indexp->cloneTreePure(false), lengthp}};
+        AstLogOr* const readyp = new AstLogOr{fl, availablep, eqp};
+        readyp->user1(true);
         if (m_elementSizeGatep) {
-            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, eqp};
+            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, readyp};
         } else {
-            m_elementSizeGatep = eqp;
+            m_elementSizeGatep = readyp;
         }
         m_elementSizeGatep->user1(true);
         if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
@@ -1037,6 +1049,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         UASSERT_OBJ(m_sizeGuardVarsp, exprp, "Size guard outside a constraint");
         m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
         return finishValuePreparation(exprp, preparationp);
+    }
+
+    // Runtime loop elements and function values are not independent predicate regions.
+    AstNodeExpr* formatCarrierValue(AstNodeExpr* const exprp) {
+        VL_RESTORER(m_valuePreparationp);
+        VL_RESTORER(m_booleanRegion);
+        VL_RESTORER(m_allowElementDeferral);
+        VL_RESTORER(m_elementSizeGatep);
+        m_valuePreparationp = nullptr;
+        m_booleanRegion = false;
+        m_allowElementDeferral = false;
+        m_elementSizeGatep = nullptr;
+        return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
     }
 
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
@@ -1209,7 +1234,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_inFuncArg);
         m_inFuncArg = true;
         for (AstNodeExpr* const leafp : leafps) {
-            pushDeletep(iterateSubtreeReturnEdits(leafp->cloneTreePure(false)));
+            pushDeletep(formatCarrierValue(leafp->cloneTreePure(false)));
         }
         return true;
     }
@@ -3832,7 +3857,9 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_guardItemp);
         GuardItem item;
         if (foldOwner) m_guardItemp = &item;
-        UASSERT_OBJ(!foldOwner || (m_constraintVars.empty() && m_foldElemNames.namesp.empty()),
+        UASSERT_OBJ(!foldOwner
+                        || (m_constraintVars.empty() && m_foldElemNames.namesp.empty()
+                            && m_foldSizeGuardVars.empty()),
                     nodep, "Constraint names of an earlier fold were not taken over");
         AstNodeExpr* newp = nullptr;
         FileLine* const fl = nodep->fileline();
@@ -4366,10 +4393,10 @@ class ConstraintExprVisitor final : public VNVisitor {
                 const AstVarRef* const baseRefp
                     = m_structSel ? VN_CAST(nodep->fromp()->baseFromp(true), VarRef) : nullptr;
                 AstVarRef* const directp = VN_CAST(nodep->fromp(), VarRef);
-                const bool deferElement = m_allowElementDeferral && m_structSel && !indexIsRand
-                                          && directp
+                const bool deferElement = m_classp && m_allowElementDeferral && m_structSel
+                                          && !indexIsRand && directp
                                           && isSizeBackedStructContainer(directp->varp());
-                if (deferElement) gateElementOnCurrentSize(directp);
+                if (deferElement) gateElementOnCurrentSize(directp, nodep->pinsp());
                 if (baseRefp && !deferElement && VN_IS(nodep->pinsp(), Const)
                     && VN_IS(baseRefp->varp()->dtypep()->skipRefp(), DynArrayDType)
                     && m_prepareConstrainedArraysp) {
@@ -4455,7 +4482,7 @@ class ConstraintExprVisitor final : public VNVisitor {
 
             AstVar* const textVarp = newTextVarp(nodep);
             AstStmtExpr* const appendp
-                = newTermAppendp(fl, textVarp, VN_AS(iterateSubtreeReturnEdits(itemp), NodeExpr));
+                = newTermAppendp(fl, textVarp, formatCarrierValue(VN_AS(itemp, NodeExpr)));
             nodep->replaceWith(newTextBuildp(fl, textVarp, "",
                                              new AstForeach{fl, headerp, appendp},
                                              newTextApplyp(fl, textVarp, "bvor", "#b0")));
@@ -4618,9 +4645,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                     fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
                     new AstConcatN{fl, openp, new AstConst{fl, AstConst::String{}, " "}}};
                 AstNodeExpr* const elementTextp
-                    = m_inGuardPredicate
-                          ? formatGuardElementValue(VN_AS(perElemExprp, NodeExpr))
-                          : VN_AS(iterateSubtreeReturnEdits(perElemExprp), NodeExpr);
+                    = m_inGuardPredicate ? formatGuardElementValue(VN_AS(perElemExprp, NodeExpr))
+                                         : formatCarrierValue(VN_AS(perElemExprp, NodeExpr));
                 bodyp->addNext(newTextAppendp(fl, textVarp, elementTextp));
                 bodyp->addNext(
                     newTextAppendp(fl, textVarp, new AstConst{fl, AstConst::String{}, ")"}));
@@ -4712,6 +4738,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         nodep->v3fatalSrc("Method not handled in constraints? " << nodep);
     }
     void visit(AstNodeFTaskRef* nodep) override {
+        VL_RESTORER(m_valuePreparationp);
+        VL_RESTORER(m_booleanRegion);
+        VL_RESTORER(m_allowElementDeferral);
+        VL_RESTORER(m_elementSizeGatep);
+        m_valuePreparationp = nullptr;
+        m_booleanRegion = false;
+        m_allowElementDeferral = false;
+        m_elementSizeGatep = nullptr;
         if (editFormat(nodep)) return;
 
         AstFunc* const funcp = VN_CAST(nodep->taskp(), Func);
