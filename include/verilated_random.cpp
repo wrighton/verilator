@@ -950,14 +950,15 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
             // The elements of a randc array, by their keys as VlRandomArrayVarTemplate::datap()
             // finds them, so a resized array gets a different hash
             int elements = 0;
-            while (m_arr_vars.count(var.first + std::to_string(elements))) ++elements;
+            while (m_arr_vars.count({var.first, elements})) ++elements;
             h ^= std::hash<int>{}(elements) + 0x9e3779b9 + (h << 6) + (h >> 2);
         }
     }
     // Keys are one per array element, so a resized queue gets a different hash.
     if (!randcOnly) {
         for (const auto& elem : m_arr_vars) {
-            h ^= std::hash<std::string>{}(elem.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<std::string>{}(elem.first.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<int>{}(elem.first.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
         }
     }
     return h;
