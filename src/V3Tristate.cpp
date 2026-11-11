@@ -59,8 +59,8 @@
 //
 // Another thing done in this phase is signal strength handling.
 //
-// Currently they are only supported in assignments and gates parsed as assignments (see verilog.y)
-// when any of the cases occurs:
+// The following legacy non-interface route supports strengths in assignments and gates parsed
+// as assignments (see verilog.y) when either case occurs:
 // - it is possible to statically resolve all drivers,
 // - all assignments that passed the static resolution have symmetric strengths (the same strength
 // is related to both 0 and 1 values).
@@ -92,7 +92,7 @@
 // - Then all not stronger assignments can be removed.
 //
 // All assignments that are stronger than the strongest with non-tristate RHS are then tried to be
-// handled dynamically. Currently it is supported only on assignments with symmetric strengths.
+// handled dynamically. On this legacy route, dynamic resolution requires symmetric strengths.
 // In this case, the exact value of the RHS doesn't matter. It only matters if it equals z or not.
 // Such assignments are handled by changing the values to z of these bits that are overwritten by
 // stronger assignments. Then all assignments can be aggregated as they would have equal strengths
@@ -111,6 +111,16 @@
 // orp = orp | (var__strength & ~enp)
 // enp = enp | var__strength__en,
 // where orp is aggregated value and enp is aggregated __en value.
+//
+// Ordinary non-wired, non-I/O interface NETs also retain each driver's computed DATA/EN and
+// captured strength0/strength1. Asymmetric continuous drivers first split their enable into
+// EN&~DATA at strength0 and EN&DATA at strength1. Within one module/target/dotted/inlined/modport
+// source context, actual-rank buckets then OR DATA&EN and EN, emitting one pair per occupied rank.
+// Local rank pairs live in the interface; external pairs write interface contribution slots.
+// The receiver masks weaker contributions per bit with cumulative higher-rank active enables.
+// Equal-rank DATA uses the existing two-state OR approximation, not general X resolution.
+// Distinct inlined contexts, including generate iterations, are not coalesced; repeated instances
+// of one driving module on one target can still share template slots.
 //
 // There is a possible problem with equally strong assignments, because multiple assignments with
 // the same strength, but different values should result in x value, but these values are
