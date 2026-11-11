@@ -1104,6 +1104,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         exprp = VN_AS(iterateSubtreeReturnEdits(condp), NodeExpr);
         UASSERT_OBJ(m_sizeGuardVarsp, exprp, "Size guard outside a constraint");
         m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
+        m_constraintVarsp = VL_RESTORER_PREV(m_constraintVarsp);
         return finishValuePreparation(exprp, preparationp);
     }
 
@@ -3187,6 +3188,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             readyTextp = VN_AS(iterateSubtreeReturnEdits(m_elementSizeGatep), NodeExpr);
             UASSERT_OBJ(m_sizeGuardVarsp, readyTextp, "Value readiness outside a constraint");
             m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
+            m_constraintVarsp = VL_RESTORER_PREV(m_constraintVarsp);
         }
         blockp->addStmtsp(
             new AstAssign{fl, new AstVarRef{fl, readyVarp, VAccess::WRITE}, readyTextp});
@@ -3619,6 +3621,9 @@ class ConstraintExprVisitor final : public VNVisitor {
             return;
         }
         const bool normalizeName = canonicalStateMemberp(nodep) != nullptr;
+        // Fields without a staged representation retain baseline preparation and readiness.
+        VL_RESTORER(m_allowElementDeferral);
+        m_allowElementDeferral = m_allowElementDeferral && normalizeName;
         if (editFormat(nodep)) return;
         const bool outermost = !m_deferRandModeHoist;
         AstNodeExpr* const origp = outermost ? nodep->cloneTree(false) : nullptr;
