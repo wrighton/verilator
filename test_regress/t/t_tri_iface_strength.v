@@ -45,6 +45,72 @@ interface sole_asym;
   assign (weak0, strong1) value = data;
 endinterface
 
+interface local_static_zero;
+  wire value;
+  assign (supply0, weak1) value = 1'b0;
+  assign (strong0, strong1) value = 1'b1;
+endinterface
+
+interface local_static_one;
+  wire value;
+  assign (weak0, supply1) value = 1'b1;
+  assign (strong0, strong1) value = 1'b0;
+endinterface
+
+interface wide_defaults;
+  bit local_enable;
+  bit [6:0] local_data;
+  wire [101:7] value;
+  assign (weak0, weak1) value = 95'h555555555555555555555555;
+  assign (strong0, strong1) value[73:67] = local_enable ? local_data : 7'bz;
+  modport drive(inout value);
+endinterface
+
+interface highz_zero;
+  bit data;
+  wire value;
+  assign (weak0, weak1) value = 1'b0;
+  assign (highz0, strong1) value = data;
+endinterface
+
+interface highz_one;
+  bit data;
+  wire value;
+  assign (weak0, weak1) value = 1'b1;
+  assign (strong0, highz1) value = data;
+endinterface
+
+`ifdef VERILATOR
+interface equal_rank;
+  wire value;
+  assign (strong0, strong1) value = 1'b0;
+endinterface
+`endif
+
+module wide_driver (
+    wide_defaults.drive p,
+    wide_defaults.drive alias_p,
+    input bit enable,
+    input bit [6:0] data
+);
+  assign (strong0, strong1) p.value[42:36] = enable ? data : 7'bz;
+  assign (supply0, supply1) alias_p.value[91:85] = enable ? ~data : 7'bz;
+endmodule
+
+module wide_wrapper (
+    wide_defaults.drive p,
+    input bit enable,
+    input bit [6:0] data
+);
+  // verilator inline_module
+  wide_driver inner (
+      p,
+      p,
+      enable,
+      data
+  );
+endmodule
+
 interface rank_defaults;
   bit local_enable;
   bit local_data;
@@ -98,6 +164,18 @@ module t;
   constant_asym_zero asym_zero ();
   constant_asym_one asym_one ();
   sole_asym asym_solo ();
+  local_static_zero local_zero ();
+  local_static_one local_one ();
+  wide_defaults wide ();
+  wide_defaults wide_idle ();
+  highz_zero hz_zero ();
+  highz_one hz_one ();
+`ifdef VERILATOR
+  // Characterize the existing two-state OR approximation, not normative X resolution.
+  equal_rank equal_opposite ();
+  assign (strong0, strong1) equal_opposite.value = 1'b1;
+`endif
+  bit [6:0] wide_data = 0;
   assign (pull0, pull1) asym_zero.value = 1'b1;
   assign (pull0, pull1) asym_one.value = 1'b0;
   bit supply_enable = 0;
@@ -110,6 +188,11 @@ module t;
   bit changing = 0;
   bit enable = 0;
   bit [2:0] data = 0;
+  wide_wrapper wide_drive (
+      wide,
+      enable,
+      wide_data
+  );
   wire flat_high;
   wire flat_low;
   assign high_override.value = 1'b1;
@@ -130,6 +213,7 @@ module t;
 
   initial begin
     bit [9:3] expected_down;
+    bit [101:7] expected_wide;
     // verilator lint_off ASCRANGE
     bit [2:16] expected_up;
     // verilator lint_on ASCRANGE
@@ -144,6 +228,17 @@ module t;
       ranked_idle.local_enable = enable;
       ranked_idle.local_data = changing;
       asym_solo.data = changing;
+      hz_zero.data = changing;
+      hz_one.data = changing;
+      wide_data = 7'(i * 13 + 5);
+      wide.local_enable = supply_enable;
+      wide.local_data = ~wide_data;
+      expected_wide = 95'h555555555555555555555555;
+      if (supply_enable) expected_wide[73:67] = ~wide_data;
+      if (enable) begin
+        expected_wide[42:36] = wide_data;
+        expected_wide[91:85] = ~wide_data;
+      end
       expected_down = 7'h55;
       expected_up = 15'h5555;
       if (enable) begin
@@ -170,6 +265,15 @@ module t;
       `checkh(asym_zero.value, 1'b1);
       `checkh(asym_one.value, 1'b0);
       `checkh(asym_solo.value, changing);
+      `checkh(local_zero.value, 1'b0);
+      `checkh(local_one.value, 1'b1);
+      `checkh(hz_zero.value, changing);
+      `checkh(hz_one.value, changing);
+      `checkh(wide.value, expected_wide);
+      `checkh(wide_idle.value, 95'h555555555555555555555555);
+`ifdef VERILATOR
+      `checkh(equal_opposite.value, 1'b1);
+`endif
       #1;
       `checkh(high_override.value, 1'b1);
       `checkh(low_override.value, 1'b0);
