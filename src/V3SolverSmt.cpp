@@ -26,6 +26,11 @@
 //        in priority order (deepest-nested global constraints first)
 //      * randomize() clears, re-runs the setup and calls the solver; arrays
 //        with constrained sizes take a two-phase solve (sizes, then elements)
+//      * eligible random struct fields absent before resizing use class-owned
+//        staged storage in the size solve, under their canonical member names;
+//        the phase flag is saved/restored, and final setup rebinds real members
+//      * numeric field defaults and frozen-mode reads keep the member datatype;
+//        reduction/function values keep preparation in their own evaluation scope
 // Each randomize() with {...} and std::randomize() with {...}:
 //      * lowers its constraints into a local VlRandomizer, derived from the
 //        class one for randomize() with {...}
