@@ -3323,7 +3323,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 // Runs in the setup task in its place among the soft constraints, so it
                 // removes only those registered before it (IEEE 1800-2023 18.5.13.2)
                 hoistp = newGuardedDisableSoftp(condp, exprp);
-                VL_DO_DANGLING(exprp->deleteTree(), exprp);
+                VL_DO_DANGLING(pushDeletep(exprp), exprp);
             } else if (foreachp) {
                 // 'if (c) foreach (...) body' is 'foreach (...) if (c) body'
                 foreachp->addBodyp(new AstConstraintIf{fl, condp->cloneTreePure(false),
@@ -3820,6 +3820,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_elemNamesp);
         m_elemNamesp = m_wantSingle ? &m_foldElemNames : &elemNames;
         if (nodep->isDisableSoft()) {
+            UASSERT_OBJ(!m_wantSingle, nodep, "Conditional disable soft was not hoisted");
             nodep->replaceWith(buildDisableSoftCallStmt(nodep));
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;

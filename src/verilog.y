@@ -8410,8 +8410,8 @@ constraint_expression<nodep>:  // ==IEEE: constraint_expression
         //                      // shape that is not a plain expression and
         //                      // builds an outer AstConstraintIf wrapping the
         //                      // statement V3Randomize already knows how to
-        //                      // lower (with disable-soft hoisted by the
-        //                      // ConstraintExprVisitor pre-pass).
+        //                      // lower (with disable-soft hoisted by
+        //                      // ConstraintExprVisitor::hoistGuardedSofts).
         |       expr yP_MINUSGT yP_CURLY__EMPTY '}'
                         { $$ = new AstConstraintIf{$2, $1, nullptr, nullptr}; }
         |       expr yP_MINUSGT '{' constraint_expressionList '}'
