@@ -109,7 +109,7 @@ module t (
   endfunction
   returned_array_t argument;
   logic sample;
-  assign argument[0] = out;
+  assign argument[1] = out;
   initial sample = touch(argument) [0];
 
   // Unpacked union fields alias the same storage, unlike struct fields.
@@ -120,4 +120,33 @@ module t (
   union_t aliases[2];
   assign aliases[0].a = out;
   initial aliases[0].b = 0;
+
+  // Preserve conservative handling of a signed narrow negative index.
+  logic signed_negative[4];
+  assign signed_negative[0] = out;
+  initial signed_negative[2'sb11] = 0;
+
+  typedef struct {
+    logic x;
+    logic y;
+  } pair_t;
+  pair_t same_field;
+  assign same_field.x = out;
+  initial same_field.x = 0;
+  pair_t whole_struct;
+  initial whole_struct = '{default: 0};
+  assign whole_struct.y = out;
+  pair_t initialized_struct = '{default: 0};
+  assign initialized_struct.x = out;
+
+  typedef struct {
+    logic elements[2];
+    logic side;
+  } nested_t;
+  nested_t same_element;
+  assign same_element.elements[0] = out;
+  initial same_element.elements[0] = 0;
+  nested_t dynamic_element;
+  assign dynamic_element.elements[0] = out;
+  initial dynamic_element.elements[index[0]] = 0;
 endmodule
