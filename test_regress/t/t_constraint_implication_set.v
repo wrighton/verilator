@@ -370,6 +370,62 @@ class DisSoftNullGuard;
   endfunction
 endclass
 
+// A guard operand decided by state proofs is not read again, so a null receiver it masks
+// does not abort randomize() (IEEE 1800-2023 18.5.12)
+class DisSoftMaskedGuard;
+  Inner h;
+  bit off;
+  rand bit [6:0] p;
+  rand bit [6:0] r;
+  rand bit [6:0] d[];
+  constraint c_pref { soft p == 7'd5; }
+  constraint c_r { r == 7'd0; }
+  // ERROR && FALSE is FALSE, so the directive follows r alone
+  constraint c_or {
+    if (r != 7'd0 || (h.y == 4'h1 && off)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  constraint c_or_swap {
+    foreach (d[i]) {
+      if ((off && h.y == 4'h1) || r != 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  // ERROR || TRUE is TRUE, so the directive follows r alone
+  constraint c_and {
+    foreach (d[i]) {
+      if (r == 7'd0 && (h.y == 4'h1 || !off)) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  // With a valid receiver: TRUE applies the directive and FALSE drops it, whatever r is
+  constraint c_true_rand {
+    foreach (d[i]) {
+      if (h.y == 4'h1 || r != 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  constraint c_false_rand {
+    foreach (d[i]) {
+      if (h.y == 4'h1 && r == 7'd0) {
+        disable soft p;
+        soft p inside {7'd5, 7'd8};
+      }
+    }
+  }
+  function new();
+    d = new[3];
+  endfunction
+endclass
+
 module t;
   Forms obj;
   DisSoft ds;
@@ -691,6 +747,57 @@ module t;
         ok = dsn.randomize();
         `checkd(ok, 1);
         `checkd(dsn.p, 5);
+      end
+    end
+
+    begin
+      automatic DisSoftMaskedGuard dsm = new();
+      automatic bit widened = 1'b0;
+      dsm.c_or_swap.constraint_mode(0);
+      dsm.c_and.constraint_mode(0);
+      dsm.c_true_rand.constraint_mode(0);
+      dsm.c_false_rand.constraint_mode(0);
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
+      dsm.c_or.constraint_mode(0);
+      dsm.c_or_swap.constraint_mode(1);
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
+      dsm.c_or_swap.constraint_mode(0);
+      dsm.c_and.constraint_mode(1);
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_and.constraint_mode(0);
+      dsm.c_r.constraint_mode(0);
+      dsm.c_true_rand.constraint_mode(1);
+      dsm.h = new();
+      dsm.h.y = 4'h1;
+      widened = 1'b0;
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_true_rand.constraint_mode(0);
+      dsm.c_false_rand.constraint_mode(1);
+      dsm.h.y = 4'h0;
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
       end
     end
 

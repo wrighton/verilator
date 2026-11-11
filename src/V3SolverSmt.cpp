@@ -3346,12 +3346,12 @@ class ConstraintExprVisitor final : public VNVisitor {
         FileLine* const fl = exprp->fileline();
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VguardDisable"), nullptr, true};
-        GuardFlagsMap flags;  // Unused: no predicate is formatted from these proofs
+        GuardFlagsMap flags;
         GuardResult result = newGuardResult(condp, blockp, flags);
         AstNode* const disablep = buildDisableSoftCallStmt(exprp);
         AstNode* stmtp = nullptr;
         if (condp->user1()) {
-            stmtp = new AstIf{fl, condp->cloneTreePure(false), disablep->cloneTree(false)};
+            stmtp = new AstIf{fl, newGuardResidualp(condp, flags), disablep->cloneTree(false)};
             if (result.falsep) stmtp = new AstIf{fl, new AstLogNot{fl, result.falsep}, stmtp};
         } else {
             VL_DO_DANGLING(result.falsep->deleteTree(), result.falsep);
@@ -3372,6 +3372,41 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         blockp->addStmtsp(stmtp);
         return blockp;
+    }
+    // Value of guard exprp read before solving, from the proofs newGuardResult recorded in
+    // flags: a part proven TRUE or FALSE, or of state only, is its sampled truth, so a receiver
+    // that the proofs made irrelevant is not read again (IEEE 1800-2023 18.5.12). Only the
+    // parts depending on random variables are read natively, as their current values.
+    AstNodeExpr* newGuardResidualp(AstNodeExpr* const exprp, const GuardFlagsMap& flags) {
+        FileLine* const fl = exprp->fileline();
+        const auto it = flags.find(exprp);
+        UASSERT_OBJ(it != flags.end(), exprp, "Missing guard proofs for guard part");
+        const GuardFlags& proof = it->second;
+        if (proof.state) {
+            UASSERT_OBJ(proof.trueVarp, exprp, "State guard part without a truth proof");
+            return newGuardRefp(proof.trueVarp);
+        }
+        AstNodeExpr* valuep;
+        if (AstLogNot* const notp = VN_CAST(exprp, LogNot)) {
+            valuep = new AstLogNot{fl, newGuardResidualp(notp->lhsp(), flags)};
+        } else if (AstLogAnd* const andp = VN_CAST(exprp, LogAnd)) {
+            valuep = new AstLogAnd{fl, newGuardResidualp(andp->lhsp(), flags),
+                                   newGuardResidualp(andp->rhsp(), flags)};
+        } else if (AstLogOr* const orp = VN_CAST(exprp, LogOr)) {
+            valuep = new AstLogOr{fl, newGuardResidualp(orp->lhsp(), flags),
+                                  newGuardResidualp(orp->rhsp(), flags)};
+        } else {
+            valuep = new AstLogNot{fl, new AstLogNot{fl, exprp->cloneTreePure(false)}};
+        }
+        if (proof.falseVarp) {
+            valuep = new AstCond{fl, newGuardRefp(proof.falseVarp),
+                                 new AstConst{fl, AstConst::BitFalse{}}, valuep};
+        }
+        if (proof.trueVarp) {
+            valuep = new AstCond{fl, newGuardRefp(proof.trueVarp),
+                                 new AstConst{fl, AstConst::BitTrue{}}, valuep};
+        }
+        return valuep;
     }
     // Negated condition of a constraint 'if'
     static AstNodeExpr* newNotCond(const AstConstraintIf* ifp) {
