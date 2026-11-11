@@ -3101,46 +3101,6 @@ class ConstraintExprVisitor final : public VNVisitor {
             new AstSFormatF{fl, "%s", false, new AstVarRef{fl, valuep, VAccess::READ}});
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    // Symbolic scalar selectors remain SMT terms selecting their numeric value.
-    void editSymbolicValueConditional(AstCond* const nodep) {
-        FileLine* const fl = nodep->fileline();
-        AstVar* const selectorp = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        AstVar* const thenValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        AstVar* const elseValuep = newGuardVarp(fl, m_valuePreparationp, nodep->findStringDType());
-        {
-            VL_RESTORER(m_allowFieldStaging);
-            VL_RESTORER(m_conditionp);
-            m_allowFieldStaging = false;
-            m_conditionp = nullptr;
-            const int width = nodep->condp()->width();
-            AstNodeExpr* const selectorTextp
-                = VN_AS(iterateSubtreeReturnEdits(nodep->condp()->unlinkFrBack()), NodeExpr);
-            m_valuePreparationp->addStmtsp(
-                new AstAssign{fl, new AstVarRef{fl, selectorp, VAccess::WRITE},
-                              wrapWithCond(selectorTextp, m_conditionp, width)});
-        }
-        m_valuePreparationp->addStmtsp(newValueConditionalArm(nodep->thenp(), thenValuep));
-        m_valuePreparationp->addStmtsp(newValueConditionalArm(nodep->elsep(), elseValuep));
-
-        // AstSFormatF holds an already lowered term; do not evaluate its string as C++ truth.
-        AstNodeExpr* const selectorTextp
-            = new AstSFormatF{fl, "%s", false, new AstVarRef{fl, selectorp, VAccess::READ}};
-        selectorTextp->user1(true);  // The condition is a solver term, not native string truth.
-        AstCond* const valueCondp = new AstCond{
-            fl, selectorTextp,
-            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, thenValuep, VAccess::READ}},
-            new AstSFormatF{fl, "%s", false, new AstVarRef{fl, elseValuep, VAccess::READ}}};
-        valueCondp->dtypep(nodep->dtypep());
-        valueCondp->user1(true);
-        AstNodeExpr* valueTextp;
-        {
-            VL_RESTORER(m_allowFieldStaging);
-            m_allowFieldStaging = false;
-            valueTextp = VN_AS(iterateSubtreeReturnEdits(valueCondp), NodeExpr);
-        }
-        nodep->replaceWith(valueTextp);
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
-    }
     void visit(AstCond* nodep) override {
         // Native selectors sample once; pure symbolic scalar selectors build a value ite.
         // Receiver-bearing selectors retain their baseline path.
@@ -3151,7 +3111,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                           || VN_IS(exprp, NodeSel) || VN_IS(exprp, CMethodHard)
                           || VN_IS(exprp, NodeFTaskRef);
                })) {
-            editSymbolicValueConditional(nodep);
+            // Keep arm preparation in this VALUE region without materializing every ite suffix.
+            editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
             return;
         }
         if (m_allowFieldStaging && m_valuePreparationp && nodep->user1()
