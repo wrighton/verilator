@@ -3445,6 +3445,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstSFormatF* const canonicalp = VN_AS(iterateSubtreeReturnEdits(nodep), SFormatF);
         AstNodeExpr* const actualRangep = m_conditionp;
         m_conditionp = nullptr;
+        // Lift the existing array-mode choice while its typed prefix is still visible.
+        // The frozen value is the selected member, never the zero-width array prefix.
+        AstNodeExpr* modeChoicep = nullptr;
+        if (AstCond* const modep = VN_CAST(canonicalp->exprsp(), Cond)) {
+            if (isRandModeGate(modep->condp())) {
+                modeChoicep = modep->condp()->unlinkFrBack();
+                AstNodeExpr* const activep = modep->thenp()->unlinkFrBack();
+                modep->replaceWith(activep);
+                VL_DO_DANGLING(pushDeletep(modep), modep);
+            }
+        }
         AstSFormatF* const savedNamep = canonicalp->cloneTreePure(false);
         AstSFormatF* const indexFormatp = VN_AS(savedNamep->exprsp()->nextp(), SFormatF);
         AstNodeExpr* oldIndexp = indexFormatp->exprsp()->unlinkFrBackWithNext();
@@ -3541,23 +3552,31 @@ class ConstraintExprVisitor final : public VNVisitor {
         validp->addNext(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE}, needp});
         preparep->addNext(new AstIf{
             fl, newPossibleFieldIndexp(new AstVarRef{fl, savedIndexp, VAccess::READ}), validp});
-        m_valuePreparationp->addStmtsp(
-            new AstIf{fl, new AstVarRef{fl, group.phasep, VAccess::READ}, preparep});
+        AstNodeExpr* const prepareActivep
+            = modeChoicep ? static_cast<AstNodeExpr*>(
+                                new AstLogAnd{fl, new AstVarRef{fl, group.phasep, VAccess::READ},
+                                              modeChoicep->cloneTreePure(false)})
+                          : new AstVarRef{fl, group.phasep, VAccess::READ};
+        m_valuePreparationp->addStmtsp(new AstIf{fl, prepareActivep, preparep});
         AstNodeExpr* const possibleTextp = new AstCond{
             fl, newPossibleFieldIndexp(new AstVarRef{fl, savedIndexp, VAccess::READ}), textp,
             getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, memberp->width(), 0})};
-        AstBegin* const blockp
-            = new AstBegin{fl, m_uniqueNames.get("__Vstaged_read"),
-                           new AstIf{fl, new AstVarRef{fl, group.phasep, VAccess::READ},
-                                     new AstCReturn{fl, possibleTextp},
-                                     new AstCReturn{fl, wrapWithCond(canonicalp, actualRangep,
-                                                                     memberp->width())}},
-                           true};
+        AstNodeExpr* const frozenp
+            = modeChoicep ? wrapWithCond(getConstFormat(origp), actualRangep->cloneTreePure(false),
+                                         memberp->width())
+                          : nullptr;
+        AstNodeStmt* const phaseChoicep = new AstIf{
+            fl, new AstVarRef{fl, group.phasep, VAccess::READ}, new AstCReturn{fl, possibleTextp},
+            new AstCReturn{fl, wrapWithCond(canonicalp, actualRangep, memberp->width())}};
+        AstBegin* const blockp = new AstBegin{
+            fl, m_uniqueNames.get("__Vstaged_read"),
+            modeChoicep ? static_cast<AstNodeStmt*>(new AstIf{fl, modeChoicep, phaseChoicep,
+                                                              new AstCReturn{fl, frozenp}})
+                        : phaseChoicep,
+            true};
         AstSFormatF* const returnedp = newReturnedTextp(fl, blockp);
         relinker.relink(returnedp);
-        m_deferRandModeHoist = false;
-        if (!hoistRandModeOverSelectAndMember(returnedp, origp))
-            VL_DO_DANGLING(pushDeletep(origp), origp);
+        if (!modeChoicep) VL_DO_DANGLING(pushDeletep(origp), origp);
         if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
     }
 
