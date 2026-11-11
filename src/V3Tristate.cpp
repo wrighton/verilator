@@ -586,15 +586,20 @@ class TristateVisitor final : public TristateBaseVisitor {
         // Otherwise return the previous output enable
         return VN_AS(nodep->user1p(), NodeExpr);
     }
+    // Append a reference when the caller already knows this variable is not listed.
+    static void addModportVarRef(AstModport* const modportp, AstVar* const varp,
+                                 const VDirection dir) {
+        AstModportVarRef* const mvrp = new AstModportVarRef{varp->fileline(), varp->name(), dir};
+        mvrp->varp(varp);
+        modportp->addVarsp(mvrp);
+    }
     // Add a ModportVarRef for varp to modportp if not already present
     void addModportVarRefIfMissing(AstModport* modportp, AstVar* varp, VDirection dir) {
         for (AstNode* const mrp : modportp->varspList()) {
             AstModportVarRef* const mvrp = VN_CAST(mrp, ModportVarRef);
             if (mvrp && mvrp->varp() == varp) return;  // Already present
         }
-        AstModportVarRef* const mvrp = new AstModportVarRef{varp->fileline(), varp->name(), dir};
-        mvrp->varp(varp);
-        modportp->addVarsp(mvrp);
+        addModportVarRef(modportp, varp, dir);
     }
     AstVar* getCreateEnVarp(AstVar* invarp, bool isTop) {
         // Return the master __en for the specified input variable
@@ -1146,8 +1151,9 @@ class TristateVisitor final : public TristateBaseVisitor {
         ifaceModp->addStmtsp(contribEnp);
         ifaceModp->addStmtsp(contribOutp);
         if (modportp) {
-            addModportVarRefIfMissing(modportp, contribOutp, VDirection::OUTPUT);
-            addModportVarRefIfMissing(modportp, contribEnp, VDirection::OUTPUT);
+            // Both slot variables are newly allocated, so no membership scan is necessary.
+            addModportVarRef(modportp, contribOutp, VDirection::OUTPUT);
+            addModportVarRef(modportp, contribEnp, VDirection::OUTPUT);
         }
         AstAssignW* const outp
             = new AstAssignW{fl, newVarXRef(fl, contribOutp, dotted, VAccess::WRITE, inlinedDots),
@@ -1380,7 +1386,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef);
         return refp && refp->varp()->isNet() && !refp->varp()->isWiredNet()
-               && VN_IS(findParentModule(refp->varp()), Iface);
+               && !refp->varp()->isIO() && VN_IS(findParentModule(refp->varp()), Iface);
     }
 
     void addToAssignmentList(AstAssignW* nodep) {
@@ -2569,7 +2575,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 nodep->addNextHere(newp);
                 // We'll iterate on the new AstPull later
             }
-            if (VN_IS(m_modp, Iface) && nodep->isNet() && !nodep->isWiredNet()
+            if (VN_IS(m_modp, Iface) && nodep->isNet() && !nodep->isWiredNet() && !nodep->isIO()
                 && nodep->hasStrengthAssignment()) {
                 // Parent modules must see this net before any plain strong driver is visited.
                 m_varAux(nodep).ifaceTristate = true;
