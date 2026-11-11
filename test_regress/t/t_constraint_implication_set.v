@@ -402,6 +402,29 @@ class DisSoftMaskedGuard;
       }
     }
   }
+  // A part with random operands decided by its state operand is not read again either
+  bit on = 1'b1;
+  rand bit [3:0] r4;
+  rand bit [6:0] r2;
+  constraint c_r2 { r2 == 7'd0; }
+  constraint c_deep_and {
+    if (r2 != 7'd0 || (h.y == r4 && off)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  constraint c_deep_or {
+    if (r2 == 7'd0 && (h.y == r4 || on)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
+  constraint c_deep_not {
+    if (!((h.y == r4 && off) || r2 != 7'd0)) {
+      disable soft p;
+      soft p inside {7'd5, 7'd8};
+    }
+  }
   // With a valid receiver: TRUE applies the directive and FALSE drops it, whatever r is
   constraint c_true_rand {
     foreach (d[i]) {
@@ -755,6 +778,9 @@ module t;
       dsm.c_and.constraint_mode(0);
       dsm.c_true_rand.constraint_mode(0);
       dsm.c_false_rand.constraint_mode(0);
+      dsm.c_deep_and.constraint_mode(0);
+      dsm.c_deep_or.constraint_mode(0);
+      dsm.c_deep_not.constraint_mode(0);
       repeat (8) begin
         ok = dsm.randomize();
         `checkd(ok, 1);
@@ -777,6 +803,33 @@ module t;
       end
       `checkh(widened, 1'b1);
       dsm.c_and.constraint_mode(0);
+      dsm.c_deep_and.constraint_mode(1);
+      repeat (8) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkd(dsm.p, 5);
+      end
+      dsm.c_deep_and.constraint_mode(0);
+      dsm.c_deep_or.constraint_mode(1);
+      widened = 1'b0;
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_deep_or.constraint_mode(0);
+      dsm.c_deep_not.constraint_mode(1);
+      widened = 1'b0;
+      repeat (32) begin
+        ok = dsm.randomize();
+        `checkd(ok, 1);
+        `checkh(dsm.p == 7'd5 || dsm.p == 7'd8, 1'b1);
+        if (dsm.p == 7'd8) widened = 1'b1;
+      end
+      `checkh(widened, 1'b1);
+      dsm.c_deep_not.constraint_mode(0);
       dsm.c_r.constraint_mode(0);
       dsm.c_true_rand.constraint_mode(1);
       dsm.h = new();

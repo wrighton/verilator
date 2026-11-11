@@ -3376,8 +3376,9 @@ class ConstraintExprVisitor final : public VNVisitor {
     // Value of guard exprp read before solving, from the proofs newGuardResult recorded in
     // flags: a part proven TRUE or FALSE, or of state only, is its sampled truth, so a receiver
     // that the proofs made irrelevant is not read again (IEEE 1800-2023 18.5.12). Only the
-    // parts depending on random variables are read natively, as their current values.
-    AstNodeExpr* newGuardResidualp(AstNodeExpr* const exprp, const GuardFlagsMap& flags) {
+    // parts depending on random variables are read natively, as their current values. A part
+    // decided by its proofs selects its constant with a Cond, which does not read the rest.
+    static AstNodeExpr* newGuardResidualp(AstNodeExpr* const exprp, const GuardFlagsMap& flags) {
         FileLine* const fl = exprp->fileline();
         const auto it = flags.find(exprp);
         UASSERT_OBJ(it != flags.end(), exprp, "Missing guard proofs for guard part");
