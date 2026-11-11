@@ -6600,10 +6600,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                     // Likely impossible, as error thrown earlier
                     cpackagerefp->v3error(  // LCOV_EXCL_LINE
-                        "'::' expected to reference a class/package but referenced '"
+                        "'::' expected to reference a class/package but referenced "
                         << (nodep->classOrPackagep() ? nodep->classOrPackagep()->prettyTypeNameQ()
-                                                     : "<unresolved-object>")
-                        << "'\n"
+                                                     : "'<unresolved-object>'")
+                        << "\n"
                         << cpackagerefp->warnMore() + "... Suggest '.' instead of '::'");
                 }
             }

@@ -4886,9 +4886,9 @@ class WidthVisitor final : public VNVisitor {
             userIterate(newp, m_vup);
             return;
         } else {
-            nodep->v3error("Member selection of non-struct/union object '"
-                           << nodep->fromp()->prettyTypeNameQ() << "' which is a '"
-                           << nodep->fromp()->dtypep()->prettyTypeNameQ() << "'");
+            nodep->v3error("Member selection of non-struct/union object "
+                           << nodep->fromp()->prettyTypeNameQ() << " which is a "
+                           << nodep->fromp()->dtypep()->prettyTypeNameQ());
         }
         // Error handling
         nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
@@ -5232,10 +5232,9 @@ class WidthVisitor final : public VNVisitor {
         } else if (basicp && basicp->isString()) {
             methodCallString(nodep, basicp);
         } else {
-            nodep->v3warn(E_UNSUPPORTED,
-                          "Unsupported: Member call on object '"
-                              << nodep->fromp()->prettyTypeNameQ() << "' which is a '"
-                              << nodep->fromp()->dtypep()->prettyTypeNameQ() << "'");
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Member call on object "
+                                             << nodep->fromp()->prettyTypeNameQ() << " which is a "
+                                             << nodep->fromp()->dtypep()->prettyTypeNameQ());
             nodep->dtypeSetVoid();
         }
     }
@@ -11860,8 +11859,8 @@ class WidthVisitor final : public VNVisitor {
 
     void assertAtExpr(AstNode* nodep) {
         if (VL_UNCOVERABLE(!m_vup)) {
-            nodep->v3fatalSrc("Unexpected '" << nodep->prettyTypeNameQ() << "' expression under '"
-                                             << nodep->backp()->prettyTypeNameQ() << "'");
+            nodep->v3fatalSrc("Unexpected " << nodep->prettyTypeNameQ() << " expression under "
+                                            << nodep->backp()->prettyTypeNameQ());
         }
     }
     void assertAtStatement(AstNode* nodep) {

@@ -1,4 +1,4 @@
-%Error-UNSUPPORTED: t/t_class_lparam_struct_field_chain_bad.v:41:27: Unsupported: Member call on object 'SEL' which is a 'BASICDTYPE 'logic''
+%Error-UNSUPPORTED: t/t_class_lparam_struct_field_chain_bad.v:41:27: Unsupported: Member call on object SEL which is a BASICDTYPE 'logic'
                                                                    : ... note: In instance 't.u'
    41 |   Sub #(int'(CFG::cfg.tag.bogus)) u_nonstruct ();
       |                           ^~~~~
