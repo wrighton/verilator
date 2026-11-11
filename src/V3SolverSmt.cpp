@@ -947,19 +947,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         return newp;
     }
 
-    // Runtime loop elements and function values are not independent predicate regions.
-    AstNodeExpr* formatCarrierValue(AstNodeExpr* const exprp) {
-        VL_RESTORER(m_valuePreparationp);
-        VL_RESTORER(m_booleanRegion);
-        VL_RESTORER(m_allowElementDeferral);
-        VL_RESTORER(m_elementSizeGatep);
-        m_valuePreparationp = nullptr;
-        m_booleanRegion = false;
-        m_allowElementDeferral = false;
-        m_elementSizeGatep = nullptr;
-        return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
-    }
-
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
         if (!itemsp) return nullptr;
 
@@ -2419,20 +2406,14 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
     void visit(AstNodeUniop* nodep) override {
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp());
     }
     void visit(AstNodeTriop* nodep) override {
         if (editFormat(nodep)) return;
-        VL_RESTORER(m_booleanRegion);
-        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
     }
     void editBooleanBinary(AstNodeBiop* const nodep) {
