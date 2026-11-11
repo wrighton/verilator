@@ -286,6 +286,19 @@ class MixedEmptyStructArray;
   constraint c_mixed {values.size() + values[idx].value == idx + 1 + expected;}
 endclass
 
+typedef enum int {
+  FALLBACK_ZERO = 0,
+  FALLBACK_THIRTY_ONE = 31
+} FallbackFieldValue;
+typedef struct {rand FallbackFieldValue value;} EnumFallbackEntry;
+
+class EnumMixedStructArray;
+  rand EnumFallbackEntry values[];
+  constraint size_c {values.size() inside {[1 : 4]};}
+  constraint field_c {values[1].value == FALLBACK_THIRTY_ONE;}
+  constraint mixed_c {values.size() + int'(values[1].value) == 34;}
+endclass
+
 class ReentrantStageArray extends MixedEmptyStructArray;
   MixedEmptyStructArray peer;
   int nested_ok;
@@ -681,6 +694,19 @@ module t;
         `checkd(ok, 1)
         `checkd(mixed.values.size(), mixed.idx + 1)
         `checkd(mixed.values[mixed.idx].value, mixed.expected)
+      end
+    end
+
+    // Enum fields keep the literal preparation needed by their complete mixed relation.
+    begin
+      automatic EnumMixedStructArray mixed = new;
+      int ok;
+      for (int turn = 0; turn < 12; ++turn) begin
+        mixed.values.delete();
+        ok = mixed.randomize();
+        `checkd(ok, 1)
+        `checkd(mixed.values.size(), 3)
+        `checkd(mixed.values[1].value, FALLBACK_THIRTY_ONE)
       end
     end
 
