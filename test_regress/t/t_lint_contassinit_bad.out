@@ -1,10 +1,146 @@
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:15:13: Continuous assignment to variable with initial value: 'a'
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:93:24: Selection index out of range: 7 outside 1:0
+                                                   : ... note: In instance 't'
+   93 |   initial invalid_index[7] = 0;
+      |                        ^
+                   ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
+                   ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: t/t_lint_contassinit_bad.v:97:21: Bit extraction of array[1:0] requires 1 bit index, not 80 bits.
+                                                     : ... note: In instance 't'
+   97 |   initial wide_index[80'h10000000000] = 0;
+      |                     ^
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:97:21: Selection index out of range: 1099511627776 outside 1:0
+                                                   : ... note: In instance 't'
+   97 |   initial wide_index[80'h10000000000] = 0;
+      |                     ^
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:17:13: Continuous assignment to variable with initial value: 'a'
                                                     : ... note: In instance 't'
                                                     : ... Location of variable initialization
-   15 |   logic a = 1'b0;   
+   17 |   logic a = 1'b0;
       |             ^~~~
-                    t/t_lint_contassinit_bad.v:16:10: ... Location of continuous assignment
-   16 |   assign a = 1'b1;   
+                    t/t_lint_contassinit_bad.v:18:10: ... Location of continuous assignment
+   18 |   assign a = 1'b1;
       |          ^
                     ... For error description see https://verilator.org/warn/CONTASSINIT?v=latest
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:31:11: Continuous assignment to variable with initial value: 'same_first'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   31 |   initial same_first[1] = 0;
+      |           ^~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:32:10: ... Location of continuous assignment
+   32 |   assign same_first[1] = out;
+      |          ^~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:36:11: Continuous assignment to variable with initial value: 'same_last'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   36 |   initial same_last[2] = 0;
+      |           ^~~~~~~~~
+                    t/t_lint_contassinit_bad.v:35:10: ... Location of continuous assignment
+   35 |   assign same_last[2] = out;
+      |          ^~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:42:11: Continuous assignment to variable with initial value: 'unrelated_init'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   42 |   initial unrelated_init[1] = 0;
+      |           ^~~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:41:10: ... Location of continuous assignment
+   41 |   assign unrelated_init[1] = out;
+      |          ^~~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:46:11: Continuous assignment to variable with initial value: 'unrelated_cont'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   46 |   initial unrelated_cont[1] = 0;
+      |           ^~~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:47:10: ... Location of continuous assignment
+   47 |   assign unrelated_cont[1] = out;
+      |          ^~~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:50:11: Continuous assignment to variable with initial value: 'whole_initial'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   50 |   initial whole_initial = '{default: 0};
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:51:10: ... Location of continuous assignment
+   51 |   assign whole_initial[2] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:54:11: Continuous assignment to variable with initial value: 'whole_continuous'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   54 |   initial whole_continuous[2] = 0;
+      |           ^~~~~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:55:10: ... Location of continuous assignment
+   55 |   assign whole_continuous = '{default: out};
+      |          ^~~~~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:57:26: Continuous assignment to variable with initial value: 'declaration'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   57 |   logic declaration[3] = '{default: 0};
+      |                          ^~
+                    t/t_lint_contassinit_bad.v:58:10: ... Location of continuous assignment
+   58 |   assign declaration[1] = out;
+      |          ^~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:62:11: Continuous assignment to variable with initial value: 'dynamic_outer'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   62 |   initial dynamic_outer[index][1] = 0;
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:61:10: ... Location of continuous assignment
+   61 |   assign dynamic_outer[0][0] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:65:11: Continuous assignment to variable with initial value: 'dynamic_inner'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   65 |   initial dynamic_inner[1][index[0]] = 0;
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:66:10: ... Location of continuous assignment
+   66 |   assign dynamic_inner[1][0] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:70:11: Continuous assignment to variable with initial value: 'nested'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   70 |   initial nested[5][-2] = 0;
+      |           ^~~~~~
+                    t/t_lint_contassinit_bad.v:69:10: ... Location of continuous assignment
+   69 |   assign nested[5][-2] = out;
+      |          ^~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:79:11: Continuous assignment to variable with initial value: 'fields'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   79 |   initial fields[1].x = 0;
+      |           ^~~~~~
+                    t/t_lint_contassinit_bad.v:78:10: ... Location of continuous assignment
+   78 |   assign fields[1].x = out;
+      |          ^~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:83:11: Continuous assignment to variable with initial value: 'packed_leaf'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   83 |   initial packed_leaf[1][0] = 0;
+      |           ^~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:82:10: ... Location of continuous assignment
+   82 |   assign packed_leaf[1][0] = out;
+      |          ^~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:89:11: Continuous assignment to variable with initial value: 'unknown_index'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   89 |   initial unknown_index[1'bx] = 0;
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:88:10: ... Location of continuous assignment
+   88 |   assign unknown_index[0] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:93:11: Continuous assignment to variable with initial value: 'invalid_index'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   93 |   initial invalid_index[7] = 0;
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:92:10: ... Location of continuous assignment
+   92 |   assign invalid_index[0] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:97:11: Continuous assignment to variable with initial value: 'wide_index'
+                                                    : ... note: In instance 't'
+                                                    : ... Location of variable initialization
+   97 |   initial wide_index[80'h10000000000] = 0;
+      |           ^~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:96:10: ... Location of continuous assignment
+   96 |   assign wide_index[0] = out;
+      |          ^~~~~~~~~~
 %Error: Exiting due to
