@@ -947,6 +947,19 @@ class ConstraintExprVisitor final : public VNVisitor {
         return newp;
     }
 
+    // Runtime loop elements and function values are not independent predicate regions.
+    AstNodeExpr* formatCarrierValue(AstNodeExpr* const exprp) {
+        VL_RESTORER(m_valuePreparationp);
+        VL_RESTORER(m_booleanRegion);
+        VL_RESTORER(m_allowElementDeferral);
+        VL_RESTORER(m_elementSizeGatep);
+        m_valuePreparationp = nullptr;
+        m_booleanRegion = false;
+        m_allowElementDeferral = false;
+        m_elementSizeGatep = nullptr;
+        return VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
+    }
+
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
         if (!itemsp) return nullptr;
 
