@@ -371,6 +371,18 @@ static AstTask* newStagedTaskp(StagedFieldGroup& group, VMemberMap& memberMap,
     return taskp;
 }
 
+// Staged storage is declared on its owner, which may be a base of the caller's class.
+static AstVarRef* newStagedRefp(FileLine* const fl, AstVar* const varp, const VAccess access) {
+    return new AstVarRef{fl, VN_AS(varp->user2p(), NodeModule), varp, access};
+}
+
+static AstNodeStmt* newStagedTaskCallp(FileLine* const fl, AstTask* const taskp,
+                                       AstClass* const ownerp) {
+    AstTaskRef* const callp = new AstTaskRef{fl, taskp};
+    callp->classOrPackagep(ownerp);
+    return callp->makeStmt();
+}
+
 class ConstraintExprVisitor final : public VNVisitor {
     // NODE STATE
     // AstVar::user3() -> bool. Handled in constraints
@@ -3427,7 +3439,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                   "__Vstaged_value", memberp->subDTypep());
         AstVar* const neededp = newStagedMemberp(group, m_memberMap, m_uniqueNames,
                                                  "__Vstaged_needed", nodep->findBitDType());
-        group.resetp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE},
+        group.resetp->addStmtsp(new AstAssign{fl, newStagedRefp(fl, neededp, VAccess::WRITE),
                                               new AstConst{fl, AstConst::BitFalse{}}});
         // The original accessor is used only by the alternative native rand-mode branch,
         // as in the normal StructSel path. It is not duplicated as a pure solver value.
@@ -3460,11 +3472,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstSFormatF* const indexFormatp = VN_AS(savedNamep->exprsp()->nextp(), SFormatF);
         AstNodeExpr* oldIndexp = indexFormatp->exprsp()->unlinkFrBackWithNext();
         VL_DO_DANGLING(oldIndexp->deleteTree(), oldIndexp);
-        indexFormatp->addExprsp(new AstVarRef{fl, savedIndexp, VAccess::READ});
+        indexFormatp->addExprsp(newStagedRefp(fl, savedIndexp, VAccess::READ));
         normalizeFieldNameIndex(savedNamep);
         const int width = std::max(indexp->width(), sizeVarp->width());
         AstNodeExpr* const indexTermp = adjustWidth(
-            fl, new AstVarRef{fl, savedIndexp, VAccess::READ}, width, indexp->dtypep()->numeric());
+            fl, newStagedRefp(fl, savedIndexp, VAccess::READ), width, indexp->dtypep()->numeric());
         AstVarRef* const sizeRefp
             = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
         sizeRefp->user1(true);
@@ -3491,13 +3503,13 @@ class ConstraintExprVisitor final : public VNVisitor {
         UASSERT_OBJ(m_sizeGuardVarsp, canonicalp, "Staged read outside constraint");
         m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
         AstCond* const valuep = new AstCond{
-            fl, guardp, new AstSFormatF{fl, "%s", false, new AstVarRef{fl, namep, VAccess::READ}},
+            fl, guardp, new AstSFormatF{fl, "%s", false, newStagedRefp(fl, namep, VAccess::READ)},
             getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, memberp->width(), 0})};
         valuep->dtypep(memberp->subDTypep());
         valuep->user1(true);
         AstNodeExpr* const textp = VN_AS(iterateSubtreeReturnEdits(valuep), NodeExpr);
         AstNodeExpr* const currentIndexp = adjustWidth(
-            fl, new AstVarRef{fl, savedIndexp, VAccess::READ}, width, indexp->dtypep()->numeric());
+            fl, newStagedRefp(fl, savedIndexp, VAccess::READ), width, indexp->dtypep()->numeric());
         AstCMethodHard* const currentSizep = new AstCMethodHard{
             fl, new AstVarRef{fl, VN_AS(arrVarp->user2p(), NodeModule), arrVarp, VAccess::READ},
             VCMethod::DYN_SIZE};
@@ -3514,7 +3526,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (mode.usesMode) {
             UASSERT_OBJ(m_randModeVarp, canonicalp, "Missing mode owner for staged field");
             AstCMethodHard* const modep
-                = new AstCMethodHard{fl, new AstVarRef{fl, m_randModeVarp, VAccess::READ},
+                = new AstCMethodHard{fl, newStagedRefp(fl, m_randModeVarp, VAccess::READ),
                                      VCMethod::ARRAY_AT, new AstConst{fl, mode.index}};
             modep->dtypeSetUInt32();
             needp = new AstLogAnd{fl, needp, modep};
@@ -3524,49 +3536,49 @@ class ConstraintExprVisitor final : public VNVisitor {
             new AstVarRef{fl, VN_CAST(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
             VCMethod::RANDOMIZER_WRITE_VAR};
         writep->dtypeSetVoid();
-        writep->addPinsp(new AstVarRef{fl, storagep, VAccess::WRITE});
+        writep->addPinsp(newStagedRefp(fl, storagep, VAccess::WRITE));
         writep->addPinsp(
             new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(memberp->width())});
-        writep->addPinsp(new AstVarRef{fl, namep, VAccess::READ});
+        writep->addPinsp(newStagedRefp(fl, namep, VAccess::READ));
         writep->addPinsp(new AstConst{fl, 0});
         if (mode.usesMode) writep->addPinsp(new AstConst{fl, mode.index});
         AstIf* const registrationp
-            = new AstIf{fl, new AstVarRef{fl, neededp, VAccess::READ}, writep->makeStmt()};
+            = new AstIf{fl, newStagedRefp(fl, neededp, VAccess::READ), writep->makeStmt()};
         group.registrationsp->addStmtsp(registrationp);
         if (group.registerp) {
             AstNodeStmt* const copyp = registrationp->cloneTree(false);
             copyp->foreach([&](AstCMethodHard* const methodp) {
                 if (methodp->method() != VCMethod::RANDOMIZER_WRITE_VAR) return;
                 AstNodeExpr* const oldp = methodp->fromp()->unlinkFrBack();
-                methodp->fromp(new AstVarRef{fl, group.registerGenp, VAccess::READWRITE});
+                methodp->fromp(newStagedRefp(fl, group.registerGenp, VAccess::READWRITE));
                 VL_DO_DANGLING(oldp->deleteTree(), oldp);
             });
             group.registerp->addStmtsp(copyp);
         }
         AstNodeStmt* const preparep
-            = new AstAssign{fl, new AstVarRef{fl, savedIndexp, VAccess::WRITE}, indexp};
-        preparep->addNext(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE},
+            = new AstAssign{fl, newStagedRefp(fl, savedIndexp, VAccess::WRITE), indexp};
+        preparep->addNext(new AstAssign{fl, newStagedRefp(fl, neededp, VAccess::WRITE),
                                         new AstConst{fl, AstConst::BitFalse{}}});
         AstNodeStmt* const validp
-            = new AstAssign{fl, new AstVarRef{fl, namep, VAccess::WRITE}, savedNamep};
-        validp->addNext(new AstAssign{fl, new AstVarRef{fl, neededp, VAccess::WRITE}, needp});
+            = new AstAssign{fl, newStagedRefp(fl, namep, VAccess::WRITE), savedNamep};
+        validp->addNext(new AstAssign{fl, newStagedRefp(fl, neededp, VAccess::WRITE), needp});
         preparep->addNext(new AstIf{
-            fl, newPossibleFieldIndexp(new AstVarRef{fl, savedIndexp, VAccess::READ}), validp});
+            fl, newPossibleFieldIndexp(newStagedRefp(fl, savedIndexp, VAccess::READ)), validp});
         AstNodeExpr* const prepareActivep
             = modeChoicep ? static_cast<AstNodeExpr*>(
-                                new AstLogAnd{fl, new AstVarRef{fl, group.phasep, VAccess::READ},
+                                new AstLogAnd{fl, newStagedRefp(fl, group.phasep, VAccess::READ),
                                               modeChoicep->cloneTreePure(false)})
-                          : new AstVarRef{fl, group.phasep, VAccess::READ};
+                          : newStagedRefp(fl, group.phasep, VAccess::READ);
         m_valuePreparationp->addStmtsp(new AstIf{fl, prepareActivep, preparep});
         AstNodeExpr* const possibleTextp = new AstCond{
-            fl, newPossibleFieldIndexp(new AstVarRef{fl, savedIndexp, VAccess::READ}), textp,
+            fl, newPossibleFieldIndexp(newStagedRefp(fl, savedIndexp, VAccess::READ)), textp,
             getConstFormat(new AstConst{fl, AstConst::WidthedValue{}, memberp->width(), 0})};
         AstNodeExpr* const frozenp
             = modeChoicep ? wrapWithCond(getConstFormat(origp), actualRangep->cloneTreePure(false),
                                          memberp->width())
                           : nullptr;
         AstNodeStmt* const phaseChoicep = new AstIf{
-            fl, new AstVarRef{fl, group.phasep, VAccess::READ}, new AstCReturn{fl, possibleTextp},
+            fl, newStagedRefp(fl, group.phasep, VAccess::READ), new AstCReturn{fl, possibleTextp},
             new AstCReturn{fl, wrapWithCond(canonicalp, actualRangep, memberp->width())}};
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__Vstaged_read"), phaseChoicep, true};
@@ -5324,7 +5336,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             group.registerGenp = genp;
             group.registerp->addStmtsp(newStagedRegistrationp(group, genp));
         }
-        return (new AstTaskRef{group.ownerp->fileline(), group.registerp})->makeStmt();
+        return newStagedTaskCallp(group.ownerp->fileline(), group.registerp, group.ownerp);
     }
 
     AstVar* beginStagedPhase(AstFunc* const funcp, StagedFieldGroup& group,
@@ -5337,12 +5349,12 @@ class SolverSmtLowering final : public V3SolverLowering {
         savedp->funcLocal(true);
         funcp->addDeclsp(savedp);
         AstNodeStmt* const stmtp = new AstAssign{fl, new AstVarRef{fl, savedp, VAccess::WRITE},
-                                                 new AstVarRef{fl, group.phasep, VAccess::READ}};
-        stmtp->addNext(new AstAssign{fl, new AstVarRef{fl, group.phasep, VAccess::WRITE},
+                                                 newStagedRefp(fl, group.phasep, VAccess::READ)};
+        stmtp->addNext(new AstAssign{fl, newStagedRefp(fl, group.phasep, VAccess::WRITE),
                                      new AstConst{fl, AstConst::BitTrue{}}});
-        if (group.resetp) stmtp->addNext((new AstTaskRef{fl, group.resetp})->makeStmt());
+        if (group.resetp) stmtp->addNext(newStagedTaskCallp(fl, group.resetp, group.ownerp));
         if (inlinep && inlinep->resetp)
-            stmtp->addNext((new AstTaskRef{fl, inlinep->resetp})->makeStmt());
+            stmtp->addNext(newStagedTaskCallp(fl, inlinep->resetp, inlinep->ownerp));
         if (beforep) {
             beforep->addNextHere(stmtp);
         } else {
@@ -5362,7 +5374,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                                      : new AstVarRef{funcp->fileline(), savedp, VAccess::READ};
         funcp->addStmtsp(
             new AstAssign{funcp->fileline(),
-                          new AstVarRef{funcp->fileline(), group.phasep, VAccess::WRITE}, valuep});
+                          newStagedRefp(funcp->fileline(), group.phasep, VAccess::WRITE), valuep});
     }
 
     // METHODS
@@ -7677,7 +7689,7 @@ public:
             priorPhasep->funcLocal(true);
             funcp->addDeclsp(priorPhasep);
             funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, priorPhasep, VAccess::WRITE},
-                                           new AstVarRef{fl, staged.phasep, VAccess::READ}});
+                                           newStagedRefp(fl, staged.phasep, VAccess::READ)});
             setStagedPhase(funcp, staged, staged.phasep);
         }
         // Register the variables as new() and randomize() do, so arrays have their current
