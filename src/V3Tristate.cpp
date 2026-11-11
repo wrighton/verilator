@@ -498,7 +498,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     };
     // The key groups interface templates; slot VarXRefs retain actual instance identity.
     std::unordered_map<AstVar*, std::vector<IfaceContribution>> m_ifaceContribs;
-    std::vector<AstVar*> m_ifaceContribVarps;  // First contribution order, independent of pointers
+    // Retain first contribution order rather than iterating the unordered lookup map.
+    // This retains the existing upstream tristate-variable processing order.
+    std::vector<AstVar*> m_ifaceContribVarps;
 
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
@@ -1476,8 +1478,6 @@ class TristateVisitor final : public TristateBaseVisitor {
         // value (0 or 1), is found, all weaker assignments can be safely removed.
         for (auto& varpAssigns : m_assigns) {
             Assigns& assigns = varpAssigns.second;
-            // Interface drivers meet external strength groups only at contribution resolution.
-            if (VN_IS(m_modp, Iface) && m_varAux(varpAssigns.first).ifaceTristate) continue;
             if (assigns.size() <= 1) continue;
             const AstAssignW* const strongest0p = getStrongestAssignmentOfValue(assigns, 0);
             const AstAssignW* const strongest1p = getStrongestAssignmentOfValue(assigns, 1);
@@ -1509,7 +1509,6 @@ class TristateVisitor final : public TristateBaseVisitor {
         // constant are already removed.)
         for (auto& varpAssigns : m_assigns) {
             Assigns& assigns = varpAssigns.second;
-            if (VN_IS(m_modp, Iface) && m_varAux(varpAssigns.first).ifaceTristate) continue;
             if (assigns.size() <= 1) continue;
             auto maxIt = std::max_element(
                 assigns.begin(), assigns.end(), [&](const AstAssignW* ap, const AstAssignW* bp) {
