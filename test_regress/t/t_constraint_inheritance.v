@@ -72,6 +72,14 @@ class ShadowSibling extends ShadowBase;
   constraint sibling_c { addr < 16'h0180; }
 endclass
 
+class ShadowHolder;
+  rand ShadowDerived h;
+  function new;
+    h = new;
+  endfunction
+  constraint holder_c { h.addr == 16'h80a5; }
+endclass
+
 module t;
   initial begin
     automatic B b = new;
@@ -110,6 +118,11 @@ module t;
     begin
       automatic ShadowSibling ss = new;
       `check_rand(ss, ss.addr, ss.addr inside {[16'h0100:16'h017f]});
+    end
+    begin
+      automatic ShadowHolder sh = new;
+      automatic ShadowBase sb = sh.h;
+      `check_rand(sh, sb.addr, sh.h.addr == 16'h80a5 && sb.addr inside {[16'h0100:16'h01ff]});
     end
     $write("*-* All Finished *-*\n");
     $finish;
