@@ -98,8 +98,8 @@ class StateIndexedStructArray;
     if (enabled) {
       values[unsigned_index].x == bias + 9;
       values[signed_index].x == bias + 9;
-    }
-    else soft values[unsigned_index].x == bias + 9;
+    } else
+    soft values[unsigned_index].x == bias + 9;
   }
 
   function void verify(int turn);
@@ -140,9 +140,7 @@ class CompoundStructArray;
   int idx = 1;
   bit enabled = 1;
   constraint c_domain {values.size() inside {[1 : 4]};}
-  constraint c_together {
-    if (enabled) (values.size() == 3) && (values[idx].value == 31);
-  }
+  constraint c_together {if (enabled) (values.size() == 3) && (values[idx].value == 31);}
   function new();
     values = new[2];
   endfunction
@@ -154,7 +152,10 @@ class SizedStructQueue;
   int idx = 2;
   constraint c_size {values.size() == count;}
   constraint c_value {values[idx].value == 31;}
-  constraint c_domain {foreach (values[i]) values[i].value inside {[1 : 31]};}
+  constraint c_domain {
+    foreach (values[i])
+    values[i].value inside {[1 : 31]};
+  }
 endclass
 
 typedef struct {
@@ -169,9 +170,7 @@ class BooleanStructArray;
   int idx = 2;
   int expected = 13;
   constraint c_domain {values.size() inside {[1 : 5]};}
-  constraint c_selected {
-    !(values.size() != count || values[idx].x != 7'(expected));
-  }
+  constraint c_selected {!(values.size() != count || values[idx].x != 7'(expected));}
   constraint c_fields {
     foreach (values[i]) {
       values[i].x inside {7'(expected), 7'(expected + 1)};
@@ -184,7 +183,10 @@ class SoftStructArray;
   rand PhaseEntry values[];
   int idx = 1;
   constraint c_size {values.size() == 3;}
-  constraint c_hard {values[idx].x == 0; values[idx].y inside {7, 22};}
+  constraint c_hard {
+    values[idx].x == 0;
+    values[idx].y inside {7, 22};
+  }
   constraint c_lower {soft values[idx].y == 7;}
   constraint c_higher {soft (values[idx].x == 11) && (values[idx].y == 22);}
 endclass
@@ -197,7 +199,10 @@ class ValueConditionalArray;
   int idx = 2;
   int other_idx = 1;
   int target = 9;
-  constraint c_size {values.size() == 3; other.size() == 2;}
+  constraint c_size {
+    values.size() == 3;
+    other.size() == 2;
+  }
   constraint c_value {
     (choose != 0 ? int'(values[idx].x) : values[idx].y) == target;
     (choose != 0 ? values[idx].x : other[other_idx].x) == 7'(target);
@@ -237,7 +242,10 @@ class SymbolicValueConditional;
   int idx = 2;
   int other_idx = 1;
   int target = 9;
-  constraint c_size {values.size() == 3; other.size() == other_count;}
+  constraint c_size {
+    values.size() == 3;
+    other.size() == other_count;
+  }
   constraint c_choose {if (force_choose >= 0) choose == bit'(force_choose);}
   constraint c_value {
     (choose ? int'(values[idx].x) : values[idx].y) == target;
@@ -267,6 +275,80 @@ class MixedAvailableStructArray;
   function new();
     values = new[2];
   endfunction
+endclass
+
+class MixedEmptyStructArray;
+  rand Entry values[];
+  int idx = 2;
+  int expected = 31;
+  constraint c_domain {values.size() inside {[1 : 5]};}
+  constraint c_field {values[idx].value == expected;}
+  constraint c_mixed {values.size() + values[idx].value == idx + 1 + expected;}
+endclass
+
+class ReentrantStageArray extends MixedEmptyStructArray;
+  MixedEmptyStructArray peer;
+  int nested_ok;
+  bit peer_conflict;
+  function void pre_randomize();
+    if (peer != null) begin
+      peer.values.delete();
+      if (peer_conflict) nested_ok = peer.randomize() with {values[idx].value == 0;};
+      else nested_ok = peer.randomize();
+    end
+  endfunction
+endclass
+
+class CanonicalIndexStructArray;
+  rand Entry values[];
+  bit [6:0] narrow_idx = 2;
+  int idx = 2;
+  longint wide_idx = 2;
+  longint huge_idx = 64'h1_0000_0002;
+  int expected = 9;
+  bit conflict;
+  constraint c_size {values.size() == 3;}
+  constraint c_field {
+    values[narrow_idx].value == expected;
+    values[wide_idx].value == expected;
+    values[idx].value == (conflict ? 0 : expected);
+    values[huge_idx].value == 0;
+  }
+endclass
+
+typedef struct {
+  rand bit signed [6:0] x;
+  rand int y;
+} SignedStageEntry;
+
+class TypedStageArray;
+  rand SignedStageEntry values[];
+  int count = 3;
+  int idx = 2;
+  int other_idx = 1;
+  int expected = 9;
+  constraint c_size {values.size() == count;}
+  constraint c_field {
+    values[idx].x == 7'(expected);
+    values[other_idx].y == 23;
+    values.size() + int'(values[idx].x) == count + expected;
+  }
+  constraint c_lower {soft values[idx].y == 7;}
+  constraint c_higher {soft values[idx].y == 11;}
+endclass
+
+class TypedStageQueue;
+  rand SignedStageEntry values[$];
+  int count = 3;
+  int idx = 2;
+  int other_idx = 1;
+  int expected = -9;
+  constraint c_size {values.size() == count;}
+  constraint c_field {
+    values[idx].x == 7'(expected);
+    values[other_idx].y == 23;
+    values.size() + int'(values[idx].x) == count + expected;
+  }
 endclass
 
 module t;
@@ -421,7 +503,10 @@ module t;
       `checkd(ok, 1)
       `checkd(retained.values.size(), 3)
       retained.idx = 4;
-      ok = retained.randomize() with {values.size() == 5; values[idx].value == 9;};
+      ok = retained.randomize() with {
+        values.size() == 5;
+        values[idx].value == 9;
+      };
       `checkd(ok, 1)
       `checkd(retained.values.size(), 5)
       `checkd(retained.values[4].value, 9)
@@ -494,7 +579,7 @@ module t;
       for (int turn = 0; turn < 20; ++turn) begin
         value_array.values.delete();
         value_array.other.delete();
-        value_array.choose = choices[turn % 4];
+        value_array.choose = choices[turn%4];
         value_array.inner = turn % 2 != 0;
         value_array.other_idx = value_array.choose != 0 ? 7 : 1;
         value_array.target = 9 + turn;
@@ -514,7 +599,7 @@ module t;
         `checkd(lazy_array.values.size(), 3)
         `checkd(lazy_array.values[2].x, 9)
         default_array.values.delete();
-        default_array.choose = choices[turn % 4];
+        default_array.choose = choices[turn%4];
         ok = default_array.randomize();
         `checkd(ok, 1)
         `checkd(default_array.values.size(), 1)
@@ -562,6 +647,149 @@ module t;
         `checkd(mixed.values.size(), 3)
         `checkd(mixed.values[1].value, mixed.target)
       end
+    end
+
+    // Empty mixed arithmetic keeps its size dependency and writes the resized real member.
+    begin
+      automatic MixedEmptyStructArray mixed = new;
+      int ok;
+      for (int turn = 0; turn < 12; ++turn) begin
+        mixed.values.delete();
+        mixed.idx = 2 + turn % 3;
+        mixed.expected = 31 + turn;
+        ok = mixed.randomize();
+        `checkd(ok, 1)
+        `checkd(mixed.values.size(), mixed.idx + 1)
+        `checkd(mixed.values[mixed.idx].value, mixed.expected)
+      end
+    end
+
+    // Nested callback randomization keeps the two objects' staging and failure state separate.
+    begin
+      automatic ReentrantStageArray outer = new;
+      int ok;
+      outer.peer = new;
+      for (int turn = 0; turn < 4; ++turn) begin
+        outer.values.delete();
+        outer.peer_conflict = turn % 2 != 0;
+        ok = outer.randomize();
+        `checkd(ok, 1)
+        `checkd(outer.values.size(), outer.idx + 1)
+        `checkd(outer.values[outer.idx].value, outer.expected)
+        `checkd(outer.nested_ok, outer.peer_conflict ? 0 : 1)
+        if (!outer.peer_conflict) begin
+          `checkd(outer.peer.values.size(), outer.peer.idx + 1)
+          `checkd(outer.peer.values[outer.peer.idx].value, outer.peer.expected)
+        end
+      end
+    end
+
+    // Different declared index widths select one canonical field; huge indices stay invalid.
+    begin
+      automatic CanonicalIndexStructArray aliases = new;
+      int ok;
+      for (int turn = 0; turn < 4; ++turn) begin
+        aliases.values.delete();
+        aliases.expected = 9 + turn;
+        aliases.conflict = 0;
+        ok = aliases.randomize();
+        `checkd(ok, 1)
+        `checkd(aliases.values.size(), 3)
+        `checkd(aliases.values[2].value, aliases.expected)
+        aliases.conflict = 1;
+        ok = aliases.randomize();
+        `checkd(ok, 0)
+        aliases.conflict = 0;
+        aliases.values.rand_mode(0);
+        ok = aliases.randomize();
+        `checkd(ok, 1)
+        `checkd(aliases.values[2].value, aliases.expected)
+        aliases.values.rand_mode(1);
+      end
+    end
+
+    // Narrow signed fields, independent fields and both container kinds retain mode/soft state.
+    begin
+      automatic TypedStageArray a = new;
+      automatic TypedStageQueue q = new;
+      int ok;
+      for (int turn = 0; turn < 8; ++turn) begin
+        a.values.delete();
+        q.values.delete();
+        a.count = 3 + turn % 3;
+        q.count = a.count;
+        a.idx = a.count - 1;
+        q.idx = q.count - 1;
+        a.expected = 9 + turn;
+        q.expected = -9 - turn;
+        ok = a.randomize();
+        `checkd(ok, 1)
+        `checkd(a.values.size(), a.count)
+        `checkd(a.values[a.idx].x, 7'(a.expected))
+        `checkd(a.values[1].y, 23)
+        `checkd(a.values[a.idx].y, 11)
+        ok = q.randomize();
+        `checkd(ok, 1)
+        `checkd(q.values.size(), q.count)
+        `checkd(q.values[q.idx].x, 7'(q.expected))
+        `checkd(q.values[1].y, 23)
+        a.values.rand_mode(0);
+        q.values.rand_mode(0);
+        ok = a.randomize();
+        `checkd(ok, 1)
+        `checkd(a.values[a.idx].x, 7'(a.expected))
+        ok = q.randomize();
+        `checkd(ok, 1)
+        `checkd(q.values[q.idx].x, 7'(q.expected))
+        ok = a.randomize() with {values[idx].x == 0;};
+        `checkd(ok, 0)
+        ok = q.randomize() with {values[idx].x == 0;};
+        `checkd(ok, 0)
+        a.values.rand_mode(1);
+        q.values.rand_mode(1);
+      end
+      a.c_size.constraint_mode(0);
+      a.c_field.constraint_mode(0);
+      a.c_lower.constraint_mode(0);
+      a.c_higher.constraint_mode(0);
+      q.c_size.constraint_mode(0);
+      q.c_field.constraint_mode(0);
+      a.values.rand_mode(0);
+      q.values.rand_mode(0);
+      a.idx = -1;
+      q.idx = -1;
+      ok = a.randomize() with {values[idx].x == 0;};
+      `checkd(ok, 1)
+      ok = q.randomize() with {values[idx].x == 0;};
+      `checkd(ok, 1)
+      a.idx = 99;
+      q.idx = 99;
+      ok = a.randomize() with {values[idx].x == 0;};
+      `checkd(ok, 1)
+      ok = q.randomize() with {values[idx].x == 0;};
+      `checkd(ok, 1)
+      a.values.rand_mode(1);
+      q.values.rand_mode(1);
+      a.idx = 2;
+      q.idx = 2;
+      a.values.delete();
+      q.values.delete();
+      ok = a.randomize() with {
+        values.size() == 3;
+        values[idx].x == 7'd9;
+        values.size() + int'(values[idx].x) == 12;
+      };
+      `checkd(ok, 1)
+      `checkd(a.values.size(), 3)
+      `checkd(a.values[2].x, 7'd9)
+      ok = q.randomize() with {
+        values.size() == 3;
+        values[idx].x == -7'd9;
+        values.size() + int'(values[idx].x) == -6;
+      };
+      `checkd(ok, 1)
+      `checkd(q.values.size(), 3)
+      `checkd(q.values[2].x, -7'd9)
     end
 
     $write("*-* All Finished *-*\n");
