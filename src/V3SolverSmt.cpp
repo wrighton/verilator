@@ -168,6 +168,17 @@ static bool isRandIndex(const AstNodeExpr* indexp) {
     });
 }
 
+// A direct rand struct container whose size has a solver proxy.
+static bool isSizeBackedStructContainer(const AstVar* varp) {
+    const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+    if (!varp->rand().isRandomizable() || !VN_IS(varp->user4p(), Var)
+        || !(VN_IS(dtypep, DynArrayDType) || VN_IS(dtypep, QueueDType))) {
+        return false;
+    }
+    const AstStructDType* const structp = VN_CAST(dtypep->subDTypep()->skipRefp(), StructDType);
+    return structp && !structp->packed();
+}
+
 // Return the index of an array element select
 static AstNodeExpr* selIndexp(AstNode* selp) {
     if (AstNodeSel* const nodeSelp = VN_CAST(selp, NodeSel)) return nodeSelp->bitp();
@@ -393,6 +404,13 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::vector<ConstraintFuncCall> m_funcCalls;  // Items calling functions with random arguments
     // Condition that the arrays reduced in the current constraint keep their current sizes
     AstNodeExpr* m_sizeGatep = nullptr;
+    // Allocation readiness of a selected struct field, consumed at a Boolean relation boundary.
+    AstNodeExpr* m_elementSizeGatep = nullptr;
+    bool m_booleanRegion = false;  // Logical operands are independent predicate regions
+    bool m_negativeBoolean = false;  // Relax an unavailable atom to FALSE under negation
+    bool m_allowElementDeferral = true;  // Never defer a control predicate or value conditional
+    std::set<std::string> m_foldSizeGuardVars;  // Auxiliary names carried by a folded constraint
+    std::set<std::string>* m_sizeGuardVarsp = nullptr;  // Not part of soft payload identity
 
     class NestedAccessPath final {
         AstMemberRef* m_topNestedArrayMemberRefp
@@ -943,6 +961,68 @@ class ConstraintExprVisitor final : public VNVisitor {
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return newp;
+    }
+
+    // Record a field's size dependency without guarding its enclosing size predicates.
+    void gateElementOnCurrentSize(AstVarRef* const arrayp) {
+        AstVar* const arrVarp = arrayp->varp();
+        AstVar* const sizeVarp = VN_AS(arrVarp->user4p(), Var);
+        FileLine* const fl = arrayp->fileline();
+        AstVarRef* const sizeRefp
+            = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
+        sizeRefp->user1(true);
+        AstCMethodHard* const currentp
+            = new AstCMethodHard{fl, arrayp->cloneTree(false), VCMethod::DYN_SIZE};
+        currentp->dtypeFrom(sizeVarp);
+        AstEq* const eqp = new AstEq{fl, sizeRefp, currentp};
+        eqp->user1(true);
+        if (m_elementSizeGatep) {
+            m_elementSizeGatep = new AstLogAnd{fl, m_elementSizeGatep, eqp};
+        } else {
+            m_elementSizeGatep = eqp;
+        }
+        m_elementSizeGatep->user1(true);
+        if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
+    }
+    // Format one predicate region; arithmetic operands remain values, not constraints.
+    AstNodeExpr* formatBooleanRegion(AstNodeExpr* exprp, const bool negative = false) {
+        FileLine* const fl = exprp->fileline();
+        const int width = exprp->width();
+        if (exprp->backp()) exprp->unlinkFrBack();
+        if (width > 1 && !exprp->isString()) {
+            exprp = new AstNeq{fl, exprp, new AstConst{fl, V3Number{fl, width, 0}}};
+            exprp->user1(true);
+        }
+        VL_RESTORER(m_booleanRegion);
+        VL_RESTORER(m_negativeBoolean);
+        VL_RESTORER(m_elementSizeGatep);
+        VL_RESTORER(m_conditionp);
+        m_booleanRegion = true;
+        m_negativeBoolean = negative;
+        m_elementSizeGatep = nullptr;
+        m_conditionp = nullptr;
+        exprp = VN_AS(iterateSubtreeReturnEdits(exprp), NodeExpr);
+        exprp = wrapWithCond(exprp, m_conditionp, 1);
+        if (!m_elementSizeGatep) return exprp;
+
+        // Only the original payload names identify a soft. Keep phase-guard names separate.
+        std::set<std::string> guardVars;
+        VL_RESTORER(m_constraintVarsp);
+        VL_RESTORER(m_allowElementDeferral);
+        m_constraintVarsp = &guardVars;
+        m_allowElementDeferral = false;
+        m_booleanRegion = false;
+        AstNodeExpr* const gatep = m_elementSizeGatep;
+        m_elementSizeGatep = nullptr;
+        AstCond* const condp = new AstCond{
+            fl, gatep, exprp,
+            new AstConst{fl, AstConst::WidthedValue{}, 1, static_cast<uint32_t>(!negative)}};
+        condp->dtypeSetBit();
+        condp->user1(true);
+        exprp = VN_AS(iterateSubtreeReturnEdits(condp), NodeExpr);
+        UASSERT_OBJ(m_sizeGuardVarsp, exprp, "Size guard outside a constraint");
+        m_sizeGuardVarsp->insert(guardVars.begin(), guardVars.end());
+        return exprp;
     }
 
     AstNodeExpr* editSingle(FileLine* fl, AstNode* itemsp) {
@@ -2453,15 +2533,41 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
+        VL_RESTORER(m_booleanRegion);
+        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp());
     }
     void visit(AstNodeUniop* nodep) override {
         if (editFormat(nodep)) return;
+        VL_RESTORER(m_booleanRegion);
+        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp());
     }
     void visit(AstNodeTriop* nodep) override {
         if (editFormat(nodep)) return;
+        VL_RESTORER(m_booleanRegion);
+        m_booleanRegion = false;
         editSMT(nodep, nodep->lhsp(), nodep->rhsp(), nodep->thsp());
+    }
+    void editBooleanBinary(AstNodeBiop* const nodep) {
+        if (editFormat(nodep)) return;
+        if (!m_booleanRegion) {
+            editSMT(nodep, nodep->lhsp(), nodep->rhsp());
+            return;
+        }
+        AstNodeExpr* const lhsp = formatBooleanRegion(nodep->lhsp(), m_negativeBoolean);
+        AstNodeExpr* const rhsp = formatBooleanRegion(nodep->rhsp(), m_negativeBoolean);
+        editSMT(nodep, lhsp, rhsp);
+    }
+    void visit(AstLogAnd* nodep) override { editBooleanBinary(nodep); }
+    void visit(AstLogOr* nodep) override { editBooleanBinary(nodep); }
+    void visit(AstLogNot* nodep) override {
+        if (editFormat(nodep)) return;
+        if (!m_booleanRegion) {
+            editSMT(nodep, nodep->lhsp());
+            return;
+        }
+        editSMT(nodep, formatBooleanRegion(nodep->lhsp(), !m_negativeBoolean));
     }
     // State proofs of TRUE/FALSE/ERROR, all absent only when the predicate is RANDOM.
     struct GuardResult final {
@@ -2901,11 +3007,18 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
         GuardFlagsMap flags;
-        const GuardResult result = newGuardResult(nodep->condp(), blockp, flags);
-        AstNodeExpr* const predicatep = nodep->condp()->unlinkFrBack();
-        nodep->condp(formatGuardPredicate(predicatep, flags));
+        GuardResult result;
+        {
+            VL_RESTORER(m_allowElementDeferral);
+            m_allowElementDeferral = false;
+            result = newGuardResult(nodep->condp(), blockp, flags);
+            AstNodeExpr* const predicatep = nodep->condp()->unlinkFrBack();
+            nodep->condp(formatGuardPredicate(predicatep, flags));
+        }
         UASSERT_OBJ(flags.empty(), nodep, "Unconsumed guard predicate proofs");
-        AstSFormatF* const smtp = editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
+        AstNodeExpr* const thenTextp = formatBooleanRegion(nodep->thenp(), m_negativeBoolean);
+        AstNodeExpr* const elseTextp = formatBooleanRegion(nodep->elsep(), m_negativeBoolean);
+        AstSFormatF* const smtp = editSMT(nodep, nodep->condp(), thenTextp, elseTextp);
         if (!result.truep && !result.falsep && !result.errorp) {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
             return;
@@ -2953,6 +3066,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstCond* nodep) override {
         // Value conditionals retain ordinary value semantics. In particular, an invalid value
         // arm must not become boolean FALSE merely because constraint guards use that status.
+        VL_RESTORER(m_allowElementDeferral);
+        m_allowElementDeferral = false;
         if (editFormat(nodep)) return;
         if (nodep->condp()->user1()) {
             editSMT(nodep, nodep->condp(), nodep->thenp(), nodep->elsep());
@@ -3927,12 +4042,14 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Solver variables directly in a soft payload, which 'disable soft' removes it by
         // (IEEE 1800-2023 18.5.13.2). Not those of a guard folded around it.
         std::set<std::string> softVars;
+        std::set<std::string> sizeGuardVars;
         ElemNames elemNames;  // Like vars
         ElemNames softElemNames;  // Like softVars
         const bool foldTaker = nodep == m_foldTakerp;
         if (!m_wantSingle) {
             if (foldTaker) {
                 vars.swap(m_constraintVars);
+                sizeGuardVars.swap(m_foldSizeGuardVars);
                 std::swap(elemNames, m_foldElemNames);
                 // A soft fold has only its payload's names so far; its guard is formatted
                 // below
@@ -3949,6 +4066,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         VL_RESTORER(m_constraintVarsp);
         m_constraintVarsp = m_wantSingle ? &m_constraintVars : &vars;
+        VL_RESTORER(m_sizeGuardVarsp);
+        m_sizeGuardVarsp = m_wantSingle ? &m_foldSizeGuardVars : &sizeGuardVars;
         VL_RESTORER(m_elemNamesp);
         m_elemNamesp = m_wantSingle ? &m_foldElemNames : &elemNames;
         if (nodep->isDisableSoft()) {
@@ -3972,7 +4091,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         VL_RESTORER(m_sizeGatep);
         m_sizeGatep = nullptr;
-        iterateChildren(nodep);
+        nodep->exprp(formatBooleanRegion(nodep->exprp()));
         // Before any size gate is added around the payload
         if (!foldTaker && nodep->isSoft()) {
             softVars = vars;
@@ -3986,6 +4105,7 @@ class ConstraintExprVisitor final : public VNVisitor {
             nodep->exprp(gatedp);
             iterate(gatedp);
         }
+        vars.insert(sizeGuardVars.begin(), sizeGuardVars.end());
         if (m_wantSingle) {
             nodep->replaceWith(nodep->exprp()->unlinkFrBack());
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
@@ -4078,13 +4198,12 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstNodeExpr* const origp = indexIsRand ? nullptr : nodep->cloneTree(false);
                 const AstVarRef* const baseRefp
                     = m_structSel ? VN_CAST(nodep->fromp()->baseFromp(true), VarRef) : nullptr;
-                if (m_structSel && !indexIsRand
-                    && VN_IS(nodep->fromp()->dtypep()->skipRefp(), DynArrayDType)
-                    && VN_IS(nodep->dtypep()->skipRefp(), StructDType)) {
-                    // A state-selected field must not constrain an array's pre-resize size solve.
-                    gateOnCurrentSize(nodep->fromp());
-                }
-                if (baseRefp && VN_IS(nodep->pinsp(), Const)
+                AstVarRef* const directp = VN_CAST(nodep->fromp(), VarRef);
+                const bool deferElement = m_allowElementDeferral && m_structSel && !indexIsRand
+                                          && directp
+                                          && isSizeBackedStructContainer(directp->varp());
+                if (deferElement) gateElementOnCurrentSize(directp);
+                if (baseRefp && !deferElement && VN_IS(nodep->pinsp(), Const)
                     && VN_IS(baseRefp->varp()->dtypep()->skipRefp(), DynArrayDType)
                     && m_prepareConstrainedArraysp) {
                     AstNodeExpr* const indexp = nodep->pinsp()->cloneTreePure(false);
@@ -5899,6 +6018,77 @@ class SolverSmtLowering final : public V3SolverLowering {
             });
         });
     }
+    struct RetainedStructSizes final {
+        AstNodeStmt* setupsp = nullptr;  // Before constraint setup snapshots
+        AstNodeStmt* pinsp = nullptr;  // After registration, before the first solve
+    };
+    // Use the same mode-wrapped tasks that resize the container, not a historical size proxy.
+    RetainedStructSizes newRetainedStructSizes(AstClass* const classp,
+                                               const VInsertionSet<AstVar*>& arrays,
+                                               const VInsertionSet<AstVar*>& inlineArrays,
+                                               AstFunc* const randomizep, AstVar* const genp) {
+        FileLine* const fl = randomizep->fileline();
+        RetainedStructSizes result;
+        std::unordered_map<AstVar*, AstVar*> activeVars;
+        for (AstVar* const arrVarp : arrays) {
+            if (!isSizeBackedStructContainer(arrVarp)) continue;
+            AstVar* const activep
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VsizeActive"),
+                             randomizep->findBitDType()};
+            activep->funcLocal(true);
+            randomizep->addDeclsp(activep);
+            activeVars.emplace(arrVarp, activep);
+            result.setupsp = AstNode::addNextNull(
+                result.setupsp,
+                new AstAssign{fl, new AstVarRef{fl, activep, VAccess::WRITE},
+                              new AstConst{fl, AstConst::WidthedValue{}, 1,
+                                           static_cast<uint32_t>(inlineArrays.exists(arrVarp))}});
+        }
+        if (activeVars.empty()) return result;
+        classp->foreachMember([&](AstClass*, AstConstraint* const constrp) {
+            const AstTask* const taskp = VN_CAST(constrp->user3p(), Task);
+            if (!taskp) return;
+            // Direct resize statements are generated by lowerConstraintMethod; member-object
+            // resizes have a separate nullable path and are outside this direct-container policy.
+            for (const AstNodeStmt* const stmtp : taskp->stmtspList()) {
+                const AstStmtExpr* const exprp = VN_CAST(stmtp, StmtExpr);
+                const AstCMethodHard* const methodp
+                    = exprp ? VN_CAST(exprp->exprp(), CMethodHard) : nullptr;
+                if (!methodp || methodp->method() != VCMethod::DYN_RESIZE) continue;
+                const AstVarRef* const refp = VN_CAST(methodp->fromp(), VarRef);
+                if (!refp) continue;
+                const auto it = activeVars.find(refp->varp());
+                if (it == activeVars.end()) continue;
+                result.setupsp = AstNode::addNextNull(
+                    result.setupsp,
+                    wrapIfConstraintMode(
+                        classp, constrp,
+                        new AstAssign{fl, new AstVarRef{fl, it->second, VAccess::WRITE},
+                                      new AstConst{fl, AstConst::BitTrue{}}}));
+            }
+        });
+        for (AstVar* const arrVarp : arrays) {
+            const auto it = activeVars.find(arrVarp);
+            if (it == activeVars.end()) continue;
+            result.setupsp = AstNode::addNextNull(
+                result.setupsp,
+                new AstIf{fl, new AstLogNot{fl, new AstVarRef{fl, it->second, VAccess::READ}},
+                          newSizeVarAssign(fl, arrVarp)});
+            result.pinsp = AstNode::addNextNull(
+                result.pinsp,
+                new AstIf{fl, new AstLogNot{fl, new AstVarRef{fl, it->second, VAccess::READ}},
+                          newPinSizeVariable(fl, arrVarp, genp)});
+        }
+        return result;
+    }
+    void syncStructSizes(const VInsertionSet<AstVar*>& arrays, AstFunc* const randomizep) {
+        for (AstVar* const arrVarp : arrays) {
+            if (isSizeBackedStructContainer(arrVarp)) {
+                randomizep->addStmtsp(newSizeVarAssign(randomizep->fileline(), arrVarp));
+            }
+        }
+    }
+
     // Pin the sizes of the disabled arrays among arrVars and memberArrays
     void addFrozenSizePins(const VInsertionSet<AstVar*>& arrVars, const MemberArrays& memberArrays,
                            AstFunc* const randomizep, AstVar* const genp,
@@ -6077,6 +6267,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                               const std::set<std::string>& writtenVars,
                               AstNodeStmt* const setupStmtsp) {
         FileLine* const fl = randomizep->fileline();
+        syncStructSizes(resizedArrayVars, randomizep);
         for (AstVar* const arrVarp : sizeArrayVars) {
             addArrayElemRefresh(fl, arrVarp, randomizep, setupGenp);
         }
@@ -6306,6 +6497,12 @@ public:
             }
             AstTask* const setupAllTaskp
                 = SmtUtil::getCreateConstraintSetupFunc(nodep, m_memberMap);
+            VInsertionSet<AstVar*> pinnedArrays = sizeArrayVars;
+            MemberArrays memberArrays;
+            addResizedArrays(nodep, pinnedArrays, memberArrays);
+            const RetainedStructSizes retained
+                = newRetainedStructSizes(nodep, pinnedArrays, {}, randomizep, genp);
+            if (retained.setupsp) randomizep->addStmtsp(retained.setupsp);
             if (!sizeArrayVars.empty() && prepareArraysTaskp->stmtsp()) {
                 // Before the setup registers the elements
                 randomizep->addStmtsp((new AstTaskRef{fl, prepareArraysTaskp})->makeStmt());
@@ -6313,10 +6510,8 @@ public:
             AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupAllTaskp};
             randomizep->addStmtsp(setupTaskRefp->makeStmt());
 
-            VInsertionSet<AstVar*> pinnedArrays = sizeArrayVars;
-            MemberArrays memberArrays;
-            addResizedArrays(nodep, pinnedArrays, memberArrays);
             addFrozenSizePins(pinnedArrays, memberArrays, randomizep, genp, randModeVarp);
+            if (retained.pinsp) randomizep->addStmtsp(retained.pinsp);
 
             // A member object array is randomized with the outer object, after its resize
             sizePhase = !sizeArrayVars.empty() || !memberArrays.empty();
@@ -6582,7 +6777,19 @@ public:
         // Arrays whose size this call solves; each is pinned when frozen and for the final solve
         VInsertionSet<AstVar*> sizedArrays = pinnedArrays;
         sizedArrays.insert(inlineSizedArrays.begin(), inlineSizedArrays.end());
+        const RetainedStructSizes retained = newRetainedStructSizes(
+            classp, sizedArrays, inlineSizedArrays, randomizeFuncp, localGenp);
+        if (retained.setupsp) {
+            if (solveAfterp) {
+                solveAfterp->addNextHere(retained.setupsp);
+            } else {
+                AstNodeStmt* const oldp = randomizeFuncp->stmtsp()->unlinkFrBackWithNext();
+                randomizeFuncp->addStmtsp(retained.setupsp);
+                randomizeFuncp->addStmtsp(oldp);
+            }
+        }
         addFrozenSizePins(sizedArrays, memberArrays, randomizeFuncp, localGenp, randModeVarp);
+        if (retained.pinsp) randomizeFuncp->addStmtsp(retained.pinsp);
 
         if (needsSizePhase) {
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
@@ -6625,6 +6832,7 @@ public:
                 clearp->dtypeSetVoid();
                 randomizeFuncp->addStmtsp(clearp->makeStmt());
             }
+            syncStructSizes(sizedArrays, randomizeFuncp);
             if (classGenp) {
                 randomizeFuncp->addStmtsp(implementConstraintsClear(fl, classGenp));
                 AstTask* const constrSetupFuncp2
