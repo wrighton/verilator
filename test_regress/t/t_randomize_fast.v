@@ -127,6 +127,22 @@ class SoftIntersection;
   }
 endclass
 
+// An empty original soft dist must not donate its procedural pick to a
+// later dist whose zero-weight bucket is removed from the final domain.
+class PickOrigin;
+  rand bit [6:0] x;
+  bit [6:0] lo = 7'd5;
+  bit [6:0] hi = 7'd4;
+  int zero_weight = 0;
+  constraint c {
+    soft x dist {[lo : hi] :/ 1};
+    soft x dist {
+      [7'd0 : 7'd7] :/ 1,
+      7'd100 := zero_weight
+    };
+  }
+endclass
+
 module t;
   localparam int N = 8192;
 
@@ -323,6 +339,20 @@ module t;
     `checkd(pinned.post_count, N);
     `checkd(pinned.pre_count, N + 1);
     `checkd(pinned.choice inside {LOW, HIGH}, 1);
+
+    begin
+      PickOrigin origin;
+      int counts_origin[8];
+      origin = new;
+      foreach (counts_origin[i]) counts_origin[i] = 0;
+      repeat (N) begin
+        `checkd(origin.randomize(), 1);
+        `checkd(origin.x inside {[7'd0 : 7'd7]}, 1);
+        counts_origin[int'(origin.x)]++;
+      end
+      foreach (counts_origin[i]) `check_range(counts_origin[i], N/ 8 - 200, N/ 8 + 200);
+    end
+
     $write("Fast digest=%0h\n", digest);
     $write("*-* All Finished *-*\n");
     $finish;
