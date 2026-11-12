@@ -14,7 +14,7 @@ test.scenarios('vlt')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+test.compile(verilator_flags2=['-fno-constraint-fast'])
 
 # 16 randomize calls; each entry names the reply the solver mangles
 runs = [
