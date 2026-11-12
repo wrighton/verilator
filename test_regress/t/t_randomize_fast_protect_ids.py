@@ -13,6 +13,7 @@ test.scenarios('vlt')
 test.top_filename = 't/t_randomize_fast.v'
 
 test.compile(verilator_flags2=['--protect-ids', '--protect-key SECRET_KEY'])
-test.execute(run_env='VERILATOR_SOLVER=/bin/false')
+test.execute(run_env='VERILATOR_SOLVER=/bin/false',
+             all_run_flags=['+verilator+wno+unsatconstr+1'])
 
 test.passes()
