@@ -217,6 +217,18 @@ class UnknownVisitor final : public VNVisitor {
         m_constXCvt = false;  // Avoid losing the X's in casex
         iterateChildren(nodep);
     }
+    void visit(AstMemberDType* nodep) override {
+        VL_RESTORER(m_constXCvt);
+        VL_RESTORER(m_allowXUnique);
+        m_constXCvt = false;
+        iterateAndNextNull(nodep->childDTypep());
+        // A member's declaration initializer is an explicit value that stays a constant, as it
+        // initializes each variable of the struct type, so its X bits take a constant
+        // --x-assign value.
+        m_constXCvt = true;
+        m_allowXUnique = false;
+        iterateAndNextNull(nodep->valuep());
+    }
     void visit(AstVar* nodep) override {
         VL_RESTORER(m_allowXUnique);
         if (nodep->isParam() || nodep->constPoolEntry()) m_allowXUnique = false;
