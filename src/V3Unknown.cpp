@@ -166,43 +166,6 @@ class UnknownVisitor final : public VNVisitor {
         return fromp == nodep ? VN_AS(backp, NodeExpr) : nullptr;
     }
 
-    // Default value of a variable of type dtypep (IEEE 1800-2023 7.4.6), or nullptr
-    static AstNodeExpr* newDefaultp(AstNode* nodep, AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        if (AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
-            AstNodeExpr* const elemp = newDefaultp(nodep, arrayp->subDTypep());
-            return elemp ? new AstConsArray{nodep->fileline(), arrayp, elemp} : nullptr;
-        }
-        AstStructDType* const structp = VN_CAST(dtypep, StructDType);
-        if (structp && !structp->packed()) {
-            AstConsStruct* const newp = new AstConsStruct{nodep->fileline(), structp};
-            for (AstMemberDType* const memberp : structp->memberspList()) {
-                AstNodeExpr* const memberValuep = newDefaultp(nodep, memberp->subDTypep());
-                if (!memberValuep) {
-                    VL_DO_DANGLING(newp->deleteTree(), newp);
-                    return nullptr;
-                }
-                newp->addItemsp(new AstConsStructItem{nodep->fileline(), memberp, memberValuep});
-            }
-            return newp;
-        }
-        // An event has no value to read instead
-        if (!(dtypep->isIntegralOrPacked() || VN_IS(dtypep, BasicDType)) || dtypep->isEvent()) {
-            return nullptr;
-        }
-        V3Number xnum{nodep, dtypep->width()};
-        if (dtypep->isDouble()) {
-            xnum = V3Number{nodep, V3Number::Double{}, 0.0};
-        } else if (dtypep->isString()) {
-            xnum = V3Number{nodep, V3Number::String{}, ""};
-        } else if (dtypep->isFourstate()) {
-            xnum.setAllBitsX();
-        } else {
-            xnum.setAllBits0();
-        }
-        return new AstConst{nodep->fileline(), xnum};
-    }
-
     AstVar* createAddTemp(const AstNodeExpr* const nodep) {
         AstVar* const varp = new AstVar{nodep->fileline(), VVarType::XTEMP,
                                         m_xrandNames->get(nodep), nodep->dtypep()};
@@ -640,8 +603,21 @@ class UnknownVisitor final : public VNVisitor {
                     readp = abovep;
                 }
             }
-            // Note below has null backp(); the Edit function knows how to deal with that.
-            AstNodeExpr* const defaultp = lvalue ? nullptr : newDefaultp(readp, readp->dtypep());
+            // Preserve member declaration initializers by selecting from the element's default,
+            // not from the final leaf dtype. A containing member's initializer may override that
+            // leaf's own type default.
+            AstNodeExpr* defaultp
+                = lvalue ? nullptr : V3Const::newDTypeDefaultp(nodep, nodep->dtypep());
+            if (defaultp && readp != nodep) {
+                AstNodeExpr* const defaultReadp = readp->cloneTree(false);
+                AstNode* const selectCopyp = nodep->clonep();
+                selectCopyp->replaceWith(defaultp);
+                VL_DO_DANGLING(pushDeletep(selectCopyp), selectCopyp);
+                defaultp = V3Const::constifyEdit(defaultReadp);
+            } else if (!defaultp && !lvalue && readp != nodep) {
+                // Retain the existing leaf fallback for unsupported aggregate defaults.
+                defaultp = V3Const::newDTypeDefaultp(readp, readp->dtypep());
+            }
             if (defaultp) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;

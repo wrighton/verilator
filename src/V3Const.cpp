@@ -4993,6 +4993,44 @@ uint32_t ConstVisitor::s_globalPassNum = 0;
 //######################################################################
 // Const class functions
 
+AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtypep) {
+    dtypep = dtypep->skipRefp();
+    if (AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        AstNodeExpr* const elemp = newDTypeDefaultp(nodep, arrayp->subDTypep());
+        return elemp ? new AstConsArray{nodep->fileline(), arrayp, elemp} : nullptr;
+    }
+    AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+    if (structp && !structp->packed()) {
+        AstConsStruct* const newp = new AstConsStruct{nodep->fileline(), structp};
+        for (AstMemberDType* const memberp : structp->memberspList()) {
+            AstNodeExpr* const memberValuep
+                = memberp->valuep() ? VN_AS(memberp->valuep(), NodeExpr)->cloneTree(false)
+                                    : newDTypeDefaultp(nodep, memberp->subDTypep());
+            if (!memberValuep) {
+                VL_DO_DANGLING(newp->deleteTree(), newp);
+                return nullptr;
+            }
+            newp->addItemsp(new AstConsStructItem{nodep->fileline(), memberp, memberValuep});
+        }
+        return newp;
+    }
+    // An event has no value to read instead.
+    if (!(dtypep->isIntegralOrPacked() || VN_IS(dtypep, BasicDType)) || dtypep->isEvent()) {
+        return nullptr;
+    }
+    V3Number xnum{nodep, dtypep->width()};
+    if (dtypep->isDouble()) {
+        xnum = V3Number{nodep, V3Number::Double{}, 0.0};
+    } else if (dtypep->isString()) {
+        xnum = V3Number{nodep, V3Number::String{}, ""};
+    } else if (dtypep->isFourstate()) {
+        xnum.setAllBitsX();
+    } else {
+        xnum.setAllBits0();
+    }
+    return new AstConst{nodep->fileline(), xnum};
+}
+
 void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const fromp,
                                          std::vector<AstNodeExpr*>& termps, const bool packReal,
                                          const bool warnImpure) {
