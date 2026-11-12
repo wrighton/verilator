@@ -143,6 +143,48 @@ class PickOrigin;
   }
 endclass
 
+// Same pure-state band helper shape as real queue selection callers.
+function automatic longint unsigned fast_band_width(longint unsigned lo, longint unsigned hi);
+  longint unsigned width;
+  width = (hi - lo + 1 + 5) / 10;
+  return width == 0 ? 1 : width;
+endfunction
+
+class QueuePicker;
+  int excluded[$];
+  function int pick(ref int value, input int pool[$], input longint unsigned lo,
+                    input longint unsigned hi);
+    return std::randomize(
+        value
+    ) with {
+      value inside {pool};
+      !(value inside {excluded});
+      if (hi >= lo + 4) {
+        soft longint'(value) dist {
+          [lo : lo + fast_band_width(lo, hi) - 1] :/ 1,
+          [lo + fast_band_width(lo, hi) : hi - fast_band_width(lo, hi)] :/ 1,
+          [hi - fast_band_width(lo, hi) + 1 : hi] :/ 1
+        };
+      }
+    };
+  endfunction
+endclass
+
+class CallbackQueue;
+  rand int x;
+  int available[$];
+  int calls = 0;
+  constraint c {x inside {available};}
+  function void pre_randomize();
+    available.delete();
+    available.push_back(calls);
+    calls++;
+  endfunction
+  function void post_randomize();
+    `checkd(x, calls - 1);
+  endfunction
+endclass
+
 module t;
   localparam int N = 8192;
 
@@ -351,6 +393,59 @@ module t;
         counts_origin[int'(origin.x)]++;
       end
       foreach (counts_origin[i]) `check_range(counts_origin[i], N/ 8 - 200, N/ 8 + 200);
+    end
+
+    begin
+      QueuePicker picker;
+      CallbackQueue callback_queue;
+      int pool[$];
+      int counts[256];
+      int value;
+      int small_counts[3];
+      picker = new;
+      callback_queue = new;
+      for (int i = 0; i < 256; i++) pool.push_back(i);
+      foreach (counts[i]) counts[i] = 0;
+      repeat (N) begin
+        `checkd(picker.pick(value, pool, 0, 255), 1);
+        `checkd(value inside {pool}, 1);
+        `checkd(!(value inside {picker.excluded}), 1);
+        counts[value]++;
+      end
+      for (int i = 0; i < 256; i++) begin
+        if (i < 26 || i >= 230) `check_range(counts[i], N/ 78 - 50, N/ 78 + 50)
+        else `check_range(counts[i], N/ 612 - 20, N/ 612 + 20);
+      end
+      pool = '{0, 0, 1, 26, 27, 230, 231};
+      picker.excluded = '{1, 27, 231};
+      foreach (small_counts[i]) small_counts[i] = 0;
+      repeat (N) begin
+        `checkd(picker.pick(value, pool, 0, 255), 1);
+        `checkd(value inside {0, 26, 230}, 1);
+        if (value == 0) small_counts[0]++;
+        else if (value == 26) small_counts[1]++;
+        else small_counts[2]++;
+      end
+      // Original band sizes26/204/26 give weights102:13:102 after exclusion.
+      `check_range(small_counts[0], 102 * N/ 217 - 200, 102 * N/ 217 + 200);
+      `check_range(small_counts[1], 13 * N/ 217 - 200, 13 * N/ 217 + 200);
+      `check_range(small_counts[2], 102 * N/ 217 - 200, 102 * N/ 217 + 200);
+      picker.excluded = pool;
+      value = 999;
+      `checkd(picker.pick(value, pool, 0, 255), 0);
+      `checkd(value, 999);
+      picker.excluded.delete();
+      pool.delete();
+      `checkd(picker.pick(value, pool, 0, 255), 0);
+      `checkd(value, 999);
+      pool = '{-3, -3, 1};
+      repeat (32) begin
+        `checkd(picker.pick(value, pool, 0, 3), 1);
+        `checkd(value inside {-3, 1}, 1);
+        `checkd(callback_queue.randomize(), 1);
+      end
+      `checkd(pool.size(), 3);
+      `checkd(pool[0], -3);
     end
 
     $write("Fast digest=%0h\n", digest);

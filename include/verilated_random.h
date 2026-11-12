@@ -500,6 +500,31 @@ public:
         if (pickp->isSigned) pickp->proposal ^= QData{1} << (pickp->width - 1);
         pickp->hasProposal = true;
     }
+    /// Snapshot a state queue's membership set; duplicates never add probability.
+    template <typename T>
+    void fast_queue(const VlQueue<T>& queue, bool exclude) {
+        FastConstraint& constraint = m_fastConstraints.back();
+        const QData mask = (QData{1} << constraint.width) - 1;
+        const QData sign = constraint.isSigned ? QData{1} << (constraint.width - 1) : 0;
+        FastRanges ranges;
+        ranges.reserve(queue.size());
+        for (const T& value : queue) {
+            const QData key = (static_cast<QData>(value) & mask) ^ sign;
+            ranges.push_back({key, key, 1, 1});
+        }
+        ranges = fastUnion(std::move(ranges));
+        if (!exclude) {
+            constraint.ranges = std::move(ranges);
+            return;
+        }
+        QData next = 0;
+        for (const FastRange& range : ranges) {
+            if (next < range.lo) constraint.ranges.push_back({next, range.lo - 1, 1, 1});
+            if (range.hi == mask) return;
+            next = range.hi + 1;
+        }
+        constraint.ranges.push_back({next, mask, 1, 1});
+    }
     /// Keep the solver path when any original constraint item is unsupported.
     void fast_disable() { m_fastDisabled = true; }
 
