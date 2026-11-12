@@ -42,6 +42,7 @@
 #include "V3Unknown.h"
 
 #include "V3Const.h"
+#include "V3MemberMap.h"
 #include "V3Stats.h"
 #include "V3UniqueNames.h"
 
@@ -64,6 +65,7 @@ class UnknownVisitor final : public VNVisitor {
     VDouble0 m_statElses;  // Statistic of else branches created for array selects
     V3UniqueNames m_lvboundNames;  // For generating unique temporary variable names
     std::unique_ptr<V3UniqueNames> m_xrandNames;  // For generating unique temporary variable names
+    VMemberMap m_memberMap;  // Member lookup; dtype declarations stay intact during this pass
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
