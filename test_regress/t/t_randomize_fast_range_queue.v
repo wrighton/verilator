@@ -43,6 +43,7 @@ module t_range_queue;
     int value;
     int counts[3];
     int width;
+    int randomize_result;
     picker = new;
     busy = '{0, 0, 1, 2, 2047};
     repeat (128) begin
@@ -77,10 +78,11 @@ module t_range_queue;
     `checkd(pick_width(value, 0), 1);
     `checkd(value, 0);
     busy = '{0, 0};
-    `checkd(std::randomize(value) with {
-              value inside {[0 : (1 << 0) - 1]};
-              !(value inside {busy});
-            }, 0);
+    randomize_result = std::randomize(value) with {
+      value inside {[0 : (1 << 0) - 1]};
+      !(value inside {busy});
+    };
+    `checkd(randomize_result, 0);
     `checkd(value, 0);
     repeat (32) begin
       `checkd(pick_width(value, 11), 1);
@@ -93,10 +95,11 @@ module t_range_queue;
     `checkd(value, 77);
     // A rand-dependent bound remains unsupported even if another item pins it.
     width = 9;
-    `checkd(std::randomize(value, width) with {
-              value inside {[0 : (1 << width) - 1]};
-              width == 11;
-            }, 0);
+    randomize_result = std::randomize(value, width) with {
+      value inside {[0 : (1 << width) - 1]};
+      width == 11;
+    };
+    `checkd(randomize_result, 0);
     `checkd(value, 77);
     `checkd(width, 9);
     $write("Range queue counts=%0d/%0d/%0d\n", counts[0], counts[1], counts[2]);

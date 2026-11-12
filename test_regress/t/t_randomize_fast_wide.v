@@ -68,6 +68,7 @@ module t_wide;
     int overlap_counts[6];
     int pinned;
     int expected;
+    int randomize_result;
     for (int epoch = 0; epoch < 2; epoch++) begin
       lo = epoch == 0 ? 64'd0 : 64'hffff_ffff_ffff_ff00;
       hi = lo + 64'd255;
@@ -85,14 +86,15 @@ module t_wide;
     // Overlap and :/ denominators stay exact above the signed 64-bit maximum.
     foreach (overlap_counts[i]) overlap_counts[i] = 0;
     repeat (N) begin
-      `checkd(std::randomize(value) with {
-                value inside {[64'hffff_ffff_ffff_fff1 : 64'hffff_ffff_ffff_fff5]};
-                value dist {
-                  [64'hffff_ffff_ffff_fff0 : 64'hffff_ffff_ffff_fff4] := 1,
-                  [64'hffff_ffff_ffff_fff4 : 64'hffff_ffff_ffff_fff6] :/ 6,
-                  64'd100 := 0
-                };
-              }, 1);
+      randomize_result = std::randomize(value) with {
+        value inside {[64'hffff_ffff_ffff_fff1 : 64'hffff_ffff_ffff_fff5]};
+        value dist {
+          [64'hffff_ffff_ffff_fff0 : 64'hffff_ffff_ffff_fff4] := 1,
+          [64'hffff_ffff_ffff_fff4 : 64'hffff_ffff_ffff_fff6] :/ 6,
+          64'd100 := 0
+        };
+      };
+      `checkd(randomize_result, 1);
       `check_range(value, 64'hffff_ffff_ffff_fff1, 64'hffff_ffff_ffff_fff5);
       overlap_counts[int'(value - 64'hffff_ffff_ffff_fff0)]++;
     end
@@ -101,21 +103,23 @@ module t_wide;
     `check_range(overlap_counts[4], 3 * N / 8 - 200, 3 * N / 8 + 200);
     `check_range(overlap_counts[5], 2 * N / 8 - 200, 2 * N / 8 + 200);
     repeat (128) begin
-      `checkd(std::randomize(value) with {
-                value inside {[64'hffff_ffff_ffff_fff8 : 64'hffff_ffff_ffff_ffff],
-                              64'hffff_ffff_ffff_ffff};
-                value != 64'hffff_ffff_ffff_fffd;
-              }, 1);
+      randomize_result = std::randomize(value) with {
+        value inside {[64'hffff_ffff_ffff_fff8 : 64'hffff_ffff_ffff_ffff],
+                      64'hffff_ffff_ffff_ffff};
+        value != 64'hffff_ffff_ffff_fffd;
+      };
+      `checkd(randomize_result, 1);
       `checkd(value - 64'hffff_ffff_ffff_fff8 <= 64'd7, 1);
       `checkd(value != 64'hffff_ffff_ffff_fffd, 1);
     end
     // One independent free scalar may accompany an independently pinned scalar.
     for (int i = 0; i < 128; i++) begin
       expected = i - 64;
-      `checkd(std::randomize(value, pinned) with {
-                value inside {[64'hffff_ffff_ffff_ff00 : 64'hffff_ffff_ffff_ffff]};
-                pinned == expected;
-              }, 1);
+      randomize_result = std::randomize(value, pinned) with {
+        value inside {[64'hffff_ffff_ffff_ff00 : 64'hffff_ffff_ffff_ffff]};
+        pinned == expected;
+      };
+      `checkd(randomize_result, 1);
       `checkd(value - 64'hffff_ffff_ffff_ff00 <= 64'd255, 1);
       `checkd(pinned, expected);
     end
@@ -138,27 +142,31 @@ module t_wide;
     `checkd(pick(value, 9, 8), 0);
     `checkd(value, 64'h1234_5678_9abc_def0);
     // Full 2^64 cardinality cannot masquerade as zero or a power-of-two proposal.
-    `checkd(std::randomize(value) with {
-              value inside {[64'd0 : 64'hffff_ffff_ffff_ffff]};
-              soft value dist {[64'd0 : 64'hffff_ffff_ffff_ffff] :/ 1};
-            }, 0);
+    randomize_result = std::randomize(value) with {
+      value inside {[64'd0 : 64'hffff_ffff_ffff_ffff]};
+      soft value dist {[64'd0 : 64'hffff_ffff_ffff_ffff] :/ 1};
+    };
+    `checkd(randomize_result, 0);
     `checkd(value, 64'h1234_5678_9abc_def0);
     // A full uniform domain also falls back when its finite count wraps to zero.
-    `checkd(std::randomize(value) with {
-              value inside {[64'd0 : 64'hffff_ffff_ffff_ffff]};
-            }, 0);
+    randomize_result = std::randomize(value) with {
+      value inside {[64'd0 : 64'hffff_ffff_ffff_ffff]};
+    };
+    `checkd(randomize_result, 0);
     `checkd(value, 64'h1234_5678_9abc_def0);
     // A := bucket of cardinality2^64 must not reuse its zero-sized proposal.
-    `checkd(std::randomize(value) with {
-              value dist {[64'd0 : 64'hffff_ffff_ffff_ffff] := 1};
-            }, 0);
+    randomize_result = std::randomize(value) with {
+      value dist {[64'd0 : 64'hffff_ffff_ffff_ffff] := 1};
+    };
+    `checkd(randomize_result, 0);
     `checkd(value, 64'h1234_5678_9abc_def0);
     // A single power-of-two bucket has an exact uniform proposal, so its
     // common weight need not be multiplied into a potentially huge total.
-    `checkd(std::randomize(value) with {
-              value inside {[64'd0 : 64'd7]};
-              value dist {[64'd0 : 64'd7] := 64'h8000_0000_0000_0000};
-            }, 1);
+    randomize_result = std::randomize(value) with {
+      value inside {[64'd0 : 64'd7]};
+      value dist {[64'd0 : 64'd7] := 64'h8000_0000_0000_0000};
+    };
+    `checkd(randomize_result, 1);
     `checkd(value <= 64'd7, 1);
     value = 64'h1234_5678_9abc_def0;
     // A state zero-weight source bucket has no recorded single-bucket proposal;
@@ -179,12 +187,14 @@ module t_slice;
     int band_counts[3];
     int restricted_counts[3];
     bit [63:0] previous;
+    int randomize_result;
     zero_pins = new;
     nonzero_pins = new;
     gap = new;
     foreach (band_counts[i]) band_counts[i] = 0;
     repeat (N) begin
-      `checkd(zero_pins.randomize(), 1);
+      randomize_result = zero_pins.randomize();
+      `checkd(randomize_result, 1);
       `checkd(zero_pins.addr[63:32], 32'b0);
       `checkd(zero_pins.addr[12:0], 13'b0);
       if (zero_pins.addr[31:13] < 19'd52429) band_counts[0]++;
@@ -195,15 +205,17 @@ module t_slice;
     // Nonzero fixed bits are not copied from the previous random storage value.
     repeat (128) begin
       nonzero_pins.addr = ~nonzero_pins.addr;
-      `checkd(nonzero_pins.randomize(), 1);
+      randomize_result = nonzero_pins.randomize();
+      `checkd(randomize_result, 1);
       `checkd(nonzero_pins.addr[63:32], 32'h8123_abcd);
       `checkd(nonzero_pins.addr[12:0], 13'h1555);
     end
     foreach (restricted_counts[i]) restricted_counts[i] = 0;
     repeat (N) begin
-      `checkd(nonzero_pins.randomize() with {
-                addr[31:13] inside {19'd0, 19'd52429, 19'd471859};
-              }, 1);
+      randomize_result = nonzero_pins.randomize() with {
+        addr[31:13] inside {19'd0, 19'd52429, 19'd471859};
+      };
+      `checkd(randomize_result, 1);
       `checkd(nonzero_pins.addr[63:32], 32'h8123_abcd);
       `checkd(nonzero_pins.addr[12:0], 13'h1555);
       case (nonzero_pins.addr[31:13])
@@ -220,22 +232,26 @@ module t_slice;
                  64'd52429 * N / 64'd891289 + 200);
     `check_range(longint'(restricted_counts[2]), 64'd419430 * N / 64'd891289 - 200,
                  64'd419430 * N / 64'd891289 + 200);
-    `checkd(nonzero_pins.randomize() with {
-              soft addr[31:13] inside {19'd1, 19'd2};
-            }, 1);
+    randomize_result = nonzero_pins.randomize() with {
+      soft addr[31:13] inside {19'd1, 19'd2};
+    };
+    `checkd(randomize_result, 1);
     `checkd(nonzero_pins.addr[31:13] inside {19'd1, 19'd2}, 1);
     nonzero_pins.c_banded.constraint_mode(0);
     repeat (32) begin
-      `checkd(nonzero_pins.randomize(), 1);
+      randomize_result = nonzero_pins.randomize();
+      `checkd(randomize_result, 1);
       `checkd(nonzero_pins.addr[63:32], 32'h8123_abcd);
       `checkd(nonzero_pins.addr[12:0], 13'h1555);
     end
     previous = nonzero_pins.addr;
-    `checkd(nonzero_pins.randomize() with {addr[63:32] == 32'h0123_abcd;}, 0);
+    randomize_result = nonzero_pins.randomize() with {addr[63:32] == 32'h0123_abcd;};
+    `checkd(randomize_result, 0);
     `checkd(nonzero_pins.addr, previous);
     // A missing low-bit pin is an unsupported projection, not an implicit zero.
     gap.addr = 64'h1234_5678_9abc_def0;
-    `checkd(gap.randomize(), 0);
+    randomize_result = gap.randomize();
+    `checkd(randomize_result, 0);
     `checkd(gap.addr, 64'h1234_5678_9abc_def0);
     $write("*-* All Finished *-*\n");
     $finish;
@@ -252,13 +268,15 @@ module t_fast_diag;
     FastWideSlice pins;
     int value;
     bit [63:0] previous;
+    int randomize_result;
     value = 77;
     `checkd(pick_width(value, 32), 0);
     `checkd(value, 77);
     pins = new;
     pins.addr = 64'h0123_4567_89ab_cdef;
     previous = pins.addr;
-    `checkd(pins.randomize() with {addr[63:32] == 32'd1;}, 0);
+    randomize_result = pins.randomize() with {addr[63:32] == 32'd1;};
+    `checkd(randomize_result, 0);
     `checkd(pins.addr, previous);
     $write("*-* All Finished *-*\n");
     $finish;
