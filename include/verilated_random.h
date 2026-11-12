@@ -342,6 +342,8 @@ class VlRandomizer VL_NOT_FINAL {
         bool isDist;
         bool isEnum;  // This item supplies the complete enum domain
         FastRanges ranges;
+        QData proposal = 0;  // Ordered coordinate of the original procedural draw
+        bool hasProposal = false;
     };
     std::vector<FastConstraint> m_fastConstraints;
     bool m_fastDisabled = false;  // At least one original item cannot be represented
@@ -480,6 +482,17 @@ public:
     void fast_range(QData lo, QData hi, QData weight, QData divisor) {
         if (lo <= hi && weight) {
             m_fastConstraints.back().ranges.push_back({lo, hi, weight, divisor});
+        }
+    }
+    /// Record a single-range procedural pick at its original evaluation point.
+    template <typename T>
+    void fast_dist_pick(T& var, QData bits) {
+        for (auto it = m_fastConstraints.rbegin(); it != m_fastConstraints.rend(); ++it) {
+            if (!it->isDist || it->datap != &var) continue;
+            it->proposal = bits & ((QData{1} << it->width) - 1);
+            if (it->isSigned) it->proposal ^= QData{1} << (it->width - 1);
+            it->hasProposal = true;
+            return;
         }
     }
     /// Keep the solver path when any original constraint item is unsupported.
