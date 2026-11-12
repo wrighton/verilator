@@ -326,6 +326,8 @@ public:
 // bucket draw plus SMT membership/soft choices. Unsupported original items
 // explicitly disable the optimization for the whole invocation.
 
+using FastDistGens = std::unordered_map<const AstDist*, AstVar*>;
+
 class FastConstraintBuilder final {
     struct Range final {
         uint64_t lo;
@@ -856,7 +858,8 @@ public:
     ~FastConstraintBuilder() {
         for (AstNodeExpr* const exprp : m_constants) VL_DO_DANGLING(exprp->deleteTree(), exprp);
     }
-    static AstNodeStmt* apply(AstNode* itemsp, AstVar* genp, bool allow = true) {
+    static AstNodeStmt* apply(AstNode* itemsp, AstVar* genp, bool allow = true,
+                              FastDistGens* distGensp = nullptr) {
         if (!allow || !v3Global.opt.fConstraintFast() || v3Global.opt.fourstate()) {
             const FastConstraintBuilder builder{genp};
             return builder.newCallp(itemsp->fileline(), VCMethod::RANDOMIZER_FAST_DISABLE)
@@ -870,6 +873,13 @@ public:
                       ? builder.build(VN_AS(itemp, ConstraintExpr))
                       : builder.newCallp(itemp->fileline(), VCMethod::RANDOMIZER_FAST_DISABLE)
                             ->makeStmt();
+            if (distGensp && builder.m_supported) {
+                if (const AstConstraintExpr* const exprp = VN_CAST(itemp, ConstraintExpr)) {
+                    if (AstDist* const distp = VN_CAST(exprp->exprp(), Dist)) {
+                        distGensp->emplace(distp, genp);
+                    }
+                }
+            }
             stmtsp = AstNode::addNext(stmtsp, stmtp);
         }
         return stmtsp;
@@ -5193,6 +5203,7 @@ public:
 
 class SolverSmtLowering final : public V3SolverLowering {
     // STATE
+    FastDistGens m_fastDistGens;  // Original eligible dist -> generator recording its draw
     int m_distNum = 0;  // Dist bucket variable counter within a class for var naming
     std::set<std::string> m_writtenVars;  // Track write_var calls per class to avoid duplicates
     // m_writtenVars of each class, with those of its base classes
@@ -6043,7 +6054,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         return new AstConstraintIf{fl, new AstRedOr{fl, gatep}, chainp, nullptr};
     }
 
-    AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp) {
+    AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp, bool recordPick) {
         FileLine* const fl = distp->fileline();
         AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
         const int distWidth = distp->exprp()->width();
@@ -6074,7 +6085,36 @@ class SolverSmtLowering final : public V3SolverLowering {
         } else {
             offsetp = new AstCCast{fl, offsetp, distWidth};
         }
-        AstNodeExpr* const valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
+        AstNodeExpr* valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
+        const auto fastIt = m_fastDistGens.find(distp);
+        if (recordPick && fastIt != m_fastDistGens.end()) {
+            // Record at the original RHS evaluation point, not hoisted across a
+            // mode/condition/solve round. The solver fallback sees the same value.
+            AstVar* const pickVarp
+                = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vdist_pick"),
+                             distp->exprp()->dtypep()};
+            pickVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            pickVarp->isInternal(true);
+            AstBegin* const blockp
+                = new AstBegin{fl, m_uniqueNames.get("__Vdist_pick_block"), nullptr, true};
+            blockp->addDeclsp(pickVarp);
+            blockp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, pickVarp, VAccess::WRITE}, valuep});
+            AstVar* const genp = fastIt->second;
+            AstCMethodHard* const recordp = new AstCMethodHard{
+                fl,
+                new AstVarRef{fl, VN_CAST(genp->user2p(), NodeModule), genp, VAccess::READWRITE},
+                VCMethod::RANDOMIZER_FAST_DIST_PICK};
+            AstNodeExpr* const targetp = distp->exprp()->cloneTreePure(false);
+            if (AstVarRef* const refp = VN_CAST(targetp, VarRef)) refp->access(VAccess::READWRITE);
+            if (AstMemberRef* const refp = VN_CAST(targetp, MemberRef))
+                refp->access(VAccess::READWRITE);
+            recordp->addPinsp(targetp);
+            recordp->addPinsp(new AstVarRef{fl, pickVarp, VAccess::READ});
+            recordp->dtypeSetVoid();
+            blockp->addStmtsp(recordp->makeStmt());
+            valuep = new AstExprStmt{fl, blockp, new AstVarRef{fl, pickVarp, VAccess::READ}};
+        }
         AstNodeExpr* const eqp = new AstEq{fl, distExprCopyp, valuep};
         eqp->user1(true);
         return eqp;
@@ -6093,7 +6133,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             if (irp && (distBoundRefsRandVar(irp->lhsp()) || distBoundRefsRandVar(irp->rhsp()))) {
                 constraintExprp = newDistRangeMembership(distp, irp);
             } else if (irp) {
-                constraintExprp = newUniformRangePick(distp, irp);
+                constraintExprp = newUniformRangePick(distp, irp, buckets.size() == 1);
             } else {
                 AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
                 constraintExprp
@@ -6247,6 +6287,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             chainp = gateFrozenDist(chainp, distp, randModeVarp);
 
             // Hard membership precedes the soft bucket chain in the constraint list.
+            m_fastDistGens.erase(distp);  // The original dist is deleted with its expression
             constrExprp->replaceWith(membershipp);
             VL_DO_DANGLING(pushDeletep(constrExprp), constrExprp);
             if (chainp) membershipp->addNextHere(chainp);
@@ -6750,8 +6791,8 @@ public:
                 if (constrp->itemsp()) {
                     // Capture the original items under the same mode guard as the
                     // SMT setup. Inherited setup tasks retain their own metadata.
-                    AstNodeStmt* const fastp
-                        = FastConstraintBuilder::apply(constrp->itemsp(), genp);
+                    AstNodeStmt* const fastp = FastConstraintBuilder::apply(
+                        constrp->itemsp(), genp, true, &m_fastDistGens);
                     taskp->addStmtsp(wrapIfConstraintMode(nodep, constrp, fastp));
                     expandUniqueElementList(constrp->itemsp());
                 }
@@ -7011,7 +7052,8 @@ public:
         AstBegin* const setupBlockp
             = new AstBegin{nodep->fileline(), "__Vsetup_constraints", holderp, true};
         // Analyze before dist loses its membership/weight/soft-priority structure.
-        randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(holderp->declsp(), localGenp));
+        randomizeFuncp->addStmtsp(
+            FastConstraintBuilder::apply(holderp->declsp(), localGenp, true, &m_fastDistGens));
         // Dist bucket draws go into the function, ahead of the constraints reading them
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              randModeVarp);
@@ -7390,7 +7432,7 @@ public:
             fastArgs &= VN_IS(exprp, VarRef) || VN_IS(exprp, MemberRef);
         }
         randomizeFuncp->addStmtsp(
-            FastConstraintBuilder::apply(holderp->declsp(), stdrandp, fastArgs));
+            FastConstraintBuilder::apply(holderp->declsp(), stdrandp, fastArgs, &m_fastDistGens));
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              nullptr);
         randomizeFuncp->addStmtsp(setupBlockp);

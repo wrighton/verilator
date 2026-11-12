@@ -1084,6 +1084,17 @@ static QData vl_fastBelow(VlRNG& rngr, QData bound) {
 
 bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
                               QData& valuer) {
+    // A full, single power-of-two range has an unbiased procedural pick already.
+    // Reuse it without an extra draw, preserving width-independent global RNG use.
+    if (distp && distp->hasProposal && distp->ranges.size() == 1 && domain.size() == 1
+        && domain[0].lo == distp->ranges[0].lo && domain[0].hi == distp->ranges[0].hi) {
+        const QData count = domain[0].hi - domain[0].lo + 1;
+        if (!(count & (count - 1)) && distp->proposal >= domain[0].lo
+            && distp->proposal <= domain[0].hi) {
+            valuer = distp->proposal;
+            return true;
+        }
+    }
     const FastRanges ranges = distp ? fastIntersect(distp->ranges, domain) : domain;
     // Convert rational :/ per-value weights to exact integer masses. No floating
     // point rounding and no rejection from the original (possibly huge) domain.
