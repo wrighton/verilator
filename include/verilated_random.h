@@ -248,6 +248,7 @@ public:
 };
 
 class VlSolverSession;
+enum class VlSolverStatus : uint8_t;
 
 //=============================================================================
 // Object holding constraints and variable references.
@@ -390,7 +391,8 @@ class VlRandomizer VL_NOT_FINAL {
         return result;
     }
     // Assert the maximal compatible soft-constraint set onto the open session.
-    void relaxSoftConstraints(VlSolverSession& sess);
+    // Return SAT when processing succeeded; UNKNOWN or FAIL never drops a soft constraint.
+    VlSolverStatus relaxSoftConstraints(VlSolverSession& sess);
     // Indices of the "__Va<N>" literals named by (get-unsat-assumptions).
     std::vector<int> readUnsatAssumptions(VlSolverSession& sess);
     void reportUnsatSetup(VlSolverSession& sess, const std::vector<std::string>& uniqueExprs);
