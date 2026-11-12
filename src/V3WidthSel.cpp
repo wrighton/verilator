@@ -354,9 +354,14 @@ class WidthSelVisitor final : public VNVisitor {
         // This select style has a (msb or lsb) and width
         UINFO(6, "SELEXTRACT " << nodep);
         // UINFOTREE(9, nodep, "", "SELEX0");
-        // Below 2 lines may change nodep->widthp()
-        V3Const::constifyParamsNoWarnEdit(nodep->leftp());  // May relink pointed to node
-        V3Const::constifyParamsNoWarnEdit(nodep->rightp());  // May relink pointed to node
+        // Queue bounds are runtime expressions (IEEE 1800-2023 7.10.1).
+        if (VN_IS(nodep->fromp()->dtypep()->skipRefp(), QueueDType)) {
+            V3Width::widthParamsEdit(nodep->leftp());  // May relink pointed to node
+            V3Width::widthParamsEdit(nodep->rightp());  // May relink pointed to node
+        } else {
+            V3Const::constifyParamsNoWarnEdit(nodep->leftp());  // May relink pointed to node
+            V3Const::constifyParamsNoWarnEdit(nodep->rightp());  // May relink pointed to node
+        }
         // UINFOTREE(9, nodep, "", "SELEX3");
         AstNodeExpr* const fromp = nodep->fromp()->unlinkFrBack();
         const FromData fromdata = fromDataForArray(nodep, fromp);
