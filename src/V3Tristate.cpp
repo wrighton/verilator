@@ -59,8 +59,8 @@
 //
 // Another thing done in this phase is signal strength handling.
 //
-// Currently they are only supported in assignments and gates parsed as assignments (see verilog.y)
-// when any of the cases occurs:
+// The following legacy non-interface route supports strengths in assignments and gates parsed
+// as assignments (see verilog.y) when either case occurs:
 // - it is possible to statically resolve all drivers,
 // - all assignments that passed the static resolution have symmetric strengths (the same strength
 // is related to both 0 and 1 values).
@@ -92,7 +92,7 @@
 // - Then all not stronger assignments can be removed.
 //
 // All assignments that are stronger than the strongest with non-tristate RHS are then tried to be
-// handled dynamically. Currently it is supported only on assignments with symmetric strengths.
+// handled dynamically. On this legacy route, dynamic resolution requires symmetric strengths.
 // In this case, the exact value of the RHS doesn't matter. It only matters if it equals z or not.
 // Such assignments are handled by changing the values to z of these bits that are overwritten by
 // stronger assignments. Then all assignments can be aggregated as they would have equal strengths
@@ -111,6 +111,16 @@
 // orp = orp | (var__strength & ~enp)
 // enp = enp | var__strength__en,
 // where orp is aggregated value and enp is aggregated __en value.
+//
+// Ordinary non-wired, non-I/O interface NETs also retain each driver's computed DATA/EN and
+// captured strength0/strength1. Asymmetric continuous drivers first split their enable into
+// EN&~DATA at strength0 and EN&DATA at strength1. Within one module/target/dotted/inlined/modport
+// source context, actual-rank buckets then OR DATA&EN and EN, emitting one pair per occupied rank.
+// Local rank pairs live in the interface; external pairs write interface contribution slots.
+// The receiver masks weaker contributions per bit with cumulative higher-rank active enables.
+// Equal-rank DATA uses the existing two-state OR approximation, not general X resolution.
+// Distinct inlined contexts, including generate iterations, are not coalesced; repeated instances
+// of one driving module on one target can still share template slots.
 //
 // There is a possible problem with equally strong assignments, because multiple assignments with
 // the same strength, but different values should result in x value, but these values are
@@ -435,6 +445,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstNodeVarRef* m_enVarrefp;  // Variable reference within m_enLhsp to retarget
         AstNodeExpr* m_enRhsp;  // Procedural enable value matching m_enLhsp
         VStrength m_strength;  // Drive strength of the assignment/procedural write
+        VStrength m_strength0;  // Source strength for zero, before retargeting
+        VStrength m_strength1;  // Source strength for one, before retargeting
         AstDelay* m_delayp;  // Explicit delay on the continuous assignment
         RefStrength(AstNodeVarRef* varrefp, AstNodeAssign* assignp,
                     const AstNodeProcedure* procedurep, AstNodeExpr* enLhsp,
@@ -447,7 +459,16 @@ class TristateVisitor final : public TristateBaseVisitor {
             , m_enVarrefp{enVarrefp}
             , m_enRhsp{enRhsp}
             , m_strength{strength}
-            , m_delayp{delayp} {}
+            , m_strength0{strength}
+            , m_strength1{strength}
+            , m_delayp{delayp} {
+            if (AstAssignW* const assignWp = VN_CAST(assignp, AssignW)) {
+                if (AstStrengthSpec* const specp = assignWp->strengthSpecp()) {
+                    m_strength0 = specp->strength0();
+                    m_strength1 = specp->strength1();
+                }
+            }
+        }
     };
     struct LhsProjection final {
         AstNodeExpr* m_lhsp;  // LHS giving the enable assign
@@ -490,11 +511,32 @@ class TristateVisitor final : public TristateBaseVisitor {
     AstNodeAssign* m_assignp = nullptr;  // Current assignment
     const AstNodeProcedure* m_procedurep = nullptr;  // Current procedural process
     TristateGraph m_tgraph;  // Logic graph
-    // Map: interface AstVar* -> list of per-module (enVarp, outVarp) contribution pairs
-    std::map<AstVar*, std::vector<std::pair<AstVar*, AstVar*>>> m_ifaceContribs;
+    struct IfaceRankBucket final {
+        AstNodeExpr* datap = nullptr;  // Scratch roots consumed by the rank assignments
+        AstNodeExpr* enp = nullptr;
+    };
+    struct IfaceExportContext final {
+        AstNodeModule* modp;  // Module containing the driver
+        AstVar* targetp;  // Canonical interface net
+        string dotted;
+        string inlinedDots;
+        AstModport* modportp;
+        std::array<IfaceRankBucket, VStrength::SUPPLY + 1> ranks{};
+    };
+    struct IfaceContribution final {
+        VStrength strength;  // Rank preserved until all instance drivers meet
+        AstVar* enVarp;  // Packed active-driver mask, owned by the interface
+        AstVar* outVarp;  // Packed drive data for this rank, owned by the interface
+    };
+    // The key groups interface templates; slot VarXRefs retain actual instance identity.
+    std::unordered_map<AstVar*, std::vector<IfaceContribution>> m_ifaceContribs;
+    // Retain first-discovery order instead of iterating the unordered lookup map.
+    // No absolute address-independent traversal order is claimed here.
+    std::vector<AstVar*> m_ifaceContribVarps;
 
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
+    VDouble0 m_statIfacePairs;  // External rank pairs, not individual drivers
 
     // METHODS
     string dbgState() const {
@@ -560,15 +602,20 @@ class TristateVisitor final : public TristateBaseVisitor {
         // Otherwise return the previous output enable
         return VN_AS(nodep->user1p(), NodeExpr);
     }
+    // Append a reference when the caller already knows this variable is not listed.
+    static void addModportVarRef(AstModport* const modportp, AstVar* const varp,
+                                 const VDirection dir) {
+        AstModportVarRef* const mvrp = new AstModportVarRef{varp->fileline(), varp->name(), dir};
+        mvrp->varp(varp);
+        modportp->addVarsp(mvrp);
+    }
     // Add a ModportVarRef for varp to modportp if not already present
     void addModportVarRefIfMissing(AstModport* modportp, AstVar* varp, VDirection dir) {
         for (AstNode* const mrp : modportp->varspList()) {
             AstModportVarRef* const mvrp = VN_CAST(mrp, ModportVarRef);
             if (mvrp && mvrp->varp() == varp) return;  // Already present
         }
-        AstModportVarRef* const mvrp = new AstModportVarRef{varp->fileline(), varp->name(), dir};
-        mvrp->varp(varp);
-        modportp->addVarsp(mvrp);
+        addModportVarRef(modportp, varp, dir);
     }
     AstVar* getCreateEnVarp(AstVar* invarp, bool isTop) {
         // Return the master __en for the specified input variable
@@ -887,24 +934,17 @@ class TristateVisitor final : public TristateBaseVisitor {
                     // (different VarXRef dotted paths) must be processed separately.
                     // E.g. io_ifc.d and io_ifc_local.d both target the same AstVar d in
                     // the ifc interface, but each instance needs its own contribution slot.
-                    struct PartitionInfo final {
-                        RefStrengthVec refs;
-                        string inlinedDots;
-                    };
-                    std::map<string, PartitionInfo> partitions;
+                    using IfacePath = std::pair<string, string>;  // Dotted and inlined paths
+                    std::map<IfacePath, RefStrengthVec> partitions;
                     for (const RefStrength& rs : *refsp) {
-                        if (AstVarXRef* const xrefp = VN_CAST(rs.m_varrefp, VarXRef)) {
-                            PartitionInfo& pi = partitions[xrefp->dotted()];
-                            pi.refs.push_back(rs);
-                            if (pi.inlinedDots.empty()) { pi.inlinedDots = xrefp->inlinedDots(); }
-                        } else {
-                            partitions[""].refs.push_back(rs);
-                        }
+                        // Before Scope, a reference to another module is a resolved VarXRef.
+                        AstVarXRef* const xrefp = VN_AS(rs.m_varrefp, VarXRef);
+                        partitions[{xrefp->dotted(), xrefp->inlinedDots()}].push_back(rs);
                     }
                     for (auto& kv : partitions) {
-                        insertTristatesSignal(nodep, invarp, &kv.second.refs, true, kv.first,
-                                              kv.second.inlinedDots,
-                                              findModportForDotted(nodep, kv.first));
+                        insertTristatesSignal(nodep, invarp, &kv.second, true, kv.first.first,
+                                              kv.first.second,
+                                              findModportForDotted(nodep, kv.first.first));
                     }
                 } else if (VN_IS(nodep, Iface) && !invarp->isIO()) {
                     // Local driver in an interface module - use contribution mechanism
@@ -928,7 +968,8 @@ class TristateVisitor final : public TristateBaseVisitor {
 
     void aggregateTriSameStrength(AstNodeModule* nodep, AstVar* const varp, AstVar* const envarp,
                                   RefStrengthVec::iterator beginStrength,
-                                  RefStrengthVec::iterator endStrength) {
+                                  RefStrengthVec::iterator endStrength,
+                                  IfaceExportContext* const ifacep = nullptr) {
         // Separate procedural processes are independent drivers, but ordered assignments within
         // one process form a single driver. Create data and enable variables for each driver, then
         // aggregate independent drivers using | to form assignments to varp and envarp.
@@ -1028,6 +1069,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                 }
             }
 
+            if (ifacep) {
+                // Split each driver before accumulating components at their actual ranks.
+                collectIfaceDriver(*ifacep, *driver.m_refsp.front(), newLhsp, newEnLhsp);
+                continue;
+            }
             // Append this driver to the resolution logic.
             FileLine* const fl = driver.m_refsp.front()->m_varrefp->fileline();
             AstNodeExpr* const ref1p = new AstVarRef{fl, newLhsp, VAccess::READ};
@@ -1040,6 +1086,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             AstNodeExpr* const ref3p = new AstVarRef{fl, newEnLhsp, VAccess::READ};
             enp = (!enp) ? ref3p : new AstOr{ref3p->fileline(), enp, ref3p};
         }
+        if (ifacep) return;  // Interface drivers already have separate rank contributions.
         AstAssignW* const assp = new AstAssignW{
             varp->fileline(), new AstVarRef{varp->fileline(), varp, VAccess::WRITE}, orp};
         UINFO(9, "       newassp " << assp);
@@ -1086,6 +1133,121 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
         }
         m_proceduralEnables.clear();
+    }
+
+    void exportIfaceStrength(const IfaceExportContext& ctx, const VStrength strength,
+                             AstVar* const outVarp, AstVar* const enVarp) {
+        AstNodeModule* const nodep = ctx.modp;
+        AstVar* const invarp = ctx.targetp;
+        const string& dotted = ctx.dotted;
+        const string& inlinedDots = ctx.inlinedDots;
+        AstModport* const modportp = ctx.modportp;
+        invarp->setDfgAllowMultidriveTri();
+        const auto inserted = m_ifaceContribs.emplace(invarp, std::vector<IfaceContribution>{});
+        if (inserted.second) m_ifaceContribVarps.push_back(invarp);
+        std::vector<IfaceContribution>& contribs = inserted.first->second;
+        if (dotted.empty()) {
+            // A local strength group already lives in the interface; preserve its rank.
+            UASSERT_OBJ(nodep == findParentModule(invarp), invarp,
+                        "Local interface driver has another owning module");
+            contribs.push_back({strength, enVarp, outVarp});
+            return;
+        }
+        AstNodeModule* const ifaceModp = findParentModule(invarp);
+        UASSERT_OBJ(ifaceModp, invarp, "Interface contribution without owning module");
+        ++m_statIfacePairs;
+        FileLine* const fl = invarp->fileline();
+        const string name = invarp->name() + "__VtriContrib" + cvtToStr(contribs.size());
+        // These slots exist in every instance of the template, including idle siblings.
+        // Bit-packed enables reset explicitly to zero even under randomized X initialization.
+        AstVar* const contribEnp = new AstVar{fl, VVarType::MODULETEMP, name + "__en",
+                                              VFlagBitPacked{}, invarp->width()};
+        AstVar* const contribOutp = new AstVar{fl, VVarType::MODULETEMP, name + "__out", invarp};
+        contribEnp->setDfgTriLowered();
+        contribOutp->setDfgTriLowered();
+        ifaceModp->addStmtsp(contribEnp);
+        ifaceModp->addStmtsp(contribOutp);
+        if (modportp) {
+            // Both slot variables are newly allocated, so no membership scan is necessary.
+            addModportVarRef(modportp, contribOutp, VDirection::OUTPUT);
+            addModportVarRef(modportp, contribEnp, VDirection::OUTPUT);
+        }
+        AstAssignW* const outp
+            = new AstAssignW{fl, newVarXRef(fl, contribOutp, dotted, VAccess::WRITE, inlinedDots),
+                             new AstVarRef{fl, outVarp, VAccess::READ}};
+        AstAssignW* const enp
+            = new AstAssignW{fl, newVarXRef(fl, contribEnp, dotted, VAccess::WRITE, inlinedDots),
+                             new AstVarRef{fl, enVarp, VAccess::READ}};
+        outp->user2Or(U2_BOTH);
+        enp->user2Or(U2_BOTH);
+        nodep->addStmtsp(new AstAlways{outp});
+        nodep->addStmtsp(new AstAlways{enp});
+        contribs.push_back({strength, contribEnp, contribOutp});
+    }
+
+    static void addIfaceRank(IfaceExportContext& ctx, const VStrength strength,
+                             AstVar* const datap, AstVar* const enp) {
+        IfaceRankBucket& bucket = ctx.ranks[strength];
+        FileLine* const fl = ctx.targetp->fileline();
+        AstNodeExpr* const dataTermp = new AstAnd{fl, new AstVarRef{fl, datap, VAccess::READ},
+                                                  new AstVarRef{fl, enp, VAccess::READ}};
+        AstNodeExpr* const enTermp = new AstVarRef{fl, enp, VAccess::READ};
+        bucket.datap = bucket.datap ? new AstOr{fl, bucket.datap, dataTermp} : dataTermp;
+        bucket.enp = bucket.enp ? new AstOr{fl, bucket.enp, enTermp} : enTermp;
+    }
+
+    void flushIfaceRanks(IfaceExportContext& ctx) {
+        FileLine* const fl = ctx.targetp->fileline();
+        for (int rank = VStrength::SUPPLY; rank >= VStrength::HIGHZ; --rank) {
+            IfaceRankBucket& bucket = ctx.ranks[rank];
+            if (!bucket.enp) continue;
+            const string name = "__VtriRank" + cvtToStr(m_unique++);
+            AstVar* const datap = new AstVar{fl, VVarType::MODULETEMP, name, ctx.targetp};
+            AstVar* const enp = new AstVar{fl, VVarType::MODULETEMP, name + "__en",
+                                           VFlagBitPacked{}, ctx.targetp->width()};
+            datap->setDfgTriLowered();
+            enp->setDfgTriLowered();
+            ctx.modp->addStmtsp(datap);
+            ctx.modp->addStmtsp(enp);
+            AstAssignW* const dataAssignp
+                = new AstAssignW{fl, new AstVarRef{fl, datap, VAccess::WRITE}, bucket.datap};
+            AstAssignW* const enAssignp
+                = new AstAssignW{fl, new AstVarRef{fl, enp, VAccess::WRITE}, bucket.enp};
+            bucket.datap = nullptr;  // The assignments now own both scratch roots.
+            bucket.enp = nullptr;
+            dataAssignp->user2Or(U2_BOTH);
+            enAssignp->user2Or(U2_BOTH);
+            ctx.modp->addStmtsp(new AstAlways{dataAssignp});
+            ctx.modp->addStmtsp(new AstAlways{enAssignp});
+            exportIfaceStrength(ctx, VStrength{rank}, datap, enp);
+        }
+    }
+
+    void collectIfaceDriver(IfaceExportContext& ctx, const RefStrength& ref, AstVar* const datap,
+                            AstVar* const enp) {
+        if (ref.m_procedurep || ref.m_strength0 == ref.m_strength1
+            || ref.m_strength0 == VStrength::HIGHZ || ref.m_strength1 == VStrength::HIGHZ) {
+            addIfaceRank(ctx, ref.m_strength, datap, enp);
+            return;
+        }
+        // Split each continuous driver's actual value before same-rank OR can erase a zero.
+        // Only sampled data/enable variables are read; the user's RHS is never reevaluated.
+        FileLine* const fl = ctx.targetp->fileline();
+        for (int value = 0; value != 2; ++value) {
+            AstNodeExpr* valuep = new AstVarRef{fl, datap, VAccess::READ};
+            if (!value) valuep = new AstNot{fl, valuep};
+            AstVar* const maskp
+                = new AstVar{fl, VVarType::MODULETEMP, "__VtriPolarity" + cvtToStr(m_unique++),
+                             VFlagBitPacked{}, ctx.targetp->width()};
+            maskp->setDfgTriLowered();
+            ctx.modp->addStmtsp(maskp);
+            AstAssignW* const maskAssignp
+                = new AstAssignW{fl, new AstVarRef{fl, maskp, VAccess::WRITE},
+                                 new AstAnd{fl, new AstVarRef{fl, enp, VAccess::READ}, valuep}};
+            maskAssignp->user2Or(U2_BOTH);
+            ctx.modp->addStmtsp(new AstAlways{maskAssignp});
+            addIfaceRank(ctx, value ? ref.m_strength1 : ref.m_strength0, datap, maskp);
+        }
     }
 
     // isIfaceTri: true when the var is a tristate in an interface module (local or external).
@@ -1145,6 +1307,9 @@ class TristateVisitor final : public TristateBaseVisitor {
             return a.m_strength > b.m_strength;
         });
 
+        // Keep actual-rank accumulation across every nominal source-strength group in this
+        // target/path partition. Only the interface route uses these scratch roots.
+        IfaceExportContext ctx{nodep, invarp, ifaceDottedPath, ifaceInlinedDots, ifaceModportp};
         RefStrengthVec::iterator beginStrength = refsp->begin();
         while (beginStrength != refsp->end()) {
             RefStrengthVec::iterator endStrength = beginStrength + 1;
@@ -1152,19 +1317,13 @@ class TristateVisitor final : public TristateBaseVisitor {
                    && endStrength->m_strength == beginStrength->m_strength)
                 ++endStrength;
 
-            FileLine* const fl = beginStrength->m_varrefp->fileline();
-            // For interface tristate vars, uniquify strength var names by including the
-            // interface instance path, since multiple interface instances may have
-            // identically-named tristate signals (e.g. io_ifc.d and io_ifc_mc.d both
-            // create d__strong in the driving module)
-            string strengthPrefix;
-            if (isIfaceTri && !ifaceDottedPath.empty()) {
-                strengthPrefix = ifaceDottedPath;
-                std::replace(strengthPrefix.begin(), strengthPrefix.end(), '.', '_');
-                strengthPrefix += "__";
+            if (isIfaceTri) {
+                aggregateTriSameStrength(nodep, invarp, invarp, beginStrength, endStrength, &ctx);
+                beginStrength = endStrength;
+                continue;
             }
-            const string strengthVarName
-                = strengthPrefix + lhsp->name() + "__" + beginStrength->m_strength.ascii();
+            FileLine* const fl = beginStrength->m_varrefp->fileline();
+            const string strengthVarName = lhsp->name() + "__" + beginStrength->m_strength.ascii();
 
             // var__strength variable
             AstVar* const varStrengthp = new AstVar{fl, VVarType::MODULETEMP, strengthVarName,
@@ -1202,66 +1361,8 @@ class TristateVisitor final : public TristateBaseVisitor {
             beginStrength = endStrength;
         }
 
-        // For interface tristate vars, store per-module contributions for later combining.
-        // The interface module owns the contribution vars; resolution happens in
-        // combineIfaceContribs() after all modules are processed.
         if (isIfaceTri) {
-            // This net intentionally has multiple contributors; DFG should not emit
-            // MULTIDRIVEN warnings for this lowered tristate pattern.
-            invarp->setDfgAllowMultidriveTri();
-            AstNodeModule* const ifaceModp = findParentModule(invarp);
-            UASSERT_OBJ(ifaceModp, invarp, "Interface tristate var has no parent module");
-            const int contribIdx = static_cast<int>(m_ifaceContribs[invarp].size());
-            FileLine* const fl = invarp->fileline();
-
-            // Create contribution vars in the interface module
-            AstVar* const contribOutp = new AstVar{
-                fl, VVarType::MODULETEMP, invarp->name() + "__out" + cvtToStr(contribIdx), invarp};
-            contribOutp->setDfgTriLowered();
-            UINFO(9, "       iface contribOut " << contribOutp);
-            ifaceModp->addStmtsp(contribOutp);
-
-            AstVar* const contribEnp = new AstVar{
-                fl, VVarType::MODULETEMP, invarp->name() + "__en" + cvtToStr(contribIdx), invarp};
-            contribEnp->setDfgTriLowered();
-            UINFO(9, "       iface contribEn " << contribEnp);
-            ifaceModp->addStmtsp(contribEnp);
-
-            // If the driving module accesses the interface through a modport,
-            // add the new contribution vars to the modport so VarXRefs
-            // can be resolved by V3LinkDot through the modport path.
-            if (ifaceModportp) {
-                UINFO(9, "       adding to modport " << ifaceModportp->name());
-                addModportVarRefIfMissing(ifaceModportp, contribOutp, VDirection::OUTPUT);
-                addModportVarRefIfMissing(ifaceModportp, contribEnp, VDirection::OUTPUT);
-            }
-
-            // Assign drive value and enable to contribution vars.
-            // External drivers use VarXRef; local drivers use VarRef.
-            {
-                AstNodeVarRef* const lhsp
-                    = ifaceDottedPath.empty() ? static_cast<AstNodeVarRef*>(
-                                                    new AstVarRef{fl, contribOutp, VAccess::WRITE})
-                                              : static_cast<AstNodeVarRef*>(
-                                                    newVarXRef(fl, contribOutp, ifaceDottedPath,
-                                                               VAccess::WRITE, ifaceInlinedDots));
-                AstAssignW* const assp = new AstAssignW{fl, lhsp, orp};
-                assp->user2Or(U2_BOTH);
-                nodep->addStmtsp(new AstAlways{assp});
-            }
-            {
-                AstNodeVarRef* const lhsp
-                    = ifaceDottedPath.empty() ? static_cast<AstNodeVarRef*>(
-                                                    new AstVarRef{fl, contribEnp, VAccess::WRITE})
-                                              : static_cast<AstNodeVarRef*>(
-                                                    newVarXRef(fl, contribEnp, ifaceDottedPath,
-                                                               VAccess::WRITE, ifaceInlinedDots));
-                AstAssignW* const assp = new AstAssignW{fl, lhsp, enp};
-                assp->user2Or(U2_BOTH);
-                nodep->addStmtsp(new AstAlways{assp});
-            }
-
-            m_ifaceContribs[invarp].push_back({contribEnp, contribOutp});
+            flushIfaceRanks(ctx);  // Export at most one pair per actual rank in this partition.
             return;
         }
 
@@ -1340,6 +1441,13 @@ class TristateVisitor final : public TristateBaseVisitor {
         return false;
     }
 
+    bool isIfaceNetLhs(AstNodeExpr* lhsp) {
+        while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
+        AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef);
+        return refp && refp->varp()->isNet() && !refp->varp()->isWiredNet()
+               && !refp->varp()->isIO() && VN_IS(findParentModule(refp->varp()), Iface);
+    }
+
     void addToAssignmentList(AstAssignW* nodep) {
         if (AstVarRef* const varRefp = VN_CAST(nodep->lhsp(), VarRef)) {
             if (varRefp->varp()->isNet()) {
@@ -1348,6 +1456,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                 nodep->strengthSpecp()->unlinkFrBack()->deleteTree();
             }
         } else if (nodep->strengthSpecp()) {
+            // Interface NET contributions retain strength until the instance resolver. Packed
+            // selects already carry their enable footprint through the ordinary tristate path.
+            if (isIfaceNetLhs(nodep->lhsp())) return;
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Assignments with signal strength with LHS of type: "
                               << nodep->lhsp()->prettyTypeNameQ());
@@ -1928,11 +2039,10 @@ class TristateVisitor final : public TristateBaseVisitor {
                         // Only drives the value whose strength is not highz
                         m_currentStrength = std::max(specp->strength0(), specp->strength1());
                     } else if (specp->strength0() != specp->strength1()) {
-                        // Unequal strengths are not a problem if the assignment is the only
-                        // assignment to its variable. Unfortunately, m_assigns map stores only
-                        // assignments to var. Selects are not inserted, so they may be handled
-                        // improperly
-                        if (!isOnlyAssignmentIsToLhsVar(assignWp)) {
+                        // Interface drivers retain both source ranks and split their sampled
+                        // data/enable before aggregation. The legacy non-interface boundary stays.
+                        if (!isIfaceNetLhs(assignWp->lhsp())
+                            && !isOnlyAssignmentIsToLhsVar(assignWp)) {
                             assignWp->v3warn(
                                 E_UNSUPPORTED,
                                 "Unsupported: Unable to resolve unequal strength specifier");
@@ -2524,6 +2634,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                 nodep->addNextHere(newp);
                 // We'll iterate on the new AstPull later
             }
+            if (VN_IS(m_modp, Iface) && nodep->isNet() && !nodep->isWiredNet() && !nodep->isIO()
+                && nodep->hasStrengthAssignment()) {
+                // Parent modules must see this net before any plain strong driver is visited.
+                m_varAux(nodep).ifaceTristate = true;
+                m_tgraph.setTristate(nodep);
+            }
             if (nodep->isInout()) {
                 //|| varp->isOutput()
                 // Note unconnected output only changes behavior vs. previous
@@ -2623,33 +2739,51 @@ class TristateVisitor final : public TristateBaseVisitor {
         // After all modules have been processed, combine per-module contributions
         // for each interface tristate signal into final resolution logic.
         // Key is the canonical AstVar in the interface module (shared across instances).
-        for (const std::pair<AstVar* const, std::vector<std::pair<AstVar*, AstVar*>>>& kv :
-             m_ifaceContribs) {
-            AstVar* const invarp = kv.first;
-            const std::vector<std::pair<AstVar*, AstVar*>>& contribs = kv.second;
+        for (AstVar* const invarp : m_ifaceContribVarps) {
+            const std::vector<IfaceContribution>& contribs = m_ifaceContribs.at(invarp);
             AstNodeModule* const ifaceModp = findParentModule(invarp);
             UASSERT_OBJ(ifaceModp, invarp, "Interface tristate var has no parent module");
             FileLine* const fl = invarp->fileline();
 
             UINFO(8, "  IFACE COMBINE " << contribs.size() << " contribs for " << invarp);
-
-            // Build resolution: d = (out0 & en0) | (out1 & en1) | ... | (~combined_en & pull)
-            AstNodeExpr* orp = nullptr;
-            AstNodeExpr* enp = nullptr;
-
-            for (const std::pair<AstVar*, AstVar*>& contrib : contribs) {
-                AstVar* const contribEnp = contrib.first;
-                AstVar* const contribOutp = contrib.second;
-
-                AstNodeExpr* const outRefp = new AstVarRef{fl, contribOutp, VAccess::READ};
-                AstNodeExpr* const enRefp = new AstVarRef{fl, contribEnp, VAccess::READ};
-                AstNodeExpr* const andp = new AstAnd{fl, outRefp, enRefp};
-
-                orp = (!orp) ? andp : new AstOr{fl, orp, andp};
-
-                AstNodeExpr* const enRef2p = new AstVarRef{fl, contribEnp, VAccess::READ};
-                enp = (!enp) ? enRef2p : new AstOr{fl, enp, enRef2p};
+            // Resolve packed bits at the highest active rank (IEEE 1800-2023 28.12.1).
+            // Same-rank OR retains the existing two-state contention approximation.
+            std::array<std::vector<const IfaceContribution*>, VStrength::SUPPLY + 1> ranks;
+            for (const IfaceContribution& contrib : contribs) {
+                ranks[contrib.strength].push_back(&contrib);
             }
+            AstNodeExpr* orp = nullptr;
+            AstVar* seenVarp = nullptr;
+            for (int rank = VStrength::SUPPLY; rank >= VStrength::HIGHZ; --rank) {
+                if (ranks[rank].empty()) continue;
+                AstNodeExpr* rankDatap = nullptr;
+                AstNodeExpr* rankEnp = nullptr;
+                for (const IfaceContribution* const contribp : ranks[rank]) {
+                    AstNodeExpr* const datap
+                        = new AstAnd{fl, new AstVarRef{fl, contribp->outVarp, VAccess::READ},
+                                     new AstVarRef{fl, contribp->enVarp, VAccess::READ}};
+                    rankDatap = rankDatap ? new AstOr{fl, rankDatap, datap} : datap;
+                    AstNodeExpr* const enp = new AstVarRef{fl, contribp->enVarp, VAccess::READ};
+                    rankEnp = rankEnp ? new AstOr{fl, rankEnp, enp} : enp;
+                }
+                if (seenVarp) {
+                    rankDatap = new AstAnd{
+                        fl, rankDatap, new AstNot{fl, new AstVarRef{fl, seenVarp, VAccess::READ}}};
+                    rankEnp = new AstOr{fl, rankEnp, new AstVarRef{fl, seenVarp, VAccess::READ}};
+                }
+                orp = orp ? new AstOr{fl, orp, rankDatap} : rankDatap;
+                // Materialize the cumulative mask once; never clone a growing prefix tree.
+                seenVarp = new AstVar{fl, VVarType::MODULETEMP,
+                                      invarp->name() + "__VtriSeen" + cvtToStr(rank),
+                                      VFlagBitPacked{}, invarp->width()};
+                seenVarp->setDfgTriLowered();
+                ifaceModp->addStmtsp(seenVarp);
+                AstAssignW* const seenAssp
+                    = new AstAssignW{fl, new AstVarRef{fl, seenVarp, VAccess::WRITE}, rankEnp};
+                seenAssp->user2Or(U2_BOTH);
+                ifaceModp->addStmtsp(new AstAlways{seenAssp});
+            }
+            AstNodeExpr* const enp = new AstVarRef{fl, seenVarp, VAccess::READ};
 
             // Create or get __en var for this interface signal
             AstVar* envarp = VN_CAST(invarp->user1p(), Var);
@@ -2718,6 +2852,7 @@ public:
     }
     ~TristateVisitor() override {
         V3Stats::addStat("Tristate, Tristate resolved nets", m_statTriSigs);
+        V3Stats::addStat("Tristate, External interface rank pairs", m_statIfacePairs);
     }
 };
 
