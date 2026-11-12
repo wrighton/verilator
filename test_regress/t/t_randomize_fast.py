@@ -15,6 +15,7 @@ test.compile(verilator_flags2=['--stats'])
 
 # A real solver cannot run. Successful sampling therefore proves the optimization
 # actually bypasses the solver, rather than adding metadata to the old solve path.
-test.execute(run_env='VERILATOR_SOLVER=/bin/false')
+test.execute(run_env='VERILATOR_SOLVER=/bin/false',
+             all_run_flags=['+verilator+wno+unsatconstr+1'])
 
 test.passes()
