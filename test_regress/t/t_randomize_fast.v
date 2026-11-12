@@ -50,6 +50,15 @@ class Univariate;
   }
 endclass
 
+class SingleRange;
+  rand bit [6:0] x;
+  constraint c {
+    x dist {
+      [7'd3 : 7'd10] :/ 1
+    };
+  }
+endclass
+
 class SignedRange;
   rand signed_t x;
   constraint c {x inside {[-15'sd3 : 15'sd2]};}
@@ -148,6 +157,7 @@ module t;
     choice_t desired_choice;
     bit [6:0] expected_x;
     Univariate univariate;
+    SingleRange single_range;
     SignedRange signed_range;
     RestrictedDist restricted;
     SoftDist soft_dist;
@@ -155,6 +165,7 @@ module t;
     SoftPriority priority_dist;
     SoftIntersection intersection_dist;
     int counts_inside[12];
+    int counts_single[8];
     int counts_signed[6];
     int counts_dist[6];
     int counts_soft[10];
@@ -171,6 +182,7 @@ module t;
     pinned = new;
     inline_pinned = new;
     univariate = new;
+    single_range = new;
     signed_range = new;
     restricted = new;
     soft_dist = new;
@@ -179,6 +191,7 @@ module t;
     intersection_dist = new;
     digest = 0;
     foreach (counts_inside[i]) counts_inside[i] = 0;
+    foreach (counts_single[i]) counts_single[i] = 0;
     foreach (counts_signed[i]) counts_signed[i] = 0;
     foreach (counts_dist[i]) counts_dist[i] = 0;
     foreach (counts_soft[i]) counts_soft[i] = 0;
@@ -196,6 +209,9 @@ module t;
       `checkd(univariate.randomize(), 1);
       `checkd(univariate.x inside {7'd2, 7'd5, 7'd7, 7'd8}, 1);
       counts_inside[int'(univariate.x)]++;
+      `checkd(single_range.randomize(), 1);
+      `check_range(single_range.x, 3, 10);
+      counts_single[int'(single_range.x)-3]++;
       `checkd(signed_range.randomize(), 1);
       `check_range(signed_range.x, -3, 2);
       counts_signed[int'(signed_range.x)+3]++;
@@ -227,6 +243,7 @@ module t;
       if (i inside {2, 5, 7, 8}) `check_range(counts_inside[i], N/ 4 - 200, N/ 4 + 200)
       else `checkd(counts_inside[i], 0);
     end
+    foreach (counts_single[i]) `check_range(counts_single[i], N/ 8 - 200, N/ 8 + 200);
     foreach (counts_signed[i]) `check_range(counts_signed[i], N/ 6 - 200, N/ 6 + 200);
     for (int i = 1; i <= 3; i++) `check_range(counts_dist[i], N/ 8 - 200, N/ 8 + 200);
     `check_range(counts_dist[4], 3 * N/ 8 - 200, 3 * N/ 8 + 200);
