@@ -12,7 +12,7 @@ import vltest_bootstrap
 test.scenarios('vlt')
 test.top_filename = "t/t_constraint.v"
 
-test.compile()
+test.compile(verilator_flags2=['-fno-constraint-fast'])
 
 test.execute(run_env='VERILATOR_SOLVER=someimaginarysolver', fails=True)
 
