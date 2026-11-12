@@ -149,4 +149,12 @@ module t (
   nested_t dynamic_element;
   assign dynamic_element.elements[0] = out;
   initial dynamic_element.elements[index[0]] = 0;
+
+  // The queue receiver is modified by a method, not a continuous queue driver.
+  class source_pool;
+    static bit [6:0] values[$] = '{7'd23};
+  endclass
+  bit [6:0] popped;
+  assign popped = source_pool::values.pop_front();
+  initial $display("%h", popped);
 endmodule
