@@ -175,6 +175,18 @@ class BareFieldStructArray;
   constraint c_other {other;}
 endclass
 
+class ImpliedFlagStructArray;
+  rand BareFlagEntry values[];
+  rand bit all_flags;
+  constraint c_size {values.size() inside {[2 : 4]};}
+  constraint c_imply {
+    foreach (values[i]) {
+      all_flags -> values[i].flag;
+      !values[i].flag -> !all_flags;
+    }
+  }
+endclass
+
 class BooleanStructArray;
   rand PhaseEntries values;
   int count = 3;
@@ -672,6 +684,20 @@ module t;
         `checkd(bare.values.size(), 2)
         `checkd(bare.values[1].flag, 1'b1)
         `checkd(bare.other, 1'b1)
+      end
+    end
+
+    // A bare one-bit field as an implication arm stays a solver variable.
+    begin
+      automatic ImpliedFlagStructArray implied = new;
+      int ok;
+      for (int turn = 0; turn < 20; ++turn) begin
+        ok = implied.randomize();
+        `checkd(ok, 1)
+        foreach (implied.values[i]) if (implied.all_flags) `checkd(implied.values[i].flag, 1'b1)
+        ok = implied.randomize() with {all_flags == 1;};
+        `checkd(ok, 1)
+        foreach (implied.values[i]) `checkd(implied.values[i].flag, 1'b1)
       end
     end
 
