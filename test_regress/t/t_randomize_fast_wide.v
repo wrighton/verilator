@@ -53,6 +53,12 @@ module t_wide;
   function automatic int pick_signed(ref longint value, input longint lo, input longint hi);
     return std::randomize(value) with {value inside {[lo : hi]};};
   endfunction
+  function automatic int mass_fallback(ref longint unsigned value, input int zero_weight);
+    return std::randomize(value) with {
+      value inside {[64'd0 : 64'd7]};
+      value dist {[64'd0 : 64'd7] := 64'h8000_0000_0000_0000, 64'd100 := zero_weight};
+    };
+  endfunction
   initial begin
     longint unsigned value;
     longint unsigned lo;
@@ -100,7 +106,7 @@ module t_wide;
                               64'hffff_ffff_ffff_ffff};
                 value != 64'hffff_ffff_ffff_fffd;
               }, 1);
-      `check_range(value, 64'hffff_ffff_ffff_fff8, 64'hffff_ffff_ffff_ffff);
+      `checkd(value - 64'hffff_ffff_ffff_fff8 <= 64'd7, 1);
       `checkd(value != 64'hffff_ffff_ffff_fffd, 1);
     end
     // One independent free scalar may accompany an independently pinned scalar.
@@ -108,9 +114,9 @@ module t_wide;
       expected = i - 64;
       `checkd(std::randomize(value, pinned) with {
                 value inside {[64'hffff_ffff_ffff_ff00 : 64'hffff_ffff_ffff_ffff]};
-                pinned == local::expected;
+                pinned == expected;
               }, 1);
-      `check_range(value, 64'hffff_ffff_ffff_ff00, 64'hffff_ffff_ffff_ffff);
+      `checkd(value - 64'hffff_ffff_ffff_ff00 <= 64'd255, 1);
       `checkd(pinned, expected);
     end
     // Guard-false at zero and both unsigned extreme endpoints must not wrap validity.
@@ -137,11 +143,27 @@ module t_wide;
               soft value dist {[64'd0 : 64'hffff_ffff_ffff_ffff] :/ 1};
             }, 0);
     `checkd(value, 64'h1234_5678_9abc_def0);
-    // Exact integer mass overflow also falls back without committing storage.
+    // A full uniform domain also falls back when its finite count wraps to zero.
+    `checkd(std::randomize(value) with {
+              value inside {[64'd0 : 64'hffff_ffff_ffff_ffff]};
+            }, 0);
+    `checkd(value, 64'h1234_5678_9abc_def0);
+    // A := bucket of cardinality2^64 must not reuse its zero-sized proposal.
+    `checkd(std::randomize(value) with {
+              value dist {[64'd0 : 64'hffff_ffff_ffff_ffff] := 1};
+            }, 0);
+    `checkd(value, 64'h1234_5678_9abc_def0);
+    // A single power-of-two bucket has an exact uniform proposal, so its
+    // common weight need not be multiplied into a potentially huge total.
     `checkd(std::randomize(value) with {
               value inside {[64'd0 : 64'd7]};
               value dist {[64'd0 : 64'd7] := 64'h8000_0000_0000_0000};
-            }, 0);
+            }, 1);
+    `checkd(value <= 64'd7, 1);
+    value = 64'h1234_5678_9abc_def0;
+    // A state zero-weight source bucket has no recorded single-bucket proposal;
+    // the same legal8-value distribution then reaches exact mass overflow.
+    `checkd(mass_fallback(value, 0), 0);
     `checkd(value, 64'h1234_5678_9abc_def0);
     $write("*-* All Finished *-*\n");
     $finish;
@@ -215,6 +237,29 @@ module t_slice;
     gap.addr = 64'h1234_5678_9abc_def0;
     `checkd(gap.randomize(), 0);
     `checkd(gap.addr, 64'h1234_5678_9abc_def0);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
+endmodule
+
+// Default diagnostics must retain the real source constraints for both new
+// empty-domain forms, rather than silently returning a native failure.
+module t_fast_diag;
+  function automatic int pick_width(ref int value, input int width);
+    return std::randomize(value) with {value inside {[0 : (1 << width) - 1]};};
+  endfunction
+  initial begin
+    FastWideSlice pins;
+    int value;
+    bit [63:0] previous;
+    value = 77;
+    `checkd(pick_width(value, 32), 0);
+    `checkd(value, 77);
+    pins = new;
+    pins.addr = 64'h0123_4567_89ab_cdef;
+    previous = pins.addr;
+    `checkd(pins.randomize() with {addr[63:32] == 32'd1;}, 0);
+    `checkd(pins.addr, previous);
     $write("*-* All Finished *-*\n");
     $finish;
   end
