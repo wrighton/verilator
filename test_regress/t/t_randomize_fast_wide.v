@@ -60,6 +60,8 @@ module t_wide;
     longint signed_value;
     int counts[256];
     int overlap_counts[6];
+    int pinned;
+    int expected;
     for (int epoch = 0; epoch < 2; epoch++) begin
       lo = epoch == 0 ? 64'd0 : 64'hffff_ffff_ffff_ff00;
       hi = lo + 64'd255;
@@ -101,7 +103,17 @@ module t_wide;
       `check_range(value, 64'hffff_ffff_ffff_fff8, 64'hffff_ffff_ffff_ffff);
       `checkd(value != 64'hffff_ffff_ffff_fffd, 1);
     end
-    // Guard-false and both unsigned extreme endpoints must not wrap validity.
+    // One independent free scalar may accompany an independently pinned scalar.
+    for (int i = 0; i < 128; i++) begin
+      expected = i - 64;
+      `checkd(std::randomize(value, pinned) with {
+                value inside {[64'hffff_ffff_ffff_ff00 : 64'hffff_ffff_ffff_ffff]};
+                pinned == local::expected;
+              }, 1);
+      `check_range(value, 64'hffff_ffff_ffff_ff00, 64'hffff_ffff_ffff_ffff);
+      `checkd(pinned, expected);
+    end
+    // Guard-false at zero and both unsigned extreme endpoints must not wrap validity.
     `checkd(pick(value, 64'hffff_ffff_ffff_ffff, 64'hffff_ffff_ffff_ffff), 1);
     `checkd(value, 64'hffff_ffff_ffff_ffff);
     `checkd(pick(value, 0, 0), 1);
