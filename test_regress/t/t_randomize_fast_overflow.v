@@ -25,9 +25,11 @@ endclass
 module t;
   initial begin
     OverflowDist obj;
+    int randomize_result;
     obj = new;
     repeat (16) begin
-      `checkd(obj.randomize(), 1);
+      randomize_result = obj.randomize();
+      `checkd(randomize_result, 1);
       `checkd(
           obj.x inside {
         [32'd0:32'd1000002], [32'd2000000:32'd3000032],
