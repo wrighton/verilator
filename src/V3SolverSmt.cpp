@@ -345,7 +345,7 @@ class FastConstraintBuilder final {
     int m_viewWidth = 0;
     bool m_viewSigned = false;
     bool m_supported = true;
-    std::vector<AstNodeExpr*> m_constants;  // Detached, constified bound copies
+    std::vector<AstNodeExpr*> m_constants;  // Detached bound references and constified copies
 
     static Ranges unite(Ranges ranges) {
         std::sort(ranges.begin(), ranges.end(),
@@ -752,13 +752,9 @@ class FastConstraintBuilder final {
         }
         return new AstExtend{fl, valuep, 64};
     }
-    bool isStateBound(const AstNodeExpr* exprp) const {
-        if (exprp->width() > 64) return false;
-        if (const AstExtend* const extendp = VN_CAST(exprp, Extend))
-            exprp = extendp->lhsp();
-        else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS))
-            exprp = extendp->lhsp();
-        return isStateLeaf(exprp);
+    bool isStateBound(AstNodeExpr* exprp) const {
+        return exprp->width() <= 64 && exprp->dtypep()->skipRefp()->isIntegralOrPacked()
+               && stateExpression(exprp) && !checkedReceiver(exprp);
     }
     AstNodeExpr* newLimitComparep(AstNodeExpr* boundp, uint64_t limit, bool less, bool inclusive,
                                   bool isSigned) const {
@@ -802,9 +798,10 @@ class FastConstraintBuilder final {
     };
     // The lowered inside {[lo:hi]} is a conjunction of one lower and one upper
     // comparison. Clamp in the comparison's type before narrowing to SV storage.
-    bool stateInterval(AstNodeExpr* exprp, StateInterval& interval) {
+    bool stateInterval(AstNodeExpr* exprp, StateInterval& interval, AstBegin* blockp) {
         if (AstLogAnd* const andp = VN_CAST(exprp, LogAnd)) {
-            return stateInterval(andp->lhsp(), interval) && stateInterval(andp->rhsp(), interval);
+            return stateInterval(andp->lhsp(), interval, blockp)
+                   && stateInterval(andp->rhsp(), interval, blockp);
         }
         if (!(VN_IS(exprp, Lt) || VN_IS(exprp, Lte) || VN_IS(exprp, Gt) || VN_IS(exprp, Gte)
               || VN_IS(exprp, LtS) || VN_IS(exprp, LteS) || VN_IS(exprp, GtS)
@@ -819,7 +816,15 @@ class FastConstraintBuilder final {
             boundp = nodep->lhsp();
             reversed = true;
         }
-        if (!isStateBound(boundp)) {
+        if (VN_IS(boundp, Const)) {
+            boundp = constant(boundp);
+            if (!boundp) return false;
+        } else if (isStateBound(boundp)) {
+            // Captured parameters become state arguments. Keep the original
+            // shift/subtract width in a native snapshot, not a widened rewrite.
+            boundp = snapshotBound(blockp, boundp, boundp->dtypep());
+            m_constants.push_back(boundp);
+        } else {
             boundp = constant(boundp);
             if (!boundp) return false;
         }
@@ -868,23 +873,25 @@ class FastConstraintBuilder final {
             return nullptr;
         }
         FileLine* const fl = exprp->fileline();
+        AstBegin* const blockp = new AstBegin{fl, m_names.get("__Vfast_range"), nullptr, true};
         StateInterval interval{new AstConst{fl, AstConst::Unsized64{}, 0},
                                new AstConst{fl, AstConst::Unsized64{}, mask()},
                                new AstConst{fl, AstConst::BitTrue{}}};
-        if (!stateInterval(exprp->exprp(), interval)) {
+        if (!stateInterval(exprp->exprp(), interval, blockp)) {
             VL_DO_DANGLING(interval.lop->deleteTree(), interval.lop);
             VL_DO_DANGLING(interval.hip->deleteTree(), interval.hip);
             VL_DO_DANGLING(interval.validp->deleteTree(), interval.validp);
+            VL_DO_DANGLING(blockp->deleteTree(), blockp);
             return nullptr;
         }
-        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
+        blockp->addStmtsp(newDomainp(fl, {}, exprp->isSoft(), false));
         AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
         rangep->addPinsp(interval.lop);
         rangep->addPinsp(interval.hip);
         rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 1});
         rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 1});
-        stmtp->addNext(new AstIf{fl, interval.validp, rangep->makeStmt()});
-        return stmtp;
+        blockp->addStmtsp(new AstIf{fl, interval.validp, rangep->makeStmt()});
+        return blockp;
     }
     AstNodeExpr* snapshotBound(AstBegin* blockp, AstNodeExpr* valuep, AstNodeDType* dtypep) {
         FileLine* const fl = valuep->fileline();
