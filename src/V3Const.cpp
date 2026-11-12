@@ -29,6 +29,7 @@
 
 #include "V3Ast.h"
 #include "V3Global.h"
+#include "V3MemberMap.h"
 #include "V3Simulate.h"
 #include "V3Stats.h"
 #include "V3String.h"
@@ -5029,6 +5030,53 @@ AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtype
         xnum.setAllBits0();
     }
     return new AstConst{nodep->fileline(), xnum};
+}
+
+AstNodeExpr* V3Const::newSelectedDefaultp(AstNodeExpr* const readp,
+                                          AstNodeExpr* const boundedElementp,
+                                          VMemberMap& memberMap) {
+    AstNodeExpr* defaultp = newDTypeDefaultp(boundedElementp, boundedElementp->dtypep());
+    AstNodeExpr* prefixp = boundedElementp;
+    if (!defaultp && readp != boundedElementp) {
+        // Follow from operands, not back pointers, to retain only this selected value's path.
+        std::vector<AstNodeExpr*> path;
+        for (AstNodeExpr* exprp = readp; exprp != boundedElementp;) {
+            AstNodeExpr* fromp = nullptr;
+            if (const AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                fromp = selp->fromp();
+            } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+                fromp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                fromp = selp->fromp();
+            }
+            UASSERT_OBJ(fromp && exprp->isPure(), readp, "Invalid default read-selection path");
+            path.push_back(exprp);
+            exprp = fromp;
+        }
+        // The outermost declaration initializer overrides nested members' type defaults.
+        // An unrelated unrepresentable sibling must not discard the selected initializer.
+        for (auto it = path.rbegin(); it != path.rend(); ++it) {
+            const AstStructSel* const selp = VN_CAST(*it, StructSel);
+            if (!selp) continue;
+            const AstNodeUOrStructDType* const structp
+                = VN_AS(selp->fromp()->dtypep()->skipRefp(), NodeUOrStructDType);
+            const AstMemberDType* const memberp
+                = VN_AS(memberMap.findMember(structp, selp->name()), MemberDType);
+            if (!memberp->valuep()) continue;
+            defaultp = VN_AS(memberp->valuep(), NodeExpr)->cloneTree(false);
+            prefixp = *it;
+            break;
+        }
+        if (!defaultp) return newDTypeDefaultp(readp, readp->dtypep());
+    }
+    if (!defaultp || readp == prefixp) return defaultp;
+    // Keep symbolic remaining indices as owned expressions; Const only folds constant parts.
+    AstNodeExpr* const defaultReadp = readp->cloneTree(false);
+    AstNode* const prefixCopyp = prefixp->clonep();
+    prefixCopyp->replaceWith(defaultp);
+    VNDeleter deleter;
+    deleter.pushDeletep(prefixCopyp);
+    return constifyEdit(defaultReadp);
 }
 
 void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const fromp,

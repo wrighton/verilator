@@ -42,6 +42,7 @@
 #include "V3Unknown.h"
 
 #include "V3Const.h"
+#include "V3MemberMap.h"
 #include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
@@ -68,6 +69,7 @@ class UnknownVisitor final : public VNVisitor {
     VDouble0 m_statElses;  // Statistic of else branches created for array selects
     V3UniqueNames m_lvboundNames;  // For generating unique temporary variable names
     std::unique_ptr<V3UniqueNames> m_xrandNames;  // For generating unique temporary variable names
+    VMemberMap m_memberMap;  // Member lookup; dtype declarations stay intact during this pass
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -603,21 +605,10 @@ class UnknownVisitor final : public VNVisitor {
                     readp = abovep;
                 }
             }
-            // Preserve member declaration initializers by selecting from the element's default,
-            // not from the final leaf dtype. A containing member's initializer may override that
-            // leaf's own type default.
-            AstNodeExpr* defaultp
-                = lvalue ? nullptr : V3Const::newDTypeDefaultp(nodep, nodep->dtypep());
-            if (defaultp && readp != nodep) {
-                AstNodeExpr* const defaultReadp = readp->cloneTree(false);
-                AstNode* const selectCopyp = nodep->clonep();
-                selectCopyp->replaceWith(defaultp);
-                VL_DO_DANGLING(pushDeletep(selectCopyp), selectCopyp);
-                defaultp = V3Const::constifyEdit(defaultReadp);
-            } else if (!defaultp && !lvalue && readp != nodep) {
-                // Retain the existing leaf fallback for unsupported aggregate defaults.
-                defaultp = V3Const::newDTypeDefaultp(readp, readp->dtypep());
-            }
+            // Preserve declaration initializers and their containing-member overrides on the
+            // pure selected path without broadening whole-aggregate default eligibility.
+            AstNodeExpr* const defaultp
+                = lvalue ? nullptr : V3Const::newSelectedDefaultp(readp, nodep, m_memberMap);
             if (defaultp) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
