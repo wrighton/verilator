@@ -1,0 +1,23 @@
+%Error: t/t_defparam_scope_bad.v:32:20: In defparam, 'u.blk.L' is a local parameter (IEEE 1800-2023 6.20.4)
+   32 |   defparam u.blk.L = 2;   
+      |                    ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_scope_bad.v:33:20: In defparam, 'u.blk.v' is not a parameter
+   33 |   defparam u.blk.v = 2;   
+      |                    ^
+%Error: t/t_defparam_scope_bad.v:34:24: In defparam, 'u.blk.inner' is not a parameter
+   34 |   defparam u.blk.inner = 2;   
+      |                        ^
+%Error: t/t_defparam_scope_bad.v:35:20: In defparam, parameter 'u.blk.Z' never declared
+   35 |   defparam u.blk.Z = 2;   
+      |                    ^
+%Error: t/t_defparam_scope_bad.v:36:18: In defparam, 'u.g.G' is a local parameter (IEEE 1800-2023 6.20.4)
+   36 |   defparam u.g.G = 2;   
+      |                  ^
+%Error: t/t_defparam_scope_bad.v:37:22: In defparam, instance u.blk.v never declared
+   37 |   defparam u.blk.v.P = 2;   
+      |                      ^
+%Error: t/t_defparam_scope_bad.v:38:21: In defparam, 'up.blk.P' is a local parameter (IEEE 1800-2023 6.20.4)
+   38 |   defparam up.blk.P = 2;   
+      |                     ^
+%Error: Exiting due to

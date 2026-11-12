@@ -738,9 +738,9 @@ void VlRandomVar::emitElement(std::ostream& s, int /*j*/) const { s << ' ' << m_
 // Serialize the current runtime value as an SMT-LIB binary literal. Used by
 // randomize(null) to pin a var via `(assert (= var #b...))`. Binary (#b)
 // rather than hex (#x) sidesteps SMT-LIB's hex-width-multiple-of-4 rule.
-void VlRandomVar::emitConcreteValue(std::ostream& s) const {
+void VlRandomVar::emitConcreteValue(std::ostream& s, int j) const {
     const int w = width();
-    const void* const dp = datap(0);
+    const void* const dp = datap(j);
     s << "#b";
     for (int i = w - 1; i >= 0; --i) {
         int bit = 0;
@@ -926,6 +926,8 @@ static uint64_t readVarValueU64(const void* datap, int width) {
 }
 
 void VlRandomizer::recordRandcValues() {
+    // Only the final function-call solve round picks the values
+    if (funcPreRound()) return;
     for (const auto& name : m_randcVarNames) {
         const auto varIt = m_vars.find(name);
         if (varIt == m_vars.end()) continue;
@@ -971,11 +973,16 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
     VlSolverSession& sess = s_solverSession;
     const VerilatedLockGuard lock{sess.m_mutex};
     m_checkOnly = checkOnly;
-    const std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    std::vector<std::string> uniqueExprs = buildUniqueExprs();
+    // pin_frozen() constraints of the variables registered by now
+    for (const auto& pin : m_frozenPins) {
+        if (m_vars.count(pin.first)) uniqueExprs.push_back(pin.second);
+    }
 
     // Randc exclusion-based cycling: exclude previously used values per randc var.
     // When solver returns unsat (all values exhausted), clear history for new cycle.
-    if (!m_randcVarNames.empty()) {
+    // An earlier function-call solve round has fewer constraints, not changed ones
+    if (!m_randcVarNames.empty() && !funcPreRound()) {
         const size_t currentHash = hashConstraints(uniqueExprs);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
         if (currentHash != m_randcConstraintHash) {
@@ -986,6 +993,13 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly) {
 
     // Reseeded from outside, so everything cached came from the old seed.
     if (m_ug2.rngReseeds != rngr.reseeds()) m_ug2 = Unigen2State{};
+
+    // Fix the function arguments solved in earlier rounds (IEEE 1800-2023 18.5.11)
+    for (const FuncArgRound& argRound : m_funcArgRounds) {
+        if (argRound.round < m_funcRound && !argRound.pin.empty()) {
+            m_constraints.push_back(argRound.pin);
+        }
+    }
 
     // Pinned vars make phase ordering moot; skip phased path in check-only.
     bool result;
@@ -1047,12 +1061,24 @@ void VlRandomizer::emitDeclares(std::ostream& os, bool pinCurrent) const {
         os << "(declare-fun " << var.first << " () ";
         var.second->emitType(os);
         os << ")\n";
-        // Pin each var to its current value
+        // Pin each var, or each array element, to its current value
         if (pinCurrent) {
-            assert(var.second->dimension() == 0);
-            os << "(assert (= " << var.first << ' ';
-            var.second->emitConcreteValue(os);
-            os << "))\n";
+            const int elements
+                = var.second->dimension() ? var.second->totalWidth() / var.second->width() : 1;
+            for (int j = 0; j < elements; ++j) {
+                os << "(assert (=";
+                var.second->emitElement(os, j);
+                os << ' ';
+                var.second->emitConcreteValue(os, j);
+                os << "))\n";
+            }
+        }
+        const auto domainIt = m_enumDomains.find(var.first);
+        if (domainIt == m_enumDomains.end()) continue;
+        for (int j = 0; j < var.second->totalWidth() / var.second->width(); ++j) {
+            os << "(assert (let ((__Ve";
+            var.second->emitElement(os, j);
+            os << ")) " << domainIt->second << "))\n";
         }
     }
 }
@@ -1789,6 +1815,7 @@ void VlRandomizer::clearConstraints() {
     m_solveBefore.clear();
     m_softConstraints.clear();
     m_uniqueArrays.clear();  // Re-registered by constraint setup
+    m_frozenPins.clear();  // Likewise re-added
     // Keep m_vars for class member randomization
 }
 
@@ -1798,12 +1825,58 @@ void VlRandomizer::clearAll() {
     m_constraintVarEnds.clear();
     m_softConstraints.clear();
     m_vars.clear();
+    m_enumDomains.clear();
     m_randcVarNames.clear();
     m_randcUsedValues.clear();
     m_randcConstraintHash = 0;
 }
 
+void VlRandomizer::clear_elem_vars(const std::string& arrayName) {
+    // Registered as "<arrayName>.<index>.<field>", and again for the objects the array holds
+    // at each randomize(), so objects that were removed or replaced are not referenced
+    const std::string prefix = arrayName + ".";
+    auto it = m_vars.lower_bound(prefix);
+    while (it != m_vars.end() && it->first.compare(0, prefix.size(), prefix) == 0) {
+        it = m_vars.erase(it);
+    }
+}
+
 void VlRandomizer::markRandc(const std::string& name) { m_randcVarNames.insert(name); }
+
+void VlRandomizer::func_round_start(int lastRound,
+                                    std::initializer_list<std::pair<const char*, int>> argRounds) {
+    m_funcArgRounds.clear();
+    for (const auto& argRound : argRounds) {
+        m_funcArgRounds.push_back({argRound.first, argRound.second, ""});
+    }
+    m_funcRound = 0;
+    m_funcRoundLast = lastRound;
+}
+
+bool VlRandomizer::func_round_next(const VlRandomizer& solvedr) {
+    // Take the values now: code after the solve may randomize the variables again
+    for (FuncArgRound& argRound : m_funcArgRounds) {
+        if (argRound.round != m_funcRound) continue;
+        // An argument of a derived class's constraint is not a variable of this object
+        const auto it = solvedr.m_vars.find(argRound.name);
+        if (it == solvedr.m_vars.end()) continue;
+        std::ostringstream os;
+        os << "(__Vbv (= " << argRound.name << ' ';
+        it->second->emitConcreteValue(os, 0);
+        os << "))";
+        argRound.pin = os.str();
+    }
+    return ++m_funcRound <= m_funcRoundLast;
+}
+
+bool VlRandomizer::func_args_ready(std::initializer_list<const char*> names) const {
+    for (const char* const name : names) {
+        for (const FuncArgRound& argRound : m_funcArgRounds) {
+            if (argRound.name == name && argRound.round >= m_funcRound) return false;
+        }
+    }
+    return true;
+}
 
 void VlRandomizer::solveBefore(const std::string& beforeName, const std::string& afterName) {
     m_solveBefore.emplace_back(beforeName, afterName);

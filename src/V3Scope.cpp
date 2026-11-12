@@ -211,6 +211,9 @@ class ScopeVisitor final : public VNVisitor {
         // ***Note m_scopep is passed back to the caller of the routine (above)
     }
     void visit(AstClass* nodep) override {
+        // A class has one scope, also when declared in a module with several instances, as
+        // it has one copy of its code. Its methods are moved, not cloned, into the first one.
+        if (m_classOrPackageScopes.count(nodep)) return;
         // Create required blocks and add to module
         VL_RESTORER(m_scopep);
         VL_RESTORER(m_aboveCellp);

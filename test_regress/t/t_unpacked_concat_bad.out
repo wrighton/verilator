@@ -3,7 +3,7 @@
    12 |   localparam bit_int_t count_bits[1:0] = {2{$bits(count_t)}};
       |                                            ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error: t/t_unpacked_concat_bad.v:12:44: Assignment pattern missed initializing elements: 0
+%Error: t/t_unpacked_concat_bad.v:12:44: Unpacked array concatenation has 1 elements, but its target has 2 (IEEE 1800-2023 10.10)
                                        : ... note: In instance 't'
    12 |   localparam bit_int_t count_bits[1:0] = {2{$bits(count_t)}};
       |                                            ^

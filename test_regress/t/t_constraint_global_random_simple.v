@@ -102,6 +102,26 @@ module t_constraint_global_random_simple;
       $stop;
     end
 
+    // 6. Replaced member objects: the new objects are randomized, the old ones are not
+    begin
+      automatic Inner old_inner = t.m_mid.m_inner;
+      automatic Mid old_mid;
+      t.m_mid.m_inner = new();
+      old_inner.m_only_topConstrained_val = 0;
+      success = t.randomize();
+      if (success != 1) $stop;
+      if (t.m_mid.m_inner.m_only_topConstrained_val != 5) $stop;
+      if (old_inner.m_only_topConstrained_val != 0) $stop;
+      old_mid = t.m_mid;
+      t.m_mid = new(20);
+      old_mid.m_inner.m_only_topConstrained_val = 0;
+      success = t.randomize();
+      if (success != 1) $stop;
+      if (t.m_mid.m_x != 20) $stop;
+      if (t.m_mid.m_inner.m_only_topConstrained_val != 5) $stop;
+      if (old_mid.m_inner.m_only_topConstrained_val != 0) $stop;
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
