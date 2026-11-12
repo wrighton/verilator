@@ -637,6 +637,19 @@ class FastConstraintBuilder final {
     AstNodeExpr* newLimitComparep(AstNodeExpr* boundp, uint64_t limit, bool less, bool inclusive,
                                   bool isSigned) const {
         FileLine* const fl = boundp->fileline();
+        const uint64_t boundMask = boundp->width() == 64 ? std::numeric_limits<uint64_t>::max()
+                                                         : (uint64_t{1} << boundp->width()) - 1;
+        const uint64_t typeMin = isSigned ? uint64_t{1} << (boundp->width() - 1) : 0;
+        const uint64_t typeMax = isSigned ? typeMin - 1 : boundMask;
+        const uint64_t encodedLimit = limit & boundMask;
+        // Comparisons beyond the operand's type are compile-time truths, not
+        // suspicious user comparisons. Do not generate unsigned x >= 0, etc.
+        if (encodedLimit == typeMin && ((less && !inclusive) || (!less && inclusive))) {
+            return new AstConst{fl, AstConst::BitTrue{}, !less};
+        }
+        if (encodedLimit == typeMax && ((less && inclusive) || (!less && !inclusive))) {
+            return new AstConst{fl, AstConst::BitTrue{}, less};
+        }
         AstNodeExpr* const valuep = boundp->cloneTreePure(false);
         V3Number num{fl, boundp->width(), 0};
         num.setQuad(limit);
