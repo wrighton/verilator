@@ -599,7 +599,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                 // Union fields alias; only an unpacked struct proves independence.
                 const AstStructDType* const structp
                     = VN_CAST(selp->fromp()->dtypep()->skipRefp(), StructDType);
-                if (!structp || structp->packed()) break;
+                if (!structp) break;
                 prefix.push_back("." + selp->name());
             } else {
                 // Preserve packed-bit/slice conservatism, retaining outer array axes.
@@ -836,8 +836,10 @@ class UndrivenVisitor final : public VNVisitorConst {
         iterateChildrenConst(nodep);
     }
     void visit(AstArraySel* nodep) override {
-        // Usage flags still conservatively cover all entries. CONTASSINIT also
-        // records the static element path independently of those aggregate flags.
+        // Arrays are rarely constant assigned, so for now we punt and do all entries.
+        // For the multiple driver checks, a constant element select is a partial write, as
+        // the longest static prefix is not the whole array (IEEE 1800-2023 11.5.3).
+        // CONTASSINIT additionally records the static element path independently.
         {
             VL_RESTORER(m_inSelLhs);
             m_inSelLhs = !V3Width::selectNonConstantRecurse(nodep->bitp(), /*inSel=*/true);
