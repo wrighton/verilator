@@ -860,13 +860,17 @@ Summary:
 .. option:: -fno-constraint-fast
 
    Disable solver-free sampling of simple integral constraints. By default,
-   recognized scalar domains up to 32 bits use this optimization when every
-   constrained variable is pinned to one legal value, or there is one constrained
-   variable. Ranges, sets, and a single distribution are supported; distribution
-   weights are preserved after hard restrictions and soft-priority resolution.
-   More complex constraints retain the solver path. Random values from a given
-   seed may differ when this optimization is enabled. This option is useful when
-   testing the solver protocol itself.
+   recognized finite scalar domains up to 64 bits use this optimization when
+   every constrained variable is pinned to one legal value, or at most one
+   independent variable remains unpinned. Ranges, state-queue membership and
+   exclusion, pure state bounds, and a single retained distribution are
+   supported. A contiguous slice can be sampled when every bit outside it is
+   hard-pinned; those fixed bits are preserved, including nonzero values.
+   Distribution weights are preserved after hard restrictions and soft-priority
+   resolution. Unsupported forms and unrepresentable sampling arithmetic retain
+   the solver path. Random values from a given seed may differ when this
+   optimization is enabled. This option is useful when testing the solver
+   protocol itself. The optimization is experimental and for internal use only.
 
 .. option:: -fno-dead-assigns
 
