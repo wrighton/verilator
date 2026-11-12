@@ -145,6 +145,14 @@ module t;
   assign narrow_index[0] = scalar_end;
   initial narrow_index[2'b11] = 0;
 
+  // A whole packed root has one continuous driver, not unpacked-prefix tracking.
+  typedef struct packed {
+    logic [4:0] left;
+    logic [6:0] right;
+  } packed_root_t;
+  packed_root_t packed_root;
+  assign packed_root = '{left: {5{valid}}, right: {7{ready}}};
+
   int checks;
   task automatic check(input bit [2:0] expected);
     #1;
@@ -167,6 +175,8 @@ module t;
     `checkh(root_nested.side, 1'b0);
     `checkh(narrow_index[0], expected[0]);
     `checkh(narrow_index[3], 1'b0);
+    `checkh(packed_root.left, {5{valid}});
+    `checkh(packed_root.right, {7{ready}});
     checks++;
   endtask
 
