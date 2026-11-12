@@ -169,6 +169,11 @@ module t;
       `checkd(h.c.v != 7'h55, 1'b1);
       `checkd(h.w, h.c.v);
     end
+    // An enabled child constraint's mode must not be read through a null handle.
+    h.c.c_v.constraint_mode(1);
+    h.c = null;
+    randomize_result = h.randomize();
+    `checkd(randomize_result, 0);
   endtask
 
   task automatic test_nested;
