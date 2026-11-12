@@ -6791,9 +6791,19 @@ public:
                 if (constrp->itemsp()) {
                     // Capture the original items under the same mode guard as the
                     // SMT setup. Inherited setup tasks retain their own metadata.
-                    AstNodeStmt* const fastp = FastConstraintBuilder::apply(
-                        constrp->itemsp(), genp, true, &m_fastDistGens);
-                    taskp->addStmtsp(wrapIfConstraintMode(nodep, constrp, fastp));
+                    AstNodeStmt* fastp = FastConstraintBuilder::apply(constrp->itemsp(), genp,
+                                                                      true, &m_fastDistGens);
+                    fastp = wrapIfConstraintMode(nodep, constrp, fastp);
+                    // Test cloned owners before reading their modes or storage,
+                    // exactly as the SMT setup below does, including optimization-off.
+                    const auto it = m_cloneObjps.find(constrp);
+                    if (it != m_cloneObjps.end()) {
+                        if (AstNodeExpr* const activep
+                            = newHandlesActivep(m_memberMap, it->second.objp, true, true)) {
+                            fastp = new AstIf{constrp->fileline(), activep, fastp};
+                        }
+                    }
+                    taskp->addStmtsp(fastp);
                     expandUniqueElementList(constrp->itemsp());
                 }
                 if (constrp->itemsp()) {

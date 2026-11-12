@@ -1140,9 +1140,9 @@ bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastC
 }
 
 int VlRandomizer::nextFast(VlRNG& rngr) {
-    if (m_fastDisabled || m_fastConstraints.empty() || m_vars.empty() || !m_randcVarNames.empty()
-        || !m_uniqueArrays.empty() || !m_frozenPins.empty() || !m_solveBefore.empty()
-        || m_funcRoundLast || hasFrozenVar()) {
+    if (solverSamples() || m_fastDisabled || m_fastConstraints.empty() || m_vars.empty()
+        || !m_randcVarNames.empty() || !m_uniqueArrays.empty() || !m_frozenPins.empty()
+        || !m_solveBefore.empty() || m_funcRoundLast || hasFrozenVar()) {
         return -1;
     }
     struct Domain final {
@@ -1184,7 +1184,10 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
     if (!enumNeeded.empty()) return -1;
     for (const Domain& domain : domains) {
         if (!domain.covered) return -1;
-        if (domain.ranges.empty()) return 0;
+        if (domain.ranges.empty()) {
+            // Default-on diagnostics retain the existing solver/source-core path.
+            return Verilated::threadContextp()->warnUnsatConstr() ? -1 : 0;
+        }
     }
     // IEEE 1800-2023 18.5.13: keep each soft iff it is compatible with the
     // hard domain and the higher-priority softs already retained.
