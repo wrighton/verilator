@@ -501,8 +501,8 @@ public:
         pickp->hasProposal = true;
     }
     /// Snapshot a state queue's membership set; duplicates never add probability.
-    template <typename T>
-    void fast_queue(const VlQueue<T>& queue, bool exclude) {
+    template <typename T, size_t N_MaxSize>
+    void fast_queue(const VlQueue<T, N_MaxSize>& queue, bool exclude) {
         FastConstraint& constraint = m_fastConstraints.back();
         const QData mask = (QData{1} << constraint.width) - 1;
         const QData sign = constraint.isSigned ? QData{1} << (constraint.width - 1) : 0;

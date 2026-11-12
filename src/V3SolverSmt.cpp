@@ -578,15 +578,34 @@ class FastConstraintBuilder final {
     }
     // State expressions may contain pure native functions, but never hidden
     // randomized reads, virtual/DPI dispatch, recursion, or side effects.
-    static bool stateExpression(AstNode* nodep, std::unordered_set<const AstNodeFTask*>& calls) {
-        if (!nodep->isPure()) return false;
+    static bool checkedReceiver(AstNode* nodep) {
+        return nodep->exists([](const AstNode* partp) {
+            if (const AstMemberRef* const refp = VN_CAST(partp, MemberRef))
+                return refp->fromp()->isClassHandleValue();
+            if (const AstMethodCall* const callp = VN_CAST(partp, MethodCall))
+                return callp->fromp()->isClassHandleValue();
+            return false;
+        });
+    }
+    static bool stateExpression(AstNode* nodep, std::unordered_set<const AstNodeFTask*>& calls,
+                                const AstNodeFTask* activationp = nullptr) {
         bool valid = true;
         nodep->foreach([&](AstNode* const partp) {
+            if (!partp->isPure()) valid = false;
             if (const AstVarRef* const refp = VN_CAST(partp, VarRef)) {
-                if (refp->varp()->rand().isRandomizable() || refp->varp()->isStdRandomizeArg())
+                const AstVar* const varp = refp->varp();
+                if (refp->user1() || varp->rand().isRandomizable() || varp->isStdRandomizeArg())
+                    valid = false;
+                // A hidden callee read of caller/global state may alias an implicit
+                // std::randomize argument that has been marshalled to another var.
+                if (activationp && !varp->isFuncLocal() && !varp->isParam()) valid = false;
+                if (refp->access().isWriteOrRW()
+                    && (!activationp || !varp->isFuncLocal() || varp->lifetime().isStatic()))
                     valid = false;
             } else if (const AstMemberRef* const refp = VN_CAST(partp, MemberRef)) {
-                if (refp->varp()->rand().isRandomizable() || refp->varp()->isStdRandomizeArg())
+                if (refp->user1() || refp->varp()->rand().isRandomizable()
+                    || refp->varp()->isStdRandomizeArg() || refp->access().isWriteOrRW()
+                    || activationp)
                     valid = false;
             } else if (AstNodeFTaskRef* const callp = VN_CAST(partp, NodeFTaskRef)) {
                 AstNodeFTask* const taskp = callp->taskp();
@@ -595,9 +614,11 @@ class FastConstraintBuilder final {
                     valid = false;
                     return;
                 }
-                if ((taskp->declsp() && !stateExpression(taskp->declsp(), calls))
-                    || (taskp->stmtsp() && !stateExpression(taskp->stmtsp(), calls)))
-                    valid = false;
+                for (AstNode* const listp : {taskp->declsp(), taskp->stmtsp()}) {
+                    for (AstNode* const itemp : VNList<AstNode>{listp}) {
+                        if (!stateExpression(itemp, calls, taskp)) valid = false;
+                    }
+                }
                 calls.erase(taskp);
             }
         });
@@ -630,6 +651,21 @@ class FastConstraintBuilder final {
         callp->addPinsp(queuep->cloneTreePure(false));
         callp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, exclude});
         stmtp->addNext(callp->makeStmt());
+        if (const AstMemberRef* const refp = VN_CAST(queuep, MemberRef)) {
+            // A simple receiver is tested before snapshotting. Deeper paths stay
+            // with legacy receiver lowering rather than dereferencing a prefix.
+            if (refp->fromp()->isClassHandleValue()) {
+                if (!VN_IS(refp->fromp(), VarRef)) {
+                    VL_DO_DANGLING(stmtp->deleteTree(), stmtp);
+                    return nullptr;
+                }
+                return new AstIf{fl,
+                                 new AstNeq{fl, refp->fromp()->cloneTreePure(false),
+                                            new AstConst{fl, AstConst::Null{}}},
+                                 stmtp,
+                                 newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt()};
+            }
+        }
         return stmtp;
     }
     // A state scalar of the same width can pin a rand scalar without depending
@@ -824,6 +860,7 @@ class FastConstraintBuilder final {
         AstVar* const varp
             = new AstVar{fl, VVarType::BLOCKTEMP, m_names.get("__Vfast_bound"), dtypep};
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        varp->funcLocal(true);
         varp->isInternal(true);
         blockp->addDeclsp(varp);
         blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
@@ -866,15 +903,36 @@ class FastConstraintBuilder final {
             AstNodeExpr* const weightSourcep = itemp->weightp();
             if (loSourcep->width() != viewWidth || hiSourcep->width() != viewWidth
                 || weightSourcep->width() > 64 || !stateExpression(loSourcep)
-                || !stateExpression(hiSourcep) || !stateExpression(weightSourcep)) {
+                || !stateExpression(hiSourcep) || !stateExpression(weightSourcep)
+                || checkedReceiver(loSourcep) || checkedReceiver(hiSourcep)
+                || checkedReceiver(weightSourcep)) {
                 m_supported = false;
                 VL_DO_DANGLING(blockp->deleteTree(), blockp);
                 return nullptr;
             }
             const AstConst* const weightConstp = VN_CAST(weightSourcep, Const);
             hasPositiveWeight |= !weightConstp || !weightConstp->isZero();
-            AstNodeExpr* const lop = snapshotBound(blockp, loSourcep, distp->exprp()->dtypep());
-            AstNodeExpr* const hip = snapshotBound(blockp, hiSourcep, distp->exprp()->dtypep());
+            AstNodeExpr* const lop = snapshotBound(blockp, loSourcep, loSourcep->dtypep());
+            AstNodeExpr* const hip = snapshotBound(blockp, hiSourcep, hiSourcep->dtypep());
+            // Opposite-sign values outside the common nonnegative range need
+            // legacy comparison semantics, not an empty soft-domain shortcut.
+            for (AstNodeExpr* const boundp : {lop, hip}) {
+                if (boundp->isSigned() == viewSigned) continue;
+                AstNodeExpr* incompatiblep;
+                if (viewSigned) {
+                    V3Number sign{fl, boundp->width(), 0};
+                    sign.setQuad(uint64_t{1} << (boundp->width() - 1));
+                    incompatiblep
+                        = new AstGte{fl, boundp->cloneTreePure(false), new AstConst{fl, sign}};
+                } else {
+                    incompatiblep = new AstLtS{
+                        fl, boundp->cloneTreePure(false),
+                        new AstConst{fl, AstConst::WidthedValue{}, boundp->width(), 0}};
+                }
+                blockp->addStmtsp(
+                    new AstIf{fl, incompatiblep,
+                              newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt()});
+            }
             AstNodeExpr* const weightp
                 = snapshotBound(blockp, weightSourcep, weightSourcep->dtypep());
             if (weightp->isSigned()) {
@@ -973,7 +1031,7 @@ public:
         for (AstNode* const itemp : VNList<AstNode>{itemsp}) {
             FastConstraintBuilder builder{genp, *namesp};
             if (AstConstraintIf* const ifp = VN_CAST(itemp, ConstraintIf)) {
-                if (stateExpression(ifp->condp())) {
+                if (stateExpression(ifp->condp()) && !checkedReceiver(ifp->condp())) {
                     AstNodeStmt* const thenp = apply(ifp->thensp(), genp, true, distGensp, namesp);
                     AstNodeStmt* const elsep
                         = ifp->elsesp() ? apply(ifp->elsesp(), genp, true, distGensp, namesp)
@@ -6909,8 +6967,8 @@ public:
                 if (constrp->itemsp()) {
                     // Capture the original items under the same mode guard as the
                     // SMT setup. Inherited setup tasks retain their own metadata.
-                    AstNodeStmt* fastp = FastConstraintBuilder::apply(constrp->itemsp(), genp,
-                                                                      true, &m_fastDistGens);
+                    AstNodeStmt* fastp = FastConstraintBuilder::apply(
+                        constrp->itemsp(), genp, true, &m_fastDistGens, &m_uniqueNames);
                     fastp = wrapIfConstraintMode(nodep, constrp, fastp);
                     // Test cloned owners before reading their modes or storage,
                     // exactly as the SMT setup below does, including optimization-off.
@@ -7180,8 +7238,8 @@ public:
         AstBegin* const setupBlockp
             = new AstBegin{nodep->fileline(), "__Vsetup_constraints", holderp, true};
         // Analyze before dist loses its membership/weight/soft-priority structure.
-        randomizeFuncp->addStmtsp(
-            FastConstraintBuilder::apply(holderp->declsp(), localGenp, true, &m_fastDistGens));
+        randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(holderp->declsp(), localGenp, true,
+                                                               &m_fastDistGens, &m_uniqueNames));
         // Dist bucket draws go into the function, ahead of the constraints reading them
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              randModeVarp);
@@ -7559,8 +7617,8 @@ public:
             const AstNodeExpr* const exprp = argp->exprp();
             fastArgs &= VN_IS(exprp, VarRef) || VN_IS(exprp, MemberRef);
         }
-        randomizeFuncp->addStmtsp(
-            FastConstraintBuilder::apply(holderp->declsp(), stdrandp, fastArgs, &m_fastDistGens));
+        randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(
+            holderp->declsp(), stdrandp, fastArgs, &m_fastDistGens, &m_uniqueNames));
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              nullptr);
         randomizeFuncp->addStmtsp(setupBlockp);

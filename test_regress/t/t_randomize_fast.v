@@ -170,6 +170,12 @@ class QueuePicker;
   endfunction
 endclass
 
+class BoundedQueuePicker;
+  rand int value;
+  int allowed[$:3];
+  constraint c {value inside {allowed};}
+endclass
+
 class CallbackQueue;
   rand int x;
   int available[$];
@@ -446,6 +452,17 @@ module t;
       end
       `checkd(pool.size(), 3);
       `checkd(pool[0], -3);
+    end
+
+    begin
+      BoundedQueuePicker bounded;
+      bounded = new;
+      bounded.allowed = '{1, 2, 3};
+      repeat (32) begin
+        `checkd(bounded.randomize(), 1);
+        `checkd(bounded.value inside {bounded.allowed}, 1);
+        `checkd(bounded.allowed.size(), 3);
+      end
     end
 
     $write("Fast digest=%0h\n", digest);
