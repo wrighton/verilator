@@ -338,8 +338,12 @@ class FastConstraintBuilder final {
     using Ranges = std::vector<Range>;
     AstVar* const m_genp;
     V3UniqueNames& m_names;
-    AstNodeExpr* m_targetp = nullptr;  // Original bound variable access
+    AstNodeExpr* m_targetp = nullptr;  // Original physical storage access
+    AstNodeExpr* m_viewp = nullptr;  // Unextended scalar or constant slice
     AstVar* m_varp = nullptr;
+    int m_viewLsb = 0;
+    int m_viewWidth = 0;
+    bool m_viewSigned = false;
     bool m_supported = true;
     std::vector<AstNodeExpr*> m_constants;  // Detached, constified bound copies
 
@@ -348,7 +352,9 @@ class FastConstraintBuilder final {
                   [](const Range& a, const Range& b) { return a.lo < b.lo; });
         Ranges result;
         for (const Range& range : ranges) {
-            if (!result.empty() && range.lo <= result.back().hi + 1) {
+            if (!result.empty()
+                && (result.back().hi == std::numeric_limits<uint64_t>::max()
+                    || range.lo <= result.back().hi + 1)) {
                 result.back().hi = std::max(result.back().hi, range.hi);
             } else {
                 result.push_back(range);
@@ -371,9 +377,9 @@ class FastConstraintBuilder final {
         }
         return result;
     }
-    uint64_t mask() const { return (uint64_t{1} << m_varp->width()) - 1; }
+    uint64_t mask() const { return VL_MASK_Q(m_viewWidth); }
     uint64_t key(uint64_t bits) const {
-        return (bits & mask()) ^ (m_varp->isSigned() ? uint64_t{1} << (m_varp->width() - 1) : 0);
+        return (bits & mask()) ^ (m_viewSigned ? uint64_t{1} << (m_viewWidth - 1) : 0);
     }
     void findTarget(AstNodeExpr* exprp) {
         exprp->foreach([&](AstNodeExpr* const nodep) {
@@ -390,7 +396,7 @@ class FastConstraintBuilder final {
             if (!varp || !(varp->rand().isRandomizable() || varp->isStdRandomizeArg())) return;
             const AstNodeDType* const dtp = varp->dtypep()->skipRefToEnump();
             if ((!VN_IS(dtp, BasicDType) && !VN_IS(dtp, EnumDType)) || !dtp->isIntegralOrPacked()
-                || varp->width() > 32 || varp->width() < 1 || varp->rand().isRandC()) {
+                || varp->width() > 64 || varp->width() < 1 || varp->rand().isRandC()) {
                 m_supported = false;
                 return;
             }
@@ -398,17 +404,39 @@ class FastConstraintBuilder final {
             m_targetp = nodep;
             m_varp = varp;
         });
-        if (!m_targetp) m_supported = false;
+        if (!m_targetp) {
+            m_supported = false;
+            return;
+        }
+        m_viewp = m_targetp;
+        m_viewWidth = m_varp->width();
+        m_viewSigned = m_varp->isSigned();
+        exprp->foreach([&](AstSel* const selp) {
+            if (!m_targetp->sameTree(selp->fromp())) return;
+            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+            if (!lsbp || lsbp->num().isFourState() || selp->lsbConst() < 0
+                || selp->widthConst() < 1
+                || selp->lsbConst() > m_varp->width() - selp->widthConst()
+                || (m_viewp != m_targetp && !m_viewp->sameTree(selp))
+                || VN_IS(m_varp->dtypep()->skipRefToEnump(), EnumDType)) {
+                m_supported = false;
+                return;
+            }
+            m_viewp = selp;
+            m_viewLsb = selp->lsbConst();
+            m_viewWidth = selp->widthConst();
+            m_viewSigned = selp->isSigned();
+        });
     }
     bool isTarget(const AstNodeExpr* exprp) const {
         if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
-            if (m_varp->isSigned()) return false;
+            if (m_viewSigned) return false;
             exprp = extendp->lhsp();
         } else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS)) {
-            if (!m_varp->isSigned()) return false;
+            if (!m_viewSigned) return false;
             exprp = extendp->lhsp();
         }
-        return m_targetp->sameTree(exprp);
+        return m_viewp->sameTree(exprp);
     }
     AstConst* constant(AstNodeExpr* exprp) {
         AstConst* constp = VN_CAST(exprp, Const);
@@ -441,7 +469,7 @@ class FastConstraintBuilder final {
         if (VN_IS(nodep, Eq) || VN_IS(nodep, EqWild) || VN_IS(nodep, Neq)) {
             const uint64_t bits = constp->toUQuad();
             uint64_t extended = bits & mask();
-            if (m_varp->isSigned() && (extended & (uint64_t{1} << (m_varp->width() - 1)))) {
+            if (m_viewSigned && (extended & (uint64_t{1} << (m_viewWidth - 1)))) {
                 extended |= ~mask();
             }
             const uint64_t operandMask = targetp->width() == 64
@@ -458,34 +486,36 @@ class FastConstraintBuilder final {
         }
         const bool signedCompare
             = VN_IS(nodep, LtS) || VN_IS(nodep, LteS) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
-        if (signedCompare != m_varp->isSigned()) {
+        if (signedCompare != m_viewSigned) {
             m_supported = false;
             return {};
         }
-        if (!signedCompare
-            && constp->toUQuad() > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
-            const bool lowerBound = (VN_IS(nodep, Gt) || VN_IS(nodep, Gte)) != reversed;
-            return lowerBound ? Ranges{} : Ranges{{0, mask()}};
-        }
-        const int64_t bound
-            = signedCompare ? constp->num().toSQuad() : static_cast<int64_t>(constp->toUQuad());
-        const int64_t min = signedCompare ? -(int64_t{1} << (m_varp->width() - 1)) : 0;
-        const int64_t max = signedCompare ? (int64_t{1} << (m_varp->width() - 1)) - 1
-                                          : static_cast<int64_t>(mask());
+        // Compare in the effective operand's ordered coordinate, then map the
+        // clipped bound into the narrower unextended view. No signed host
+        // arithmetic or UINT64_MAX+1 sentinel is needed.
+        const uint64_t operandMask = VL_MASK_Q(targetp->width());
+        const uint64_t operandSign
+            = signedCompare ? uint64_t{1} << (targetp->width() - 1) : 0;
+        const uint64_t minBits
+            = signedCompare ? (uint64_t{1} << (m_viewWidth - 1)) | (operandMask ^ mask()) : 0;
+        const uint64_t maxBits = signedCompare ? mask() >> 1 : mask();
+        const uint64_t minKey = minBits ^ operandSign;
+        const uint64_t maxKey = maxBits ^ operandSign;
+        const uint64_t bits = constp->toUQuad();
+        const uint64_t boundKey = (bits & operandMask) ^ operandSign;
         bool lower
             = VN_IS(nodep, Gt) || VN_IS(nodep, Gte) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
         const bool inclusive
             = VN_IS(nodep, Gte) || VN_IS(nodep, Lte) || VN_IS(nodep, GteS) || VN_IS(nodep, LteS);
         if (reversed) lower = !lower;
-        // Clamp before incrementing/decrementing, including the extreme 64-bit bound.
         if (lower) {
-            if (bound > max || (bound == max && !inclusive)) return {};
-            const int64_t lo = bound < min ? min : bound + !inclusive;
-            return {{key(static_cast<uint64_t>(lo)), key(static_cast<uint64_t>(max))}};
+            if (boundKey > maxKey || (boundKey == maxKey && !inclusive)) return {};
+            if (boundKey < minKey) return {{0, mask()}};
+            return {{key(bits) + !inclusive, mask()}};
         }
-        if (bound < min || (bound == min && !inclusive)) return {};
-        const int64_t hi = bound > max ? max : bound - !inclusive;
-        return {{key(static_cast<uint64_t>(min)), key(static_cast<uint64_t>(hi))}};
+        if (boundKey < minKey || (boundKey == minKey && !inclusive)) return {};
+        if (boundKey > maxKey) return {{0, mask()}};
+        return {{0, key(bits) - !inclusive}};
     }
     void parseUnion(AstNodeExpr* nodep, Ranges& ranges) {
         if (AstLogOr* const orp = VN_CAST(nodep, LogOr)) {
@@ -534,13 +564,17 @@ class FastConstraintBuilder final {
             if (!lop || !hip) return {};
             // Bounds are already context-sized by V3Width. Reject rather than
             // truncate wider bounds, which could admit values outside the SV set.
-            if (lop->width() != m_varp->width() || hip->width() != m_varp->width()) {
+            if (lop->width() != m_viewWidth || hip->width() != m_viewWidth) {
                 m_supported = false;
                 return {};
             }
             const uint64_t lo = key(lop->toUQuad());
             const uint64_t hi = key(hip->toUQuad());
             if (lo > hi || !weightp->toUQuad()) continue;
+            if (itemp->isWhole() && hi - lo == std::numeric_limits<uint64_t>::max()) {
+                m_supported = false;  // The original :/ cardinality is 2^64
+                return {};
+            }
             ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole() ? hi - lo + 1 : 1});
         }
         if (ranges.empty()) m_supported = false;  // Preserve the existing all-zero dist policy
@@ -562,10 +596,12 @@ class FastConstraintBuilder final {
             refp->access(VAccess::READWRITE);
         beginp->addPinsp(targetp);
         beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_varp->width())});
-        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, m_varp->isSigned()});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, m_viewSigned});
         beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, soft});
         beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, dist});
         beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, isEnum});
+        beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_viewLsb)});
+        beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_viewWidth)});
         AstNodeStmt* const stmtp = beginp->makeStmt();
         for (const Range& range : ranges) {
             AstCMethodHard* const callp = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
@@ -643,8 +679,8 @@ class FastConstraintBuilder final {
             || (!VN_IS(queuep, VarRef) && !VN_IS(queuep, MemberRef)))
             return nullptr;
         const AstNodeDType* const elemDtp = queueDtp->subDTypep()->skipRefp();
-        if (!elemDtp->isIntegralOrPacked() || elemDtp->width() != m_varp->width()
-            || elemDtp->isSigned() != m_varp->isSigned())
+        if (!elemDtp->isIntegralOrPacked() || elemDtp->width() != m_viewWidth
+            || elemDtp->isSigned() != m_viewSigned)
             return nullptr;
         FileLine* const fl = exprp->fileline();
         AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
@@ -681,18 +717,12 @@ class FastConstraintBuilder final {
         }
         const AstVarRef* const refp = VN_CAST(boundp, VarRef);
         if (!refp || refp->user1() || refp->varp()->rand().isRandomizable()
-            || boundp->width() != m_varp->width() || eqp->lhsp()->width() != m_varp->width()) {
+            || boundp->width() != m_viewWidth || eqp->lhsp()->width() != m_viewWidth) {
             return nullptr;
         }
         FileLine* const fl = exprp->fileline();
         AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
-        AstNodeExpr* valuep = boundp->cloneTreePure(false);
-        if (m_varp->isSigned()) {
-            valuep = new AstXor{fl, valuep,
-                                new AstConst{fl, AstConst::WidthedValue{}, m_varp->width(),
-                                             uint32_t{1} << (m_varp->width() - 1)}};
-        }
-        valuep = new AstExtend{fl, valuep, 64};
+        AstNodeExpr* const valuep = newBoundKeyp(boundp);
         AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
         rangep->addPinsp(valuep);
         rangep->addPinsp(valuep->cloneTreePure(false));
@@ -712,13 +742,13 @@ class FastConstraintBuilder final {
     AstNodeExpr* newBoundKeyp(AstNodeExpr* boundp) const {
         FileLine* const fl = boundp->fileline();
         AstNodeExpr* valuep = boundp->cloneTreePure(false);
-        if (valuep->width() > m_varp->width()) {
-            valuep = new AstSel{fl, valuep, 0, m_varp->width()};
+        if (valuep->width() > m_viewWidth) {
+            valuep = new AstSel{fl, valuep, 0, m_viewWidth};
         }
-        if (m_varp->isSigned()) {
-            valuep = new AstXor{fl, valuep,
-                                new AstConst{fl, AstConst::WidthedValue{}, m_varp->width(),
-                                             uint32_t{1} << (m_varp->width() - 1)}};
+        if (m_viewSigned) {
+            V3Number sign{fl, m_viewWidth, 0};
+            sign.setQuad(uint64_t{1} << (m_viewWidth - 1));
+            valuep = new AstXor{fl, valuep, new AstConst{fl, sign}};
         }
         return new AstExtend{fl, valuep, 64};
     }
@@ -795,15 +825,15 @@ class FastConstraintBuilder final {
         }
         const bool signedCompare
             = VN_IS(nodep, LtS) || VN_IS(nodep, LteS) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
-        if (signedCompare != m_varp->isSigned() || boundp->width() < m_varp->width()) return false;
+        if (signedCompare != m_viewSigned || boundp->width() < m_viewWidth) return false;
         bool lower
             = VN_IS(nodep, Gt) || VN_IS(nodep, Gte) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
         if (reversed) lower = !lower;
         const bool inclusive
             = VN_IS(nodep, Gte) || VN_IS(nodep, Lte) || VN_IS(nodep, GteS) || VN_IS(nodep, LteS);
         FileLine* const fl = exprp->fileline();
-        const uint64_t min = signedCompare ? ~((uint64_t{1} << (m_varp->width() - 1)) - 1) : 0;
-        const uint64_t max = signedCompare ? (uint64_t{1} << (m_varp->width() - 1)) - 1 : mask();
+        const uint64_t min = signedCompare ? ~((uint64_t{1} << (m_viewWidth - 1)) - 1) : 0;
+        const uint64_t max = signedCompare ? (uint64_t{1} << (m_viewWidth - 1)) - 1 : mask();
         if (lower) {
             if (interval.hasLower) return false;
             interval.hasLower = true;
@@ -812,9 +842,9 @@ class FastConstraintBuilder final {
                 edgep = new AstAdd{fl, edgep, new AstConst{fl, AstConst::Unsized64{}, 1}};
             AstNodeExpr* const clippedp = new AstCond{
                 fl, newLimitComparep(boundp, min, true, inclusive, signedCompare),
-                new AstConst{fl, AstConst::Unsized64{}, 0},
-                new AstCond{fl, newLimitComparep(boundp, max, false, !inclusive, signedCompare),
-                            new AstConst{fl, AstConst::Unsized64{}, mask() + 1}, edgep}};
+                new AstConst{fl, AstConst::Unsized64{}, 0}, edgep};
+            interval.validp = new AstLogAnd{
+                fl, interval.validp, newLimitComparep(boundp, max, true, inclusive, signedCompare)};
             VL_DO_DANGLING(interval.lop->deleteTree(), interval.lop);
             interval.lop = clippedp;
         } else {
@@ -828,8 +858,8 @@ class FastConstraintBuilder final {
                               new AstConst{fl, AstConst::Unsized64{}, mask()}, edgep};
             VL_DO_DANGLING(interval.hip->deleteTree(), interval.hip);
             interval.hip = clippedp;
-            VL_DO_DANGLING(interval.validp->deleteTree(), interval.validp);
-            interval.validp = newLimitComparep(boundp, min, false, inclusive, signedCompare);
+            interval.validp = new AstLogAnd{
+                fl, interval.validp, newLimitComparep(boundp, min, false, inclusive, signedCompare)};
         }
         return true;
     }
@@ -881,28 +911,28 @@ class FastConstraintBuilder final {
     AstNodeStmt* newStateDistp(AstConstraintExpr* exprp, AstDist* distp) {
         if (!isTarget(distp->exprp())) return nullptr;
         const bool needsNative
-            = distp->exprp()->width() != m_varp->width()
+            = distp->exprp()->width() != m_viewWidth
               || distp->exists([&](const AstVarRef* refp) { return isStateLeaf(refp); })
               || distp->exists([](const AstNodeFTaskRef*) { return true; });
         if (!needsNative) return nullptr;
-        const int viewWidth = distp->exprp()->width();
+        const int operandWidth = distp->exprp()->width();
         const bool viewSigned = distp->exprp()->isSigned();
-        if (viewWidth < m_varp->width() || viewWidth > 64 || viewSigned != m_varp->isSigned()) {
+        if (operandWidth < m_viewWidth || operandWidth > 64 || viewSigned != m_viewSigned) {
             m_supported = false;
             return nullptr;
         }
         FileLine* const fl = exprp->fileline();
         AstBegin* const blockp = new AstBegin{fl, m_names.get("__Vfast_dist"), nullptr, true};
         blockp->addStmtsp(newDomainp(fl, {}, exprp->isSoft(), true));
-        const uint64_t min = viewSigned ? ~((uint64_t{1} << (m_varp->width() - 1)) - 1) : 0;
-        const uint64_t max = viewSigned ? (uint64_t{1} << (m_varp->width() - 1)) - 1 : mask();
+        const uint64_t min = viewSigned ? ~((uint64_t{1} << (m_viewWidth - 1)) - 1) : 0;
+        const uint64_t max = viewSigned ? (uint64_t{1} << (m_viewWidth - 1)) - 1 : mask();
         bool hasPositiveWeight = false;
         for (AstDistItem* const itemp : distp->itemspList()) {
             const AstInsideRange* const sourcep = VN_CAST(itemp->rangep(), InsideRange);
             AstNodeExpr* const loSourcep = sourcep ? sourcep->lhsp() : itemp->rangep();
             AstNodeExpr* const hiSourcep = sourcep ? sourcep->rhsp() : itemp->rangep();
             AstNodeExpr* const weightSourcep = itemp->weightp();
-            if (loSourcep->width() != viewWidth || hiSourcep->width() != viewWidth
+            if (loSourcep->width() != operandWidth || hiSourcep->width() != operandWidth
                 || weightSourcep->width() > 64 || !stateExpression(loSourcep)
                 || !stateExpression(hiSourcep) || !stateExpression(weightSourcep)
                 || checkedReceiver(loSourcep) || checkedReceiver(hiSourcep)
