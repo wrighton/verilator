@@ -9,7 +9,7 @@
 
 import vltest_bootstrap
 
-test.scenarios('simulator')
+test.scenarios('vlt_all')
 test.top_filename = "t/t_struct_member_init_x.v"
 
 test.compile(verilator_flags2=['--x-assign 1', '-DT_X_ONE'])
