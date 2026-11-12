@@ -138,6 +138,35 @@ class G;
   }
 endclass
 
+class ImplyItem;
+  rand bit flag;
+endclass
+
+class ImplyHandleArray;
+  rand ImplyItem items[];
+  rand bit all_flags;
+
+  function new();
+    items = new [3];
+    foreach (items[i]) items[i] = new;
+  endfunction
+
+  constraint c_imply {
+    foreach (items[i]) {
+      if (i < 5) {
+        all_flags -> items[i].flag;
+        !items[i].flag -> !all_flags;
+      }
+    }
+  }
+  constraint c_select {
+    foreach (items[i]) {
+      if (all_flags) items[i].flag;
+      else !items[i].flag;
+    }
+  }
+endclass
+
 class H;
   rand integer a[];
   rand integer b;
@@ -213,6 +242,23 @@ module t;
     end
     foreach (g.cfg[i]) begin
       `check_rand_min_count(g, g.cfg[i].a, 0, 14);
+    end
+    // A bare one-bit member of an array element as an implication or if/else arm stays a
+    // solver variable.
+    begin
+      automatic ImplyHandleArray imply = new;
+      automatic int randomize_result;
+      repeat (20) begin
+        randomize_result = imply.randomize();
+        `checkd(randomize_result, 1)
+        foreach (imply.items[k]) `checkd(imply.items[k].flag, imply.all_flags)
+      end
+      imply.c_select.constraint_mode(0);
+      repeat (20) begin
+        randomize_result = imply.randomize() with {all_flags == 1;};
+        `checkd(randomize_result, 1)
+        foreach (imply.items[k]) `checkd(imply.items[k].flag, 1'b1)
+      end
     end
     foreach (h.a[i]) begin
       `check_rand(h, h.a[i], (h.a[i] != h.b));
