@@ -857,6 +857,17 @@ Summary:
    Rarely needed. Disable eager constant folding, run immediately after
    expanding wide operations.
 
+.. option:: -fno-constraint-fast
+
+   Disable solver-free sampling of simple integral constraints. By default,
+   recognized scalar domains up to 32 bits use this optimization when every
+   constrained variable is pinned to one legal value, or there is one constrained
+   variable. Ranges, sets, and a single distribution are supported; distribution
+   weights are preserved after hard restrictions and soft-priority resolution.
+   More complex constraints retain the solver path. Random values from a given
+   seed may differ when this optimization is enabled. This option is useful when
+   testing the solver protocol itself.
+
 .. option:: -fno-dead-assigns
 
    Rarely needed. Disable removing assignments to variables that are never

@@ -51,6 +51,7 @@
 #include "V3File.h"
 #include "V3MemberMap.h"
 #include "V3Randomize.h"
+#include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
 
@@ -317,6 +318,546 @@ public:
                     + std::to_string(pair.second) + "}";
         }
         return list + "}";
+    }
+};
+
+//######################################################################
+// Structured fast-domain lowering, before dist is rewritten to a procedural
+// bucket draw plus SMT membership/soft choices. Unsupported original items
+// explicitly disable the optimization for the whole invocation.
+
+class FastConstraintBuilder final {
+    struct Range final {
+        uint64_t lo;
+        uint64_t hi;
+        uint64_t weight = 1;
+        uint64_t divisor = 1;
+    };
+    using Ranges = std::vector<Range>;
+    AstVar* const m_genp;
+    AstNodeExpr* m_targetp = nullptr;  // Original bound variable access
+    AstVar* m_varp = nullptr;
+    bool m_supported = true;
+    std::vector<AstNodeExpr*> m_constants;  // Detached, constified bound copies
+
+    static Ranges unite(Ranges ranges) {
+        std::sort(ranges.begin(), ranges.end(),
+                  [](const Range& a, const Range& b) { return a.lo < b.lo; });
+        Ranges result;
+        for (const Range& range : ranges) {
+            if (!result.empty() && range.lo <= result.back().hi + 1) {
+                result.back().hi = std::max(result.back().hi, range.hi);
+            } else {
+                result.push_back(range);
+            }
+        }
+        return result;
+    }
+    static Ranges intersect(const Ranges& a, const Ranges& b) {
+        Ranges result;
+        size_t i = 0;
+        size_t j = 0;
+        while (i < a.size() && j < b.size()) {
+            const uint64_t lo = std::max(a[i].lo, b[j].lo);
+            const uint64_t hi = std::min(a[i].hi, b[j].hi);
+            if (lo <= hi) result.push_back({lo, hi});
+            if (a[i].hi < b[j].hi)
+                ++i;
+            else
+                ++j;
+        }
+        return result;
+    }
+    uint64_t mask() const { return (uint64_t{1} << m_varp->width()) - 1; }
+    uint64_t key(uint64_t bits) const {
+        return (bits & mask()) ^ (m_varp->isSigned() ? uint64_t{1} << (m_varp->width() - 1) : 0);
+    }
+    void findTarget(AstNodeExpr* exprp) {
+        exprp->foreach([&](AstNodeExpr* const nodep) {
+            AstVar* varp = nullptr;
+            if (AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+                if (refp->user1()) varp = refp->varp();
+            } else if (AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) {
+                // Only a capture of this object's scalar, not a path through a
+                // possibly null/aliased member object.
+                if (VN_IS(refp->fromp(), VarRef) && refp->fromp()->user1()
+                    && refp->user2p() == refp->varp()->user2p())
+                    varp = refp->varp();
+            }
+            if (!varp || !(varp->rand().isRandomizable() || varp->isStdRandomizeArg())) return;
+            const AstNodeDType* const dtp = varp->dtypep()->skipRefToEnump();
+            if ((!VN_IS(dtp, BasicDType) && !VN_IS(dtp, EnumDType)) || !dtp->isIntegralOrPacked()
+                || varp->width() > 32 || varp->width() < 1 || varp->rand().isRandC()) {
+                m_supported = false;
+                return;
+            }
+            if (m_targetp && !m_targetp->sameTree(nodep)) m_supported = false;
+            m_targetp = nodep;
+            m_varp = varp;
+        });
+        if (!m_targetp) m_supported = false;
+    }
+    bool isTarget(const AstNodeExpr* exprp) const {
+        if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
+            if (m_varp->isSigned()) return false;
+            exprp = extendp->lhsp();
+        } else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS)) {
+            if (!m_varp->isSigned()) return false;
+            exprp = extendp->lhsp();
+        }
+        return m_targetp->sameTree(exprp);
+    }
+    const AstConst* constant(const AstNodeExpr* exprp) {
+        const AstConst* constp = VN_CAST(exprp, Const);
+        if (!constp && exprp->isPure() && !exprp->exists([](const AstNodeVarRef*) { return true; })
+            && !exprp->exists([](const AstMemberRef*) { return true; })) {
+            AstNodeExpr* const foldedp = V3Const::constifyEdit(exprp->cloneTreePure(false));
+            m_constants.push_back(foldedp);
+            constp = VN_CAST(foldedp, Const);
+        }
+        if (!constp || constp->width() > 64 || constp->num().isOpaque()
+            || constp->num().isFourState())
+            m_supported = false;
+        return m_supported ? constp : nullptr;
+    }
+    Ranges comparison(AstNodeBiop* nodep) {
+        const AstNodeExpr* boundp = nodep->rhsp();
+        const AstNodeExpr* targetp = nodep->lhsp();
+        bool reversed = false;
+        if (!isTarget(targetp)) {
+            std::swap(targetp, boundp);
+            reversed = true;
+        }
+        if (!isTarget(targetp) || targetp->width() > 64) {
+            m_supported = false;
+            return {};
+        }
+        const AstConst* const constp = constant(boundp);
+        if (!constp) return {};
+        if (VN_IS(nodep, Eq) || VN_IS(nodep, EqWild) || VN_IS(nodep, Neq)) {
+            const uint64_t bits = constp->toUQuad();
+            uint64_t extended = bits & mask();
+            if (m_varp->isSigned() && (extended & (uint64_t{1} << (m_varp->width() - 1)))) {
+                extended |= ~mask();
+            }
+            const uint64_t operandMask = targetp->width() == 64
+                                             ? std::numeric_limits<uint64_t>::max()
+                                             : (uint64_t{1} << targetp->width()) - 1;
+            Ranges equal;
+            if ((extended & operandMask) == bits) equal.push_back({key(bits), key(bits)});
+            if (!VN_IS(nodep, Neq)) return equal;
+            if (equal.empty()) return {{0, mask()}};
+            Ranges result;
+            if (equal[0].lo) result.push_back({0, equal[0].lo - 1});
+            if (equal[0].hi < mask()) result.push_back({equal[0].hi + 1, mask()});
+            return result;
+        }
+        const bool signedCompare
+            = VN_IS(nodep, LtS) || VN_IS(nodep, LteS) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
+        if (signedCompare != m_varp->isSigned()) {
+            m_supported = false;
+            return {};
+        }
+        if (!signedCompare
+            && constp->toUQuad() > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+            const bool lowerBound = (VN_IS(nodep, Gt) || VN_IS(nodep, Gte)) != reversed;
+            return lowerBound ? Ranges{} : Ranges{{0, mask()}};
+        }
+        const int64_t bound
+            = signedCompare ? constp->num().toSQuad() : static_cast<int64_t>(constp->toUQuad());
+        const int64_t min = signedCompare ? -(int64_t{1} << (m_varp->width() - 1)) : 0;
+        const int64_t max = signedCompare ? (int64_t{1} << (m_varp->width() - 1)) - 1
+                                          : static_cast<int64_t>(mask());
+        bool lower
+            = VN_IS(nodep, Gt) || VN_IS(nodep, Gte) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
+        const bool inclusive
+            = VN_IS(nodep, Gte) || VN_IS(nodep, Lte) || VN_IS(nodep, GteS) || VN_IS(nodep, LteS);
+        if (reversed) lower = !lower;
+        // Clamp before incrementing/decrementing, including the extreme 64-bit bound.
+        if (lower) {
+            if (bound > max || (bound == max && !inclusive)) return {};
+            const int64_t lo = bound < min ? min : bound + !inclusive;
+            return {{key(static_cast<uint64_t>(lo)), key(static_cast<uint64_t>(max))}};
+        }
+        if (bound < min || (bound == min && !inclusive)) return {};
+        const int64_t hi = bound > max ? max : bound - !inclusive;
+        return {{key(static_cast<uint64_t>(min)), key(static_cast<uint64_t>(hi))}};
+    }
+    void parseUnion(AstNodeExpr* nodep, Ranges& ranges) {
+        if (AstLogOr* const orp = VN_CAST(nodep, LogOr)) {
+            parseUnion(orp->lhsp(), ranges);
+            parseUnion(orp->rhsp(), ranges);
+        } else {
+            const Ranges term = parse(nodep);
+            ranges.insert(ranges.end(), term.begin(), term.end());
+        }
+    }
+    Ranges parse(AstNodeExpr* nodep) {
+        if (const AstConst* const constp = VN_CAST(nodep, Const)) {
+            if (constp->num().isFourState()) m_supported = false;
+            return constp->isZero() ? Ranges{} : Ranges{{0, mask()}};
+        }
+        if (AstLogAnd* const andp = VN_CAST(nodep, LogAnd)) {
+            const Ranges a = parse(andp->lhsp());
+            const Ranges b = parse(andp->rhsp());
+            return intersect(a, b);
+        }
+        if (VN_IS(nodep, LogOr)) {
+            Ranges ranges;
+            parseUnion(nodep, ranges);
+            return unite(std::move(ranges));
+        }
+        if (VN_IS(nodep, Eq) || VN_IS(nodep, EqWild) || VN_IS(nodep, Neq) || VN_IS(nodep, Lt)
+            || VN_IS(nodep, Lte) || VN_IS(nodep, Gt) || VN_IS(nodep, Gte) || VN_IS(nodep, LtS)
+            || VN_IS(nodep, LteS) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS))
+            return comparison(VN_AS(nodep, NodeBiop));
+        m_supported = false;
+        return {};
+    }
+    Ranges distribution(AstDist* distp) {
+        if (!isTarget(distp->exprp())) m_supported = false;
+        Ranges ranges;
+        for (AstDistItem* const itemp : distp->itemspList()) {
+            const AstConst* const weightp = constant(itemp->weightp());
+            if (!weightp) return {};
+            if (weightp->isSigned() && weightp->num().isNegative()) {
+                m_supported = false;
+                return {};
+            }
+            const AstInsideRange* const rangep = VN_CAST(itemp->rangep(), InsideRange);
+            const AstConst* const lop = constant(rangep ? rangep->lhsp() : itemp->rangep());
+            const AstConst* const hip = constant(rangep ? rangep->rhsp() : itemp->rangep());
+            if (!lop || !hip) return {};
+            // Bounds are already context-sized by V3Width. Reject rather than
+            // truncate wider bounds, which could admit values outside the SV set.
+            if (lop->width() != m_varp->width() || hip->width() != m_varp->width()) {
+                m_supported = false;
+                return {};
+            }
+            const uint64_t lo = key(lop->toUQuad());
+            const uint64_t hi = key(hip->toUQuad());
+            if (lo > hi || !weightp->toUQuad()) continue;
+            ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole() ? hi - lo + 1 : 1});
+        }
+        if (ranges.empty()) m_supported = false;  // Preserve the existing all-zero dist policy
+        return ranges;
+    }
+    AstCMethodHard* newCallp(FileLine* fl, VCMethod method) const {
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
+            method};
+        callp->dtypeSetVoid();
+        return callp;
+    }
+    AstNodeStmt* newDomainp(FileLine* fl, const Ranges& ranges, bool soft, bool dist,
+                            bool isEnum = false) const {
+        AstCMethodHard* const beginp = newCallp(fl, VCMethod::RANDOMIZER_FAST_BEGIN);
+        AstNodeExpr* const targetp = m_targetp->cloneTreePure(false);
+        if (AstVarRef* const refp = VN_CAST(targetp, VarRef)) refp->access(VAccess::READWRITE);
+        if (AstMemberRef* const refp = VN_CAST(targetp, MemberRef))
+            refp->access(VAccess::READWRITE);
+        beginp->addPinsp(targetp);
+        beginp->addPinsp(new AstConst{fl, static_cast<uint32_t>(m_varp->width())});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, m_varp->isSigned()});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, soft});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, dist});
+        beginp->addPinsp(new AstConst{fl, AstConst::BitTrue{}, isEnum});
+        AstNodeStmt* const stmtp = beginp->makeStmt();
+        for (const Range& range : ranges) {
+            AstCMethodHard* const callp = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
+            for (const uint64_t value : {range.lo, range.hi, range.weight, range.divisor}) {
+                callp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, value});
+            }
+            stmtp->addNext(callp->makeStmt());
+        }
+        return stmtp;
+    }
+    // A state scalar of the same width can pin a rand scalar without depending
+    // on another solve. Copy only a pure leaf, never a function/callback expression.
+    AstNodeStmt* newStatePinp(AstConstraintExpr* exprp) const {
+        const AstEq* const eqp = VN_CAST(exprp->exprp(), Eq);
+        if (!eqp) return nullptr;
+        const AstNodeExpr* boundp = eqp->rhsp();
+        if (!isTarget(eqp->lhsp())) {
+            if (!isTarget(eqp->rhsp())) return nullptr;
+            boundp = eqp->lhsp();
+        }
+        const AstVarRef* const refp = VN_CAST(boundp, VarRef);
+        if (!refp || refp->user1() || refp->varp()->rand().isRandomizable()
+            || boundp->width() != m_varp->width() || eqp->lhsp()->width() != m_varp->width()) {
+            return nullptr;
+        }
+        FileLine* const fl = exprp->fileline();
+        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
+        AstNodeExpr* valuep = boundp->cloneTreePure(false);
+        if (m_varp->isSigned()) {
+            valuep = new AstXor{fl, valuep,
+                                new AstConst{fl, AstConst::WidthedValue{}, m_varp->width(),
+                                             uint64_t{1} << (m_varp->width() - 1)}};
+        }
+        valuep = new AstExtend{fl, valuep, 64};
+        AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
+        rangep->addPinsp(valuep);
+        rangep->addPinsp(valuep->cloneTreePure(false));
+        rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 1});
+        rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 1});
+        stmtp->addNext(rangep->makeStmt());
+        return stmtp;
+    }
+    // Pure state leaves can supply runtime bounds/weights without evaluating an
+    // arbitrary constraint function or depending on another solve round.
+    bool isStateLeaf(const AstNodeExpr* exprp) const {
+        const AstVarRef* const refp = VN_CAST(exprp, VarRef);
+        return refp && !refp->user1() && !refp->varp()->rand().isRandomizable()
+               && !refp->varp()->isStdRandomizeArg()
+               && exprp->dtypep()->skipRefp()->isIntegralOrPacked();
+    }
+    AstNodeExpr* newBoundKeyp(const AstNodeExpr* boundp) const {
+        FileLine* const fl = boundp->fileline();
+        AstNodeExpr* valuep = boundp->cloneTreePure(false);
+        if (valuep->width() > m_varp->width()) {
+            valuep = new AstSel{fl, valuep, 0, m_varp->width()};
+        }
+        if (m_varp->isSigned()) {
+            valuep = new AstXor{fl, valuep,
+                                new AstConst{fl, AstConst::WidthedValue{}, m_varp->width(),
+                                             uint64_t{1} << (m_varp->width() - 1)}};
+        }
+        return new AstExtend{fl, valuep, 64};
+    }
+    bool isStateBound(const AstNodeExpr* exprp) const {
+        if (exprp->width() > 64) return false;
+        if (const AstExtend* const extendp = VN_CAST(exprp, Extend))
+            exprp = extendp->lhsp();
+        else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS))
+            exprp = extendp->lhsp();
+        return isStateLeaf(exprp);
+    }
+    AstNodeExpr* newLimitComparep(const AstNodeExpr* boundp, uint64_t limit, bool less,
+                                  bool inclusive, bool isSigned) const {
+        FileLine* const fl = boundp->fileline();
+        AstNodeExpr* const valuep = boundp->cloneTreePure(false);
+        AstConst* const limitp
+            = new AstConst{fl, AstConst::WidthedValue{}, boundp->width(), limit};
+        if (less) {
+            if (inclusive)
+                return isSigned ? static_cast<AstNodeExpr*>(new AstLteS{fl, valuep, limitp})
+                                : new AstLte{fl, valuep, limitp};
+            return isSigned ? static_cast<AstNodeExpr*>(new AstLtS{fl, valuep, limitp})
+                            : new AstLt{fl, valuep, limitp};
+        }
+        if (inclusive)
+            return isSigned ? static_cast<AstNodeExpr*>(new AstGteS{fl, valuep, limitp})
+                            : new AstGte{fl, valuep, limitp};
+        return isSigned ? static_cast<AstNodeExpr*>(new AstGtS{fl, valuep, limitp})
+                        : new AstGt{fl, valuep, limitp};
+    }
+    struct StateInterval final {
+        AstNodeExpr* lop;
+        AstNodeExpr* hip;
+        AstNodeExpr* validp;
+        bool hasLower = false;
+        bool hasUpper = false;
+    };
+    // The lowered inside {[lo:hi]} is a conjunction of one lower and one upper
+    // comparison. Clamp in the comparison's type before narrowing to SV storage.
+    bool stateInterval(AstNodeExpr* exprp, StateInterval& interval) {
+        if (AstLogAnd* const andp = VN_CAST(exprp, LogAnd)) {
+            return stateInterval(andp->lhsp(), interval) && stateInterval(andp->rhsp(), interval);
+        }
+        if (!(VN_IS(exprp, Lt) || VN_IS(exprp, Lte) || VN_IS(exprp, Gt) || VN_IS(exprp, Gte)
+              || VN_IS(exprp, LtS) || VN_IS(exprp, LteS) || VN_IS(exprp, GtS)
+              || VN_IS(exprp, GteS))) {
+            return false;
+        }
+        const AstNodeBiop* const nodep = VN_AS(exprp, NodeBiop);
+        const AstNodeExpr* boundp = nodep->rhsp();
+        bool reversed = false;
+        if (!isTarget(nodep->lhsp())) {
+            if (!isTarget(nodep->rhsp())) return false;
+            boundp = nodep->lhsp();
+            reversed = true;
+        }
+        if (!isStateBound(boundp)) {
+            boundp = constant(boundp);
+            if (!boundp) return false;
+        }
+        const bool signedCompare
+            = VN_IS(nodep, LtS) || VN_IS(nodep, LteS) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
+        if (signedCompare != m_varp->isSigned() || boundp->width() < m_varp->width()) return false;
+        bool lower
+            = VN_IS(nodep, Gt) || VN_IS(nodep, Gte) || VN_IS(nodep, GtS) || VN_IS(nodep, GteS);
+        if (reversed) lower = !lower;
+        const bool inclusive
+            = VN_IS(nodep, Gte) || VN_IS(nodep, Lte) || VN_IS(nodep, GteS) || VN_IS(nodep, LteS);
+        FileLine* const fl = exprp->fileline();
+        const uint64_t min = signedCompare ? ~((uint64_t{1} << (m_varp->width() - 1)) - 1) : 0;
+        const uint64_t max = signedCompare ? (uint64_t{1} << (m_varp->width() - 1)) - 1 : mask();
+        if (lower) {
+            if (interval.hasLower) return false;
+            interval.hasLower = true;
+            AstNodeExpr* edgep = newBoundKeyp(boundp);
+            if (!inclusive)
+                edgep = new AstAdd{fl, edgep, new AstConst{fl, AstConst::Unsized64{}, 1}};
+            AstNodeExpr* const clippedp = new AstCond{
+                fl, newLimitComparep(boundp, min, true, inclusive, signedCompare),
+                new AstConst{fl, AstConst::Unsized64{}, 0},
+                new AstCond{fl, newLimitComparep(boundp, max, false, !inclusive, signedCompare),
+                            new AstConst{fl, AstConst::Unsized64{}, mask() + 1}, edgep}};
+            VL_DO_DANGLING(interval.lop->deleteTree(), interval.lop);
+            interval.lop = clippedp;
+        } else {
+            if (interval.hasUpper) return false;
+            interval.hasUpper = true;
+            AstNodeExpr* edgep = newBoundKeyp(boundp);
+            if (!inclusive)
+                edgep = new AstSub{fl, edgep, new AstConst{fl, AstConst::Unsized64{}, 1}};
+            AstNodeExpr* const clippedp
+                = new AstCond{fl, newLimitComparep(boundp, max, false, inclusive, signedCompare),
+                              new AstConst{fl, AstConst::Unsized64{}, mask()}, edgep};
+            VL_DO_DANGLING(interval.hip->deleteTree(), interval.hip);
+            interval.hip = clippedp;
+            VL_DO_DANGLING(interval.validp->deleteTree(), interval.validp);
+            interval.validp = newLimitComparep(boundp, min, false, inclusive, signedCompare);
+        }
+        return true;
+    }
+    AstNodeStmt* newStateRangep(AstConstraintExpr* exprp) {
+        if (!exprp->exprp()->exists([&](const AstVarRef* refp) { return isStateLeaf(refp); })) {
+            return nullptr;
+        }
+        FileLine* const fl = exprp->fileline();
+        StateInterval interval{new AstConst{fl, AstConst::Unsized64{}, 0},
+                               new AstConst{fl, AstConst::Unsized64{}, mask()},
+                               new AstConst{fl, AstConst::BitTrue{}}};
+        if (!stateInterval(exprp->exprp(), interval)) {
+            VL_DO_DANGLING(interval.lop->deleteTree(), interval.lop);
+            VL_DO_DANGLING(interval.hip->deleteTree(), interval.hip);
+            VL_DO_DANGLING(interval.validp->deleteTree(), interval.validp);
+            return nullptr;
+        }
+        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), false);
+        AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
+        rangep->addPinsp(interval.lop);
+        rangep->addPinsp(interval.hip);
+        rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 1});
+        rangep->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 1});
+        stmtp->addNext(new AstIf{fl, interval.validp, rangep->makeStmt()});
+        return stmtp;
+    }
+    AstNodeStmt* newStateDistp(AstConstraintExpr* exprp, AstDist* distp) {
+        if (!isTarget(distp->exprp())) return nullptr;
+        // Only try this form when there actually is a state leaf. The constant
+        // path preserves the existing all-zero-dist policy and validates constants.
+        const bool hasState
+            = distp->exists([&](const AstVarRef* refp) { return isStateLeaf(refp); });
+        if (!hasState) return nullptr;
+        FileLine* const fl = exprp->fileline();
+        AstNodeStmt* const stmtp = newDomainp(fl, {}, exprp->isSoft(), true);
+        bool hasPositiveWeight = false;
+        for (AstDistItem* const itemp : distp->itemspList()) {
+            const AstInsideRange* const rangeSourcep = VN_CAST(itemp->rangep(), InsideRange);
+            const AstNodeExpr* lop = rangeSourcep ? rangeSourcep->lhsp() : itemp->rangep();
+            const AstNodeExpr* hip = rangeSourcep ? rangeSourcep->rhsp() : itemp->rangep();
+            const AstNodeExpr* weightp = itemp->weightp();
+            for (const AstNodeExpr** boundpp : {&lop, &hip, &weightp}) {
+                if (isStateLeaf(*boundpp)) continue;
+                const AstConst* const constp = constant(*boundpp);
+                if (!constp) break;
+                *boundpp = constp;
+            }
+            if (!m_supported || lop->width() != m_varp->width() || hip->width() != m_varp->width()
+                || weightp->width() > 64) {
+                m_supported = false;
+                VL_DO_DANGLING(stmtp->deleteTree(), stmtp);
+                return nullptr;
+            }
+            hasPositiveWeight |= isStateLeaf(weightp) || !VN_AS(weightp, Const)->isZero();
+            // A negative state weight is not an unsigned probability. Keep the
+            // existing solver diagnostics/policy for that invocation.
+            if (weightp->isSigned()) {
+                AstCMethodHard* const disablep = newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE);
+                stmtp->addNext(new AstIf{
+                    fl,
+                    new AstLtS{fl, weightp->cloneTreePure(false),
+                               new AstConst{fl, AstConst::WidthedValue{}, weightp->width(), 0}},
+                    disablep->makeStmt()});
+            }
+            AstNodeExpr* const lokeyp = newBoundKeyp(lop);
+            AstNodeExpr* const hikeyp = newBoundKeyp(hip);
+            AstNodeExpr* const divisorp
+                = itemp->isWhole() ? static_cast<AstNodeExpr*>(
+                                         new AstAdd{fl,
+                                                    new AstSub{fl, hikeyp->cloneTreePure(false),
+                                                               lokeyp->cloneTreePure(false)},
+                                                    new AstConst{fl, AstConst::Unsized64{}, 1}})
+                                   : new AstConst{fl, AstConst::Unsized64{}, 1};
+            AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
+            rangep->addPinsp(lokeyp);
+            rangep->addPinsp(hikeyp);
+            rangep->addPinsp(new AstExtend{fl, weightp->cloneTreePure(false), 64});
+            rangep->addPinsp(divisorp);
+            stmtp->addNext(rangep->makeStmt());
+        }
+        if (!hasPositiveWeight) {
+            m_supported = false;  // Constant all-zero weights are ignored by the existing path
+            VL_DO_DANGLING(stmtp->deleteTree(), stmtp);
+            return nullptr;
+        }
+        return stmtp;
+    }
+    AstNodeStmt* build(AstConstraintExpr* exprp) {
+        findTarget(exprp->exprp());
+        Ranges ranges;
+        AstNodeStmt* stmtp = nullptr;
+        AstDist* const distp = VN_CAST(exprp->exprp(), Dist);
+        if (m_supported && !exprp->isDisableSoft()) {
+            stmtp = distp ? newStateDistp(exprp, distp) : newStatePinp(exprp);
+            if (!stmtp && !distp && m_supported) stmtp = newStateRangep(exprp);
+            if (!stmtp) ranges = distp ? distribution(distp) : parse(exprp->exprp());
+        } else
+            m_supported = false;
+        FileLine* const fl = exprp->fileline();
+        if (!m_supported) return newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt();
+        if (!stmtp) stmtp = newDomainp(fl, ranges, exprp->isSoft(), distp != nullptr);
+        if (const AstEnumDType* const enumDtp
+            = VN_CAST(m_varp->dtypep()->skipRefToEnump(), EnumDType)) {
+            Ranges enumRanges;
+            for (const AstEnumItem* const itemp : enumDtp->itemspList()) {
+                const AstConst* const valuep = VN_AS(itemp->valuep(), Const);
+                if (valuep->num().isFourState()) continue;
+                const uint64_t value = key(valuep->toUQuad());
+                enumRanges.push_back({value, value});
+            }
+            stmtp->addNext(newDomainp(fl, enumRanges, false, false, true));
+        }
+        V3Stats::addStat("Optimizations, Randomize structured domains", 1);
+        return stmtp;
+    }
+    explicit FastConstraintBuilder(AstVar* genp)
+        : m_genp{genp} {}
+
+public:
+    ~FastConstraintBuilder() {
+        for (AstNodeExpr* const exprp : m_constants) VL_DO_DANGLING(exprp->deleteTree(), exprp);
+    }
+    static AstNodeStmt* apply(AstNode* itemsp, AstVar* genp, bool allow = true) {
+        if (!allow || !v3Global.opt.fConstraintFast() || v3Global.opt.fourstate()) {
+            const FastConstraintBuilder builder{genp};
+            return builder.newCallp(itemsp->fileline(), VCMethod::RANDOMIZER_FAST_DISABLE)
+                ->makeStmt();
+        }
+        AstNodeStmt* stmtsp = nullptr;
+        for (AstNode* const itemp : VNList<AstNode>{itemsp}) {
+            FastConstraintBuilder builder{genp};
+            AstNodeStmt* const stmtp
+                = VN_IS(itemp, ConstraintExpr)
+                      ? builder.build(VN_AS(itemp, ConstraintExpr))
+                      : builder.newCallp(itemp->fileline(), VCMethod::RANDOMIZER_FAST_DISABLE)
+                            ->makeStmt();
+            stmtsp = AstNode::addNext(stmtsp, stmtp);
+        }
+        return stmtsp;
     }
 };
 
@@ -6191,7 +6732,14 @@ public:
                         wrapIfConstraintMode(nodep, constrp, resizeTaskRefp->makeStmt()));
                 }
 
-                if (constrp->itemsp()) expandUniqueElementList(constrp->itemsp());
+                if (constrp->itemsp()) {
+                    // Capture the original items under the same mode guard as the
+                    // SMT setup. Inherited setup tasks retain their own metadata.
+                    AstNodeStmt* const fastp
+                        = FastConstraintBuilder::apply(constrp->itemsp(), genp);
+                    taskp->addStmtsp(wrapIfConstraintMode(nodep, constrp, fastp));
+                    expandUniqueElementList(constrp->itemsp());
+                }
                 if (constrp->itemsp()) {
                     lowerDistConstraints(taskp, constrp->itemsp(), randModeVarp);
                 }
@@ -6447,6 +6995,8 @@ public:
         AstBegin* const holderp = SmtUtil::newItemsHolderp(nodep->fileline(), capturedTreep);
         AstBegin* const setupBlockp
             = new AstBegin{nodep->fileline(), "__Vsetup_constraints", holderp, true};
+        // Analyze before dist loses its membership/weight/soft-priority structure.
+        randomizeFuncp->addStmtsp(FastConstraintBuilder::apply(holderp->declsp(), localGenp));
         // Dist bucket draws go into the function, ahead of the constraints reading them
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              randModeVarp);
@@ -6817,6 +7367,15 @@ public:
         randomizeFuncp->addStmtsp(roundsFirstp);
         AstBegin* const holderp = SmtUtil::newItemsHolderp(fl, capturedTreep);
         AstBegin* const setupBlockp = new AstBegin{fl, "__Vsetup_constraints", holderp, true};
+        // Selected pieces may be marshalled through distinct temporaries despite
+        // aliasing the same SV storage. Only direct scalar arguments use this path.
+        bool fastArgs = true;
+        for (const AstArg* const argp : nodep->argspList()) {
+            const AstNodeExpr* const exprp = argp->exprp();
+            fastArgs &= VN_IS(exprp, VarRef) || VN_IS(exprp, MemberRef);
+        }
+        randomizeFuncp->addStmtsp(
+            FastConstraintBuilder::apply(holderp->declsp(), stdrandp, fastArgs));
         lowerDistConstraints(randomizeFuncp, VN_AS(holderp->declsp(), NodeConstraintItem),
                              nullptr);
         randomizeFuncp->addStmtsp(setupBlockp);

@@ -325,6 +325,33 @@ class VlRandomizer VL_NOT_FINAL {
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
 
+    // Structured domains emitted from the original constraint AST. Coordinates are
+    // unsigned, with the sign bit flipped for signed variables, so order is monotone.
+    struct FastRange final {
+        QData lo;
+        QData hi;
+        QData weight;
+        QData divisor;  // Original range size for :/, otherwise 1
+    };
+    using FastRanges = std::vector<FastRange>;
+    struct FastConstraint final {
+        void* datap;
+        int width;
+        bool isSigned;
+        bool isSoft;
+        bool isDist;
+        bool isEnum;  // This item supplies the complete enum domain
+        FastRanges ranges;
+    };
+    std::vector<FastConstraint> m_fastConstraints;
+    bool m_fastDisabled = false;  // At least one original item cannot be represented
+    // Return -1 for fallback, 0 for an empty domain, 1 for a sampled solution.
+    int nextFast(VlRNG& rngr);
+    static FastRanges fastIntersect(const FastRanges& a, const FastRanges& b);
+    static FastRanges fastUnion(FastRanges ranges);
+    static bool fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
+                           QData& valuer);
+
     // PRIVATE METHODS
     void randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
                           const std::vector<std::string>* layerVarsp = nullptr);
@@ -444,6 +471,20 @@ public:
     ~VlRandomizer() = default;
 
     // METHODS
+    /// Start one original, univariate constraint, bound to the actual SV storage.
+    template <typename T>
+    void fast_begin(T& var, int width, bool isSigned, bool isSoft, bool isDist, bool isEnum) {
+        m_fastConstraints.push_back({&var, width, isSigned, isSoft, isDist, isEnum, {}});
+    }
+    /// Add an interval and its per-value rational weight to the current constraint.
+    void fast_range(QData lo, QData hi, QData weight, QData divisor) {
+        if (lo <= hi && weight) {
+            m_fastConstraints.back().ranges.push_back({lo, hi, weight, divisor});
+        }
+    }
+    /// Keep the solver path when any original constraint item is unsupported.
+    void fast_disable() { m_fastDisabled = true; }
+
     // Finds the next solution satisfying the constraints
     bool next(VlRNGReseeds& rngr);
     // Validate the constraints against the current runtime values of every
