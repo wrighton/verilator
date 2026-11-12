@@ -303,7 +303,8 @@ class ParamProcessor final {
 
     // TYPES
     // Note may have duplicate entries
-    using IfaceRefRefs = std::deque<std::pair<AstIfaceRefDType*, AstIfaceRefDType*>>;
+    // Interface port, and the interface its pin connects
+    using IfaceRefRefs = std::deque<std::pair<AstIfaceRefDType*, AstIface*>>;
 
     // STATE
     using CloneMap = std::unordered_map<const AstNode*, AstNode*>;
@@ -335,7 +336,23 @@ class ParamProcessor final {
     // then differ between runs.
     static constexpr std::string::size_type DIGEST_DIGITS = 8;
 
-    const AstNodeModule* m_modp = nullptr;  // Current module being processed
+    AstNodeModule* m_modp = nullptr;  // Current module being processed
+    // Copies of cells being specialized by hierPinIfacep, and their originals
+    std::vector<std::pair<const AstNode*, const AstCell*>> m_cellCopies;
+    // Modules hierPinIfacep found for each cell, by instance name, which the cell gets in turn.
+    // Those found while visiting a module's body may differ, as not all its items are recorded.
+    using CopyModps
+        = std::unordered_map<const AstCell*, std::unordered_map<string, AstNodeModule*>>;
+    CopyModps m_copyModps;
+    CopyModps m_bodyCopyModps;
+    bool m_copyCycle = false;  // hierPinIfacep found a cycle, so is resolving no further
+    bool m_visitCells = false;  // ParamVisitor specializes m_visitModp's cells, so all recorded
+    // Instances and interface variables of each scope, a module or generate block, by name.
+    // Recorded by ParamVisitor for the module it visits, as visiting may change it, else found
+    // when first searched. The nodes are not deleted before the end of V3Param.
+    std::unordered_map<const AstNode*, std::unordered_map<string, AstNode*>> m_scopeItems;
+    // Generate block of each item recorded for the module ParamVisitor visits
+    std::unordered_map<const AstNode*, const AstGenBlock*> m_visitItemBlocks;
 
     // Database to get lib-create wrapper that matches parameters in hierarchical Verilation
     ParameterizedHierBlocks m_hierBlocks;
@@ -1192,13 +1209,13 @@ class ParamProcessor final {
         // Fix any interface references
         for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
             const AstIfaceRefDType* const portIrefp = it->first;
-            const AstIfaceRefDType* const pinIrefp = it->second;
+            AstIface* const pinIfacep = it->second;
             AstIfaceRefDType* const cloneIrefp = portIrefp->clonep();
             UINFO(8, "     IfaceOld " << portIrefp);
-            UINFO(8, "     IfaceTo  " << pinIrefp);
+            UINFO(8, "     IfaceTo  " << pinIfacep);
             UASSERT_OBJ(cloneIrefp, portIrefp, "parameter clone didn't hit AstIfaceRefDType");
             UINFO(8, "     IfaceClo " << cloneIrefp);
-            cloneIrefp->ifacep(pinIrefp->ifaceViaCellp());
+            cloneIrefp->ifacep(pinIfacep);
             // The connected instance, not the port's parameters, now selects the interface
             if (cloneIrefp->paramsp()) {
                 m_deleter.pushDeletep(cloneIrefp->paramsp()->unlinkFrBackWithNext());
@@ -1995,12 +2012,24 @@ class ParamProcessor final {
                                   << " is not connected to interface/modport pin expression");
                 } else {
                     UINFO(9, "     pinIfaceRef " << pinIrefp);
-                    if (portIrefp->ifaceViaCellp() != pinIrefp->ifaceViaCellp()) {
-                        UINFO(9, "     IfaceRefDType needs reconnect  " << pinIrefp);
+                    AstIface* pinIfacep = pinIrefp->ifaceViaCellp();
+                    const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+                    const AstVarXRef* const xrefp = VN_CAST(exprp, VarXRef);
+                    // In a copy (see hierPinIfacep), instances local to the module specialized
+                    // ahead of its turn may not be specialized either
+                    if (xrefp || (refp && !m_cellCopies.empty())) {
+                        if (m_cellCopies.empty()) m_copyCycle = false;
+                        // The cell is the parent of its first pin
+                        AstIface* const ifacep = hierPinIfacep(
+                            pinsp->backp(), xrefp ? xrefp->dotted() : "", refp->name());
+                        if (ifacep) pinIfacep = ifacep;
+                    }
+                    if (portIrefp->ifaceViaCellp() != pinIfacep) {
+                        UINFO(9, "     IfaceRefDType needs reconnect  " << pinIfacep);
                         longnamer += ("_" + paramSmallName(srcModp, pinp->modVarp())
-                                      + paramValueNumber(pinIrefp));
+                                      + paramValueNumber(pinIfacep));
                         any_overridesr = true;
-                        ifaceRefRefs.emplace_back(portIrefp, pinIrefp);
+                        ifaceRefRefs.emplace_back(portIrefp, pinIfacep);
                         if (portIrefp->ifacep() != pinIrefp->ifacep()
                             // Might be different only due to param cloning, so check names too
                             && portIrefp->ifaceName() != pinIrefp->ifaceName()) {
@@ -2278,8 +2307,10 @@ class ParamProcessor final {
             any_overrides = true;
         }
         if (VN_IS(nodep, Cell) && !srcModp->hierBlock() && hasInstanceClasses(srcModp)) {
-            // A class referring to its module's instance needs a copy for each instance
-            if (const int count = m_instanceCounts[longname]++) {
+            // A class referring to its module's instance needs a copy for each instance. A copy
+            // of the instance for hierPinIfacep does not count, it is only resolving types.
+            int& countr = m_instanceCounts[longname];
+            if (const int count = m_cellCopies.empty() ? countr++ : countr) {
                 longname += "__Vinst" + std::to_string(count);
                 any_overrides = true;
             }
@@ -2642,6 +2673,15 @@ public:
         m_visitModp = modp;
         m_visitBaseQueued = false;
     }
+    // ParamVisitor starts visiting m_visitModp's body, which may change it
+    void visitModpBody() {
+        m_scopeItems[m_visitModp].clear();  // To record as visited
+        m_visitItemBlocks.clear();
+        m_bodyCopyModps.clear();
+        m_visitCells = false;
+    }
+    // ParamVisitor starts specializing m_visitModp's cells, so its items are all recorded
+    void visitModpCells() { m_visitCells = true; }
     void visitBaseQueued(bool flag) { m_visitBaseQueued = flag; }
 
     // Report defparams whose path named no instance once generate loops were elaborated
@@ -2675,10 +2715,102 @@ public:
     // addition to AST children, follow typedefs, parameter types, deferred
     // localparam values, and referenced-variable dtypes. This makes the walk
     // independent of the particular dtype wrappers around a RefDType.
-    void resolveDeferredDotsReachableFrom(AstNode* rootp, const AstNodeModule* modp) {
+    void resolveDeferredDotsReachableFrom(AstNode* rootp, AstNodeModule* modp) {
         VL_RESTORER(m_modp);
         m_modp = modp;
         DeferredResolverVisitor{*this, rootp};
+    }
+
+    // Record a named item of the module ParamVisitor visits, in generate block blockp if not null
+    void visitScopeItem(AstNode* itemp, const AstGenBlock* blockp) {
+        const AstNode* const scopep = blockp ? static_cast<const AstNode*>(blockp) : m_visitModp;
+        m_scopeItems[scopep].emplace(itemp->name(), itemp);
+        if (blockp) m_visitItemBlocks.emplace(itemp, blockp);
+    }
+    // Return the specialization of the interface of the instance named by the reference
+    // 'dotted.name' used as an interface port actual of cellp, e.g. '.bus(h.b)' (IEEE 1800-2023
+    // 25.3), or nullptr if not found below the current module. The instances on its path may be
+    // specialized only after the current module's cells. Specialize copies of them instead,
+    // creating the modules the instances themselves get in their own turn.
+    AstIface* hierPinIfacep(const AstNode* cellp, const string& dotted, const string& name) {
+        for (const auto& copy : m_cellCopies) {
+            if (copy.first == cellp) cellp = copy.second;  // In the scope of its original
+        }
+        // The first name is declared in the module or in an enclosing generate block, the
+        // innermost declaring it (IEEE 1800-2023 23.9). Scopes, outermost first, with their
+        // instance names.
+        std::vector<std::pair<const AstNode*, string>> scopes{
+            {m_modp, m_modp->someInstanceName()}};
+        for (auto it = m_visitItemBlocks.find(cellp); it != m_visitItemBlocks.end();
+             it = m_visitItemBlocks.find(it->second)) {
+            scopes.emplace(scopes.begin() + 1, it->second, "");
+        }
+        for (size_t i = 1; i < scopes.size(); ++i) {
+            scopes[i].second = scopes[i - 1].second + "." + scopes[i].first->prettyName();
+        }
+        std::deque<string> names = VString::split(dotted, '.');
+        names.push_back(name);
+        AstNode* itemp = nullptr;
+        string instanceName;
+        for (auto it = scopes.rbegin(); !itemp && it != scopes.rend(); ++it) {
+            itemp = findItem(it->first, names.front());
+            instanceName = it->second;
+        }
+        AstNodeModule* modp = m_modp;
+        for (size_t i = 0;; ++i) {
+            // Find the module names[i], itemp, refers to
+            AstCell* cellp = VN_CAST(itemp, Cell);
+            if (const AstVar* const varp = VN_CAST(itemp, Var)) {
+                // Not an interface variable is reported by the caller
+                const AstIfaceRefDType* const irefp
+                    = VN_AS(arraySubDTypeDeepp(varp->subDTypep()), IfaceRefDType);
+                cellp = irefp->cellp();  // An interface instance's variable
+                if (!cellp) modp = irefp->ifacep();  // An interface port, already specialized
+            } else if (!cellp) {
+                return nullptr;  // Not below this module
+            }
+            if (cellp) {
+                // Each instance once, as several references may pass through it
+                CopyModps& copyModps = m_visitCells ? m_copyModps : m_bodyCopyModps;
+                AstNodeModule*& copyModpr = copyModps[cellp][instanceName];
+                if (copyModpr) {
+                    modp = copyModpr;
+                } else {
+                    // Interface port actuals referring to each other through their instances,
+                    // so specialized with default interfaces: leave all of them to their turn
+                    if (std::any_of(m_cellCopies.begin(), m_cellCopies.end(),
+                                    [&](const auto& copy) { return copy.second == cellp; })) {
+                        m_copyCycle = true;
+                    }
+                    if (m_copyCycle) return nullptr;
+                    AstCell* const copyp = cellp->cloneTree(false);
+                    m_cellCopies.emplace_back(copyp, cellp);
+                    {
+                        VL_RESTORER(m_modp);
+                        nodeDeparam(copyp, cellp->modp(), modp, instanceName);
+                    }
+                    m_cellCopies.pop_back();
+                    modp = copyp->modp();  // Unchanged after an error
+                    VL_DO_DANGLING(m_deleter.pushDeletep(copyp), copyp);
+                    if (m_copyCycle) return nullptr;
+                    copyModpr = modp;
+                }
+                instanceName += "." + cellp->name();
+            }
+            if (i + 1 == names.size()) return VN_AS(modp, Iface);
+            itemp = findItem(modp, names[i + 1]);
+        }
+    }
+    // Return the instance or interface variable named 'name' in scope, a module or generate block
+    AstNode* findItem(const AstNode* scopep, const string& name) {
+        const auto pair = m_scopeItems.emplace(scopep, std::unordered_map<string, AstNode*>{});
+        if (pair.second) {  // Not the module visited, nor one of its generate blocks
+            for (AstNode* const itemp : VN_AS(scopep, NodeModule)->stmtspList()) {
+                pair.first->second.emplace(itemp->name(), itemp);
+            }
+        }
+        const auto it = pair.first->second.find(name);
+        return it == pair.first->second.end() ? nullptr : it->second;
     }
 
     AstNodeModule* nodeDeparam(AstNode* nodep, AstNodeModule* srcModp, AstNodeModule* modp,
@@ -3101,6 +3233,7 @@ class ParamVisitor final : public VNVisitor {
     VarsByName m_modIfaceRefs;  // Interface-ref Vars in current module, keyed by name
     bool m_modIfaceRefsDone = false;  // m_modIfaceRefs has been gathered for m_modp
     string m_generateHierName;  // Generate portion of hierarchy name
+    const AstGenBlock* m_genBlockp = nullptr;  // Generate block being visited
     bool m_inGenerateCond = false;  // Traversing a generate condition; see iterateGenerateCond
     bool m_inClassExtends = false;  // Traversing the base of a class
 
@@ -3143,18 +3276,22 @@ class ParamVisitor final : public VNVisitor {
                 if (modp->someInstanceName().empty()) modp->someInstanceName(modp->origName());
 
                 // Iterate the body
+                m_processor.visitModpBody();
                 {
                     VL_RESTORER(m_modp);
                     VL_RESTORER_CLEAR(m_ifacePortNames);
                     VL_RESTORER_CLEAR(m_ifaceInstCells);
                     VL_RESTORER_CLEAR(m_modIfaceRefs);
                     VL_RESTORER(m_modIfaceRefsDone);
+                    VL_RESTORER(m_genBlockp);
                     m_modp = modp;
                     m_modIfaceRefsDone = false;
+                    m_genBlockp = nullptr;
                     iterateChildren(modp);
                 }
             }
 
+            m_processor.visitModpCells();
             // Process interface cells, then non-interface cells, which may reference an interface
             // cell. Specialize the base of a class before the rest, whose parameter overrides may
             // use names it inherits.
@@ -3618,6 +3755,7 @@ class ParamVisitor final : public VNVisitor {
         }
         checkParamNotHierRecurse(nodep->paramsp());
         if (VN_IS(nodep->modp(), Iface)) m_ifaceInstCells.emplace(nodep->name(), nodep);
+        m_processor.visitScopeItem(nodep, m_genBlockp);
         visitCellOrClassRef(nodep, VN_IS(nodep->modp(), Iface));
     }
     void visit(AstIfaceRefDType* nodep) override {
@@ -3722,7 +3860,10 @@ class ParamVisitor final : public VNVisitor {
             if (irefp->paramsp()) pushDeletep(irefp->paramsp()->unlinkFrBackWithNext());
         }
         // Build cache of interface port names as we encounter them
-        if (nodep->isIfaceRef()) { m_ifacePortNames.insert(nodep->name()); }
+        if (nodep->isIfaceRef()) {
+            m_ifacePortNames.insert(nodep->name());
+            m_processor.visitScopeItem(nodep, m_genBlockp);
+        }
         iterateChildren(nodep);
         if (nodep->isParam()) {
             checkParamNotHierRecurse(nodep->valuep());
@@ -4076,8 +4217,13 @@ class ParamVisitor final : public VNVisitor {
             VL_DO_DANGLING(m_unroller.unroll(forp, beginName), forp);
         } else {
             VL_RESTORER_COPY(m_generateHierName);
+            VL_RESTORER(m_genBlockp);
             // An unnamed block that is not a generate scope has no name
-            if (!nodep->name().empty()) m_generateHierName += "." + nodep->prettyName();
+            if (!nodep->name().empty()) {
+                m_processor.visitScopeItem(nodep, m_genBlockp);
+                m_generateHierName += "." + nodep->prettyName();
+                m_genBlockp = nodep;
+            }
             iterateChildren(nodep);
         }
     }
