@@ -961,6 +961,7 @@ class FastConstraintBuilder final {
         AstVar* const varp
             = new AstVar{fl, VVarType::BLOCKTEMP, m_names.get("__Vfast_bound"), dtypep};
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        varp->funcLocal(true);
         varp->isInternal(true);
         blockp->addDeclsp(varp);
         blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
