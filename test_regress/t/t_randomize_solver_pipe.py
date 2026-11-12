@@ -17,7 +17,7 @@ test.top_filename = "t/t_randomize_solver_fault.v"
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+test.compile(verilator_flags2=['-fno-constraint-fast'])
 
 # Every scenario acts on the first reply of its kind, so the counts do not
 # depend on how many replies a particular solver sends per randomize() call.

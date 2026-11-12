@@ -30,6 +30,7 @@
 #include <sstream>
 #include <streambuf>
 #include <tuple>
+#include <unordered_map>
 
 // Diversity: tie each variable, array element, or part of one, to a random target via
 //   a boolean assumption literal, then force them with (check-sat-assuming). If
@@ -1041,7 +1042,275 @@ bool VlRandomizer::next(VlRNGReseeds& rngr) { return nextRandomize(rngr, false);
 
 bool VlRandomizer::next_size(VlRNGReseeds& rngr) { return nextRandomize(rngr, false, true); }
 
+// Normalize a union without changing its set of legal values. Weights are only
+// used by the original dist buckets, never by the intersected membership domains.
+VlRandomizer::FastRanges VlRandomizer::fastUnion(FastRanges ranges) {
+    std::sort(ranges.begin(), ranges.end(),
+              [](const FastRange& a, const FastRange& b) { return a.lo < b.lo; });
+    FastRanges result;
+    for (const FastRange& range : ranges) {
+        if (!result.empty()
+            && (result.back().hi == std::numeric_limits<QData>::max()
+                || range.lo <= result.back().hi + 1)) {
+            result.back().hi = std::max(result.back().hi, range.hi);
+        } else {
+            result.push_back({range.lo, range.hi, 1, 1});
+        }
+    }
+    return result;
+}
+
+// b is a sorted, disjoint membership domain. a may be the original overlapping
+// dist buckets: retain each contribution so overlaps add their weights.
+VlRandomizer::FastRanges VlRandomizer::fastIntersect(const FastRanges& a, const FastRanges& b) {
+    FastRanges result;
+    for (const FastRange& range : a) {
+        auto it = std::lower_bound(b.begin(), b.end(), range.lo,
+                                   [](const FastRange& r, QData lo) { return r.hi < lo; });
+        for (; it != b.end() && it->lo <= range.hi; ++it) {
+            result.push_back({std::max(range.lo, it->lo), std::min(range.hi, it->hi), range.weight,
+                              range.divisor});
+        }
+    }
+    return result;
+}
+
+// Uniform bounded draws without modulo bias. The finite 64-bit bound is
+// nonzero. This does not touch the solver or the thread's global RNG.
+static QData vl_fastBelow(VlRNG& rngr, QData bound) {
+    const QData threshold = -bound % bound;
+    QData value;
+    do { value = VL_RANDOM_RNG_Q(rngr); } while (value < threshold);
+    return value % bound;
+}
+
+bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
+                              QData& valuer) {
+    // A full, single power-of-two range has an unbiased procedural pick already.
+    // Reuse it without an extra draw, preserving width-independent global RNG use.
+    if (distp && distp->hasProposal && distp->ranges.size() == 1 && domain.size() == 1
+        && domain[0].lo == distp->ranges[0].lo && domain[0].hi == distp->ranges[0].hi) {
+        const QData count = domain[0].hi - domain[0].lo + 1;
+        if (count && !(count & (count - 1)) && distp->proposal >= domain[0].lo
+            && distp->proposal <= domain[0].hi) {
+            valuer = distp->proposal;
+            return true;
+        }
+    }
+    const FastRanges ranges = distp ? fastIntersect(distp->ranges, domain) : domain;
+    // Convert rational :/ per-value weights to exact integer masses. No floating
+    // point rounding and no rejection from the original (possibly huge) domain.
+    QData denominator = 1;
+    for (const FastRange& range : ranges) {
+        if (!range.divisor) return false;
+        QData a = denominator;
+        QData b = range.divisor;
+        while (b) {
+            const QData remainder = a % b;
+            a = b;
+            b = remainder;
+        }
+        const QData factor = range.divisor / a;
+        if (factor > std::numeric_limits<QData>::max() / denominator) return false;
+        denominator *= factor;
+    }
+    QData total = 0;
+    std::vector<QData> masses;
+    masses.reserve(ranges.size());
+    for (const FastRange& range : ranges) {
+        const QData scale = denominator / range.divisor;
+        if (range.weight > std::numeric_limits<QData>::max() / scale) return false;
+        const QData weight = range.weight * scale;
+        const QData count = range.hi - range.lo + 1;
+        if (!count) return false;  // The finite cardinality cannot be represented
+        if (count > std::numeric_limits<QData>::max() / weight) return false;
+        const QData mass = count * weight;
+        if (mass > std::numeric_limits<QData>::max() - total) return false;
+        total += mass;
+        masses.push_back(mass);
+    }
+    if (!total) return false;
+    QData pick = vl_fastBelow(rngr, total);
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        if (pick < masses[i]) {
+            // Consecutive equal-weight units map uniformly onto the legal values.
+            valuer = ranges[i].lo + pick / (masses[i] / (ranges[i].hi - ranges[i].lo + 1));
+            return true;
+        }
+        pick -= masses[i];
+    }
+    return false;  // Unreachable: the cumulative masses equal total
+}
+
+// A hard singleton view fixes exactly those physical bits. It does not
+// consume probability mass or silently pin any bits outside that view.
+bool VlRandomizer::fastPinned(const FastConstraint& constraint) {
+    return !constraint.isSoft && !constraint.isDist && !constraint.isEnum
+           && constraint.ranges.size() == 1 && constraint.ranges[0].lo == constraint.ranges[0].hi;
+}
+
+bool VlRandomizer::fastView(FastDomain& domain) {
+    const QData physicalMask = VL_MASK_Q(domain.varp->width());
+    if (!domain.viewWidth) {
+        const QData freeMask = physicalMask & ~domain.pinMask;
+        if (!freeMask) {
+            domain.viewWidth = domain.varp->width();
+        } else {
+            const QData first = freeMask & -freeMask;
+            domain.viewLsb = VL_COUNTONES_Q(first - 1);
+            const QData shifted = freeMask >> domain.viewLsb;
+            if (shifted & (shifted + 1)) return false;  // More than one free window
+            domain.viewWidth = VL_COUNTONES_Q(shifted);
+        }
+    }
+    const QData mask = VL_MASK_Q(domain.viewWidth);
+    const QData viewMask = mask << domain.viewLsb;
+    const QData outside = physicalMask & ~viewMask;
+    if ((domain.pinMask & outside) != outside) return false;
+    const QData inside = domain.pinMask & viewMask;
+    if (inside && inside != viewMask) return false;  // Gaps need the solver
+    if (domain.pinConflict) return true;  // Preserve an empty hard domain
+    if (inside) {
+        QData value = (domain.pinBits >> domain.viewLsb) & mask;
+        if (domain.isSigned) value ^= QData{1} << (domain.viewWidth - 1);
+        domain.ranges.push_back({value, value, 1, 1});
+    } else {
+        domain.ranges.push_back({0, mask, 1, 1});
+    }
+    return true;
+}
+
+bool VlRandomizer::fastDomains(std::vector<FastDomain>& domains,
+                               std::unordered_map<void*, size_t>& indices) {
+    std::unordered_set<void*> enumNeeded;
+    for (const auto& namedVar : m_vars) {
+        const VlRandomVar* const varp = namedVar.second.get();
+        if (varp->dimension() || varp->width() <= 0 || varp->width() > VL_QUADSIZE) return false;
+        // Two symbolic names for one location require the full alias checks.
+        if (!indices.emplace(varp->datap(0), domains.size()).second) return false;
+        if (m_enumDomains.count(namedVar.first)) enumNeeded.insert(varp->datap(0));
+        FastDomain domain;
+        domain.varp = varp;
+        domains.push_back(std::move(domain));
+    }
+    for (const FastConstraint& constraint : m_fastConstraints) {
+        const auto it = indices.find(constraint.datap);
+        if (it == indices.end()) return false;
+        FastDomain& domain = domains[it->second];
+        if (constraint.width != domain.varp->width() || constraint.viewWidth <= 0
+            || constraint.viewLsb < 0
+            || constraint.viewLsb > constraint.width - constraint.viewWidth)
+            return false;
+        domain.covered = true;
+        if (constraint.isEnum) {
+            if (constraint.viewLsb || constraint.viewWidth != constraint.width) return false;
+            enumNeeded.erase(constraint.datap);
+        }
+        if (fastPinned(constraint)) {
+            const QData mask = VL_MASK_Q(constraint.viewWidth) << constraint.viewLsb;
+            QData bits = constraint.ranges[0].lo;
+            if (constraint.isSigned) bits ^= QData{1} << (constraint.viewWidth - 1);
+            bits = (bits << constraint.viewLsb) & mask;
+            domain.pinConflict |= ((domain.pinBits ^ bits) & domain.pinMask & mask) != 0;
+            domain.pinBits = (domain.pinBits & ~mask) | bits;
+            domain.pinMask |= mask;
+            continue;
+        }
+        if (domain.viewWidth
+            && (domain.viewLsb != constraint.viewLsb || domain.viewWidth != constraint.viewWidth
+                || domain.isSigned != constraint.isSigned))
+            return false;
+        domain.viewLsb = constraint.viewLsb;
+        domain.viewWidth = constraint.viewWidth;
+        domain.isSigned = constraint.isSigned;
+    }
+    if (!enumNeeded.empty()) return false;
+    for (FastDomain& domain : domains) {
+        if (!domain.covered || !fastView(domain)) return false;
+    }
+    for (const FastConstraint& constraint : m_fastConstraints) {
+        if (constraint.isSoft || fastPinned(constraint)) continue;
+        FastDomain& domain = domains[indices[constraint.datap]];
+        domain.ranges = fastIntersect(domain.ranges, fastUnion(constraint.ranges));
+        if (constraint.isDist) {
+            if (domain.distp) return false;  // Multiple retained distributions need the solver
+            domain.distp = &constraint;
+        }
+    }
+    return true;
+}
+
+int VlRandomizer::nextFast(VlRNG& rngr) {
+    if (solverSamples() || m_fastDisabled || m_fastConstraints.empty() || m_vars.empty()
+        || !m_randcVarNames.empty() || !m_uniqueArrays.empty() || !m_frozenPins.empty()
+        || !m_solveBefore.empty() || m_funcRoundLast || hasFrozenVar()) {
+        return -1;
+    }
+    std::vector<FastDomain> domains;
+    std::unordered_map<void*, size_t> indices;
+    if (!fastDomains(domains, indices)) return -1;
+    for (const FastDomain& domain : domains) {
+        if (domain.ranges.empty()) {
+            // Default-on diagnostics retain the existing solver/source-core path.
+            return Verilated::threadContextp()->warnUnsatConstr() ? -1 : 0;
+        }
+    }
+    // IEEE 1800-2023 18.5.13: keep each soft iff it is compatible with the
+    // hard domain and the higher-priority softs already retained.
+    for (auto it = m_fastConstraints.rbegin(); it != m_fastConstraints.rend(); ++it) {
+        if (!it->isSoft) continue;
+        FastDomain& domain = domains[indices[it->datap]];
+        FastRanges intersection = fastIntersect(domain.ranges, fastUnion(it->ranges));
+        if (intersection.empty()) continue;
+        domain.ranges = std::move(intersection);
+        if (it->isDist) {
+            if (domain.distp) return -1;
+            domain.distp = &*it;
+        }
+    }
+    const size_t freeDomains
+        = std::count_if(domains.begin(), domains.end(), [](const FastDomain& d) {
+              return d.ranges.size() != 1 || d.ranges[0].lo != d.ranges[0].hi;
+          });
+    // Every original item is univariate and state-only. One free domain plus
+    // independently proved singleton domains needs no coupled solver work.
+    if (freeDomains > 1) return -1;
+    // Prepare every value before committing any write. Overflow/unsupported sampling
+    // falls back without advancing the caller's RNG or changing SV storage.
+    VlRNG trialRng = rngr;
+    std::vector<QData> values;
+    for (const FastDomain& domain : domains) {
+        QData value = domain.ranges[0].lo;
+        const bool pinned = domain.ranges.size() == 1 && value == domain.ranges[0].hi;
+        if (!pinned && !fastSample(trialRng, domain.ranges, domain.distp, value)) return -1;
+        if (domain.isSigned) value ^= QData{1} << (domain.viewWidth - 1);
+        const QData viewMask = VL_MASK_Q(domain.viewWidth) << domain.viewLsb;
+        values.push_back((value << domain.viewLsb) | (domain.pinBits & ~viewMask));
+    }
+    for (size_t i = 0; i < domains.size(); ++i) {
+        const VlRandomVar* const varp = domains[i].varp;
+        if (varp->width() <= VL_BYTESIZE) {
+            *static_cast<CData*>(varp->datap(0)) = values[i];
+        } else if (varp->width() <= VL_SHORTSIZE) {
+            *static_cast<SData*>(varp->datap(0)) = values[i];
+        } else if (varp->width() <= VL_IDATASIZE) {
+            *static_cast<IData*>(varp->datap(0)) = values[i];
+        } else {
+            *static_cast<QData*>(varp->datap(0)) = values[i];
+        }
+    }
+    rngr = trialRng;
+    return 1;
+}
+
 bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool sizeSolve) {
+    // Check-only, resize, frozen and function-round calls retain their original
+    // protocols. nextFast separately verifies enum domains and excludes randc.
+    // The original setup and callbacks have already run.
+    if (!checkOnly && !sizeSolve && !m_sizeSolved) {
+        const int fastResult = nextFast(rngr);
+        if (fastResult >= 0) return fastResult != 0;
+    }
     // No rand variables: randomize() still checks the constraints (IEEE 1800-2023 18.11.1)
     if (!checkOnly && m_vars.empty() && m_uniqueArrays.empty() && m_constraints.empty()) {
         return true;
@@ -2135,6 +2404,7 @@ void VlRandomizer::soft(std::string constraint, std::initializer_list<std::strin
 }
 
 void VlRandomizer::disable_soft(const std::string& varName) {
+    m_fastDisabled = true;  // Retain the existing conditional disable-soft protocol
     // IEEE 1800-2023 18.5.13.2: Remove the soft constraints the variable directly appears in,
     // in one pass keeping the order of the others
     size_t kept = 0;
@@ -2163,6 +2433,8 @@ void VlRandomizer::disable_soft(const std::string& varName) {
 }
 
 void VlRandomizer::clearConstraints() {
+    m_fastConstraints.clear();
+    m_fastDisabled = false;
     m_constraints.clear();
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();
@@ -2177,6 +2449,8 @@ void VlRandomizer::clearConstraints() {
 }
 
 void VlRandomizer::clearAll() {
+    m_fastConstraints.clear();
+    m_fastDisabled = false;
     m_constraints.clear();
     m_constraintVarNames.clear();
     m_constraintVarEnds.clear();

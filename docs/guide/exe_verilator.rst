@@ -857,6 +857,24 @@ Summary:
    Rarely needed. Disable eager constant folding, run immediately after
    expanding wide operations.
 
+.. option:: -fno-constraint-fast
+
+   Disable solver-free sampling of simple integral constraints. By default,
+   recognized finite scalar domains up to 64 bits use this optimization when
+   every constrained variable is pinned to one legal value, or at most one
+   independent variable remains unpinned. Ranges, state-queue membership and
+   exclusion, pure state bounds, and a single retained distribution are
+   supported. A contiguous slice can be sampled when every bit outside it is
+   hard-pinned; those fixed bits are preserved, including nonzero values.
+   Distribution weights are preserved after hard restrictions and soft-priority
+   resolution. Unsupported forms, unrepresentable sampling arithmetic, and
+   :vlopt:`+verilator+rand+sampler+\<name\>` set to ``solver`` retain the
+   solver path. Random values from a given seed may differ when this
+   optimization is enabled, and so may the result of ``randomize()`` where the
+   solver path does not keep soft constraints as IEEE 1800-2023 18.5.13
+   requires. This option is useful when testing the solver protocol itself. The
+   optimization is experimental and for internal use only.
+
 .. option:: -fno-dead-assigns
 
    Rarely needed. Disable removing assignments to variables that are never

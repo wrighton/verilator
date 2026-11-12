@@ -34,6 +34,7 @@
 #include <ostream>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 //=============================================================================
@@ -325,6 +326,52 @@ class VlRandomizer VL_NOT_FINAL {
                      const VlRandomVar& var) const;  // true if this var is currently frozen
     bool hasFrozenVar() const;  // true if any var is currently rand_mode(0)-frozen
 
+    // Structured domains emitted from the original constraint AST. Coordinates are
+    // unsigned, with the sign bit flipped for signed variables, so order is monotone.
+    struct FastRange final {
+        QData lo;
+        QData hi;
+        QData weight;
+        QData divisor;  // Original range size for :/, otherwise 1
+    };
+    using FastRanges = std::vector<FastRange>;
+    struct FastConstraint final {
+        void* datap;
+        int width;
+        bool isSigned;
+        bool isSoft;
+        bool isDist;
+        bool isEnum;  // This item supplies the complete enum domain
+        FastRanges ranges;
+        int viewLsb = 0;  // Constant extraction offset in physical storage
+        int viewWidth = 0;  // Width before comparison/dist extension
+        QData proposal = 0;  // Ordered coordinate of the original procedural draw
+        bool hasProposal = false;
+    };
+    struct FastDomain final {
+        const VlRandomVar* varp;
+        int viewLsb = 0;
+        int viewWidth = 0;
+        bool isSigned = false;
+        bool covered = false;
+        QData pinMask = 0;
+        QData pinBits = 0;
+        bool pinConflict = false;
+        FastRanges ranges;
+        const FastConstraint* distp = nullptr;
+    };
+    std::vector<FastConstraint> m_fastConstraints;
+    bool m_fastDisabled = false;  // At least one original item cannot be represented
+    static bool fastPinned(const FastConstraint& constraint);
+    static bool fastView(FastDomain& domain);
+    bool fastDomains(std::vector<FastDomain>& domains, std::unordered_map<void*, size_t>& indices);
+    // Return -1 for fallback, 0 for an empty domain, 1 for a sampled solution.
+    int nextFast(VlRNG& rngr);
+    static FastRanges fastIntersect(const FastRanges& a, const FastRanges& b);
+    static FastRanges fastUnion(FastRanges ranges);
+    static bool fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
+                           QData& valuer);
+
     // PRIVATE METHODS
     void randomConstraint(std::ostream& os, VlRNG& rngr, int bits,
                           const std::vector<std::string>* layerVarsp = nullptr);
@@ -444,6 +491,68 @@ public:
     ~VlRandomizer() = default;
 
     // METHODS
+    /// Start one original, univariate constraint, bound to the actual SV storage.
+    template <typename T>
+    void fast_begin(T& var, int width, bool isSigned, bool isSoft, bool isDist, bool isEnum,
+                    int viewLsb, int viewWidth) {
+        m_fastConstraints.push_back({&var, width, isSigned, isSoft, isDist, isEnum, {}});
+        m_fastConstraints.back().viewLsb = viewLsb;
+        m_fastConstraints.back().viewWidth = viewWidth;
+    }
+    /// Add an interval and its per-value rational weight to the current constraint.
+    void fast_range(QData lo, QData hi, QData weight, QData divisor) {
+        if (lo <= hi && weight) {
+            if (!divisor) {
+                m_fastDisabled = true;  // An original :/ cardinality of 2^64
+            } else {
+                m_fastConstraints.back().ranges.push_back({lo, hi, weight, divisor});
+            }
+        }
+    }
+    /// Record a single-range procedural pick at its original evaluation point.
+    template <typename T>
+    void fast_dist_pick(T& var, QData bits) {
+        // Count original descriptors, including empty ones, before soft pruning.
+        // Storage alone cannot identify which RHS produced a multi-dist pick.
+        FastConstraint* pickp = nullptr;
+        for (FastConstraint& constraint : m_fastConstraints) {
+            if (!constraint.isDist || constraint.datap != &var) continue;
+            if (pickp) return;
+            pickp = &constraint;
+        }
+        if (!pickp) return;
+        pickp->proposal = bits & VL_MASK_Q(pickp->viewWidth);
+        if (pickp->isSigned) pickp->proposal ^= QData{1} << (pickp->viewWidth - 1);
+        pickp->hasProposal = true;
+    }
+    /// Snapshot a state queue's membership set; duplicates never add probability.
+    template <typename T, size_t N_MaxSize>
+    void fast_queue(const VlQueue<T, N_MaxSize>& queue, bool exclude) {
+        FastConstraint& constraint = m_fastConstraints.back();
+        const QData mask = VL_MASK_Q(constraint.viewWidth);
+        const QData sign = constraint.isSigned ? QData{1} << (constraint.viewWidth - 1) : 0;
+        FastRanges ranges;
+        ranges.reserve(queue.size());
+        for (const T& value : queue) {
+            const QData key = (static_cast<QData>(value) & mask) ^ sign;
+            ranges.push_back({key, key, 1, 1});
+        }
+        ranges = fastUnion(std::move(ranges));
+        if (!exclude) {
+            constraint.ranges = std::move(ranges);
+            return;
+        }
+        QData next = 0;
+        for (const FastRange& range : ranges) {
+            if (next < range.lo) constraint.ranges.push_back({next, range.lo - 1, 1, 1});
+            if (range.hi == mask) return;
+            next = range.hi + 1;
+        }
+        constraint.ranges.push_back({next, mask, 1, 1});
+    }
+    /// Keep the solver path when any original constraint item is unsupported.
+    void fast_disable() { m_fastDisabled = true; }
+
     // Finds the next solution satisfying the constraints
     bool next(VlRNGReseeds& rngr);
     // Validate the constraints against the current runtime values of every
