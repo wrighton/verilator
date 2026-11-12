@@ -55,6 +55,10 @@ interface ifc (
     got = cb.sig;
     t = $time;
   endtask
+  task automatic sum_later(int n, const ref bit [6:0] a, const ref bit [14:0] b, output int sum);
+    #2;
+    sum = n + int'(a) + int'(b);
+  endtask
   // An upward reference out of the interface is illegal here: "Although an interface may
   // contain hierarchical references to objects outside its body or ports that reference other
   // interfaces, it shall be illegal to use an interface containing those references in the
@@ -259,6 +263,27 @@ module t;
     #1;  // For the NBA
     `checkd(ha.i.y, 7);
     `checkd(hb.i.y, 15);
+  end
+
+  // Const ref arguments after another argument read the caller's variables, which change while
+  // the task waits (IEEE 1800-2023 13.5.2)
+  initial begin
+    virtual ifc v;
+    bit [6:0] a;
+    bit [14:0] b;
+    int sum;
+    v = ha.i;
+    a = 5;
+    b = 100;
+    fork
+      v.sum_later(1, a, b, sum);
+      begin
+        #1;
+        a = 20;
+        b = 200;
+      end
+    join
+    `checkd(sum, 221);
   end
 
   initial begin

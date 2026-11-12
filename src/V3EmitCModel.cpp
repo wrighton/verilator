@@ -90,8 +90,9 @@ class EmitCModel final : public EmitCFunc {
 
         // Declare foreign instances up front to make C++ happy
         puts("\n");
-        puts("class " + EmitCUtil::symClassName() + ";\n");
-        puts("class " + EmitCUtil::prefixNameProtect(modp) + ";\n");  // For rootp pointer only
+        puts(EmitCUtil::fwdClassDecl(EmitCUtil::symClassName()));
+        // For rootp pointer only
+        puts(EmitCUtil::fwdClassDecl(EmitCUtil::prefixNameProtect(modp)));
         for (const string& base : v3Global.opt.traceClassLangs()) puts("class " + base + ";\n");
         emitModCUse(modp, VUseType::INT_FWD_CLASS);  // Note: This is needed for cell forwarding
 

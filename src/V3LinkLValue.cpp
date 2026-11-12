@@ -22,6 +22,7 @@
 
 #include "V3LinkLValue.h"
 
+#include "V3MemberMap.h"
 #include "V3Task.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -32,6 +33,9 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 class LinkLValueVisitor final : public VNVisitor {
     // NODE STATE
 
+    // STATE - across all visitors
+    VMemberMap* const m_memberMapp;  // Struct members by name, nullptr if the tree is typed
+
     // STATE - for current visit position (use VL_RESTORER)
     bool m_setContinuously = false;  // Set that var has some continuous assignment
     bool m_setForcedByCode = false;  // Set that var is the target of an AstAssignForce/AstRelease
@@ -40,7 +44,12 @@ class LinkLValueVisitor final : public VNVisitor {
     bool m_inFunc = false;  // Set if inside AstNodeFTask
     bool m_inInitialStatic = false;  // Set if inside AstInitialStatic
     bool m_inInitialStaticStmt = false;  // Set if inside AstInitialStaticStmt
+    // Non-procedural context, e.g. "a continuous assignment", if under one
+    const char* m_nonProcContextp = nullptr;
     VAccess m_setRefLvalue;  // Set VarRefs to lvalues for pin assignments
+    const AstNodeVarRef* m_handleRefp = nullptr;  // Handle read to write a member of its object
+    // Untyped address data types already inferred, see addressDTypep
+    std::map<const AstNodeExpr*, const AstNodeDType*> m_addressDTypes;
 
     // VISITORS
     // Result handing
@@ -50,12 +59,10 @@ class LinkLValueVisitor final : public VNVisitor {
         if (m_setRefLvalue != VAccess::NOCHANGE) nodep->access(m_setRefLvalue);
         // Linked via an input-only modport by V3LinkDot, before it was known if written
         if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
-            if (xrefp->readOnlyModport()) {
-                if (nodep->access().isWriteOrRW()) {
-                    nodep->v3error(
-                        "Attempt to drive input-only modport: " << nodep->prettyNameQ());
-                }
-                xrefp->readOnlyModport(false);
+            // Writing a member of the object does not write its handle (IEEE 1800-2023 6.20.6)
+            if (xrefp->readOnlyModport() && nodep->access().isWriteOrRW()
+                && nodep != m_handleRefp) {
+                nodep->v3error("Attempt to drive input-only modport: " << nodep->prettyNameQ());
             }
         }
         if (nodep->varp() && nodep->access().isWriteOrRW()) {
@@ -70,7 +77,19 @@ class LinkLValueVisitor final : public VNVisitor {
                 nodep->varp()->isContinuously(true);
                 // Strength may only be specified in continuous assignment,
                 // so it is needed to check only if m_setContinuously is true
-                if (m_setStrengthSpecified) nodep->varp()->hasStrengthAssignment(true);
+                if (m_setStrengthSpecified) {
+                    AstVar* const varp = nodep->varp();
+                    varp->hasStrengthAssignment(true);
+                    // An output port with an explicit data type but no net type is a
+                    // variable (IEEE 1800-2023 23.2.2.3)
+                    if (varp->varType() == VVarType::VAR
+                        || (varp->varType() == VVarType::PORT
+                            && varp->direction() == VDirection::OUTPUT && varp->isDeclTyped())) {
+                        nodep->v3error("Drive strength specified for a variable, but drive "
+                                       "strengths only apply to nets (IEEE 1800-2023 10.3.4): "
+                                       << nodep->prettyNameQ());
+                    }
+                }
             }
             if (const AstClockingItem* const itemp
                 = VN_CAST(nodep->varp()->backp(), ClockingItem)) {
@@ -114,6 +133,12 @@ class LinkLValueVisitor final : public VNVisitor {
         VL_RESTORER(m_setRefLvalue);
         VL_RESTORER(m_setContinuously);
         VL_RESTORER(m_setStrengthSpecified);
+        VL_RESTORER(m_nonProcContextp);
+        if (VN_IS(nodep, AssignW)) {
+            m_nonProcContextp = "a continuous assignment";
+        } else if (VN_IS(nodep, AssignCont) || VN_IS(nodep, AssignForce)) {
+            m_nonProcContextp = "a procedural continuous assignment";
+        }
         {
             m_setRefLvalue = VAccess::WRITE;
             m_setContinuously = VN_IS(nodep, AssignW);
@@ -154,6 +179,16 @@ class LinkLValueVisitor final : public VNVisitor {
                 }
             }
         }
+    }
+    void visit(AstCell* nodep) override {
+        VL_RESTORER(m_nonProcContextp);
+        m_nonProcContextp = "an instance connection";
+        iterateChildren(nodep);
+    }
+    void visit(AstSenItem* nodep) override {
+        VL_RESTORER(m_nonProcContextp);
+        m_nonProcContextp = "an event expression";
+        iterateChildren(nodep);
     }
     void visit(AstAlias* nodep) override {
         VL_RESTORER(m_setRefLvalue);
@@ -354,11 +389,86 @@ class LinkLValueVisitor final : public VNVisitor {
                 }
             }
         } else {
-            // It is the only place where the access is set to member select nodes.
             // If it doesn't have to be set to WRITE, it means that it is READ.
+            // (V3Width marks the target of a modifying built-in method WRITE.)
             nodep->access(VAccess::READ);
         }
+        VL_RESTORER(m_handleRefp);
+        // Only the variable holding the handle is exempt, not e.g. one in an index
+        const AstNodeDType* const fromDtypep = addressDTypep(nodep->fromp());
+        if (fromDtypep && VN_IS(fromDtypep->skipRefOrNullp(), ClassRefDType)) {
+            m_handleRefp = addressRootp(nodep->fromp());
+        }
         iterateChildren(nodep);
+    }
+    // Variable an address expression selects from, or nullptr
+    const AstNodeVarRef* addressRootp(const AstNodeExpr* exprp) {
+        // Called for the address of a handle, it stops at a member of another class object,
+        // which is the address of the next handle. So the walks over one address do not
+        // overlap, and cost O(depth) in total.
+        while (true) {
+            if (const AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                exprp = selp->fromp();
+            } else if (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
+                exprp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+                // A member of a struct, but not of another class object
+                if (!structDTypep(addressDTypep(selp->fromp()))) return nullptr;
+                exprp = selp->fromp();
+            } else {
+                return VN_CAST(exprp, NodeVarRef);
+            }
+        }
+    }
+    // Struct or union a data type is, or nullptr
+    static const AstNodeUOrStructDType* structDTypep(const AstNodeDType* dtypep) {
+        // Typedefs may not be linked yet
+        return dtypep ? VN_CAST(dtypep->skipRefOrNullp(), NodeUOrStructDType) : nullptr;
+    }
+    // Data type of an address expression, also before V3Width set it, or nullptr
+    const AstNodeDType* addressDTypep(const AstNodeExpr* exprp) {
+        if (exprp->dtypep()) return exprp->dtypep();
+        if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
+            return refp->varp() ? refp->varp()->subDTypep() : nullptr;
+        }
+        // Each member select of a d-deep address asks for its prefix, so without the memo
+        // inference would cost O(d^2). With it each prefix is inferred once, about
+        // O(d log d + d log K) per address, for K members per struct looked up. A std::map,
+        // as visitors are many and small. A node is only asked for while visiting an ancestor,
+        // before visiting its subtree. Of what inference reads, the visit changes only a
+        // clocking VarRef's varp, when visiting that VarRef, so an entry cannot become stale.
+        // The memo lives as long as this visitor; it does not see later V3Width changes.
+        const auto it = m_addressDTypes.find(exprp);
+        if (it != m_addressDTypes.end()) return it->second;
+        const AstNodeDType* const dtypep = inferDTypep(exprp);
+        m_addressDTypes.emplace(exprp, dtypep);
+        return dtypep;
+    }
+    // Data type of an untyped member or element select, or nullptr
+    const AstNodeDType* inferDTypep(const AstNodeExpr* exprp) {
+        // Member of a struct or union, from its declared members
+        if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+            const AstNodeUOrStructDType* const sdtypep
+                = structDTypep(addressDTypep(selp->fromp()));
+            if (!sdtypep) return nullptr;
+            UASSERT_OBJ(m_memberMapp, selp, "Untyped member select, but no member map");
+            const AstMemberDType* const memberp
+                = VN_CAST(m_memberMapp->findMember(sdtypep, selp->name()), MemberDType);
+            return memberp ? memberp->subDTypep() : nullptr;
+        }
+        // Element of an unpacked, dynamic, associative array or queue; typed selects have a dtype
+        const AstSelBit* const selp = VN_CAST(exprp, SelBit);
+        const AstNodeDType* const fromDtypep = selp ? addressDTypep(selp->fromp()) : nullptr;
+        // Typedefs may not be linked yet
+        const AstNodeDType* const arrayp = fromDtypep ? fromDtypep->skipRefOrNullp() : nullptr;
+        if (VN_IS(arrayp, UnpackArrayDType) || VN_IS(arrayp, DynArrayDType)
+            || VN_IS(arrayp, AssocArrayDType) || VN_IS(arrayp, WildcardArrayDType)
+            || VN_IS(arrayp, QueueDType)) {
+            return arrayp->subDTypep();
+        }
+        return nullptr;
     }
     void visit(AstNodeFTaskRef* nodep) override {
         const AstNodeFTask* const taskp = nodep->taskp();
@@ -372,6 +482,12 @@ class LinkLValueVisitor final : public VNVisitor {
             if (!argp) continue;
             AstNodeExpr* const pinp = argp->exprp();
             if (!pinp) continue;
+            if (m_nonProcContextp && portp->direction().isWritable()) {
+                nodep->v3error("Function "
+                               << nodep->prettyNameQ() << " with output, inout or ref argument "
+                               << portp->prettyNameQ() << " is called in " << m_nonProcContextp
+                               << " (IEEE 1800-2023 13.4)");
+            }
             VL_RESTORER(m_setRefLvalue);
             m_setRefLvalue = portp->direction().pinAccess();
             iterate(pinp);
@@ -393,8 +509,9 @@ class LinkLValueVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    LinkLValueVisitor(AstNode* nodep, VAccess start)
-        : m_setRefLvalue{start} {
+    LinkLValueVisitor(AstNode* nodep, VAccess start, VMemberMap* memberMapp)
+        : m_memberMapp{memberMapp}
+        , m_setRefLvalue{start} {
         iterate(nodep);
     }
     ~LinkLValueVisitor() override = default;
@@ -405,12 +522,14 @@ public:
 
 void V3LinkLValue::linkLValue(AstNetlist* nodep) {
     UINFO(4, __FUNCTION__ << ": ");
-    { LinkLValueVisitor{nodep, VAccess::NOCHANGE}; }  // Destruct before checking
+    VMemberMap memberMap;  // For this pass; V3Param may change structs before the next
+    { LinkLValueVisitor{nodep, VAccess::NOCHANGE, &memberMap}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("linklvalue", 0, dumpTreeEitherLevel() >= 6);
 }
-void V3LinkLValue::linkLValueSet(AstNode* const nodep, const VAccess access) {
+void V3LinkLValue::linkLValueSet(AstNode* const nodep, const VAccess access,
+                                 VMemberMap* const memberMapp) {
     // Called by later link functions when it is known a node needs
     // to be converted to a lvalue.
     UINFO(9, __FUNCTION__ << ": ");
-    { LinkLValueVisitor{nodep, access}; }
+    { LinkLValueVisitor{nodep, access, memberMapp}; }
 }

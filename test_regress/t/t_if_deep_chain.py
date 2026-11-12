@@ -32,6 +32,6 @@ def gen(filename):
 
 gen(test.top_filename)
 
-test.lint()
+test.lint(verilator_flags2=["--unlimited-stack"])
 
 test.passes()

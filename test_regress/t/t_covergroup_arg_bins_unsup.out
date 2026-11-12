@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_covergroup_arg_bins_unsup.v:12:21: Unsupported: covergroup argument or instance constant value in this kind of bin
+                                                         : ... note: In instance 't'
+   12 |       wildcard bins wild = {val};
+      |                     ^~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_covergroup_arg_bins_unsup.v:15:12: Unsupported: covergroup argument or instance constant value in this kind of bin
+                                                         : ... note: In instance 't'
+   15 |       bins real_val = {val};
+      |            ^~~~~~~~
+%Error-UNSUPPORTED: t/t_covergroup_arg_bins_unsup.v:19:12: Unsupported: covergroup argument or instance constant value in this kind of bin
+                                                         : ... note: In instance 't'
+   19 |       bins trans = (val => val + 1);
+      |            ^~~~~
+%Error: Exiting due to

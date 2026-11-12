@@ -105,6 +105,9 @@ With :vlopt:`--timing`, all timing controls are supported:
 
 - delay statements,
 - event control statements not only at the top of a process,
+- implicit event expressions (``@*``) of event control statements, and of
+  ``always @*`` blocks that contain a timing control, which wait for the
+  variables the statement reads,
 - intra-assignment timing controls,
 - net delays,
 - ``wait`` statements,
@@ -210,6 +213,15 @@ Class
 Verilator class support is limited but in active development. Verilator
 supports members, methods, class extend, and class parameters.
 
+A class declared in a module refers to the variables and tasks of the
+instance it is declared in. When such a class refers to them and the module
+is instantiated more than once, Verilator makes a copy of the module, and of
+the modules above it, for each instance, so the class's static members are
+then also per instance; otherwise one class serves all instances. A class
+declared in an interface is not copied, as a virtual interface may refer to
+any instance, so when the interface is instantiated more than once, the class
+may not refer to the interface's variables, or call its tasks that use them.
+
 
 Dotted cross-hierarchy references
 ---------------------------------
@@ -312,7 +324,43 @@ drivers.
 
 Tristate drivers are not supported inside functions and tasks; an inout
 there will be considered a two-state variable that is read and written
-instead of a four-state variable.
+instead of a four-state variable. Likewise, a z procedurally assigned to
+an element of an unpacked array, queue, or structure, or to a member of a
+class object, is stored as a two-state value, the same as an x.
+
+An input port of net kind that is driven inside its module, by a continuous
+assignment, an output port connection, or a clocking block output, is
+coerced to inout (IEEE 1800-2023 23.3.3.1), so its drivers also reach the
+connected net, and are resolved with the other drivers of that net, using the
+tristate resolution described above; this does not provide complete
+four-state contention resolution. An input net port of the parent that such
+a port is connected to is coerced as well. The :option:`ASSIGNIN` warning is
+still reported on the driver; it is an error by default, so must be waived
+for coercion to proceed. Coercion changes both the effective and the
+declared direction, including the direction shown in traces and JSON dumps.
+A port is not coerced if it is a port of the top-level module, has a type
+that is not integral or packed, is also written procedurally, or if any
+instance connects it to something other than writable nets, constant bit or
+part selects of them, and concatenations of those (e.g. to a variable, a
+constant, a narrower net, an assignment pattern, a cast, an unpacked array
+element, a net through an input-only modport, or a net of a module other
+than an interface by a hierarchical reference), or to an input port that is
+not coerced.
+
+An input port of net kind that is written but not coerced, including one
+written procedurally inside its module, through a virtual interface, or by a
+hierarchical reference, drives the net it is connected to if that net has no
+other driver, as the port and the net collapse into one net (IEEE 1800-2023
+23.3.3.7). The connection may be a hierarchical reference, and a constant
+bit, part, or element select of the net. Otherwise the net drives the port,
+and overrides the writes to it when it changes. A net, as a whole, has
+another driver if anything other than force or release writes any bit of it,
+if it is declared tri0 or tri1 or connected to a pullup or pulldown, if it is
+an input port connected in any instance or set by ```unconnected_drive``, if
+it is a port of the top-level module, or if it is public writable. Two such
+ports connected to overlapping bits of a net keep their connections driving
+the ports. :option:`ASSIGNIN` is still reported on a write inside the module
+or by a hierarchical reference.
 
 
 Gate Primitives
@@ -439,10 +487,11 @@ checker
    inside a checker.
 
 disable
-   Disable statements may be used only if the block being disabled is a
-   block the disable statement itself is inside. This was commonly used to
-   provide loop break and continue functionality before SystemVerilog added
-   the break and continue keywords.
+   A disable statement outside the block or task it disables requires
+   :vlopt:`--timing`. When such a statement is executed by a process that
+   is running the disabled block or task, e.g. in a task or function called
+   from it, the process stops only at its next timing control, so the
+   statements up to that timing control still execute.
 
 force, release
    Verilator supports the procedural `force` (and corresponding `release`)

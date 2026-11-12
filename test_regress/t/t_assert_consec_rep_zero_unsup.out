@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_assert_consec_rep_zero_unsup.v:13:43: Unsupported: zero-minimum consecutive repetition next to a ranged cycle delay or another zero-minimum repetition (IEEE 1800-2023 16.9.2.1)
+                                                            : ... note: In instance 't'
+   13 |   assert property (@(posedge clk) a |-> a ##[1:2] b [* 0: 1]);
+      |                                           ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_consec_rep_zero_unsup.v:15:52: Unsupported: zero-minimum consecutive repetition next to a ranged cycle delay or another zero-minimum repetition (IEEE 1800-2023 16.9.2.1)
+                                                            : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) a |-> a [* 0: 1] ##1 b [* 0: 1]);
+      |                                                    ^~
+%Error: Exiting due to

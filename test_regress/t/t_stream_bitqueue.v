@@ -597,6 +597,32 @@ module t (
               384'hdeadbeef_cafebabe_feedface_12345678_00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000000);
     end
 
+    // Cast of a queue of strings to its own type
+    begin
+      typedef string string_q_t[$];
+      string_q_t string_q;
+      string_q_t string_qq;
+      string_q.push_back("ab");
+      string_q.push_back("cde");
+      string_qq = string_q_t'(string_q);
+      `checkh(string_qq.size(), 2);
+      `checks(string_qq[0], "ab");
+      `checks(string_qq[1], "cde");
+      // From a fixed-size array and a dynamic array of strings
+      begin
+        string string_a[2];
+        string string_d[];
+        string_a = '{"f", "gh"};
+        string_qq = string_q_t'(string_a);
+        `checkh(string_qq.size(), 2);
+        `checks(string_qq[1], "gh");
+        string_d = string_q;
+        string_qq = string_q_t'(string_d);
+        `checkh(string_qq.size(), 2);
+        `checks(string_qq[0], "ab");
+      end
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end

@@ -23,8 +23,9 @@ module t (
     end
   end
 
-  reg a[N-1:0];
-  reg b[N-1:0];
+  // One unwritten element keeps per-NBA temporaries for the conditional-merging fixture.
+  reg a[N:0];
+  reg b[N:0];
 
   // This yields pathological complexity for the current conditional merging
   // algorithm. Note in practice, other parts of the compiler blow up on this

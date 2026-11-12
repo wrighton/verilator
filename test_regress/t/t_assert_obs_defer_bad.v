@@ -27,5 +27,7 @@ module t;
     else x++;
     assert #0 (0)
     else report_output(x);
+    // A pass action
+    assert #0 (0) x++;
   end
 endmodule

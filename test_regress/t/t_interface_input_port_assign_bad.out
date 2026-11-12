@@ -1,5 +1,5 @@
 %Error-ASSIGNIN: t/t_interface_input_port_assign_bad.v:20:10: Assigning to input/const variable: 'clk'
-                                                            : ... note: In instance 't'
+                                                            : ... note: In instance 't.iif'
    20 |   assign clk = 1'b0;   
       |          ^~~
                  ... For error description see https://verilator.org/warn/ASSIGNIN?v=latest

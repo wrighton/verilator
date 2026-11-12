@@ -1,0 +1,67 @@
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:21:28: Variable written to in always_ff also written by other process (IEEE 1800-2023 9.2.2.4): 'm1'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:21:28: 
+   21 |   always_ff @(posedge clk) m1[a] <= d;   
+      |                            ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:20:39: ... Location of other write
+   20 |   initial for (int i = 0; i < 4; i++) m1[i] = 1'b0;
+      |                                       ^~
+                      ... For warning description see https://verilator.org/warn/MULTIDRIVEN?v=latest
+                      ... Use "/* verilator lint_off MULTIDRIVEN */" and lint_on around source to disable this message.
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:25:28: Variable written to in always_ff also written by other process (IEEE 1800-2023 9.2.2.4): 'm2'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:25:28: 
+   25 |   always_ff @(posedge clk) m2[b] <= d;   
+      |                            ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:24:28: ... Location of other write
+   24 |   always_ff @(posedge clk) m2[a] <= d;
+      |                            ^~
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:29:11: Variable also written to in always_comb (IEEE 1800-2023 9.2.2.2): 'm3'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:29:11: 
+   29 |   initial m3[0] = 1'b0;   
+      |           ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:28:15: ... Location of always_comb write
+   28 |   always_comb m3[a] = d;
+      |               ^~
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:33:10: Variable also written to in always_ff (IEEE 1800-2023 9.2.2.4): 'm4'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:33:10: 
+   33 |   assign m4[3] = 1'b0;   
+      |          ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:32:28: ... Location of always_ff write
+   32 |   always_ff @(posedge clk) m4[a] <= d;
+      |                            ^~
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:37:28: Variable written to in always_ff also written by other process (IEEE 1800-2023 9.2.2.4): 'm5'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:37:28: 
+   37 |   always_ff @(posedge clk) m5[1][1] <= d;   
+      |                            ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:36:28: ... Location of other write
+   36 |   always_ff @(posedge clk) m5[a][0] <= d;
+      |                            ^~
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:45:28: Variable written to in always_ff also written by other process (IEEE 1800-2023 9.2.2.4): 'm6'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:45:28: 
+   45 |   always_ff @(posedge clk) m6.f[1] <= d;   
+      |                            ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:44:11: ... Location of other write
+   44 |   initial m6 = '{f: 2'b0};
+      |           ^~
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:49:39: Variable also written to in always_ff (IEEE 1800-2023 9.2.2.4): 'm7'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:49:39: 
+   49 |   initial for (int i = 0; i < 4; i++) m7[i] = 2'b0;   
+      |                                       ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:48:28: ... Location of always_ff write
+   48 |   always_ff @(posedge clk) m7[2][1] <= d;
+      |                            ^~
+%Warning-MULTIDRIVEN: t/t_lint_always_ff_multidriven_array_bad.v:53:28: Variable written to in always_ff also written by other process (IEEE 1800-2023 9.2.2.4): 'm8'
+                                                                      : ... note: In instance 't'
+                      t/t_lint_always_ff_multidriven_array_bad.v:53:28: 
+   53 |   always_ff @(posedge clk) m8[b-:2] <= '{d, d};   
+      |                            ^~
+                      t/t_lint_always_ff_multidriven_array_bad.v:52:28: ... Location of other write
+   52 |   always_ff @(posedge clk) m8[a+:2] <= '{d, d};
+      |                            ^~
+%Error: Exiting due to

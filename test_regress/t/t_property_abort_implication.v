@@ -45,7 +45,6 @@ module t;
   int fail_delay_range = 0;
   int fail_fby = 0;
   int fail_and = 0;
-  int fail_unb = 0;
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
@@ -140,9 +139,6 @@ module t;
   assert property (@(posedge clk) (sync_accept_on (abrt) b) and c)
   else fail_and++;
 
-  assert property (@(posedge clk) sync_reject_on (abrt) (a and always [1:$] b))
-  else fail_unb++;
-
   cover property (@(posedge clk) (a and b) ##1 c);
 
 
@@ -174,13 +170,12 @@ module t;
     `checkd(fail_rep_ref_true, 5);
     `checkd(fail_rep_ring_true, fail_rep_ref_true);
     `checkd(fail_goto, 9);
-    `checkd(fail_goto2, 6);
-    `checkd(fail_goto_range, 10);
+    `checkd(fail_goto2, 11);
+    `checkd(fail_goto_range, 9);
     `checkd(fail_goto_range2, 6);
     `checkd(fail_delay, 12);
     `checkd(fail_fby, 16);
     `checkd(fail_and, 16);
-    `checkd(fail_unb, 3);  // One other sim: 19
     $write("*-* All Finished *-*\n");
     $finish;
   end

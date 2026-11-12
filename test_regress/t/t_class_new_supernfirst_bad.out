@@ -1,5 +1,4 @@
 %Error-SUPERNFIRST: t/t_class_new_supernfirst_bad.v:20:11: 'super.new' must be first statement in a 'function new' (IEEE 1800-2023 8.15)
-                                                         : ... note: In instance 't'
    20 |     super.new(build_coverage(x), x);   
       |           ^~~
                     t/t_class_new_supernfirst_bad.v:19:13: ... Location of earlier statement

@@ -1,0 +1,8 @@
+%Error-UNSUPPORTED: t/t_tri_array_elem_caseeq_unsup.v:25:12: Unsupported tristate construct: ARRAYSEL in function getEnExprBasedOnOriginalp
+   25 |     if (mem[0] !== 8'bz) $stop;   
+      |            ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_tri_array_elem_caseeq_unsup.v:26:11: Unsupported tristate construct: STRUCTSEL 'f' in function getEnExprBasedOnOriginalp
+   26 |     if (s.f === 8'bz) $stop;   
+      |           ^
+%Error: Exiting due to

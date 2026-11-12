@@ -56,4 +56,13 @@ module t;
     $fatal(2, "%s", $sformatf("Fatal Error"));
     return 0;
   endfunction
+
+  // Slice read out of bounds
+  localparam BSOOB = f_bad_slice_out_of_bounds(64'h1_0000_0000);
+  function automatic integer f_bad_slice_out_of_bounds(input [63:0] i);
+    int a[3] = '{1, 2, 3};
+    int s[2];
+    s = a[i+:2];
+    return s[0];
+  endfunction
 endmodule

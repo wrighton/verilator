@@ -1,9 +1,20 @@
-%Error-PINNOTFOUND: t/t_class_param_bad1.v:14:10: Parameter not found: 'PARAMBAD'
+%Error-PINNOTFOUND: t/t_class_param_bad1.v:19:10: Parameter not found: 'PARAMBAD'
                                                 : ... Suggested alternative: 'PARAMB'
-   14 |   Cls #(.PARAMBAD(1)) c;   
+   19 |   Cls #(.PARAMBAD(1)) c;   
       |          ^~~~~~~~
                     ... For error description see https://verilator.org/warn/PINNOTFOUND?v=latest
-%Error-PINNOTFOUND: t/t_class_param_bad1.v:15:13: Parameter not found: '__paramNumber2'
-   15 |   Cls #(13, 1) cd;   
+%Error-PINNOTFOUND: t/t_class_param_bad1.v:20:13: Parameter not found: '__paramNumber2'
+   20 |   Cls #(13, 1) cd;   
       |             ^
+%Error-PINNOTFOUND: t/t_class_param_bad1.v:23:12: Parameter not found: 'PARAMBAD'
+                                                : ... Suggested alternative: 'PARAMB'
+   23 |     Cls #(.PARAMBAD(2)) gc;   
+      |            ^~~~~~~~
+%Error-PINNOTFOUND: t/t_class_param_bad1.v:24:20: Parameter not found: 'PARAMBAD'
+                                                : ... Suggested alternative: 'PARAMB'
+   24 |     sub #(.T(Cls#(.PARAMBAD(3)))) u_sub ();   
+      |                    ^~~~~~~~
+                                                : ... Location of instance's module declaration
+   12 | module sub #(
+      |        ^~~
 %Error: Exiting due to

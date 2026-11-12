@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_interface_generic_hier_unsup.v:27:15: Unsupported: Generic interface port connected to a hierarchical reference to an interface instance with a parameter value that is not a constant: 'req'
+   27 |   drv u (.g(b.req));
+      |               ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

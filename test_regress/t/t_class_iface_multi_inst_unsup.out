@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_class_iface_multi_inst_unsup.v:24:14: Unsupported: Class referencing 'v' of interface 'ifc' instantiated more than once
+                                                            : ... note: In instance 't.i2'
+   24 |       return v;
+      |              ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_class_iface_multi_inst_unsup.v:29:14: Unsupported: Class referencing 'getv' of interface 'ifc' instantiated more than once
+                                                            : ... note: In instance 't.i2'
+   29 |       return getv();
+      |              ^~~~
+%Error-UNSUPPORTED: t/t_class_iface_multi_inst_unsup.v:34:14: Unsupported: Class referencing 'next' of interface 'ifc' instantiated more than once
+                                                            : ... note: In instance 't.i2'
+   34 |       return next();
+      |              ^~~~
+%Error: Exiting due to

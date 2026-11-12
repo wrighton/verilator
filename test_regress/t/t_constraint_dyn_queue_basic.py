@@ -14,8 +14,14 @@ test.scenarios('simulator')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+# With Verilator, a C++ companion checks the randomizer's array element table keeps similarly
+# named arrays apart
+test.compile(v_flags2=["t/t_constraint_dyn_queue_basic_c.cpp"] if test.vlt_all else [])
 
 test.execute()
+
+if test.vlt_all:
+    test.file_grep(test.run_log_filename, r'Array element keys kept apart: escaped with space')
+    test.file_grep(test.run_log_filename, r'Array element keys kept apart: escaped without space')
 
 test.passes()

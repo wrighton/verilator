@@ -1,14 +1,18 @@
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:26:41: Unsupported: clock event in a nested property instance
-                                                              : ... note: In instance 't'
-   26 |   assert property (@(posedge clk) a |-> q_clk);
-      |                                         ^~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:40:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   40 |   assert property (@(posedge clk) a |-> q_arg(q_ovl));
+      |   ^~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:27:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:35:41: Unsupported: clock event in a nested property instance
                                                               : ... note: In instance 't'
-   27 |   assert property (@(posedge clk) a |-> q_seq);
+   35 |   assert property (@(posedge clk) a |-> q_clk);
       |                                         ^~~~~
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:28:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:36:41: Unsupported: multi-cycle body in a nested property instance
                                                               : ... note: In instance 't'
-   28 |   assert property (@(posedge clk) a |-> q_rep);
+   36 |   assert property (@(posedge clk) a |-> q_strong);
+      |                                         ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:38:41: Unsupported: multi-cycle body in a nested property instance
+                                                              : ... note: In instance 't'
+   38 |   assert property (@(posedge clk) b |-> q_loc);
       |                                         ^~~~~
 %Error: Exiting due to

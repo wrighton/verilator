@@ -50,7 +50,18 @@ module t;
     if (i < 5) `checkh(arr[i], expected);
   endtask
 
+  task automatic assign_side_effect_method(input int i);
+    int aa[int];
+    aa[5] = 1;
+    aa[9] = 2;
+    `checkh(aa.last(arr[i]), 1);
+    if (i < 5) `checkh(arr[i], 9);
+  endtask
+
   initial begin
+    assign_side_effect_method(2);
+    assign_side_effect_method(6);
+
     incr(0, 0);
     incr(7, 0);
     incr(4, 2);
@@ -84,6 +95,25 @@ module t;
     arr[q.sum() with (get_w(item))+4] = 7;
     `checkh(w, 4);
     `checkh(arr[3], 6);
+    // An index is evaluated once, also a pure one with a new value each evaluation
+    for (int i = 0; i < 5; i++) arr[i] = 10 * i + 1;
+    for (int seed = 1; seed <= 20; seed++) begin
+      automatic logic [4:0] bits = 5'b10110;
+      int got;
+      int after;
+      int pos;
+      logic bit_got;
+      void'($urandom(seed));
+      got = arr[$urandom() % 8];
+      bit_got = bits[$urandom() % 8];
+      after = $urandom();
+      void'($urandom(seed));
+      pos = $urandom() % 8;
+      `checkh(got, pos < 5 ? arr[pos] : 0);
+      pos = $urandom() % 8;
+      if (pos < 5) `checkh(bit_got, bits[pos]);
+      `checkh(after, $urandom());
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

@@ -22,6 +22,7 @@
 //          File operations
 //              Convert normal var to FILE* type
 //          SenItems: Convert pos/negedge of non-simple signals to temporaries
+//      Check package items do not reference the design hierarchy
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -97,7 +98,25 @@ class LinkResolveVisitor final : public VNVisitor {
     }
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
-        if (m_ftaskp) nodep->funcLocal(true);
+        if (m_ftaskp) {
+            nodep->funcLocal(true);
+            // A local's data type requires constant expressions, so a call there means the
+            // function may not be a constant function (IEEE 1800-2023 13.4.3)
+            if (!nodep->isIO() && nodep->childDTypep()
+                && nodep->childDTypep()->exists([](const AstNodeFTaskRef*) { return true; })) {
+                m_ftaskp->usesConstFunc(true);
+            }
+        }
+        if (!m_ftaskp && nodep->isInout() && nodep->varType() == VVarType::VAR) {
+            nodep->v3warn(NONSTD, "Inout port " << nodep->prettyNameQ()
+                                                << " is declared as a variable, but should be a"
+                                                   " net (IEEE 1800-2023 23.3.3.2)");
+        }
+        if (nodep->isRef() && nodep->isNet()) {
+            nodep->v3error("Ref port " << nodep->prettyNameQ()
+                                       << " is declared as a net, but must be a variable"
+                                          " (IEEE 1800-2023 23.2.2.2)");
+        }
         if (nodep->isSigModPublic()) {
             nodep->sigModPublic(false);  // We're done with this attribute
             m_modp->modPublic(true);  // Avoid flattening if signals are exposed
@@ -119,7 +138,9 @@ class LinkResolveVisitor final : public VNVisitor {
                         if (refp->varp() == nodep->varp()) ok = true;
                     });
             }
-            if (nodep->varp()->isGenVar() && !ok) {
+            // A hierarchical reference is to a loop block instance's implicit localparam, else
+            // V3LinkDot reported it
+            if (nodep->varp()->isGenVar() && !ok && !VN_IS(nodep, VarXRef)) {
                 nodep->v3error("Genvar "
                                << nodep->prettyNameQ()
                                << " used outside generate for loop (IEEE 1800-2023 27.4)");
@@ -171,7 +192,9 @@ class LinkResolveVisitor final : public VNVisitor {
             }
             // UINFOTREE(9, letp, "", "let-let");
             // UINFOTREE(9, nodep, "", "let-ref");
-            AstNodeExpr* const newp = letp->exprp()->cloneTree(false);
+            // Clone under a statement, so a body that is only a formal can be replaced
+            AstStmtExpr* const newStmtp
+                = new AstStmtExpr{letp->fileline(), letp->exprp()->cloneTree(false)};
             const V3TaskConnects tconnects = V3Task::taskConnects(nodep);
             std::map<const AstVar*, AstNodeExpr*> portToExprs;
             for (const auto& tconnect : tconnects) {
@@ -182,16 +205,26 @@ class LinkResolveVisitor final : public VNVisitor {
                 portToExprs.emplace(portp, pinp);
             }
             // Replace VarRefs of arguments with the argument values
-            newp->foreach([&](AstVarRef* refp) {  //
+            newStmtp->foreach([&](AstVarRef* refp) {  //
                 const auto it = portToExprs.find(refp->varp());
                 if (it != portToExprs.end()) {
                     AstNodeExpr* const pinp = it->second;
                     UINFO(9, "let pin subst " << refp << " <- " << pinp);
                     // Side effects are copied into pins, to match other simulators
-                    refp->replaceWith(pinp->cloneTree(false));
+                    AstNodeExpr* substp = pinp->cloneTree(false);
+                    // The actual of a typed formal is cast to its type (IEEE 1800-2023 11.12)
+                    AstNodeDType* const portDTypep = it->first->childDTypep();
+                    const AstBasicDType* const basicp = VN_CAST(portDTypep, BasicDType);
+                    if (!basicp || !basicp->untyped()) {
+                        substp = new AstCast{substp->fileline(), substp, VFlagChildDType{},
+                                             portDTypep->cloneTree(false)};
+                    }
+                    refp->replaceWith(substp);
                     VL_DO_DANGLING(pushDeletep(refp), refp);
                 }
             });
+            AstNodeExpr* const newp = newStmtp->exprp()->unlinkFrBack();
+            VL_DO_DANGLING(newStmtp->deleteTree(), newStmtp);
             // UINFOTREE(9, newp, "", "let-new");
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -362,14 +395,19 @@ class LinkResolveVisitor final : public VNVisitor {
         iterateChildren(nodep);
         expectDescriptor(nodep, VN_CAST(nodep->filep(), NodeVarRef));
     }
-    void visit(AstFScanF* nodep) override {
+    // Move a string literal scan format to text(), and check it
+    template <typename T_ScanF>
+    void visitScanF(T_ScanF* nodep) {
         iterateChildren(nodep);
+        // Other formats are only known at runtime (IEEE 1800-2023 21.3.4.3)
+        const AstConst* const constp = VN_CAST(nodep->formatp(), Const);
+        if (!constp || !constp->num().isFromString()) return;
+        nodep->text(constp->num().toString());
+        VL_DO_DANGLING(pushDeletep(nodep->formatp()->unlinkFrBack()), constp);
         expectFormat(nodep, nodep->text(), nodep->exprsp(), true);
     }
-    void visit(AstSScanF* nodep) override {
-        iterateChildren(nodep);
-        expectFormat(nodep, nodep->text(), nodep->exprsp(), true);
-    }
+    void visit(AstFScanF* nodep) override { visitScanF(nodep); }
+    void visit(AstSScanF* nodep) override { visitScanF(nodep); }
     void visit(AstSFormatF* nodep) override {
         if (nodep->user2SetOnce()) return;
         iterateChildren(nodep);
@@ -508,6 +546,51 @@ public:
 };
 
 //######################################################################
+// LinkPackageRefVisitor
+//      Check that package items do not reference the design hierarchy
+//      (IEEE 1800-2023 26.2). References from packages to compilation-unit
+//      ($unit) items are intentionally allowed as an extension.
+
+class LinkPackageRefVisitor final : public VNVisitorConst {
+    // NODE STATE
+    //  AstNode::user1()  -> bool. True if under a design element (module, interface, etc.)
+    const VNUser1InUse m_inuser1;
+
+    // METHODS
+    static void checkTarget(const AstNode* nodep, const AstNode* targetp) {
+        if (targetp && targetp->user1()) {
+            nodep->v3error("Package item cannot hierarchically reference design item "
+                           << targetp->prettyNameQ() << " (IEEE 1800-2023 26.2)");
+        }
+    }
+
+    // VISITORS
+    void visit(AstNodeFTaskRef* nodep) override {
+        checkTarget(nodep, nodep->taskp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        checkTarget(nodep, nodep->varp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit LinkPackageRefVisitor(AstNetlist* rootp) {
+        // First mark everything in design elements, then check references from packages
+        for (AstNode* modp = rootp->modulesp(); modp; modp = modp->nextp()) {
+            if (!VN_IS(modp, Package)) modp->foreach([](AstNode* nodep) { nodep->user1(true); });
+        }
+        for (AstNode* modp = rootp->modulesp(); modp; modp = modp->nextp()) {
+            const AstPackage* const pkgp = VN_CAST(modp, Package);
+            if (pkgp && !pkgp->isDollarUnit()) iterateConst(modp);
+        }
+    }
+    ~LinkPackageRefVisitor() override = default;
+};
+
+//######################################################################
 // V3LinkResolve class functions
 
 void V3LinkResolve::linkResolve(AstNetlist* rootp) {
@@ -515,6 +598,7 @@ void V3LinkResolve::linkResolve(AstNetlist* rootp) {
     {
         const LinkResolveVisitor visitor{rootp};
         LinkBotupVisitor{rootp};
+        LinkPackageRefVisitor{rootp};
     }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("linkresolve", 0, dumpTreeEitherLevel() >= 6);
 }

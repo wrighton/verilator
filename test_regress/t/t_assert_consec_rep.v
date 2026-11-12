@@ -162,9 +162,7 @@ module t (
       `checkd(count_fail3, 9);
       `checkd(count_fail4, 49);
       `checkd(count_fail5, 0);
-      // NFA merge-node range [*M:N] over-counts rejects; match
-      // detection is correct, only reject counting is imprecise
-      `checkd(count_fail6, 59);  // All other sims: 51
+      `checkd(count_fail6, 51);
       `checkd(count_fail7, 51);
       `checkd(count_fail8, 20);
       // IEEE 1800-2023 16.9.2 permits empty match of [*0]; NFA reports

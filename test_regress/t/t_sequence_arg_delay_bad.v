@@ -43,6 +43,58 @@ module t (
   assert property (@(posedge clk) a |-> seq_sum(1'b1, b, 1))
   else fails++;
 
+  // Likewise for formal arguments used as repetition counts and $past tick counts
+  // (IEEE 1800-2023 16.9.2, 16.9.3)
+  property prop_rep(untyped cnt);
+    @(posedge clk) a |-> b [* cnt];
+  endproperty
+  property prop_rep_min(untyped cnt);
+    @(posedge clk) a |-> b [* cnt: 3];
+  endproperty
+  property prop_rep_max(untyped cnt);
+    @(posedge clk) a |-> b [* 1: cnt];
+  endproperty
+  property prop_goto(untyped cnt);
+    @(posedge clk) a [-> cnt] |-> b;
+  endproperty
+  property prop_past(untyped cnt);
+    @(posedge clk) a |-> $past(b, cnt);
+  endproperty
+  assert property (prop_rep(n))
+  else fails++;
+  assert property (prop_goto(n))
+  else fails++;
+  assert property (prop_goto($past(n, 1)))  // Checking the count deletes the $past in it
+  else fails++;
+  assert property (prop_past(n))
+  else fails++;
+  assert property (prop_rep(-1))
+  else fails++;
+  assert property (prop_past(0))
+  else fails++;
+  assert property (prop_rep_min(n))
+  else fails++;
+  assert property (prop_rep_max(n))
+  else fails++;
+
+  // Likewise for formal arguments used as always range bounds (IEEE 1800-2023 16.12.11)
+  property prop_always(untyped lo, untyped hi);
+    @(posedge clk) a |-> always [lo:hi] b;
+  endproperty
+  property prop_always_from(untyped lo);
+    @(posedge clk) a |-> always [lo:$] b;
+  endproperty
+  assert property (prop_always(n, 2))
+  else fails++;
+  assert property (prop_always(1, n))
+  else fails++;
+  assert property (prop_always(3, 1))
+  else fails++;
+  assert property (prop_always(1, 32'h7fffffff))
+  else fails++;
+  assert property (prop_always_from(-1))
+  else fails++;
+
   // As 'a' is never set, none would fail
   final `checkd(fails, 0)
 

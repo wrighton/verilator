@@ -15,4 +15,6 @@ Randomization failed.
 
 === Test: Conflicting constraints (x > 100 && x < 50) ===
 Expected failure: conflicting constraints detected
+
+=== Test 7: Size of an array with rand_mode off ===
 *-* All Finished *-*

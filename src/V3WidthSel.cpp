@@ -105,32 +105,56 @@ class WidthSelVisitor final : public VNVisitor {
         return FromData(errp, ddtypep, fromRange);
     }
 
-    AstNodeExpr* newSubNeg(AstNodeExpr* lhsp, int32_t rhs) {
+    AstNodeExpr* newSubNeg(AstNodeExpr* lhsp, int32_t rhs, bool signedRhs = false) {
         // Return lhs-rhs, but if rhs is negative use an add, so we won't
         // have to deal with signed math and related 32bit sign extension problems
         if (rhs == 0) {
             return lhsp;
         } else if (VN_IS(lhsp, Const)) {
             // Optional vs just making add/sub below, but saves constification some work
-            V3Number num(lhsp, lhsp->width());
-            num.opSub(VN_AS(lhsp, Const)->num(), V3Number(lhsp, 32, rhs));
+            // At least 32 bits, as V3Width makes the add/sub below, so the result does not wrap
+            const int width = std::max(lhsp->width(), 32);
+            const V3Number& lhsNum = VN_AS(lhsp, Const)->num();
+            V3Number lhsExtNum{lhsp, width};
+            if (lhsp->isSigned()) {
+                lhsExtNum.opExtendS(lhsNum, lhsNum.width());
+            } else {
+                lhsExtNum.opAssign(lhsNum);
+            }
+            V3Number rhsNum{lhsp, width};
+            rhsNum.opExtendS(V3Number(lhsp, 32, rhs), 32);
+            V3Number num{lhsp, width};
+            num.opSub(lhsExtNum, rhsNum);
             num.isSigned(lhsp->isSigned());
             return new AstConst{lhsp->fileline(), num};
-        } else if (rhs > 0) {
-            AstNodeExpr* const newp
-                = new AstSub{lhsp->fileline(), lhsp,
-                             new AstConst(lhsp->fileline(), AstConst::Unsized32{}, rhs)};
+        }
+        // Unsized, as a literal; a signed constant sign extends a narrower signed lhs
+        V3Number offset{lhsp, 32, static_cast<uint32_t>(std::abs(rhs))};
+        offset.width(32, false);
+        offset.isSigned(signedRhs);
+        AstConst* const offsetp = new AstConst{lhsp->fileline(), offset};
+        if (rhs > 0) {
+            AstNodeExpr* const newp = new AstSub{lhsp->fileline(), lhsp, offsetp};
             // We must make sure sub gets sign of original value, not from the constant
             newp->dtypeFrom(lhsp);
             return newp;
         } else {  // rhs < 0;
-            AstNodeExpr* const newp
-                = new AstAdd{lhsp->fileline(), lhsp,
-                             new AstConst(lhsp->fileline(), AstConst::Unsized32{}, -rhs)};
+            AstNodeExpr* const newp = new AstAdd{lhsp->fileline(), lhsp, offsetp};
             // We must make sure sub gets sign of original value, not from the constant
             newp->dtypeFrom(lhsp);
             return newp;
         }
+    }
+    // Return an unsigned index one bit wider
+    static AstNodeExpr* newIndexExtendp(AstNodeExpr* indexp) {
+        // Adding the offset of a negative low bound to an index near its maximum would
+        // wrap to a valid element. A narrower index is added at 32 bits, so cannot wrap.
+        AstConst* const constp = VN_CAST(indexp, Const);
+        if (!constp) return new AstExtend{indexp->fileline(), indexp, indexp->width() + 1};
+        // Still a constant, for the SELRANGE check. The caller deletes the unlinked index.
+        V3Number num{constp, constp->width() + 1};
+        num.opAssign(constp->num());
+        return new AstConst{constp->fileline(), num};
     }
     AstNodeExpr* newSubNeg(int32_t lhs, AstNodeExpr* rhsp) {
         // Return lhs-rhs
@@ -232,7 +256,16 @@ class WidthSelVisitor final : public VNVisitor {
             // SELBIT(array, index) -> ARRAYSEL(array, index)
             AstNodeExpr* subp = rhsp;
             if (fromRange.lo() != 0 || fromRange.hi() < 0) {
-                subp = newSubNeg(subp, fromRange.lo());
+                if (fromRange.lo() < 0 && !subp->isSigned() && subp->width() >= 32) {
+                    subp = newIndexExtendp(subp);
+                }
+                // Signed for a signed index, as V3Width keeps the index's full value
+                AstNodeExpr* const extp = subp;
+                subp = newSubNeg(subp, fromRange.lo(), subp->isSigned());
+                // A constant is folded into a new one; the index itself is deleted below
+                if (extp != rhsp && extp != subp && !extp->backp()) {
+                    VL_DO_DANGLING(pushDeletep(extp), extp);
+                }
             }
             AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, subp};
             newp->dtypeFrom(adtypep->subDTypep());  // Need to strip off array reference
@@ -362,7 +395,7 @@ class WidthSelVisitor final : public VNVisitor {
         const FromData fromdata = fromDataForArray(nodep, fromp);
         AstNodeDType* const ddtypep = fromdata.m_dtypep;
         const VNumRange fromRange = fromdata.m_fromRange;
-        if (VN_IS(ddtypep, QueueDType)) {
+        if (VN_IS(ddtypep, QueueDType) || VN_IS(ddtypep, DynArrayDType)) {
             AstNodeExpr* const qleftp = nodep->leftp()->unlinkFrBack();
             AstNodeExpr* const qrightp = nodep->rightp()->unlinkFrBack();
             AstNodeExpr* const qleftBacknessp = selQueueBackness(qleftp);
@@ -410,10 +443,6 @@ class WidthSelVisitor final : public VNVisitor {
             if (fromRange.elements() == elem
                 && fromRange.lo() == lsb) {  // Extracting whole of original array
                 nodep->replaceWith(fromp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else if (fromRange.elements() == 1) {  // Extracting single element
-                AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, lsbp};
-                nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
             } else {  // Slice
                 AstSliceSel* const newp
@@ -536,10 +565,6 @@ class WidthSelVisitor final : public VNVisitor {
                        == fromRange.lo()) {  // Extracting whole of original array
                 nodep->replaceWith(fromp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else if (fromRange.elements() == 1) {  // Extracting single element
-                AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, rhsp};
-                nodep->replaceWith(newp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
             } else if (VN_IS(rhsp, Const)) {  // Slice
                 const int32_t rhs = VN_AS(rhsp, Const)->toSInt();
                 // down array: lsb/lo +: width
@@ -554,8 +579,14 @@ class WidthSelVisitor final : public VNVisitor {
                     nodep->fileline(), fromp, VNumRange{msb, lsb, fromRange.ascending()}};
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else {
-                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Slice of non-constant bounds");
+            } else {  // Slice with a variable position (IEEE 1800-2023 7.4.6)
+                AstNodeExpr* const lsbp
+                    = newSubNeg(rhsp, (VN_IS(nodep, SelPlus) ? 0 : width - 1) + fromRange.lo());
+                AstSliceSel* const newp
+                    = new AstSliceSel{nodep->fileline(), fromp,
+                                      VNumRange{width - 1, 0, fromRange.ascending()}, lsbp};
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
             }
         } else if (VN_IS(ddtypep, BasicDType) || VN_IS(ddtypep, PackArrayDType)
                    || (VN_IS(ddtypep, NodeUOrStructDType)
@@ -592,6 +623,28 @@ class WidthSelVisitor final : public VNVisitor {
             newp->declElWidth(elwidth);
             UINFO(6, "   new " << newp);
             UINFOTREE(9, newp, "", "SELNEW");
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        } else if (VN_IS(ddtypep, QueueDType) || VN_IS(ddtypep, DynArrayDType)) {
+            // SELPLUS(from,lsb,width) -> CMETHODHARD(from, slicePlus, lsb, width), so the position
+            // is evaluated once
+            AstNodeExpr* lsbp = rhsp;
+            if (VN_IS(nodep, SelMinus)) {
+                // Subtract in 32 bits, the width of the runtime position, so a narrow position
+                // may go below 0
+                if (rhsp->width() < 32 && rhsp->isSigned()) {
+                    lsbp = new AstExtendS{rhsp->fileline(), rhsp, 32};
+                } else if (rhsp->width() < 32) {
+                    lsbp = new AstExtend{rhsp->fileline(), rhsp, 32};
+                }
+                lsbp = newSubNeg(lsbp, width - 1);
+            }
+            AstCMethodHard* const newp
+                = new AstCMethodHard{nodep->fileline(), fromp, VCMethod::DYN_SLICE_PLUS, lsbp};
+            newp->addPinsp(widthp);
+            newp->dtypep(fromdata.m_dtypep);
+            newp->didWidth(true);
+            newp->protect(false);
             nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else {  // nullptr=bad extract, or unknown node type

@@ -1,0 +1,15 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+`verilator_config
+
+lint_off -rule COMBDLY -file "*/cmt.v"
+lint_off -rule COMBDLY -file "*/blk.v" -lines 2
+lint_off -rule COMBDLY -file "*/code.v" -lines 2-2
+lint_off -rule COMBDLY -file "*/one.v"
+lint_off -rule COMBDLY -file "*/nl.v" -lines 2
+lint_off -rule COMBDLY -file "*/pragma.v"
+lint_off -rule BADVLTPRAGMA -file "*/pragma.v"

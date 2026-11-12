@@ -305,6 +305,30 @@ class NonRandMember;
   endfunction
 endclass
 
+class NonRandRange;
+  rand Mixed m;
+  constraint c {
+    m.nf dist {
+      [1 : 10] :/ 9,
+      70 := 1
+    };
+  }
+  function new();
+    m = new;
+  endfunction
+endclass
+
+class NonRandProp;
+  rand uint d;
+  uint y;
+  constraint c {
+    y dist {
+      5 := 9,
+      70 := 1
+    };
+  }
+endclass
+
 class QSel;
   rand Sub q[$];
   int pick;
@@ -915,14 +939,49 @@ module t;
       end
     end
 
-    // Dist on a non-rand member of a rand object: in-set value succeeds.
+    // Dist on a non-rand member of a rand object, or a non-rand property: the variable is
+    // state, never written; an in-set value succeeds, an out-of-set value fails.
     begin
       NonRandMember nr;
       nr = new;
       nr.m.nf = 5;
+      for (int i = 0; i < 16; ++i) begin
+        ok = nr.randomize();
+        `checkd(ok, 1);
+        `checkd(nr.m.nf, 5);
+      end
+      nr.m.nf = 7;
       ok = nr.randomize();
-      `checkd(ok, 1);
-      `checkd(nr.m.nf, 5);
+      `checkd(ok, 0);
+      `checkd(nr.m.nf, 7);
+    end
+    begin
+      NonRandRange nrr;
+      nrr = new;
+      nrr.m.nf = 3;
+      for (int i = 0; i < 16; ++i) begin
+        ok = nrr.randomize();
+        `checkd(ok, 1);
+        `checkd(nrr.m.nf, 3);
+      end
+      nrr.m.nf = 11;
+      ok = nrr.randomize();
+      `checkd(ok, 0);
+      `checkd(nrr.m.nf, 11);
+    end
+    begin
+      NonRandProp np;
+      np = new;
+      np.y = 5;
+      for (int i = 0; i < 16; ++i) begin
+        ok = np.randomize();
+        `checkd(ok, 1);
+        `checkd(np.y, 5);
+      end
+      np.y = 7;
+      ok = np.randomize();
+      `checkd(ok, 0);
+      `checkd(np.y, 7);
     end
 
     // Queue element member: draws both values, biased toward the heavy bucket.

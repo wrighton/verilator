@@ -17,7 +17,7 @@ test.compile(
     verilator_flags2=["--assert", "--timing", "--coverage-user", "--exe", test.pli_filename],
     nc_flags2=["+nccovoverwrite", "+nccoverage+all", "+nccovtest+" + test.name])
 
-test.execute(all_run_flags=["+verilator+error+limit+100"], expect_filename=test.golden_filename)
+test.execute(all_run_flags=["+verilator+error+limit+200"], expect_filename=test.golden_filename)
 
 test.files_identical(test.coverage_filename, test.t_dir + "/t_assert_ctl_arg.dat.out")
 
