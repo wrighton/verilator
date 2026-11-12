@@ -169,11 +169,16 @@ module t;
       `checkd(h.c.v != 7'h55, 1'b1);
       `checkd(h.w, h.c.v);
     end
-    // An enabled child constraint's mode must not be read through a null handle.
-    h.c.c_v.constraint_mode(1);
-    h.c = null;
-    randomize_result = h.randomize();
-    `checkd(randomize_result, 0);
+    // Isolate the enabled-child/null-owner mode getter before any prior solve
+    // has registered the child's leaves in this fresh parent instance.
+    begin
+      Holder nullable;
+      nullable = new;
+      nullable.c.c_v.constraint_mode(1);
+      nullable.c = null;
+      randomize_result = nullable.randomize();
+      `checkd(randomize_result, 0);
+    end
   endtask
 
   task automatic test_nested;
