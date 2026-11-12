@@ -487,13 +487,18 @@ public:
     /// Record a single-range procedural pick at its original evaluation point.
     template <typename T>
     void fast_dist_pick(T& var, QData bits) {
-        for (auto it = m_fastConstraints.rbegin(); it != m_fastConstraints.rend(); ++it) {
-            if (!it->isDist || it->datap != &var) continue;
-            it->proposal = bits & ((QData{1} << it->width) - 1);
-            if (it->isSigned) it->proposal ^= QData{1} << (it->width - 1);
-            it->hasProposal = true;
-            return;
+        // Count original descriptors, including empty ones, before soft pruning.
+        // Storage alone cannot identify which RHS produced a multi-dist pick.
+        FastConstraint* pickp = nullptr;
+        for (FastConstraint& constraint : m_fastConstraints) {
+            if (!constraint.isDist || constraint.datap != &var) continue;
+            if (pickp) return;
+            pickp = &constraint;
         }
+        if (!pickp) return;
+        pickp->proposal = bits & ((QData{1} << pickp->width) - 1);
+        if (pickp->isSigned) pickp->proposal ^= QData{1} << (pickp->width - 1);
+        pickp->hasProposal = true;
     }
     /// Keep the solver path when any original constraint item is unsupported.
     void fast_disable() { m_fastDisabled = true; }
