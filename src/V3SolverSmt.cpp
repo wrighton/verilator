@@ -956,28 +956,6 @@ class FastConstraintBuilder final {
         }
         return valuep;
     }
-    AstNodeExpr* snapshotBound(AstBegin* blockp, AstNodeExpr* valuep, AstNodeDType* dtypep) {
-        FileLine* const fl = valuep->fileline();
-        AstVar* const varp
-            = new AstVar{fl, VVarType::BLOCKTEMP, m_names.get("__Vfast_bound"), dtypep};
-        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-        varp->funcLocal(true);
-        varp->isInternal(true);
-        blockp->addDeclsp(varp);
-        blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE},
-                                        valuep->cloneTreePure(false)});
-        return new AstVarRef{fl, varp, VAccess::READ};
-    }
-    AstNodeExpr* originalBoundKey(AstNodeExpr* boundp, bool isSigned) const {
-        FileLine* const fl = boundp->fileline();
-        AstNodeExpr* valuep = new AstExtend{fl, boundp->cloneTreePure(false), 64};
-        if (isSigned) {
-            V3Number sign{fl, 64, 0};
-            sign.setQuad(uint64_t{1} << (boundp->width() - 1));
-            valuep = new AstXor{fl, valuep, new AstConst{fl, sign}};
-        }
-        return valuep;
-    }
     AstNodeStmt* newStateDistp(AstConstraintExpr* exprp, AstDist* distp) {
         if (!isTarget(distp->exprp())) return nullptr;
         const bool needsNative
