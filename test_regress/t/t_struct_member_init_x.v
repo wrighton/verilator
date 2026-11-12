@@ -29,11 +29,11 @@ module t;
   initial begin
     automatic Holder h = new;
 `ifdef T_X_ONE
-    `checkh(items[1].narrow, 7'b1100111);
-    `checkh(items[0].signed_narrow, 7'sb1100111);
+    `checkh(items[1].narrow, 7'b1101011);
+    `checkh(items[0].signed_narrow, 7'sb1101011);
     `checkh(items[1].odd, 33'h1_ffff_0001);
     `checkh(items[0].wide, 95'h7fff_0000_ffff_1234_5678);
-    `checkh(h.items[2].narrow, 7'b1100111);
+    `checkh(h.items[2].narrow, 7'b1101011);
     `checkh(h.items[0].wide, 95'h7fff_0000_ffff_1234_5678);
 `else
     `checkh(items[1].narrow, 7'b1000010);
