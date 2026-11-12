@@ -638,7 +638,7 @@ class FastConstraintBuilder final {
                                   bool isSigned) const {
         FileLine* const fl = boundp->fileline();
         AstNodeExpr* const valuep = boundp->cloneTreePure(false);
-        V3Number num{fl, boundp->width()};
+        V3Number num{fl, boundp->width(), 0};
         num.setQuad(limit);
         AstConst* const limitp = new AstConst{fl, num};
         if (less) {
