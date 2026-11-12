@@ -407,10 +407,11 @@ class FastConstraintBuilder final {
         }
         return m_targetp->sameTree(exprp);
     }
-    const AstConst* constant(const AstNodeExpr* exprp) {
-        const AstConst* constp = VN_CAST(exprp, Const);
+    AstConst* constant(AstNodeExpr* exprp) {
+        AstConst* constp = VN_CAST(exprp, Const);
         if (!constp && exprp->isPure() && !exprp->exists([](const AstNodeVarRef*) { return true; })
-            && !exprp->exists([](const AstMemberRef*) { return true; })) {
+            && !exprp->exists([](const AstMemberRef*) { return true; })
+            && !exprp->exists([](const AstNodeFTaskRef*) { return true; })) {
             AstNodeExpr* const foldedp = V3Const::constifyEdit(exprp->cloneTreePure(false));
             m_constants.push_back(foldedp);
             constp = VN_CAST(foldedp, Const);
@@ -421,8 +422,8 @@ class FastConstraintBuilder final {
         return m_supported ? constp : nullptr;
     }
     Ranges comparison(AstNodeBiop* nodep) {
-        const AstNodeExpr* boundp = nodep->rhsp();
-        const AstNodeExpr* targetp = nodep->lhsp();
+        AstNodeExpr* boundp = nodep->rhsp();
+        AstNodeExpr* targetp = nodep->lhsp();
         bool reversed = false;
         if (!isTarget(targetp)) {
             std::swap(targetp, boundp);
@@ -577,7 +578,7 @@ class FastConstraintBuilder final {
     AstNodeStmt* newStatePinp(AstConstraintExpr* exprp) const {
         const AstEq* const eqp = VN_CAST(exprp->exprp(), Eq);
         if (!eqp) return nullptr;
-        const AstNodeExpr* boundp = eqp->rhsp();
+        AstNodeExpr* boundp = eqp->rhsp();
         if (!isTarget(eqp->lhsp())) {
             if (!isTarget(eqp->rhsp())) return nullptr;
             boundp = eqp->lhsp();
@@ -593,7 +594,7 @@ class FastConstraintBuilder final {
         if (m_varp->isSigned()) {
             valuep = new AstXor{fl, valuep,
                                 new AstConst{fl, AstConst::WidthedValue{}, m_varp->width(),
-                                             uint64_t{1} << (m_varp->width() - 1)}};
+                                             uint32_t{1} << (m_varp->width() - 1)}};
         }
         valuep = new AstExtend{fl, valuep, 64};
         AstCMethodHard* const rangep = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
@@ -612,7 +613,7 @@ class FastConstraintBuilder final {
                && !refp->varp()->isStdRandomizeArg()
                && exprp->dtypep()->skipRefp()->isIntegralOrPacked();
     }
-    AstNodeExpr* newBoundKeyp(const AstNodeExpr* boundp) const {
+    AstNodeExpr* newBoundKeyp(AstNodeExpr* boundp) const {
         FileLine* const fl = boundp->fileline();
         AstNodeExpr* valuep = boundp->cloneTreePure(false);
         if (valuep->width() > m_varp->width()) {
@@ -621,7 +622,7 @@ class FastConstraintBuilder final {
         if (m_varp->isSigned()) {
             valuep = new AstXor{fl, valuep,
                                 new AstConst{fl, AstConst::WidthedValue{}, m_varp->width(),
-                                             uint64_t{1} << (m_varp->width() - 1)}};
+                                             uint32_t{1} << (m_varp->width() - 1)}};
         }
         return new AstExtend{fl, valuep, 64};
     }
@@ -633,12 +634,13 @@ class FastConstraintBuilder final {
             exprp = extendp->lhsp();
         return isStateLeaf(exprp);
     }
-    AstNodeExpr* newLimitComparep(const AstNodeExpr* boundp, uint64_t limit, bool less,
-                                  bool inclusive, bool isSigned) const {
+    AstNodeExpr* newLimitComparep(AstNodeExpr* boundp, uint64_t limit, bool less, bool inclusive,
+                                  bool isSigned) const {
         FileLine* const fl = boundp->fileline();
         AstNodeExpr* const valuep = boundp->cloneTreePure(false);
-        AstConst* const limitp
-            = new AstConst{fl, AstConst::WidthedValue{}, boundp->width(), limit};
+        V3Number num{fl, boundp->width()};
+        num.setQuad(limit);
+        AstConst* const limitp = new AstConst{fl, num};
         if (less) {
             if (inclusive)
                 return isSigned ? static_cast<AstNodeExpr*>(new AstLteS{fl, valuep, limitp})
@@ -671,7 +673,7 @@ class FastConstraintBuilder final {
             return false;
         }
         const AstNodeBiop* const nodep = VN_AS(exprp, NodeBiop);
-        const AstNodeExpr* boundp = nodep->rhsp();
+        AstNodeExpr* boundp = nodep->rhsp();
         bool reversed = false;
         if (!isTarget(nodep->lhsp())) {
             if (!isTarget(nodep->rhsp())) return false;
@@ -757,12 +759,12 @@ class FastConstraintBuilder final {
         bool hasPositiveWeight = false;
         for (AstDistItem* const itemp : distp->itemspList()) {
             const AstInsideRange* const rangeSourcep = VN_CAST(itemp->rangep(), InsideRange);
-            const AstNodeExpr* lop = rangeSourcep ? rangeSourcep->lhsp() : itemp->rangep();
-            const AstNodeExpr* hip = rangeSourcep ? rangeSourcep->rhsp() : itemp->rangep();
-            const AstNodeExpr* weightp = itemp->weightp();
-            for (const AstNodeExpr** boundpp : {&lop, &hip, &weightp}) {
+            AstNodeExpr* lop = rangeSourcep ? rangeSourcep->lhsp() : itemp->rangep();
+            AstNodeExpr* hip = rangeSourcep ? rangeSourcep->rhsp() : itemp->rangep();
+            AstNodeExpr* weightp = itemp->weightp();
+            for (AstNodeExpr** const boundpp : {&lop, &hip, &weightp}) {
                 if (isStateLeaf(*boundpp)) continue;
-                const AstConst* const constp = constant(*boundpp);
+                AstConst* const constp = constant(*boundpp);
                 if (!constp) break;
                 *boundpp = constp;
             }
