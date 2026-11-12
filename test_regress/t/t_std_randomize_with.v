@@ -23,6 +23,18 @@ class external_cl;
   endfunction
 endclass
 
+function automatic longint unsigned pick(longint unsigned lo, longint unsigned hi);
+  longint unsigned v;
+  if (std::randomize(v) with {v inside {[lo:hi]};} != 1) `stop;
+  return v;
+endfunction
+
+class queue_plan;
+  function void plan(ref int q[$], input int m);
+    q = q[0:int'(pick(1, 64'(m))) - 1];
+  endfunction
+endclass
+
 module t;
   initial begin
     int a, b;
@@ -199,6 +211,26 @@ module t;
       `checkd(randomize_result, 0);
       `checkd(a, 3);
       $display("Test 11 passed: a=%0d", a);
+    end
+
+    // A class-method queue bound may call a function containing std::randomize.
+    begin
+      queue_plan o;
+      int q[$];
+      int m;
+      o = new;
+      for (int iteration = 0; iteration < 32; ++iteration) begin
+        m = (iteration % 4) + 1;
+        q = '{0, 1, 2, 3, 4};
+        o.plan(q, m);
+        `checkd(q.size() >= 1 && q.size() <= m, 1'b1);
+        foreach (q[i]) `checkd(q[i], i);
+        // Singleton constraints guarantee that the returned bound varies.
+        q = '{0, 1, 2, 3, 4};
+        q = q[0:int'(pick(64'(m), 64'(m))) - 1];
+        `checkd(q.size(), m);
+        foreach (q[i]) `checkd(q[i], i);
+      end
     end
 
     $write("*-* All Finished *-*\n");
