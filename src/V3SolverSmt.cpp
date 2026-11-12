@@ -614,7 +614,8 @@ class FastConstraintBuilder final {
                     valid = false;
                     return;
                 }
-                for (AstNode* const listp : {taskp->declsp(), taskp->stmtsp()}) {
+                for (AstNode* const listp :
+                     std::initializer_list<AstNode*>{taskp->declsp(), taskp->stmtsp()}) {
                     for (AstNode* const itemp : VNList<AstNode>{listp}) {
                         if (!stateExpression(itemp, calls, taskp)) valid = false;
                     }
