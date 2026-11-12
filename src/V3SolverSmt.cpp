@@ -1017,16 +1017,20 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     // Keep value preparation ahead of every use, inside one owned expression block.
-    AstNodeExpr* finishValuePreparation(AstNodeExpr* const exprp, AstBegin* const blockp) {
+    // The result is visited again as an operand of the enclosing SMT expression, which
+    // leaves only an AstSFormatF unchanged; other text, such as the AstCond of a
+    // condition, would be formatted once more as a constant.
+    AstSFormatF* finishValuePreparation(AstNodeExpr* const exprp, AstBegin* const blockp) {
         if (!blockp->stmtsp()) {
             VL_DO_DANGLING(blockp->deleteTree(), blockp);
-            return exprp;
+            if (AstSFormatF* const fmtp = VN_CAST(exprp, SFormatF)) return fmtp;
+            return new AstSFormatF{exprp->fileline(), "%s", false, exprp};
         }
         blockp->addStmtsp(new AstCReturn{exprp->fileline(), exprp});
         return newReturnedTextp(exprp->fileline(), blockp);
     }
     // Format one expression with its owned preparation and original range default.
-    AstNodeExpr* formatValueRegion(AstNodeExpr* exprp) {
+    AstSFormatF* formatValueRegion(AstNodeExpr* exprp) {
         FileLine* const fl = exprp->fileline();
         const int width = exprp->width();
         if (exprp->backp()) exprp->unlinkFrBack();
