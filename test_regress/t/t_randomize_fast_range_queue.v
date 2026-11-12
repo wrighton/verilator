@@ -34,7 +34,7 @@ endclass
 module t_range_queue;
   localparam int N = 8192;
   // The 32-bit shift/subtract expression is intentional, including width32.
-  function automatic int edge(ref int value, input int width);
+  function automatic int pick_width(ref int value, input int width);
     return std::randomize(value) with {value inside {[0 : (1 << width) - 1]};};
   endfunction
   initial begin
@@ -74,7 +74,7 @@ module t_range_queue;
     value = 77;
     `checkd(picker.pick(value, busy, 1), 0);
     `checkd(value, 77);
-    `checkd(edge(value, 0), 1);
+    `checkd(pick_width(value, 0), 1);
     `checkd(value, 0);
     busy = '{0, 0};
     `checkd(std::randomize(value) with {
@@ -83,13 +83,13 @@ module t_range_queue;
             }, 0);
     `checkd(value, 0);
     repeat (32) begin
-      `checkd(edge(value, 11), 1);
+      `checkd(pick_width(value, 11), 1);
       `check_range(value, 0, 2047);
-      `checkd(edge(value, 31), 1);
+      `checkd(pick_width(value, 31), 1);
       `check_range(value, 0, 32'sh7fff_ffff);
     end
     value = 77;
-    `checkd(edge(value, 32), 0);
+    `checkd(pick_width(value, 32), 0);
     `checkd(value, 77);
     // A rand-dependent bound remains unsupported even if another item pins it.
     width = 9;
