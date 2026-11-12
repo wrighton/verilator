@@ -324,7 +324,10 @@ public:
 //######################################################################
 // Structured fast-domain lowering, before dist is rewritten to a procedural
 // bucket draw plus SMT membership/soft choices. Unsupported original items
-// explicitly disable the optimization for the whole invocation.
+// explicitly disable the optimization for the whole invocation. The runtime
+// samples from these descriptions alone and never reads the SMT constraint
+// text, so every constraint the solver receives must be described here or
+// disable the optimization.
 
 using FastDistGens = std::unordered_map<const AstDist*, AstVar*>;
 
@@ -494,8 +497,7 @@ class FastConstraintBuilder final {
         // clipped bound into the narrower unextended view. No signed host
         // arithmetic or UINT64_MAX+1 sentinel is needed.
         const uint64_t operandMask = VL_MASK_Q(targetp->width());
-        const uint64_t operandSign
-            = signedCompare ? uint64_t{1} << (targetp->width() - 1) : 0;
+        const uint64_t operandSign = signedCompare ? uint64_t{1} << (targetp->width() - 1) : 0;
         const uint64_t minBits
             = signedCompare ? (uint64_t{1} << (m_viewWidth - 1)) | (operandMask ^ mask()) : 0;
         const uint64_t maxBits = signedCompare ? mask() >> 1 : mask();
@@ -715,9 +717,8 @@ class FastConstraintBuilder final {
             if (!isTarget(eqp->rhsp())) return nullptr;
             boundp = eqp->lhsp();
         }
-        const AstVarRef* const refp = VN_CAST(boundp, VarRef);
-        if (!refp || refp->user1() || refp->varp()->rand().isRandomizable()
-            || boundp->width() != m_viewWidth || eqp->lhsp()->width() != m_viewWidth) {
+        if (!isStateLeaf(boundp) || boundp->width() != m_viewWidth
+            || eqp->lhsp()->width() != m_viewWidth) {
             return nullptr;
         }
         FileLine* const fl = exprp->fileline();
@@ -742,9 +743,7 @@ class FastConstraintBuilder final {
     AstNodeExpr* newBoundKeyp(AstNodeExpr* boundp) const {
         FileLine* const fl = boundp->fileline();
         AstNodeExpr* valuep = boundp->cloneTreePure(false);
-        if (valuep->width() > m_viewWidth) {
-            valuep = new AstSel{fl, valuep, 0, m_viewWidth};
-        }
+        if (valuep->width() > m_viewWidth) { valuep = new AstSel{fl, valuep, 0, m_viewWidth}; }
         if (m_viewSigned) {
             V3Number sign{fl, m_viewWidth, 0};
             sign.setQuad(uint64_t{1} << (m_viewWidth - 1));
@@ -845,11 +844,12 @@ class FastConstraintBuilder final {
             AstNodeExpr* edgep = newBoundKeyp(boundp);
             if (!inclusive)
                 edgep = new AstAdd{fl, edgep, new AstConst{fl, AstConst::Unsized64{}, 1}};
-            AstNodeExpr* const clippedp = new AstCond{
-                fl, newLimitComparep(boundp, min, true, inclusive, signedCompare),
-                new AstConst{fl, AstConst::Unsized64{}, 0}, edgep};
-            interval.validp = new AstLogAnd{
-                fl, interval.validp, newLimitComparep(boundp, max, true, inclusive, signedCompare)};
+            AstNodeExpr* const clippedp
+                = new AstCond{fl, newLimitComparep(boundp, min, true, inclusive, signedCompare),
+                              new AstConst{fl, AstConst::Unsized64{}, 0}, edgep};
+            interval.validp
+                = new AstLogAnd{fl, interval.validp,
+                                newLimitComparep(boundp, max, true, inclusive, signedCompare)};
             VL_DO_DANGLING(interval.lop->deleteTree(), interval.lop);
             interval.lop = clippedp;
         } else {
@@ -863,8 +863,9 @@ class FastConstraintBuilder final {
                               new AstConst{fl, AstConst::Unsized64{}, mask()}, edgep};
             VL_DO_DANGLING(interval.hip->deleteTree(), interval.hip);
             interval.hip = clippedp;
-            interval.validp = new AstLogAnd{
-                fl, interval.validp, newLimitComparep(boundp, min, false, inclusive, signedCompare)};
+            interval.validp
+                = new AstLogAnd{fl, interval.validp,
+                                newLimitComparep(boundp, min, false, inclusive, signedCompare)};
         }
         return true;
     }

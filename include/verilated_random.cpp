@@ -1146,8 +1146,7 @@ bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastC
 // consume probability mass or silently pin any bits outside that view.
 bool VlRandomizer::fastPinned(const FastConstraint& constraint) {
     return !constraint.isSoft && !constraint.isDist && !constraint.isEnum
-           && constraint.ranges.size() == 1
-           && constraint.ranges[0].lo == constraint.ranges[0].hi;
+           && constraint.ranges.size() == 1 && constraint.ranges[0].lo == constraint.ranges[0].hi;
 }
 
 bool VlRandomizer::fastView(FastDomain& domain) {
@@ -1182,7 +1181,7 @@ bool VlRandomizer::fastView(FastDomain& domain) {
 }
 
 bool VlRandomizer::fastDomains(std::vector<FastDomain>& domains,
-                              std::unordered_map<void*, size_t>& indices) {
+                               std::unordered_map<void*, size_t>& indices) {
     std::unordered_set<void*> enumNeeded;
     for (const auto& namedVar : m_vars) {
         const VlRandomVar* const varp = namedVar.second.get();
@@ -1231,7 +1230,7 @@ bool VlRandomizer::fastDomains(std::vector<FastDomain>& domains,
     }
     for (const FastConstraint& constraint : m_fastConstraints) {
         if (constraint.isSoft || fastPinned(constraint)) continue;
-        FastDomain& domain = domains[indices.at(constraint.datap)];
+        FastDomain& domain = domains[indices[constraint.datap]];
         domain.ranges = fastIntersect(domain.ranges, fastUnion(constraint.ranges));
         if (constraint.isDist) {
             if (domain.distp) return false;  // Multiple retained distributions need the solver
@@ -1260,7 +1259,7 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
     // hard domain and the higher-priority softs already retained.
     for (auto it = m_fastConstraints.rbegin(); it != m_fastConstraints.rend(); ++it) {
         if (!it->isSoft) continue;
-        FastDomain& domain = domains[indices.at(it->datap)];
+        FastDomain& domain = domains[indices[it->datap]];
         FastRanges intersection = fastIntersect(domain.ranges, fastUnion(it->ranges));
         if (intersection.empty()) continue;
         domain.ranges = std::move(intersection);
@@ -1269,9 +1268,10 @@ int VlRandomizer::nextFast(VlRNG& rngr) {
             domain.distp = &*it;
         }
     }
-    const size_t freeDomains = std::count_if(domains.begin(), domains.end(), [](const FastDomain& d) {
-        return d.ranges.size() != 1 || d.ranges[0].lo != d.ranges[0].hi;
-    });
+    const size_t freeDomains
+        = std::count_if(domains.begin(), domains.end(), [](const FastDomain& d) {
+              return d.ranges.size() != 1 || d.ranges[0].lo != d.ranges[0].hi;
+          });
     // Every original item is univariate and state-only. One free domain plus
     // independently proved singleton domains needs no coupled solver work.
     if (freeDomains > 1) return -1;

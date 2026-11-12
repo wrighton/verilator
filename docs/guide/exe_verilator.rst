@@ -867,10 +867,13 @@ Summary:
    supported. A contiguous slice can be sampled when every bit outside it is
    hard-pinned; those fixed bits are preserved, including nonzero values.
    Distribution weights are preserved after hard restrictions and soft-priority
-   resolution. Unsupported forms and unrepresentable sampling arithmetic retain
-   the solver path. Random values from a given seed may differ when this
-   optimization is enabled. This option is useful when testing the solver
-   protocol itself. The optimization is experimental and for internal use only.
+   resolution. Unsupported forms, unrepresentable sampling arithmetic, and
+   :vlopt:`+verilator+rand+sampler+\<name\>` set to ``solver`` retain the
+   solver path. Random values from a given seed may differ when this
+   optimization is enabled, and so may the result of ``randomize()`` where the
+   solver path does not keep soft constraints as IEEE 1800-2023 18.5.13
+   requires. This option is useful when testing the solver protocol itself. The
+   optimization is experimental and for internal use only.
 
 .. option:: -fno-dead-assigns
 
