@@ -59,6 +59,10 @@ module t;
   typedef struct {
     int queue_member[$];
     bit zero;
+    bit [6:0] initialized_leaf = 7'd5;
+    s_t initialized_nested = '{m_lo: 4'h9, m_mid: 94'h123, m_hi: 4'h2};
+    s_t ordinary_nested;
+    bit [6:0] initialized_lanes[2] = '{7'd9, 7'd11};
   } unsupported_default_t;
 
   int calls = 0;
@@ -79,6 +83,7 @@ module t;
     string string_zeros[3];
     real real_zeros[3];
     unsupported_default_t unsupported[2][3];
+    unsupported_default_t selected_defaults[3];
     int index;
     int inner_index;
     begin
@@ -125,6 +130,10 @@ module t;
       nested[n].ordinary = fixed_a[n];
       nested[n].lanes = '{7'd3, 7'd4};
       zeros[n] = 7'(n + 17);
+      selected_defaults[n].initialized_leaf = 7'(n + 1);
+      selected_defaults[n].initialized_nested = fixed_a[n];
+      selected_defaults[n].ordinary_nested = fixed_a[n];
+      selected_defaults[n].initialized_lanes = '{7'd3, 7'd4};
     end
     matrix[0][0] = fixed_a[0];
     for (int step = 0; step < 5; step++) begin
@@ -151,10 +160,21 @@ module t;
         `checkh(nested[index].ordinary.m_mid, ~94'h0);
         `checkh(nested[index].lanes[inner_index], inner_index == 0 ? 7'd9 : 7'd11);
         `checkh(zeros[index], 7'd0);
+        // Unrelated queue storage must not hide an initialized selected member.
+        `checkh(selected_defaults[index].initialized_leaf, 7'd5);
+        `checkh(selected_defaults[index].initialized_leaf[2:0], 3'h5);
+        `checkh(selected_defaults[index].initialized_nested.m_lo, 4'h9);
+        `checkh(selected_defaults[index].initialized_nested.m_mid, 94'h123);
+        `checkh(selected_defaults[index].ordinary_nested.m_lo, P);
+        `checkh(selected_defaults[index].initialized_lanes[inner_index],
+                inner_index == 0 ? 7'd9 : 7'd11);
         `checks(string_zeros[index], "");
         `checkh($realtobits(real_zeros[index]), 64'd0);
         fixed_a[index].m_lo = 4'hf;
         dynamic_a[index].m_lo = 4'hf;
+        selected_defaults[index].initialized_leaf = 7'd63;
+        `checkh(selected_defaults[0].initialized_leaf, 7'd1);
+        `checkh(selected_defaults[index].initialized_leaf, 7'd5);
         // Queue [$+1] writes append; only the negative index is a no-op.
         if (index < 0) queue_a[index].m_lo = 4'hf;
         `checkh(fixed_a[0].m_lo, 4'h1);
@@ -174,6 +194,10 @@ module t;
         `checkh(nested[index].initialized.m_lo, 4'(index + 1));
         `checkh(nested[index].lanes[inner_index], inner_index == 0 ? 7'd3 : 7'd4);
         `checkh(zeros[index], 7'(index + 17));
+        `checkh(selected_defaults[index].initialized_leaf, 7'(index + 1));
+        `checkh(selected_defaults[index].initialized_nested.m_lo, 4'(index + 1));
+        `checkh(selected_defaults[index].initialized_lanes[inner_index],
+                inner_index == 0 ? 7'd3 : 7'd4);
       end
       if (index == 0 || index == 1) begin
         `checkh(slice_a[0].m_lo, 4'(index + 1));
