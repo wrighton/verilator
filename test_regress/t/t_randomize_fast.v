@@ -243,6 +243,7 @@ module t;
     bit signed [6:0] signed_value;
     int digest;
     bit [6:0] std_value;
+    int randomize_result;
     pinned = new;
     inline_pinned = new;
     univariate = new;
@@ -265,40 +266,50 @@ module t;
 
     repeat (N) begin
       pinned.desired = pinned.pre_count[0] ? HIGH : LOW;
-      `checkd(pinned.randomize(), 1);
+      randomize_result = pinned.randomize();
+      `checkd(randomize_result, 1);
       `checkd(pinned.choice, pinned.desired);
       `checkd(pinned.x, 7'd100);
       `checkd(pinned.y, -15'sd21);
       `checkd(pinned.post_count, pinned.pre_count);
-      `checkd(univariate.randomize(), 1);
+      randomize_result = univariate.randomize();
+      `checkd(randomize_result, 1);
       `checkd(univariate.x inside {7'd2, 7'd5, 7'd7, 7'd8}, 1);
       counts_inside[int'(univariate.x)]++;
-      `checkd(single_range.randomize(), 1);
+      randomize_result = single_range.randomize();
+      `checkd(randomize_result, 1);
       `check_range(single_range.x, 3, 10);
       counts_single[int'(single_range.x)-3]++;
-      `checkd(signed_range.randomize(), 1);
+      randomize_result = signed_range.randomize();
+      `checkd(randomize_result, 1);
       `check_range(signed_range.x, -3, 2);
       counts_signed[int'(signed_range.x)+3]++;
-      `checkd(restricted.randomize(), 1);
+      randomize_result = restricted.randomize();
+      `checkd(randomize_result, 1);
       `check_range(restricted.x, 1, 5);
       counts_dist[int'(restricted.x)]++;
-      `checkd(soft_dist.randomize(), 1);
+      randomize_result = soft_dist.randomize();
+      `checkd(randomize_result, 1);
       `checkd(soft_dist.x inside {7'd2, 7'd3, 7'd7}, 1);
       counts_soft[int'(soft_dist.x)]++;
-      `checkd(state_dist.randomize(), 1);
+      randomize_result = state_dist.randomize();
+      `checkd(randomize_result, 1);
       `checkd(state_dist.x inside {7'd2, 7'd3, 7'd7}, 1);
       counts_state[int'(state_dist.x)]++;
-      `checkd(priority_dist.randomize(), 1);
+      randomize_result = priority_dist.randomize();
+      `checkd(randomize_result, 1);
       `checkd(priority_dist.x inside {7'd7, 7'd8}, 1);
       counts_priority[int'(priority_dist.x)]++;
-      `checkd(intersection_dist.randomize(), 1);
+      randomize_result = intersection_dist.randomize();
+      `checkd(randomize_result, 1);
       `checkd(intersection_dist.x, 7'd3);
       `checkd(pick_bands(band_value, 2, 34), 1);
       `checkd(band_value inside {[2 : 4], [10 : 19], [30 : 34]}, 1);
       if (band_value <= 4) band_counts[0]++;
       else if (band_value <= 19) band_counts[1]++;
       else band_counts[2]++;
-      `checkd(std::randomize(std_value) with {std_value inside {7'd13, 7'd29};}, 1);
+      randomize_result = std::randomize(std_value) with {std_value inside {7'd13, 7'd29};};
+      `checkd(randomize_result, 1);
       `checkd(std_value inside {7'd13, 7'd29}, 1);
       digest = (digest << 1) ^ int'(restricted.x) ^ int'(std_value);
     end
@@ -319,12 +330,14 @@ module t;
     `check_range(counts_state[3], 2 * N/ 10 - 200, 2 * N/ 10 + 200);
     `check_range(counts_state[7], 6 * N/ 10 - 200, 6 * N/ 10 + 200);
     state_dist.w = 0;
-    `checkd(state_dist.randomize(), 1);
+    randomize_result = state_dist.randomize();
+    `checkd(randomize_result, 1);
     `checkd(state_dist.x, 7'd7);
     state_dist.w  = 2;
     state_dist.lo = 7'd5;
     state_dist.hi = 7'd6;
-    `checkd(state_dist.randomize(), 1);
+    randomize_result = state_dist.randomize();
+    `checkd(randomize_result, 1);
     `checkd(state_dist.x, 7'd7);
     `check_range(counts_priority[7], N/ 4 - 200, N/ 4 + 200);
     `check_range(counts_priority[8], 3 * N/ 4 - 200, 3 * N/ 4 + 200);
@@ -370,20 +383,22 @@ module t;
     for (int i = 0; i < 32; i++) begin
       desired_choice = i[0] ? HIGH : LOW;
       expected_x = 7'(i + 1);
-      `checkd(inline_pinned.randomize() with {
-              choice == local:: desired_choice;
-              x == local:: expected_x;
-              },
-              1);
+      randomize_result = inline_pinned.randomize() with {
+      choice == local:: desired_choice;
+      x == local:: expected_x;
+      };
+      `checkd(randomize_result, 1);
       `checkd(inline_pinned.choice, desired_choice);
       `checkd(inline_pinned.x, expected_x);
     end
     // Hard inline restrictions relax an incompatible soft dist, not fail.
-    `checkd(soft_dist.randomize() with {x == 7'd9;}, 1);
+    randomize_result = soft_dist.randomize() with {x == 7'd9;};
+    `checkd(randomize_result, 1);
     `checkd(soft_dist.x, 7'd9);
     // An illegal enum value must fail without committing any pinned fields.
     pinned.desired = choice_t'(7'd12);
-    `checkd(pinned.randomize(), 0);
+    randomize_result = pinned.randomize();
+    `checkd(randomize_result, 0);
     `checkd(pinned.post_count, N);
     `checkd(pinned.pre_count, N + 1);
     `checkd(pinned.choice inside {LOW, HIGH}, 1);
@@ -394,7 +409,8 @@ module t;
       origin = new;
       foreach (counts_origin[i]) counts_origin[i] = 0;
       repeat (N) begin
-        `checkd(origin.randomize(), 1);
+        randomize_result = origin.randomize();
+        `checkd(randomize_result, 1);
         `checkd(origin.x inside {[7'd0 : 7'd7]}, 1);
         counts_origin[int'(origin.x)]++;
       end
@@ -448,7 +464,8 @@ module t;
       repeat (32) begin
         `checkd(picker.pick(value, pool, 0, 3), 1);
         `checkd(value inside {-3, 1}, 1);
-        `checkd(callback_queue.randomize(), 1);
+        randomize_result = callback_queue.randomize();
+        `checkd(randomize_result, 1);
       end
       `checkd(pool.size(), 3);
       `checkd(pool[0], -3);
@@ -459,7 +476,8 @@ module t;
       bounded = new;
       bounded.allowed = '{1, 2, 3};
       repeat (32) begin
-        `checkd(bounded.randomize(), 1);
+        randomize_result = bounded.randomize();
+        `checkd(randomize_result, 1);
         `checkd(bounded.value inside {bounded.allowed}, 1);
         `checkd(bounded.allowed.size(), 3);
       end
