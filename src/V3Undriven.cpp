@@ -563,7 +563,9 @@ class UndrivenVisitor final : public VNVisitorConst {
         m_contAssTargetp = nullptr;
         iterateConst(nodep);
     }
-    std::vector<string> initialContPrefix(const AstNodeVarRef* nodep) const {
+    // Returns the static element path written, or false for a write through a
+    // constant invalid index, which selects no element (IEEE 1800-2023 7.4.5)
+    bool initialContPrefix(const AstNodeVarRef* nodep, std::vector<string>& prefix) const {
         std::vector<const AstNodeExpr*> selects;
         const AstNodeExpr* exprp = m_contAssTargetp;
         while (exprp && exprp != nodep) {
@@ -577,22 +579,22 @@ class UndrivenVisitor final : public VNVisitorConst {
             } else if (const AstSliceSel* const selp = VN_CAST(exprp, SliceSel)) {
                 exprp = selp->fromp();
             } else {
-                return {};
+                return true;
             }
         }
-        if (exprp != nodep) return {};  // Whole write, or not this variable's select chain
-        std::vector<string> prefix;
+        if (exprp != nodep) return true;  // Whole write, or not this variable's select chain
         for (auto it = selects.rbegin(); it != selects.rend(); ++it) {
             if (const AstArraySel* const selp = VN_CAST(*it, ArraySel)) {
                 const AstConst* const constp = VN_CAST(selp->bitp(), Const);
+                if (!constp) break;  // The longest static prefix ends here (IEEE 1800-2023 11.5.3)
                 // V3WidthSel already normalized the index. Never clip wide/X/Z values.
                 const AstUnpackArrayDType* const arrayp
                     = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
-                if (!constp || constp->num().isFourState()
+                if (constp->num().isFourState()
                     || (constp->isSigned() && constp->num().isNegative())
                     || !constp->num().fitsInUInt()
                     || constp->toUInt() >= static_cast<uint32_t>(arrayp->elementsConst()))
-                    break;
+                    return false;
                 prefix.push_back("[" + cvtToStr(constp->toUInt()) + "]");
             } else if (const AstStructSel* const selp = VN_CAST(*it, StructSel)) {
                 // Union fields alias; only an unpacked struct proves independence.
@@ -605,7 +607,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                 break;
             }
         }
-        return prefix;
+        return true;
     }
 
     UndrivenVarEntry* getEntryp(AstVar* nodep, int which_user) {
@@ -1091,8 +1093,12 @@ class UndrivenVisitor final : public VNVisitorConst {
                         || (rootStructp && !rootStructp->packed()))) {
                     const bool initial
                         = nodep->varp()->hasUserInit() ? m_inInitialStatic : m_inInitial;
-                    if (initial || m_inContAssign)
-                        entryp->recordInitialCont(initialContPrefix(nodep), nodep, initial);
+                    if (initial || m_inContAssign) {
+                        std::vector<string> prefix;
+                        // A write selecting no element keeps element tracking, without a location
+                        const bool element = initialContPrefix(nodep, prefix);
+                        entryp->recordInitialCont(prefix, element ? nodep : nullptr, initial);
+                    }
                 }
                 if (m_drivingPinp && !entryp->outPinp()) entryp->outPinp(nodep);
                 if (inPlainProcAssign() && !entryp->plainProcp()) entryp->plainProcp(nodep);
