@@ -70,9 +70,9 @@
 
 #include "V3BitBlast.h"
 
-#include "V3AstUserAllocator.h"
 #include "V3SharedTmps.h"
 #include "V3Stats.h"
+#include "V3VNUserAllocator.h"
 
 #include <algorithm>
 
@@ -124,8 +124,8 @@ class BitBlastVisitor final : public VNVisitorConst, public VNDeleter {
     // STATE
     // The fragment AstVars created so far, by LSB and MSB. AstVarScopes with the same
     // fragment share its AstVar.
-    AstUser2Allocator<AstVar, std::map<std::pair<int, int>, AstVar*>> m_fragmentVarps;
-    AstUser1Allocator<AstVarScope, VscpInfo> m_vscpInfos;
+    VNUser2Allocator<AstVar, std::map<std::pair<int, int>, AstVar*>> m_fragmentVarps;
+    VNUser1Allocator<AstVarScope, VscpInfo> m_vscpInfos;
     std::vector<AstVarScope*> m_vscps;  // AstVarScopes of eligible variables, in encounter order
     AstNodeAssign* m_assignp = nullptr;  // The enclosing assignment, if it can be expanded
     V3SharedTmps m_tmps{"__VbitblastTmp", VVarType::MODULETEMP};  // Temporaries of RHSs
@@ -165,7 +165,7 @@ class BitBlastVisitor final : public VNVisitorConst, public VNDeleter {
                 // Eligible if no refusal reason returned
                 return !reasonp;
             }();
-            varp->user1(2 | eligible);
+            varp->user1(2 | (eligible ? 1 : 0));
         }
         // Return the cached result
         return varp->user1() & 1;
@@ -227,10 +227,8 @@ class BitBlastVisitor final : public VNVisitorConst, public VNDeleter {
         std::string name = varp->name() + "__BRA__" + AstNode::encodeNumber(msb);
         if (width > 1) name += AstNode::encodeName(":") + AstNode::encodeNumber(lsb);
         name += "__KET__";
-        AstNodeDType* const dtypep = varp->dtypep()->isFourstate()
-                                         ? varp->findLogicDType(width, width, VSigning::UNSIGNED)
-                                         : varp->findBitDType(width, width, VSigning::UNSIGNED);
-        fragVarpr = new AstVar{varp->fileline(), varp->varType(), name, dtypep};
+        fragVarpr = new AstVar{varp->fileline(), varp->varType(), name,
+                               varp->findBitDType(width, width, VSigning::UNSIGNED)};
         fragVarpr->propagateSplitAttrFrom(varp);
         varp->addHereThisAsNext(fragVarpr);
         return fragVarpr;
@@ -430,7 +428,7 @@ class BitBlastVisitor final : public VNVisitorConst, public VNDeleter {
         // Record whole access
         record(nodep, nodep, 0, nodep->varp()->width() - 1);
     }
-    void visit(AstMemberSel* nodep) override {
+    void visit(AstMemberRef* nodep) override {
         iterateChildrenConst(nodep);
         // The AstVarScope is not known, so all of them are blocked, by making it ineligible
         AstVar* const varp = nodep->varp();
@@ -473,7 +471,7 @@ class BitBlastVisitor final : public VNVisitorConst, public VNDeleter {
                 const int width = fragment.msb - fragment.lsb + 1;
                 AstSel* const lhsp = new AstSel{flp, lhsRefp, fragment.lsb, width};
                 AstVarRef* const rhsp = new AstVarRef{flp, fragment.vscp, VAccess::READ};
-                activep->addStmtsp(new AstAlways{new AstAssignW{flp, lhsp, rhsp}});
+                activep->addProcsp(new AstAlways{new AstAssignW{flp, lhsp, rhsp}});
             }
         }
 
