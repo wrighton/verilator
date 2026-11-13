@@ -119,6 +119,17 @@ module t (
   initial invalid_descendant[1] = '{default: 0};
   assign invalid_descendant[1][5] = out;
 
+  // An ignored write does not hide a later overlap, in either driver order.
+  logic ignored_initial_first[2];
+  initial ignored_initial_first[7] = 0;
+  initial ignored_initial_first[1] = 0;
+  assign ignored_initial_first[1] = out;
+
+  logic ignored_continuous_first[2];
+  assign ignored_continuous_first[4] = out;
+  assign ignored_continuous_first[0] = out;
+  initial ignored_continuous_first[0] = 0;
+
   // A valid constant index wider than 32 bits still selects its element.
   logic wide_valid[2];
   initial wide_valid[80'd1] = 0;
