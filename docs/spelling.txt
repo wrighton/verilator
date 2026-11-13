@@ -60,6 +60,7 @@ Cai
 Cavium
 Cfuncs
 Chandan
+Cheng
 Chentai
 Cherkasov
 Chih
@@ -133,6 +134,7 @@ Feinberg
 Fekete
 Ferrandi
 Fiergolski
+Fila
 Filip
 Flachs
 Flavien
@@ -338,6 +340,7 @@ Mora
 Muhlestein
 Multithreaded
 Multithreading
+Murdock
 Mykyta
 NFA
 NOUNOPTFLAT
@@ -386,6 +389,7 @@ Plunkett
 Poikela
 Popolon
 Popov
+Povišer
 Prabhat
 Prabhu
 Prateek
@@ -731,6 +735,7 @@ dehash
 demangling
 dep
 deparametrized
+deps
 deque
 der
 dereference
@@ -1030,6 +1035,7 @@ oversubscription
 parallelized
 param
 parameterization
+parameterizations
 parameterized
 parameterized
 parameterless
@@ -1059,7 +1065,10 @@ postincrement
 pragma
 pragmas
 pre
+prebuild
+prebuilt
 precisions
+precompile
 precompiled
 predefines
 prefetch
@@ -1268,6 +1277,7 @@ uvm
 uwire
 uwires
 valgrind
+variadic
 vc
 vcd
 vcddiff
