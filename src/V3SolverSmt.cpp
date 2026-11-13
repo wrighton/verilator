@@ -4424,9 +4424,9 @@ class ConstraintExprVisitor final : public VNVisitor {
             = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
         const bool indexIsRand = isRandIndex(nodep->bitp());
-        if (!indexIsRand) {
-            // V3Width keeps all index bits; truncate as it did before, as the names of struct
-            // and class array elements depend on the index width
+        if (!indexIsRand || m_structSel) {
+            // V3Width keeps all index bits; truncate to the array's select width, which the
+            // names of struct and class array elements require, also for a random index
             const int selWidth
                 = V3Number::log2b(VN_AS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)
                                       ->declRange()
