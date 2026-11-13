@@ -22,6 +22,9 @@
 //          with a member reference)
 //      Look for TASKs
 //          Remove them, they're inlined
+// Then, with calls inlined into their processes:
+//      Look for associative array elements V3Width made const ref actuals create
+//          Make the process write the array
 //
 //*************************************************************************
 
@@ -35,6 +38,7 @@
 #include "V3EmitCBase.h"
 #include "V3Graph.h"
 #include "V3LanguageWords.h"
+#include "V3LinkLValue.h"
 #include "V3SharedTmps.h"
 #include "V3Stats.h"
 
@@ -104,12 +108,31 @@ public:
 
 //######################################################################
 
+// Return whether an inlined call can bind ref argument 'pinp' to its location
+static bool isInlinableRefPin(const AstNodeExpr* pinp) {
+    // A class member, or array element and struct member selects of a variable or class member
+    while (true) {
+        if (const AstArraySel* const selp = VN_CAST(pinp, ArraySel)) {
+            pinp = selp->fromp();
+        } else if (const AstStructSel* const selp = VN_CAST(pinp, StructSel)) {
+            pinp = selp->fromp();
+        } else {
+            return VN_IS(pinp, VarRef) || VN_IS(pinp, MemberRef);
+        }
+    }
+}
+
+//######################################################################
+
 class TaskStateVisitor final : public VNVisitor {
     // NODE STATE
     //  Output:
     //   AstNodeFTask::user3p   // AstScope* this FTask is under
     //   AstNodeFTask::user4p   // GraphFTaskVertex* this FTask is under
     //   AstVar::user4p         // GraphFTaskVertex* this variable is declared in
+    //   AstNodeFTaskRef::user4 // bool. Call in initial continuous assignment, not inlined
+    //  Temporary in isInitial:
+    //   AstVarScope::user1     // bool. Written
     const VNUser3InUse m_inuser3;
     const VNUser4InUse m_inuser4;
 
@@ -124,6 +147,10 @@ class TaskStateVisitor final : public VNVisitor {
     V3Graph m_callGraph;  // Task call graph
     TaskBaseVertex* m_curVxp;  // Current vertex we're adding to
     std::vector<AstInitialAutomatic*> m_initialps;  // Initial blocks to move
+    // Calls in continuous assignments, with the assignment
+    std::vector<std::pair<AstNodeProcedure*, AstNodeFTaskRef*>> m_assignCalls;
+    AstNodeProcedure* m_assignp = nullptr;  // Current continuous assignment
+    VDouble0 m_statInitCalls;  // Statistic tracking
     bool m_underPortVar = false;  // Visiting under a port AstVar; any expression there
                                   // is a default value, evaluated at call sites only
     // Instances of each interface
@@ -183,6 +210,7 @@ public:
     }
     // Returns pointer to node that makes the given FTask impure
     AstNode* checkImpure(AstNodeFTask* nodep) { return getFTaskVertex(nodep)->impureNode(); }
+    static bool initCall(const AstNodeFTaskRef* nodep) { return nodep->user4(); }
 
 private:
     TaskFTaskVertex* getFTaskVertex(AstNodeFTask* nodep) {
@@ -211,6 +239,72 @@ private:
                 }
             }
         }
+    }
+
+    // Mark calls of impure functions in initial continuous assignments not to be inlined
+    void decideInitCalls() {
+        // Impure functions are inlined so scheduling sees what they read and write, which code
+        // run once at initialization does not need. Calls of pure functions are left as they
+        // are, so when inlined they still fold to constants.
+        const AstNodeProcedure* checkedp = nullptr;  // Assignment 'initial' is for
+        bool initial = false;
+        for (const auto& pair : m_assignCalls) {
+            TaskFTaskVertex* const ftVtxp = getFTaskVertex(pair.second->taskp());
+            if (ftVtxp->pure() || ftVtxp->noInline()) continue;
+            if (pair.first != checkedp) {
+                checkedp = pair.first;
+                initial = isInitial(checkedp);
+            }
+            if (!initial) continue;
+            pair.second->user4(true);
+            ftVtxp->needsNonInlineCFunc(true);
+            ++m_statInitCalls;
+        }
+    }
+
+    // Whether the continuous assignment is initial, approximating V3ActiveTop
+    bool isInitial(const AstNodeProcedure* nodep) {
+        // V3ActiveTop makes it initial if it writes each variable before reading it. Check
+        // this as if the calls were inlined, as calls not inlined hide what the function reads.
+        const VNUser1InUse user1InUse;
+        return writesBeforeReads(nodep->stmtsp(), false);
+    }
+
+    // Whether the statements write each variable before reading it
+    bool writesBeforeReads(const AstNode* stmtsp, bool callee) {
+        for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
+            if (!stmtp->forall([&](const AstNode* np) { return writeBeforeRead(np, callee); })) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Whether the node, visited in pre-order, reads nothing not yet written
+    bool writeBeforeRead(const AstNode* np, bool callee) {
+        // Check in the called functions too, as if inlined, except those not inlined anyway,
+        // as their calls already hide what they do. The functions may write only static
+        // variables of functions besides their own: V3ActiveTop must see writes to variables
+        // the assignment reads later, and V3Delayed handles nonblocking assignments and
+        // nonblocking event triggers only when inlined.
+        if (const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
+            return getFTaskVertex(refp->taskp())->noInline()
+                   || writesBeforeReads(refp->taskp()->stmtsp(), true);
+        }
+        if (VN_IS(np, AssignDly)) return false;
+        const AstFireEvent* const firep = VN_CAST(np, FireEvent);
+        if (firep && firep->isDelayed()) return false;
+        const AstVarRef* const vrefp = VN_CAST(np, VarRef);
+        if (!vrefp) return true;
+        const AstVar* const varp = vrefp->varp();
+        // Variables of the called function become temporaries written first
+        if (varp->user4u().toGraphVertex() != m_curVxp) return true;
+        if (vrefp->access().isWriteOrRW()) {
+            // Static variables of functions are normally accessed only by calling them
+            if (callee && !varp->isFuncLocalSticky()) return false;
+            if (vrefp->access().isWriteOnly()) vrefp->varScopep()->user1(true);
+        }
+        return vrefp->varScopep()->user1();
     }
 
     void decideInlining() {
@@ -242,6 +336,12 @@ private:
     }
 
     // VISITORS
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER(m_assignp);
+        const AstAlways* const alwaysp = VN_CAST(nodep, Always);
+        if (alwaysp && alwaysp->keyword() == VAlwaysKwd::CONT_ASSIGN) m_assignp = nodep;
+        iterateChildren(nodep);
+    }
     void visit(AstScope* nodep) override {
         // Each FTask is unique per-scope, so AstNodeFTaskRefs do not need
         // pointers to what scope the FTask is to be invoked under.
@@ -275,6 +375,10 @@ private:
         new TaskEdge{&m_callGraph, m_curVxp, taskVtxp};
         // The copy of every instance may be called through a virtual interface (see below)
         if (isVirtualIfaceMethodCall(nodep)) m_vifTaskps.insert(nodep->taskp());
+        // As decideInlining, other functions must be inlined
+        if (m_assignp && nodep->taskp()->verilogFunction() && !nodep->taskp()->taskPublic()) {
+            m_assignCalls.emplace_back(m_assignp, nodep);
+        }
         // Do we have to disable inlining the function?
         const V3TaskConnects tconnects = V3Task::taskConnects(nodep, nodep->taskp()->declsp());
         if (!taskVtxp->noInline()) {  // Else short-circuit below
@@ -282,7 +386,10 @@ private:
                 const AstVar* const portp = itr.first;
                 const AstArg* const argp = itr.second;
                 if (const AstNodeExpr* const pinp = argp->exprp()) {
-                    if ((portp->isRef() || portp->isConstRef()) && !VN_IS(pinp, VarRef)) {
+                    // A function cannot suspend (IEEE 1800-2023 13.4), so no other process
+                    // reuses the temporaries capturing the location's indices while needed
+                    if ((portp->isRef() || portp->isConstRef()) && !VN_IS(pinp, VarRef)
+                        && !(nodep->taskp()->verilogFunction() && isInlinableRefPin(pinp))) {
                         UINFO(9, "No function inline due to ref " << pinp);
                         taskVtxp->noInline(true);
                     }
@@ -351,7 +458,18 @@ private:
             VL_DO_DANGLING(pushDeletep(initialp->unlinkFrBack()), initialp);
         }
         m_initialps.clear();
-        m_ctorp->prependStmtsp(insertp);
+        if (!insertp) return;
+        // Property initializers run after super.new (IEEE 1800-2023 8.7), which EmitC
+        // emits in place
+        AstNode* superNewp = nullptr;
+        m_ctorp->foreach([&](AstNew* newp) {
+            if (VN_IS(newp->dtypep(), VoidDType)) superNewp = newp->backp();
+        });
+        if (superNewp) {
+            superNewp->addNextHere(insertp);
+        } else {
+            m_ctorp->prependStmtsp(insertp);
+        }
     }
     void visit(AstInitialAutomatic* nodep) override {
         m_initialps.push_back(nodep);
@@ -378,9 +496,13 @@ public:
         m_callGraph.removeRedundantEdgesSum(&TaskEdge::followAlwaysTrue);
         propagateImpureReason();
         decideInlining();
+        decideInitCalls();
         if (dumpGraphLevel()) m_callGraph.dumpDotFilePrefixed("task_call");
     }
-    ~TaskStateVisitor() override = default;
+    ~TaskStateVisitor() override {
+        V3Stats::addStat("Optimizations, Function calls in initial assignments not inlined",
+                         m_statInitCalls);
+    }
     VL_UNCOPYABLE(TaskStateVisitor);
 };
 
@@ -442,7 +564,8 @@ class TaskVisitor final : public VNVisitor {
     //    AstNodeFTask::user1   // True if its been expanded
     // Each funccall
     //  to 'relink' function:
-    //    AstVar::user2p        // AstVarScope* to replace varref with
+    //    AstVar::user2p        // AstVarScope* to replace varref with, or AstNodeExpr*
+    //                          // location of a ref argument to replace varref with
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
 
@@ -480,6 +603,7 @@ class TaskVisitor final : public VNVisitor {
     // STATE - across all visitors
     DpiCFuncs m_dpiNames;  // Map of all created DPI functions
     std::map<std::string, const AstStructDType*> m_dpiStructs;  // C names of DPI structures
+    std::map<const AstEnumDType*, size_t> m_enumNumbers;  // Unique numbers of enum types
     VDouble0 m_statInlines;  // Statistic tracking
     VDouble0 m_statGetters;  // Statistic tracking
     VDouble0 m_statHierDpisWithCosts;  // Statistic tracking
@@ -526,15 +650,56 @@ class TaskVisitor final : public VNVisitor {
         return newvscp;
     }
 
-    // Replace varrefs with new var pointer
+    // Replace varrefs with new var pointer, or with a ref argument's location
     void relink(AstNode* nodep) {
-        nodep->foreachAndNext([](AstVarRef* refp) {
-            if (refp->varp()->user2p()) {  // It's being converted to an alias.
-                AstVarScope* const newvscp = VN_AS(refp->varp()->user2p(), VarScope);
-                refp->varScopep(newvscp);
-                refp->varp(refp->varScopep()->varp());
+        std::vector<AstVarRef*> locRefps;
+        nodep->foreachAndNext([&](AstVarRef* refp) {
+            if (AstNode* const newp = refp->varp()->user2p()) {  // It's being converted
+                if (AstVarScope* const newvscp = VN_CAST(newp, VarScope)) {
+                    refp->varScopep(newvscp);
+                    refp->varp(newvscp->varp());
+                } else {
+                    locRefps.push_back(refp);
+                }
             }
         });
+        for (AstVarRef* const refp : locRefps) {
+            AstNodeExpr* const locp = VN_AS(refp->varp()->user2p(), NodeExpr)->cloneTree(false);
+            V3LinkLValue::linkLValueSet(locp, refp->access());
+            refp->replaceWith(locp);
+            VL_DO_DANGLING(pushDeletep(refp), refp);
+        }
+    }
+    // Return location of ref argument 'pinp', with its variable parts evaluated after 'beginp'
+    AstNodeExpr* refPinLocation(const AstNodeFTaskRef* refp, AstNodeExpr* pinp, AstNode* beginp) {
+        // The argument is bound when called (IEEE 1800-2023 13.5.2), so later changes of
+        // indices or class handles in the location must not move it
+        AstNodeExpr* const locp = pinp->cloneTree(false);
+        pushDeletep(locp);  // Cloned by relink
+        AstNodeExpr* exprp = locp;
+        while (!VN_IS(exprp, VarRef)) {
+            if (AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                captureRefPinPart(refp, selp->bitp(), beginp);
+                exprp = selp->fromp();
+            } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else {
+                captureRefPinPart(refp, VN_AS(exprp, MemberRef)->fromp(), beginp);
+                break;
+            }
+        }
+        return locp;
+    }
+    // Replace 'exprp' with a temporary assigned after 'beginp'
+    void captureRefPinPart(const AstNodeFTaskRef* refp, AstNodeExpr* exprp, AstNode* beginp) {
+        if (VN_IS(exprp, Const)) return;
+        FileLine* const flp = exprp->fileline();
+        V3SharedTmps& tmps = VN_IS(refp, FuncRef) ? m_funcTmps : m_taskTmps;
+        AstVarScope* const vscp
+            = tmps.make(flp, m_scopep, exprp->dtypep(), refp->taskp()->shortName() + "__Vref");
+        vscp->varp()->isInternal(true);
+        exprp->replaceWith(new AstVarRef{flp, vscp, VAccess::READ});
+        beginp->addNextHere(new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, exprp});
     }
 
     AstAssign* connectPortMakeInAssign(AstNodeExpr* pinp, AstVarScope* newvscp, bool pureCheck) {
@@ -629,6 +794,48 @@ class TaskVisitor final : public VNVisitor {
         }
     }
 
+    // Wrap a typeless mailbox message argument with the name of its type
+    void addMailboxMessageType(AstArg* argp, const AstVar* portp) {
+        AstNodeExpr* const pinp = argp->exprp();
+        const AstNodeDType* const dtypep = pinp->dtypep()->skipRefToEnump();
+        // Already a message when a mailbox subclass passes it on
+        if (dtypep->basicp() && dtypep->basicp()->isMailboxMessage()) return;
+        pinp->unlinkFrBack();
+        // Equivalent types have the same name (IEEE 1800-2023 6.22.2). Messages are singular
+        // (checked by V3Width), so the name is the canonical packed type, the enum declaration
+        // or the declared name. Classes with the same name differ in their C++ type, which the
+        // runtime also checks.
+        string typeName = dtypep->prettyDTypeName(false);
+        if (const AstEnumDType* const enump = VN_CAST(dtypep, EnumDType)) {
+            typeName += " #"
+                        + std::to_string(
+                            m_enumNumbers.emplace(enump, m_enumNumbers.size()).first->second);
+        } else if (dtypep->isIntegralOrPacked()) {
+            // V3Unknown made 4-state types 2-state; they still name their 4-state type
+            const bool fourstate = dtypep->isFourstate() || dtypep->mimicsFourstate();
+            typeName = string{fourstate ? "logic" : "bit"} + (dtypep->isSigned() ? " signed" : "")
+                       + "[" + std::to_string(dtypep->width() - 1) + ":0]";
+        }
+        typeName
+            = "\"" + V3OutFormatter::quoteNameControls(VIdProtect::protect(typeName)) + "\", ";
+        AstCExpr* const newp = new AstCExpr{pinp->fileline()};
+        if (portp->isRef()) {
+            newp->add("VlMailboxMessage::ref(" + typeName);
+            newp->add(pinp);
+            newp->add(", \""
+                      + V3OutFormatter::quoteNameControls(
+                          VIdProtect::protect(pinp->fileline()->filename()))
+                      + "\", " + std::to_string(pinp->fileline()->lineno()) + ").lvalue()");
+        } else {
+            newp->add("VlMailboxMessage::val(" + typeName + std::to_string(dtypep->width())
+                      + ", ");
+            newp->add(pinp);
+            newp->add(")");
+        }
+        newp->dtypeFrom(portp);
+        argp->exprp(newp);
+    }
+
     void connectPort(const AstNodeFTaskRef* refp, AstVar* portp, AstArg* argp, AstNode* beginp,
                      bool inlineTask) {
         AstNodeExpr* pinp = argp->exprp();
@@ -665,7 +872,8 @@ class TaskVisitor final : public VNVisitor {
             if (portp->isRef() || portp->isConstRef()) {
                 bool refArgOk = false;
                 if (VN_IS(pinp, VarRef) || VN_IS(pinp, MemberRef) || VN_IS(pinp, StructSel)
-                    || VN_IS(pinp, ArraySel)) {
+                    || VN_IS(pinp, ArraySel) || VN_IS(pinp, AssocSel)
+                    || VN_IS(pinp, WildcardSel)) {
                     refArgOk = true;
                 } else if (AstCMethodHard* const cMethodp = VN_CAST(pinp, CMethodHard)) {
                     if (VN_IS(cMethodp->fromp()->dtypep()->skipRefp(), QueueDType)) {
@@ -690,7 +898,7 @@ class TaskVisitor final : public VNVisitor {
                         UASSERT_OBJ(localVscp, varrefp, "Null var scope");
                         portp->user2p(localVscp);
                     } else {
-                        pinp->v3fatalSrc("ref argument should have caused non-inline of function");
+                        portp->user2p(refPinLocation(refp, pinp, beginp));
                     }
                 }
             } else if (portp->isInout()) {
@@ -864,6 +1072,9 @@ class TaskVisitor final : public VNVisitor {
                 AstVar* const portp = itr.first;
                 AstArg* const argp = itr.second;
                 connectPort(refp, portp, argp, beginp, false);
+                if (portp->basicp() && portp->basicp()->isMailboxMessage()) {
+                    addMailboxMessageType(argp, portp);
+                }
             }
         }
         // First argument is symbol table, then output if a function
@@ -1614,8 +1825,8 @@ class TaskVisitor final : public VNVisitor {
             UASSERT_OBJ(portp, nodep, "function without function output variable");
             UASSERT_OBJ(portp->isFuncReturn(), nodep, "Not marked as function return var");
             if (nodep->dpiImport() || nodep->dpiExport()) {
-                AstBasicDType* const bdtypep = portp->dtypep()->basicp();
-                if (!bdtypep) {
+                const AstNodeDType* const dtypep = portp->dtypep()->skipRefp();
+                if (!VN_IS(dtypep, BasicDType) && !dtypep->isIntegralOrPacked()) {
                     portp->v3error("DPI function may not return type "
                                    << portp->dtypep()->prettyDTypeNameQ(true)
                                    << " (IEEE 1800-2023 35.5.5)");
@@ -1700,6 +1911,7 @@ class TaskVisitor final : public VNVisitor {
         cfuncp->dontCombine(!nodep->dpiImport());
         cfuncp->entryPoint(!nodep->dpiImport());
         cfuncp->funcPublic(nodep->taskPublic());
+        cfuncp->fromFTask(!nodep->dpiImport());
         cfuncp->dpiContext(nodep->dpiContext());
         cfuncp->dpiExportImpl(nodep->dpiExport());
         cfuncp->dpiImportWrapper(nodep->dpiImport());
@@ -2060,7 +2272,7 @@ class TaskVisitor final : public VNVisitor {
     static AstVarRef* getterVarRefp(AstNodeFTask* taskp) {
         // Only the return variable is declared, so no arguments or locals
         const AstVar* const fvarp = taskp->fvarp();
-        if (taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
+        if (!fvarp || taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
         AstNode* stmtp = taskp->stmtsp();
         // Skip the default initialization of the function's return value
         if (const AstAssign* const initp = VN_CAST(stmtp, Assign)) {
@@ -2168,7 +2380,8 @@ class TaskVisitor final : public VNVisitor {
         AstNodeStmt* beginp;
         AstCNew* cnewp = nullptr;
         if (m_statep->ftaskNoInline(nodep->taskp())
-            || TaskStateVisitor::isVirtualIfaceMethodCall(nodep)) {
+            || TaskStateVisitor::isVirtualIfaceMethodCall(nodep)
+            || TaskStateVisitor::initCall(nodep)) {
             processArgs(nodep);
             // This may share VarScope's with a public task, if any.  Yuk.
             beginp = createNonInlinedFTask(nodep, outvscp, cnewp /*ref*/);
@@ -2280,6 +2493,26 @@ class TaskVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(vscp->unlinkFrBack()), vscp);
                 }
             }
+            // Calls to a non-inlined function only need its ports and purity, so free the rest of
+            // its body now rather than at the end of the visitor (replaceGetterCall still needs a
+            // getter's body). The visitor follows no other pointer into it except as kept below.
+            if (noInline && !getterVarRefp(nodep)) {
+                // Clear first, as a cached value may be stale or provisional (within recursion)
+                VIsCached::clearCacheTree();
+                const bool pure = nodep->isPure();
+                AstNode* const impurep = m_statep->checkImpure(nodep);
+                for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
+                    nextp = stmtp->nextp();
+                    // Keep the impure reference, IMPURE warnings on callers may show it
+                    if (impurep
+                        && stmtp->exists([&](const AstVarRef* refp) { return refp == impurep; })) {
+                        pushDeletep(impurep->unlinkFrBack());
+                    }
+                    VL_DO_DANGLING(stmtp->unlinkFrBack()->deleteTree(), stmtp);
+                }
+                // A call computes its purity from the body, so keep an impure function impure
+                if (!pure) nodep->addStmtsp(new AstCStmt{nodep->fileline()});
+            }
             // Just push for deletion, as other references to func may
             // remain until visitor exits
             nodep->unlinkFrBack();
@@ -2360,9 +2593,141 @@ public:
 };
 
 //######################################################################
+// Visitor for associative array elements created by const ref actuals
+
+class TaskAssocCreateVisitor final : public VNVisitor {
+    // STATE - for current visit position (use VL_RESTORER)
+    bool m_inProcess = false;  // In a process, not a function
+    bool m_combo = false;  // Current process is combinational logic
+    VDouble0 m_statCreatingSels;  // Statistic tracking
+    VDouble0 m_statWrittenRefs;  // Statistic tracking
+
+    // METHODS
+    // Whether a process body controls timing, as V3Active checks; forks are other processes
+    class TimingControlVisitor final : public VNVisitorConst {
+        bool m_found = false;  // Found a timing control
+        void visit(AstFork* nodep) override { m_found |= nodep->isTimingControl(); }
+        void visit(AstNode* nodep) override {
+            if (nodep->isTimingControl()) m_found = true;
+            if (!m_found) iterateChildrenConst(nodep);
+        }
+
+    public:
+        explicit TimingControlVisitor(AstNode* nodep) { iterateAndNextConstNull(nodep); }
+        bool found() const { return m_found; }
+    };
+
+    // VISITORS
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER(m_inProcess);
+        VL_RESTORER(m_combo);
+        m_inProcess = true;
+        // As V3Active: with a sensitivity list only if it has no signals (@*); without one if
+        // not 'always' or no timing control in the body. Level-sensitive processes stay
+        // clocked, as the call is impure.
+        const AstAlways* const alwaysp = VN_CAST(nodep, Always);
+        if (!alwaysp) {
+            m_combo = false;
+        } else if (alwaysp->sentreep()) {
+            m_combo = !alwaysp->sentreep()->hasClocked();
+        } else {
+            m_combo = alwaysp->keyword() != VAlwaysKwd::ALWAYS
+                      || !TimingControlVisitor{alwaysp->stmtsp()}.found();
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstCFunc* nodep) override {
+        // A function body runs in its callers; inlined bodies are in their processes
+        VL_RESTORER(m_inProcess);
+        m_inProcess = false;
+        iterateChildren(nodep);
+    }
+    void visit(AstCMethodHard* nodep) override {
+        if (!isAssocAtWrite(nodep)) {
+            iterateChildren(nodep);
+            return;
+        }
+        // The element is created, so the array is written; but only the selects were made
+        // writable, if the array itself is still only read (see V3Width), as written arrays
+        // are otherwise found ordinarily. Impure from now on; they were pure only to keep
+        // V3LiftExpr from copying an enclosing select, within the call's actual.
+        std::vector<AstCMethodHard*> atWriteps{nodep};
+        AstNodeExpr* exprp = nodep->fromp();
+        while (true) {
+            if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                exprp = selp->fromp();
+            } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else if (AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+                if (isAssocAtWrite(methodp)) atWriteps.push_back(methodp);
+                exprp = methodp->fromp();
+            } else {
+                break;
+            }
+        }
+        AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+        AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef);
+        if ((refp && refp->access().isReadOnly())
+            || (memberSelp && memberSelp->access().isReadOnly())) {
+            for (AstCMethodHard* const atWritep : atWriteps) {
+                atWritep->method(VCMethod::ASSOC_AT_WRITE);
+                ++m_statCreatingSels;
+            }
+            if (m_combo) {
+                // Would read and write the array in the same combinational logic
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Associative array element passed "
+                                             "to a const ref argument in combinational logic.");
+            } else if (m_inProcess && refp) {
+                refp->access(VAccess::READWRITE);
+                ++m_statWrittenRefs;
+            } else if (m_inProcess) {
+                memberSelp->access(VAccess::READWRITE);
+                ++m_statWrittenRefs;
+            }
+        }
+        iterateAndNextNull(nodep->pinsp());
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    static bool isAssocAtWrite(const AstCMethodHard* nodep) {
+        const AstNodeDType* const dtypep = nodep->fromp()->dtypep()->skipRefp();
+        return nodep->method() == VCMethod::ARRAY_AT_WRITE
+               && (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType));
+    }
+
+public:
+    // CONSTRUCTORS
+    explicit TaskAssocCreateVisitor(AstNetlist* nodep) {
+        iterate(nodep);
+        VIsCached::clearCacheTree();  // Purity changed
+    }
+    ~TaskAssocCreateVisitor() override {
+        V3Stats::addStat("Tasks, Assoc selects creating elements for const ref",
+                         m_statCreatingSels);
+        V3Stats::addStat("Tasks, Assoc array references written by element creation",
+                         m_statWrittenRefs);
+    }
+};
+
+//######################################################################
 // Task class functions
 
 const char* const V3Task::s_dpiTemporaryVarSuffix = "__Vcvt";
+
+// True if a default argument value refers to the callee's arguments or object
+static bool defaultNeedsCallee(const AstNodeExpr* valuep) {
+    return valuep->exists([](const AstNode* nodep) {
+        if (VN_IS(nodep, ThisRef)) return true;
+        if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            const AstVar* const varp = refp->varp();
+            return varp->isFuncLocal() || (varp->isClassMember() && !varp->lifetime().isStatic());
+        }
+        if (const AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef)) {
+            return refp->taskp()->classMethod() && !refp->taskp()->isStatic();
+        }
+        return false;
+    });
+}
 
 // Connect the arguments of reference 'nodep' to the ports in 'taskDeclsp' of 'calleep'.
 // Defaulted ports needing an argument wrapper (only with 'statep') are added to 'argWrap'.
@@ -2465,6 +2830,10 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
                                << portp->prettyNameQ() << " in function call to "
                                << calleep->prettyTypeNameQ());
                 newvaluep = new AstConst{nodep->fileline(), AstConst::Unsized32{}, 0};
+            } else if (VN_IS(calleep, Property) || VN_IS(calleep, Sequence)) {
+                // Substituted textually, so resolved in the declaration scope
+                // (IEEE 1800-2023 16.8)
+                newvaluep = VN_AS(portp->valuep(), NodeExpr);
             } else if (AstFuncRef* const funcRefp = VN_CAST(portp->valuep(), FuncRef)) {
                 const AstNodeFTask* const funcp = funcRefp->taskp();
                 if (funcp->classMethod() && funcp->isStatic()) newvaluep = funcRefp;
@@ -2478,7 +2847,17 @@ static V3TaskConnects connectArgs(T_Ref* nodep, const AstNode* calleep, AstNode*
                 // now; we don't have much to lose if it fails.
                 newvaluep = V3Const::constifyEdit(VN_AS(portp->valuep(), NodeExpr));
                 if (!VN_IS(newvaluep, Const)) {
-                    if (statep) {
+                    const AstNodeFTask* const ftaskp = VN_CAST(calleep, NodeFTask);
+                    if (ftaskp && ftaskp->isConstructor()) {
+                        // A wrapper cannot construct the object, so evaluate the default in
+                        // the caller, which is only possible if it does not need the callee
+                        if (defaultNeedsCallee(newvaluep)) {
+                            nodep->v3warn(E_UNSUPPORTED,
+                                          "Unsupported: Constructor default value referring to the"
+                                          " object or another argument, in missing argument "
+                                              << portp->prettyNameQ());
+                        }
+                    } else if (statep) {
                         portp->pinNum(i + 1);  // Make sure correct, will use to build name
                         UINFO(9, "taskConnects arg wrapper needed " << portp->valuep());
                         argWrap.insert(portp);
@@ -2790,6 +3169,7 @@ void V3Task::taskAll(AstNetlist* nodep) {
     {
         TaskStateVisitor visitors{nodep};
         const TaskVisitor visitor{nodep, &visitors};
-    }  // Destruct before checking
+    }
+    { TaskAssocCreateVisitor{nodep}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("task", 0, dumpTreeEitherLevel() >= 3);
 }

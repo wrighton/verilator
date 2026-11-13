@@ -10,7 +10,7 @@
 // verilog_format: on
 
 // Repeated randomize() of each kind of constraint set: scalars (UniGen2 and
-// diversity pins by default), an array (XOR diversity rounds) and
+// diversity pins by default), an array (diversity pins too) and
 // solve...before (phased, with a diversity round per layer), and a randc
 // cycle. The drivers check the sampler named in the solver log.
 

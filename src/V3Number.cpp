@@ -413,6 +413,9 @@ bool V3Number::epsilonEqual(double a, double b) {
 }
 
 bool V3Number::epsilonIntegral(double a) {
+    // Converting a value outside the int64_t range [-2^63, 2^63), or NaN, is undefined
+    static constexpr double INT64_LIMIT = 9223372036854775808.0;  // 2^63, exact as a double
+    if (!(a >= -INT64_LIMIT && a < INT64_LIMIT)) return false;
     const double dint = static_cast<double>(static_cast<int64_t>(a));
     // Check all the rounding possibilities, as we did truncation above rather than rounding
     return epsilonEqual(a, dint) || epsilonEqual(a, dint - 1) || epsilonEqual(a, dint + 1);
@@ -1039,7 +1042,7 @@ string V3Number::emitC() const VL_MT_STABLE {
             if (std::signbit(dnum)) result += '-';
             result += "std::numeric_limits<double>::quiet_NaN()";
         } else {
-            const char* const fmt = (static_cast<int>(dnum) == dnum && -1000 < dnum && dnum < 1000)
+            const char* const fmt = (-1000 < dnum && dnum < 1000 && static_cast<int>(dnum) == dnum)
                                         ? "%3.1f"  // Force decimal point
                                         : "%.17e";  // %e always yields a float literal
             (void)VL_SNPRINTF(sbuf, bufsize, fmt, dnum);
@@ -2919,6 +2922,15 @@ V3Number& V3Number::opCvtPackString(const V3Number& lhs) {
     NUM_ASSERT_OP_ARGS1(lhs);
     return setString(lhs.toString());
 }
+V3Number& V3Number::opCvtWildcardKey(const V3Number& lhs) {
+    NUM_ASSERT_OP_ARGS1(lhs);
+    std::string key;
+    for (int byte = (lhs.width() + 7) / 8 - 1; byte >= 0; --byte) {
+        const char c = static_cast<char>(lhs.dataByte(byte));
+        if (c || !key.empty()) key += c;
+    }
+    return setString(key);
+}
 V3Number& V3Number::opToLowerN(const V3Number& lhs) {
     NUM_ASSERT_OP_ARGS1(lhs);
     NUM_ASSERT_STRING_ARGS1(lhs);
@@ -2988,6 +3000,10 @@ void V3Number::selfTestThis() {
     UASSERT_SELFTEST(V3Number::epsilonIntegral(0.9999), false);
     UASSERT_SELFTEST(V3Number::epsilonIntegral(-1.0001), false);
     UASSERT_SELFTEST(V3Number::epsilonIntegral(-0.9999), false);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(-9223372036854775808.0), true);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(9223372036854775808.0), false);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(-1e30), false);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(std::numeric_limits<double>::quiet_NaN()), false);
 
     const char* const decimals[] = {
         "0",

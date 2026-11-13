@@ -277,4 +277,22 @@
                                        : ... note: In instance 't'
    77 |     b = !s;
       |         ^
+%Error: t/t_math_nonintegral_bad.v:84:12: Operator ADD expects a numeric LHS operand, but it has data type 'int$[*]' (IEEE 1800-2023 11.3)
+                                        : ... note: In instance 't'
+   84 |     i = wa + 1;
+      |            ^
+%Error: t/t_math_nonintegral_bad.v:85:5: Operator IF expects a numeric If operand, but it has data type 'int$[*]' (IEEE 1800-2023 11.3)
+                                       : ... note: In instance 't'
+   85 |     if (wa) i = 1;
+      |     ^~
+%Error: t/t_math_nonintegral_bad.v:86:12: Operator COND expects a numeric Conditional Test operand, but it has data type 'int$[*]' (IEEE 1800-2023 11.3)
+                                        : ... note: In instance 't'
+   86 |     i = wa ? 1 : 0;
+      |            ^
+%Error: t/t_math_nonintegral_bad.v:87:7: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                       : ... note: In instance 't'
+                                       : ... Left-hand data type: 'int'
+                                       : ... Right-hand data type: 'int$[*]'
+   87 |     i = wa;
+      |       ^
 %Error: Exiting due to

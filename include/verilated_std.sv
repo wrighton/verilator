@@ -32,6 +32,7 @@
 // verilator lint_off DECLFILENAME
 // verilator lint_off TIMESCALEMOD
 // verilator lint_off UNUSEDSIGNAL
+// verilator lint_off VARHIDDEN
 package std;
   // IEEE 1800-specified standard "mailbox"
   class mailbox #(
@@ -75,6 +76,8 @@ package std;
 
     function int try_get(ref T message);
       if (num() > 0) begin
+        // A typeless mailbox message must match the type of the variable (IEEE 1800-2023 15.4.6)
+        if ($c("!VlMailboxMessage::match(", message, ", ", m_queue[0], ")")) return -1;
         message = m_queue.pop_front();
         return 1;
       end
@@ -92,6 +95,8 @@ package std;
 
     function int try_peek(ref T message);
       if (num() > 0) begin
+        // A typeless mailbox message must match the type of the variable (IEEE 1800-2023 15.4.8)
+        if ($c("!VlMailboxMessage::match(", message, ", ", m_queue[0], ")")) return -1;
         message = m_queue[0];
         return 1;
       end
@@ -110,7 +115,7 @@ package std;
     } state;
 
     // Width visitor changes it to VlProcessRef
-    // V3Name is hardcoded not to rename this variable
+    // V3Name is hardcoded not to rename or --protect-ids this variable
     protected chandle m_process;
 
     static function process self();
@@ -163,14 +168,14 @@ package std;
 `endif
     endtask
 
-    static task killQueue(ref process processQueue[$]);
+    static function void killQueue(ref process processQueue[$]);
 `ifdef VERILATOR_TIMING
       repeat (processQueue.size()) begin
         process p = processQueue.pop_front();
         if (p) p.kill();
       end
 `endif
-    endtask
+    endfunction
 
     // verilog_format: off
 `ifdef VERILATOR_TIMING

@@ -1,0 +1,38 @@
+%Error: t/t_func_ref_call_bad.v:67:9: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                    : ... note: In instance 't'
+   67 |     set(get_i());   
+      |         ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_func_ref_call_bad.v:68:14: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   68 |     set(pkg::get_p());   
+      |              ^~~~~
+%Error: t/t_func_ref_call_bad.v:69:14: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   69 |     set(Cls::get_s());   
+      |              ^~~~~
+%Error: t/t_func_ref_call_bad.v:70:11: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   70 |     set(c.get_m());   
+      |           ^~~~~
+%Error: t/t_func_ref_call_bad.v:71:15: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   71 |     set(c.m_q.pop_front());   
+      |               ^~~~~~~~~
+%Error: t/t_func_ref_call_bad.v:72:11: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   72 |     c.set(get_i());   
+      |           ^~~~~
+%Error: t/t_func_ref_call_bad.v:73:14: Ref argument 'b' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   73 |     i = size(get_q());   
+      |              ^~~~~
+%Error: t/t_func_ref_call_bad.v:74:19: Ref argument 'r' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   74 |     set(get_ints()[0]);   
+      |                   ^
+%Error: t/t_func_ref_call_bad.v:75:13: Ref argument 's' requires a variable, but connection is from a function call result (IEEE 1800-2023 13.5.2)
+                                     : ... note: In instance 't'
+   75 |     set_str(get_str());   
+      |             ^~~~~~~
+%Error: Exiting due to

@@ -68,7 +68,7 @@ class V3DfgCache final {
             V3Hash hash = dtype.hash();
             hash += vertexHash(fromp);
             hash += lsb;
-            return hash.value();
+            return tableHash(hash);
         }
     };
     struct EqualSel final {
@@ -90,7 +90,7 @@ class V3DfgCache final {
         size_t operator()(const DfgDataType& dtype, const DfgVertex* source0p) const {
             V3Hash hash = dtype.hash();
             hash += vertexHash(source0p);
-            return hash.value();
+            return tableHash(hash);
         }
     };
     struct EqualUnary final {
@@ -113,7 +113,7 @@ class V3DfgCache final {
             V3Hash hash = dtype.hash();
             hash += vertexHash(source0p);
             hash += vertexHash(source1p);
-            return hash.value();
+            return tableHash(hash);
         }
     };
     struct EqualBinary final {
@@ -138,7 +138,7 @@ class V3DfgCache final {
             hash += vertexHash(source0p);
             hash += vertexHash(source1p);
             hash += vertexHash(source2p);
-            return hash.value();
+            return tableHash(hash);
         }
     };
 
@@ -264,6 +264,16 @@ CacheType<Vertex>* cacheForType() {
     FOREACH_DFG_VERTEX_TYPE(VERTEX_CACHE_DECLARE_CACHE)
 #undef VERTEX_CACHE_DECLARE_CACHE
     return nullptr;  // LCOV_EXCL_LINE
+}
+
+// Hash value to use in the table
+static size_t tableHash(V3Hash hash) {
+    // Combining a hash with consecutive values, like the LSBs of selects from the same
+    // vertex, yields near consecutive hashes. The table indexes by the low bits and probes
+    // linearly, so these would form long runs of occupied slots. Spread them out.
+    static constexpr uint64_t GOLDEN_RATIO = 0x9e3779b97f4a7c15ULL;  // 2^64 / golden ratio
+    const uint64_t product = hash.value() * GOLDEN_RATIO;
+    return static_cast<size_t>(product ^ (product >> 32));
 }
 
 // Hash constants by value, everything else by identity

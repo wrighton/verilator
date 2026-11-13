@@ -71,12 +71,24 @@
                                      : ... note: In instance 't'
    43 |     a[x] = "bad";
       |      ^
-%Error: t/t_assoc_wildcard_bad.v:43:7: Cannot convert 'class' handle to a string:'class Cls'
-                                     : ... note: In instance 't'
-   43 |     a[x] = "bad";
-      |       ^
 %Error: t/t_assoc_wildcard_bad.v:45:7: Unknown wildcard associative array method 'bad_not_defined'
                                      : ... note: In instance 't'
    45 |     a.bad_not_defined();
       |       ^~~~~~~~~~~~~~~
+%Error: t/t_assoc_wildcard_bad.v:57:23: Array method 'next' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   57 |         end while (mm.next(id));
+      |                       ^~~~
+%Error: t/t_assoc_wildcard_bad.v:54:14: Array method 'first' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   54 |       if (mm.first(id)) begin
+      |              ^~~~~
+%Error: t/t_assoc_wildcard_bad.v:75:21: Array method 'prev' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   75 |       end while (mm.prev(id));
+      |                     ^~~~
+%Error: t/t_assoc_wildcard_bad.v:72:12: Array method 'last' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   72 |     if (mm.last(id)) begin
+      |            ^~~~
 %Error: Exiting due to

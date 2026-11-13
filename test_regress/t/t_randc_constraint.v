@@ -235,6 +235,130 @@ class RandcDeep;
   endfunction
 endclass
 
+// Test 8: A state value changing in a constraint without the randc variable
+// does not restart its cycle
+class RandcItem;
+  rand bit [3:0] v;
+endclass
+
+class RandcStateChange;
+  randc bit [2:0] rc;
+  rand bit [7:0] x, y;
+  bit [7:0] lim;
+  rand RandcItem items[2];
+  constraint c_x {x == f(y);}
+  constraint c_y {y < lim;}
+  constraint c_rc {rc != 3'd7 || rc == 3'd7;}
+  constraint c_items {foreach (items[i]) items[i].v < 4'(lim - 5);}
+
+  function new();
+    foreach (items[i]) items[i] = new;
+  endfunction
+
+  static function bit [7:0] f(bit [7:0] d);
+    return d + 8'd3;
+  endfunction
+
+  function void test_cyclic;
+    automatic int count[8];
+    automatic int randomize_result;
+    $display("Test randc next to changing state values");
+    for (int trial = 0; trial < 3; ++trial) begin
+      for (int i = 0; i < 8; ++i) begin
+        lim = 8'(10 + i);
+        randomize_result = randomize();
+        `checkd(randomize_result, 1);
+        `checkd(items[1].v < 4'(lim - 5), 1);
+        ++count[rc];
+      end
+    end
+    for (int v = 0; v < 8; ++v) begin
+      `checkd(count[v], 3);
+    end
+  endfunction
+endclass
+
+// Test 9: Per-element randc history for equal-size domains (IEEE 1800-2023 18.4)
+class RandcArray;
+  randc bit [7:0] pair[2];  // Disjoint domains of the same size
+  randc bit [1:0] fixed[3:1];  // Elements constrained equal
+  randc bit [7:0] grid[2][0:2];
+  randc bit [7:0] dyn[];
+  randc bit [63:0] quad[2];  // Values sharing the lower word
+  constraint c_pair {
+    pair[0] < 8'd3;
+    pair[1] inside {[8'd10 : 8'd12]};
+  }
+  constraint c_fixed {
+    foreach (fixed[i]) fixed[i] != 0;
+    fixed[1] == fixed[3];
+  }
+  constraint c_grid {foreach (grid[i, j]) grid[i][j] < 8'd3;}
+  constraint c_dyn {
+    foreach (dyn[i]) {
+      dyn[i] inside {8'd5, 8'd6, 8'd7};
+    }
+  }
+  constraint c_quad {
+    foreach (quad[i]) {
+      quad[i] inside {64'h8000_0000_0000_0003, 64'h3, 64'h8000_0000_0000_0005};
+    }
+  }
+
+  function void test_cyclic;
+    automatic int randomize_result;
+    $display("Test randc arrays (3 values per element)");
+    dyn = new[2];
+    for (int trial = 0; trial < 3; ++trial) begin
+      // Values seen in this cycle, per element
+      automatic bit [7:0] pair_seen[2][$];
+      automatic bit [3:0] fixed_seen[3:1] = '{0, 0, 0};
+      automatic bit [2:0] grid_seen[2][3] = '{'{0, 0, 0}, '{0, 0, 0}};
+      automatic bit [2:0] dyn_seen[2] = '{0, 0};
+      automatic bit [63:0] quad_seen[2][$];
+      for (int i = 0; i < 3; ++i) begin
+        randomize_result = randomize();
+        `checkd(randomize_result, 1);
+        `checkd(pair[0] < 8'd3, 1);
+        `check_range(pair[1], 10, 12);
+        `checkd(fixed[1], fixed[3]);
+        foreach (pair[k]) begin
+          foreach (pair_seen[k][q]) `checkd(pair_seen[k][q] == pair[k], 0);
+          pair_seen[k].push_back(pair[k]);
+        end
+        foreach (fixed[k]) begin
+          `check_range(fixed[k], 1, 3);
+          `checkd(fixed_seen[k][fixed[k]], 0);
+          fixed_seen[k][fixed[k]] = 1;
+        end
+        foreach (grid[k, m]) begin
+          `checkd(grid[k][m] < 8'd3, 1);
+          `checkd(grid_seen[k][m][2'(grid[k][m])], 0);
+          grid_seen[k][m][2'(grid[k][m])] = 1;
+        end
+        foreach (dyn[k]) begin
+          `check_range(dyn[k], 5, 7);
+          `checkd(dyn_seen[k][2'(dyn[k]-8'd5)], 0);
+          dyn_seen[k][2'(dyn[k]-8'd5)] = 1;
+        end
+        foreach (quad[k]) begin
+          `checkd(quad[k] inside {64'h8000_0000_0000_0003, 64'h3, 64'h8000_0000_0000_0005}, 1);
+          foreach (quad_seen[k][q]) `checkd(quad_seen[k][q] == quad[k], 0);
+          quad_seen[k].push_back(quad[k]);
+        end
+      end
+    end
+    // Resized
+    dyn = new[3];
+    for (int i = 0; i < 3; ++i) begin
+      randomize_result = randomize();
+      `checkd(randomize_result, 1);
+      `checkd(dyn.size(), 3);
+      foreach (dyn[k]) `check_range(dyn[k], 5, 7);
+    end
+  endfunction
+endclass
+
 module t;
   RandcRange rr;
   RandcSmall rs;
@@ -243,6 +367,8 @@ module t;
   RandcModeSwitch rms;
   RandcEnumConstrained rec;
   RandcDeep rd;
+  RandcStateChange rsc;
+  RandcArray ra;
 
   initial begin
     rr = new;
@@ -265,6 +391,12 @@ module t;
 
     rd = new;
     rd.test_cyclic();
+
+    rsc = new;
+    rsc.test_cyclic();
+
+    ra = new;
+    ra.test_cyclic();
 
     $write("*-* All Finished *-*\n");
     $finish();

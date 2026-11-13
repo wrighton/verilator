@@ -43,11 +43,6 @@ module t;
     cp_multi_item: coverpoint state {
       bins multi = (0 => 1, 2);  // second element is a two-value list
     }
-    // Repetition-type bins: goto ([->N]) and non-consecutive ([=N]) repetition
-    cp_reptype: coverpoint state {
-      bins goto_bin = (0 => 1 [-> 2]);  // goto repetition - currently matched as simple (0=>1)
-      bins noncons_bin = (2 [=1] => 3);  // non-consecutive repetition - currently matched as simple (2=>3)
-    }
   endgroup
 
   // Coverpoint mixing a transition bin and a value-array bin: both route through the
@@ -57,6 +52,12 @@ module t;
     cp_mix: coverpoint state {
       bins tr = (0 => 1);
       bins vals[] = {2, [4:5]};  // discrete + range elements
+    }
+    // A transition bin holds no values, so the default bin gets every value but 3
+    cp_default: coverpoint state {
+      bins tr = (1 => 2);
+      bins three = {3};
+      bins others = default;
     }
   endgroup
 

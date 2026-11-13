@@ -29,6 +29,23 @@ class Softy;
   }
 endclass
 
+// Compatible soft constraints before and after a prioritized relaxation chunk.
+class SoftUnknown;
+  rand bit [6:0] x;
+  rand bit [6:0] y;
+  rand bit [6:0] z;
+  constraint c_domain {
+    x < 7'd3;
+    y < 7'd3;
+    z < 7'd3;
+  }
+  constraint c_kept_domain {y == 7'd0;}
+  constraint c_low {soft y == 7'd1;}
+  constraint c_soft {soft x == 7'd1;}
+  constraint c_high {soft z == 7'd1;}
+  constraint c_order {solve x before y;}
+endclass
+
 // Phased solve...before replies
 class Phased;
   rand bit [3:0] x;
@@ -63,6 +80,45 @@ class Pinned;
 endclass
 
 module t;
+  task automatic soft_unknown;
+    automatic SoftUnknown value = new;
+    automatic int phased = 0;
+    automatic int expected = 1;
+    automatic int kept = 0;
+    automatic int ok;
+    if ($value$plusargs("PHASED=%d", phased)) begin
+    end
+    if ($value$plusargs("EXPECT=%d", expected)) begin
+    end
+    if ($value$plusargs("KEPT=%d", kept)) begin
+    end
+    if (phased == 0) value.c_order.constraint_mode(0);
+    value.c_kept_domain.constraint_mode(kept != 0);
+    value.c_low.constraint_mode(kept != 0);
+    value.c_high.constraint_mode(kept != 0);
+    value.x = 7'd7;
+    value.y = 7'd6;
+    value.z = 7'd5;
+    ok = value.randomize();
+    `checkd(ok, expected);
+    if (ok != 0) begin
+      `checkd(value.x, 7'd1);
+      `checkd(value.y < 7'd3, 1'b1);
+      if (kept != 0) begin
+        `checkd(value.y, 7'd0);
+        `checkd(value.z, 7'd1);
+      end
+      else begin
+        `checkd(value.z < 7'd3, 1'b1);
+      end
+    end
+    else begin
+      `checkd(value.x, 7'd7);
+      `checkd(value.y, 7'd6);
+      `checkd(value.z, 7'd5);
+    end
+  endtask
+
   // t_randomize_solver_reply runs the +MODE=pins rows alone, so the replies their
   // TAMPER_AT counts start at the first Pinned call
   task automatic pin_rounds;
@@ -87,6 +143,12 @@ module t;
     automatic Unsat un = new;
     automatic int npass = 0;
     automatic int rc;
+    if ($test$plusargs("MODE=soft_unknown")) begin
+      soft_unknown();
+      $write("*-* All Finished *-*\n");
+      $finish;
+      disable checks;
+    end
     if ($test$plusargs("MODE=pins")) begin
       pin_rounds();
       $write("*-* All Finished *-*\n");

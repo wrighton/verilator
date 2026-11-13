@@ -13,6 +13,12 @@ module t;
   logic [7:0] arr_4state_a[3:0];
   logic [7:0] arr_4state_b[3:0];
 
+  // Queues and dynamic arrays of 4-state elements (IEEE 1800-2023 7.6)
+  logic [7:0] arr_4state_q[$];
+  logic [7:0] arr_4state_d[];
+  logic [7:0] arr_4state_2[1:0];
+  int idx_q[$];
+
   initial begin
     // Initialize
     arr_2state_a[0] = 8'h10;
@@ -34,6 +40,16 @@ module t;
     if (arr_2state_b[3] !== 8'h40) $stop;
     if (arr_4state_b[0] !== 8'hA0) $stop;
     if (arr_4state_b[3] !== 8'hD0) $stop;
+
+    arr_4state_q.push_back(8'h12);
+    arr_4state_q.push_back(8'h34);
+    arr_4state_2 = arr_4state_q;
+    if (arr_4state_2[0] !== 8'h34) $stop;
+    arr_4state_a[2:1] = arr_4state_q;
+    arr_4state_d = arr_4state_q;
+    if (arr_4state_d[1] !== 8'h34) $stop;
+    idx_q = arr_4state_q.find_index with (item == 8'h34);
+    if (idx_q[0] !== 1) $stop;
 
     $write("*-* All Coverage *-*\n");
     $finish;

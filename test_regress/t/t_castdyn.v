@@ -79,6 +79,26 @@ module t;
     if (bao != ba) $stop;  // Unchanged
     void'($cast(bao, b));  // Ok as is function
 
+    begin
+      // A string and a real are never cast compatible (IEEE 1800-2023 6.24.1), so $cast fails
+      // and leaves the destination unchanged
+      typedef real real_t;
+      string s;
+      real_t r;
+      s = $sformatf("%0d.5", $time + 1);
+      r = 2.5;
+      i = -1;
+      i = $cast(r, s);
+      if (i != 0) $stop;
+      if (r != 2.5) $stop;
+      i = -1;
+      i = $cast(s, r);
+      if (i != 0) $stop;
+      if (s != "1.5") $stop;
+      void'($cast(s, r));
+      if (s != "1.5") $stop;
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end

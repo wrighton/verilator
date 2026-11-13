@@ -42,11 +42,141 @@ class RandDynIndexCastTest;
   }
 endclass
 
+// A rand index wider than the array's select width that is out of range reads the
+// default value rather than a valid element (IEEE 1800-2023 7.4.6)
+class OutOfRangeIndexTest;
+  rand int idx;
+  rand bit [39:0] widx;
+  rand int unsigned arr[3];
+  rand int unsigned arr53[5:3];
+  rand bit [1:0] bidx;
+  bit [1:0] nidx = 1;
+  rand int ni;
+  rand int nj;
+  rand int unsigned narr[2][3];
+  constraint values_c {
+    foreach (narr[a, b]) narr[a][b] == a * 10 + b;
+    arr[0] == 0;
+    arr[1] == 7;
+    arr[2] == 0;
+    arr53[3] == 0;
+    arr53[4] == 9;
+    arr53[5] == 0;
+  }
+  // verilator lint_off WIDTHTRUNC
+  constraint select_c {
+    arr[idx] == 7;
+    arr[widx] == 7;
+    arr53[idx + 3] == 9;
+    arr[bidx] == 7;
+    arr[nidx] == 7;
+    narr[ni][nj] == 12;
+    narr[ni][1] == 11;
+  }
+  // verilator lint_on WIDTHTRUNC
+endclass
+
+class OutOfRangeUnsatTest;
+  rand int idx;
+  rand int unsigned arr[3];
+  constraint c {
+    idx == 5;
+    arr[1] == 7;
+    arr[idx] == 7;
+  }
+endclass
+
+// Indices of other widths than the 32-bit index of a dynamic array or queue
+class RandDynIndexTest;
+  rand bit [1:0] uidx;
+  rand byte sidx;
+  rand longint widx;
+  rand int unsigned dyn[];
+  rand int unsigned q[$];
+  rand int unsigned uval, sval, wval;
+
+  constraint sizes {
+    dyn.size() == 3;
+    q.size() == 4;
+  }
+  constraint indices {
+    uidx < 3;
+    sidx inside {[0 : 3]};
+    widx inside {[0 : 2]};
+  }
+  constraint values {
+    foreach (dyn[i]) dyn[i] == 100 + i;
+    foreach (q[i]) q[i] == 200 + i;
+    uval == dyn[uidx];
+    sval == q[sidx];
+    wval == dyn[widx];
+  }
+endclass
+
+// An index out of range must not select an element: a negative index must not be zero extended,
+// nor a wide index truncated, into range
+class RandDynOobTest;
+  rand byte sidx;
+  rand longint widx;
+  rand int unsigned q[$];
+  rand int unsigned sval, wval;
+
+  constraint sizes {q.size() == 256;}
+  constraint values {
+    foreach (q[i]) q[i] == i + 1;
+    sidx == -1;
+    sval == q[sidx];
+    sval != 256;  // q[255]
+    widx == 64'h1_0000_0001;
+    wval == q[widx];
+    wval != 2;  // q[1]
+  }
+endclass
+
+// A random index selecting a member of an unpacked struct or class array element
+// must verilate. Solving such a select is not supported, so its constraint is
+// disabled before randomizing.
+typedef struct {bit [6:0] tag;} tag_t;
+
+class RandIndexItem;
+  rand bit [14:0] val;
+endclass
+
+class RandIndexMemberTest;
+  rand int idx;
+  rand tag_t tags[3];
+  rand RandIndexItem items[3];
+  constraint member_c {
+    tags[idx].tag == 7'h5;
+    items[idx].val == 15'h6;
+  }
+  function new();
+    foreach (items[i]) items[i] = new;
+  endfunction
+endclass
+
 module t;
   initial begin
     int randomize_result;
     static RandArrayIndexTest obj = new();
     RandDynIndexCastTest cobj;
+    static OutOfRangeIndexTest oor = new;
+    static OutOfRangeUnsatTest unsat = new;
+    static RandIndexMemberTest member = new;
+    repeat (20) begin
+      randomize_result = oor.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(oor.idx, 1);
+      `checkd(oor.widx, 1);
+      `checkd(oor.bidx, 1);
+      `checkd(oor.ni, 1);
+      `checkd(oor.nj, 2);
+    end
+    randomize_result = unsat.randomize();
+    `checkd(randomize_result, 0);
+    member.member_c.constraint_mode(0);
+    randomize_result = member.randomize();
+    `checkd(randomize_result, 1);
     repeat (20) begin
       randomize_result = obj.randomize();
       `checkd(randomize_result, 1);
@@ -59,6 +189,21 @@ module t;
       `checkd(randomize_result, 1);
       `checkd(cobj.dyn_value, cobj.dyn[cobj.idx]);
       `checkd(cobj.q_value, cobj.q[cobj.idx]);
+    end
+    begin
+      static RandDynIndexTest dobj = new();
+      repeat (20) begin
+        randomize_result = dobj.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(dobj.uval, 100 + 32'(dobj.uidx));
+        `checkd(dobj.sval, 200 + 32'(dobj.sidx));
+        `checkd(dobj.wval, 100 + 32'(dobj.widx));
+      end
+    end
+    begin
+      static RandDynOobTest oobj = new();
+      randomize_result = oobj.randomize();
+      `checkd(randomize_result, 1);
     end
     $write("*-* All Finished *-*\n");
     $finish;

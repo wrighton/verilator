@@ -105,6 +105,8 @@ module t;
   mixed_array_t mixed_array_out;
   simple_t simple_array[2];
   simple_t simple_array_out[2];
+  simple_t simple_desc[3:2];
+  simple_t simple_asc[1:2];
   enum_struct_t enum_struct;
   enum_struct_t enum_struct_out;
   real_struct_t real_struct;
@@ -345,6 +347,68 @@ module t;
     `checkh(simple_array_out[1].b, 4'hb);
     `checkh(simple_array_out[1].p, 8'hcd);
 
+    // A structure, or an array of them, into an array of a packed type
+    begin
+      byte bytes[5];
+      byte bytes_desc[4:0];
+      logic [9:0] halves[1:2];
+      bytes = {>>{simple_array}};
+      `checkh(bytes[0], 8'h12);
+      `checkh(bytes[1], 8'hab);
+      `checkh(bytes[2], 8'hc3);
+      `checkh(bytes[3], 8'h4d);
+      `checkh(bytes[4], 8'hef);
+      bytes_desc = {<<8{simple_array}};
+      `checkh(bytes_desc[4], 8'hef);
+      `checkh(bytes_desc[3], 8'h4d);
+      `checkh(bytes_desc[2], 8'hc3);
+      `checkh(bytes_desc[1], 8'hab);
+      `checkh(bytes_desc[0], 8'h12);
+      halves = {>>{simple_array[0]}};
+      `checkh(halves[1], 10'h04a);
+      `checkh(halves[2], 10'h2bc);
+      // Into a wider array, left-justified
+      begin
+        byte bytes_wide[6];
+        bytes_wide = '{6{8'hff}};
+        bytes_wide = {>>{simple_array}};
+        `checkh(bytes_wide[0], 8'h12);
+        `checkh(bytes_wide[4], 8'hef);
+        `checkh(bytes_wide[5], 8'h00);
+        bytes_wide = '{6{8'hff}};
+        bytes_wide = {<<8{simple_array}};
+        `checkh(bytes_wide[0], 8'hef);
+        `checkh(bytes_wide[4], 8'h12);
+        `checkh(bytes_wide[5], 8'h00);
+      end
+      // And as the source of a stream target
+      bytes = '{5{8'h0}};
+      {>>{bytes}} = simple_array;
+      `checkh(bytes[0], 8'h12);
+      `checkh(bytes[4], 8'hef);
+      {<<8{bytes}} = simple_array;
+      `checkh(bytes[0], 8'hef);
+      `checkh(bytes[4], 8'h12);
+      begin
+        byte byte_q[$];
+        {<<8{byte_q}} = simple_array;
+        `checkh(byte_q.size(), 5);
+        `checkh(byte_q[0], 8'hef);
+        `checkh(byte_q[4], 8'h12);
+        {>>{byte_q}} = simple_array;
+        `checkh(byte_q[0], 8'h12);
+        `checkh(byte_q[4], 8'hef);
+      end
+      simple_out = simple_array[0];
+      halves = '{2{10'h0}};
+      {>>{halves}} = simple_out;
+      `checkh(halves[1], 10'h04a);
+      `checkh(halves[2], 10'h2bc);
+      simple_bits = '0;
+      {>>{simple_bits}} = simple_out;
+      `checkh(simple_bits, 20'h12abc);
+    end
+
     enum_struct = '{E5, 5'ha};
     enum_bits = {>>{enum_struct}};
     `checkh(enum_bits, 8'haa);
@@ -389,6 +453,46 @@ module t;
     `checkh(issue_4521_union.words[2], 16'h1234);
     `checkh(issue_4521_union.words[1], 16'h5678);
     `checkh(issue_4521_union.words[0], 16'h9abc);
+
+    begin
+      // Unpacked struct operands in streams with several operands
+      logic [31:0] multi_bits;
+      logic [31:0] multi_exp_bits;
+      logic [87:0] multi_array_bits;
+      logic [51:0] multi_desc_bits;
+      multi_bits = {>>{narrow_bits, simple}};
+      `checkh(multi_bits, {narrow_bits, 20'h12abc});
+      multi_bits = {<<4{simple, narrow_bits}};
+      multi_exp_bits = {<<4{20'h12abc, narrow_bits}};
+      `checkh(multi_bits, multi_exp_bits);
+      multi_array_bits = {>>{simple_array, narrow_bits, nested}};
+      `checkh(multi_array_bits, {40'h12abc34def, narrow_bits, 36'h12abc3456});
+      {>>{simple_out, narrow_bits}} = 32'h13579bdf;
+      `checkh(simple_out.a, 8'h13);
+      `checkh(simple_out.b, 4'h5);
+      `checkh(simple_out.p, 8'h79);
+      `checkh(narrow_bits, 12'hbdf);
+      {>>{narrow_bits, simple_array_out}} = 52'h123_45678_9abcd;
+      `checkh(narrow_bits, 12'h123);
+      `checkh(simple_array_out[0].a, 8'h45);
+      `checkh(simple_array_out[0].p, 8'h78);
+      `checkh(simple_array_out[1].a, 8'h9a);
+      `checkh(simple_array_out[1].p, 8'hcd);
+      // Arrays not indexed from 0
+      {>>{narrow_bits, simple_desc}} = 52'h123_45678_9abcd;
+      `checkh(simple_desc[3].a, 8'h45);
+      `checkh(simple_desc[3].p, 8'h78);
+      `checkh(simple_desc[2].a, 8'h9a);
+      `checkh(simple_desc[2].p, 8'hcd);
+      {>>{simple_asc, narrow_bits}} = 52'h45678_9abcd_321;
+      `checkh(narrow_bits, 12'h321);
+      `checkh(simple_asc[1].a, 8'h45);
+      `checkh(simple_asc[2].p, 8'hcd);
+      multi_desc_bits = {>>{narrow_bits, simple_desc}};
+      `checkh(multi_desc_bits, 52'h321_45678_9abcd);
+      multi_desc_bits = {>>{simple_asc, narrow_bits}};
+      `checkh(multi_desc_bits, 52'h45678_9abcd_321);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

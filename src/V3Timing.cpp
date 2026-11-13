@@ -335,8 +335,10 @@ class TimingSuspendableVisitor final : public VNVisitor {
         }
         if (!m_classp) return;
 
-        // Go over overridden functions
+        // Go over overridden functions. Visit each base class once, as interface classes can
+        // inherit the same class along many paths.
 
+        std::set<const AstClass*> visited;
         std::queue<AstClassExtends*> extends;
         if (m_classp->extendsp()) extends.push(m_classp->extendsp());
 
@@ -346,6 +348,7 @@ class TimingSuspendableVisitor final : public VNVisitor {
 
             for (AstClassExtends* cextp = ext_listp; cextp;
                  cextp = VN_AS(cextp->nextp(), ClassExtends)) {
+                if (!visited.emplace(cextp->classp()).second) continue;
                 // TODO: It is possible that a methods the same name in the base class is not
                 // actually overridden by our method. If this causes a problem, traverse to
                 // the root of the inheritance hierarchy and check if the original method is
@@ -437,9 +440,10 @@ public:
     // CONSTRUCTORS
     explicit TimingSuspendableVisitor(AstNetlist* nodep) {
         iterate(nodep);
-        m_suspGraph.removeTransitiveEdges();
-        m_procGraph.removeTransitiveEdges();
-        // Opaque DPI calls may introduce cycles, so add them after transitive pruning.
+        // Propagation is linear in the graph size. Do not remove transitive edges: process
+        // flags stop at T_ALLOCS_PROC vertices, so a direct call edge is not implied by
+        // another path through a fork branch.
+        // Opaque DPI calls may introduce cycles. Propagation handles these as well.
         for (AstCFunc* const dpiExportp : m_dpiExports) {
             new V3GraphEdge{&m_suspGraph, getSuspendDepVtx(dpiExportp), getSuspendDepVtx(nodep),
                             P_CALL};
@@ -974,7 +978,8 @@ class TimingControlVisitor final : public VNVisitor {
         nodep->rtnType("VlCoroutine");
         // If in a class, create a shared pointer to 'this'
         if (m_classp) {
-            AstCStmt* const cstmtp = new AstCStmt{nodep->fileline(), "VL_KEEP_THIS;"};
+            AstCStmt* const cstmtp
+                = new AstCStmt{nodep->fileline(), "VL_KEEP_THIS;", VCStmtType::KEEP_THIS};
             nodep->prependStmtsp(cstmtp);
         }
     }
@@ -1336,6 +1341,8 @@ class TimingControlVisitor final : public VNVisitor {
                 delayp->lhsp(
                     new AstCond{flp, new AstEq{flp, rhs1p->cloneTree(false), new AstConst{flp, 0}},
                                 fallDelayp, lhsp});
+                // Both values are now in ticks, so visit(AstDelay) must not scale them again
+                delayp->timeunit(v3Global.rootp()->timeprecision());
             }
         }
         AstAssign* const assignp = new AstAssign{nodep->fileline(), lhs1p, rhs1p, controlp};

@@ -1792,11 +1792,13 @@ inline void VL_STREAMR_RII(int lbits, VlQueue<T>& q, IData ld, IData rd_log2) VL
 }
 
 template <std::size_t N_Words>
-inline void VL_STREAMR_RII(int lbits, VlQueue<VlWide<N_Words>>& q, IData ld,
+inline void VL_STREAMR_RII(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, IData ld,
                            IData rd_log2) VL_PURE {
+    // Left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
     q.clear();
     VlWide<N_Words> value;
-    VL_SET_WI(value, ld);
+    VL_ZERO_W(queueBits, value);
+    _vl_insert_WI(value, ld, queueBits - 1, queueBits - lbits);
     q.push_back(value);
 }
 
@@ -1869,11 +1871,13 @@ inline IData VL_STREAMR_QRI(int lbits, VlQueue<T>& q, IData rd_log2) VL_PURE {
 }
 
 template <std::size_t N_Words>
-inline void VL_STREAMR_RQI(int lbits, VlQueue<VlWide<N_Words>>& q, QData ld,
+inline void VL_STREAMR_RQI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q, QData ld,
                            IData rd_log2) VL_PURE {
-    q.clear();  // Empty the queue first
+    // Left-justified, zero-filled on the right (IEEE 1800-2023 11.4.14)
+    q.clear();
     VlWide<N_Words> value;
-    VL_SET_WQ(value, ld);
+    VL_ZERO_W(queueBits, value);
+    _vl_insert_WQ(value, ld, queueBits - 1, queueBits - lbits);
     q.push_back(value);
 }
 
@@ -1919,13 +1923,17 @@ inline void VL_STREAMR_RWI(int lbits, int queueBits, VlQueue<T>& q, WDataInP con
 template <std::size_t N_Words>
 inline void VL_STREAMR_RWI(int lbits, int queueBits, VlQueue<VlWide<N_Words>>& q,
                            WDataInP const lwp, IData rd_log2) VL_PURE {
-    q.clear();  // Empty the queue first
-    const int numWords = VL_BITWORD_E(lbits);
-    VlWide<N_Words> value;
-    for (int ii = 0; ii < N_Words; ii++) value.at(ii) = 0;
-    for (int word = numWords - 1; word >= 0; word--) {
-        value.at(word) = lwp[word];
-        if ((word % N_Words) == 0) { q.push_back(value); }
+    // Elements take the stream from the left, the last zero-filled on the right
+    // (IEEE 1800-2023 11.4.14)
+    q.clear();
+    for (int msb = lbits - 1; msb >= 0; msb -= queueBits) {
+        const int width = std::min(queueBits, msb + 1);
+        VlWide<N_Words> bits;
+        VL_SEL_WWII(width, lbits, bits, lwp, msb - width + 1, width);
+        VlWide<N_Words> value;
+        VL_ZERO_W(queueBits, value);
+        _vl_insert_WW(value, bits, queueBits - 1, queueBits - width);
+        q.push_back(value);
     }
 }
 
@@ -2280,13 +2288,35 @@ inline IData VL_PACK_I_RI(int /*obits*/, int lbits, const VlQueue<IData>& q) {
 
 template <typename T>
 struct VlUnpackedElements final {
+    using Leaf = T;
     static constexpr size_t count = 1;
 };
 
 template <typename T, size_t N>
 struct VlUnpackedElements<VlUnpacked<T, N>> final {
+    using Leaf = typename VlUnpackedElements<T>::Leaf;
     static constexpr size_t count = N * VlUnpackedElements<T>::count;
+    using Flat = VlUnpacked<Leaf, count>;  // One-dimensional array of the same elements
 };
+
+// Copy the elements of a multidimensional unpacked array, in element order, to outp
+template <typename T_Leaf>
+inline void _vl_unpacked_flatten(const T_Leaf& from, T_Leaf*& outp) {
+    *outp++ = from;
+}
+template <typename T_Value, std::size_t N_Depth, typename T_Leaf>
+inline void _vl_unpacked_flatten(const VlUnpacked<T_Value, N_Depth>& from, T_Leaf*& outp) {
+    for (size_t i = 0; i < N_Depth; ++i) _vl_unpacked_flatten(from[i], outp);
+}
+
+// Return a multidimensional unpacked array as a one-dimensional array, for VL_PACK_*
+template <typename T_Array>
+inline typename VlUnpackedElements<T_Array>::Flat _vl_unpacked_flat(const T_Array& q) {
+    typename VlUnpackedElements<T_Array>::Flat ret;
+    typename VlUnpackedElements<T_Array>::Leaf* outp = ret.data();
+    _vl_unpacked_flatten(q, outp);
+    return ret;
+}
 
 template <std::size_t N_Depth>
 inline IData VL_PACK_I_UI(int /*obits*/, int lbits, const VlUnpacked<CData, N_Depth>& q) {
@@ -2368,6 +2398,12 @@ inline QData VL_PACK_Q_UI(int /*obits*/, int lbits, const VlUnpacked<IData, N_De
     return ret;
 }
 
+template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
+inline QData VL_PACK_Q_UI(int obits, int lbits,
+                          const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
+    return VL_PACK_Q_UI(obits, lbits, _vl_unpacked_flat(q));
+}
+
 inline QData VL_PACK_Q_RQ(int /*obits*/, int lbits, const VlQueue<QData>& q) {
     QData ret = 0;
     for (size_t i = 0; i < q.size(); ++i) ret |= q.at(q.size() - 1 - i) << (i * lbits);
@@ -2392,6 +2428,12 @@ inline QData VL_PACK_Q_UQ(int /*obits*/, int lbits, const VlUnpacked<QData, N_De
     QData ret = 0;
     for (size_t i = 0; i < N_Depth; ++i) ret |= q[N_Depth - 1 - i] << (i * lbits);
     return ret;
+}
+
+template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
+inline QData VL_PACK_Q_UQ(int obits, int lbits,
+                          const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
+    return VL_PACK_Q_UQ(obits, lbits, _vl_unpacked_flat(q));
 }
 
 inline WDataOutP VL_PACK_W_RI(int obits, int lbits, WDataOutP owp, const VlQueue<CData>& q) {
@@ -2451,6 +2493,12 @@ inline WDataOutP VL_PACK_W_UI(int obits, int lbits, WDataOutP owp,
     return owp;
 }
 
+template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
+inline WDataOutP VL_PACK_W_UI(int obits, int lbits, WDataOutP owp,
+                              const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
+    return VL_PACK_W_UI(obits, lbits, owp, _vl_unpacked_flat(q));
+}
+
 inline WDataOutP VL_PACK_W_RQ(int obits, int lbits, WDataOutP owp, const VlQueue<QData>& q) {
     VL_MEMSET_ZERO_W(owp, VL_WORDS_I(obits));
     if (VL_UNLIKELY(obits < q.size() * lbits)) return owp;  // Though is illegal for q to be larger
@@ -2468,6 +2516,12 @@ inline WDataOutP VL_PACK_W_UQ(int obits, int lbits, WDataOutP owp,
     for (size_t i = 0; i < N_Depth; ++i)
         _vl_insert_WQ(owp, q[N_Depth - 1 - i], i * lbits + lbits - 1, i * lbits);
     return owp;
+}
+
+template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
+inline WDataOutP VL_PACK_W_UQ(int obits, int lbits, WDataOutP owp,
+                              const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
+    return VL_PACK_W_UQ(obits, lbits, owp, _vl_unpacked_flat(q));
 }
 
 template <std::size_t N_Words>
@@ -2491,6 +2545,12 @@ inline WDataOutP VL_PACK_W_UW(int obits, int lbits, WDataOutP owp,
     for (size_t i = 0; i < N_Depth; ++i)
         _vl_insert_WW(owp, q[N_Depth - 1 - i], i * lbits + lbits - 1 + offset, i * lbits + offset);
     return owp;
+}
+
+template <typename T_Sub, std::size_t N_Sub, std::size_t N_Depth>
+inline WDataOutP VL_PACK_W_UW(int obits, int lbits, WDataOutP owp,
+                              const VlUnpacked<VlUnpacked<T_Sub, N_Sub>, N_Depth>& q) {
+    return VL_PACK_W_UW(obits, lbits, owp, _vl_unpacked_flat(q));
 }
 
 // Because concats are common and wide, it's valuable to always have a clean output.
@@ -2961,18 +3021,20 @@ inline WDataOutP VL_SEL_WWII(int obits, int lbits, WDataOutP owp, WDataInP const
     return owp;
 }
 
-template <typename T>
-inline VlQueue<T> VL_CLONE_Q(const VlQueue<T>& from, int lbits, int srcElementBits,
-                             int dstElementBits) {
-    VlQueue<T> ret;
+// Return a converted copy of a queue; N_MaxSize is as in VlQueue, for a bounded result
+template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
+inline VlQueue<T, N_MaxSize> VL_CLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
+                                        int srcElementBits, int dstElementBits) {
+    VlQueue<T, N_MaxSize> ret;
     VL_COPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
 
-template <typename T>
-inline VlQueue<T> VL_REVCLONE_Q(const VlQueue<T>& from, int lbits, int srcElementBits,
-                                int dstElementBits) {
-    VlQueue<T> ret;
+// Return a converted copy of a queue, reversed; N_MaxSize as for VL_CLONE_Q
+template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
+inline VlQueue<T, N_MaxSize> VL_REVCLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
+                                           int srcElementBits, int dstElementBits) {
+    VlQueue<T, N_MaxSize> ret;
     VL_REVCOPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
@@ -3137,24 +3199,31 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
     }
 }
 
-// Reverse element order of an unpacked array in-place.
-// Used by emitter for descending-range arrays after VL_UNPACK_*.
-template <typename T_Value, std::size_t N_Depth>
-inline void VL_UNPACK_REVERSED(VlUnpacked<T_Value, N_Depth>& q) {
-    for (size_t i = 0; i < N_Depth / 2; ++i) {
-        const T_Value tmp = q[i];
-        q[i] = q[N_Depth - 1 - i];
-        q[N_Depth - 1 - i] = tmp;
-    }
+// Convert a queue into a queue, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+          int srcElementBits, int dstElementBits) {
+    // Convert unbounded copies, then assign, which discards elements beyond the destination's
+    // bound with a warning (IEEE 1800-2023 7.10.5)
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_COPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
 }
 
-// Return a reversed copy of an unpacked array.
-// Used by emitter for descending-range arrays before VL_PACK_*.
-template <typename T_Value, std::size_t N_Depth>
-inline VlUnpacked<T_Value, N_Depth> VL_PACK_REVERSED(const VlUnpacked<T_Value, N_Depth>& q) {
-    VlUnpacked<T_Value, N_Depth> ret;
-    for (size_t i = 0; i < N_Depth; ++i) ret[i] = q[N_Depth - 1 - i];
-    return ret;
+// Convert a queue into a queue, reversed, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+             int srcElementBits, int dstElementBits) {
+    // As VL_COPY_Q above
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_REVCOPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
 }
 
 // Overloads for VlUnpacked source -> VlQueue destination
@@ -3174,6 +3243,24 @@ inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int 
     srcQ.renew(N_Depth);
     for (size_t i = 0; i < N_Depth; ++i) srcQ.atWrite(i) = from[N_Depth - 1 - i];
     VL_COPY_Q(q, srcQ, lbits, srcElementBits, dstElementBits);
+}
+
+// Overloads for VlQueue source -> fixed-size VlUnpacked destination
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
+inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                      int lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<T_Dst> dstQ;
+    VL_COPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
+    // Elements past a shorter stream read as zero (IEEE 1800-2023 11.4.14)
+    for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
+}
+
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
+inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                         int lbits, int srcElementBits, int dstElementBits) {
+    VlQueue<T_Dst> dstQ;
+    VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
+    for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
 }
 
 //======================================================================
@@ -3290,6 +3377,7 @@ inline void VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<VlWide<N_Words>>& q, WD
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
         VL_SEL_WWII(actualWidth, rbits, q.atWrite(i), rwp, actualBitPos, actualWidth);
+        q.atWrite(i)[VL_WORDS_I(actualWidth) - 1] &= VL_MASK_E(actualWidth);
     }
 }
 
@@ -3420,8 +3508,10 @@ inline void VL_UNPACK_UQ_W(int lbits, int rbits, VlUnpacked<QData, N_Depth>& q, 
 template <std::size_t N_Depth, std::size_t N_Words>
 inline void VL_UNPACK_UW_W(int lbits, int rbits, VlUnpacked<VlWide<N_Words>, N_Depth>& q,
                            WDataInP rwp, const int bit_offset = 0) {
-    for (size_t i = 0; i < N_Depth; ++i)
+    for (size_t i = 0; i < N_Depth; ++i) {
         VL_SEL_WWII(lbits, rbits, q[i], rwp, bit_offset + (N_Depth - 1 - i) * lbits, lbits);
+        q[i][VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);
+    }
 }
 
 // Return QData from double (numeric)
@@ -3762,6 +3852,35 @@ inline std::string VL_CVT_PACK_STR_NQ(QData lhs) VL_PURE {
     VL_SET_WQ(lw, lhs);
     return VL_CVT_PACK_STR_NW(VL_WQ_WORDS_E, lw);
 }
+// Insert a queue element into a wide value
+template <typename T>
+inline void _vl_insert_W_elem(WDataOutP owp, T ld, int hbit, int lbit) VL_MT_SAFE {
+    _vl_insert_WQ(owp, ld, hbit, lbit);
+}
+template <std::size_t N_Words>
+inline void _vl_insert_W_elem(WDataOutP owp, const VlWide<N_Words>& ld, int hbit,
+                              int lbit) VL_MT_SAFE {
+    _vl_insert_WW(owp, ld, hbit, lbit);
+}
+// Convert the stream of a queue or dynamic array to a string, '<<' if rd is nonzero
+template <typename T, size_t N_MaxSize>
+inline std::string VL_CVT_PACK_STR_NR(int lbits, IData rd,
+                                      const VlQueue<T, N_MaxSize>& q) VL_MT_SAFE {
+    // Pack the elements, the first one most significant, as for a packed value
+    const int obits = q.size() * lbits;
+    if (!obits) return "";
+    std::vector<EData> packed(VL_WORDS_I(obits));
+    const WDataOutP packedp = WDataOutP::external(packed.data());
+    for (size_t i = 0; i < q.size(); ++i) {
+        const int lsb = obits - (i + 1) * lbits;
+        _vl_insert_W_elem(packedp, q.at(i), lsb + lbits - 1, lsb);
+    }
+    if (!rd) return VL_CVT_PACK_STR_NW(packed.size(), packedp);
+    std::vector<EData> streamed(packed.size());
+    const WDataOutP streamedp = WDataOutP::external(streamed.data());
+    VL_STREAML_WWI(obits, streamedp, packedp, rd);
+    return VL_CVT_PACK_STR_NW(streamed.size(), streamedp);
+}
 inline std::string VL_CVT_PACK_STR_NN(const std::string& lhs) VL_PURE { return lhs; }
 inline std::string& VL_CVT_PACK_STR_NN(std::string& lhs) VL_PURE { return lhs; }
 inline std::string VL_CVT_PACK_STR_NI(IData lhs) VL_PURE {
@@ -3769,11 +3888,22 @@ inline std::string VL_CVT_PACK_STR_NI(IData lhs) VL_PURE {
     VL_SET_WI(lw, lhs);
     return VL_CVT_PACK_STR_NW(1, lw);
 }
+extern std::string VL_CVT_WILDCARD_KEY_NW(int lwords, const WDataInP lwp) VL_PURE;
+inline std::string VL_CVT_WILDCARD_KEY_NQ(QData lhs) VL_PURE {
+    VlWide<VL_WQ_WORDS_E> lw;
+    VL_SET_WQ(lw, lhs);
+    return VL_CVT_WILDCARD_KEY_NW(VL_WQ_WORDS_E, lw);
+}
+inline std::string VL_CVT_WILDCARD_KEY_NI(IData lhs) VL_PURE {
+    VlWide<VL_WQ_WORDS_E> lw;
+    VL_SET_WI(lw, lhs);
+    return VL_CVT_WILDCARD_KEY_NW(1, lw);
+}
 inline std::string VL_CONCATN_NNN(const std::string& lhs, const std::string& rhs) VL_PURE {
     return lhs + rhs;
 }
 // Append in place, unlike 'lhs = VL_CONCATN_NNN(lhs, rhs)', which copies 'lhs'
-inline void VL_APPENDN_NN(std::string& lhsr, const std::string& rhs) VL_PURE { lhsr += rhs; }
+inline void VL_APPENDN_NN(std::string& lhsr, const std::string& rhs) VL_MT_SAFE { lhsr += rhs; }
 inline std::string VL_REPLICATEN_NNQ(const std::string& lhs, IData rep) VL_PURE {
     std::string result;
     result.reserve(lhs.length() * rep);

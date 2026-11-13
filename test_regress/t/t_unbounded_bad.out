@@ -9,4 +9,25 @@
       |     ^~
                      ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
                      ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Error-UNSUPPORTED: t/t_unbounded_bad.v:11:13: Unsupported: Unbounded ('$') outside of queue or string operations
+                                             : ... note: In instance 't'
+   11 |   sub u (.a($));   
+      |             ^
+%Error-UNSUPPORTED: t/t_unbounded_bad.v:16:15: Unsupported: Unbounded ('$') outside of queue or string operations
+                                             : ... note: In instance 't'
+   16 |   initial x = P + 1;
+      |               ^
+%Error-UNSUPPORTED: t/t_unbounded_bad.v:20:52: Unsupported: Unbounded ('$') outside of queue or string operations
+                                             : ... note: In instance 't'
+   20 |     a: coverpoint x {bins filter = {[1 : 5]} with ($);}   
+      |                                                    ^
+%Error: t/t_unbounded_bad.v:23:42: Intersect value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                 : ... note: In instance 't'
+   23 |       bins value = binsof (a) intersect {$};   
+      |                                          ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_unbounded_bad.v:24:42: Intersect value may not be '$', which may only bound a range (IEEE 1800-2023 6.20.7)
+                                 : ... note: In instance 't'
+   24 |       bins param = binsof (a) intersect {P};   
+      |                                          ^
 %Error: Exiting due to

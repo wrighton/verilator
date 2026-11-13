@@ -11,7 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('simulator_st')
 
-test.compile()
+# Dumps cover AstPatMember::dump and dumpJson
+test.compile(verilator_flags2=['--dump-tree', '--dump-tree-json', '--no-json-ids'])
 
 test.execute()
 

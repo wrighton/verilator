@@ -106,34 +106,22 @@ class SeqEventLowerVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstSenItem* nodep) override {
-        AstSchemaRef* const schemaRefp = VN_CAST(nodep->sensp(), SchemaRef);
+        AstSchemaRef* schemaRefp = VN_CAST(nodep->sensp(), SchemaRef);
         if (schemaRefp && VN_IS(schemaRefp->schemap(), Sequence)) {
             FileLine* const flp = nodep->fileline();
-            AstVar* const eventp = new AstVar{flp, VVarType::MODULETEMP, m_names.get(nodep),
-                                              m_modp->findBasicDType(VBasicDTypeKwd::EVENT)};
-            eventp->lifetime(VLifetime::STATIC_EXPLICIT);
-            m_modp->addStmtsp(eventp);
-            v3Global.setHasEvents();
             schemaRefp->unlinkFrBack();
-            nodep->sensp(new AstVarRef{flp, eventp, VAccess::READ});
             const bool automaticActual = schemaRefp->exists([](const AstNodeVarRef* refp) {
                 return refp->varp() && refp->varp()->lifetime().isAutomatic();
             });
             if (automaticActual) {
                 nodep->v3error("Arguments to a sequence used as an event control must be"
                                " static (IEEE 1800-2023 9.4.2.4)");
-                VN_AS(schemaRefp->schemap(), Sequence)->isReferenced(false);
-                VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
-                return;
+                // Null: no sequence to fire
+                VL_DO_CLEAR(pushDeletep(schemaRefp), schemaRefp = nullptr);
             }
-            AstFireEvent* const firep
-                = new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false};
-            AstCover* const coverp
-                = new AstCover{flp, new AstPropSpec{flp, nullptr, nullptr, schemaRefp}, firep,
-                               VAssertType::CONCURRENT};
-            coverp->isCoverSeq(true);
-            coverp->isSeqEvent(true);
-            m_modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
+            AstVar* const eventp
+                = V3AssertCommon::newSequenceEvent(flp, m_modp, m_names.get(nodep), schemaRefp);
+            nodep->sensp(new AstVarRef{flp, eventp, VAccess::READ});
             return;
         }
         iterateChildren(nodep);
@@ -151,9 +139,38 @@ void V3AssertCommon::collectDefaultDisable(AstNetlist* nodep) {
     { DefaultDisablePropagateVisitor{nodep}; }
 }
 
+AstClocking* V3AssertCommon::moduleDefaultClockingp(const AstNodeModule* modp) {
+    // It applies to the whole module, also to items before its declaration (IEEE 1800-2023 14.12)
+    for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+        AstClocking* const clockingp = VN_CAST(stmtp, Clocking);
+        if (clockingp && clockingp->isDefault()) return clockingp;
+    }
+    return nullptr;
+}
+
 void V3AssertCommon::lowerSequenceEvents(AstNetlist* nodep) {
     { SeqEventLowerVisitor{nodep}; }
     V3Global::dumpCheckGlobalTree("assertseqevent", 0, dumpTreeEitherLevel() >= 3);
+}
+
+AstVar* V3AssertCommon::newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
+                                         AstSchemaRef* schemaRefp) {
+    // The event is fired by an internal cover sequence (IEEE 1800-2023 9.4.2.4)
+    AstVar* const eventp
+        = new AstVar{flp, VVarType::MODULETEMP, name, modp->findBasicDType(VBasicDTypeKwd::EVENT)};
+    eventp->lifetime(VLifetime::STATIC_EXPLICIT);
+    modp->addStmtsp(eventp);
+    v3Global.setHasEvents();
+    if (!schemaRefp) return eventp;
+    AstFireEvent* const firep
+        = new AstFireEvent{flp, new AstVarRef{flp, eventp, VAccess::WRITE}, false};
+    AstCover* const coverp = new AstCover{flp, new AstPropSpec{flp, nullptr, nullptr, schemaRefp},
+                                          firep, VAssertType::CONCURRENT};
+    coverp->isCoverSeq(true);
+    coverp->isSeqEvent(true);
+    // A concurrent assertion is in its own process, clocked by it in AssertVisitor
+    modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
+    return eventp;
 }
 
 string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
@@ -161,6 +178,22 @@ string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
     // Template arguments let the runtime build the type/directive mask at C++ compile time
     return "vlSymsp->_vm_contextp__->assertCtlGet<"s + std::to_string(type) + ", "s
            + std::to_string(directiveType) + ">(VerilatedAssertCtlQuery::"s + query + ")"s;
+}
+
+bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
+    // An integral type, or an unpacked array or structure of such types (IEEE 1800-2023 16.9.3).
+    dtypep = dtypep->skipRefp();
+    if (dtypep->isIntegralOrPacked()) return true;
+    if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+    if (!structp) return false;
+    for (const AstMemberDType* memberp = structp->membersp(); memberp;
+         memberp = VN_AS(memberp->nextp(), MemberDType)) {
+        if (!isSampledType(memberp->subDTypep())) return false;
+    }
+    return true;
 }
 
 bool V3AssertCommon::checkSvaValueLimit(AstNode* nodep, const AstConst* constp, const char* what) {
@@ -224,6 +257,194 @@ void V3AssertCommon::checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) {
     }
 }
 
+// Replace an invalid repetition count, so later steps do not fail, or expand it, after the error
+static void replaceSvaRepCount(AstNodeExpr* countp) {
+    countp->replaceWith(new AstConst{countp->fileline(), 1});
+    VL_DO_DANGLING(countp->deleteTree(), countp);
+}
+
+void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp, bool emptyOk) {
+    if (VN_IS(nodep->maxCountp(), Unbounded)) {
+        // A '$' actual argument (IEEE 1800-2023 16.8), as [*N:$]
+        AstSConsRep* const newp
+            = new AstSConsRep{nodep->fileline(), nodep->exprp()->unlinkFrBack(),
+                              nodep->countp()->unlinkFrBack(), nullptr, true};
+        newp->dtypeFrom(nodep);
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(nodep->deleteTree(), nodep);
+        nodep = newp;
+    }
+    // The counts must be valid elaboration-time constants.
+    V3Const::constifyParamsEdit(nodep->countp());
+    const AstConst* minConstp = VN_CAST(nodep->countp(), Const);
+    if (!minConstp) {
+        errp->v3error("Consecutive repetition count must be constant expression"
+                      " (IEEE 1800-2023 16.9.2)");
+    } else if (minConstp->toSInt() < 0) {
+        errp->v3error("Consecutive repetition count must be non-negative"
+                      " (IEEE 1800-2023 16.9.2)");
+    } else if (checkSvaValueLimit(errp, minConstp, "SVA repetition count")) {
+        if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1 && !emptyOk) {
+            errp->v3warn(E_UNSUPPORTED, "Unsupported: [*0] consecutive repetition");
+        }
+    } else {
+        minConstp = nullptr;  // Over the limit
+    }
+    if (!minConstp) replaceSvaRepCount(nodep->countp());
+    if (!nodep->maxCountp()) return;
+    V3Const::constifyParamsEdit(nodep->maxCountp());
+    const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
+    if (!maxConstp) {
+        errp->v3error("Consecutive repetition max count must be constant"
+                      " expression (IEEE 1800-2023 16.9.2)");
+    } else if (minConstp && maxConstp->toSInt() < minConstp->toSInt()) {
+        errp->v3error("Consecutive repetition max count must be >= min count"
+                      " (IEEE 1800-2023 16.9.2)");
+    } else if (checkSvaValueLimit(errp, maxConstp, "SVA repetition count")) {
+        if (maxConstp->toSInt() < 1 && !emptyOk) {
+            errp->v3warn(E_UNSUPPORTED, "Unsupported: [*N:0] consecutive repetition"
+                                        " with zero max count");
+        }
+        return;
+    }
+    // The min count is then at most 1 too
+    replaceSvaRepCount(nodep->maxCountp());
+    if (minConstp) replaceSvaRepCount(nodep->countp());
+}
+
+// Goto repetition [->N] or nonconsecutive repetition [=N], with the kind named in messages
+template <typename T_Rep>
+static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* errp) {
+    // Replace a non-constant count after reporting it, so later steps do not fail.
+    if (!nodep->maxCountp()) {
+        V3Const::constifyParamsNoWarnEdit(nodep->countp());
+        const AstConst* const constp = VN_CAST(nodep->countp(), Const);
+        if (!constp) {
+            errp->v3error("Repetition count is not an elaboration-time constant"
+                          " (IEEE 1800-2023 16.9.2)");
+            replaceSvaRepCount(nodep->countp());
+        } else if (constp->dtypep()->isSigned() && constp->num().isNegative()) {
+            errp->v3error("Repetition count must be non-negative"
+                          " (IEEE 1800-2023 16.9.2)");
+            replaceSvaRepCount(nodep->countp());
+        } else if (constp->num().mostSetBitP1() > 31) {
+            errp->v3warn(
+                E_UNSUPPORTED,
+                "Unsupported: SVA repetition count exceeds implementation limit of 2147483647");
+            replaceSvaRepCount(nodep->countp());
+        } else if (constp->isZero()) {
+            errp->v3warn(E_UNSUPPORTED, "Unsupported: zero repetition count"
+                                        " (IEEE 1800-2023 16.9.2)");
+        }
+        return;
+    }
+    // A '$' maximum is legal, but is not an expression to constify
+    const bool unbounded = VN_IS(nodep->maxCountp(), Unbounded);
+    // Accessors are re-fetched after constifyParamsEdit, as it can replace the node in-tree
+    V3Const::constifyParamsEdit(nodep->countp());
+    if (!unbounded) V3Const::constifyParamsEdit(nodep->maxCountp());
+    const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
+    const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
+    if (!minConstp || (!maxConstp && !unbounded)) {
+        errp->v3error(std::string{kind}
+                      + " repetition range bounds must be constant expressions"
+                        " (IEEE 1800-2023 16.9.2)");
+        if (!minConstp) replaceSvaRepCount(nodep->countp());
+        if (!maxConstp && !unbounded) replaceSvaRepCount(nodep->maxCountp());
+    } else if (minConstp->toSInt() < 0) {
+        errp->v3error(std::string{kind}
+                      + " repetition range min count must be non-negative"
+                        " (IEEE 1800-2023 16.9.2)");
+        replaceSvaRepCount(nodep->countp());
+        if (!unbounded) replaceSvaRepCount(nodep->maxCountp());
+    } else if (unbounded) {
+        // Only ever written in the body, as a '$' actual argument is checked when substituted
+        nodep->maxCountp()->v3warn(E_UNSUPPORTED,
+                                   "Unsupported: " << kind
+                                                   << " repetition range with '$' maximum"
+                                                      " (IEEE 1800-2023 16.9.2)");
+    } else if (maxConstp->toSInt() < minConstp->toSInt()) {
+        errp->v3error(std::string{kind}
+                      + " repetition range max count must be >= min count"
+                        " (IEEE 1800-2023 16.9.2)");
+        replaceSvaRepCount(nodep->countp());
+        replaceSvaRepCount(nodep->maxCountp());
+    } else if (minConstp->isZero()) {
+        errp->v3warn(E_UNSUPPORTED, "Unsupported: zero min count in "s + kind
+                                        + " repetition range (IEEE 1800-2023 16.9.2)");
+    }
+}
+void V3AssertCommon::checkSvaRepetition(AstSGotoRep* nodep, AstNode* errp) {
+    checkSvaGotoOrNonConsRep(nodep, "Goto", errp);
+}
+void V3AssertCommon::checkSvaRepetition(AstSNonConsRep* nodep, AstNode* errp) {
+    checkSvaGotoOrNonConsRep(nodep, "Nonconsecutive", errp);
+}
+
+void V3AssertCommon::checkSvaPastTicks(AstPast* nodep, AstNode* errp) {
+    // The tick count must be a positive elaboration-time constant, else it is removed after
+    // reporting it.
+    V3Const::constifyParamsEdit(nodep->ticksp());  // ticksp may change
+    const AstConst* const constp = VN_CAST(nodep->ticksp(), Const);
+    if (!constp) {
+        errp->v3error("$past tick value must be constant (IEEE 1800-2023 16.9.3)");
+        nodep->ticksp()->unlinkFrBack()->deleteTree();
+    } else if (constp->toSInt() < 1) {
+        constp->v3error("$past tick value must be >= 1 (IEEE 1800-2023 16.9.3)");
+        nodep->ticksp()->unlinkFrBack()->deleteTree();
+    } else if (!checkSvaValueLimit(nodep, constp, "$past tick value")) {
+        nodep->ticksp()->unlinkFrBack()->deleteTree();
+    } else if (constp->toSInt() > 10) {
+        constp->v3warn(TICKCOUNT, "$past tick value of " << constp->toSInt()
+                                                         << " may have a large performance cost");
+    }
+}
+
+void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
+    // Errors are reported on instp if given, else on the bound. After an error the bounds are
+    // replaced with constants, so later steps do not fail.
+    V3Const::constifyParamsEdit(nodep->loBoundp());  // loBoundp may change
+    const bool hiUnbounded = VN_IS(nodep->hiBoundp(), Unbounded);
+    if (!hiUnbounded) V3Const::constifyParamsEdit(nodep->hiBoundp());  // hiBoundp may change
+    AstNode* const loErrp = instp ? instp : nodep->loBoundp();
+    AstNode* const hiErrp = instp ? instp : nodep->hiBoundp();
+    const AstConst* const loConstp = VN_CAST(nodep->loBoundp(), Const);
+    const AstConst* const hiConstp = VN_CAST(nodep->hiBoundp(), Const);
+    bool valid = false;
+    if (!loConstp) {
+        loErrp->v3error("always range low bound must be a constant expression"
+                        " (IEEE 1800-2023 16.12.11)");
+    } else if (loConstp->toSInt() < 0) {
+        loErrp->v3error("always range low bound must be non-negative"
+                        " (IEEE 1800-2023 16.12.11)");
+    } else {
+        valid = checkSvaValueLimit(loErrp, loConstp, "always range bound");
+    }
+    if (hiUnbounded && nodep->isStrong()) {
+        // From a '$' actual argument (IEEE 1800-2023 16.8)
+        hiErrp->v3error("s_always range must be bounded (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    } else if (hiUnbounded) {
+        // Weak always [m:$]
+    } else if (!hiConstp) {
+        hiErrp->v3error("always range high bound must be a constant expression"
+                        " (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    } else if (!checkSvaValueLimit(hiErrp, hiConstp, "always range bound")) {
+        valid = false;
+    } else if (loConstp && hiConstp->toSInt() < loConstp->toSInt()) {
+        hiErrp->v3error("always range high bound must be >= low bound"
+                        " (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    }
+    if (valid) return;
+    for (AstNodeExpr* const boundp : {nodep->loBoundp(), nodep->hiBoundp()}) {
+        if (VN_IS(boundp, Unbounded) && !nodep->isStrong()) continue;
+        boundp->replaceWith(new AstConst{boundp->fileline(), AstConst::BitFalseErroring{}});
+        VL_DO_DANGLING(boundp->deleteTree(), boundp);
+    }
+}
+
 bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     return nodep->exists([](const AstNodeVarRef* refp) {
         const AstVar* const varp = refp->varp();
@@ -233,7 +454,68 @@ bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     });
 }
 
-void V3AssertCommon::checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) {
+AstNode* V3AssertCommon::checkSvaUnboundedActuals(
+    AstNode* nodep, const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
+    AstNode* instp) {
+    // A formal argument with a '$' actual argument may only be referenced as the maximum of a
+    // cycle_delay_const_range_expression, of a cycle delay, an always, or a repetition, or as the
+    // actual argument of a nested instance, which is checked when that is substituted (IEEE
+    // 1800-2023 16.8). Run before the substitution, so that a '$' written in the body is not
+    // mistaken for one from an actual argument.
+    const bool anyUnbounded = std::any_of(portMap.begin(), portMap.end(), [](const auto& it) {
+        return VN_IS(it.second, Unbounded);
+    });
+    if (!anyUnbounded) return nodep;
+    std::unordered_set<const AstNode*> legalps;
+    nodep->foreach([&](const AstDelay* delayp) {
+        if (delayp->rhsp()) legalps.insert(delayp->rhsp());
+    });
+    nodep->foreach([&](const AstPropAlways* alwaysp) { legalps.insert(alwaysp->hiBoundp()); });
+    nodep->foreach([&](const AstSConsRep* repp) { legalps.insert(repp->maxCountp()); });
+    // Unlike a literal '$', which they do not support either
+    std::unordered_set<const AstNode*> unsupps;
+    nodep->foreach([&](const AstSGotoRep* repp) { unsupps.insert(repp->maxCountp()); });
+    nodep->foreach([&](const AstSNonConsRep* repp) { unsupps.insert(repp->maxCountp()); });
+    nodep->foreach([&](const AstSchemaRef* refp) {
+        for (const AstArg* const argp : refp->argspList()) legalps.insert(argp->exprp());
+    });
+    std::vector<AstVarRef*> badps;
+    nodep->foreach([&](AstVarRef* refp) {
+        const auto it = portMap.find(refp->varp());
+        if (it != portMap.end() && VN_IS(it->second, Unbounded) && !legalps.count(refp)) {
+            AstNodeExpr* newp;
+            if (unsupps.count(refp)) {
+                instp->v3warn(E_UNSUPPORTED, "Unsupported: formal argument "
+                                                 << refp->prettyNameQ()
+                                                 << " with '$' actual argument as the maximum of a"
+                                                    " goto or nonconsecutive repetition range");
+                // Make the range its minimum, so later steps do not fail
+                const AstSGotoRep* const gotop = VN_CAST(refp->backp(), SGotoRep);
+                newp = (gotop ? gotop->countp() : VN_AS(refp->backp(), SNonConsRep)->countp())
+                           ->cloneTreePure(false);
+            } else {
+                instp->v3error("Formal argument " << refp->prettyNameQ()
+                                                  << " with '$' actual argument is used other"
+                                                     " than as a range maximum (IEEE 1800-2023"
+                                                     " 16.8)");
+                newp = new AstConst{refp->fileline(), AstConst::BitFalseErroring{}};
+            }
+            // The body may be only the reference
+            if (refp == nodep) {
+                nodep = newp;
+            } else {
+                refp->replaceWith(newp);
+            }
+            badps.push_back(refp);
+        }
+    });
+    for (AstVarRef* const refp : badps) VL_DO_DANGLING(refp->deleteTree(), refp);
+    return nodep;
+}
+
+void V3AssertCommon::checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) {
+    // Check the cycle delays, repetition counts, always ranges and $past tick counts, now that
+    // the formal arguments are replaced with the actual arguments (IEEE 1800-2023 16.8).
     // A delay still referencing a formal argument of an enclosing sequence or property is
     // checked when that is instanced. Collect first, as checking edits the delays.
     std::vector<AstDelay*> delayps;
@@ -243,6 +525,195 @@ void V3AssertCommon::checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) {
         delayps.push_back(delayp);
     });
     for (AstDelay* const delayp : delayps) checkSvaCycleDelay(delayp, instp);
+    // Likewise repetitions and $past
+    std::vector<AstNodeExpr*> exprps;
+    nodep->foreach([&](AstNodeExpr* exprp) {
+        const AstPast* const pastp = VN_CAST(exprp, Past);
+        if (VN_IS(exprp, SConsRep) || VN_IS(exprp, SGotoRep) || VN_IS(exprp, SNonConsRep)
+            || VN_IS(exprp, PropAlways) || (pastp && pastp->ticksp())) {
+            if (!refsSvaFormal(exprp)) exprps.push_back(exprp);
+        }
+    });
+    // Inner ones first, as checking an outer one may delete an invalid count holding them
+    for (auto it = exprps.rbegin(); it != exprps.rend(); ++it) {
+        AstNodeExpr* const exprp = *it;
+        if (AstSConsRep* const repp = VN_CAST(exprp, SConsRep)) {
+            checkSvaRepetition(repp, instp);
+        } else if (AstSGotoRep* const repp = VN_CAST(exprp, SGotoRep)) {
+            checkSvaRepetition(repp, instp);
+        } else if (AstSNonConsRep* const repp = VN_CAST(exprp, SNonConsRep)) {
+            checkSvaRepetition(repp, instp);
+        } else if (AstPropAlways* const alwaysp = VN_CAST(exprp, PropAlways)) {
+            checkSvaAlwaysRange(alwaysp, instp);
+        } else {
+            checkSvaPastTicks(VN_AS(exprp, Past), instp);
+        }
+    }
+}
+
+std::unordered_map<const AstVar*, AstVar*>
+V3AssertCommon::newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* modp,
+                                V3UniqueNames& names) {
+    std::unordered_map<const AstVar*, AstVar*> localVarMap;
+    for (const AstNode* const declp : schemap->declspList()) {
+        const AstVar* const varp = VN_CAST(declp, Var);
+        if (!varp || varp->isIO()) continue;
+        // An XTEMP stays one, see isMatchItem in V3AssertNfa
+        const VVarType varType
+            = varp->varType() == VVarType::XTEMP ? VVarType::XTEMP : VVarType::MODULETEMP;
+        AstVar* const newVarp
+            = new AstVar{varp->fileline(), varType, names.get(varp), varp->dtypep()};
+        newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
+        modp->addStmtsp(newVarp);
+        localVarMap[varp] = newVarp;
+    }
+    return localVarMap;
+}
+
+AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstSchemaRef* instp) {
+    // A sequence or property may be instanced by a hierarchical name (IEEE 1800-2023 16.8,
+    // 16.12). Its inlined body then refers to the declaring scope through the same path.
+    const string dotted = instp->dotted();
+    if (dotted.empty()) return bodyp;
+    // Formal arguments and local variables, which are substituted by the caller
+    std::unordered_set<const AstVar*> ownVarps;
+    for (const AstNode* const declp : instp->schemap()->declspList()) {
+        if (const AstVar* const varp = VN_CAST(declp, Var)) ownVarps.insert(varp);
+    }
+    // A hierarchical reference is downward if it starts at a scope in the declaring module.
+    // Others are upward or absolute, so resolve the same from the instance.
+    std::unordered_set<string> scopeNames;
+    const AstNode* modp = instp->schemap();
+    while (!VN_IS(modp, NodeModule)) modp = modp->backp();
+    modp->foreach([&](const AstNode* nodep) {
+        if (VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, GenBlock)
+            || (VN_IS(nodep, Var) && VN_AS(nodep, Var)->isIfaceRef())) {
+            scopeNames.insert(nodep->name());
+        }
+    });
+    const auto relinkDotted = [&](const string& refDotted) {
+        if (refDotted.empty()) return dotted;
+        if (!scopeNames.count(refDotted.substr(0, refDotted.find('.')))) return refDotted;
+        return dotted + "." + refDotted;
+    };
+    bodyp->foreach([&](AstVarXRef* refp) { refp->dotted(relinkDotted(refp->dotted())); });
+    bodyp->foreach([&](AstNodeFTaskRef* refp) {
+        if (!refp->classOrPackagep()) refp->dotted(relinkDotted(refp->dotted()));
+    });
+    bodyp->foreach([&](AstSchemaRef* refp) {
+        if (!refp->classOrPackagep()) refp->dotted(relinkDotted(refp->dotted()));
+    });
+    bodyp->foreach([&](AstVarRef* refp) {
+        if (refp->classOrPackagep() || ownVarps.count(refp->varp())) return;
+        AstVarXRef* const xrefp
+            = new AstVarXRef{refp->fileline(), refp->varp(), dotted, refp->access()};
+        if (refp == bodyp) {
+            bodyp = xrefp;
+        } else {
+            refp->replaceWith(xrefp);
+        }
+        VL_DO_DANGLING(refp->deleteTree(), refp);
+    });
+    return bodyp;
+}
+
+void V3AssertCommon::removeActualReductions(const std::vector<AstNodeExpr*>& actualps) {
+    // V3Width reduces a reference to an untyped formal argument used as a boolean, as its type is
+    // only known from the actual argument (IEEE 1800-2023 16.8). A sequence or property
+    // instance is not an operand of a reduction, and for any other single-bit actual argument the
+    // reduction is an identity.
+    for (AstNodeExpr* const actualp : actualps) {
+        AstRedOr* const redOrp = VN_CAST(actualp->firstAbovep(), RedOr);
+        if (!redOrp || actualp->width() != 1) continue;
+        redOrp->replaceWith(actualp->unlinkFrBack());
+        VL_DO_DANGLING(redOrp->deleteTree(), redOrp);
+    }
+}
+
+void V3AssertCommon::lowerSvaLocalVarInits(
+    AstProperty* propp, AstPropSpec* bodyp,
+    const std::unordered_map<const AstVar*, AstVar*>& localVarMap) {
+    // A local variable is initialized at the start of each attempt (IEEE 1800-2023 16.10), but
+    // its module variable is not. A read that is not after a match item assigning the variable
+    // sees the initial value. Here only the reads in the consequent of an implication whose
+    // antecedent is `(e, v = x)` are known to follow it; a read after a match item in the same
+    // sequence, which V3AssertNfa lowers later, is conservatively reported too.
+    const AstImplication* const implp = VN_CAST(bodyp->propp(), Implication);
+    const AstExprStmt* const itemsp = implp ? VN_CAST(implp->lhsp(), ExprStmt) : nullptr;
+    // V3LinkParse keeps the initializer of a local variable as its value
+    for (AstNode* const declp : propp->declspList()) {
+        AstVar* const localVarp = VN_CAST(declp, Var);
+        if (!localVarp || localVarp->isIO() || !localVarp->valuep()) continue;
+        V3Const::constifyParamsNoWarnEdit(localVarp->valuep());  // valuep may change
+        AstNodeExpr* const initp = VN_AS(localVarp->valuep(), NodeExpr);
+        const AstConst* const constp = VN_CAST(initp, Const);
+        const AstVar* const varp = localVarMap.at(localVarp);
+        std::vector<AstVarRef*> readps;
+        bool assigned = false;
+        bodyp->foreach([&](AstVarRef* refp) {
+            if (refp->varp() != varp) return;
+            if (refp->access().isReadOnly()) {
+                readps.push_back(refp);
+            } else {
+                assigned = true;
+            }
+        });
+        if (assigned) {
+            std::unordered_set<const AstVarRef*> beforeps{readps.begin(), readps.end()};
+            if (itemsp && itemsp->exists([&](const AstVarRef* refp) {
+                    return refp->varp() == varp && refp->access().isWriteOrRW();
+                })) {
+                implp->rhsp()->foreach([&](const AstVarRef* refp) { beforeps.erase(refp); });
+            }
+            if (!beforeps.empty()) {
+                initp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: initializer of a property local variable"
+                              " assigned by a match item, read other than in the"
+                              " consequent of an implication whose antecedent assigns"
+                              " it (IEEE 1800-2023 16.10)");
+            }
+        } else if (constp) {
+            for (AstVarRef* const refp : readps) {
+                AstConst* const newp = new AstConst{refp->fileline(), constp->num()};
+                newp->dtypeFrom(refp);
+                refp->replaceWith(newp);
+                VL_DO_DANGLING(refp->deleteTree(), refp);
+            }  // LCOV_EXCL_LINE -- GCC exception cleanup branch
+        } else if (!readps.empty()) {
+            initp->v3warn(E_UNSUPPORTED, "Unsupported: non-constant initializer of a property"
+                                         " local variable (IEEE 1800-2023 16.10)");
+        }
+    }
+}
+
+void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
+    // Equivalent when the property is attempted at every tick (IEEE 1800-2023 16.12.11).
+    // Unlike under always, p may then contain property operators.
+    AstPropAlways* const alwaysp = VN_CAST(specp->propp(), PropAlways);
+    if (!alwaysp || !alwaysp->isPlainAlways()) return;
+    alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
+    VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
+}
+
+AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
+    // A single edge event none of whose variables is used in the procedure body. A use in an
+    // event, as in the clock that assertion lowering gives a sampled value function, is ignored.
+    AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
+    if (!itemp || itemp->nextp() || !itemp->edgeType().anEdge() || !alwaysp->stmtsp()) {
+        return nullptr;
+    }
+    const auto inEvent = [alwaysp](const AstNode* nodep) {
+        for (; nodep != alwaysp; nodep = nodep->aboveLoopp()) {
+            if (VN_IS(nodep, SenItem)) return true;
+        }
+        return false;
+    };
+    const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
+        return alwaysp->stmtsp()->existsAndNext([&](const AstVarRef* refp) {
+            return refp->varp() == clkRefp->varp() && !inEvent(refp);
+        });
+    });
+    return usedInBody ? nullptr : itemp;
 }
 
 //######################################################################
@@ -258,6 +729,7 @@ class AssertDeFutureVisitor final : public VNVisitor {
     std::map<AstVar*, AstVar*> m_delayedVars;  // Old to delayed variable mapping
     // STATE - for current visit position (use VL_RESTORER)
     bool m_inFuture = false;  // Inside a future
+    bool m_inDisable = false;  // Inside a disable condition
     bool m_unsupported = false;  // Printed unsupported
 
     // METHODS
@@ -268,8 +740,34 @@ class AssertDeFutureVisitor final : public VNVisitor {
                       "Unsupported/illegal: Future value function used with expression with "
                           << nodep->prettyOperatorName());
     }
+    // Return a new variable that each future clock tick loads with 'valuep'
+    AstVar* newDelayedVar(const string& name, AstNodeExpr* valuep) {
+        FileLine* const flp = valuep->fileline();
+        AstAlways* const alwaysp = new AstAlways{flp, VAlwaysKwd::ALWAYS,
+                                                 m_futurep->sentreep()->cloneTree(false), nullptr};
+        m_modp->addStmtsp(alwaysp);
+        AstVar* const varp = new AstVar{flp, VVarType::MODULETEMP, name, valuep->dtypep()};
+        m_modp->addStmtsp(varp);
+        AstVarRef* const writeRefp = new AstVarRef{flp, varp, VAccess::WRITE};
+        writeRefp->user1(true);
+        alwaysp->addStmtsp(new AstAssignDly{flp, writeRefp, valuep});
+        return varp;
+    }
     // VISITORS
+    void visit(AstPropSpec* nodep) override {
+        iterateAndNextNull(nodep->sensesp());
+        {
+            VL_RESTORER(m_inDisable);
+            m_inDisable = true;
+            iterateAndNextNull(nodep->disablep());
+        }
+        iterateAndNextNull(nodep->propp());
+        iterateAndNextNull(nodep->matchCountp());
+    }
     void visit(AstFuture* nodep) override {
+        // A disable condition is not a property or sequence expression, so leave a future value
+        // function there for AssertVisitor to reject (IEEE 1800-2023 16.9.4)
+        if (m_inDisable) return;
         VL_RESTORER(m_inFuture);
         m_inFuture = true;
         iterateChildren(nodep);
@@ -288,21 +786,10 @@ class AssertDeFutureVisitor final : public VNVisitor {
         auto it = m_delayedVars.find(nodep->varp());
         AstVar* outvarp;
         if (it == m_delayedVars.end()) {
-            AstSenTree* const sentreep = m_futurep->sentreep();
-            AstAlways* const alwaysp = new AstAlways{nodep->fileline(), VAlwaysKwd::ALWAYS,
-                                                     sentreep->cloneTree(false), nullptr};
-            m_modp->addStmtsp(alwaysp);
-            outvarp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
-                                 "__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
-                                 nodep->dtypep()};
-            m_modp->addStmtsp(outvarp);
-            AstVarRef* varRefAWritep = new AstVarRef{nodep->fileline(), outvarp, VAccess::WRITE};
-            varRefAWritep->user1(true);
-            AstNodeVarRef* varRefAReadp = nodep->cloneTree(false);
-            varRefAReadp->user1(true);
-            AstNodeStmt* const assp
-                = new AstAssignDly{nodep->fileline(), varRefAWritep, varRefAReadp};
-            alwaysp->addStmtsp(assp);
+            AstNodeVarRef* const valuep = nodep->cloneTree(false);
+            valuep->user1(true);
+            outvarp = newDelayedVar("__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
+                                    valuep);
             m_delayedVars.emplace(nodep->varp(), outvarp);
         } else {
             outvarp = it->second;
@@ -312,6 +799,14 @@ class AssertDeFutureVisitor final : public VNVisitor {
         UINFO(9, "DeFuture " << nodep << "  becomes " << newp);
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void visit(AstPExpr* nodep) override {
+        // V3AssertPre lowered this operator to a forked process, which cannot be evaluated one
+        // tick late; the rest of the visit then only strips the future value functions
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported: future sampled value function in a property"
+                                     " with this temporal operator");
+        m_unsupported = true;
+        iterateChildren(nodep);
     }
     void visit(AstNodeFTaskRef* nodep) override { unsupported(nodep); }
     void visit(AstMethodCall* nodep) override { unsupported(nodep); }
@@ -331,42 +826,83 @@ public:
                 return false;
             }))
             return;
+        // Only concurrent assertions, which have a PropSpec, are lowered (IEEE 1800-2023 16.9.4)
+        AstPropSpec* const specp = VN_AS(nodep, PropSpec);
         // UINFOTREE(9, nodep, "", "defuture-in");
-        visit(nodep);  // Nodep may get deleted
+        visit(specp);
         // UINFOTREE(9, nodep, "", "defuture-ou");
+        // The attempt checked at a tick is the one from the previous tick, so disable the
+        // first tick, which has no previous tick and no delayed values
+        FileLine* const flp = specp->fileline();
+        AstVar* const startedp = newDelayedVar("__VfutureStarted" + cvtToStr(m_pastNum),
+                                               new AstConst{flp, AstConst::BitTrue{}});
+        AstNodeExpr* disablep = new AstLogNot{flp, new AstVarRef{flp, startedp, VAccess::READ}};
+        if (specp->disablep()) {
+            disablep = new AstLogOr{flp, specp->disablep()->unlinkFrBack(), disablep};
+        }
+        specp->disablep(disablep);
     }
     ~AssertDeFutureVisitor() override = default;
 };
 
 // Prepare one default sampled expression.
 class DefaultSampledValueVisitor final : public VNVisitor {
-    // STATE
-    bool m_defaulted = false;  // A reference below was replaced by its default
-
     // METHODS
-    AstConst* newTypeDefault(AstNodeExpr* nodep) {
-        m_defaulted = true;
-        AstConst* const constp
-            = new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()};
-        if (nodep->dtypep()->isFourstate()) constp->num().setAllBitsX();
-        constp->dtypeFrom(nodep);
+    static AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
+        AstNodeDType* const skipDtp = dtypep->skipRefp();
+        if (AstUnpackArrayDType* const arrayp = VN_CAST(skipDtp, UnpackArrayDType)) {
+            return new AstConsArray{flp, arrayp, newTypeDefault(flp, arrayp->subDTypep())};
+        }
+        AstStructDType* const structp = VN_CAST(skipDtp, StructDType);
+        if (structp && !structp->packed()) {
+            AstConsStruct* const consp = new AstConsStruct{flp, structp};
+            for (AstMemberDType* memberp = structp->membersp(); memberp;
+                 memberp = VN_AS(memberp->nextp(), MemberDType)) {
+                consp->addItemsp(new AstConsStructItem{flp, memberp,
+                                                       newTypeDefault(flp, memberp->subDTypep())});
+            }
+            return consp;
+        }
+        AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
+        if (dtypep->isFourstate()) constp->num().setAllBitsX();
+        constp->dtypep(dtypep);
         return constp;
     }
-
+    static bool hasDefaultValue(const AstVar* varp) {
+        return !varp->isParam()
+               && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
+    }
+    static AstNodeExpr* selectFromp(AstNode* nodep) {
+        if (AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) return selp->fromp();
+        if (AstSel* const selp = VN_CAST(nodep, Sel)) return selp->fromp();
+        if (AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        return nullptr;
+    }
     void visitSelect(AstNodeExpr* nodep) {
-        // A select of a replaced value or index is itself the default of its type
-        bool setDefaulted;
-        {
-            VL_RESTORER(m_defaulted);
-            m_defaulted = false;
-            iterateChildren(nodep);
-            setDefaulted = m_defaulted;
+        // A selection from a variable with its default value, or with an unknown index, has
+        // the default value of the selected type (IEEE 1800-2023 7.4.6, 11.5.1). Replace the
+        // whole selection: the variable may be unpacked, and a constant unknown index would
+        // be rejected later.
+        AstNodeExpr* basep = selectFromp(nodep);
+        while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        bool isDefault = refp && hasDefaultValue(refp->varp());
+        if (!isDefault) {
+            AstNodeExpr* selp = nodep;
+            for (; selectFromp(selp); selp = selectFromp(selp)) {
+                // The index of an AstNodeSel or AstSel; an AstStructSel has none
+                AstNodeBiop* const biopp = VN_CAST(selp, NodeBiop);
+                if (!biopp) continue;
+                iterate(biopp->rhsp());
+                const AstConst* const constp
+                    = VN_CAST(V3Const::constifyEdit(biopp->rhsp()), Const);
+                if (constp && constp->num().isAnyXZ()) isDefault = true;
+            }
+            iterate(selp);
         }
-        if (setDefaulted) {
-            m_defaulted = true;  // Propagate up that replacement was made
-            nodep->replaceWith(newTypeDefault(nodep));
+        if (isDefault) {
+            nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
         }
     }
 
@@ -379,17 +915,14 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             iterateChildren(nodep);
         }
     }
+    void visit(AstNodeSel* nodep) override { visitSelect(nodep); }
+    void visit(AstSel* nodep) override { visitSelect(nodep); }
+    void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
-        AstVar* const varp = nodep->varp();
-        if (varp->isParam()
-            || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
-            return;
-        }
-        nodep->replaceWith(newTypeDefault(nodep));
+        if (!hasDefaultValue(nodep->varp())) return;
+        nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstArraySel* nodep) override { visitSelect(nodep); }
-    void visit(AstSel* nodep) override { visitSelect(nodep); }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
@@ -486,14 +1019,24 @@ class AssertVisitor final : public VNVisitor {
         // cppcheck-suppress missingReturn
         switch (directiveType) {
         case VAssertDirectiveType::INTRINSIC: return new AstConst{fl, AstConst::BitTrue{}};
-        case VAssertDirectiveType::VIOLATION_CASE: {
-            if (v3Global.opt.assertCase()) {
-                return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()",
-                                    1};
-            }
+        case VAssertDirectiveType::VIOLATION_CASE:
+        case VAssertDirectiveType::VIOLATION_IF: {
+            const bool enabled = directiveType == VAssertDirectiveType::VIOLATION_CASE
+                                     ? v3Global.opt.assertCase()
+                                     : v3Global.opt.assertOn();
             // If assertions are off, have constant propagation rip them out later
             // This allows syntax errors and such to be detected normally.
-            return new AstConst{fl, AstConst::BitFalse{}};
+            if (!enabled) return new AstConst{fl, AstConst::BitFalse{}};
+            // Unique/unique0/priority checks are controlled by their assertion type
+            // (IEEE 1800-2023 Table 20-6), as assert directives; full_case/parallel_case
+            // checks have no type and follow the global state.
+            if (type != VAssertType::INTERNAL) {
+                return new AstCExpr{fl, AstCExpr::Pure{},
+                                    V3AssertCommon::assertCtlGetCall("ASSERT_CTL_ON", type,
+                                                                     VAssertDirectiveType::ASSERT),
+                                    1};
+            }
+            return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()", 1};
         }
         case VAssertDirectiveType::ASSERT:
         case VAssertDirectiveType::COVER:
@@ -506,7 +1049,6 @@ class AssertVisitor final : public VNVisitor {
             return new AstConst{fl, AstConst::BitFalse{}};
         }
         case VAssertDirectiveType::INTERNAL:
-        case VAssertDirectiveType::VIOLATION_IF:
         case VAssertDirectiveType::RESTRICT: {
             if (v3Global.opt.assertOn()) {
                 return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()",
@@ -743,7 +1285,27 @@ class AssertVisitor final : public VNVisitor {
             AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
             forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
-                if (!m_finalp) {
+                // The end-of-simulation check runs action blocks in a final block, where an
+                // NBA, legal in an action block, executes as a blocking assignment
+                finalp->foreach([](AstAssignDly* const dlyp) {
+                    FileLine* const newfl = new FileLine{dlyp->fileline()};
+                    newfl->warnOff(V3ErrorCode::FINALDLY, true);
+                    dlyp->fileline(newfl);
+                });
+                // The final block executes in zero time (IEEE 1800-2023 9.2.3), so a timing
+                // control there never resumes
+                const AstNode* timingp = nullptr;
+                finalp->exists([&](const AstNode* const np) {
+                    if (!np->isTimingControl()) return false;
+                    timingp = np;
+                    return true;
+                });
+                if (timingp) {
+                    timingp->v3warn(E_UNSUPPORTED,
+                                    "Unsupported: Timing control in action block of a strong "
+                                    "property, which also runs at end of simulation");
+                    VL_DO_DANGLING(pushDeletep(finalp->unlinkFrBack()), finalp);
+                } else if (!m_finalp) {
                     m_finalp = new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()};
                     m_modp->addStmtsp(m_finalp);
                 } else {
@@ -873,6 +1435,9 @@ class AssertVisitor final : public VNVisitor {
     // Pending calls run in the Reactive region unless a flush of their process clears them
     // (IEEE 1800-2023 16.4.1).
     AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp) {
+        // The null statement of an 'else;', an empty implied block, has no call to defer
+        const AstBegin* const beginp = VN_CAST(actionsp, Begin);
+        if (beginp && beginp->implied() && !beginp->stmtsp()) return actionsp;
         if (!(actionsp->isOutputter() || VN_IS(actionsp, SFormat) || VN_IS(actionsp, StmtExpr))) {
             actionsp->v3error("Observed deferred immediate assertion action block must be a "
                               "single subroutine call (IEEE 1800-2023 16.4).");
@@ -989,7 +1554,10 @@ class AssertVisitor final : public VNVisitor {
         }
         if (m_beginp && nodep->name() == "") nodep->name(m_beginp->name());
 
-        { AssertDeFutureVisitor{nodep->propp(), m_modp, m_modPastNum++}; }
+        // An immediate assertion's expression is not a property or sequence expression, so a
+        // future value function there is left for visit(AstFuture) to reject (IEEE 1800-2023
+        // 16.9.4)
+        if (!nodep->immediate()) AssertDeFutureVisitor{nodep->propp(), m_modp, m_modPastNum++};
 
         iterateAndNextNull(nodep->sentreep());
         if (AstAssert* const assertp = VN_CAST(nodep, Assert)) {
@@ -1075,7 +1643,7 @@ class AssertVisitor final : public VNVisitor {
             } else {
                 ++m_statAsNotImm;
             }
-            if (!passsp && !failsp)
+            if (!failsp)
                 failsp = newFireAssertUnchecked(
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
             if (obsDeferred) {
@@ -1439,7 +2007,34 @@ class AssertVisitor final : public VNVisitor {
     }
 
     //========== Past
+    // True if sentreep has an event that fires in the Observed region
+    static bool isObservedEventClock(const AstSenTree* sentreep) {
+        // Compiler-made events, of clocking blocks and sequences (the only MODULETEMP events
+        // at this stage), fire in the Observed region
+        for (const AstSenItem* itemp = sentreep->sensesp(); itemp;
+             itemp = VN_AS(itemp->nextp(), SenItem)) {
+            const AstNodeVarRef* const refp = itemp->varrefp();
+            if (refp && refp->varp()->varType() == VVarType::MODULETEMP
+                && refp->varp()->isEvent()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void visit(AstPast* nodep) override {
+        // When clocked in the Observed region, the history of a nested sampled value function
+        // would already be updated in the time step
+        if (isObservedEventClock(nodep->sentreep())
+            && nodep->exprp()->exists([](const AstPast*) { return true; })) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: sampled value function clocked by a"
+                                         " clocking block or sequence event, of an expression"
+                                         " with a nested sampled value function");
+            nodep->replaceWith(
+                new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         if (!nodep->propertyTiming()) {
             nodep->initp(nodep->exprp()->cloneTreePure(false));
             { DefaultSampledValueVisitor{nodep->initp()}; }
@@ -1720,12 +2315,15 @@ class AssertVisitor final : public VNVisitor {
         }
         if (assertTypeConst && nodep->assertTypes() != ALL_ASSERT_TYPES
             && nodep->assertTypes().containsAny(VAssertType::UNIQUE | VAssertType::UNIQUE0
-                                                | VAssertType::PRIORITY)) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: assert control assertion_type");
+                                                | VAssertType::PRIORITY)
+            && (!controlTypeConst || nodep->ctlType() > VAssertCtlType::KILL)) {
+            // Violation checks are only enabled by the On/Off state; pass and fail action
+            // controls would be silently ignored
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: assert control of unique, unique0 or"
+                                         " priority checks with this control_type");
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
             return;
         }
-
         bool directiveTypeConst = true;
         if (!nodep->directiveTypesp()) {
             nodep->directiveTypes(VAssertDirectiveType::ASSERT | VAssertDirectiveType::ASSUME

@@ -50,11 +50,12 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     // TYPES
     struct ScopeData final {
         const AstNode* m_nodep;  // Scope symbol-table entry corresponds to
-        const std::string m_symName;  // Mangled name used to build __Vscopep_ variable
+        const std::string m_symName;  // Mangled name, used to build __Vscopep_ member name
         const std::string m_prettyName;  // Pretty (unprotected) name for display
         const std::string m_defName;  // Name registered for this scope
         const int m_timeunit;  // Timeunit of this scope
         std::string m_type;  // TODO: this should be an enum
+        int m_arrayIndex = -1;  // Index in __Vscopesp, or -1 if it has a __Vscopep_ member
         ScopeData(const AstNode* nodep, const std::string& symName, const std::string& prettyName,
                   const std::string& defName, int timeunit, const std::string& type)
             : m_nodep{nodep}
@@ -128,7 +129,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     std::unordered_map<ScopedVar, ScopeVarData*, ScopedVarHash>
         m_scopeVarsByVar;  // Registered variable identities
     ScopeNames m_scopeNames;  // Each unique AstScopeName. Dpi scopes added later
-    ScopeNames m_dpiScopeNames;  // Each unique AstScopeName for DPI export
+    ScopeNames m_dpiScopeNames;  // Each unique AstScopeName for a DPI context import or export
+    ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
+    int m_scopeArraySize = 0;  // Number of scopes held in __Vscopesp
     ScopeNames m_vpiScopeCandidates;  // All scopes for VPI
     std::vector<IfaceRefData> m_ifaceRefs;  // Each interface reference, for VPI
     // The actual hierarchy of scopes
@@ -326,6 +329,15 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         }
         out += skipDTypep->vlEnumPackedAgg();
         return out + ')';
+    }
+
+    // Offset of the given scope's pointer within the Syms class
+    static std::string scopeOffset(const ScopeData& sd) {
+        const std::string member
+            = sd.m_arrayIndex < 0
+                  ? protect("__Vscopep_" + sd.m_symName)
+                  : protect("__Vscopesp") + "[" + std::to_string(sd.m_arrayIndex) + "]";
+        return "offsetof(" + symClassName() + ", " + member + ")";
     }
 
     // Name of the instance member for the given scope
@@ -811,12 +823,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
             // Keep such references reachable by name, without attaching them to a scope.
             std::string parentOffset = "VL_IFACEREF_NO_PARENT";
             const auto parent = m_scopeNames.find(ird.m_parentSym);
-            if (parent != m_scopeNames.end()) {
-                parentOffset = "offsetof(" + symClass + ", "
-                               + protect("__Vscopep_" + parent->second.m_symName) + ")";
-            }
-            std::string row
-                = "{offsetof(" + symClass + ", " + protect("__Vscopep_" + scopeSym) + "), ";
+            if (parent != m_scopeNames.end()) parentOffset = scopeOffset(parent->second);
+            std::string row = "{" + scopeOffset(m_scopeNames.at(scopeSym)) + ", ";
             row += parentOffset + ", \"";
             row += V3OutFormatter::quoteNameControls(VIdProtect::protectWordsIf(ird.m_name, true));
             row += "\", \"";
@@ -862,6 +870,12 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         if (v3Global.dpi()) {
             // add dpi scopes to m_scopeNames if not already there
             for (const auto& scp : m_dpiScopeNames) m_scopeNames.emplace(scp.first, scp.second);
+            // Scopes needed only by a %m are never named in generated code, they exist to be
+            // found at run time, so hold them in one array; a member each is slow to compile
+            for (const auto& scp : m_fmtScopeNames) {
+                const auto pair = m_scopeNames.emplace(scp.first, scp.second);
+                if (pair.second) pair.first->second.m_arrayIndex = m_scopeArraySize++;
+            }
         }
 
         // Sort by names, so line/process order matters less
@@ -945,7 +959,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         // UINFO(9, "scnameins sp " << nodep->name() << " sp " << nodep->scopePrettySymName()
         // << " ss" << name);
         const int timeunit = m_modp ? m_modp->timeunit().powerOfTen() : 0;
-        m_dpiScopeNames.emplace(  //
+        ScopeNames& scopeNames = nodep->forFormat() ? m_fmtScopeNames : m_dpiScopeNames;
+        scopeNames.emplace(  //
             std::piecewise_construct,  //
             std::forward_as_tuple(name),  //
             std::forward_as_tuple(nodep, name, nodep->scopePrettySymName(), "<null>", timeunit,
@@ -959,7 +974,7 @@ class EmitCSyms final : EmitCBaseVisitorConst {
                 std::forward_as_tuple(nodep, m_cfuncp, m_modp));
         } else {
             // Note emplace does not construct when duplicate key
-            m_dpiScopeNames.emplace(  //
+            scopeNames.emplace(  //
                 std::piecewise_construct,  //
                 std::forward_as_tuple(nodep->scopeDpiName()),  //
                 std::forward_as_tuple(nodep, nodep->scopeDpiName(), nodep->scopePrettyDpiName(),
@@ -1131,7 +1146,12 @@ void EmitCSyms::emitSymHdr() {
         puts("\n// SCOPE NAMES\n");
         for (const auto& itpair : m_scopeNames) {
             const ScopeData& sd = itpair.second;
+            if (sd.m_arrayIndex >= 0) continue;
             putns(sd.m_nodep, "::VerilatedScope* " + protect("__Vscopep_" + sd.m_symName) + ";\n");
+        }
+        if (m_scopeArraySize) {
+            puts("::VerilatedScope* " + protect("__Vscopesp") + "["
+                 + std::to_string(m_scopeArraySize) + "];\n");
         }
     }
 
@@ -1298,11 +1318,8 @@ void EmitCSyms::emitVarTables() {
 }
 
 void EmitCSyms::buildHierTableRows() {
-    const std::string symClass = symClassName();
-    const auto offset = [&](const std::string& name) {
-        return "offsetof(" + symClass + ", "
-               + protect("__Vscopep_" + m_scopeNames.at(name).m_symName) + ")";
-    };
+    const auto offset
+        = [&](const std::string& name) { return scopeOffset(m_scopeNames.at(name)); };
     for (const auto& itpair : m_scopeNames) {
         if (itpair.first == "TOP") continue;
         const ScopeData& sd = itpair.second;
@@ -1467,14 +1484,13 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
     }
 
     // Every scope has the same construction shape, so all fold into one table with no
-    // residual; offsetof bakes the target __Vscopep_* member address into each row.
+    // residual; offsetof bakes the target scope pointer's address into each row.
     if (!m_scopeNames.empty()) {
         stmts.add("// Setup scopes");
         const std::string symClass = symClassName();
         for (const auto& itpair : m_scopeNames) {
             const ScopeData& sd = itpair.second;
-            std::string row
-                = "{offsetof(" + symClass + ", " + protect("__Vscopep_" + sd.m_symName) + "), \"";
+            std::string row = "{" + scopeOffset(sd) + ", \"";
             const std::pair<size_t, std::string> top = EmitCUtil::splitTopPath(sd.m_prettyName);
             row += V3OutFormatter::quoteNameControls(VIdProtect::protectWordsIf(top.second, true));
             row += "\", \"";
@@ -1654,8 +1670,13 @@ EmitCSyms::TextStmts EmitCSyms::getSymDtorStmts() {
     stmts.add("// Tear down scopes");
     for (const auto& itpair : m_scopeNames) {
         const ScopeData& sd = itpair.second;
+        if (sd.m_arrayIndex >= 0) continue;
         const std::string id = "vlSymsp->" + protect("__Vscopep_" + sd.m_symName);
         stmts.add("VL_DO_CLEAR(delete " + id + ", " + id + " = nullptr);");
+    }
+    if (m_scopeArraySize) {
+        stmts.add("for (::VerilatedScope*& scopep : vlSymsp->" + protect("__Vscopesp")
+                  + ") VL_DO_CLEAR(delete scopep, scopep = nullptr);");
     }
 
     stmts.add("// Tear down sub module instances");

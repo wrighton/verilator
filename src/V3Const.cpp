@@ -954,6 +954,13 @@ class ConstVisitor final : public VNVisitor {
     bool m_hasJumpDelay = false;  // JumpGo or Delay under this loop
     bool m_hasLoopTest = false;  // Contains AstLoopTest
     bool m_underRecFunc = false;  // Under a recursive function
+    const AstNodeBiop* m_bitwiseFromLogicp = nullptr;  // And/Or just converted from LogAnd/LogOr
+    // Cond made by the last ifSameAssign transform. Its operands are simplified and its values
+    // gate trees, which later edits keep. Deletes are deferred, so no other node gets its address.
+    const AstCond* m_ifSameAssignCondp = nullptr;
+    // Last And/Or converted from a pure LogAnd/LogOr, still pure while there was no edit since
+    const AstNode* m_pureBitwisep = nullptr;
+    uint64_t m_pureBitwiseEditCnt = 0;  // AstNode::editCountGbl() when m_pureBitwisep was made
     AstNodeModule* m_modp = nullptr;  // Current module
     const AstArraySel* m_selp = nullptr;  // Current select
     const AstScope* m_scopep = nullptr;  // Current scope
@@ -976,6 +983,8 @@ class ConstVisitor final : public VNVisitor {
     // and every key looked up is an AstEnumItem.
     std::unordered_set<const AstEnumItem*> m_recursingEnumItems;
     std::unordered_set<AstJumpBlock*> m_usedJumpBlocks;  // JumpBlocks used by some JumpGo
+    const AstIf* m_tailIfp = nullptr;  // Innermost If whose branches end m_tailBlockp
+    const AstJumpBlock* m_tailBlockp = nullptr;  // JumpBlock ended by m_tailIfp's branches
 
     // METHODS
 
@@ -1021,6 +1030,17 @@ class ConstVisitor final : public VNVisitor {
             resultp = new AstConcat{resultp->fileline(), resultp, termps[i]};
         }
         return resultp;
+    }
+
+    // Pack a fixed-size aggregate stream operand, return whether packed
+    bool packAggregateStream(AstNode* nodep) {
+        AstNodeStream* const streamp = VN_CAST(nodep, NodeStream);
+        if (!streamp || !lowerAsFixedAggregate(streamp->lhsp()->dtypep())) return false;
+        AstNodeExpr* const packedp = packFixedAggregate(streamp->lhsp()->unlinkFrBack());
+        streamp->lhsp(packedp);
+        streamp->dtypeSetBitOrLogicUnsized(packedp->width(), packedp->widthMin(),
+                                           VSigning::UNSIGNED, packedp->isFourstateOrNoDtype());
+        return true;
     }
 
     void replaceAssignToFixedAggregate(AstNodeAssign* const nodep, AstNodeExpr* const dstp,
@@ -1731,6 +1751,29 @@ class ConstVisitor final : public VNVisitor {
         return true;
     }
 
+    bool packStreamOperand(AstNodeStream* streamp) {
+        // Pack a fixed-size unpacked operand, so the stream is a packed one
+        if (!VN_IS(streamp->dtypep(), StreamDType)) return false;
+        AstNodeExpr* const fromp = streamp->lhsp();
+        if (!fromp->dtypep()->isStreamableFixedAggregate()) return false;
+        fromp->unlinkFrBack();
+        AstNodeExpr* packedp;
+        if (lowerAsFixedAggregate(fromp->dtypep())) {
+            packedp = packFixedAggregate(fromp);
+        } else {
+            // Converted as a whole, so the operand is evaluated once
+            const int width = fromp->dtypep()->widthStream();
+            packedp = new AstCvtArrayToPacked{
+                fromp->fileline(), fromp,
+                fromp->findBitOrLogicDType(width, width, VSigning::UNSIGNED,
+                                           fromp->dtypep()->isFourstate())};
+        }
+        streamp->lhsp(packedp);
+        streamp->dtypeSetBitOrLogicUnsized(packedp->width(), packedp->widthMin(),
+                                           VSigning::UNSIGNED, packedp->isFourstateOrNoDtype());
+        if (m_params) iterate(streamp);  // Fold a constant operand
+        return true;
+    }
     bool operandBiExtendConstShrink(AstNodeBiop* nodep) {
         // Loop unrolling favors standalone compares
         // EQ(const{width32}, EXTEND(xx{width3})) -> EQ(const{3}, xx{3})
@@ -1857,7 +1900,12 @@ class ConstVisitor final : public VNVisitor {
         if (thensp->type() != elsesp->type()) return false;  // Can't mix an assigndly with assign
         if (!thensp->lhsp()->sameGateTree(elsesp->lhsp())) return false;
         if (!thensp->rhsp()->gateTree()) return false;
-        if (!elsesp->rhsp()->gateTree()) return false;
+        // On an if/else chain, the else is the Cond the last transform made from the IF below,
+        // whose values are known gate trees. Walking them again on every level is quadratic.
+        AstNodeExpr* const elseGatep = elsesp->rhsp() == m_ifSameAssignCondp
+                                           ? m_ifSameAssignCondp->condp()
+                                           : elsesp->rhsp();
+        if (!elseGatep->gateTree()) return false;
         // Must not create an expression with unpacked array type
         if (VN_IS(thensp->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)) return false;
         if (VN_IS(elsesp->rhsp()->dtypep()->skipRefp(), UnpackArrayDType)) return false;
@@ -2132,6 +2180,24 @@ class ConstVisitor final : public VNVisitor {
     }
     void replaceWLhsBool(AstNodeBiop* nodep) { replaceWChildBool(nodep, nodep->lhsp()); }
     void replaceWRhsBool(AstNodeBiop* nodep) { replaceWChildBool(nodep, nodep->rhsp()); }
+    // Replace a LogAnd/LogOr with the equivalent And/Or
+    void replaceLogicWithBitwise(AstNodeBiop* nodep) {
+        AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
+        AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+        FileLine* const flp = nodep->fileline();
+        AstNodeBiop* const newp = VN_IS(nodep, LogAnd)
+                                      ? static_cast<AstNodeBiop*>(new AstAnd{flp, lhsp, rhsp})
+                                      : new AstOr{flp, lhsp, rhsp};
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        m_pureBitwisep = newp;
+        m_pureBitwiseEditCnt = AstNode::editCountGbl();
+        // The iterator revisits newp next to apply its rules (the conversion is only done in
+        // the global pass, where no LogAnd/LogOr is visited by a direct iterate()). Its
+        // operands are already simplified, so tell iterateBitwiseOperands not to walk them
+        // again, which on a long chain of operators would be quadratic.
+        m_bitwiseFromLogicp = newp;
+    }
     void replaceAsv(AstNodeBiop* nodep) {
         // BIASV(CONSTa, BIASV(CONSTb, c)) -> BIASV( BIASV_CONSTED(a,b), c)
         // BIASV(SAMEa,  BIASV(SAMEb, c))  -> BIASV( BIASV(SAMEa,SAMEb), c)
@@ -2672,18 +2738,24 @@ class ConstVisitor final : public VNVisitor {
             AstNodeExpr* srcp = cvtp->fromp()->unlinkFrBack();
             if (lowerAsFixedAggregate(srcp->dtypep())) {
                 srcp = packFixedAggregate(srcp);
-            } else if (AstNodeStream* const streamp = VN_CAST(srcp, NodeStream)) {
-                AstNodeExpr* const streamSrcp = streamp->lhsp();
-                if (lowerAsFixedAggregate(streamSrcp->dtypep())) {
-                    AstNodeExpr* const packedp = packFixedAggregate(streamSrcp->unlinkFrBack());
-                    streamp->lhsp(packedp);
-                    streamp->dtypeSetBitOrLogicUnsized(packedp->width(), packedp->widthMin(),
-                                                       VSigning::UNSIGNED,
-                                                       packedp->isFourstateOrNoDtype());
-                }
+            } else {
+                packAggregateStream(srcp);
             }
             VL_DO_DANGLING(pushDeletep(cvtp), cvtp);
             replaceAssignToFixedAggregate(nodep, nodep->lhsp()->unlinkFrBack(), srcp);
+            return true;
+        } else if (m_doV && VN_IS(nodep->rhsp(), CvtPackedToArray)
+                   && packAggregateStream(VN_AS(nodep->rhsp(), CvtPackedToArray)->fromp())) {
+            // The conversion takes the packed operand apart. A narrower stream is left-justified,
+            // zero-filled on the right (IEEE 1800-2023 11.4.14), as V3Width does for others.
+            AstCvtPackedToArray* const cvtp = VN_AS(nodep->rhsp(), CvtPackedToArray);
+            const int padWidth = cvtp->dtypep()->widthStream() - cvtp->fromp()->width();
+            if (padWidth > 0) {
+                FileLine* const flp = cvtp->fileline();
+                AstNodeExpr* const fromp = cvtp->fromp()->unlinkFrBack();
+                cvtp->fromp(new AstConcat{
+                    flp, fromp, new AstConst{flp, AstConst::WidthedValue{}, padWidth, 0}});
+            }
             return true;
         } else if (m_doV && VN_IS(nodep->rhsp(), StreamR)
                    && !VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)) {
@@ -2697,7 +2769,8 @@ class ConstVisitor final : public VNVisitor {
             if (lowerAsFixedAggregate(srcDTypep)) {
                 srcp = packFixedAggregate(srcp);
             } else if (VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)) {
-                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)) {
+                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)
+                    || VN_IS(dstDTypep, UnpackArrayDType)) {
                     int srcElementBits = 0;
                     if (const AstNodeDType* const elemDtp = srcDTypep->subDTypep()) {
                         srcElementBits = elemDtp->width();
@@ -2745,7 +2818,11 @@ class ConstVisitor final : public VNVisitor {
             AstNodeExpr* const dstp = VN_AS(streamp, StreamL)->lhsp()->unlinkFrBack();
             AstNodeDType* const dstDTypep = dstp->dtypep()->skipRefp();
             AstNodeExpr* srcp = nodep->rhsp()->unlinkFrBack();
-            const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
+            const AstNodeDType* srcDTypep = srcp->dtypep()->skipRefp();
+            if (lowerAsFixedAggregate(srcDTypep)) {
+                srcp = packFixedAggregate(srcp);
+                srcDTypep = srcp->dtypep();
+            }
             // Handle unpacked/queue/dynarray source -> queue/dynarray dest via
             // CvtArrayToArray (StreamL reverses, so reverse=true)
             if ((VN_IS(srcDTypep, UnpackArrayDType) || VN_IS(srcDTypep, QueueDType)
@@ -2772,7 +2849,6 @@ class ConstVisitor final : public VNVisitor {
                 VL_DO_DANGLING(pushDeletep(streamp), streamp);
                 return true;
             }
-            if (lowerAsFixedAggregate(srcDTypep)) srcp = packFixedAggregate(srcp);
             const int sWidth = srcp->width();
             const int dWidth = dstp->width();
             // Connect the rhs to the stream operator and update its width
@@ -2806,6 +2882,7 @@ class ConstVisitor final : public VNVisitor {
             AstNodeExpr* const dstp = VN_AS(streamp, StreamR)->lhsp()->unlinkFrBack();
             AstNodeDType* const dstDTypep = dstp->dtypep()->skipRefp();
             AstNodeExpr* srcp = nodep->rhsp()->unlinkFrBack();
+            if (lowerAsFixedAggregate(srcp->dtypep())) srcp = packFixedAggregate(srcp);
             // Handle unpacked/queue/dynarray source -> queue/dynarray dest via
             // CvtArrayToArray (StreamR does not reverse, so reverse=false).
             // V3Width may have wrapped the source in CvtArrayToPacked; unwrap it.
@@ -2858,8 +2935,25 @@ class ConstVisitor final : public VNVisitor {
                 }
                 srcp = new AstCvtPackedToArray{nodep->fileline(), srcp, dstDTypep};
             } else {
+                const AstNodeDType* const srcDTypep = srcp->dtypep()->skipRefp();
                 if (dWidth == 0) {
                     srcp = new AstCvtPackedToArray{nodep->fileline(), srcp, dstDTypep};
+                } else if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType))
+                           && srcDTypep->subDTypep()->skipRefp()->isIntegralOrPacked()) {
+                    // Pack only the first elements covering the target, as the bits of a
+                    // longer source beyond the target are ignored (IEEE 1800-2023 11.4.14.3)
+                    FileLine* const flp = srcp->fileline();
+                    const AstNodeDType* const elemDTypep = srcDTypep->subDTypep();
+                    const int elems = (dWidth + elemDTypep->width() - 1) / elemDTypep->width();
+                    const int packedWidth = elems * elemDTypep->width();
+                    AstCMethodHard* const slicep
+                        = new AstCMethodHard{flp, srcp, VCMethod::DYN_SLICE, new AstConst{flp, 0}};
+                    slicep->addPinsp(new AstConst{flp, static_cast<uint32_t>(elems - 1)});
+                    slicep->dtypeFrom(srcp);
+                    AstNodeDType* const packedDTypep = srcp->findBitOrLogicDType(
+                        packedWidth, packedWidth, VSigning::UNSIGNED, elemDTypep->isFourstate());
+                    srcp = new AstSel{flp, new AstCvtArrayToPacked{flp, slicep, packedDTypep},
+                                      packedWidth - dWidth, dWidth};
                 } else if (sWidth >= dWidth) {
                     srcp = new AstSel{streamp->fileline(), srcp, sWidth - dWidth, dWidth};
                 } else {
@@ -2897,7 +2991,8 @@ class ConstVisitor final : public VNVisitor {
                 srcp = packedp;
             } else if ((VN_IS(srcDTypep, QueueDType) || VN_IS(srcDTypep, DynArrayDType)
                         || VN_IS(srcDTypep, UnpackArrayDType))) {
-                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)) {
+                if (VN_IS(dstDTypep, QueueDType) || VN_IS(dstDTypep, DynArrayDType)
+                    || VN_IS(dstDTypep, UnpackArrayDType)) {
                     int blockSize = 1;
                     if (const AstConst* const constp = VN_CAST(streamp->rhsp(), Const)) {
                         blockSize = constp->toSInt();
@@ -3079,11 +3174,21 @@ class ConstVisitor final : public VNVisitor {
         return result;
     }
 
+    // Purity of a LogAnd/LogOr. Any edit clears the cached purity, so an operand just converted
+    // to an And/Or, known to be pure, is not walked again, which on a long chain of operators
+    // would be quadratic.
+    bool isPureLogic(AstNodeBiop* nodep) const {
+        if (AstNode::editCountGbl() == m_pureBitwiseEditCnt) {
+            if (nodep->lhsp() == m_pureBitwisep) return nodep->rhsp()->isPure();
+            if (nodep->rhsp() == m_pureBitwisep) return nodep->lhsp()->isPure();
+        }
+        return nodep->isPure();
+    }
     bool matchBiopToBitwise(AstNodeBiop* const nodep) {
         if (!m_convertLogicToBit) return false;
         if (!nodep->lhsp()->width1()) return false;
         if (!nodep->rhsp()->width1()) return false;
-        if (!nodep->isPure()) return false;
+        if (!isPureLogic(nodep)) return false;
         if (containsMemberAccessRecurse(nodep)) return false;
         return true;
     }
@@ -3380,6 +3485,15 @@ class ConstVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
 
+    // Return element of 'consp' at constant 'indexp', or nullptr if out of range
+    static AstNodeExpr* constArrayElementp(const AstConsArray* consp, const AstConst* indexp) {
+        // An out-of-range index, also one wider than 32 bits, is left to V3Unknown
+        const V3Number& num = indexp->num();
+        const uint32_t elements
+            = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+        if (!num.fitsInUInt() || num.toUInt() >= elements) return nullptr;
+        return consp->valuep(num.toUInt());
+    }
     void visit(AstArraySel* nodep) override {
         iterateAndNextNull(nodep->bitp());
         if (VN_IS(nodep->bitp(), Const)
@@ -3391,13 +3505,11 @@ class ConstVisitor final : public VNVisitor {
         }
         iterateAndNextNull(nodep->fromp());
         if (VN_IS(nodep->fromp(), Const)) {  // It did.
-            if (!m_selp) {
-                nodep->v3error("Illegal assignment of constant to unpacked array");
-            } else {
-                AstNode* const fromp = nodep->fromp()->unlinkFrBack();
-                nodep->replaceWithKeepDType(fromp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            }
+            // V3Width reports a singular value assigned to an unpacked array
+            UASSERT_OBJ(m_selp, nodep, "Constant substituted for an unpacked array");
+            AstNode* const fromp = nodep->fromp()->unlinkFrBack();
+            nodep->replaceWithKeepDType(fromp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
         }
         // Handle ARRAYSEL directly on ConsArray (not through VarRef)
         else if (VN_IS(nodep->bitp(), Const) && VN_IS(nodep->fromp(), ConsArray)) {
@@ -3407,7 +3519,7 @@ class ConstVisitor final : public VNVisitor {
                 = bitp->num().isAnyXZ()
                       ? SimulateVisitor::defaultOf(nodep->fileline(), consp->dtypep()->subDTypep())
                       : nullptr;
-            AstNodeExpr* const itemp = defaultp ? defaultp : consp->valuep(bitp->toUInt());
+            AstNodeExpr* const itemp = defaultp ? defaultp : constArrayElementp(consp, bitp);
             if (VN_IS(itemp, Const)) {
                 const V3Number& num = VN_AS(itemp, Const)->num();
                 VL_DO_DANGLING(replaceNum(nodep, num), nodep);
@@ -3446,6 +3558,30 @@ class ConstVisitor final : public VNVisitor {
         }
     }
 
+    // Iterate the operands of an And/Or, unless it was just converted from a LogAnd/LogOr
+    void iterateBitwiseOperands(AstNodeBiop* nodep) {
+        if (!m_bitwiseFromLogicp) {
+            iterateChildren(nodep);
+            return;
+        }
+        UASSERT_OBJ(nodep == m_bitwiseFromLogicp, nodep, "Converted node not visited next");
+        m_bitwiseFromLogicp = nullptr;
+    }
+    void visit(AstAnd* nodep) override {
+        iterateBitwiseOperands(nodep);
+        visitGen(nodep);
+    }
+    void visit(AstOr* nodep) override {
+        iterateBitwiseOperands(nodep);
+        visitGen(nodep);
+    }
+    void visit(AstCond* nodep) override {
+        // The iterator revisits a Cond made by ifSameAssign next, with its statement. Its
+        // operands are already simplified, and walking them again on every level of an if/else
+        // chain would be quadratic.
+        visitGen(nodep, nodep != m_ifSameAssignCondp);
+    }
+
     void visit(AstCAwait* nodep) override {
         m_hasJumpDelay = true;
         iterateChildren(nodep);
@@ -3470,7 +3606,7 @@ class ConstVisitor final : public VNVisitor {
                                                                  consp->dtypep()->subDTypep());
                         selItemp = selDefaultp;
                     } else {
-                        selItemp = consp->valuep(constp->toSInt());
+                        selItemp = constArrayElementp(consp, constp);
                     }
                 }
             }
@@ -3752,6 +3888,8 @@ class ConstVisitor final : public VNVisitor {
         if (m_wremove && !m_params && m_doNConst && m_modp && operandConst(nodep->rhsp())
             && !VN_AS(nodep->rhsp(), Const)->num().isFourState()
             && varrefp  // Don't do messes with BITREFs/ARRAYREFs
+            // A constant to an unpacked array is an error, left for V3Slice to report
+            && !VN_IS(varrefp->dtypep()->skipRefp(), UnpackArrayDType)
             && !varrefp->varp()->hasStrengthAssignment()  // Strengths are resolved in V3Tristate
             && !varrefp->varp()->isWiredNet()  // Wired drivers are merged in V3Tristate
             && !varrefp->varp()->valuep()  // Not already constified
@@ -3886,7 +4024,16 @@ class ConstVisitor final : public VNVisitor {
     }
 
     void visit(AstIf* nodep) override {
-        iterateChildren(nodep);
+        {
+            VL_RESTORER(m_tailIfp);
+            VL_RESTORER(m_tailBlockp);
+            // For visit(AstJumpGo): the branches of an If last in its list end what the If
+            // ends. Tracked down the tree, as walking up from each JumpGo would be quadratic.
+            const AstNode* const abovep = nodep->nextp() ? nullptr : nodep->abovep();
+            if (!abovep || abovep != m_tailIfp) m_tailBlockp = VN_CAST(abovep, JumpBlock);
+            m_tailIfp = m_tailBlockp ? nodep : nullptr;
+            iterateChildren(nodep);
+        }
         if (m_doNConst) {
             if (const AstConst* const constp = VN_CAST(nodep->condp(), Const)) {
                 AstNode* keepp = nullptr;
@@ -3976,9 +4123,11 @@ class ConstVisitor final : public VNVisitor {
                 AstNodeExpr* const condp = nodep->condp()->unlinkFrBack();
                 AstNodeExpr* const truep = thensp->rhsp()->unlinkFrBack();
                 AstNodeExpr* const falsep = elsesp->rhsp()->unlinkFrBack();
-                thensp->rhsp(new AstCond{truep->fileline(), condp, truep, falsep});
+                AstCond* const newp = new AstCond{truep->fileline(), condp, truep, falsep};
+                thensp->rhsp(newp);
                 nodep->replaceWith(thensp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                m_ifSameAssignCondp = newp;  // See visit(AstCond)
             } else if (false  // Disabled, as vpm assertions are faster
                               // without due to short-circuiting
                        && operandIfIf(nodep)) {
@@ -4276,6 +4425,19 @@ class ConstVisitor final : public VNVisitor {
         if (operandBoolShift(nodep->condp())) replaceBoolShift(nodep->condp());
     }
 
+    void visit(AstCvtArrayToPacked* nodep) override {
+        iterateChildren(nodep);
+        // Unpacked structs are packed member by member, and so is a constant array, e.g. a
+        // parameter in a stream with other operands, so it folds
+        if (!lowerAsFixedAggregate(nodep->fromp()->dtypep())
+            && !(m_params && VN_IS(nodep->fromp(), ConsArray))) {
+            return;
+        }
+        AstNodeExpr* const newp = packFixedAggregate(nodep->fromp()->unlinkFrBack());
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        iterate(newp);
+    }
     void visit(AstConsArray* nodep) override { iterateChildren(nodep); }
     void visit(AstConsStruct* nodep) override { iterateChildren(nodep); }
     void visit(AstConsStructItem* nodep) override { iterateChildren(nodep); }
@@ -4337,17 +4499,15 @@ class ConstVisitor final : public VNVisitor {
             pushDeletep(nodep->nextp()->unlinkFrBackWithNext());
         }
 
-        // JumpGo as last statement in target JumpBlock (including last in a last sub-list),
-        // is a no-op, remove it.
+        // JumpGo as last statement in target JumpBlock (including last in a last sub-list of
+        // an 'if' when doing expensive, see visit(AstNodeIf)), is a no-op, remove it.
+        // TODO: it would be enough if the sub-list was not a branch.
         if (!nodep->nextp()) {
-            for (AstNode* abovep = nodep->abovep(); abovep; abovep = abovep->abovep()) {
-                if (abovep == nodep->blockp()) {
-                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
-                    return;
-                }
-                // Stop if not doing expensive, or if the above node is not the last in its list,
-                // ... or if it's not an 'if' TODO: it would be enough if it was not a branch.
-                if (!m_doExpensive || abovep->nextp() || !VN_IS(abovep, If)) break;
+            const AstNode* const abovep = nodep->abovep();
+            if (abovep == nodep->blockp()
+                || (m_doExpensive && abovep == m_tailIfp && m_tailBlockp == nodep->blockp())) {
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
             }
         }
         // Mark JumpBlock as used
@@ -4380,11 +4540,16 @@ class ConstVisitor final : public VNVisitor {
 
     //-----
     // Below lines are magic expressions processed by astgen
-    //  TREE_SKIP_VISIT("AstNODETYPE")    # Rename normal visit to visitGen and don't iterate
+    //  TREE_SKIP_VISIT("AstNODETYPE")    # Rename normal visit to visitGen and don't iterate,
+    //                                    # or for short-circuited types, to visitGen with a
+    //                                    # bool argument saying whether to iterate
     //-----
     // clang-format off
+    TREE_SKIP_VISIT("And");
     TREE_SKIP_VISIT("ArraySel");
     TREE_SKIP_VISIT("CAwait");
+    TREE_SKIP_VISIT("Cond");
+    TREE_SKIP_VISIT("Or");
 
     //-----
     //  "AstNODETYPE {             # bracket not paren
@@ -4576,6 +4741,8 @@ class ConstVisitor final : public VNVisitor {
     TREEOP ("AstShiftL{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstShiftR{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstWordSel{operandWordOOB(nodep)}",        "replaceZero(nodep)");
+    TREEOPV("AstCvtPackString{$lhsp.castNodeStream, packStreamOperand(VN_AS(nodep->lhsp(),, NodeStream))}", "DONE");
+    TREEOPV("AstNodeStream{m_params, packStreamOperand(nodep)}", "DONE");
     // Compress out EXTENDs to appease loop unroller
     TREEOPV("AstEq    {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
     TREEOPV("AstNeq   {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
@@ -4653,8 +4820,8 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstOneHot{$lhsp.width1}",          "replaceWLhs(nodep)");
     TREEOPV("AstOneHot0{$lhsp.width1}",         "replaceNum(nodep,1)");
     // Binary AND/OR is faster than logical and/or (usually)
-    TREEOPV("AstLogAnd{matchBiopToBitwise(nodep)}", "AstAnd{$lhsp,$rhsp}");
-    TREEOPV("AstLogOr {matchBiopToBitwise(nodep)}", "AstOr{$lhsp,$rhsp}");
+    TREEOPV("AstLogAnd{matchBiopToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
+    TREEOPV("AstLogOr {matchBiopToBitwise(nodep)}", "replaceLogicWithBitwise(nodep)");
     TREEOPV("AstLogNot{$lhsp.width1}",  "AstNot{$lhsp}");
     // CONCAT(CONCAT({a},{b}),{c}) -> CONCAT({a},CONCAT({b},{c}))
     // CONCAT({const},CONCAT({const},{c})) -> CONCAT((constifiedCONC{const|const},{c}))
@@ -4833,11 +5000,26 @@ void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const 
     const AstNodeDType* const dtypep = fromp->dtypep()->skipRefp();
     const AstNodeUOrStructDType* const sdtypep = VN_CAST(dtypep, NodeUOrStructDType);
     if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+        const AstConsArray* const consp = VN_CAST(fromp, ConsArray);
+        const AstSliceSel* const slicep = VN_CAST(fromp, SliceSel);
         for (const int index : adtypep->declRange().seqLeftToRight()) {
-            collectFixedAggregateTerms(
-                deleter,
-                new AstArraySel{flp, fromp->cloneTree(false, warnImpure), index - adtypep->lo()},
-                termps, packReal, warnImpure);
+            // Select by offset from the low index, from a constant array directly
+            AstNodeExpr* selp;
+            if (consp) {
+                AstNodeExpr* const valuep = consp->valuep(index - adtypep->lo());
+                UASSERT_OBJ(valuep, consp, "Constant array element missing");
+                selp = valuep->cloneTree(false);
+            } else if (slicep && VN_IS(slicep->lsbp(), Const)) {
+                // Select from the sliced array, as a slice is a copy that cannot be written.
+                // A variable slice is selected from in V3Slice, after V3Unknown checks that
+                // the whole slice is within the array.
+                const int offset = slicep->declRange().lo() + index - adtypep->lo();
+                selp = new AstArraySel{flp, slicep->fromp()->cloneTree(false, warnImpure), offset};
+            } else {
+                selp = new AstArraySel{flp, fromp->cloneTree(false, warnImpure),
+                                       index - adtypep->lo()};
+            }
+            collectFixedAggregateTerms(deleter, selp, termps, packReal, warnImpure);
         }
     } else if (sdtypep && !sdtypep->packed()) {
         for (const AstMemberDType* const itemp : sdtypep->memberspList()) {

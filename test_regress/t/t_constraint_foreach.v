@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 `define check_rand(cl, field, cond) \
 begin \
   automatic longint prev_result; \
@@ -136,6 +138,35 @@ class G;
   }
 endclass
 
+class ImplyItem;
+  rand bit flag;
+endclass
+
+class ImplyHandleArray;
+  rand ImplyItem items[];
+  rand bit all_flags;
+
+  function new();
+    items = new [3];
+    foreach (items[i]) items[i] = new;
+  endfunction
+
+  constraint c_imply {
+    foreach (items[i]) {
+      if (i < 5) {
+        all_flags -> items[i].flag;
+        !items[i].flag -> !all_flags;
+      }
+    }
+  }
+  constraint c_select {
+    foreach (items[i]) {
+      if (all_flags) items[i].flag;
+      else !items[i].flag;
+    }
+  }
+endclass
+
 class H;
   rand integer a[];
   rand integer b;
@@ -185,6 +216,11 @@ class J;
   }
 endclass
 
+class CaptureMatrix;
+  rand int matrix[2][3];
+  rand int cube[2][2][2];
+endclass
+
 module t;
   initial begin
     automatic C c = new;
@@ -207,16 +243,67 @@ module t;
     foreach (g.cfg[i]) begin
       `check_rand_min_count(g, g.cfg[i].a, 0, 14);
     end
+    // A bare one-bit member of an array element as an implication or if/else arm stays a
+    // solver variable.
+    begin
+      automatic ImplyHandleArray imply = new;
+      automatic int randomize_result;
+      repeat (20) begin
+        randomize_result = imply.randomize();
+        `checkd(randomize_result, 1)
+        foreach (imply.items[k]) `checkd(imply.items[k].flag, imply.all_flags)
+      end
+      imply.c_select.constraint_mode(0);
+      repeat (20) begin
+        randomize_result = imply.randomize() with {all_flags == 1;};
+        `checkd(randomize_result, 1)
+        foreach (imply.items[k]) `checkd(imply.items[k].flag, 1'b1)
+      end
+    end
     foreach (h.a[i]) begin
       `check_rand(h, h.a[i], (h.a[i] != h.b));
     end
     `check_rand(i, i.a, (i.arr.sum() + i.a == 200));
     foreach (i.arr[it]) begin
-        `check_rand(i, i.arr[it], (i.arr[it] inside {[10 : 200]}));
+      `check_rand(i, i.arr[it], (i.arr[it] inside {[10 : 200]}));
     end
     `check_rand(j, j.a, (j.arr.sum() + j.a == 200));
     foreach (j.arr[i]) begin
-        `check_rand(j, j.arr[i], (j.arr[i] inside {[10 : 200]}));
+      `check_rand(j, j.arr[i], (j.arr[i] inside {[10 : 200]}));
+    end
+    begin
+      automatic CaptureMatrix c = new;
+      automatic int offset;
+      automatic int randomize_result;
+      // Later indices are local to their header, while a caller loop index is captured.
+      for (int j = 0; j < 4; j++) begin
+        offset = j + 7;
+        randomize_result = c.randomize() with {
+          foreach (matrix[i, k]) matrix[i][k] == 100 * j + 10 * i + k;
+          foreach (cube[i, k, l]) cube[i][k][l] == 100 * i + 10 * k + l + offset;
+        };
+        `checkd(randomize_result, 1);
+        foreach (c.matrix[i, k]) `checkd(c.matrix[i][k], 100 * j + 10 * i + k);
+        foreach (c.cube[i, k, l]) `checkd(c.cube[i][k][l], 100 * i + 10 * k + l + offset);
+      end
+      // A nested header with an omitted first dimension still owns its j index.
+      randomize_result = c.randomize() with {
+        foreach (matrix[i]) {
+          foreach (matrix[, j]) matrix[i][j] == 16 * i + j + offset;
+        }
+      };
+      `checkd(randomize_result, 1);
+      foreach (c.matrix[i, j]) `checkd(c.matrix[i][j], 16 * i + j + offset);
+    end
+    begin
+      automatic int matrix[2][3];
+      automatic int offset = 19;
+      automatic int randomize_result;
+      randomize_result = std::randomize(matrix) with {
+        foreach (matrix[i, j]) matrix[i][j] == 16 * i + j + offset;
+      };
+      `checkd(randomize_result, 1);
+      foreach (matrix[i, j]) `checkd(matrix[i][j], 16 * i + j + offset);
     end
     $write("*-* All Finished *-*\n");
     $finish;

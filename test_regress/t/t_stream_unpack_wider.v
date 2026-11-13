@@ -10,7 +10,31 @@
 `define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
+module sub (
+    input logic [27:0] i,
+    output logic [27:0] o
+);
+  assign o = i;
+endmodule
+
 module t;
+  // Initializers, input ports and input arguments are assignment-like, so also left-justify
+  logic [7:0] src_port = 8'hA5;
+  logic [27:0] dst_port;
+  // verilator lint_off WIDTHEXPAND
+  sub u_sub (
+      .i({<<4{src_port}}),
+      .o(dst_port)
+  );
+  // verilator lint_on WIDTHEXPAND
+  function automatic logic [27:0] pass(logic [27:0] a);
+    return a;
+  endfunction
+  task automatic give(output logic [27:0] o);
+    o = 28'h1234567;
+  endtask
+  final `checkh(dst_port, 28'h5A00000);
+
   initial begin
     automatic logic [7:0] src_1 = 8'b1010_0011;  // 8 bits wide source
     automatic logic [1:0] dst_1[3];  // 6 bits wide target
@@ -90,6 +114,21 @@ module t;
     dst_5 = {>>{src_5}};
     // verilator lint_on WIDTHTRUNC
     `checkh(dst_5, 40'h8899aabbcc);
+
+    begin
+      localparam logic [7:0] SRC_P = 8'hA5;
+      // verilator lint_off WIDTHEXPAND
+      localparam logic [27:0] DST_P = {>>{SRC_P}};
+      // verilator lint_on WIDTHEXPAND
+      `checkh(DST_P, 28'hA500000);
+    end
+    // verilator lint_off WIDTHEXPAND
+    `checkh(pass({>>{src_3}}), 28'hA500000);
+    // verilator lint_on WIDTHEXPAND
+    // An output argument is a stream target, not widened (only checks this compiles)
+    // verilator lint_off WIDTHEXPAND
+    give({>>{src_3}});
+    // verilator lint_on WIDTHEXPAND
 
     $write("*-* All Finished *-*\n");
     $finish;

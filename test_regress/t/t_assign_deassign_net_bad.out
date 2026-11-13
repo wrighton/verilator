@@ -1,0 +1,14 @@
+%Error-PROCASSWIRE: t/t_assign_deassign_net_bad.v:17:12: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'w'
+                                                       : ... note: In instance 't'
+   17 |     assign w = 4'h1;   
+      |            ^
+                    ... For error description see https://verilator.org/warn/PROCASSWIRE?v=latest
+%Error-PROCASSWIRE: t/t_assign_deassign_net_bad.v:18:12: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'o'
+                                                       : ... note: In instance 't'
+   18 |     assign o = 1'b1;   
+      |            ^
+%Error-PROCASSWIRE: t/t_assign_deassign_net_bad.v:19:16: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'w'
+                                                       : ... note: In instance 't'
+   19 |     assign {a, w} = 5'h11;   
+      |                ^
+%Error: Exiting due to

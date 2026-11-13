@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2019 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -17,6 +22,7 @@ module t (
   wire [63:0] result;  // From test of Test.v
   // End of automatics
   Test test (.*);
+  TestCond test_cond (.*);
 
   // Test loop
   always @(posedge clk) begin
@@ -85,5 +91,47 @@ module Test (
 
   // Aggregate outputs into a single result vector
   assign result = {32'h0, d3_r, d2_r, d1_r, d0_r};
+
+endmodule
+
+// Conditions that are not 1-bit, and conditions on a concatenation
+module TestCond (
+    input clk,
+    input [31:0] cyc
+);
+
+  logic a = 1'b0;
+  logic b = 1'b0;
+  // Nonzero values have bit 0 clear, so truncating the condition to its LSB never fires
+  logic [7:0] cnt = 8'h0;
+  real rcnt = 0.0;
+  int expected = 0;
+  int c_multi = 0;
+  int c_concat = 0;
+  int c_real = 0;
+
+  // verilator lint_off WIDTHTRUNC
+  always @(a iff cnt) c_multi++;
+  always @({a, b} iff cnt) c_concat++;
+  always @(a iff rcnt) c_real++;
+  // verilator lint_on WIDTHTRUNC
+
+  // Condition changes only on negedge, so it is stable when a changes
+  always @(negedge clk) begin
+    cnt <= (cyc % 4 < 2) ? 8'h0 : 8'h2;
+    rcnt <= (cyc % 4 < 2) ? 0.0 : 0.25;
+  end
+
+  always @(posedge clk) begin
+    a <= ~a;
+    b <= ~b;
+    if (cnt != 0) expected++;
+    if (cyc == 20) begin
+      `checkd(expected, 10);
+      `checkd(c_multi, expected);
+      `checkd(c_concat, expected);
+      `checkd(c_real, expected);
+    end
+  end
 
 endmodule

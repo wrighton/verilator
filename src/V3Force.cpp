@@ -145,6 +145,7 @@ private:
 
     // NODE STATE
     //  AstVarRef::user1      -> bool.  Not to replace reference
+    //  AstMemberRef::user1   -> bool.  Not to replace member read
     //  AstAssignForce::user2 -> bool.  Force is synthetic (externally forceable)
     //  AstVar::user3         -> ForceHelperVars via m_forceHelperVarsByVar
     const VNUser1InUse m_user1InUse;
@@ -161,6 +162,8 @@ private:
     ForceHelperVarsByVar& m_forceHelperVarsByVar;
     std::vector<VarForceInfo> m_varInfos;  // Indexed by stable variable ID
     std::unordered_map<AstVarScope*, int> m_varToId;
+    std::unordered_map<const AstVar*, AstVar*>
+        m_forceVecVars;  // Shared declarations across scopes
     std::unordered_set<AstVar*> m_clockedWrites;
     std::unordered_map<AstVar*, std::vector<ForceInfo*>> m_rhsDepToForces;
     std::unordered_map<AstScope*, ScopeVarCache> m_scopeVarCaches;
@@ -548,6 +551,11 @@ public:
         return it != m_varToId.end() ? &m_varInfos[it->second] : nullptr;
     }
 
+    AstVar* forceVecVarp(const AstVar* varp) const {
+        const auto it = m_forceVecVars.find(varp);
+        return it != m_forceVecVars.end() ? it->second : nullptr;
+    }
+
     AstVarScope* findScopeVar(AstScope* scopep, const AstVar* varp) {
         ScopeVarCache& cache = m_scopeVarCaches[scopep];
         if (cache.empty()) {
@@ -571,17 +579,25 @@ public:
         // Allocate one force vector per variable, no matter how many individual force
         // statements later target slices/elements of that variable.
         if (!info.m_forceVecVscp) {
-            AstCDType* const forceVecDtypep = new AstCDType{flp, "VlForceVec"};
-            v3Global.rootp()->typeTablep()->addTypesp(forceVecDtypep);
+            AstVar* forceVecVarp = this->forceVecVarp(varp);
+            if (!forceVecVarp) {
+                AstCDType* const forceVecDtypep = new AstCDType{flp, "VlForceVec"};
+                v3Global.rootp()->typeTablep()->addTypesp(forceVecDtypep);
 
-            AstVar* const forceVecVarp
-                = new AstVar{flp, VVarType::MEMBER,
-                             varp->name() + (m_doingAssign ? "_VassignVec" : "__VforceVec") + "__"
-                                 + scopep->nameDotless(),
-                             forceVecDtypep};
-            forceVecVarp->funcLocal(false);
-            forceVecVarp->isInternal(true);
-            varp->addNextHere(forceVecVarp);
+                forceVecVarp
+                    = new AstVar{flp, VVarType::MEMBER,
+                                 varp->name() + (m_doingAssign ? "_VassignVec" : "__VforceVec")
+                                     + "__" + scopep->nameDotless(),
+                                 forceVecDtypep};
+                forceVecVarp->funcLocal(false);
+                forceVecVarp->isInternal(true);
+                varp->addNextHere(forceVecVarp);
+                if (varp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+                    m_forceVecVars.emplace(varp, forceVecVarp);
+                }
+            }
+            // A virtual interface selects an instance at runtime, so all instances must
+            // use the same member declaration, with separate storage in each instance.
             info.m_forceVecVscp = new AstVarScope{flp, scopep, forceVecVarp};
             scopep->addVarsp(info.m_forceVecVscp);
         }
@@ -1403,6 +1419,29 @@ class ForceReplaceVisitor final : public VNVisitor {
     }
     void visit(AstSenItem* nodep) override { iterateLogic(nodep); }
     void visit(AstSel* nodep) override {
+        // Preserve the selected-read fast path for a packed virtual-interface member.
+        if (AstMemberRef* const memberp = VN_CAST(nodep->fromp(), MemberRef)) {
+            if (memberp->access().isReadOnly() && memberp->isWide()) {
+                if (AstVar* const vecVarp = m_state.forceVecVarp(memberp->varp())) {
+                    iterateAndNextNull(memberp->fromp());
+                    iterateAndNextNull(nodep->lsbp());
+                    FileLine* const flp = nodep->fileline();
+                    AstMemberRef* const rawp = memberp->cloneTreePure(false);
+                    rawp->user1SetOnce();
+                    AstCMethodHard* const readp = new AstCMethodHard{
+                        flp,
+                        new AstMemberRef{flp, memberp->fromp()->cloneTreePure(false), vecVarp},
+                        VCMethod::FORCE_READ_SEL, ForceState::makeConst32(flp, memberp->width())};
+                    readp->addPinsp(rawp);
+                    readp->addPinsp(nodep->lsbp()->cloneTreePure(false));
+                    readp->addPinsp(ForceState::makeConst32(flp, nodep->width()));
+                    readp->dtypeFrom(nodep);
+                    nodep->replaceWith(readp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    return;
+                }
+            }
+        }
         // Replace Sel on a wide with readSelI/Q/W to avoid materializing the full value
         AstVarRef* const refp = VN_CAST(nodep->fromp(), VarRef);
         if (!refp || m_state.isNotReplaceable(refp) || !refp->access().isReadOnly()) {
@@ -1488,6 +1527,26 @@ class ForceReplaceVisitor final : public VNVisitor {
         AstNodeExpr* const readExprp
             = m_state.createForceReadIndexExpression(*varInfop, nodep, indexExprp);
         nodep->replaceWith(readExprp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+
+    void visit(AstMemberRef* nodep) override {
+        iterateChildren(nodep);
+        if (nodep->user1() || !nodep->access().isReadOnly()
+            || !nodep->dtypep()->skipRefp()->isIntegralOrPacked())
+            return;
+        AstVar* const forceVecVarp = m_state.forceVecVarp(nodep->varp());
+        if (!forceVecVarp) return;
+
+        FileLine* const flp = nodep->fileline();
+        AstMemberRef* const vecp
+            = new AstMemberRef{flp, nodep->fromp()->cloneTreePure(false), forceVecVarp};
+        AstMemberRef* const rawp = nodep->cloneTreePure(false);
+        rawp->user1SetOnce();  // Do not recursively force-read the raw value again
+        AstNodeExpr* const valuep = ForceState::castToNodeDType(rawp, nodep);
+        AstCMethodHard* const readp = new AstCMethodHard{flp, vecp, VCMethod::FORCE_READ, valuep};
+        readp->dtypeFrom(nodep);
+        nodep->replaceWith(readp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 

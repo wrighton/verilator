@@ -1463,6 +1463,7 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     DECL_OPTION("-debug-fatalsrc", CbCall, []() {
         v3fatalSrc("--debug-fatal-src");
     }).undocumented();  // See also --debug-abort
+    DECL_OPTION("-debug-fatalsrc-worker", OnOff, &m_debugFatalSrcWorker).undocumented();
     DECL_OPTION("-debug-leak", OnOff, &m_debugLeak);
     DECL_OPTION("-debug-nondeterminism", OnOff, &m_debugNondeterminism).undocumented();
     DECL_OPTION("-debug-options", OnOff, &m_debugOptions).undocumented();
@@ -1537,6 +1538,7 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     DECL_OPTION("-fconst-before-dfg", FOnOff, &m_fConstBeforeDfg);
     DECL_OPTION("-fconst-bit-op-tree", FOnOff, &m_fConstBitOpTree);
     DECL_OPTION("-fconst-eager", FOnOff, &m_fConstEager);
+    DECL_OPTION("-fconstraint-fast", FOnOff, &m_fConstraintFast);
     DECL_OPTION("-fdead-assigns", FOnOff, &m_fDeadAssigns);
     DECL_OPTION("-fdead-cells", FOnOff, &m_fDeadCells);
     DECL_OPTION("-fdead-methods", FOnOff, &m_fDeadMethods);
@@ -2478,6 +2480,7 @@ void V3Options::optimize(int level) {
     m_fCombine = flag;
     m_fConst = flag;
     m_fConstBitOpTree = flag;
+    m_fConstraintFast = flag;
     m_fDedupe = flag;
     m_fDfg = flag;
     m_fDeadAssigns = flag;

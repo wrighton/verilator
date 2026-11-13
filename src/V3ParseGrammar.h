@@ -36,6 +36,7 @@ public:
     AstStrengthSpec* m_netStrengthp = nullptr;  // Pointer to strength for next net declaration
     FileLine* m_instModuleFl = nullptr;  // Fileline of module referenced for instantiations
     AstPin* m_instParamp = nullptr;  // Parameters for instantiations
+    bool m_instDriveStrength = false;  // Drive strength given for instantiations
     string m_instModule;  // Name of module referenced for instantiations
     VVarType m_varDecl = VVarType::UNKNOWN;  // Type for next signal declaration (reg/wire/etc)
     VDirection m_varIO = VDirection::NONE;  // Direction for next signal declaration (reg/wire/etc)
@@ -44,10 +45,11 @@ public:
     V3Control::VarSpecKind m_vltVarSpecKind = V3Control::VarSpecKind::VAR;
     bool m_impliedDecl = false;  // Allow implied wire declarations
     bool m_varDeclTyped = false;  // Var got reg/wire for dedup check
+    bool m_portDirOmitted = false;  // ANSI port has no direction or net type
     bool m_pinAnsi = false;  // In ANSI parameter or port list
     bool m_tracingParse = true;  // Tracing disable for parser
     bool m_inImplements = false;  // Is inside class implements list
-    bool m_insideProperty = false;  // Is inside property declaration
+    bool m_insideProperty = false;  // Is inside property or sequence declaration
     bool m_specifyignWarned = false;  // Issued a SPECIFYIGN warning
     bool m_typedPropertyPort = false;  // Typed property port occurred on port lists
     bool m_modportImpExpActive
@@ -74,6 +76,7 @@ public:
     bool allTracingOn(const FileLine* fl) const {
         return v3Global.opt.trace() && m_tracingParse && fl->tracingOn();
     }
+    void checkTimeunits(const AstNodeModule* modp, const AstNode* itemsp) VL_MT_DISABLED;
     AstRange* scrubRange(AstNodeRange* nrangep) VL_MT_DISABLED;
     AstRange* scrubRangeMulti(AstNodeRange* nrangep) VL_MT_DISABLED;
     AstNodePreSel* scrubSel(AstNodeExpr* fromp, AstNodePreSel* selp) VL_MT_DISABLED;
@@ -97,6 +100,7 @@ public:
             (singletonp()->m_instParamp ? singletonp()->m_instParamp->cloneTree(true) : nullptr),
             singletonp()->scrubRangeMulti(rangelistp)};
         nodep->trace(singletonp()->allTracingOn(fileline));
+        nodep->hasDriveStrength(singletonp()->m_instDriveStrength);
         return nodep;
     }
     static AstNode* createPatternKey(AstNodeExpr* exprp) {
@@ -317,6 +321,13 @@ public:
         AstNode::addNext(nodep,
                          createVariable(nodep->fileline(), nodep->name(), rangep, sigAttrListp));
         m_varDecl = VVarType::VAR;
+    }
+
+    // The fail action of an assertion's 'else' at 'fl'
+    static AstNodeStmt* elseAction(FileLine* fl, AstNodeStmt* stmtp) {
+        // A null statement is an empty block, as unlike no 'else' it has no default $error
+        // (IEEE 1800-2023 16.3)
+        return stmtp ? stmtp : new AstBegin{fl, "", nullptr, true};
     }
 
     // Wrap each statement in the given list in an AstForkItem

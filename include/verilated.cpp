@@ -452,6 +452,25 @@ VlRNG& VlProcess::currentRng() VL_MT_SAFE {
 }
 
 //===========================================================================
+// VlMailboxMessage:: Methods
+
+VlMailboxMessage& VlMailboxMessage::operator=(const VlMailboxMessage& that) {
+    if (!m_varp) {
+        m_typeName = that.m_typeName;
+        m_valuep = that.m_valuep;
+        return *this;
+    }
+    if (VL_UNLIKELY(!match(*this, that))) {
+        const std::string msg = "Typeless mailbox message of type '"s + that.m_typeName
+                                + "' does not match the type of the variable, '" + m_typeName
+                                + "' (IEEE 1800-2023 15.4.9)";
+        VL_FATAL_MT(m_filename, m_lineno, "", msg.c_str());
+    }
+    m_receivep(m_varp, *that.m_valuep);
+    return *this;
+}
+
+//===========================================================================
 // Random -- Mostly called at init time, so not inline.
 
 static std::pair<uint64_t, uint64_t> vl_splitmix64(uint64_t x) VL_PURE {
@@ -1844,11 +1863,13 @@ IData _vl_vsscanf(FILE* fp,  // If a fscanf
                     }
                     break;
                 }
-                default: {  // LCOV_EXCL_START
-                    const std::string msg = "Unknown _vl_vsscanf code: "s + pos[0];
-                    VL_FATAL_MT(__FILE__, __LINE__, "", msg.c_str());
-                    break;
-                }  // LCOV_EXCL_STOP
+                default: {
+                    // Only reachable with a format known only at runtime
+                    const std::string msg
+                        = "Unsupported or unknown $sscanf/$fscanf format code: '%"s + pos[0] + "'";
+                    VL_FATAL_MT("", 0, "", msg.c_str());
+                    goto done;
+                }
 
                 }  // switch
 
@@ -2601,6 +2622,16 @@ std::string VL_CVT_PACK_STR_NW(int lwords, const WDataInP lwp) VL_PURE {
         lsb = (lsb / 8) * 8;  // Next digit
         const IData charval = VL_BITRSHIFT_W(lwp, lsb) & 0xff;
         if (charval) result += static_cast<char>(charval);
+    }
+    return result;
+}
+
+std::string VL_CVT_WILDCARD_KEY_NW(int lwords, const WDataInP lwp) VL_PURE {
+    // As VL_CVT_PACK_STR_NW, but only leading zero bytes are dropped
+    std::string result;
+    for (int lsb = lwords * VL_EDATASIZE - 8; lsb >= 0; lsb -= 8) {
+        const IData charval = VL_BITRSHIFT_W(lwp, lsb) & 0xff;
+        if (charval || !result.empty()) result += static_cast<char>(charval);
     }
     return result;
 }

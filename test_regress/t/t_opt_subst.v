@@ -16,7 +16,15 @@ class Cls;
   int d[];
   int m[int];
   pair_t s;
+  int aq[int][$];
+  function void filter(int v);
+    foreach (aq[k]) aq[k] = aq[k].find with (item != v);
+  endfunction
 endclass
+
+typedef struct {
+  int q[$];
+} qs_t;
 
 module t (
     input clk
@@ -94,5 +102,39 @@ module t (
     aq[1] = {11};
     aq[1] = {aq[1], aq[0]};
     if ($sformatf("%p", aq) != "'{'{'ha}, '{'hb, 'ha}}") $stop;
+  end
+
+  // Array method 'with' results assigned to a non-variable lvalue they also read
+  initial begin
+    Cls c;
+    int dq[][$];
+    int qq[$][$];
+    qs_t sa[2];
+    c = new;
+
+    c.aq[1] = {2, 3, 4};
+    c.aq[5] = {3, 1};
+    c.filter(3);
+    if ($sformatf("%p", c.aq) != "'{'h1:'{'h2, 'h4}, 'h5:'{'h1}}") $stop;
+
+    dq = new[3];
+    dq[0] = {1, 2, 3, 2};
+    dq[1] = {2, 5};
+    foreach (dq[i]) dq[i] = dq[i].find_index with (item == 2);
+    dq[2] = dq[0].find_last with (item > 1);
+    if ($sformatf("%p", dq) != "'{'{'h1, 'h3}, '{'h0}, '{'h3}}") $stop;
+
+    qq = '{'{4, 5, 6}, '{6, 6, 7}};
+    qq[0] = qq[0].find_first with (item > 4);
+    qq[1] = qq[1].unique with (item);
+    qq.push_back(qq[1].max with (item));
+    qq[2][0] = qq[1].sum with (item * 2);
+    if ($sformatf("%p", qq) != "'{'{'h5}, '{'h6, 'h7}, '{'h1a}}") $stop;
+
+    sa[0].q = {7, 3, 9};
+    sa[1].q = {2};
+    foreach (sa[i]) sa[i].q = sa[i].q.min with (item);
+    sa[1].q[0] = sa[0].q.product with (item + 1);
+    if ($sformatf("%p", sa) != "'{'{q:'{'h3}}, '{q:'{'h4}}}") $stop;
   end
 endmodule

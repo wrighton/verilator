@@ -1,0 +1,13 @@
+%Error: t/t_constraint_disable_soft_call_bad.v:19:20: 'disable soft' of 'y' selects from the result of a call, but its operand must be a constraint primary (IEEE 1800-2023 18.5.13.2, A.1.10)
+   19 |     disable soft q.unique()[0].y;
+      |                    ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_constraint_disable_soft_call_bad.v:20:18: 'disable soft' of 'y' selects from the result of a call, but its operand must be a constraint primary (IEEE 1800-2023 18.5.13.2, A.1.10)
+   20 |     disable soft first().y;
+      |                  ^~~~~
+%Warning-CONSTRAINTIGN: t/t_constraint_disable_soft_call_bad.v:23:33: Unsupported: randomizing this expression, treating as state
+   23 |   constraint c_ignored { soft q.unique()[0].y == 4'h5; }
+      |                                 ^~~~~~
+                        ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
+                        ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
+%Error: Exiting due to
