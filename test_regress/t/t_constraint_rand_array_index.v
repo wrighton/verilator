@@ -71,12 +71,35 @@ class OutOfRangeUnsatTest;
   }
 endclass
 
+// A random index selecting a member of an unpacked struct or class array element
+// must verilate. Solving such a select is not supported, so its constraint is
+// disabled before randomizing.
+typedef struct {bit [6:0] tag;} tag_t;
+
+class RandIndexItem;
+  rand bit [14:0] val;
+endclass
+
+class RandIndexMemberTest;
+  rand int idx;
+  rand tag_t tags[3];
+  rand RandIndexItem items[3];
+  constraint member_c {
+    tags[idx].tag == 7'h5;
+    items[idx].val == 15'h6;
+  }
+  function new();
+    foreach (items[i]) items[i] = new;
+  endfunction
+endclass
+
 module t;
   initial begin
     int randomize_result;
     static RandArrayIndexTest obj = new();
     static OutOfRangeIndexTest oor = new;
     static OutOfRangeUnsatTest unsat = new;
+    static RandIndexMemberTest member = new;
     repeat (20) begin
       randomize_result = oor.randomize();
       `checkd(randomize_result, 1);
@@ -88,6 +111,9 @@ module t;
     end
     randomize_result = unsat.randomize();
     `checkd(randomize_result, 0);
+    member.member_c.constraint_mode(0);
+    randomize_result = member.randomize();
+    `checkd(randomize_result, 1);
     repeat (20) begin
       randomize_result = obj.randomize();
       `checkd(randomize_result, 1);
