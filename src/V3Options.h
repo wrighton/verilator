@@ -658,7 +658,7 @@ public:
     bool profPgo() const { return m_profPgo; }
     bool usesProfiler() const { return profExec() || profPgo(); }
     bool protectIds() const VL_MT_SAFE { return m_protectIds; }
-    bool allPublic() const { return m_public; }
+    bool allPublic() const VL_MT_SAFE { return m_public; }
     bool publicParams() const { return m_publicParams; }
     bool publicOff() const { return m_publicIgnore; }
     bool publicFlatRW() const { return m_publicFlatRW; }

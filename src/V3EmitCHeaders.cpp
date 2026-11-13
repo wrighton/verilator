@@ -78,12 +78,9 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
         // V3VariableOrder puts all variables at the front of the list: top level ports, then
         // trivially constructible variables, then the not trivially constructible ones, then
         // those that are not model state
-        const AstVar* portp = nullptr;
-        const AstVar* trivp = nullptr;
-        const AstVar* nontp = nullptr;
-        size_t nPort = 0;
-        size_t nTriv = 0;
-        size_t nNont = 0;
+        std::vector<const AstVar*> ports;
+        std::vector<const AstVar*> trivs;
+        std::vector<const AstVar*> nonts;
         for (const AstNode* const nodep : modp->stmtspList()) {
             const AstVar* const varp = VN_CAST(nodep, Var);
             if (!varp) break;
@@ -91,61 +88,63 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
                 // Cache line alignment is only effective on emitted fields
                 UASSERT_OBJ(!varp->mtaskCacheLineAlign(), varp, "Aligned non-field");
             } else if (varp->isPrimaryIO()) {
-                if (!portp) portp = varp;
-                ++nPort;
+                ports.push_back(varp);
             } else if (varp->isTriviallyConstructible()) {
-                if (!trivp) trivp = varp;
-                ++nTriv;
+                trivs.push_back(varp);
             } else {
-                if (!nontp) nontp = varp;
-                ++nNont;
+                nonts.push_back(varp);
             }
         }
 
-        const auto emitAndStep = [&](const AstVar*& varpr) {
-            emitVarDecl(varpr);
-            varpr = VN_CAST(varpr->nextp(), Var);
-        };
-
         // Emit primary ports
-        if (nPort) {
+        if (!ports.empty()) {
             putsDecoration(nullptr, "\n// TOP LEVEL PORTS\n");
             // In anonymous union to prevent the C++ compiler from generating
             // constructor/destructor calls
             puts("union {\nstruct {\n");
-            for (size_t i = 0; i < nPort; ++i) emitAndStep(portp);
+            for (const AstVar* const varp : ports) emitVarDecl(varp);
             puts("} __VprimaryPorts;\n};\n");
         }
 
         // Emit trivially constructible variables
-        if (nTriv) {
+        if (!trivs.empty()) {
             putsDecoration(nullptr, "\n// TRIVIALLY CONSTRUCTIBLE STATE\n");
-            emitGroupedVarDecls(trivp, nTriv, false);
+            // User code accesses public members by name, so these stay in anonymous structs
+            auto anonBegin = trivs.begin();
+            if (hasNamedTrivialGroups(modp)) {
+                anonBegin = std::stable_partition(trivs.begin(), trivs.end(), isNameableTrivial);
+                UASSERT_OBJ(static_cast<size_t>(anonBegin - trivs.begin())
+                                == EmitCParentModule::data(modp).trivialCount,
+                            modp, "Inconsistent member count.");
+            }
+            emitGroupedVarDecls({trivs.begin(), anonBegin}, true);
+            emitGroupedVarDecls({anonBegin, trivs.end()}, false);
         }
 
         // Emit not trivially constructible variables
-        if (nNont) {
+        if (!nonts.empty()) {
             putsDecoration(nullptr, "\n// NOT TRIVIALLY CONSTRUCTIBLE STATE\n");
             // Classes use real constructors
             if (VN_IS(modp, Class)) {
-                for (size_t i = 0; i < nNont; ++i) emitAndStep(nontp);
+                for (const AstVar* const varp : nonts) emitVarDecl(varp);
                 return;
             }
             // Output under an anonymous union to prevent the C++ compiler from generating
             // constructor/destructor calls for them. They are managed explicitly in ctor/dtor.
             // While 'union { singleVar; }' for each variable would be simpler, it blows up
             // clang's compile time when using pre-compiled headers, joy.
-            UASSERT_OBJ(EmitCParentModule::data(modp).count == nNont, modp,
+            UASSERT_OBJ(EmitCParentModule::data(modp).count == nonts.size(), modp,
                         "Nontrivial member count mismatch.");
             puts("union {\nstruct {\n");
-            emitGroupedVarDecls(nontp, nNont, true);
+            emitGroupedVarDecls(nonts, true);
             puts("} __Vnontrivs;\n};\n");
         }
     }
-    // Emit 'n' variables starting at 'firstp', nested in structs, named '__Vg<index>' if 'named'
-    void emitGroupedVarDecls(const AstVar* const firstp, const size_t n, const bool named) {
+    // Emit variables nested in structs, named '__Vg<index>' if 'named'
+    void emitGroupedVarDecls(const std::vector<const AstVar*>& vars, const bool named) {
         // GCC does not allow non-trivially constructible members in anonymous structs, so
         // these need named structs, and EmitCBaseVisitorConst::varName gives their path
+        const size_t n = vars.size();
         const EmitCMemberGroups groups{n};
         if (groups.l1s() != 1) {
             putsDecoration(nullptr,
@@ -158,7 +157,6 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
             puts(named ? "} __Vg" + std::to_string(index) + ";\n" : "};\n");
         };
         const size_t lim = groups.lim() ? groups.lim() : n;
-        const AstVar* varp = firstp;
         size_t nEmitted = 0;
         for (size_t l3 = 0; nEmitted < n; ++l3) {
             if (groups.l3s() != 1) puts("struct {\n");
@@ -167,10 +165,10 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
                 for (size_t l1 = 0; l1 < groups.l1s() && nEmitted < n; ++l1) {
                     if (groups.l1s() != 1) puts("struct {\n");
                     for (size_t l0 = 0; l0 < lim && nEmitted < n; ++l0, ++nEmitted) {
+                        const AstVar* const varp = vars[nEmitted];
                         UASSERT_OBJ(!named || EmitCParentModule::data(varp).index == nEmitted,
-                                    varp, "Nontrivial member index mismatch.");
+                                    varp, "Named member index mismatch.");
                         emitVarDecl(varp);
-                        varp = VN_CAST(varp->nextp(), Var);
                     }
                     closeStruct(groups.l1s(), l1);
                 }
@@ -178,7 +176,7 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
             }
             closeStruct(groups.l3s(), l3);
         }
-        UASSERT_OBJ(nEmitted == n, firstp, "Not all variables emitted.");
+        UASSERT(nEmitted == n, "Not all variables emitted.");
     }
     void emitInternalVarDecls(const AstNodeModule* modp) {
         if (const AstClass* const classp = VN_CAST(modp, Class)) {
@@ -671,9 +669,6 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
             }
         }
 
-        // Forward declarations required by this AstNodeModule
-        puts("\nclass " + EmitCUtil::symClassName() + ";\n");
-
         // From `systemc_header
         emitSystemCSection(modp, VSystemCSectionType::HDR);
 
@@ -758,6 +753,7 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
 
         std::set<string> cuse_set;
         auto add_to_cuse_set = [&](string s) { cuse_set.insert(s); };
+        add_to_cuse_set(EmitCUtil::fwdClassDecl(EmitCUtil::symClassName()));
 
         forModCUse(modp, VUseType::INT_FWD_CLASS | VUseType::INT_INCLUDE, add_to_cuse_set);
         if (const AstClassPackage* const packagep = VN_CAST(modp, ClassPackage)) {

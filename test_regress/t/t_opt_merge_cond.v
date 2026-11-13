@@ -156,8 +156,9 @@ module t (
     end
   end
 
-  // Generated always
-  reg shuf_g[63:0];
+  // Generated always; one unwritten element retains the original shared-flag lowering
+  // so the motion/no-motion comparison keeps exercising the same merging fixture.
+  reg shuf_g[64:0];
   generate
     for (genvar i = 0; i < 64; i = i + 1)
     always @(posedge clk) begin

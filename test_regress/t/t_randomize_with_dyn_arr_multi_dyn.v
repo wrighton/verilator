@@ -75,17 +75,36 @@ class Cls3;
   endtask
 endclass
 
+class Cls4;
+  rand int x;
+  rand int_arr_t arr[];
+  task body();
+    int ok;
+    arr = new[2];
+    arr[1] = new[2];
+    arr[1][1] = 123;
+    repeat (40) begin
+      ok = randomize() with {x == arr[1][1];};
+      `checkd(ok, 1);
+      `checkd(x, arr[1][1]);
+    end
+  endtask
+endclass
+
 module t;
   Cls c;
   Cls2 c2;
   Cls3 c3;
+  Cls4 c4;
   initial begin
     c = new;
     c2 = new;
     c3 = new;
+    c4 = new;
     c.body();
     c2.body();
     c3.body();
+    c4.body();
     $write("*-* All Finished *-*\n");
     $finish;
   end

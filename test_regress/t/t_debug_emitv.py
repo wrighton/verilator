@@ -16,10 +16,7 @@ test.lint(
     # Likewise XML
     v_flags=[
         "--lint-only",
-        # --Wno-COVERIGN: cg_trans uses a goto-repetition transition bin ([->N]); the count is
-        # unsupported (dropped) but the bin is still created with a non-NONE VTransRepType, which
-        # is what exercises VTransRepType::ascii() and AstCoverTransItem::dump()'s repType arm.
-        "--Wno-COVERIGN",
+        # This also hides the goto-repetition bin's COVERIGN, checked by t_debug_emitv_addrids
         "--bbox-unsup",  # Continue after the set-expression bin to cover its dump and emission
         "--timing",
         "--dumpi-tree 9 --dumpi-V3EmitV 9 --debug-emitv",  # Dev coverage of the V3EmitV code

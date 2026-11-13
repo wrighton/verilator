@@ -209,11 +209,13 @@ public:
     void sizedRange(QData lo, QData hi);
     void sizedRangeW(WDataInP lop, WDataInP hip);
     /// Distribute the values sizedRange() added over the bins of the sized array 'name[count]'
-    /// (IEEE 1800-2023 19.5.1).  'positive' is false for a count below one, which is invalid.
-    /// At most 'limit' bins may hold values.  Needs valueType(); bins append after those of
-    /// init().
+    /// (IEEE 1800-2023 19.5.1) for Fixed 'grouping'; else put them in the one bin 'name', of
+    /// count 1, or in a bin for each value.  'positive' is false for a count below one, which
+    /// is invalid.  At most 'limit' bins may hold values.  Needs valueType(); bins append
+    /// after those of init().
     void sizedFinish(VlCovBinKind kind, QData count, bool positive, uint32_t limit,
-                     const char* name, const char* file, int line, int col);
+                     const char* name, const char* file, int line, int col,
+                     VlCovBinGrouping grouping);
     /// Declared bins [sizedFirst(), sizedEnd()) of the sized array 'sized', counted in
     /// sizedFinish() order, for cross selections.
     uint32_t sizedFirst(uint32_t sized) const;
@@ -688,7 +690,7 @@ public:
     double coverage();
     /// Coverage of 'itemp', an item of this instance, with the instances of the type merged;
     /// see VlCovergroupType::mergedCoverage()
-    double mergedCoverage(const VlCoverpointIf* itemp) const;
+    double mergedCoverage(const VlCoverpointIf* itemp, IData& covered, IData& total) const;
 };
 
 //=============================================================================
@@ -748,7 +750,9 @@ public:
     std::pair<double, double> coverageSums(const VlCovMergedItems& other) const;
     /// Coverage of the item 'name', which these items have, merged with that of 'other', in
     /// 0..100.  Without bins, 0, or 100 if its type_option.weight is 0 (IEEE 1800-2023 19.11.1).
-    double coverage(const std::string& name, const VlCovMergedItems& other) const;
+    /// Also its merged bins that are covered, and all its merged bins.
+    double coverage(const std::string& name, const VlCovMergedItems& other, IData& covered,
+                    IData& total) const;
 };
 
 //=============================================================================
@@ -802,7 +806,8 @@ public:
     /// Coverage of the item 'name' with the instances merged, as a union of their bins, which
     /// is the item's get_coverage() with type_option.merge_instances (IEEE 1800-2023 19.11.3),
     /// in 0..100.  The bins of the instances that have died count if the type may merge them.
-    double mergedCoverage(const std::string& name) const;
+    /// Also the item's merged bins that are covered, and all its merged bins.
+    double mergedCoverage(const std::string& name, IData& covered, IData& total) const;
 
     // ---- introspection ----
     // Test and debug only; generated code never calls these, and SV reaches them

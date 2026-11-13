@@ -821,9 +821,28 @@ static void _vl_cov_warn_ignored(const char* file, int line, const std::string& 
 }
 
 void VlCoverpoint::sizedFinish(VlCovBinKind kind, QData count, bool positive, uint32_t limit,
-                               const char* name, const char* file, int line, int col) {
+                               const char* name, const char* file, int line, int col,
+                               VlCovBinGrouping grouping) {
     ValueData& data = *m_valuesp;
     assert(!data.m_frozen);
+    if (grouping == VlCovBinGrouping::Values) {
+        // The bins of a 'with' filter keeping every value, each once, in value order
+        ValueData::With& with = data.m_with;
+        with = ValueData::With{};
+        with.m_grouping = grouping;
+        with.m_limit = std::min(limit, UINT32_MAX - m_total);
+        with.m_values = ValueData::Value{data.positionWords()};
+        for (ValueData::SizedElement& element : data.m_sizedElements) {
+            with.m_kept.push_back({std::move(element.m_lo), std::move(element.m_hi), {}});
+        }
+        data.normalize(with.m_kept);
+        for (const ValueData::Range& range : with.m_kept) {
+            data.countValues(range.m_lo, range.m_hi, with.m_values);
+        }
+        with.m_full = data.compare(with.m_values, data.toPosition(with.m_limit)) > 0;
+        withFinish(kind, count, positive, name, file, line, col);
+        return;
+    }
     data.m_sized.emplace_back();
     ValueData::Sized& sized = data.m_sized.back();
     sized.m_kind = kind;
@@ -871,7 +890,9 @@ void VlCoverpoint::sizedFinish(VlCovBinKind kind, QData count, bool positive, ui
     m_counts.resize(m_total, 0);
     m_crossIdx.resize(m_total, -1);
     data.m_values.resize(m_total);
-    addNamer(kind, sized.m_count, VlCovBinNaming::Array, name, file, line, col);
+    addNamer(kind, sized.m_count,
+             grouping == VlCovBinGrouping::Single ? VlCovBinNaming::Single : VlCovBinNaming::Array,
+             name, file, line, col);
     // Give each bin the values of its positions, for exclusions and cross selections
     size_t element = 0;
     ValueData::Value first{data.positionWords()};  // First position of bin k
@@ -1048,7 +1069,8 @@ void VlCoverpoint::withFinish(VlCovBinKind kind, QData count, bool positive, con
         for (ValueData::Range& range : kept) {
             data.m_sizedElements.push_back({std::move(range.m_lo), std::move(range.m_hi), {}});
         }
-        sizedFinish(kind, count, positive, with.m_limit, name, file, line, col);
+        sizedFinish(kind, count, positive, with.m_limit, name, file, line, col,
+                    VlCovBinGrouping::Fixed);
         return;
     }
     data.m_sized.emplace_back();
@@ -2195,12 +2217,14 @@ void VlCoverpointIf::loadWeight() const {
     m_weight = _vl_cov_load_weight("option.weight", m_loadedWeight, m_fileline);
 }
 
-double VlCoverpointIf::coverage() const {
-    double covered = 0.0;
-    double total = 0.0;
-    coverageParts(covered, total);
+double VlCoverpointIf::coverage(IData& covered, IData& total) const {
+    double coveredBins = 0.0;
+    double totalBins = 0.0;
+    coverageParts(coveredBins, totalBins);
+    covered = static_cast<IData>(coveredBins);
+    total = static_cast<IData>(totalBins);
     loadWeight();
-    return _vl_cov_calculate(100.0 * covered, total, m_weight);
+    return _vl_cov_calculate(100.0 * coveredBins, totalBins, m_weight);
 }
 
 VlCoverCrossDyn* VlCovergroupInst::addCrossDyn() {
@@ -2240,8 +2264,9 @@ void VlCovergroupInst::mergeInto(VlCovMergedItems& items) const {
     for (const auto& itemp : m_items) itemp->mergeInto(items);
 }
 
-double VlCovergroupInst::mergedCoverage(const VlCoverpointIf* itemp) const {
-    return m_typep->mergedCoverage(itemp->hier());
+double VlCovergroupInst::mergedCoverage(const VlCoverpointIf* itemp, IData& covered,
+                                        IData& total) const {
+    return m_typep->mergedCoverage(itemp->hier(), covered, total);
 }
 
 //=============================================================================
@@ -2311,19 +2336,22 @@ std::pair<double, double> VlCovMergedItems::coverageSums(const VlCovMergedItems&
     return {100.0 * weighted, weights};
 }
 
-double VlCovMergedItems::coverage(const std::string& name, const VlCovMergedItems& other) const {
+double VlCovMergedItems::coverage(const std::string& name, const VlCovMergedItems& other,
+                                  IData& covered, IData& total) const {
     const auto it = m_items.find(name);
     assert(it != m_items.end());
     const VlCovMergedItem& item = it->second;
     const auto otherIt = other.m_items.find(name);
-    double covered = 0.0;
-    double total = 0.0;
+    double coveredBins = 0.0;
+    double totalBins = 0.0;
     if (otherIt == other.m_items.end()) {
-        item.coverageParts(covered, total);
+        item.coverageParts(coveredBins, totalBins);
     } else {
-        item.coverageParts(otherIt->second, covered, total);
+        item.coverageParts(otherIt->second, coveredBins, totalBins);
     }
-    return _vl_cov_calculate(100.0 * covered, total, item.typeWeight());
+    covered = static_cast<IData>(coveredBins);
+    total = static_cast<IData>(totalBins);
+    return _vl_cov_calculate(100.0 * coveredBins, totalBins, item.typeWeight());
 }
 
 //=============================================================================
@@ -2434,7 +2462,8 @@ double VlCovergroupType::coverage(IData typeWeight, bool mergeInstances,
     return _vl_cov_calculate(sumCoverage, sumWeight, m_typeWeight);
 }
 
-double VlCovergroupType::mergedCoverage(const std::string& name) const {
+double VlCovergroupType::mergedCoverage(const std::string& name, IData& covered,
+                                        IData& total) const {
     // Only that item of each live instance, not all of them as mergeLive(); those of the
     // instances that have died are in m_mergedRetired
     VlCovMergedItems live;
@@ -2444,7 +2473,7 @@ double VlCovergroupType::mergedCoverage(const std::string& name) const {
             if (itemp->hier() == name) itemp->mergeInto(live);
         }
     }
-    return live.coverage(name, m_mergedRetired);
+    return live.coverage(name, m_mergedRetired, covered, total);
 }
 
 double VlCovergroupType::retiredCoverage() const {

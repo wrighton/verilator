@@ -53,19 +53,128 @@ endclass
 class BitDerived extends ParamBase #(bit);
 endclass
 
+// 'randomize()' target that is a member inherited from a parameterized class
+typedef class MemberLater;
+
+class MemberItem;
+  rand bit [6:0] x;
+  constraint x_c {x < 7'd50;}
+endclass
+
+class MemberBase #(
+    int W = 8
+);
+  MemberItem tr = new;
+endclass
+
+class MemberMid extends MemberBase #(16);
+endclass
+
+class MemberDerived extends MemberMid;
+endclass
+
+class MemberHolder extends MemberBase #(2);
+  MemberDerived d = new;
+  function int randomize_d(bit [6:0] v);
+    return d.tr.randomize() with {x == v;};
+  endfunction
+endclass
+
 typedef ParamGrandchild param_alias_t;
 
+// Members of parameters in 'randomize() with' that is linked after V3Param, as the
+// target class is parameterized or the call is in a class extending a parameterized class
+package pkg;
+  typedef struct packed {int W;} s_t;
+  localparam s_t P = '{W: 4};
+  localparam s_t PA[2] = '{'{W: 1}, '{W: 3}};
+endpackage
+
+class Item;
+  rand bit [3:0] strb;
+  rand bit [3:0] other;
+endclass
+
+class ItemP #(
+    int N = 1
+);
+  rand bit [3:0] strb;
+endclass
+
+class Holder #(
+    int N = 1
+);
+  localparam pkg::s_t BP = '{W: 2};
+  Item tr = new;
+  Item trs[2];
+endclass
+
+class HolderDerived extends Holder #(2);
+  function void check();
+    int randomize_result;
+    randomize_result = tr.randomize() with {strb == {pkg::P.W{1'b1}};};
+    `checkd(randomize_result, 1)
+    `checkh(tr.strb, 4'b1111)
+    // The randomized object named explicitly, and a member of an inherited parameter
+    randomize_result = tr.randomize() with {
+      tr.strb == 4'({BP.W{1'b1}});
+      other == 4'(pkg::P.W);
+    };
+    `checkd(randomize_result, 1)
+    `checkh(tr.strb, 4'b0011)
+    `checkh(tr.other, 4'd4)
+    trs[0] = new;
+    trs[1] = new;
+    randomize_result = trs[0].randomize() with {strb == 4'(pkg::PA[1].W);};
+    `checkd(randomize_result, 1)
+    `checkh(trs[0].strb, 4'd3)
+    randomize_result = trs[pkg::P.W-3].randomize() with {trs[pkg::P.W-3].strb == 4'd9;};
+    `checkd(randomize_result, 1)
+    `checkh(trs[1].strb, 4'd9)
+  endfunction
+endclass
+
 module t;
+  bit [6:0] x;  // Must not capture the names in the 'with' clauses below
+
+  task automatic check_member_select();
+    MemberHolder holder = new;
+    MemberLater later = new;
+    int randomize_result;
+    for (int i = 0; i < 10; ++i) begin
+      x = 7'(i + 20);
+      randomize_result = holder.d.tr.randomize() with {x == local::x + 1;};
+      `checkd(randomize_result, 1)
+      `checkd(holder.d.tr.x, 7'(i + 21))
+      randomize_result = holder.tr.randomize() with {x == 7'(i);};
+      `checkd(randomize_result, 1)
+      `checkd(holder.tr.x, 7'(i))
+      randomize_result = later.tr.randomize() with {x == local::x;};
+      `checkd(randomize_result, 1)
+      `checkd(later.tr.x, 7'(i + 20))
+      randomize_result = holder.randomize_d(7'(i + 30));
+      `checkd(randomize_result, 1)
+      `checkd(holder.d.tr.x, 7'(i + 30))
+      holder.d.tr.x = 7'(i + 45);
+      randomize_result = holder.d.tr.randomize(null);
+      `checkd(randomize_result, int'(i < 5))
+    end
+  endtask
+
   initial begin
     automatic Cls #() cd = new;
     automatic Cls #(5) c5 = new;
     automatic ParamDerived derived = new;
     automatic param_alias_t grandchild = new;
     automatic BitDerived bit_derived = new;
+    automatic HolderDerived holder = new;
+    automatic ItemP #(2) item_p = new;
     bit [7:0] f;
     bit [6:0] own_value;
     bit [32:0] typed_value;
     int randomize_result;
+
+    check_member_select();
 
     `check_rand(cd, cd.x, x > 0, cd.x > 0 && cd.x <= 3);
     `check_rand(cd, cd.x, x > y, cd.x > -100 && cd.x <= 3);
@@ -105,7 +214,15 @@ module t;
       `checkh(derived.f, f)
     end
 
+    holder.check();
+    randomize_result = item_p.randomize() with {strb == {pkg::P.W{1'b1}};};
+    `checkd(randomize_result, 1)
+    `checkh(item_p.strb, 4'b1111)
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
 endmodule
+
+class MemberLater extends MemberBase #(4);
+endclass

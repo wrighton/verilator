@@ -426,6 +426,101 @@ public:
 
 inline std::string VL_TO_STRING(const VlProcessRef&) { return std::string("process"); }
 
+//===================================================================
+/// Verilog typeless mailbox message (IEEE 1800-2023 15.4.9). Holds a message value of any
+/// type, or refers to the variable that receives a message.
+
+class VlMailboxMessage final {
+    // TYPES
+    struct Value VL_NOT_FINAL {
+        virtual ~Value() = default;
+    };
+    template <typename T_Value>
+    struct TypedValue final : Value {
+        const T_Value m_value;  // Message value
+        explicit TypedValue(const T_Value& value)
+            : m_value{value} {}
+    };
+    // Integral values of every width up to 64 bits are stored as QData
+    template <typename T_Value>
+    using Stored =
+        typename std::conditional<std::is_integral<T_Value>::value, QData, T_Value>::type;
+
+    // MEMBERS
+    const char* m_typeName = "";  // Type name, the same for equivalent types
+    std::shared_ptr<const Value> m_valuep;  // Message value
+    void* m_varp = nullptr;  // Variable that receives a message
+    const char* m_filename = "";  // Source location of the receiving call
+    int m_lineno = 0;  // Source location of the receiving call
+    bool (*m_receivep)(void* varp, const Value& value) = nullptr;  // Assigns m_varp if not null
+
+    // METHODS
+    template <typename T_Var>
+    static bool receive(void* varp, const Value& value) {
+        // The type check guards against different C++ types with the same type name
+        const auto* const typedp = dynamic_cast<const TypedValue<Stored<T_Var>>*>(&value);
+        if (typedp && varp) *static_cast<T_Var*>(varp) = static_cast<T_Var>(typedp->m_value);
+        return typedp;
+    }
+    // Clear the bits above width, the message expression may not be clean
+    template <typename T_Value>
+    static QData clean(const T_Value& value, int width, std::true_type) {
+        return static_cast<QData>(value) & VL_MASK_Q(width);
+    }
+    template <std::size_t N_Words>
+    static VlWide<N_Words> clean(VlWide<N_Words> value, int width, std::false_type) {
+        value[N_Words - 1] &= VL_MASK_E(width);
+        return value;
+    }
+    template <typename T_Value>
+    static const T_Value& clean(const T_Value& value, int, std::false_type) {
+        return value;
+    }
+
+public:
+    // CONSTRUCTORS
+    VlMailboxMessage() = default;
+    VlMailboxMessage(const VlMailboxMessage&) = default;
+    // Message of a put() or try_put()
+    template <typename T_Value>
+    static VlMailboxMessage val(const char* typeName, int width, const T_Value& value) {
+        VlMailboxMessage msg;
+        msg.m_typeName = typeName;
+        msg.m_valuep = std::make_shared<const TypedValue<Stored<T_Value>>>(
+            clean(value, width, std::is_integral<T_Value>{}));
+        return msg;
+    }
+    // Variable of a get(), try_get(), peek() or try_peek()
+    template <typename T_Var>
+    static VlMailboxMessage ref(const char* typeName, T_Var& var, const char* filename,
+                                int lineno) {
+        VlMailboxMessage msg;
+        msg.m_typeName = typeName;
+        msg.m_varp = &var;
+        msg.m_filename = filename;
+        msg.m_lineno = lineno;
+        msg.m_receivep = &receive<T_Var>;
+        return msg;
+    }
+    // Pass a temporary from ref() as a ref argument
+    VlMailboxMessage& lvalue() { return *this; }
+    // Store a message, or receive a message into the referred variable
+    VlMailboxMessage& operator=(const VlMailboxMessage& that);
+    // Whether the variable can receive the message (IEEE 1800-2023 15.4.9)
+    static bool match(const VlMailboxMessage& var, const VlMailboxMessage& msg) {
+        return !std::strcmp(var.m_typeName, msg.m_typeName)
+               && var.m_receivep(nullptr, *msg.m_valuep);
+    }
+    // Parameterized mailbox messages always match
+    template <typename T_Var, typename T_Value>
+    static bool match(const T_Var&, const T_Value&) {
+        return true;
+    }
+    const char* typeName() const { return m_typeName; }
+};
+
+inline std::string VL_TO_STRING(const VlMailboxMessage& obj) { return obj.typeName(); }
+
 // Use process RNG if in a process, else thread RNG (IEEE 1800-2023 18.14)
 inline uint64_t vl_rand64() VL_MT_SAFE { return VlRNG::vl_current_rng_rand64(); }
 
@@ -610,9 +705,6 @@ class VlClassRef;
 template <typename T_Value, size_t N_MaxSize = 0>
 class VlQueue final {
 private:
-    template <typename U_Value, size_t M_MaxSize>
-    friend class VlQueue;
-
     // TYPES
     using Deque = std::deque<T_Value>;
 
@@ -638,7 +730,7 @@ private:
     void append(const T_Value& value) { m_deque.push_back(value); }
     template <size_t N_RhsMaxSize>
     void append(const VlQueue<T_Value, N_RhsMaxSize>& rhs) {
-        for (const T_Value& value : rhs.m_deque) m_deque.push_back(value);
+        for (const T_Value& value : rhs.privateDeque()) m_deque.push_back(value);
     }
     template <std::size_t N_Depth>
     void append(const VlUnpacked<T_Value, N_Depth>& rhs) {
@@ -648,7 +740,7 @@ private:
               typename = typename std::enable_if<
                   std::is_convertible<VlClassRef<T_Subclass>, T_Value>::value>::type>
     void append(const VlQueue<VlClassRef<T_Subclass>, N_RhsMaxSize>& rhs) {
-        for (const VlClassRef<T_Subclass>& value : rhs.m_deque) m_deque.push_back(value);
+        for (const VlClassRef<T_Subclass>& value : rhs.privateDeque()) m_deque.push_back(value);
     }
     template <typename T_Subclass, std::size_t N_Depth,
               typename = typename std::enable_if<
@@ -727,6 +819,7 @@ public:
     T_Value& atDefault() { return m_defaultValue; }
     const T_Value& atDefault() const { return m_defaultValue; }
     const Deque& privateDeque() const { return m_deque; }
+    Deque& privateDeque() { return m_deque; }
 
     // Size. Verilog: function int size(), or int num()
     int size() const { return m_deque.size(); }
@@ -2175,9 +2268,8 @@ inline bool operator==(const T* lhsp, VlNull) {
 template <typename T_Class>
 class VlClassRef final {
 private:
-    // TYPES
-    template <typename T_OtherClass>
-    friend class VlClassRef;  // Needed for template copy/move assignments
+    // No friend template of VlClassRef (nor in VlQueue): each instantiation would redeclare it,
+    // and clang walks all redeclarations on each use, quadratic with many classes
 
     // MEMBERS
     T_Class* m_objp = nullptr;  // Object pointed to
@@ -2238,13 +2330,13 @@ public:
     // cppcheck-suppress noExplicitConstructor
     template <typename T_OtherClass>
     VlClassRef(const VlClassRef<T_OtherClass>& copied)
-        : m_objp{copied.m_objp} {
+        : m_objp{copied.privateObjp()} {
         refCountInc();
     }
     // cppcheck-suppress noExplicitConstructor
     template <typename T_OtherClass>
     VlClassRef(VlClassRef<T_OtherClass>&& moved)
-        : m_objp{std::exchange(moved.m_objp, nullptr)} {}
+        : m_objp{moved.privateRelease()} {}
     ~VlClassRef() { refCountDec(); }
 
     // METHODS
@@ -2264,17 +2356,17 @@ public:
     }
     template <typename T_OtherClass>
     VlClassRef& operator=(const VlClassRef<T_OtherClass>& copied) {
-        if (m_objp == copied.m_objp) return *this;
+        if (m_objp == copied.privateObjp()) return *this;
         refCountDec();
-        m_objp = copied.m_objp;
+        m_objp = copied.privateObjp();
         refCountInc();
         return *this;
     }
     template <typename T_OtherClass>
     VlClassRef& operator=(VlClassRef<T_OtherClass>&& moved) {
-        if (m_objp == moved.m_objp) return *this;
+        if (m_objp == moved.privateObjp()) return *this;
         refCountDec();
-        m_objp = std::exchange(moved.m_objp, nullptr);
+        m_objp = moved.privateRelease();
         return *this;
     }
     // Assign with nullptr
@@ -2297,6 +2389,10 @@ public:
         result.m_objp = dynamic_cast<T_Class*>(clonedp);
         return result;
     }
+    // Internal object pointer, for handles of other classes
+    T_Class* privateObjp() const { return m_objp; }
+    // Internal release of the object without changing its reference count, for moves
+    T_Class* privateRelease() { return std::exchange(m_objp, nullptr); }
     // Dereference operators
     T_Class& operator*() const { return *m_objp; }
     T_Class* operator->() const { return m_objp; }
@@ -2305,15 +2401,15 @@ public:
     // In SV A == B iff both are handles to the same object (IEEE 1800-2023 8.4)
     template <typename T_OtherClass>
     bool operator==(const VlClassRef<T_OtherClass>& rhs) const {
-        return m_objp == rhs.m_objp;
+        return m_objp == rhs.privateObjp();
     };
     template <typename T_OtherClass>
     bool operator!=(const VlClassRef<T_OtherClass>& rhs) const {
-        return m_objp != rhs.m_objp;
+        return m_objp != rhs.privateObjp();
     };
     template <typename T_OtherClass>
     bool operator<(const VlClassRef<T_OtherClass>& rhs) const {
-        return m_objp < rhs.m_objp;
+        return m_objp < rhs.privateObjp();
     };
 };
 
@@ -2416,17 +2512,18 @@ inline T VL_NULL_CHECK(T t, const char* filename, int linenum) {
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(const VlQueue<VlClassRef<T_Subclass>>& that)
-    : m_deque{that.m_deque.begin(), that.m_deque.end()}
-    , m_defaultValue{that.m_defaultValue} {
+    : m_deque{that.privateDeque().begin(),  // lintok-begin-on-ref
+              that.privateDeque().end()}  // lintok-begin-on-ref
+    , m_defaultValue{that.atDefault()} {
     applyBound();
 }
 
 template <typename T_Value, size_t N_MaxSize>
 template <typename T_Subclass>
 VlQueue<T_Value, N_MaxSize>::VlQueue(VlQueue<VlClassRef<T_Subclass>>&& that)
-    : m_deque{std::make_move_iterator(that.m_deque.begin()),
-              std::make_move_iterator(that.m_deque.end())}
-    , m_defaultValue{std::move(that.m_defaultValue)} {
+    : m_deque{std::make_move_iterator(that.privateDeque().begin()),  // lintok-begin-on-ref
+              std::make_move_iterator(that.privateDeque().end())}  // lintok-begin-on-ref
+    , m_defaultValue{std::move(that.atDefault())} {
     applyBound();
 }
 
