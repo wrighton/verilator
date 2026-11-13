@@ -10193,6 +10193,8 @@ class WidthVisitor final : public VNVisitor {
                     }
                 }
                 if (portp->direction() != VDirection::REF
+                    // A string literal input converts to an unpacked array of bytes below
+                    && !(portp->isInput() && unpackedBytesFromString(pinp, portDTypep))
                     && ((VN_IS(portDTypep, BasicDType) && pinDTypep->isAggregateType())
                         || (VN_IS(pinDTypep, BasicDType) && portDTypep->isAggregateType()))) {
                     pinp->v3error("Function Argument expects " << portDTypep->prettyDTypeNameQ()
@@ -12197,45 +12199,48 @@ class WidthVisitor final : public VNVisitor {
             iterateCheckSizedSelf(parentp, "LHS", underp, SELF, FINAL, /* deferUntyped */ true);
         }
     }
+    // If assignment-like context converts string literal rhsp to an unpacked array of bytes,
+    // return that array type (IEEE 1800-2023 5.9)
+    static const AstUnpackArrayDType* unpackedBytesFromString(const AstNode* rhsp,
+                                                              const AstNodeDType* lhsDTypep) {
+        const AstConst* const constp = VN_CAST(rhsp, Const);
+        // A string-typed constant such as $typename is not a string literal
+        if (!constp || !constp->num().isFromString() || constp->num().isString()) return nullptr;
+        const AstUnpackArrayDType* const arrayp = VN_CAST(lhsDTypep->skipRefp(), UnpackArrayDType);
+        if (!arrayp) return nullptr;
+        const AstBasicDType* const basicp = VN_CAST(arrayp->subDTypep()->skipRefp(), BasicDType);
+        return basicp && basicp->width() == 8 ? arrayp : nullptr;
+    }
     void iterateCheckAssign(AstNode* parentp, const char* side, AstNode* rhsp, Stage stage,
                             AstNodeDType* lhsDTypep, VAccess rhsAccess = VAccess::READ) {
         // Check using assignment-like context rules
         // UINFOTREE(1, parentp, "", "checkass");
         UASSERT_OBJ(stage == FINAL, parentp, "Bad width call");
         // Create unpacked byte from string see IEEE 1800-2023 5.9
-        if (AstConst* constp = VN_CAST(rhsp, Const)) {
-            if (const AstUnpackArrayDType* const arrayp
-                = VN_CAST(lhsDTypep->skipRefp(), UnpackArrayDType)) {
-                if (AstBasicDType* basicp = VN_CAST(arrayp->subDTypep()->skipRefp(), BasicDType)) {
-                    // A string-typed constant such as $typename is not a string literal
-                    if (basicp->width() == 8 && constp->num().isFromString()
-                        && !constp->num().isString()) {
-                        // Left justified: the first character goes to the left element, a
-                        // shorter string is padded with zeros, a longer string loses its last
-                        // characters
-                        AstConsArray* newp = new AstConsArray{
-                            constp->fileline(), lhsDTypep,
-                            new AstConst{constp->fileline(), AstConst::WidthedValue{}, 8, 0}};
-                        const int chars = constp->num().width() / 8;
-                        const int elements = arrayp->elementsConst();
-                        const bool ascending = arrayp->declRange().ascending();
-                        for (int n = 0; n < std::min(chars, elements); ++n) {
-                            // Character 'n' from the left is the 'n'th most significant byte
-                            const int lsb = (chars - 1 - n) * 8;
-                            V3Number selected{constp, 8};
-                            selected.opSel(constp->num(), lsb + 7, lsb);
-                            // Element 'n' from the left, indexed from lo
-                            newp->valuep(ascending ? n : elements - 1 - n,
-                                         new AstConst{constp->fileline(), AstConst::WidthedValue{},
-                                                      8, selected.toUInt()});
-                        }
-                        UINFO(6, "   unpackFromString: " << parentp);
-                        rhsp->replaceWith(newp);
-                        VL_DO_DANGLING(pushDeletep(rhsp), rhsp);
-                        rhsp = newp;
-                    }
-                }
+        if (const AstUnpackArrayDType* const arrayp = unpackedBytesFromString(rhsp, lhsDTypep)) {
+            AstConst* const constp = VN_AS(rhsp, Const);
+            // Left justified: the first character goes to the left element, a shorter string is
+            // padded with zeros, a longer string loses its last characters
+            AstConsArray* newp = new AstConsArray{
+                constp->fileline(), lhsDTypep,
+                new AstConst{constp->fileline(), AstConst::WidthedValue{}, 8, 0}};
+            const int chars = constp->num().width() / 8;
+            const int elements = arrayp->elementsConst();
+            const bool ascending = arrayp->declRange().ascending();
+            for (int n = 0; n < std::min(chars, elements); ++n) {
+                // Character 'n' from the left is the 'n'th most significant byte
+                const int lsb = (chars - 1 - n) * 8;
+                V3Number selected{constp, 8};
+                selected.opSel(constp->num(), lsb + 7, lsb);
+                // Element 'n' from the left, indexed from lo
+                newp->valuep(ascending ? n : elements - 1 - n,
+                             new AstConst{constp->fileline(), AstConst::WidthedValue{}, 8,
+                                          selected.toUInt()});
             }
+            UINFO(6, "   unpackFromString: " << parentp);
+            rhsp->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(rhsp), rhsp);
+            rhsp = newp;
         }
         // We iterate and size the RHS based on the result of RHS evaluation
         // A datatype RHS is diagnosed by iterateCheck below
