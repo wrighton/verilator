@@ -3290,6 +3290,7 @@ inline void VL_UNPACK_RW_W(int lbits, int rbits, VlQueue<VlWide<N_Words>>& q, WD
         const int actualBitPos = (bitPos < 0) ? 0 : bitPos;
         const int actualWidth = (bitPos < 0) ? (lbits + bitPos) : lbits;
         VL_SEL_WWII(actualWidth, rbits, q.atWrite(i), rwp, actualBitPos, actualWidth);
+        q.atWrite(i)[VL_WORDS_I(actualWidth) - 1] &= VL_MASK_E(actualWidth);
     }
 }
 
@@ -3420,8 +3421,10 @@ inline void VL_UNPACK_UQ_W(int lbits, int rbits, VlUnpacked<QData, N_Depth>& q, 
 template <std::size_t N_Depth, std::size_t N_Words>
 inline void VL_UNPACK_UW_W(int lbits, int rbits, VlUnpacked<VlWide<N_Words>, N_Depth>& q,
                            WDataInP rwp, const int bit_offset = 0) {
-    for (size_t i = 0; i < N_Depth; ++i)
+    for (size_t i = 0; i < N_Depth; ++i) {
         VL_SEL_WWII(lbits, rbits, q[i], rwp, bit_offset + (N_Depth - 1 - i) * lbits, lbits);
+        q[i][VL_WORDS_I(lbits) - 1] &= VL_MASK_E(lbits);
+    }
 }
 
 // Return QData from double (numeric)
@@ -3772,6 +3775,8 @@ inline std::string VL_CVT_PACK_STR_NI(IData lhs) VL_PURE {
 inline std::string VL_CONCATN_NNN(const std::string& lhs, const std::string& rhs) VL_PURE {
     return lhs + rhs;
 }
+// Append in place, unlike 'lhs = VL_CONCATN_NNN(lhs, rhs)', which copies 'lhs'
+inline void VL_APPENDN_NN(std::string& lhsr, const std::string& rhs) VL_PURE { lhsr += rhs; }
 inline std::string VL_REPLICATEN_NNQ(const std::string& lhs, IData rep) VL_PURE {
     std::string result;
     result.reserve(lhs.length() * rep);

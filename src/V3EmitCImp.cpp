@@ -16,11 +16,11 @@
 
 #include "V3PchAstMT.h"
 
-#include "V3AstUserAllocator.h"
 #include "V3EmitC.h"
 #include "V3EmitCFunc.h"
 #include "V3ThreadPool.h"
 #include "V3UniqueNames.h"
+#include "V3VNUserAllocator.h"
 
 #include <algorithm>
 #include <map>
@@ -44,7 +44,7 @@ class EmitCImp final : public EmitCFunc {
 
     // NODE STATE
     //   AstNodeModule::user1()  -> CtorDtor. Constructor/destructor statements (slow only)
-    AstUser1Allocator<AstNodeModule, CtorDtor> m_ctorDtors;
+    VNUser1Allocator<AstNodeModule, CtorDtor> m_ctorDtors;
 
     // MEMBERS
     const std::vector<AstNodeModule*>& m_modps;  // Modules emitted into the same output files
@@ -377,7 +377,11 @@ class EmitCImp final : public EmitCFunc {
                             // System C top I/O doesn't need loading, as the
                             // lower level subinst code does it.
                         } else if (varp->isParam()) {
-                        } else if (VN_IS(varp->dtypep(), NBACommitQueueDType)) {
+                        } else if (VN_IS(varp->dtypep(), ClosurePoolDType)) {
+                            // Closure pools are not saved, they are simply memory pools
+                        } else if (varp->basicp() && varp->basicp()->isNbaGenericQueue()) {
+                            // NBAs enqueued in an eval are committed by its end. Those made by
+                            // a DPI export called between evals are pending, so a save drops them
                         } else {
                             int vects = 0;
                             AstNodeDType* elementp = varp->dtypeSkipRefp();
