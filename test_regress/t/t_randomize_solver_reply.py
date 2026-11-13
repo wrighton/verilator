@@ -30,6 +30,7 @@ runs = [
     ('dup_model', 1, 15),  # the same variable answered twice
     ('err_assume', 1, 16),  # error in place of the unsat assumptions
     ('err_core', 1, 16),  # error in place of the unsat core
+    ('err_extra', 4, 15),  # error replying to a soft constraint, ahead of the relaxation status
     ('err_multiline', 2, 15),  # solver rejects a command with an error spanning two lines
     ('err_once', 2, 15),  # solver rejects a command instead of answering
     ('err_phase', 1, 15),  # error in place of an intermediate phase value reply

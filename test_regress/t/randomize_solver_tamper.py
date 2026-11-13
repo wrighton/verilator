@@ -12,7 +12,7 @@
 # Input arguments from environment variables:
 # TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | binary
 #         | core_junk | crlf | die_at | die_status_at | diversity_model
-#         | dup_model | err_assume | err_core | err_multiline | err_once
+#         | dup_model | err_assume | err_core | err_extra | err_multiline | err_mute | err_once
 #         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
@@ -33,7 +33,10 @@
 #   dup_model        - replace the Nth model reply with one answering a variable twice
 #   err_assume       - replace the first unsat-assumptions reply with (error ...)
 #   err_core         - replace the first unsat-core reply with (error ...)
+#   err_extra        - send an (error ...) line ahead of the Nth status, as for a rejected
+#                      earlier command; echo the runtime's marker quoted, as SMT-LIB 2.6 does
 #   err_multiline    - answer the Nth status with an (error ...) split over two lines
+#   err_mute         - answer the Nth status with (error ...), then close the reply pipe as mute_at
 #   err_once         - answer the Nth status with one (error ...) line
 #   err_phase        - replace the first phase value reply with (error ...)
 #   err_reply        - replace the Nth S-expression reply with (error ...)
@@ -84,8 +87,8 @@ at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
-STATUS_MODES = ("die_status_at", "err_multiline", "err_once", "err_trunc", "err_unbal",
-                "err_unbal_cont", "garbage_status", "unknown_once", "unknown_twice",
+STATUS_MODES = ("die_status_at", "err_extra", "err_multiline", "err_mute", "err_once", "err_trunc",
+                "err_unbal", "err_unbal_cont", "garbage_status", "unknown_once", "unknown_twice",
                 "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
@@ -162,6 +165,17 @@ def read_full(first):
     return chunks
 
 
+def mute():
+    """Close the reply pipe but keep running until the runtime gives up on this solver"""
+    os.close(1)
+    proc.kill()
+    proc.wait()
+    parent = os.getppid()
+    while os.getppid() == parent:
+        time.sleep(0.05)
+    sys.exit(0)
+
+
 def swallow(first):
     """Drop the rest of a real S-expression reply that was replaced"""
     read_full(first)
@@ -175,6 +189,9 @@ inside = False  # Inside an SMT string literal, where parens do not nest
 
 for line in proc.stdout:
     line = line.rstrip("\n")
+    # z3 prints an echoed string bare; SMT-LIB 2.6 section 4.2.9 keeps its quotes
+    if mode == "err_extra" and line == "vl_resync":
+        line = '"vl_resync"'
     at_reply_start = depth == 0
     depth, inside = scan_depth(line, depth, inside)
     is_status = line in ("sat", "unsat", "unknown")
@@ -258,6 +275,10 @@ for line in proc.stdout:
         emit('(error "injected core error")')
         swallow(line)
         continue
+    if mode == "err_extra":
+        emit('(error "injected earlier command rejected")')
+        forward(line, at_reply_start)
+        continue
     if mode == "err_multiline":
         emit('(error "injected')
         emit('multiline error")')
@@ -265,6 +286,9 @@ for line in proc.stdout:
     if mode == "err_once":
         emit('(error "injected command rejected")')
         continue
+    if mode == "err_mute":
+        emit('(error "injected command rejected")')
+        mute()
     # The first phase value reply always precedes the final phased model
     if mode == "err_phase":
         emit('(error "injected phase value error")')
@@ -387,10 +411,4 @@ for line in proc.stdout:
         proc.wait()
         sys.exit(0)
     if mode == "mute_at":
-        os.close(1)
-        proc.kill()
-        proc.wait()
-        parent = os.getppid()
-        while os.getppid() == parent:
-            time.sleep(0.05)
-        sys.exit(0)
+        mute()
