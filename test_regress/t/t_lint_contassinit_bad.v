@@ -82,8 +82,8 @@ module t (
   assign packed_leaf[1][0] = out;
   initial packed_leaf[1][0] = 0;
 
-  // Preserve existing conservative unknown/invalid-index handling, including
-  // WIDTH/SELRANGE diagnostics. Invalid indices are not physical element overlaps.
+  // A constant invalid index selects no element, so its write performs no
+  // operation and is no driver (IEEE 1800-2023 7.4.5). WIDTH/SELRANGE still warn.
   logic unknown_index[2];
   assign unknown_index[0] = out;
   initial unknown_index[1'bx] = 0;
@@ -95,6 +95,39 @@ module t (
   logic wide_index[2];
   assign wide_index[0] = out;
   initial wide_index[80'h10000000000] = 0;
+
+  logic unknown_continuous[2];
+  initial unknown_continuous[0] = 0;
+  assign unknown_continuous[1'bz] = out;
+
+  logic invalid_continuous[2];
+  initial invalid_continuous[1] = 0;
+  assign invalid_continuous[5] = out;
+
+  logic invalid_declaration[2] = '{default: 0};
+  assign invalid_declaration[6] = out;
+
+  logic invalid_both[2];
+  initial invalid_both[3] = 0;
+  assign invalid_both[2] = out;
+
+  logic invalid_bound[-2:-4];
+  initial invalid_bound[-3] = 0;
+  assign invalid_bound[-1] = out;
+
+  logic invalid_descendant[2][2];
+  initial invalid_descendant[1] = '{default: 0};
+  assign invalid_descendant[1][5] = out;
+
+  // A valid constant index wider than 32 bits still selects its element.
+  logic wide_valid[2];
+  initial wide_valid[80'd1] = 0;
+  assign wide_valid[1] = out;
+
+  // A nonconstant index ends the longest static prefix before a later invalid one.
+  logic dynamic_invalid[3][2];
+  assign dynamic_invalid[0][0] = out;
+  initial dynamic_invalid[index][7] = 0;
 
   // A constant array slice includes the continuously assigned element.
   logic slice_overlap[3];
@@ -121,7 +154,7 @@ module t (
   assign aliases[0].a = out;
   initial aliases[0].b = 0;
 
-  // Preserve conservative handling of a signed narrow negative index.
+  // A signed narrow negative index is invalid, like an out-of-bounds index.
   logic signed_negative[4];
   assign signed_negative[0] = out;
   initial signed_negative[2'sb11] = 0;
