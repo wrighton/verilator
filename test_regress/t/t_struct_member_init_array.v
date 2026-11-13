@@ -14,6 +14,9 @@
 
 typedef struct {bit [3:0] a = 4'd1; bit [3:0] b;} inner_t;
 
+class Leaf;
+endclass
+
 typedef struct {
   byte uniform[4] = '{4{8'd1}};
   bit [4:0] odd[3] = '{5'd17, 5'd18, 5'd19};
@@ -25,6 +28,7 @@ typedef struct {
   bit [3:0] dflt[3] = '{default: 4'd11};
   bit [3:0] scalar = 4'd9;
   bit [3:0] plain[2];
+  Leaf objs[2];
 } outer_t;
 
 class Holder;
@@ -57,6 +61,16 @@ module t;
     `checkh(o.dflt[2], 4'd11);
     `checkh(o.scalar, 4'd9);
     `checkh(o.plain[1], 4'd0);
+    if (o.objs[1] != null) `stop;
+  endtask
+
+  // Each call resets its automatic variable from the member initializers again
+  task automatic checkLocal();
+    outer_t l;
+    check(l);
+    l.uniform[2] = 8'd5;
+    l.sub[1].a = 4'd7;
+    l.objs[0] = new;
   endtask
 
   initial begin
@@ -66,6 +80,8 @@ module t;
     check(h.one);
     check(h.items[0]);
     check(h.items[1]);
+    checkLocal();
+    checkLocal();
     $write("*-* All Finished *-*\n");
     $finish;
   end
