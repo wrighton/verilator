@@ -91,6 +91,66 @@ module t;
     `checkh(ld[2], 8'h0);
   endtask
 
+  // Test: string literal to input arguments, copied by value like an assignment
+  function automatic byte left_asc(byte a[0:2]);
+    return a[0];
+  endfunction
+  function automatic byte right_desc(byte a[2:0]);
+    return a[0];
+  endfunction
+  function automatic bit [31:0] pack_bounds(input byte a[5:2]);
+    return {a[5], a[4], a[3], a[2]};
+  endfunction
+  function automatic bit [23:0] pack_typedef(bytes4_t a, u8_t b[1:3]);
+    a[0] = "z";  // Changes only the copy
+    return {b[1], b[2], b[3]};
+  endfunction
+  function automatic bit [15:0] pack_default(byte a[0:1] = "d");
+    return {a[0], a[1]};
+  endfunction
+  task automatic get_task(input logic [7:0] a[3:1], output bit [23:0] o);
+    o = {a[3], a[2], a[1]};
+  endtask
+  class Cls;
+    static function bit [15:0] pack_static(byte a[1:2]);
+      return {a[1], a[2]};
+    endfunction
+    function bit [15:0] pack_method(byte a[0:1]);
+      return {a[0], a[1]};
+    endfunction
+  endclass
+
+  // Constant function evaluation
+  localparam bit [31:0] BOUNDS = pack_bounds("xy");
+
+  task automatic check_arguments;
+    bytes4_t ba = "copy";
+    u8_t ub[1:3] = "var";
+    bit [23:0] o;
+    Cls c = new;
+    `checkh(left_asc("ab"), "a");
+    `checkh(right_desc("ab"), 8'h0);
+    `checkh(right_desc("abcd"), "c");
+    `checkh(right_desc("a"), 8'h0);
+    `checkh(pack_bounds("wxyz"), "wxyz");
+    `checkh(pack_bounds("wx"), {"wx", 16'h0});
+    `checkh(pack_bounds("vwxyz"), "vwxy");
+    `checkh(pack_bounds(""), 32'h0);
+    `checkh(pack_bounds("\000\377\200"), 32'h00ff8000);
+    `checkh(pack_typedef("abcd", "\200\377"), 24'h80ff00);
+    `checkh(pack_typedef(ba, ub), "var");
+    `checkh(ba[0], "c");
+    `checkh(pack_default(), {"d", 8'h0});
+    `checkh(pack_default(.a("ef")), "ef");
+    get_task("lmn", o);
+    `checkh(o, "lmn");
+    get_task(.o(o), .a("pq"));
+    `checkh(o, {"pq", 8'h0});
+    `checkh(Cls::pack_static("s"), {"s", 8'h0});
+    `checkh(c.pack_method("tuv"), "tu");
+    `checkh(BOUNDS, {"xy", 16'h0});
+  endtask
+
   // Check in one process, as initial procedures run in an unspecified order
   initial begin
     check_left_justified();
@@ -98,6 +158,7 @@ module t;
     check_characters();
     check_empty();
     check_automatic();
+    check_arguments();
     $write("*-* All Finished *-*\n");
     $finish;
   end

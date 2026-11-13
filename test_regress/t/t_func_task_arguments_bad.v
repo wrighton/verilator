@@ -48,6 +48,8 @@ module t;
   ustruct_t ustruct_data;
   logic my_signal_a[10];
   logic my_signal_b[10];
+  string str = "ab";
+  localparam string STR = "ab";
   initial begin
     dyn_task(.data($urandom));
     unpacked_task(.data($urandom));
@@ -62,7 +64,29 @@ module t;
     scalar_vec_task(.data(ustruct_data));
     ustruct_task(.data(1));
     logical_or(my_signal_a[0], my_signal_b);
+    unpacked_task(.data("ab"));
+    dyn_task(.data("ab"));
+    bytes_ref_task("ab");
+    bytes_const_ref_task("ab");
+    bytes_output_task("ab");
+    bytes_input_task(16'h6162);
+    bytes_input_task(str);
+    bytes_input_task(STR);
+    bytes_input_task($typename(str));
+    bytes2_input_task("ab");
     $write("*-* All Finished *-*\n");
     $finish;
   end
+
+  // A string literal is converted only by value to an unpacked array of bytes
+  task automatic bytes_ref_task(ref byte data[1:0]);
+  endtask
+  task automatic bytes_const_ref_task(const ref byte data[1:0]);
+  endtask
+  task bytes_output_task(output byte data[1:0]);
+  endtask
+  task bytes_input_task(input byte data[1:0]);
+  endtask
+  task bytes2_input_task(input byte data[1:0][1:0]);
+  endtask
 endmodule
