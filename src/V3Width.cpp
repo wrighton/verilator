@@ -9397,7 +9397,10 @@ class WidthVisitor final : public VNVisitor {
                                    << unpackedArraySize(conDTypep) << ".");
                     UINFO(1, "    Related lo: " << modDTypep);
                     UINFO(1, "    Related hi: " << conDTypep);
-                } else if ((exprArrayp && !modArrayp) || (!exprArrayp && modArrayp)) {
+                } else if (((exprArrayp && !modArrayp) || (!exprArrayp && modArrayp))
+                           // A string literal input converts to an unpacked array of bytes below
+                           && !(nodep->modVarp()->isInput()
+                                && unpackedBytesFromString(nodep->exprp(), modDTypep))) {
                     nodep->v3error(
                         "Illegal "
                         << nodep->prettyOperatorName() << "," << " mismatch between port which is"
