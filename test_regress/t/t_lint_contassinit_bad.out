@@ -14,9 +14,37 @@
                                                    : ... note: In instance 't'
    97 |   initial wide_index[80'h10000000000] = 0;
       |                     ^
-%Warning-SELRANGE: t/t_lint_contassinit_bad.v:127:26: Selection index out of range: -1 outside 3:0
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:105:28: Selection index out of range: 5 outside 1:0
                                                     : ... note: In instance 't'
-  127 |   initial signed_negative[2'sb11] = 0;
+  105 |   assign invalid_continuous[5] = out;
+      |                            ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:108:29: Selection index out of range: 6 outside 1:0
+                                                    : ... note: In instance 't'
+  108 |   assign invalid_declaration[6] = out;
+      |                             ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:111:23: Selection index out of range: 3 outside 1:0
+                                                    : ... note: In instance 't'
+  111 |   initial invalid_both[3] = 0;
+      |                       ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:112:22: Selection index out of range: 2 outside 1:0
+                                                    : ... note: In instance 't'
+  112 |   assign invalid_both[2] = out;
+      |                      ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:120:31: Selection index out of range: 5 outside 1:0
+                                                    : ... note: In instance 't'
+  120 |   assign invalid_descendant[1][5] = out;
+      |                               ^
+%Warning-WIDTHTRUNC: t/t_lint_contassinit_bad.v:124:21: Bit extraction of array[1:0] requires 1 bit index, not 80 bits.
+                                                      : ... note: In instance 't'
+  124 |   initial wide_valid[80'd1] = 0;
+      |                     ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:130:33: Selection index out of range: 7 outside 1:0
+                                                    : ... note: In instance 't'
+  130 |   initial dynamic_invalid[index][7] = 0;
+      |                                 ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:160:26: Selection index out of range: -1 outside 3:0
+                                                    : ... note: In instance 't'
+  160 |   initial signed_negative[2'sb11] = 0;
       |                          ^
 %Error-CONTASSINIT: t/t_lint_contassinit_bad.v:17:13: Continuous assignment to variable with initial value: 'a'
                                                     : ... note: In instance 't'
@@ -123,100 +151,84 @@
                     t/t_lint_contassinit_bad.v:82:10: ... Location of continuous assignment
    82 |   assign packed_leaf[1][0] = out;
       |          ^~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:89:11: Continuous assignment to variable with initial value: 'unknown_index'
-                                                    : ... note: In instance 't'
-                                                    : ... Location of variable initialization
-   89 |   initial unknown_index[1'bx] = 0;
-      |           ^~~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:88:10: ... Location of continuous assignment
-   88 |   assign unknown_index[0] = out;
-      |          ^~~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:93:11: Continuous assignment to variable with initial value: 'invalid_index'
-                                                    : ... note: In instance 't'
-                                                    : ... Location of variable initialization
-   93 |   initial invalid_index[7] = 0;
-      |           ^~~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:92:10: ... Location of continuous assignment
-   92 |   assign invalid_index[0] = out;
-      |          ^~~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:97:11: Continuous assignment to variable with initial value: 'wide_index'
-                                                    : ... note: In instance 't'
-                                                    : ... Location of variable initialization
-   97 |   initial wide_index[80'h10000000000] = 0;
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:124:11: Continuous assignment to variable with initial value: 'wide_valid'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  124 |   initial wide_valid[80'd1] = 0;
       |           ^~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:96:10: ... Location of continuous assignment
-   96 |   assign wide_index[0] = out;
+                    t/t_lint_contassinit_bad.v:125:10: ... Location of continuous assignment
+  125 |   assign wide_valid[1] = out;
       |          ^~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:102:11: Continuous assignment to variable with initial value: 'slice_overlap'
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:130:11: Continuous assignment to variable with initial value: 'dynamic_invalid'
                                                      : ... note: In instance 't'
                                                      : ... Location of variable initialization
-  102 |   initial slice_overlap[0:1] = '{default: 0};
-      |           ^~~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:101:10: ... Location of continuous assignment
-  101 |   assign slice_overlap[0] = out;
-      |          ^~~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:113:26: Continuous assignment to variable with initial value: 'argument'
-                                                     : ... note: In instance 't'
-                                                     : ... Location of variable initialization
-  113 |   initial sample = touch(argument) [0];
-      |                          ^~~~~~~~
-                    t/t_lint_contassinit_bad.v:112:10: ... Location of continuous assignment
-  112 |   assign argument[1] = out;
-      |          ^~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:122:11: Continuous assignment to variable with initial value: 'aliases'
-                                                     : ... note: In instance 't'
-                                                     : ... Location of variable initialization
-  122 |   initial aliases[0].b = 0;
-      |           ^~~~~~~
-                    t/t_lint_contassinit_bad.v:121:10: ... Location of continuous assignment
-  121 |   assign aliases[0].a = out;
-      |          ^~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:127:11: Continuous assignment to variable with initial value: 'signed_negative'
-                                                     : ... note: In instance 't'
-                                                     : ... Location of variable initialization
-  127 |   initial signed_negative[2'sb11] = 0;
+  130 |   initial dynamic_invalid[index][7] = 0;
       |           ^~~~~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:126:10: ... Location of continuous assignment
-  126 |   assign signed_negative[0] = out;
+                    t/t_lint_contassinit_bad.v:129:10: ... Location of continuous assignment
+  129 |   assign dynamic_invalid[0][0] = out;
       |          ^~~~~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:135:11: Continuous assignment to variable with initial value: 'same_field'
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:135:11: Continuous assignment to variable with initial value: 'slice_overlap'
                                                      : ... note: In instance 't'
                                                      : ... Location of variable initialization
-  135 |   initial same_field.x = 0;
-      |           ^~~~~~~~~~
+  135 |   initial slice_overlap[0:1] = '{default: 0};
+      |           ^~~~~~~~~~~~~
                     t/t_lint_contassinit_bad.v:134:10: ... Location of continuous assignment
-  134 |   assign same_field.x = out;
+  134 |   assign slice_overlap[0] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:146:26: Continuous assignment to variable with initial value: 'argument'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  146 |   initial sample = touch(argument) [0];
+      |                          ^~~~~~~~
+                    t/t_lint_contassinit_bad.v:145:10: ... Location of continuous assignment
+  145 |   assign argument[1] = out;
+      |          ^~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:155:11: Continuous assignment to variable with initial value: 'aliases'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  155 |   initial aliases[0].b = 0;
+      |           ^~~~~~~
+                    t/t_lint_contassinit_bad.v:154:10: ... Location of continuous assignment
+  154 |   assign aliases[0].a = out;
+      |          ^~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:168:11: Continuous assignment to variable with initial value: 'same_field'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  168 |   initial same_field.x = 0;
+      |           ^~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:167:10: ... Location of continuous assignment
+  167 |   assign same_field.x = out;
       |          ^~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:137:11: Continuous assignment to variable with initial value: 'whole_struct'
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:170:11: Continuous assignment to variable with initial value: 'whole_struct'
                                                      : ... note: In instance 't'
                                                      : ... Location of variable initialization
-  137 |   initial whole_struct = '{default: 0};
+  170 |   initial whole_struct = '{default: 0};
       |           ^~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:138:10: ... Location of continuous assignment
-  138 |   assign whole_struct.y = out;
+                    t/t_lint_contassinit_bad.v:171:10: ... Location of continuous assignment
+  171 |   assign whole_struct.y = out;
       |          ^~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:139:31: Continuous assignment to variable with initial value: 'initialized_struct'
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:172:31: Continuous assignment to variable with initial value: 'initialized_struct'
                                                      : ... note: In instance 't'
                                                      : ... Location of variable initialization
-  139 |   pair_t initialized_struct = '{default: 0};
+  172 |   pair_t initialized_struct = '{default: 0};
       |                               ^~
-                    t/t_lint_contassinit_bad.v:140:10: ... Location of continuous assignment
-  140 |   assign initialized_struct.x = out;
+                    t/t_lint_contassinit_bad.v:173:10: ... Location of continuous assignment
+  173 |   assign initialized_struct.x = out;
       |          ^~~~~~~~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:148:11: Continuous assignment to variable with initial value: 'same_element'
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:181:11: Continuous assignment to variable with initial value: 'same_element'
                                                      : ... note: In instance 't'
                                                      : ... Location of variable initialization
-  148 |   initial same_element.elements[0] = 0;
+  181 |   initial same_element.elements[0] = 0;
       |           ^~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:147:10: ... Location of continuous assignment
-  147 |   assign same_element.elements[0] = out;
+                    t/t_lint_contassinit_bad.v:180:10: ... Location of continuous assignment
+  180 |   assign same_element.elements[0] = out;
       |          ^~~~~~~~~~~~
-%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:151:11: Continuous assignment to variable with initial value: 'dynamic_element'
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:184:11: Continuous assignment to variable with initial value: 'dynamic_element'
                                                      : ... note: In instance 't'
                                                      : ... Location of variable initialization
-  151 |   initial dynamic_element.elements[index[0]] = 0;
+  184 |   initial dynamic_element.elements[index[0]] = 0;
       |           ^~~~~~~~~~~~~~~
-                    t/t_lint_contassinit_bad.v:150:10: ... Location of continuous assignment
-  150 |   assign dynamic_element.elements[0] = out;
+                    t/t_lint_contassinit_bad.v:183:10: ... Location of continuous assignment
+  183 |   assign dynamic_element.elements[0] = out;
       |          ^~~~~~~~~~~~~~~
 %Error: Exiting due to
