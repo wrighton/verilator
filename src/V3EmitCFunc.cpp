@@ -551,32 +551,54 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
     } else if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
         UASSERT_OBJ(adtypep->hi() >= adtypep->lo(), varp,
                     "Should have swapped msb & lsb earlier.");
+        // A struct member's declaration initializer sets the elements it gives, after the
+        // others are set to its default
+        const AstConsArray* const consp = VN_CAST(valuep, ConsArray);
+        const AstNode* elemValuep = consp ? consp->defaultp() : nullptr;
         const AstNodeDType* const elementp = adtypep->subDTypep()->skipRefp();
+        const auto itemsp = [&](const AstNode* const fillValuep) {
+            string out;
+            for (const AstConsArrayItem* itemp = consp ? consp->itemsp() : nullptr; itemp;
+                 itemp = VN_AS(itemp->nextp(), ConsArrayItem)) {
+                if (fillValuep && itemp->valuep()->sameTree(fillValuep)) continue;
+                out += emitVarResetRecurse(
+                    varp, constructing, varNameProtected, adtypep->subDTypep(), depth + 1,
+                    suffix + "[" + cvtToStr(itemp->index()) + "]", itemp->valuep());
+            }
+            return out;
+        };
         if (!varp->isFuncLocal() && elementp->isIntegralOrPacked()) {
+            // Without a default, the elements are mostly the value of the first given, e.g.
+            // a default V3Width expanded
+            if (consp && !elemValuep && consp->itemsp()) elemValuep = consp->itemsp()->valuep();
             // Scoped reset has no array-index input or mutable RNG state. Initialize one
             // element, then fill in the optimized runtime even when this code is cold.
             const string first
                 = emitVarResetRecurse(varp, constructing, varNameProtected, adtypep->subDTypep(),
-                                      depth + 1, suffix + "[0]", nullptr);
+                                      depth + 1, suffix + "[0]", elemValuep);
             const string array = varNameProtected + suffix;
             return first + "VL_UNPACKED_FILL(" + array + ".data(), sizeof(" + array + "[0]), "
-                   + cvtToStr(adtypep->elementsConst()) + ");\n";
+                   + cvtToStr(adtypep->elementsConst()) + ");\n" + itemsp(elemValuep);
         }
         const string ivar = "__Vi"s + cvtToStr(depth);
         const string pre = ("for (int " + ivar + " = " + cvtToStr(0) + "; " + ivar + " < "
                             + cvtToStr(adtypep->elementsConst()) + "; ++" + ivar + ") {\n");
         const string below
             = emitVarResetRecurse(varp, constructing, varNameProtected, adtypep->subDTypep(),
-                                  depth + 1, suffix + "[" + ivar + "]", nullptr);
+                                  depth + 1, suffix + "[" + ivar + "]", elemValuep);
         const string post = "}\n";
-        return below.empty() ? "" : pre + below + post;
+        return (below.empty() ? "" : pre + below + post) + itemsp(nullptr);
     } else if (VN_IS(dtypep, NodeUOrStructDType) && !VN_AS(dtypep, NodeUOrStructDType)->packed()) {
         const AstNodeUOrStructDType* const sdtypep = VN_AS(dtypep, NodeUOrStructDType);
+        // The value of the struct in an initializer of an enclosing struct member, if any,
+        // gives the value of each member
+        const AstConsStruct* const consp = VN_CAST(valuep, ConsStruct);
         string literal;
         for (const AstMemberDType* const itemp : sdtypep->memberspList()) {
             const std::string line = emitVarResetRecurse(
                 varp, constructing, varNameProtected + suffix + "." + itemp->nameProtect(),
-                itemp->dtypep(), depth + 1, "", itemp->valuep());
+                itemp->dtypep(), depth + 1, "",
+                consp ? consp->memberValuep(itemp->name()) : itemp->valuep());
             if (!line.empty()) literal += line;
         }
         return literal;
@@ -603,6 +625,12 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
     } else if (basicp && (basicp->isEvent())) {
         return "VlAssignableEvent{};\n";
     } else if (basicp) {
+        // An element value in an aggregate initializer is a constant of the element's width,
+        // cast only to the element's C type
+        const AstCCast* const castp = VN_CAST(valuep, CCast);
+        if (castp && VN_IS(castp->lhsp(), Const)
+            && castp->lhsp()->widthMin() == dtypep->widthMin())
+            valuep = castp->lhsp();
         const bool zeroit
             = (varp->attrFileDescr()  // Zero so we don't do file IO if never $fopen
                || varp->isFuncLocal()  // Randomization too slow
