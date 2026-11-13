@@ -5032,6 +5032,22 @@ AstNodeExpr* V3Const::newDTypeDefaultp(AstNode* const nodep, AstNodeDType* dtype
     return new AstConst{nodep->fileline(), xnum};
 }
 
+AstNodeExpr* V3Const::selectionFromp(const AstNodeExpr* const exprp) {
+    if (const AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) return selp->fromp();
+    if (const AstSel* const selp = VN_CAST(exprp, Sel)) return selp->fromp();
+    if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) return selp->fromp();
+    if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+        // Only read selectors/getters belong on a default path; write methods can be pure too.
+        switch (methodp->method()) {
+        case VCMethod::ARRAY_AT:
+        case VCMethod::ARRAY_AT_BACK:
+        case VCMethod::DYN_SIZE: return methodp->fromp();
+        default: break;
+        }
+    }
+    return nullptr;
+}
+
 AstNodeExpr* V3Const::newSelectedDefaultp(AstNodeExpr* const readp,
                                           AstNodeExpr* const boundedElementp,
                                           VMemberMap& memberMap) {
@@ -5041,14 +5057,7 @@ AstNodeExpr* V3Const::newSelectedDefaultp(AstNodeExpr* const readp,
         // Follow from operands, not back pointers, to retain only this selected value's path.
         std::vector<AstNodeExpr*> path;
         for (AstNodeExpr* exprp = readp; exprp != boundedElementp;) {
-            AstNodeExpr* fromp = nullptr;
-            if (const AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
-                fromp = selp->fromp();
-            } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
-                fromp = selp->fromp();
-            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
-                fromp = selp->fromp();
-            }
+            AstNodeExpr* const fromp = selectionFromp(exprp);
             UASSERT_OBJ(fromp && exprp->isPure(), readp, "Invalid default read-selection path");
             path.push_back(exprp);
             exprp = fromp;
