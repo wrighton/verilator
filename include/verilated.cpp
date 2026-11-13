@@ -3515,7 +3515,7 @@ void VerilatedContext::internalsDump() const VL_MT_SAFE {
     VerilatedImp::userDump();
 }
 
-void VerilatedContext::addModel(const VerilatedModel* modelp) {
+void VerilatedContext::addModel(VerilatedModel* modelp) {
     if (!quiet()) {
         // CPU time isn't read as starting point until model creation, so that quiet() is set
         // Thus if quiet(), avoids slow OS read affecting some usages that make many models
@@ -3544,6 +3544,21 @@ void VerilatedContext::addModel(const VerilatedModel* modelp) {
         const std::string str = msg.str();
         VL_FATAL_MT(__FILE__, __LINE__, modelp->hierName(), str.c_str());
     }
+
+    // Record the model under its hierarchical path
+    {
+        const VerilatedLockGuard lock{m_impdatap->m_modelsMutex};
+        // Ids are in the order models are added, unique even after a model is removed
+        modelp->m_id = m_impdatap->m_nextModelId++;
+        const bool newEntry = m_impdatap->m_models.emplace(modelp->hierName(), modelp).second;
+        if (VL_UNLIKELY(!newEntry)) {
+            std::ostringstream msg;
+            msg << "VerilatedContext already has a model registered under hierarchical path '"
+                << modelp->hierName() << "'\n";
+            const std::string str = msg.str();
+            VL_FATAL_MT(__FILE__, __LINE__, modelp->hierName(), str.c_str());
+        }
+    }
 }
 
 VerilatedVirtualBase* VerilatedContext::threadPoolp(unsigned modelThreads) {
@@ -3551,11 +3566,12 @@ VerilatedVirtualBase* VerilatedContext::threadPoolp(unsigned modelThreads) {
     // fewer than a model uses, e.g. a model Verilated with --threads 4 on a single core machine.
     // Oversubscribing is slow but works, so grow to fit the model, unless the user picked the
     // thread count themselves, in which case addModel() reports the mismatch instead.
-    if (VL_UNLIKELY(modelThreads > m_threads) && !m_threadsSet && !m_threadPool) {
+    if (VL_UNLIKELY(modelThreads > m_threads) && !m_threadsSet
+        && (!m_threadPool || static_cast<VlThreadPool*>(m_threadPool.get())->numThreads() == 0)) {
+        m_threadPool.reset();
         m_threads = modelThreads;
         warnThreadsOversubscribed(m_threads);
     }
-    if (m_threads == 1) return nullptr;
     if (!m_threadPool) m_threadPool.reset(new VlThreadPool{this, m_threads - 1});
     return m_threadPool.get();
 }
@@ -3573,6 +3589,21 @@ VerilatedVirtualBase*
 VerilatedContext::enableExecutionProfiler(VerilatedVirtualBase* (*construct)(VerilatedContext&)) {
     if (!m_executionProfiler) m_executionProfiler.reset(construct(*this));
     return m_executionProfiler.get();
+}
+
+void VerilatedContext::removeModel(const VerilatedModel* modelp) {
+    const VerilatedLockGuard lock{m_impdatap->m_modelsMutex};
+    // Found by address, as its name is not available while it is destroyed
+    for (auto it = m_impdatap->m_models.begin(); it != m_impdatap->m_models.end(); ++it) {
+        if (it->second != modelp) continue;
+        m_impdatap->m_models.erase(it);
+        return;
+    }
+}
+
+std::map<std::string, VerilatedModel*> VerilatedContext::models() const VL_MT_SAFE {
+    const VerilatedLockGuard lock{m_impdatap->m_modelsMutex};
+    return m_impdatap->m_models;
 }
 
 //======================================================================
@@ -4292,6 +4323,8 @@ template void VerilatedEvalLoop::evalImpl<true>();
 VerilatedModel::VerilatedModel(VerilatedContext& context)
     : m_context{context} {}
 
+VerilatedModel::~VerilatedModel() { m_context.removeModel(this); }
+
 std::unique_ptr<VerilatedTraceConfig> VerilatedModel::traceConfig() const { return nullptr; }
 
 //======================================================================
@@ -4373,8 +4406,8 @@ void VerilatedScope::exportInsert(int finalize, const char* namep, void* cbp) VL
 }
 
 VerilatedVar* VerilatedScope::varInsert(const char* namep, void* datap, bool isParam,
-                                        VerilatedVarType vltype, int vlflags, int udims,
-                                        int pdims...) VL_MT_UNSAFE {
+                                        VerilatedVarType vltype, int vlflags, int udims, int pdims,
+                                        ...) VL_MT_UNSAFE {
     // Grab dimensions
     // In the future we may just create a large table at emit time and
     // statically construct from that.
@@ -4519,7 +4552,7 @@ void VerilatedScope::ifaceRefsEraseFromTable(const VlIfaceRefTableEntry* entp, s
 
 VerilatedVar* VerilatedScope::varInsertSized(const char* namep, void* datap, bool isParam,
                                              VerilatedVarType vltype, int vlflags, int udims,
-                                             uint32_t entSize...) VL_MT_UNSAFE {
+                                             uint32_t entSize, ...) VL_MT_UNSAFE {
     if (!m_varsp) m_varsp = new VerilatedVarNameMap;
     VerilatedVar var(namep, datap, vltype, static_cast<VerilatedVarFlags>(vlflags), udims, 0,
                      isParam, entSize);
@@ -4541,8 +4574,8 @@ VerilatedVar* VerilatedScope::varInsertSized(const char* namep, void* datap, boo
 VerilatedVar* VerilatedScope::forceableVarInsert(
     const char* namep, void* datap, bool isParam, VerilatedVarType vltype, int vlflags,
     void* forceReadSignalDatap, const char* const forceReadSignalName,
-    std::pair<VerilatedVar*, VerilatedVar*> forceControlSignals, int udims,
-    int pdims...) VL_MT_UNSAFE {
+    std::pair<VerilatedVar*, VerilatedVar*> forceControlSignals, int udims, int pdims,
+    ...) VL_MT_UNSAFE {
     if (!m_varsp) m_varsp = new VerilatedVarNameMap;
 
     // TODO: While the force read signal would be *expected* to have the same vltype and vlflags
