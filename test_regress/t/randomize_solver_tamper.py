@@ -14,15 +14,16 @@
 #         | binary | bv_digits | bv_literals | bv_long | bv_overflow | bv_sort | bv_spaced
 #         | core_junk | crlf | die_at | die_status_at | diversity_model
 #         | dup_model | err_assume | err_core | err_multiline | err_once
-#         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont
+#         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont | frozen_value
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
 #         | no_digits | none | octal | oor_assume | phase_model | phase_trunc
 #         | select_arity | select_carry | select_digit | select_dup | select_extra | select_lead
-#         | select_narrow | select_octal | select_prefix | select_scalar | select_wide
+#         | select_narrow | select_octal | select_prefix | select_scalar | select_unknown
+#         | select_whole | select_wide
 #         | short_model | stale_assume | success | unknown_once | unknown_twice
 #         | unknown_var | unsat_recheck | unsupported_once | upper_hex | value_digit
-#         | value_lead
+#         | value_lead | value_narrow | value_wide
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
 #   bad_index        - replace the first array model reply with a bad select index
@@ -51,6 +52,7 @@
 #   err_trunc        - answer the Nth status with an unterminated (error and close the pipe
 #   err_unbal        - answer the Nth status with an error closing an extra paren
 #   err_unbal_cont   - answer the Nth status with an error, the extra paren on a continuation line
+#   frozen_value     - replace the Nth model reply with a bad value for a variable not written
 #   garbage_assume   - answer the unsat assumptions with a non-S-expression word
 #   garbage_at       - replace every Nth model reply with a non-S-expression line
 #   garbage_model    - replace the Nth model reply with a partly valid one
@@ -77,6 +79,8 @@
 #   select_octal     - replace the Nth array model reply with an octal index of another width
 #   select_prefix    - replace the Nth array model reply with a misspelled select
 #   select_scalar    - replace the Nth array model reply with a select of a scalar
+#   select_unknown   - replace the Nth array model reply with an index naming no element
+#   select_whole     - replace the Nth array model reply with a whole array answered as a value
 #   select_wide      - replace the Nth array model reply with an index wider than the index's sort
 #   short_model      - replace the Nth model reply with one omitting a requested variable
 #   stale_assume     - answer every unsat assumptions reply from the Nth with the literal __Va0
@@ -89,6 +93,8 @@
 #   upper_hex        - replace the Nth model reply with uppercase hex digits
 #   value_digit      - replace the Nth model reply with an extra digit after a value
 #   value_lead       - replace the Nth model reply with an extra digit before a value
+#   value_narrow     - replace the Nth model reply with a value narrower than its variable
+#   value_wide       - replace the Nth model reply with a value wider than its variable
 # TAMPER_AT: reply index to act on (default 3)
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
@@ -116,7 +122,8 @@ REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
 SELECT_MODES = ("bad_index", "diversity_model", "select_arity", "select_carry", "select_digit",
                 "select_dup", "select_extra", "select_lead", "select_narrow", "select_octal",
-                "select_prefix", "select_scalar", "select_wide")
+                "select_prefix", "select_scalar", "select_unknown", "select_whole",
+                "select_wide")
 # Modes acting on the status the solver sends after answering unsat
 RECHECK_MODES = ("unsat_recheck", )
 # phase_model acts on the final phased model; the others on any phase value reply
@@ -274,6 +281,10 @@ for line in proc.stdout:
         emit("((a #b00001011) (b #b00010010))")
         swallow(line)
         continue
+    if mode == "frozen_value":
+        emit("((f #x0b) (g #x!))")
+        swallow(line)
+        continue
     # Indexed literals the parser must reject: the first, valid one must not be written either
     bad_bv = {
         "bv_digits": "(_ bvx12 8)",
@@ -409,7 +420,9 @@ for line in proc.stdout:
         "select_wide": "((select q #x100000000) #x15) ((select q #x00000001) #x15)",
         "select_extra": "((select q #x00000000 #x00000001) #x15) ((select q #x00000001) #x15)",
         "select_prefix": "((selectx q #x00000000) #x15) ((select q #x00000001) #x15)",
-        "select_scalar": "((select z #x00000000) #x15) ((select q #x00000001) #x15)"
+        "select_scalar": "((select z #x00000000) #x15) ((select q #x00000001) #x15)",
+        "select_unknown": "((select q #x00000003) #x15) ((select q #x00000001) #x15)",
+        "select_whole": "(q #x15) ((select q #x00000001) #x15)"
     }
     if mode in bad_select:
         emit("(" + bad_select[mode] + q_rest)
@@ -453,6 +466,14 @@ for line in proc.stdout:
         continue
     if mode == "value_lead":
         emit("((a 0 #x0b) (b #x12))")
+        swallow(line)
+        continue
+    if mode == "value_narrow":
+        emit("((a #b0) (b #x12))")
+        swallow(line)
+        continue
+    if mode == "value_wide":
+        emit("((a #x00b) (b #x12))")
         swallow(line)
         continue
     if mode == "upper_hex":

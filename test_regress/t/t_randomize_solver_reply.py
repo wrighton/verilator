@@ -67,6 +67,8 @@ runs = [
     ('select_octal', 1, 15),  # a select with an octal index of another width
     ('select_prefix', 1, 15),  # a misspelled select operator
     ('select_scalar', 1, 15),  # a select of a variable that is not an array
+    ('select_unknown', 1, 15),  # an index within its sort naming no element
+    ('select_whole', 1, 15),  # a whole array answered as one value
     ('select_wide', 1, 15),  # an index wider than its sort, which must not alias q[0]
     ('short_model', 1, 15),  # a model missing a requested variable is not a model
     ('success', 1, 16),  # print-success echo ahead of every reply
@@ -77,6 +79,8 @@ runs = [
     ('upper_hex', 1, 16),  # uppercase hex digits
     ('value_digit', 1, 15),  # a value with a bare digit after it
     ('value_lead', 1, 15),  # a value with a bare digit before it
+    ('value_narrow', 1, 15),  # a binary value narrower than its variable
+    ('value_wide', 1, 15),  # a hex value wider than its variable
 ]
 
 for mode, at, npass in runs:
@@ -127,5 +131,15 @@ for mode, at, nrounds in pin_runs:
                           'TAMPER=' + mode + ' TAMPER_AT=' + str(at)) if mode else '')
     test.file_grep(logfile, r'NPASS=(\d+)', 4)
     test.file_grep_count(solver_log, r'^  \(check-sat-assuming', nrounds)
+
+# 4 randomize calls with a variable whose rand_mode is off: an unusable value for it fails
+# the call even though it is not written
+for mode, npass in [(None, 4), ('frozen_value', 3)]:
+    logfile = test.obj_dir + '/sim_frozen_' + str(mode) + '.log'
+    test.execute(logfile=logfile,
+                 all_run_flags=['+MODE=frozen'],
+                 run_env=('VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+                          'TAMPER=' + mode + ' TAMPER_AT=1') if mode else '')
+    test.file_grep(logfile, r'NPASS=(\d+)', npass)
 
 test.passes()

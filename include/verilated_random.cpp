@@ -854,6 +854,13 @@ static size_t smtNumWidth(const std::string& val) {
     }
 }
 
+// True if val, which must have passed validSMTNum, is a value for a variable of width bits.
+// A #b or #x literal has a bit-vector sort, which must be the variable's; the octal and #h
+// forms are not SMT-LIB literals and keep being read by value only.
+static bool smtValueOfWidth(const std::string& val, int width) {
+    return (val[1] != 'b' && val[1] != 'x') || smtNumWidth(val) == static_cast<size_t>(width);
+}
+
 // val must have passed validSMTNum
 static void parseSMTNum(int obits, WDataOutP owp, const std::string& val) {
     size_t i = val.find('#') + 1;
@@ -1332,9 +1339,10 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
             std::vector<std::string> indices;
             if (VL_UNLIKELY(parseSelect(readSMTTerm(is), indices) != entry.first)) return -1;
             std::string value = readSMTLastTerm(is);
-            smtIndexedToBinary(value, m_vars.at(entry.first)->width());
+            const int width = m_vars.at(entry.first)->width();
+            smtIndexedToBinary(value, width);
             // The batch outlives this call, so reject a bad value before it is cached
-            if (VL_UNLIKELY(!validSMTNum(value))) return -1;
+            if (VL_UNLIKELY(!validSMTNum(value) || !smtValueOfWidth(value, width))) return -1;
             witness[entry.first][entry.second] = value;
         }  // LCOV_EXCL_BR_LINE
         if (VL_UNLIKELY(!(is >> c) || c != ')')) return -1;  // LCOV_EXCL_BR_LINE
@@ -1728,6 +1736,12 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
         }
         const VlRandomVar& varr = *it->second;
         smtIndexedToBinary(value, varr.width());
+        // One index per dimension: neither a whole array nor a select of a scalar is an element
+        if (indices.size() != static_cast<size_t>(varr.dimension())) {
+            VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                       "Internal: Unable to parse solver's response: invalid array index");
+            return false;
+        }
         // The element is named as ArrayInfo names it, whichever literal notation the solver
         // answered in: each index of up to 32 bits in decimal, a wider one in hex without
         // leading zeros
@@ -1765,11 +1779,31 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
                     element += "[" + (hexStr.empty() ? "0" : hexStr) + "]";
                 }
             }
+            // An index within the sort can still name no registered element
+            const auto iti = std::find_if(
+                m_arr_vars.begin(), m_arr_vars.end(),
+                [&element](const auto& entry) { return entry.second->m_name == element; });
+            if (iti == m_arr_vars.end()) {
+                VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                           "Internal: Unable to parse solver's response: invalid array index");
+                return false;
+            }
+            std::ostringstream ss;
+            ss << "#x" << std::hex << std::setw(8) << std::setfill('0') << iti->second->m_index;
+            idx = ss.str();
         }
         // By element, so the same element written in two notations is still a repeat
         if (!answered.insert(element).second) {
             VL_WARN_MT(__FILE__, __LINE__, "randomize",
                        "Internal: Unable to parse solver's response: repeated variable");
+            return false;
+        }
+        // Reject before any commit, so a bad value later in the reply cannot leave earlier
+        // ones written, and before skipping a variable not written, as a malformed reply is
+        // not a model whatever is kept from it
+        if (!validSMTNum(value) || !smtValueOfWidth(value, varr.width())) {
+            VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                       "Internal: Unable to parse solver's response: invalid value");
             return false;
         }
         if (!varr.randModeIdxNone()) {
@@ -1780,27 +1814,6 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
             if (modep && !modep->at(varr.randModeIdx())) continue;
         }
         if (m_disabledVars.count(name)) continue;
-        if (!indices.empty()) {
-            const auto iti = std::find_if(
-                m_arr_vars.begin(), m_arr_vars.end(),
-                [&element](const auto& entry) { return entry.second->m_name == element; });
-            if (iti != m_arr_vars.end()) {
-                std::ostringstream ss;
-                ss << "#x" << std::hex << std::setw(8) << std::setfill('0')
-                   << iti->second->m_index;
-                idx = ss.str();
-            } else {
-                VL_FATAL_MT(__FILE__, __LINE__, "randomize",
-                            "indexed_name not found in m_arr_vars");
-            }
-        }
-        // Reject before any commit, so a bad value later in the reply cannot
-        // leave earlier ones written
-        if (!validSMTNum(value)) {
-            VL_WARN_MT(__FILE__, __LINE__, "randomize",
-                       "Internal: Unable to parse solver's response: invalid value");
-            return false;
-        }
         staged.emplace_back(&varr, idx, value);
     }
     if (answered.size() != requested) {
