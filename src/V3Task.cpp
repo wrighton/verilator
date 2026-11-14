@@ -522,6 +522,7 @@ class TaskVisitor final : public VNVisitor {
         AstVar* const newvarp = newvscp->varp();
         newvarp->funcLocal(false);
         newvarp->propagateAttrFrom(invarp);
+        newvarp->lifetime(invarp->lifetime());
         newvarp->isInternal(true);
         return newvscp;
     }
