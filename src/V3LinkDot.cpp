@@ -1997,6 +1997,8 @@ class LinkDotFindVisitor final : public VNVisitor {
                         findvarp->combineType(nodep);
                         findvarp->fileline()->modifyStateInherit(nodep->fileline());
                         findvarp->gotNansiType(true);
+                        // E.g. "output o; wire #1 o;"
+                        if (nodep->delayp()) findvarp->delayp(nodep->delayp()->unlinkFrBack());
                         UASSERT_OBJ(nodep->subDTypep(), nodep, "Var has no type");
                         if (nodep->subDTypep()->numeric().isSigned()
                             && !findvarp->subDTypep()->numeric().isSigned()) {
