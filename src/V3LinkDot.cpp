@@ -3527,9 +3527,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         VSymEnt* const modportSymp = ifaceCellSymp->findIdFallback(ifaceRefp->modportp()->name());
         if (!modportSymp) return nullptr;
 
-        // Look up virtual port name in modport symbol table
-        string baddot;
-        VSymEnt* const virtPortp = m_statep->findSymPrefixed(modportSymp, portName, baddot, true);
+        // Look up virtual port name in modport symbol table, not in its fallback interface
+        VSymEnt* const virtPortp = modportSymp->findIdFlat(portName);
         if (!virtPortp) return nullptr;
 
         // Symbol may point to VarScope or Var
@@ -3537,6 +3536,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
         // Symbol points to Var - look up VarScope by name in interface cell
         if (const AstVar* const realVarp = VN_CAST(virtPortp->nodep(), Var)) {
+            string baddot;
             VSymEnt* const realFoundp
                 = m_statep->findSymPrefixed(ifaceCellSymp, realVarp->name(), baddot, true);
             return realFoundp ? VN_CAST(realFoundp->nodep(), VarScope) : nullptr;
@@ -5526,11 +5526,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     return;
                 }
             } else {
-                VSymEnt* const foundp
-                    = m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true);
-                AstVarScope* vscp = foundp ? VN_CAST(foundp->nodep(), VarScope) : nullptr;
-                // Handle modport expression virtual ports
-                if (!vscp) vscp = findVirtualPortVarScope(dotSymp, nodep->name());
+                // A modport expression port name hides an interface item of the same name
+                AstVarScope* vscp = findVirtualPortVarScope(dotSymp, nodep->name());
+                if (!vscp) {
+                    VSymEnt* const foundp
+                        = m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true);
+                    vscp = foundp ? VN_CAST(foundp->nodep(), VarScope) : nullptr;
+                }
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (vscp && errorHierNonPort(nodep, vscp->varp(), dotSymp)) return;
                 if (!vscp) {
