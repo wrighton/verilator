@@ -528,6 +528,8 @@ class TristateVisitor final : public TristateBaseVisitor {
     AstCell* m_cellp = nullptr;  // current cell
     VarMap m_lhsmap;  // Tristate left-hand-side driver map
     VarToAssignsMap m_assigns;  // Assigns in current module
+    // Variables the assignments in current module forward each variable's value to
+    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_valueReaders;
     AssignEnableMap m_assignEnps;  // Raw enable expression for each procedural assignment
     ProceduralEnableMap m_proceduralEnables;  // Enable updates to merge into assignments
     int m_unique = 0;
@@ -1506,7 +1508,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
 
     void removeNotStrongerAssignments(Assigns& assigns, const AstAssignW* strongestp,
-                                      uint8_t greatestKnownStrength) {
+                                      uint8_t greatestKnownStrength, bool keepTristate = false) {
         // Weaker assignments are these assignments that can't change the final value of the net.
         // They can be safely removed. Assignments of the same strength are also removed, because
         // duplicates aren't needed. One problem is with 2 assignments of different values and
@@ -1514,6 +1516,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         // supported now.
         auto removedIt = std::remove_if(assigns.begin(), assigns.end(), [&](AstAssignW* assignp) {
             if (assignp == strongestp) return false;
+            if (keepTristate && m_tgraph.isTristate(assignp)) return false;
             if (isAssignmentNotStrongerThanStrength(assignp, greatestKnownStrength)) {
                 // Vertices corresponding to nodes from removed assignment's subtree have to be
                 // removed.
@@ -1554,12 +1557,61 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
+    static void valueReads(AstNode* nodep, std::vector<AstVar*>& varps) {
+        // Variables whose value, z included, nodep's value carries: a z read only as e.g. a
+        // condition or operator operand gives x, not z (IEEE 1800-2023 11.4)
+        if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            varps.push_back(refp->varp());
+        } else if (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+            valueReads(selp->fromp(), varps);
+        } else if (const AstArraySel* const aselp = VN_CAST(nodep, ArraySel)) {
+            valueReads(aselp->fromp(), varps);
+        } else if (const AstStructSel* const sselp = VN_CAST(nodep, StructSel)) {
+            valueReads(sselp->fromp(), varps);
+        } else if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            valueReads(concatp->lhsp(), varps);
+            valueReads(concatp->rhsp(), varps);
+        } else if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            valueReads(repp->srcp(), varps);
+        } else if (const AstExtend* const extendp = VN_CAST(nodep, Extend)) {
+            valueReads(extendp->lhsp(), varps);
+        } else if (const AstExtendS* const extendsp = VN_CAST(nodep, ExtendS)) {
+            valueReads(extendsp->lhsp(), varps);
+        } else if (const AstCond* const condp = VN_CAST(nodep, Cond)) {
+            valueReads(condp->thenp(), varps);
+            valueReads(condp->elsep(), varps);
+        }
+    }
+    std::unordered_set<const AstVar*> mayBeZVars() {
+        // Tristate variables, and variables an assignment in the module forwards one of them
+        // to. The graph does not propagate a tristate variable to the logic reading it.
+        std::unordered_set<const AstVar*> mayBeZ;
+        std::vector<const AstVar*> pending;
+        for (const auto& readWriters : m_valueReaders) {
+            if (m_tgraph.isTristate(readWriters.first)
+                && mayBeZ.insert(readWriters.first).second) {
+                pending.push_back(readWriters.first);
+            }
+        }
+        while (!pending.empty()) {
+            const AstVar* const varp = pending.back();
+            pending.pop_back();
+            const auto it = m_valueReaders.find(varp);
+            if (it == m_valueReaders.end()) continue;
+            for (const AstVar* const writtenp : it->second) {
+                if (mayBeZ.insert(writtenp).second) pending.push_back(writtenp);
+            }
+        }
+        return mayBeZ;
+    }
+
     void removeAssignmentsNotStrongerThanNonTristate() {
         // Similar function as removeAssignmentsNotStrongerThanUniformConstant, but here the
         // assignments that have strength not stronger than the strongest assignment with
         // non-tristate RHS are removed. Strengths are compared according to their smaller values,
         // because the values of RHSs are unknown. (Assignments not stronger than strongest
         // constant are already removed.)
+        const std::unordered_set<const AstVar*> mayBeZ = mayBeZVars();
         for (auto& varpAssigns : m_assigns) {
             Assigns& assigns = varpAssigns.second;
             if (assigns.size() <= 1) continue;
@@ -1575,9 +1627,17 @@ class TristateVisitor final : public TristateBaseVisitor {
             // needed to check if it is non-tristate.
             const AstAssignW* const strongestp = m_tgraph.isTristate(*maxIt) ? nullptr : *maxIt;
             if (strongestp) {
+                // A strongest driver whose value is a variable that may be z does not override
+                // the tristate drivers, which win while it is z
+                std::vector<AstVar*> readps;
+                valueReads(strongestp->rhsp(), readps);
+                const bool strongestMayBeZ
+                    = std::any_of(readps.begin(), readps.end(),
+                                  [&](const AstVar* varp) { return mayBeZ.count(varp); });
                 const uint8_t greatestKnownStrength
                     = std::min(getStrength(strongestp, 0), getStrength(strongestp, 1));
-                removeNotStrongerAssignments(assigns, strongestp, greatestKnownStrength);
+                removeNotStrongerAssignments(assigns, strongestp, greatestKnownStrength,
+                                             strongestMayBeZ);
             }
         }
     }
@@ -1909,6 +1969,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             m_currentDelayp = VN_CAST(assignWp->timingControlp(), Delay);
         }
         if (m_graphing) {
+            std::vector<AstVar*> readps;
+            valueReads(nodep->rhsp(), readps);
+            nodep->lhsp()->foreach([&](const AstVarRef* refp) {
+                if (!refp->access().isWriteOrRW()) return;
+                for (const AstVar* const readp : readps) {
+                    m_valueReaders[readp].push_back(refp->varp());
+                }
+            });
             if (AstAssignW* assignWp = VN_CAST(nodep, AssignW)) {
                 if (assignWp->getLhsNetDelay()) return;
                 if (assignWp->timingControlp() && !m_currentDelayp) return;
@@ -2524,6 +2592,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         VL_RESTORER(m_unique);
         VL_RESTORER_CLEAR(m_lhsmap);
         VL_RESTORER_CLEAR(m_assigns);
+        VL_RESTORER_CLEAR(m_valueReaders);
         VL_RESTORER_CLEAR(m_assignEnps);
         VL_RESTORER_CLEAR(m_proceduralEnables);
         // Not preserved, needs pointer instead: TristateGraph origTgraph = m_tgraph;
