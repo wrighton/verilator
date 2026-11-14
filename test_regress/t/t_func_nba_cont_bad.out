@@ -5,6 +5,12 @@
 %Error: t/t_func_nba_cont_bad.v:29:5: Non-blocking event trigger '->>' in a function called from a continuous assignment (IEEE 1800-2023 13.4.4)
    29 |     ->>e;   
       |     ^~~
+%Error: t/t_func_nba_cont_bad.v:39:7: Non-blocking assignment '<=' in a function called from a continuous assignment (IEEE 1800-2023 13.4.4)
+   39 |     s <= 3;   
+      |       ^~
+%Error: t/t_func_nba_cont_bad.v:46:5: Non-blocking event trigger '->>' in a function called from a continuous assignment (IEEE 1800-2023 13.4.4)
+   46 |     ->>se;   
+      |     ^~~
 %Error: t/t_func_nba_cont_bad.v:11:7: Non-blocking assignment '<=' in a function called from a continuous assignment (IEEE 1800-2023 13.4.4)
                                     : ... note: In instance 't.i'
    11 |     x <= v;   
