@@ -943,43 +943,27 @@ double VL_ISTOR_D_W(int lbits, const WDataInP lwp) VL_MT_SAFE {
 
 // Output a string representation of a wide number
 std::string VL_DECIMAL_NW(int width, const WDataInP lwp) VL_MT_SAFE {
-    const int maxdecwidth = (width + 3) * 4 / 3;
-    // Or (maxdecwidth+7)/8], but can't have more than 4 BCD bits per word
-    std::vector<EData> bcd(VL_WORDS_I(maxdecwidth));
-    WDataOutP bcdp = WDataOutP::external(bcd.data());
-    VL_ZERO_W(maxdecwidth, bcdp);
-    std::vector<EData> tmp(VL_WORDS_I(maxdecwidth));
-    std::vector<EData> tmp2(VL_WORDS_I(maxdecwidth));
-    WDataOutP tmpp = WDataOutP::external(tmp.data());
-    WDataOutP tmp2p = WDataOutP::external(tmp2.data());
-    int from_bit = width - 1;
-    // Skip all leading zeros
-    for (; from_bit >= 0 && !(VL_BITRSHIFT_W(lwp, from_bit) & 1); --from_bit) {}
-    // Double-dabble algorithm
-    for (; from_bit >= 0; --from_bit) {
-        // Any digits >= 5 need an add 3 (via tmp)
-        for (int nibble_bit = 0; nibble_bit < maxdecwidth; nibble_bit += 4) {
-            if ((VL_BITRSHIFT_W(bcd, nibble_bit) & 0xf) >= 5) {
-                VL_ZERO_W(maxdecwidth, tmp2p);
-                tmp2[VL_BITWORD_E(nibble_bit)] |= VL_EUL(0x3) << VL_BITBIT_E(nibble_bit);
-                VL_ASSIGN_W(maxdecwidth, tmpp, bcdp);
-                VL_ADD_W(VL_WORDS_I(maxdecwidth), bcdp, tmpp, tmp2p);
-            }
-        }
-        // Shift; bcd = bcd << 1
-        VL_ASSIGN_W(maxdecwidth, tmpp, bcdp);
-        VL_SHIFTL_WWI(maxdecwidth, maxdecwidth, 32, bcdp, tmpp, 1);
-        // bcd[0] = lwp[from_bit]
-        if (VL_BITISSET_W(lwp, from_bit)) bcd[0] |= 1;
-    }
+    // Repeatedly divide by 10^9, producing nine digits per pass over the words
+    int words = VL_WORDS_I(width);
+    std::vector<EData> num(lwp.datap(), lwp.datap() + words);
+    num[words - 1] &= VL_MASK_E(width);
     std::string output;
-    int lsb = (maxdecwidth - 1) & ~3;
-    for (; lsb > 0; lsb -= 4) {  // Skip leading zeros
-        if (VL_BITRSHIFT_W(bcd, lsb) & 0xf) break;
-    }
-    for (; lsb >= 0; lsb -= 4) {
-        output += ('0' + (VL_BITRSHIFT_W(bcd, lsb) & 0xf));  // 0..9
-    }
+    do {
+        uint64_t rem = 0;
+        for (int i = words - 1; i >= 0; --i) {
+            const uint64_t cur = (rem << VL_EDATASIZE) | num[i];
+            num[i] = static_cast<EData>(cur / 1000000000);
+            rem = cur % 1000000000;
+        }
+        while (words && !num[words - 1]) --words;
+        // Leading zeros only in the last (most significant) group are dropped
+        for (int digit = 0; digit < 9 && (words || rem); ++digit) {
+            output += static_cast<char>('0' + rem % 10);
+            rem /= 10;
+        }
+    } while (words);
+    if (output.empty()) output = "0";
+    std::reverse(output.begin(), output.end());
     return output;
 }
 
