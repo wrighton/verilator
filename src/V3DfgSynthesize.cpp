@@ -1152,6 +1152,12 @@ class AstToDfgSynthesize final {
         return true;
     }
 
+    // True if every path to 'bbp' goes through 'edgep'. A join block can be reached
+    // without going through 'edgep', so then neither it nor the blocks it dominates are.
+    bool dominates(const CfgEdge* edgep, const CfgBlock* bbp) {
+        return !edgep->dstp()->isJoin() && m_domTree.dominates(edgep->dstp(), bbp);
+    }
+
     // Given two joining control flow edges, compute how to join their symbols.
     // Returns the predicaete to join over, and the 'then' and 'else' blocks.
     std::tuple<DfgVertexVar*, const CfgBlock*, const CfgBlock*>  //
@@ -1174,14 +1180,14 @@ class AstToDfgSynthesize final {
         // it's as if there was an empty block on that critical edge which
         // is dominated by that path.
 
-        if (takenEdgep == ap || m_domTree.dominates(takenEdgep->dstp(), ap->srcp())) {
-            if (untknEdgep == bp || m_domTree.dominates(untknEdgep->dstp(), bp->srcp())) {
+        if (takenEdgep == ap || dominates(takenEdgep, ap->srcp())) {
+            if (untknEdgep == bp || dominates(untknEdgep, bp->srcp())) {
                 // Taken path dominates 'ap' and untaken dominates 'bp', use the branch condition
                 ++m_ctx.m_synt.joinUsingBranchCondition;
                 return std::make_tuple(m_bbToCondp[domp], ap->srcp(), bp->srcp());
             }
-        } else if (takenEdgep == bp || m_domTree.dominates(takenEdgep->dstp(), bp->srcp())) {
-            if (untknEdgep == ap || m_domTree.dominates(untknEdgep->dstp(), ap->srcp())) {
+        } else if (takenEdgep == bp || dominates(takenEdgep, bp->srcp())) {
+            if (untknEdgep == ap || dominates(untknEdgep, ap->srcp())) {
                 // Taken path dominates 'bp' and untaken dominates 'ap', use the branch condition
                 ++m_ctx.m_synt.joinUsingBranchCondition;
                 return std::make_tuple(m_bbToCondp[domp], bp->srcp(), ap->srcp());
