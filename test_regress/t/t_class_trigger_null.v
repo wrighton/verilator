@@ -13,6 +13,11 @@
 // Also tests "instant fall-through" scenario: events triggered at time 0
 // (same timestep as class construction) should still be detected.
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 interface my_if;
   logic sig;
 endinterface
@@ -22,6 +27,9 @@ package my_pkg;
   class my_driver;
     virtual my_if vif;
     event my_event;
+    int cnt;
+    logic [2:0] vec;
+    my_driver peer;
 
     function new(virtual my_if vif_in);
       vif = vif_in;
@@ -64,6 +72,11 @@ package my_pkg;
     join
   endtask
 
+  // Wait on an expression of a member through a task argument
+  task automatic wait_cnt(my_driver drv, int n);
+    wait (drv.cnt == n);
+  endtask
+
 endpackage
 
 module t;
@@ -96,6 +109,98 @@ module t;
       $display("%%Error: vif_sig_count = %0d, expected 2", vif_sig_count);
       $stop;
     end
+  end
+
+  // Sensitivity on an expression of a member, on a select of a member, and on a member of a
+  // member. The processes wait only once the handles they read through are set, but the
+  // triggers are also computed at time 0, before the initial block below constructs 'drv'.
+  int wait_count = 0;
+  initial begin
+    #1;
+    wait (drv.cnt == 2);
+    ++wait_count;
+  end
+  int task_wait_count = 0;
+  initial begin
+    #20;
+    my_pkg::wait_cnt(drv, 2);
+    ++task_wait_count;
+  end
+  int bit_count = 0;
+  initial begin
+    #1;
+    @(posedge drv.vec[1]);
+    ++bit_count;
+  end
+  int peer_count = 0;
+  initial begin
+    #66;
+    @(drv.peer.cnt);
+    ++peer_count;
+  end
+  // The right operand of '||' is read only when the handle is set, so the posedge from
+  // clearing the handle must not be suppressed
+  int or_count = 0;
+  initial begin
+    #1;
+    forever begin
+      @(posedge (drv.peer == null || drv.peer.cnt[0]));
+      ++or_count;
+    end
+  end
+  initial begin
+    #65;
+    drv.cnt = 2;
+    drv.vec = 3'b010;
+    drv.peer = new(vif);
+    #2 drv.peer.cnt = 1;
+    #1 drv.peer.cnt = 0;
+    #1 drv.peer = null;
+    #1;
+    `checkd(wait_count, 1);
+    `checkd(task_wait_count, 1);
+    `checkd(bit_count, 1);
+    `checkd(peer_count, 1);
+    `checkd(or_count, 2);
+  end
+
+  // A member selected by a runtime value of '&&', '||' or '?:', or read by an 'iff' condition,
+  // through a handle that is null until time 2. The processes wait only from time 3. 'gate' is
+  // written below, so the selections are not constant.
+  my_pkg::my_driver sel_drv;
+  bit gate = 1;
+  bit tick = 0;
+  int and_count = 0, nor_count = 0, cond_count = 0, iff_count = 0;
+  initial begin
+    #3;
+    @(posedge (gate && sel_drv.vec[0]));
+    ++and_count;
+  end
+  initial begin
+    #3;
+    @(posedge (!gate || sel_drv.vec[0]));
+    ++nor_count;
+  end
+  initial begin
+    #3;
+    @(posedge (gate ? sel_drv.vec[0] : 1'b0));
+    ++cond_count;
+  end
+  initial begin
+    #3;
+    @(tick iff sel_drv.vec[1]);
+    ++iff_count;
+  end
+  initial begin
+    #2 sel_drv = new(vif);
+    #2 sel_drv.vec = 3'b011;
+    gate = 1;
+    #1 tick = 1;
+    #1;
+    `checkd(and_count, 1);
+    `checkd(nor_count, 1);
+    `checkd(cond_count, 1);
+    `checkd(iff_count, 1);
   end
 
   // Construct the class at time 0
