@@ -1202,9 +1202,11 @@ private:
         }
     }
 
-    void handleAssignElement(AstNodeAssign* nodep, AstNodeExpr* lhsp, AstNodeExpr* valueFromp) {
-        // Assign an element or member, maybe nested, of a variable, by editing the variable's
-        // value. Selects, from the element inwards:
+    AstNodeExpr* findAssignedElement(const AstNodeAssign* nodep, AstNodeExpr* lhsp,
+                                     AstNode*& vscpr, AstNodeExpr*& rootpr) {
+        // Find the value of an element or member, maybe nested, of a variable assigned by lhsp,
+        // making a defaulted array element explicit. Null if not simulating, or out of bounds.
+        // Selects, from the element inwards:
         std::vector<AstNodeExpr*> selps;
         AstNodeExpr* fromp = lhsp;
         while (true) {
@@ -1224,30 +1226,29 @@ private:
         AstVarRef* const varrefp = VN_CAST(fromp, VarRef);
         if (!varrefp) {
             clearOptimizable(fromp, "Array select LHS isn't simple variable");
-            return;
+            return nullptr;
         }
-        if (m_checkOnly || !optimizable()) return;
-        AstNode* const vscp = varOrScope(varrefp);
+        if (m_checkOnly || !optimizable()) return nullptr;
+        vscpr = varOrScope(varrefp);
         // Only a delayed assignment builds on the pending value. Others edit the current value,
         // which a call or initialization may have replaced without updating the pending one.
-        AstNodeExpr* rootp = VN_IS(nodep, AssignDly) ? fetchOutValueNull(vscp) : nullptr;
-        if (!rootp) rootp = fetchValueNull(vscp);
-        if (!rootp) {  // As initVar couldn't make an initial value of its type
+        rootpr = VN_IS(nodep, AssignDly) ? fetchOutValueNull(vscpr) : nullptr;
+        if (!rootpr) rootpr = fetchValueNull(vscpr);
+        if (!rootpr) {  // As initVar couldn't make an initial value of its type
             clearOptimizable(varrefp, "Assigned variable has unsupported data type");
-            return;
+            return nullptr;
         }
-        // Find the value of the selected element, making a defaulted array element explicit
-        AstNodeExpr* itemp = rootp;
+        AstNodeExpr* itemp = rootpr;
         for (AstNodeExpr* const selp : vlstd::reverse_view(selps)) {
             if (const AstArraySel* const aselp = VN_CAST(selp, ArraySel)) {
                 AstConsArray* const consp = VN_AS(itemp, ConsArray);
                 const AstConst* const indexp = fetchConst(aselp->bitp());
-                if (!indexp->num().fitsInUInt()) return;  // X/Z, or out of bounds
+                if (!indexp->num().fitsInUInt()) return nullptr;  // X/Z, or out of bounds
                 const uint32_t index = indexp->toUInt();
                 const int elements
                     = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
                 if (index >= static_cast<uint32_t>(elements)) {
-                    return;  // Ignore a write out of bounds (IEEE 1800-2023 7.4.6)
+                    return nullptr;  // Ignore a write out of bounds (IEEE 1800-2023 7.4.6)
                 }
                 itemp = consp->valuep(index);
                 if (itemp == consp->defaultp()) {  // Make a defaulted element explicit
@@ -1258,22 +1259,49 @@ private:
                 itemp = VN_AS(itemp, ConsStruct)->memberValuep(selp->name());
             }
         }
-        // Clone first, as the value assigned may be the old value of the element
-        AstNodeExpr* const valuep = newTrackedClone(fetchValue(valueFromp));
-        cleanTwoStateValue(valuep, itemp->dtypep());
-        UINFO(9, "     set " << lhsp << " = " << valuep);
+        return itemp;
+    }
+    void assignElement(AstNodeAssign* nodep, AstNode* vscp, AstNodeExpr* rootp, AstNodeExpr* itemp,
+                       AstNodeExpr* valuep) {
+        // Replace the value itemp found by findAssignedElement
         itemp->replaceWith(valuep);
         m_reclaimValuesp.push_back(itemp);
         UINFOTREE(9, rootp, "", "aggregate");
         assignOutValue(nodep, vscp, rootp);
     }
+    void handleAssignElement(AstNodeAssign* nodep, AstNodeExpr* lhsp, AstNodeExpr* valueFromp) {
+        // Assign an element or member, maybe nested, of a variable, by editing the variable's
+        // value
+        AstNode* vscp = nullptr;
+        AstNodeExpr* rootp = nullptr;
+        AstNodeExpr* const itemp = findAssignedElement(nodep, lhsp, vscp /*ref*/, rootp /*ref*/);
+        if (!itemp) return;
+        // Clone first, as the value assigned may be the old value of the element
+        AstNodeExpr* const valuep = newTrackedClone(fetchValue(valueFromp));
+        cleanTwoStateValue(valuep, itemp->dtypep());
+        UINFO(9, "     set " << lhsp << " = " << valuep);
+        assignElement(nodep, vscp, rootp, itemp, valuep);
+    }
     void handleAssignSel(AstNodeAssign* nodep, AstSel* selp, AstNodeExpr* valueFromp) {
-        AstVarRef* varrefp = nullptr;
+        AstNodeExpr* basep = nullptr;
         V3Number lsb{nodep};
-        handleAssignSelRecurse(nodep, selp, varrefp /*ref*/, lsb /*ref*/, 0);
+        handleAssignSelRecurse(nodep, selp, basep /*ref*/, lsb /*ref*/, 0);
         if (m_checkOnly || !optimizable()) return;
-        UASSERT_OBJ(varrefp, nodep,
-                    "Indicated optimizable, but no variable found on RHS of select");
+        UASSERT_OBJ(basep, nodep, "Indicated optimizable, but no variable found on RHS of select");
+        V3Number value{fetchConst(valueFromp)->num()};
+        value.opCleanTwoStateNumber(selp->dtypep());
+        AstVarRef* const varrefp = VN_CAST(basep, VarRef);
+        if (!varrefp) {  // Select of an element or member of an unpacked aggregate
+            AstNode* vscp = nullptr;
+            AstNodeExpr* rootp = nullptr;
+            AstNodeExpr* const itemp
+                = findAssignedElement(nodep, basep, vscp /*ref*/, rootp /*ref*/);
+            if (!itemp) return;
+            AstConst* const newp = VN_AS(newTrackedClone(itemp), Const);
+            newp->num().opSelInto(value, lsb, selp->widthConst());
+            assignElement(nodep, vscp, rootp, itemp, newp);
+            return;
+        }
         AstNode* const vscp = varOrScope(varrefp);
         AstConst* outconstp = nullptr;
         if (AstConst* const vscpnump = fetchOutConstNull(vscp)) {
@@ -1290,31 +1318,30 @@ private:
             }
             m_reclaimValuesp.emplace_back(outconstp);
         }
-        V3Number value{fetchConst(valueFromp)->num()};
-        value.opCleanTwoStateNumber(selp->dtypep());
         outconstp->num().opSelInto(value, lsb, selp->widthConst());
         assignOutValue(nodep, vscp, outconstp);
     }
-    void handleAssignSelRecurse(AstNodeAssign* nodep, AstSel* selp, AstVarRef*& outVarrefpRef,
+    void handleAssignSelRecurse(AstNodeAssign* nodep, AstSel* selp, AstNodeExpr*& outBasepRef,
                                 V3Number& lsbRef, int depth) {
-        // Recurse down to find final variable being set (outVarrefp), with
-        // lsb to be eventually set on lsbRef
+        // Recurse down to find final variable, or element or member of a variable, being set
+        // (outBasepRef), with lsb to be eventually set on lsbRef
         checkNodeInfo(selp);
         iterateAndNextConstNull(selp->lsbp());  // Bit index
-        if (AstVarRef* const varrefp = VN_CAST(selp->fromp(), VarRef)) {
-            outVarrefpRef = varrefp;
+        AstNodeExpr* const fromp = selp->fromp();
+        if (VN_IS(fromp, VarRef) || VN_IS(fromp, ArraySel) || VN_IS(fromp, StructSel)) {
+            outBasepRef = fromp;
             lsbRef = fetchConst(selp->lsbp())->num();
             return;  // And presumably still optimizable()
         }
-        if (AstSel* const subselp = VN_CAST(selp->fromp(), Sel)) {
+        if (AstSel* const subselp = VN_CAST(fromp, Sel)) {
             V3Number sublsb{nodep};
-            handleAssignSelRecurse(nodep, subselp, outVarrefpRef, sublsb /*ref*/, depth + 1);
+            handleAssignSelRecurse(nodep, subselp, outBasepRef, sublsb /*ref*/, depth + 1);
             if (optimizable()) {
                 lsbRef = sublsb;
                 lsbRef.opAdd(sublsb, fetchConst(selp->lsbp())->num());
             }
         } else {
-            clearOptimizable(selp->fromp(), "Select LHS isn't simple variable");
+            clearOptimizable(fromp, "Select LHS isn't simple variable");
         }
     }
     void handleAssignRecurse(AstNodeAssign* nodep, AstNodeExpr* lhsp, AstNodeExpr* valueFromp) {
