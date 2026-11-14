@@ -4,11 +4,17 @@
 // SPDX-FileCopyrightText: 2020 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
 
   wire o_n;
+  wire o_p;
   wire o_0;
   wire o_1;
   wire [2:0] o_p1;
@@ -32,6 +38,8 @@ module t (
   sub_p0_wide sub_p0_wide (.o(o_p0_wide));
   sub_p1_packed sub_p1_packed (.o(o_p1_packed));
   sub_p0_packed sub_p0_packed (.o(o_p0_packed));
+  ifc_1 ifc_1 ();
+  prg_1 prg_1 (.o_p);
   // verilator lint_on PINMISSING
 
   always @(posedge clk) begin
@@ -46,6 +54,8 @@ module t (
     if (o_p0_wide !== {33{1'b0}}) $stop;
     if (o_p1_packed !== 8'hff) $stop;
     if (o_p0_packed !== 8'h00) $stop;
+    `checkh(ifc_1.o_i, 1'b1);
+    `checkh(o_p, 1'b1);
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -133,5 +143,19 @@ module sub_p0_packed (
 );
   assign o = i;
 endmodule
+
+interface ifc_1 (
+    input i
+);
+  wire o_i;
+  assign o_i = i;
+endinterface
+
+program prg_1 (
+    input i,
+    output wire o_p
+);
+  assign o_p = i;
+endprogram
 
 `nounconnected_drive
