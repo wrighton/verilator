@@ -630,7 +630,7 @@ AstNode* V3Begin::convertToWhile(AstForeach* nodep) {
             } else if (const AstBasicDType* const adtypep = VN_CAST(fromDtp, BasicDType)) {
                 if (adtypep->isString()) {
                     AstConst* const leftp = new AstConst{fl, 0};
-                    AstNodeExpr* const rightp = new AstLenN{fl, fromp->cloneTreePure(false)};
+                    AstNodeExpr* const rightp = new AstLenN{fl, subfromp->cloneTreePure(false)};
                     loopp = createForeachLoop(nodep, blockp, bodyPointp, arrayMayResize, subfromp,
                                               varp, leftp, rightp, VNType::Lt);
                 } else {
