@@ -386,6 +386,9 @@ class WidthVisitor final : public VNVisitor {
     bool m_hasSExpr = false;  // Property has a sequence expression
     const AstCell* m_cellp = nullptr;  // Current cell, whose port connections are visited
     std::vector<AstVar*> m_splitIfaceArrayVarps;  // Interface arrays split by V3Param
+    // Element variables of each interface array split by V3Param, in order (see V3Param),
+    // gathered when first selected from
+    std::unordered_map<const AstVar*, std::vector<AstVar*>> m_splitIfaceElemVarps;
     const AstEnumItem* m_enumItemp = nullptr;  // Current enum item
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstProperty* m_propertyp = nullptr;  // Current property
@@ -1747,6 +1750,7 @@ class WidthVisitor final : public VNVisitor {
     }
 
     void visit(AstSelBit* nodep) override {
+        if (replaceSplitIfaceArraySel(nodep)) return;
         // Just a quick check as after V3Param these nodes instead are AstSel's
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
@@ -1769,6 +1773,7 @@ class WidthVisitor final : public VNVisitor {
         nodep->v3fatalSrc("AstSelBit should disappear after widthSel");
     }
     void visit(AstSelExtract* nodep) override {
+        if (replaceSplitIfaceArraySel(nodep)) return;
         // Just a quick check as after V3Param these nodes instead are AstSel's
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->leftp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
@@ -1782,6 +1787,7 @@ class WidthVisitor final : public VNVisitor {
         nodep->v3fatalSrc("AstSelExtract should disappear after widthSel");
     }
     void visit(AstSelPlus* nodep) override {
+        if (replaceSplitIfaceArraySel(nodep)) return;
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->widthp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
@@ -1794,6 +1800,7 @@ class WidthVisitor final : public VNVisitor {
         nodep->v3fatalSrc("AstSelPlus should disappear after widthSel");
     }
     void visit(AstSelMinus* nodep) override {
+        if (replaceSplitIfaceArraySel(nodep)) return;
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->widthp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
@@ -12077,16 +12084,160 @@ class WidthVisitor final : public VNVisitor {
     void replaceSplitIfaceArrayRef(AstNodeVarRef* nodep) {
         AstVar* const varp = nodep->varp();
         UASSERT_OBJ(varp->isIfaceArraySplit(), nodep, "Not a split interface array");
-        std::string name = varp->name();
+        std::string name;
         std::string suffix;
-        if (varp->isIfaceParent()) {
-            name = name.substr(0, name.rfind("__Viftop"));
-            suffix = "__Viftop";
-        }
+        splitIfaceArrayName(varp, name, suffix);
         // The element variables follow the whole array variable in order (see V3Param)
         AstVar* elemVarp = VN_CAST(varp->nextp(), Var);
         nodep->replaceWith(newIfaceArrayValue(nodep, varp->dtypep(), name, suffix, elemVarp));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // The element variables of split interface array 'varp' are named 'name' + their indices
+    // + 'suffix'
+    static void splitIfaceArrayName(const AstVar* varp, std::string& name, std::string& suffix) {
+        name = varp->name();
+        if (varp->isIfaceParent()) {
+            name = name.substr(0, name.rfind("__Viftop"));
+            suffix = "__Viftop";
+        }
+    }
+    // The value of constant 'nodep' as an index, if it is a constant representable as an int
+    static bool constIndex(const AstNode* nodep, int& indexr) {
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (!constp) return false;
+        const V3Number& num = constp->num();
+        if (num.isOpaque() || num.isFourState() || num.width() > 64) return false;
+        // Any width and signedness, e.g. a negative 64-bit index (IEEE 1800-2023 7.4.5)
+        constexpr int64_t MIN = std::numeric_limits<int>::min();
+        constexpr int64_t MAX = std::numeric_limits<int>::max();
+        if (!constp->isSigned()) {
+            if (num.toUQuad() > static_cast<uint64_t>(MAX)) return false;
+            indexr = static_cast<int>(num.toUQuad());
+            return true;
+        }
+        const int64_t value = num.toSQuad();
+        if (value < MIN || value > MAX) return false;
+        indexr = static_cast<int>(value);
+        return true;
+    }
+    // Replace 'nodep', a constant select of a whole interface array variable split by V3Param,
+    // or the outermost of a chain of constant selects of one, with references to just the
+    // selected elements. Referencing all elements of the array, then selecting, would be
+    // quadratic for many selects. Element selects may be chained; 'nodep' may also be a slice.
+    // Returns false, leaving 'nodep' to the general path, if not such a select, or an index is
+    // not constant, or not a plain in-range select (the general path reports those).
+    bool replaceSplitIfaceArraySel(AstNodePreSel* nodep) {
+        if (m_paramsOnly) return false;
+        std::vector<AstSelBit*> bitps;  // Element selects below 'nodep', the leftmost last
+        AstNodeExpr* fromp = nodep->fromp();
+        while (AstSelBit* const selp = VN_CAST(fromp, SelBit)) {
+            bitps.push_back(selp);
+            fromp = selp->fromp();
+        }
+        AstNodeVarRef* const refp = VN_CAST(fromp, NodeVarRef);
+        if (!refp || !refp->varp()->isIfaceArraySplit()) return false;
+        AstVar* const varp = refp->varp();
+        userIterate(varp, nullptr);  // Its data type is needed below
+        if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) bitps.insert(bitps.begin(), selp);
+        // Select from the leftmost dimension inwards: the selected elements are the
+        // 'dtypep' elements starting at element variable 'offset'
+        std::string name;
+        std::string suffix;
+        splitIfaceArrayName(varp, name, suffix);
+        AstNodeDType* dtypep = varp->dtypep();
+        uint32_t offset = 0;
+        for (auto it = bitps.rbegin(); it != bitps.rend(); ++it) {
+            const AstUnpackArrayDType* const arrp = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
+            if (!arrp) return false;
+            // As the general path (see V3WidthSel)
+            userIterateAndNext((*it)->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+            V3Const::constifyParamsNoWarnEdit((*it)->bitp());  // May relink pointed to node
+            int index;
+            if (!constIndex((*it)->bitp(), index)) return false;
+            const VNumRange range = arrp->declRange();
+            if (index < range.lo() || index > range.hi()) return false;
+            dtypep = arrp->subDTypep();
+            offset += std::abs(index - range.left()) * dtypep->arrayUnpackedElements();
+            name += "__BRA__" + AstNode::encodeNumber(index) + "__KET__";
+        }
+        std::vector<AstVar*>& elemVarps = m_splitIfaceElemVarps[varp];
+        if (elemVarps.empty()) {
+            const uint32_t elements = varp->dtypep()->arrayUnpackedElements();
+            elemVarps.reserve(elements);
+            for (AstNode* itemp = varp->nextp(); elemVarps.size() < elements;
+                 itemp = itemp->nextp()) {
+                UASSERT_OBJ(VN_IS(itemp, Var), varp,
+                            "Missing element variables of interface array");
+                elemVarps.push_back(VN_AS(itemp, Var));
+            }
+        }
+        AstNodeExpr* newp;
+        if (VN_IS(nodep, SelBit)) {
+            AstVar* elemVarp = elemVarps[offset];
+            newp = newIfaceArrayValue(refp, dtypep, name, suffix, elemVarp);
+        } else {
+            newp = newSplitIfaceArraySlice(nodep, refp, dtypep, name, suffix, elemVarps, offset);
+            if (!newp) return false;
+        }
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
+    // For 'replaceSplitIfaceArraySel', the value of slice 'nodep' of the elements 'dtypep' named
+    // 'name' + indices + 'suffix', starting at 'offset' in 'elemVarps', as the general path
+    // makes it. Returns nullptr if not a plain constant in-range slice.
+    AstNodeExpr* newSplitIfaceArraySlice(AstNodePreSel* nodep, const AstNodeVarRef* refp,
+                                         AstNodeDType* dtypep, const std::string& name,
+                                         const std::string& suffix,
+                                         const std::vector<AstVar*>& elemVarps, uint32_t offset) {
+        const AstUnpackArrayDType* const arrp = VN_CAST(dtypep->skipRefp(), UnpackArrayDType);
+        if (!arrp) return nullptr;
+        const VNumRange range = arrp->declRange();
+        if (range.elements() == 1) return nullptr;
+        // As the general path (see V3WidthSel)
+        userIterateAndNext(nodep->rhsp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+        userIterateAndNext(nodep->thsp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+        V3Const::constifyParamsNoWarnEdit(nodep->rhsp());  // May relink pointed to node
+        V3Const::constifyParamsNoWarnEdit(nodep->thsp());  // May relink pointed to node
+        int rhs;
+        int ths;
+        if (!constIndex(nodep->rhsp(), rhs) || !constIndex(nodep->thsp(), ths)) return nullptr;
+        // The slice range relative to range.lo(), as V3WidthSel makes it, and whether the
+        // whole array is selected, which V3WidthSel replaces with the array itself
+        VNumRange sliceRange;
+        bool whole;
+        if (VN_IS(nodep, SelExtract)) {
+            // Reversed order is reported by the general path
+            if (rhs != ths && (rhs > ths) == range.ascending()) return nullptr;
+            sliceRange = VNumRange{rhs - range.lo(), ths - range.lo()};
+            whole = range.elements() == std::abs(rhs - ths) + 1 && range.lo() == ths;
+        } else {
+            if (ths < 1) return nullptr;
+            const int hi = VN_IS(nodep, SelPlus) ? rhs + ths - 1 : rhs;
+            const int lo = VN_IS(nodep, SelPlus) ? rhs : rhs - ths + 1;
+            sliceRange = VNumRange{hi - range.lo(), lo - range.lo(), range.ascending()};
+            whole = range.elements() == ths && range.lo() == rhs;
+        }
+        if (sliceRange.lo() < 0 || sliceRange.hi() >= range.elements()) return nullptr;
+        if (whole) {
+            AstVar* elemVarp = elemVarps[offset];
+            return newIfaceArrayValue(refp, dtypep, name, suffix, elemVarp);
+        }
+        FileLine* const flp = nodep->fileline();
+        AstNodeDType* const newDtp
+            = new AstUnpackArrayDType{flp, arrp->subDTypep(), new AstRange{flp, sliceRange}};
+        v3Global.rootp()->typeTablep()->addTypesp(newDtp);
+        AstConsArray* const consp = new AstConsArray{flp, newDtp};
+        const uint32_t subElements = arrp->subDTypep()->arrayUnpackedElements();
+        for (int n = 0; n < sliceRange.elements(); ++n) {
+            const int index = range.lo() + sliceRange.lo() + n;
+            AstVar* elemVarp = elemVarps[offset + std::abs(index - range.left()) * subElements];
+            consp->valuep(
+                n, newIfaceArrayValue(refp, arrp->subDTypep(),
+                                      name + "__BRA__" + AstNode::encodeNumber(index) + "__KET__",
+                                      suffix, elemVarp));
+        }
+        return consp;
     }
 
     // Add a pin for each element port of interface array port of pin 'nodep', split by V3Param,
@@ -12219,6 +12370,7 @@ public:
             VL_DO_DANGLING(pushDeletep(varp->unlinkFrBack()), varp);
         }
         m_splitIfaceArrayVarps.clear();
+        m_splitIfaceElemVarps.clear();
         return nodep;
     }
     static bool lowerAsFixedAggregate(const AstNodeDType* const dtypep) {
