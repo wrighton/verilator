@@ -160,9 +160,24 @@ private:
                 hash += vertexHash(src);  // Graph is acyclic, so this terminates
                 return false;
             });
-            result = hash;
+            result = finalMix(hash.value());
         }
         return result;
+    }
+
+    // V3Hash combining mixes poorly, so along a long chain of identically shaped vertices,
+    // e.g. 'x = x ^ {x[6:0], x[7]}' repeated, the hashes of successive vertices soon repeat,
+    // and equivalence checks between the chain's equal-hash vertices become quadratic in time
+    // and memory. Avalanche each vertex hash with the MurmurHash3 'fmix32' finalizer
+    // (A. Appleby, SMHasher), so the hash of a chain behaves like that of a random function.
+    static V3Hash finalMix(uint32_t h) {
+        h ^= h >> 16;
+        h *= 0x85ebca6bU;
+        h ^= h >> 13;
+        h *= 0xc2b2ae35U;
+        h ^= h >> 16;
+        // Zero means not yet computed
+        return V3Hash{h ? h : 1U};
     }
 };
 
