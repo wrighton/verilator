@@ -36,4 +36,15 @@ test.file_grep(
 term = r'\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)'
 test.file_grep_not(log, r'\(and +' + term + r'\)')
 
+# A seed under which a UniGen2 hash equation selects no bit of Single's v: the xor of no
+# bit is still an application of two operands, as SMT-LIB 'bvxor' takes at least two
+log = test.obj_dir + "/solver_seed.log"
+test.execute(logfile=test.obj_dir + "/sim_seed.log",
+             all_run_flags=[
+                 '+verilator+rand+sampler+default', '+verilator+seed+111',
+                 '+verilator+solver+file+' + log
+             ])
+test.file_grep(log, r'\(bvxor #b0 #b0\)')
+test.file_grep_not(log, r'\(bvxor +[^ ()]+\)')
+
 test.passes()
