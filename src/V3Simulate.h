@@ -685,12 +685,14 @@ private:
         if (m_checkOnly) {
             m_instrCount += nodep->instrCount();
             m_dataCount += nodep->width();
+            // Only the check result is used. Values made during emulation clear the cached
+            // purity, so re-checking every node then would walk each subtree again: O(n^2)
+            if (!nodep->isPure()) m_isImpure = true;
         }
         if (!ignorePredict && !nodep->isPredictOptimizable()) {
             // UINFO(9, "     !predictopt " << nodep);
             clearOptimizable(nodep, "Isn't predictable");
         }
-        if (!nodep->isPure()) m_isImpure = true;
     }
 
     void knownBadNodeType(AstNode* nodep) {
