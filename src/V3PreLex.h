@@ -171,6 +171,7 @@ public:  // Used only by V3PreLex.cpp and V3PreProc.cpp
 
     // State from lexer
     int m_formalLevel = 0;  // Parenthesis counting inside def formals
+    bool m_defNameEscaped = false;  // Definition name is an escaped identifier
     int m_parenLevel = 0;  // Parenthesis counting inside def args
     bool m_defCmtSlash = false;  // /*...*/ comment in define had \ ending
     bool m_defQuote = false;  // Definition value inside quote
@@ -215,7 +216,7 @@ public:  // Used only by V3PreLex.cpp and V3PreProc.cpp
     void verilatorCmtLintSave();
     // Called by V3PreProc.cpp to inform lexer
     void pushStateDefArg(int level);
-    void pushStateDefForm();
+    void pushStateDefForm(bool nameEscaped);
     void pushStateDefValue();
     void pushStateExpr();
     void pushStateIncFilename();
