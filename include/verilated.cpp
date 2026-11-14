@@ -917,16 +917,17 @@ double VL_ITOR_D_W(int lbits, const WDataInP lwp) VL_PURE {
     for (; !lwp[ms_word] && ms_word > 0;) --ms_word;
     if (ms_word == 0) return static_cast<double>(lwp[0]);
     if (ms_word == 1) return static_cast<double>(VL_SET_QW(lwp));
-    // We need 53 bits of mantissa, which might mean looking at 3 words
-    // namely ms_word, ms_word-1 and ms_word-2
-    const EData ihi = lwp[ms_word];
-    const EData imid = lwp[ms_word - 1];
-    const EData ilo = lwp[ms_word - 2];
-    const double hi = static_cast<double>(ihi) * std::exp2(2 * VL_EDATASIZE);
-    const double mid = static_cast<double>(imid) * std::exp2(VL_EDATASIZE);
-    const double lo = static_cast<double>(ilo);
-    const double d = (hi + mid + lo) * std::exp2(VL_EDATASIZE * (ms_word - 2));
-    return d;
+    // Round once to nearest (IEEE 754): convert the 64 most significant bits, with any
+    // lower set bit folded into the least significant bit, then scale
+    const int lsb = VL_MOSTSETBITP1_W(ms_word + 1, lwp) - VL_QUADSIZE;
+    const int word = VL_BITWORD_E(lsb);
+    const int bit = VL_BITBIT_E(lsb);
+    QData mant = (static_cast<QData>(lwp[word]) >> bit)
+                 | (static_cast<QData>(lwp[word + 1]) << (VL_EDATASIZE - bit));
+    if (bit) mant |= static_cast<QData>(lwp[word + 2]) << (2 * VL_EDATASIZE - bit);
+    bool sticky = bit && (lwp[word] & VL_MASK_E(bit));
+    for (int i = 0; !sticky && i < word; ++i) sticky = lwp[i] != 0;
+    return std::ldexp(static_cast<double>(mant | sticky), lsb);
 }
 double VL_ISTOR_D_W(int lbits, const WDataInP lwp) VL_MT_SAFE {
     if (!VL_SIGN_W(lbits, lwp)) return VL_ITOR_D_W(lbits, lwp);
