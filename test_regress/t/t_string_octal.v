@@ -39,6 +39,22 @@ module t;
     `checko(s[2], 8'o003);
     `checko(s[4], 8'o012);
     `checko(s[5], 8'o103);
+
+    s = "ab\12";  // Octal escape ending the string
+    `checko(s.len(), 3);
+    `checko(s[2], 8'o012);
+
+    s = "\18\9";  // 8 and 9 are not octal digits
+    `checko(s.len(), 3);
+    `checko(s[0], 8'o001);
+    `checko(s[1], "8");
+    `checko(s[2], "9");
+
+    s = "\x4G\x4";  // Single digit hex escapes
+    `checko(s.len(), 3);
+    `checko(s[0], 8'h04);
+    `checko(s[1], "G");
+    `checko(s[2], 8'h04);
     $display("*-* All Finished *-*");
     $finish;
   end
