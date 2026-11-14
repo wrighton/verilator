@@ -17,8 +17,11 @@ if not test.have_solver:
 if platform.system() != "Linux":
     test.skip("Replacing write() needs Linux")
 
-test.compile(v_flags2=["t/t_randomize_solver_short_write_c.cpp"], verilator_flags2=['--binary'])
+test.compile(v_flags2=["t/t_randomize_solver_short_write_c.cpp", "-LDFLAGS -ldl"],
+             verilator_flags2=['--binary'])
 
-test.execute()
+logfile = test.obj_dir + '/sim_short_transfers.log'
+test.execute(logfile=logfile)
+test.file_grep(logfile, r'Short solver transfers: ([1-9][0-9]*)')
 
 test.passes()
