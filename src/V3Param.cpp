@@ -1273,7 +1273,8 @@ class ParamProcessor final {
             return;
         }
         AstParseRef* const parseRefp = memberParseRef(dotp->rhsp());
-        if (!parseRefp) return;
+        AstFuncRef* const funcRefp = VN_CAST(dotp->rhsp(), FuncRef);
+        if (!parseRefp && !funcRefp) return;
 
         AstClass* lhsClassp = VN_CAST(classRefp->classOrPackageSkipp(), Class);
 
@@ -1316,10 +1317,25 @@ class ParamProcessor final {
         if (!lhsClassp) return;
 
         AstClass* memberClassp = nullptr;
-        AstNode* const memberp
-            = findClassMember(lhsClassp, parseRefp->name(), memberClassp /*ref*/);
-        UINFO(9, "Resolve deferred class member: " << parseRefp->name() << " -> " << memberp);
-        if (VN_IS(memberp, ParamTypeDType) || VN_IS(memberp, Typedef)) {
+        const string& memberName = parseRefp ? parseRefp->name() : funcRefp->name();
+        AstNode* const memberp = findClassMember(lhsClassp, memberName, memberClassp /*ref*/);
+        UINFO(9, "Resolve deferred class member: " << memberName << " -> " << memberp);
+        AstFunc* const funcp = VN_CAST(memberp, Func);
+        if (funcRefp || (funcp && parseRefp == dotp->rhsp())) {
+            // Static method call 'Cls#(...)::f(...)' (IEEE 1800-2023 13.4.3), maybe without
+            // parentheses (13.5.5), linked as V3LinkDot links a static method call of an
+            // unparameterized class
+            if (!funcp || !funcp->isStatic()) return;
+            AstFuncRef* const refp
+                = funcRefp ? funcRefp->unlinkFrBack()
+                           : new AstFuncRef{parseRefp->fileline(), parseRefp->name()};
+            refp->taskp(funcp);
+            refp->classOrPackagep(memberClassp);
+            refp->superReference(true);
+            dotp->replaceWith(refp);
+            // m_cellps in ParamVisitor may still contain the class reference
+            VL_DO_DANGLING(m_deleter.pushDeletep(dotp), dotp);
+        } else if (VN_IS(memberp, ParamTypeDType) || VN_IS(memberp, Typedef)) {
             if (parseRefp != dotp->rhsp()) return;
             AstRefDType* const refp = new AstRefDType{dotp->fileline(), parseRefp->name()};
             linkClassType(refp, memberp, memberClassp);
@@ -2379,6 +2395,12 @@ class ParamProcessor final {
                 iterateChildren(nodep);
             }
             m_processor.resolveDotToTypedef(nodep);
+        }
+        void visit(AstNodeFTaskRef* nodep) override {
+            iterateChildren(nodep);
+            // A constant function call evaluates the body of the function
+            AstNodeFTask* const taskp = nodep->taskp();
+            if (taskp && firstReach(taskp)) iterateDecl(taskp, taskp);
         }
         void visit(AstRefDType* nodep) override {
             iterateChildren(nodep);
