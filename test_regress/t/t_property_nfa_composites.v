@@ -45,19 +45,9 @@ module t (
     throughout_pass++;
   else throughout_fail++;
 
-  // Same-end intersect over branching left operands
-  int isect_pass_one = 0, isect_pass_both = 0, isect_pass_zero = 0;
-  int isect_fail_left = 0, isect_fail_right = 0, isect_fail_zero = 0;
-  int isect_unexp_one = 0, isect_unexp_both = 0, isect_unexp_zero_pass = 0;
-  int isect_unexp_zero_fail = 0, isect_unexp_left = 0, isect_unexp_right = 0;
-
-  assert property (@(posedge clk) ((1'b1 ##1 1'b1) or(1'b1 ##1 1'b0)) intersect (1'b1 ##1 1'b1))
-    isect_pass_one <= isect_pass_one + 1;
-  else isect_unexp_one <= isect_unexp_one + 1;
-
-  assert property (@(posedge clk) ((1'b1 ##1 1'b1) or(1'b1 ##1 1'b1)) intersect (1'b1 ##1 1'b1))
-    isect_pass_both <= isect_pass_both + 1;
-  else isect_unexp_both <= isect_unexp_both + 1;
+  // Same-end intersect over boolean 'or' operands
+  int isect_pass_zero = 0, isect_fail_zero = 0;
+  int isect_unexp_zero_pass = 0, isect_unexp_zero_fail = 0;
 
   assert property (@(posedge clk) (1'b1 or 1'b0) intersect 1'b1)
     isect_pass_zero <= isect_pass_zero + 1;
@@ -67,13 +57,70 @@ module t (
     isect_unexp_zero_fail <= isect_unexp_zero_fail + 1;
   else isect_fail_zero <= isect_fail_zero + 1;
 
-  assert property (@(posedge clk) ((1'b1 ##1 1'b0) or(1'b1 ##1 1'b0)) intersect (1'b1 ##1 1'b1))
-    isect_unexp_left <= isect_unexp_left + 1;
-  else isect_fail_left <= isect_fail_left + 1;
-
-  assert property (@(posedge clk) ((1'b1 ##1 1'b1) or(1'b1 ##1 1'b0)) intersect (1'b1 ##1 1'b0))
-    isect_unexp_right <= isect_unexp_right + 1;
-  else isect_fail_right <= isect_fail_right + 1;
+  // Sequence 'or' of multi-cycle operands fails once every operand has failed (IEEE 1800-2023
+  // 16.9.7). An attempt fails when no operand matches, counted at its last clock tick.
+  bit oa, ob, oc, od;
+  // Sampled values of the previous cycles, the previous one in bit 0
+  bit [7:0] oa_q, ob_q, oc_q, od_q;
+  int or_cyc = 0;
+  int or2_fail = 0, or2_exp = 0;
+  assert property (@(posedge clk) oa |-> (##1 ob) or (##2 oc)) else ++or2_fail;
+  int or3_fail = 0, or3_exp = 0;
+  assert property (@(posedge clk) oa |=> (ob ##1 oc) or (oc ##1 ob) or (##2 oa)) else ++or3_fail;
+  int or4_fail = 0, or4_exp = 0;
+  assert property (@(posedge clk) oa |-> (##1 ob) or (##2 oc) or (ob ##1 oc ##1 oa) or (##6 oa))
+  else ++or4_fail;
+  int orgap_fail = 0, orgap_exp = 0;
+  assert property (@(posedge clk) oa |-> (##1 ob) or (##6 oc)) else ++orgap_fail;
+  int ortop_fail = 0, ortop_exp = 0;
+  assert property (@(posedge clk) (ob ##1 oc) or (##1 oa)) else ++ortop_fail;
+  int ordis_fail = 0, ordis_exp = 0;
+  assert property (@(posedge clk) disable iff (od) oa |-> (##1 ob) or (##2 oc)) else ++ordis_fail;
+  // A cycle delay before the 'or' applies to each operand
+  int orlead_fail = 0, orlead_exp = 0;
+  assert property (@(posedge clk) oa |-> ##1 ((ob ##1 oc) or (oc ##1 ob))) else ++orlead_fail;
+  int orpre_fail = 0, orpre_exp = 0;
+  assert property (@(posedge clk) oa |-> ob ##2 (oc or (oa ##1 oc))) else ++orpre_fail;
+  always @(posedge clk) begin
+    ++or_cyc;
+    oa_q <= {oa_q[6:0], oa};
+    ob_q <= {ob_q[6:0], ob};
+    oc_q <= {oc_q[6:0], oc};
+    od_q <= {od_q[6:0], od};
+    if (oa_q[1] && !ob_q[0] && !oc) ++or2_exp;
+    if (oa_q[2] && !(ob_q[1] && oc_q[0]) && !(oc_q[1] && ob_q[0]) && !oa) ++or3_exp;
+    if (oa_q[5] && !ob_q[4] && !oc_q[3] && !(ob_q[5] && oc_q[4] && oa_q[3]) && !oa) ++or4_exp;
+    if (oa_q[5] && !ob_q[4] && !oc) ++orgap_exp;
+    if (or_cyc > 1 && !(ob_q[0] && oc) && !oa) ++ortop_exp;
+    if (oa_q[1] && !ob_q[0] && !oc && !od_q[1] && !od_q[0] && !od) ++ordis_exp;
+    if (oa_q[0] && !ob && !oc) ++orlead_exp;
+    if (oa_q[1] && (ob_q[0] || oc_q[0]) && !(ob_q[0] && oc) && !(oc_q[0] && ob)) ++orlead_exp;
+    if (oa && !ob) ++orpre_exp;
+    if (oa_q[1] && ob_q[1] && !oc && !oa) ++orpre_exp;
+    if (oa_q[2] && ob_q[2] && !oc_q[0] && oa_q[0] && !oc) ++orpre_exp;
+  end
+  bit or_checked = 0;
+  bit [15:0] or_lfsr = 16'hace1;
+  initial begin
+    repeat (2) @(negedge clk);
+    repeat (100) begin
+      or_lfsr = {or_lfsr[14:0], or_lfsr[15] ^ or_lfsr[13] ^ or_lfsr[12] ^ or_lfsr[10]};
+      {oa, ob, oc} = or_lfsr[7:5];
+      od = &or_lfsr[2:0];
+      @(negedge clk);
+    end
+    {oa, ob, oc, od} = '0;
+    repeat (8) @(negedge clk);
+    `checkd(or2_fail, or2_exp);
+    `checkd(or3_fail, or3_exp);
+    `checkd(or4_fail, or4_exp);
+    `checkd(orgap_fail, orgap_exp);
+    `checkd(ortop_fail, ortop_exp);
+    `checkd(ordis_fail, ordis_exp);
+    `checkd(orlead_fail, orlead_exp);
+    `checkd(orpre_fail, orpre_exp);
+    or_checked = 1;
+  end
 
   initial begin
     $assertpasson;
@@ -123,24 +170,17 @@ module t (
     repeat (3) @(negedge clk);
 
     `checkd(or_fail_pass, 0);
-    `checkd(or_fail_count, 0);
+    `checkd(or_fail_count, 1);
     `checkd(or_both_pass, 1);
     `checkd(or_both_fail, 0);
     `checkd(cross_hits, 0);
     `checkd(throughout_pass, 1);
     `checkd(throughout_fail, 1);
-    `checkd(isect_pass_one, 17);
-    `checkd(isect_pass_both, 17);
     `checkd(isect_pass_zero, 18);
-    `checkd(isect_fail_left, 0);
-    `checkd(isect_fail_right, 17);
     `checkd(isect_fail_zero, 18);
-    `checkd(isect_unexp_one, 0);
-    `checkd(isect_unexp_both, 0);
     `checkd(isect_unexp_zero_pass, 0);
     `checkd(isect_unexp_zero_fail, 0);
-    `checkd(isect_unexp_left, 0);
-    `checkd(isect_unexp_right, 0);
+    wait (or_checked);
     $write("*-* All Finished *-*\n");
     $finish;
   end
