@@ -65,6 +65,7 @@ runs = [
     ('select_carry', 1, 15),  # an indexed index of 2^32, whose low bits name q[0]
     ('select_digit', 1, 15),  # a select with a bare digit after its index
     ('select_dup', 1, 15),  # one element answered twice, in two notations
+    ('select_empty', 1, 15),  # a select of an array with no element
     ('select_extra', 1, 15),  # a select with a term after its index
     ('select_lead', 1, 15),  # a select with a bare digit before its index
     ('select_narrow', 1, 15),  # an index narrower than its sort
@@ -95,6 +96,10 @@ for mode, at, npass in runs:
                  'TAMPER=' + mode + ' TAMPER_AT=' + str(at))
     test.file_grep(logfile, r'NPASS=(\d+)', npass)
 
+# An array with no element has no element a select can name
+test.file_grep(test.obj_dir + '/sim_select_empty_1.log',
+               r"Unable to parse solver's response: invalid array index")
+
 # Every literal, select indices too, as an indexed (_ bvX n) literal. The blocking clauses
 # show the UniGen2 cell enumeration read these replies too, rather than giving up.
 logfile = test.obj_dir + '/sim_bv_literals.log'
@@ -106,9 +111,11 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(solver_log, r'^  \(assert \(not \(and .*\(= \(select q #x00000000\) +#b[01]+\)')
 
-# The first sampled reply: replies 1 to 15 answer the first calls' plain solves, so reply 16
-# is the UniGen2 sampler's first get-value, for Packet's second call. A value of the wrong
-# width must not reach a blocking clause; the call still passes.
+# The first UniGen2 sampler reply, for Packet's second call. Replies 1 to 15 answer the
+# first calls' solves and diversity rounds, so their count depends on the solver's models:
+# the injected reply must be the one right after the sampler's push and get-value, else
+# this case does not test the sampler. A value of the wrong width must not reach a
+# blocking clause, and the call still passes.
 logfile = test.obj_dir + '/sim_bsat_narrow.log'
 solver_log = test.obj_dir + '/solver_bsat_narrow.log'
 test.execute(logfile=logfile,
@@ -116,8 +123,9 @@ test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
              'TAMPER=value_narrow TAMPER_AT=16')
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
-test.file_grep(solver_log, r'^  \(push 1\)')
-test.file_grep(solver_log, r'^< \(\(a #b0\) \(b #x12\)\)')
+test.file_grep(
+    solver_log, r'^  \(push 1\)\n  \(check-sat\)\n< sat\n  \(get-value \( a b\)\)\n'
+    r'< \(\(a #b0\) \(b #x12\)\)\n  \(pop 1\)$')
 test.file_grep_not(solver_log, r'\(= a +#b0\)')
 
 # 4 randomize calls through the diversity pin rounds, alone, from a fixed seed. A round
