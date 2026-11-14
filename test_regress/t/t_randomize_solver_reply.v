@@ -38,15 +38,17 @@ class Phased;
 endclass
 
 // Array element replies, which arrive as (select ...) terms; a key wider than 32 bits
-// names its element in hex
+// names its element in hex, and an array with no element is still a solver variable
 class Arr;
   rand bit [7:0] q[3];
   rand bit [7:0] wide[bit [64:0]];
   rand bit [7:0] z;
+  rand bit [7:0] e[];
   constraint ac {
     foreach (q[i]) q[i] > 8'd20;
     foreach (wide[k]) wide[k] == 8'd77;
     z != 8'd200;
+    foreach (e[i]) e[i] < 8'd50;
   }
   function new;
     wide[65'h1_2345_6789_abcd_ef01] = 0;
@@ -188,6 +190,7 @@ module t;
         `checkd(ar.wide[65'h1_2345_6789_abcd_ef01], 8'd77);
       end
       else `checkd(ar.q[0], 8'd7);
+      `checkd(ar.e.size(), 0);
       rc = un.randomize();
       `checkd(rc, 0);  // zero-ok: constraints are unsatisfiable
     end
