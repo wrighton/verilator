@@ -182,6 +182,35 @@ module t;
     d.w = c.w - 1;
     return c.w + f_recurse(d);
   endfunction
+  // Calls each partially assigning a fresh two-state local or an argument
+  typedef struct {
+    bit [6:0] tag;
+    bit [30:0] w;
+  } part_t;
+  typedef part_t parts_t[3:1];
+  function automatic int f_partial(int i, int v, parts_t a);
+    part_t c;
+    parts_t l;
+    c.w = 31'(v);
+    l[i].w = 31'(v);
+    a[i].w += 31'(v);
+    return int'(c.w) + int'(c.tag) + int'(l[1].w) + int'(l[2].w) + int'(l[3].w) + int'(a[1].w)
+        + int'(a[2].w) + int'(a[3].w);
+  endfunction
+  function automatic int f_partials();
+    parts_t a;
+    foreach (a[i]) a[i].w = 1;
+    return f_partial(1, 10, a) * 10000 + f_partial(2, 20, a) * 100 + f_partial(3, 30, a);
+  endfunction
+  // A fresh local partially assigned after a recursive call
+  function automatic int f_rec_part(int n);
+    bit [7:0] l[2];
+    int r;
+    if (n == 0) return 0;
+    r = f_rec_part(n - 1);
+    l[n%2] = 8'(n);
+    return r * 10 + int'(l[0]) + int'(l[1]);
+  endfunction
   // Issue #3826: an array of structures built in a loop over its size, used by a generate
   typedef cfg_t list_t[3];
   function list_t make_list;
@@ -212,6 +241,8 @@ module t;
   localparam int MEMBER_W = f_pattern(9).w;
   localparam int GET_W = get_w(P);
   localparam int LOOP = f_loop(5);
+  localparam int PARTIALS = f_partials();
+  localparam int REC_PART = f_rec_part(3);
   localparam int RECURSE = f_recurse('{1'b1, 4});
   localparam int COMPARE_EQ = f_compare('{1'b1, 5}, '{1'b1, 5});
   localparam int COMPARE_NE = f_compare('{1'b1, 5}, '{1'b1, 6});
@@ -255,6 +286,8 @@ module t;
     `checkd(MEMBER_W, 10);
     `checkd(GET_W, 33);
     `checkd(LOOP, 10);
+    `checkd(PARTIALS, 33 * 10000 + 63 * 100 + 93);
+    `checkd(REC_PART, 123);
     `checkd(RECURSE, 10);
     `checkd(COMPARE_EQ, 'b0_1011);
     `checkd(COMPARE_NE, 'b0_0110);
