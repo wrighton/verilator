@@ -274,6 +274,10 @@ public:
             // otherwise done
             const VOptionBool drive = cellp->modp()->unconnectedDrive();
             if (pinVarp->direction() != VDirection::INPUT || drive.isDefault()) return nullptr;
+            // An omitted or positionally blank input with a default value is connected to the
+            // default (IEEE 1800-2023 23.2.2.4, 23.3.2.1), an explicit empty named connection
+            // is not (IEEE 1800-2023 23.3.2.2).
+            if (pinVarp->hasUserInit() && !pinp->svDotName()) return nullptr;
             if (!pinVarp->dtypep()->skipRefp()->isIntegralOrPacked()) {
                 pinp->v3error("Unconnected input port "
                               << pinVarp->prettyNameQ()
