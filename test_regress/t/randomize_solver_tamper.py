@@ -11,7 +11,7 @@
 #
 # Input arguments from environment variables:
 # TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | binary
-#         | core_junk | crlf | die_at | die_status_at | diversity_model
+#         | close_stdin_at | core_junk | crlf | die_at | die_status_at | diversity_model
 #         | dup_model | err_assume | err_core | err_multiline | err_once
 #         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
@@ -25,6 +25,7 @@
 #   bad_value        - replace the Nth model reply with one well-formed value lacking a base
 #   bare_hash        - replace the Nth model reply with one value that is only "#"
 #   binary           - replace the Nth model reply with binary values
+#   close_stdin_at   - kill and reap the solver, close stdin, then forward the Nth status
 #   core_junk        - prepend garbage to the core reply and close the pipe
 #   crlf             - end every line with CRLF
 #   die_at           - kill the solver at the Nth model reply and exit, closing every pipe end
@@ -84,8 +85,8 @@ at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
-STATUS_MODES = ("die_status_at", "err_multiline", "err_once", "err_trunc", "err_unbal",
-                "err_unbal_cont", "garbage_status", "unknown_once", "unknown_twice",
+STATUS_MODES = ("close_stdin_at", "die_status_at", "err_multiline", "err_once", "err_trunc",
+                "err_unbal", "err_unbal_cont", "garbage_status", "unknown_once", "unknown_twice",
                 "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
@@ -236,6 +237,12 @@ for line in proc.stdout:
         emit("((a #b00001011) (b #b00010010))")
         swallow(line)
         continue
+    if mode == "close_stdin_at":
+        proc.kill()
+        proc.wait()
+        os.close(0)
+        forward(line, at_reply_start)
+        sys.exit(0)
     if mode == "core_junk":
         emit("junk((__Vcons0))")
         proc.kill()
