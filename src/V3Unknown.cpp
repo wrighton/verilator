@@ -54,6 +54,7 @@ class UnknownVisitor final : public VNVisitor {
     // Cleared on Netlist
     //  AstSel::user()          -> bool.  Set true if already processed
     //  AstArraySel::user()     -> bool.  Set true if already processed
+    //  AstNodeDType::user()    -> bool.  Set true if member initializers converted
     //  AstNode::user2p()       -> AstIf* Inserted if assignment for conditional
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
@@ -72,6 +73,24 @@ class UnknownVisitor final : public VNVisitor {
     bool m_allowXUnique = true;  // Allow unique assignments
 
     // METHODS
+
+    // Convert the X bits of the member initializers within a data type, as visit(AstMemberDType)
+    // does, before V3Const::newSelectedDefaultp may clone them into a default value, as the type
+    // table is visited after the modules. Follows every element and member data type, as
+    // the default may be of a member selected through any of them.
+    void convertMemberInitializers(AstNodeDType* dtypep) {
+        dtypep = dtypep->skipRefp();
+        if (dtypep->user1SetOnce()) return;
+        if (AstNodeUOrStructDType* const sdtypep = VN_CAST(dtypep, NodeUOrStructDType)) {
+            if (sdtypep->packed()) return;  // No member initializers (IEEE 1800-2023 7.2.2)
+            for (AstMemberDType* const memberp : sdtypep->memberspList()) {
+                iterate(memberp);
+                convertMemberInitializers(memberp->subDTypep());
+            }
+        } else if (AstNodeDType* const subDTypep = dtypep->subDTypep()) {
+            convertMemberInitializers(subDTypep);
+        }
+    }
 
     void addVar(AstVar* varp) {
         if (m_ftaskp) {
