@@ -18,9 +18,9 @@
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
 #         | no_digits | none | octal | oor_assume | phase_model | phase_trunc
-#         | select_arity | select_carry | select_digit | select_dup | select_extra | select_lead
-#         | select_narrow | select_octal | select_prefix | select_scalar | select_unknown
-#         | select_whole | select_wide
+#         | select_arity | select_carry | select_digit | select_dup | select_empty
+#         | select_extra | select_lead | select_narrow | select_octal | select_prefix
+#         | select_scalar | select_unknown | select_whole | select_wide
 #         | short_model | stale_assume | success | unknown_once | unknown_twice
 #         | unknown_var | unsat_recheck | unsupported_once | upper_hex | value_digit
 #         | value_lead | value_narrow | value_wide
@@ -73,6 +73,7 @@
 #   select_carry     - replace the Nth array model reply with an indexed index of 2^width
 #   select_digit     - replace the Nth array model reply with a select of an extra digit
 #   select_dup       - replace the Nth array model reply with one element in two notations
+#   select_empty     - replace the Nth array model reply with a select of an array with no element
 #   select_extra     - replace the Nth array model reply with a select of an extra term
 #   select_lead      - replace the Nth array model reply with a select of a digit before its index
 #   select_narrow    - replace the Nth array model reply with an index narrower than its sort
@@ -121,8 +122,8 @@ STATUS_MODES = ("die_status_at", "err_multiline", "err_once", "err_trunc", "err_
 REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
 SELECT_MODES = ("bad_index", "diversity_model", "select_arity", "select_carry", "select_digit",
-                "select_dup", "select_extra", "select_lead", "select_narrow", "select_octal",
-                "select_prefix", "select_scalar", "select_unknown", "select_whole",
+                "select_dup", "select_empty", "select_extra", "select_lead", "select_narrow",
+                "select_octal", "select_prefix", "select_scalar", "select_unknown", "select_whole",
                 "select_wide")
 # Modes acting on the status the solver sends after answering unsat
 RECHECK_MODES = ("unsat_recheck", )
@@ -414,6 +415,7 @@ for line in proc.stdout:
         "((select (select q #x00000000) #x00000000) #x15) ((select q #x00000001) #x15)",
         "select_carry": "((select q (_ bv4294967296 32)) #x15) ((select q #x00000001) #x15)",
         "select_dup": "((select q #x00000000) #x15) ((select q #b" + "0" * 32 + ") #x16)",
+        "select_empty": "((select e #x00000000) #x15) ((select q #x00000001) #x15)",
         "select_lead": "((select q 0 #x00000000) #x15) ((select q #x00000001) #x15)",
         "select_narrow": "((select q #b0) #x15) ((select q #x00000001) #x15)",
         "select_octal": "((select q #o00000000000) #x15) ((select q #x00000001) #x15)",
