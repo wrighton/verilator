@@ -1769,8 +1769,9 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
         std::string element = varr.name();
         if (!indices.empty()) {
             const auto infoIt = m_arr_vars.find(generateKey(name, 0));
-            if (infoIt == m_arr_vars.end()
-                || indices.size() != infoIt->second->m_idxWidths.size()) {
+            // An element is recorded with one index per dimension, but an array with no
+            // element has no entry to name one
+            if (infoIt == m_arr_vars.end()) {
                 VL_WARN_MT(__FILE__, __LINE__, "randomize",
                            "Internal: Unable to parse solver's response: invalid array index");
                 return false;
