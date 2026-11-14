@@ -143,6 +143,8 @@ public:
     }
     // Resume the coroutine if the handle isn't null and the process isn't killed
     void resume();
+    // Destroy the coroutines of killed processes in 'handles', keeping the rest in order
+    static void dropKilled(std::vector<VlCoroutineHandle>& handles);
 #ifdef VL_DEBUG
     void dump() const;
 #endif
@@ -302,6 +304,10 @@ public:
 
             bool await_ready() const { return false; }  // Always suspend
             void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                // Killed processes stay here until the event fires, which may never happen
+                if (suspended.size() == suspended.capacity()) {
+                    VlCoroutineHandle::dropKilled(suspended);
+                }
                 suspended.emplace_back(coro, process, fileline);
             }
             void await_resume() const {}
