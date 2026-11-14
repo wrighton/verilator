@@ -143,8 +143,11 @@ module t;
       // Below the constraint, so any model the runtime applies overwrites it
       p.a = 8'd5;
       rc = p.randomize();
-      // A randomize that failed must leave the variable alone
-      if (rc != 0) npass++;
+      // A randomize that failed must leave the variable alone, one that passed must solve
+      if (rc != 0) begin
+        npass++;
+        `checkd(p.a > 8'd10, 1'b1);
+      end
       else `checkd(p.a, 8'd5);
       rc = s.randomize();
       if (rc != 0) npass++;

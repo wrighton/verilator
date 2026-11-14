@@ -101,6 +101,20 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(solver_log, r'^  \(assert \(not \(and .*\(= \(select q #x00000000\) +#b[01]+\)')
 
+# The first sampled reply: replies 1 to 15 answer the first calls' plain solves, so reply 16
+# is the UniGen2 sampler's first get-value, for Packet's second call. A value of the wrong
+# width must not reach a blocking clause; the call still passes.
+logfile = test.obj_dir + '/sim_bsat_narrow.log'
+solver_log = test.obj_dir + '/solver_bsat_narrow.log'
+test.execute(logfile=logfile,
+             all_run_flags=['+verilator+solver+file+' + solver_log],
+             run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+             'TAMPER=value_narrow TAMPER_AT=16')
+test.file_grep(logfile, r'NPASS=(\d+)', 16)
+test.file_grep(solver_log, r'^  \(push 1\)')
+test.file_grep(solver_log, r'^< \(\(a #b0\) \(b #x12\)\)')
+test.file_grep_not(solver_log, r'\(= a #b0\)')
+
 # 4 randomize calls through the diversity pin rounds, alone, from a fixed seed. A round
 # the solver leaves unsettled keeps the base solution, so every call still passes; the
 # count of check-sat-assuming rounds shows where each call's rounds stopped.
