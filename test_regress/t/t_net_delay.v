@@ -32,6 +32,18 @@ module t;
   assign val4 = cyc;
   assign val5 = cyc;
 
+  // Net delays of non-ANSI port nets
+  wire [3:0] port_in;
+  wire [3:0] port_out;
+  t_net_delay_in u_in (
+      .i(cyc),
+      .o(port_in)
+  );
+  t_net_delay_out u_out (
+      .o(port_out),
+      .a(cyc)
+  );
+
   always @(posedge clk) begin
     if ($time > 0) cyc <= cyc + 1;
     if (cyc == 15) begin
@@ -53,6 +65,28 @@ module t;
         `checkh(val4, 0);
         `checkh(val5, cyc);
         `checkh(val6, cyc - 1);
+        `checkh(port_in, cyc - 1);
+        `checkh(port_out, cyc - 1);
       end
     end
+endmodule
+
+module t_net_delay_in (
+    i,
+    o
+);
+  input [3:0] i;
+  output [3:0] o;
+  wire [3:0] #3 i;
+  assign o = i;
+endmodule
+
+module t_net_delay_out (
+    o,
+    a
+);
+  output [3:0] o;
+  input [3:0] a;
+  wire [3:0] #3 o;
+  assign o = a;
 endmodule
