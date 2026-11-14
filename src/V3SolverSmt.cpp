@@ -754,32 +754,57 @@ class ConstraintExprVisitor final : public VNVisitor {
         callp->dtypeSetVoid();
         return callp->makeStmt();
     }
-    // Statement appending a space and the term 'termp' to the text in 'varp'
-    static AstStmtExpr* newTermAppendp(FileLine* flp, AstVar* varp, AstNodeExpr* termp) {
-        return newTextAppendp(
-            flp, varp, new AstConcatN{flp, new AstConst{flp, AstConst::String{}, " "}, termp});
+    // Variable counting the terms appended to a text
+    static AstVar* newTermCountVarp(AstNode* nodep) {
+        AstVar* const varp = new AstVar{nodep->fileline(), VVarType::BLOCKTEMP, "__Vterms",
+                                        nodep->findIntDType()};
+        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        return varp;
     }
-    // The SMT operator 'op' applied to the terms in 'varp', or 'identity' if there are none
-    static AstCond* newTextApplyp(FileLine* flp, AstVar* varp, const std::string& op,
-                                  const std::string& identity) {
-        AstNodeExpr* const isEmptyp = new AstEqN{flp, new AstVarRef{flp, varp, VAccess::READ},
-                                                 new AstConst{flp, AstConst::String{}, ""}};
+    // Statements appending a space and the term 'termp' to the text in 'varp', and counting
+    // it in 'countVarp'
+    static AstNodeStmt* newTermAppendp(FileLine* flp, AstVar* varp, AstVar* countVarp,
+                                       AstNodeExpr* termp) {
+        AstNodeStmt* const appendp = newTextAppendp(
+            flp, varp, new AstConcatN{flp, new AstConst{flp, AstConst::String{}, " "}, termp});
+        appendp->addNext(new AstAssign{
+            flp, new AstVarRef{flp, countVarp, VAccess::WRITE},
+            new AstAdd{flp, new AstConst{flp, 1}, new AstVarRef{flp, countVarp, VAccess::READ}}});
+        return appendp;
+    }
+    // The SMT operator 'op' applied to the 'countVarp' terms in 'varp': 'identity' if there
+    // are none, and the term itself if there is one, as the SMT-LIB operators take at least two
+    static AstCond* newTextApplyp(FileLine* flp, AstVar* varp, AstVar* countVarp,
+                                  const std::string& op, const std::string& identity) {
+        const auto newCountEqp = [&](uint32_t count) {
+            return new AstEq{flp, new AstVarRef{flp, countVarp, VAccess::READ},
+                             new AstConst{flp, count}};
+        };
         AstNodeExpr* const openp
             = new AstConcatN{flp, new AstConst{flp, AstConst::String{}, "(" + op},
                              new AstVarRef{flp, varp, VAccess::READ}};
         AstNodeExpr* const appliedp
             = new AstConcatN{flp, openp, new AstConst{flp, AstConst::String{}, ")"}};
-        return new AstCond{flp, isEmptyp, new AstConst{flp, AstConst::String{}, identity},
-                           appliedp};
+        AstNodeExpr* const nonEmptyp
+            = new AstCond{flp, newCountEqp(1), new AstVarRef{flp, varp, VAccess::READ}, appliedp};
+        return new AstCond{flp, newCountEqp(0), new AstConst{flp, AstConst::String{}, identity},
+                           nonEmptyp};
     }
-    // The text 'resultp', after 'foreachp' built it in 'varp', starting from 'init'
+    // The text 'resultp', after 'foreachp' built it in 'varp', starting from 'init', counting
+    // its terms in 'countVarp' if not nullptr
     AstSFormatF* newTextBuildp(FileLine* flp, AstVar* varp, const std::string& init,
-                               AstForeach* foreachp, AstNodeExpr* resultp) {
+                               AstForeach* foreachp, AstNodeExpr* resultp,
+                               AstVar* countVarp = nullptr) {
         AstBegin* const blockp
             = new AstBegin{flp, m_uniqueNames.get("__VrandBlock"), nullptr, true};
         blockp->addDeclsp(varp);
         blockp->addStmtsp(new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE},
                                         new AstConst{flp, AstConst::String{}, init}});
+        if (countVarp) {
+            blockp->addDeclsp(countVarp);
+            blockp->addStmtsp(new AstAssign{flp, new AstVarRef{flp, countVarp, VAccess::WRITE},
+                                            new AstConst{flp, 0}});
+        }
         blockp->addStmtsp(foreachp);
         return new AstSFormatF{flp, "%s", false, new AstExprStmt{flp, blockp, resultp}};
     }
@@ -2164,11 +2189,12 @@ class ConstraintExprVisitor final : public VNVisitor {
         } else if (m_wantSingle) {
             if (AstNodeExpr* const itemp = editSingle(fl, nodep->bodyp())) {
                 AstVar* const textVarp = newTextVarp(nodep);
-                AstNodeStmt* const bodyp
-                    = prependDistPreamble(nodep, newTermAppendp(fl, textVarp, itemp));
+                AstVar* const countVarp = newTermCountVarp(nodep);
+                AstNodeStmt* const bodyp = prependDistPreamble(
+                    nodep, newTermAppendp(fl, textVarp, countVarp, itemp));
                 nodep->replaceWith(newTextBuildp(
                     fl, textVarp, "", new AstForeach{fl, nodep->headerp()->unlinkFrBack(), bodyp},
-                    newTextApplyp(fl, textVarp, "bvand", "#b1")));
+                    newTextApplyp(fl, textVarp, countVarp, "bvand", "#b1"), countVarp));
             } else {
                 nodep->unlinkFrBack();  // The body folded to nothing, e.g. only empty sets.
             }
@@ -2596,11 +2622,12 @@ class ConstraintExprVisitor final : public VNVisitor {
             itemp->user1(true);
 
             AstVar* const textVarp = newTextVarp(nodep);
-            AstStmtExpr* const appendp
-                = newTermAppendp(fl, textVarp, VN_AS(iterateSubtreeReturnEdits(itemp), NodeExpr));
-            nodep->replaceWith(newTextBuildp(fl, textVarp, "",
-                                             new AstForeach{fl, headerp, appendp},
-                                             newTextApplyp(fl, textVarp, "bvor", "#b0")));
+            AstVar* const countVarp = newTermCountVarp(nodep);
+            AstNodeStmt* const appendp = newTermAppendp(
+                fl, textVarp, countVarp, VN_AS(iterateSubtreeReturnEdits(itemp), NodeExpr));
+            nodep->replaceWith(
+                newTextBuildp(fl, textVarp, "", new AstForeach{fl, headerp, appendp},
+                              newTextApplyp(fl, textVarp, countVarp, "bvor", "#b0"), countVarp));
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
         }
@@ -2712,6 +2739,7 @@ class ConstraintExprVisitor final : public VNVisitor {
 
             // Build loop body based on whether we have a 'with' clause
             AstVar* const textVarp = newTextVarp(nodep);
+            AstVar* const countVarp = withp ? nullptr : newTermCountVarp(nodep);
             AstNodeStmt* bodyp;
             if (withp) {
                 // With 'with' clause: evaluate expression for each element
@@ -2824,7 +2852,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 AstSFormatF* const varNamep
                     = createSolverArrDerefp(fl, nodep->fromp()->unlinkFrBack(), idxFormatp);
 
-                bodyp = newTermAppendp(fl, textVarp, varNamep);
+                bodyp = newTermAppendp(fl, textVarp, countVarp, varNamep);
             }
 
             // Build final expression
@@ -2835,8 +2863,9 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                  new AstVarRef{fl, textVarp, VAccess::READ}));
             } else {
                 // For without 'with' clause: the operator applied to the element terms
-                nodep->replaceWith(newTextBuildp(fl, textVarp, "", foreachp,
-                                                 newTextApplyp(fl, textVarp, smtOp, identity)));
+                nodep->replaceWith(newTextBuildp(
+                    fl, textVarp, "", foreachp,
+                    newTextApplyp(fl, textVarp, countVarp, smtOp, identity), countVarp));
             }
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
