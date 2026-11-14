@@ -193,7 +193,7 @@ string VString::unquoteSVString(const string& text, string& errOut) {
     int octal_digits = 0;
     for (string::const_iterator cp = text.begin(); cp != text.end(); ++cp) {
         if (quoted) {
-            if (std::isdigit(*cp)) {
+            if (*cp >= '0' && *cp <= '7') {
                 octal_val = octal_val * 8 + (*cp - '0');
                 if (++octal_digits == 3) {
                     newtext += octal_val;
@@ -224,12 +224,14 @@ string VString::unquoteSVString(const string& text, string& errOut) {
                     newtext += '\t';
                 } else if (*cp == 'v') {
                     newtext += '\v';  // SystemVerilog 3.1
-                } else if (*cp == 'x' && std::isxdigit(cp[1])
-                           && std::isxdigit(cp[2])) {  // SystemVerilog 3.1
-                    newtext
-                        += static_cast<char>(16 * vl_decodexdigit(cp[1]) + vl_decodexdigit(cp[2]));
-                    cp += 2;
-                } else if (std::isalnum(*cp)) {
+                } else if (*cp == 'x' && cp + 1 != text.end() && std::isxdigit(cp[1])) {
+                    // 1 to 2 hex digits (IEEE 1800-2023 5.9.1)
+                    int hexVal = vl_decodexdigit(*++cp);
+                    if (cp + 1 != text.end() && std::isxdigit(cp[1])) {
+                        hexVal = 16 * hexVal + vl_decodexdigit(*++cp);
+                    }
+                    newtext += static_cast<char>(hexVal);
+                } else if (std::isalpha(*cp)) {
                     errOut = "Unknown escape sequence: \\";
                     errOut += *cp;
                     break;
@@ -249,6 +251,7 @@ string VString::unquoteSVString(const string& text, string& errOut) {
             newtext += *cp;
         }
     }
+    if (octal_digits) newtext += octal_val;  // Octal escape ending the string
     return newtext;
 }
 
