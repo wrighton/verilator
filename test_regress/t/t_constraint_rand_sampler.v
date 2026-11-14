@@ -118,6 +118,8 @@ module t;
       automatic Single one = new;
       automatic bit [6:0] first_v;
       automatic bit v_varied;
+      // A seed under which a UniGen2 hash equation selects no bit of v
+      one.srandom(211);
       for (int i = 0; i < 20; ++i) begin
         randomize_result = one.randomize();
         `checkd(randomize_result, 1);
