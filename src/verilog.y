@@ -1552,6 +1552,7 @@ interface_declaration:          // IEEE: interface_declaration + interface_nonan
 intFront<nodeModulep>:
                 yINTERFACE lifetimeE idAny/*new_interface*/
                         { $$ = new AstIface{$<fl>3, *$3, PARSEP->libname()};
+                          $$->unconnectedDrive(PARSEP->unconnectedDrive());
                           $$->inLibrary(true);
                           $$->lifetime($2);
                           PARSEP->rootp()->addModulesp($$); }
@@ -1649,6 +1650,7 @@ pgmFront<nodeModulep>:
                           $$->timeunit(PARSEP->timeLastUnit());
                           PARSEP->rootp()->timeprecisionMerge($$->fileline(),
                                                               PARSEP->timeLastPrec());
+                          $$->unconnectedDrive(PARSEP->unconnectedDrive());
                           PARSEP->rootp()->addModulesp($$); }
         ;
 
