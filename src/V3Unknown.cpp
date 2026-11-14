@@ -42,6 +42,7 @@
 #include "V3Unknown.h"
 
 #include "V3Const.h"
+#include "V3MemberMap.h"
 #include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
@@ -68,6 +69,7 @@ class UnknownVisitor final : public VNVisitor {
     VDouble0 m_statElses;  // Statistic of else branches created for array selects
     V3UniqueNames m_lvboundNames;  // For generating unique temporary variable names
     std::unique_ptr<V3UniqueNames> m_xrandNames;  // For generating unique temporary variable names
+    VMemberMap m_memberMap;  // Member lookup; dtype declarations stay intact during this pass
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -164,43 +166,6 @@ class UnknownVisitor final : public VNVisitor {
             fromp = selp->fromp();
         }
         return fromp == nodep ? VN_AS(backp, NodeExpr) : nullptr;
-    }
-
-    // Default value of a variable of type dtypep (IEEE 1800-2023 7.4.6), or nullptr
-    static AstNodeExpr* newDefaultp(AstNode* nodep, AstNodeDType* dtypep) {
-        dtypep = dtypep->skipRefp();
-        if (AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
-            AstNodeExpr* const elemp = newDefaultp(nodep, arrayp->subDTypep());
-            return elemp ? new AstConsArray{nodep->fileline(), arrayp, elemp} : nullptr;
-        }
-        AstStructDType* const structp = VN_CAST(dtypep, StructDType);
-        if (structp && !structp->packed()) {
-            AstConsStruct* const newp = new AstConsStruct{nodep->fileline(), structp};
-            for (AstMemberDType* const memberp : structp->memberspList()) {
-                AstNodeExpr* const memberValuep = newDefaultp(nodep, memberp->subDTypep());
-                if (!memberValuep) {
-                    VL_DO_DANGLING(newp->deleteTree(), newp);
-                    return nullptr;
-                }
-                newp->addItemsp(new AstConsStructItem{nodep->fileline(), memberp, memberValuep});
-            }
-            return newp;
-        }
-        // An event has no value to read instead
-        if (!(dtypep->isIntegralOrPacked() || VN_IS(dtypep, BasicDType)) || dtypep->isEvent()) {
-            return nullptr;
-        }
-        V3Number xnum{nodep, dtypep->width()};
-        if (dtypep->isDouble()) {
-            xnum = V3Number{nodep, V3Number::Double{}, 0.0};
-        } else if (dtypep->isString()) {
-            xnum = V3Number{nodep, V3Number::String{}, ""};
-        } else if (dtypep->isFourstate()) {
-            xnum.setAllBitsX();
-        } else {
-            xnum.setAllBits0();
-        }
-        return new AstConst{nodep->fileline(), xnum};
     }
 
     AstVar* createAddTemp(const AstNodeExpr* const nodep) {
@@ -640,8 +605,10 @@ class UnknownVisitor final : public VNVisitor {
                     readp = abovep;
                 }
             }
-            // Note below has null backp(); the Edit function knows how to deal with that.
-            AstNodeExpr* const defaultp = lvalue ? nullptr : newDefaultp(readp, readp->dtypep());
+            // Preserve declaration initializers and their containing-member overrides on the
+            // pure selected path without broadening whole-aggregate default eligibility.
+            AstNodeExpr* const defaultp
+                = lvalue ? nullptr : V3Const::newSelectedDefaultp(readp, nodep, m_memberMap);
             if (defaultp) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
