@@ -29,6 +29,47 @@ module sub_rev (
   end
 endmodule
 
+// A row of a two-dimensional array, connected by a constant select
+module sub_row (
+    simple_if p[2:4]
+);
+  final begin
+    `checkd(p[2].data, 8'd23);
+    `checkd(p[3].data, 8'd24);
+    `checkd(p[4].data, 8'd25);
+  end
+endmodule
+
+// An element of a two-dimensional array, connected by constant selects
+module sub_elem #(
+    parameter logic [7:0] EXP = 8'd54
+) (
+    simple_if e
+);
+  final `checkd(e.data, EXP);
+endmodule
+
+// A slice of a row, connected by constant selects and constant slice bounds
+module sub_slice (
+    simple_if p[1:0]
+);
+  final begin
+    `checkd(p[1].data, 8'd11);
+    `checkd(p[0].data, 8'd12);
+  end
+endmodule
+
+// A whole row, connected by a constant slice of all of it
+module sub_whole (
+    simple_if p[2:0]
+);
+  final begin
+    `checkd(p[2].data, 8'd13);
+    `checkd(p[1].data, 8'd14);
+    `checkd(p[0].data, 8'd15);
+  end
+endmodule
+
 module t;
   // Both dims ascending, zero-based.
   simple_if asc[0:1][0:2] ();
@@ -40,6 +81,14 @@ module t;
   simple_if neg[1:-1][-2:0] ();
 
   sub_rev u_rev (.p(asc));
+  sub_row u_row (.p(mix[1]));
+  sub_elem u_elem (.e(neg[0][-1]));
+  sub_elem u_elem_wide (.e(neg[0][-64'sd1]));
+  sub_elem #(.EXP(8'd15)) u_elem_uns (.e(asc[1'b1][2'd2]));
+  sub_whole u_whole (.p(asc[1][0+:3]));
+  sub_slice u_slice (.p(asc[0][1:2]));
+  sub_slice u_slice_plus (.p(asc[0][1+:2]));
+  sub_slice u_slice_minus (.p(asc[0][2-:2]));
 
   initial begin
     asc[0][0].data = 8'd10;
