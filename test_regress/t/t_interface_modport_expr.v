@@ -16,6 +16,7 @@ interface my_if #(
   logic [WIDTH-1:0] sig_e, sig_f;
   // Multiple expressions same direction
   logic [WIDTH-1:0] m1, m2, m3;
+  logic [WIDTH-1:0] sig_g, sig_h;
 
   modport mp1(input .a(sig_a), output .b(sig_b));
   modport mp2(input .a(sig_c), output .b(sig_d));
@@ -23,7 +24,15 @@ interface my_if #(
   modport mp3(input sig_e, output .f(sig_f));
   // Multiple expressions with same direction
   modport mp4(input .in1(m1), input .in2(m2), output .out(m3));
+  // Expression port names hiding interface items of the same name
+  modport mp_hide(input .sig_a(sig_g), output .sig_b(sig_h));
 endinterface
+
+module mod_hide (
+    my_if.mp_hide i
+);
+  assign i.sig_b = i.sig_a;
+endmodule
 
 module mod1 (
     my_if.mp1 i
@@ -51,6 +60,14 @@ endmodule
 
 module top ();
   my_if #(.WIDTH(8)) myIf ();
+
+  mod_hide mod_hidei (myIf.mp_hide);
+  assign myIf.sig_g = 8'h5A;
+  initial begin
+    #1;
+    `checkh(myIf.sig_h, 8'h5A);
+  end
+
   assign myIf.sig_a = 8'h42, myIf.sig_c = 8'hAB;
   assign myIf.sig_e = 8'hCD;
   assign myIf.m1 = 8'hF0, myIf.m2 = 8'h0F;
