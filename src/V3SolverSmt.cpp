@@ -1167,6 +1167,15 @@ static AstNodeStmt* newStagedTaskCallp(FileLine* const fl, AstTask* const taskp,
 }
 
 class ConstraintExprVisitor final : public VNVisitor {
+public:
+    struct MemberSizeBindings final {
+        const std::map<const AstVar*, AstVar*>& vars;  // Existing member SIZE proxies
+        const std::set<std::string>& paths;  // Specific instances resized by this solve
+        // Gated paths, each with a member select of it, owned by the map's owner
+        std::map<std::string, AstMemberRef*>* gatedp = nullptr;
+    };
+
+private:
     // NODE STATE
     // AstVar::user3() -> bool. Handled in constraints
     // AstNodeExpr::user1()    -> bool. Depending on a randomized variable
@@ -1181,7 +1190,12 @@ class ConstraintExprVisitor final : public VNVisitor {
     AstVar* const m_genp;  // VlRandomizer variable of the class
     AstVar* m_randModeVarp;  // Relevant randmode state variable
     bool m_wantSingle = false;  // Whether to merge constraint expressions with LOGAND
+    bool m_inSoftItem = false;  // Keep soft payload/name grouping when deferring array layouts
+    AstNodeExpr* m_layoutRootp = nullptr;  // Positive hard conjunct currently allowed to split
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
+    const std::map<const AstVar*, AstVar*>& m_memberSizeVars;  // Existing member SIZE proxies
+    const std::set<std::string>& m_sizedMemberPaths;  // Paths resized by this solve
+    std::map<std::string, AstMemberRef*>* const m_gatedMemberPathsp;  // Gated, see bindings
     bool m_structSel = false;  // Marks when inside structSel
                                // (used to format "%s.%s" for struct arrays and nested structs)
     bool m_deferRandModeHoist = false;  // Wait for the complete struct member path
@@ -1685,28 +1699,65 @@ class ConstraintExprVisitor final : public VNVisitor {
         // are solved before iterative ones) while it still has its previous size, then resized
         // and solved with the size pinned. So the expansion is only right in the first solve
         // if that keeps the previous size, and must not constrain any other.
+        if (VN_IS(arrayp->dtypep()->skipRefp(), AssocArrayDType)) return;
+        FileLine* const fl = arrayp->fileline();
+        AstVar* sizeVarp = nullptr;
+        AstNodeExpr* sizeRefp = nullptr;
+        AstNodeExpr* ownersActivep = nullptr;
         AstVarRef* const arrRefp = VN_CAST(arrayp, VarRef);
-        if (!arrRefp) return;
-        AstVar* const arrVarp = arrRefp->varp();
-        AstVar* const sizeVarp = VN_CAST(arrVarp->user4p(), Var);
-        if (!sizeVarp || VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)) return;
-        FileLine* const fl = arrRefp->fileline();
-        AstVarRef* const sizeRefp
-            = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp, VAccess::READ};
+        if (arrRefp) {
+            sizeVarp = VN_CAST(arrRefp->varp()->user4p(), Var);
+            if (!sizeVarp) return;
+            sizeRefp = new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp,
+                                     VAccess::READ};
+        } else if (const AstMemberRef* const memberRefp = VN_CAST(arrayp, MemberRef)) {
+            // Only a member select chain from a variable has a path; an array element of
+            // objects, e.g. objs[i].q, is not gated
+            const AstNodeExpr* rootp = memberRefp;
+            while (const AstMemberRef* const ownerp = VN_CAST(rootp, MemberRef))
+                rootp = ownerp->fromp();
+            if (!VN_IS(rootp, VarRef)) return;
+            const auto it = m_memberSizeVars.find(memberRefp->varp());
+            // A type's size proxy is used only for the particular instances this solve resizes.
+            if (it == m_memberSizeVars.end()
+                || !m_sizedMemberPaths.count(buildMemberPath(memberRefp)))
+                return;
+            sizeVarp = it->second;
+            if (m_gatedMemberPathsp) {
+                const std::string path = buildMemberPath(memberRefp);
+                if (!m_gatedMemberPathsp->count(path))
+                    m_gatedMemberPathsp->emplace(
+                        path, new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false),
+                                               memberRefp->varp()});
+            }
+            AstMemberRef* const refp
+                = new AstMemberRef{fl, memberRefp->fromp()->cloneTreePure(false), sizeVarp};
+            refp->access(VAccess::READ);
+            sizeRefp = refp;
+            ownersActivep = newHandlesActivep(m_memberMap, memberRefp->fromp(), false, true);
+        } else {
+            return;
+        }
         sizeRefp->user1(true);
         AstCMethodHard* const curSizep
-            = new AstCMethodHard{fl, arrRefp->cloneTree(false), VCMethod::DYN_SIZE};
+            = new AstCMethodHard{fl, arrayp->cloneTreePure(false), VCMethod::DYN_SIZE};
         curSizep->dtypeFrom(sizeVarp);
-        AstEq* const eqp = new AstEq{fl, sizeRefp, curSizep};
-        eqp->user1(true);
+        AstNodeExpr* gatep = new AstEq{fl, sizeRefp, curSizep};
+        gatep->user1(true);
+        if (ownersActivep) {
+            // The generated layout test is irrelevant without an owner. Source receiver
+            // errors still belong to their original value/guard expressions.
+            gatep = new AstLogOr{fl, new AstLogNot{fl, ownersActivep}, gatep};
+            gatep->user1(true);
+        }
         if (m_sizeGatep) {
-            m_sizeGatep = new AstLogAnd{fl, m_sizeGatep, eqp};
+            m_sizeGatep = new AstLogAnd{fl, m_sizeGatep, gatep};
             m_sizeGatep->user1(true);
         } else {
-            m_sizeGatep = eqp;
+            m_sizeGatep = gatep;
         }
         // Solve twice even if no element is referenced, e.g. with only 'item.index'
-        if (m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrVarp);
+        if (arrRefp && m_sizeConstrainedArraysp) m_sizeConstrainedArraysp->insert(arrRefp->varp());
     }
     AstNodeExpr* wrapWithCond(AstNodeExpr* const exprp, AstNodeExpr* const condp,
                               const int width) {
@@ -3336,6 +3387,39 @@ class ConstraintExprVisitor final : public VNVisitor {
     void visit(AstShiftL* nodep) override { handleShift(nodep); }
     void visit(AstShiftR* nodep) override { handleShift(nodep); }
     void visit(AstShiftRS* nodep) override { handleShift(nodep); }
+    AstNodeExpr* lowerLayoutOperand(AstNodeExpr* operandp) {
+        VL_RESTORER(m_layoutRootp);
+        VL_RESTORER(m_conditionp);
+        m_layoutRootp = VN_IS(operandp, LogAnd) ? operandp : nullptr;
+        m_conditionp = nullptr;
+        m_sizeGatep = nullptr;
+        const int width = operandp->width();
+        operandp = VN_AS(iterateSubtreeReturnEdits(operandp->unlinkFrBack()), NodeExpr);
+        m_layoutRootp = nullptr;
+        if (m_conditionp) {
+            // An already lowered text value must not be visited as a new STATE expression.
+            operandp = new AstSFormatF{operandp->fileline(), "%s", false,
+                                       wrapWithCond(operandp, m_conditionp, width)};
+        }
+        if (!m_sizeGatep) return operandp;
+        AstLogIf* const gatedp = new AstLogIf{operandp->fileline(), m_sizeGatep, operandp};
+        gatedp->dtypeSetBit();
+        gatedp->user1(true);
+        m_sizeGatep = nullptr;
+        return VN_AS(iterateSubtreeReturnEdits(gatedp), NodeExpr);
+    }
+    void visit(AstLogAnd* nodep) override {
+        if (nodep != m_layoutRootp || m_inSoftItem || m_inGuardPredicate) {
+            visit(static_cast<AstNodeBiop*>(nodep));
+            return;
+        }
+        if (editFormat(nodep)) return;
+        // Defer only layout-dependent hard conjuncts, not their unrelated size terms.
+        VL_RESTORER(m_sizeGatep);
+        AstNodeExpr* const lhsp = lowerLayoutOperand(nodep->lhsp());
+        AstNodeExpr* const rhsp = lowerLayoutOperand(nodep->rhsp());
+        editSMT(nodep, lhsp, rhsp);
+    }
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
@@ -5210,6 +5294,8 @@ class ConstraintExprVisitor final : public VNVisitor {
         // unconditional.
         VL_RESTORER(m_firstExpressionInsideIndexp);
         VL_RESTORER(m_guardItemp);
+        VL_RESTORER(m_inSoftItem);
+        m_inSoftItem = nodep->isSoft();
         GuardItem item;
         if (!m_wantSingle) m_guardItemp = &item;
         // Outside a fold this constraint is emitted here with only its own names: those it
@@ -5267,8 +5353,11 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
         }
         VL_RESTORER(m_sizeGatep);
+        VL_RESTORER(m_layoutRootp);
         m_sizeGatep = nullptr;
+        m_layoutRootp = nodep->isSoft() ? nullptr : nodep->exprp();
         nodep->exprp(formatValueRegion(nodep->exprp()));
+        m_layoutRootp = nullptr;
         // Before any size gate is added around the payload
         if (!foldTaker && nodep->isSoft()) {
             softVars = vars;
@@ -5852,7 +5941,8 @@ class ConstraintExprVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit ConstraintExprVisitor(AstClass* classp, VMemberMap& memberMap, AstNode* nodep,
+    explicit ConstraintExprVisitor(AstClass* classp, VMemberMap& memberMap,
+                                   const MemberSizeBindings& memberSizes, AstNode* nodep,
                                    AstBegin* inlineInitp, AstVar* genp, AstVar* randModeVarp,
                                    std::set<std::string>& writtenVars,
                                    uint32_t* uniqueConstraintIdp, V3UniqueNames& uniqueNames,
@@ -5867,6 +5957,9 @@ public:
         , m_genp{genp}
         , m_randModeVarp{randModeVarp}
         , m_memberMap{memberMap}
+        , m_memberSizeVars{memberSizes.vars}
+        , m_sizedMemberPaths{memberSizes.paths}
+        , m_gatedMemberPathsp{memberSizes.gatedp}
         , m_writtenVars{writtenVars}
         , m_newWrittenVarsp{newWrittenVarsp}
         , m_sizeConstrainedArraysp{sizeConstrainedArraysp}
@@ -5894,6 +5987,9 @@ class SolverSmtLowering final : public V3SolverLowering {
     std::unordered_set<const AstClass*> m_randcClasses;
     std::map<AstClass*, VInsertionSet<AstVar*>> m_sizeConstrainedArrays;  // Per-class arrays
     std::map<const AstVar*, AstVar*> m_memberSizeVars;  // Size variables of member arrays
+    // Member array paths the constraints declared in a class are gated on, each with a member
+    // select of it (owned)
+    std::map<AstClass*, std::map<std::string, AstMemberRef*>> m_gatedMemberPaths;
     // Arrays of member objects, by SMT name, each with its member select
     using MemberArrays = std::map<std::string, const AstMemberRef*>;
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
@@ -6284,7 +6380,12 @@ class SolverSmtLowering final : public V3SolverLowering {
             AstNodeExpr* const objp = it->second.objp;
             if (!VN_IS(objp->dtypep()->skipRefp(), ClassRefDType)) return stmtp;
             AstNodeExpr* const modep = newObjConstraintModep(objp, it->second.origp);
-            return modep ? new AstIf{stmtp->fileline(), modep, stmtp} : stmtp;
+            if (!modep) return stmtp;
+            AstNodeStmt* const resultp = new AstIf{stmtp->fileline(), modep, stmtp};
+            // The mode is stored in the object, so it is read only where the constraint
+            // applies, as checked around the constraint's setup
+            AstNodeExpr* const activep = newHandlesActivep(m_memberMap, objp, true, true);
+            return activep ? new AstIf{stmtp->fileline(), activep, resultp} : resultp;
         }
         const RandomizeMode rmode = {.asUQuad = constrp->user1()};
         AstVar* const modeVarp = constrp->isStatic() ? getStaticConstraintModeVar(classp)
@@ -6413,6 +6514,102 @@ class SolverSmtLowering final : public V3SolverLowering {
         const auto it = m_memberSizeVars.find(arrVarp);
         UASSERT_OBJ(it != m_memberSizeVars.end(), arrVarp, "Member array without size variable");
         return it->second;
+    }
+    // Paths whose sizes the class constraints solve, including inherited/global constraints.
+    static bool isSameOrDerived(const AstClass* classp, const AstClass* const basep) {
+        for (; classp; classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {
+            if (classp == basep) return true;
+        }
+        return false;
+    }
+    // Paths of member arrays sized by the constraints of declp or a class derived from it.
+    // A constraint of declp is lowered once, into setup every such class runs, so its layout
+    // depends on the array sizes of each. Classes not yet visited still have their size
+    // methods, which make the size variables needed for the gates.
+    std::set<std::string> gateMemberPaths(AstClass* const declp) {
+        std::set<std::string> paths;
+        // A path names an array in each class the same way only from a variable that declp
+        // can see; a same-named variable of a derived class is another array
+        const auto addPath = [&](const AstMemberRef* const selp) {
+            const AstNodeExpr* rootp = selp;
+            while (const AstMemberRef* const ownerp = VN_CAST(rootp, MemberRef))
+                rootp = ownerp->fromp();
+            const AstVarRef* const rootRefp = VN_CAST(rootp, VarRef);
+            if (!rootRefp) return false;
+            const AstClass* const ownerClassp = VN_CAST(rootRefp->varp()->user2p(), Class);
+            if (ownerClassp && !isSameOrDerived(declp, ownerClassp)) return false;
+            paths.insert(buildMemberPath(selp));
+            return true;
+        };
+        // declp and the classes derived from it. A class has one base class, so it is in the
+        // derived class list of only that one, once.
+        std::vector<AstClass*> classps{declp};
+        for (size_t i = 0; i < classps.size(); ++i) {
+            const auto it = m_derivedClasses.find(classps[i]);
+            if (it != m_derivedClasses.end())
+                classps.insert(classps.end(), it->second.begin(), it->second.end());
+        }
+        for (AstClass* const classp : classps) {
+            classp->foreachMember([&](AstClass*, AstConstraint* const constrp) {
+                if (const AstTask* const taskp = VN_CAST(constrp->user3p(), Task)) {
+                    taskp->foreach([&](const AstCMethodHard* const methodp) {
+                        if (methodp->method() != VCMethod::DYN_RESIZE) return;
+                        if (const AstMemberRef* const selp = VN_CAST(methodp->fromp(), MemberRef))
+                            addPath(selp);
+                    });
+                }
+                constrp->foreach([&](AstCMethodHard* const methodp) {
+                    if (methodp->method() != VCMethod::DYN_SIZE || !methodp->fromp()->user1())
+                        return;
+                    AstMemberRef* const selp = VN_CAST(methodp->fromp(), MemberRef);
+                    if (selp && addPath(selp))
+                        createOrGetMemberSizeVar(selp->varp(), methodp->fileline(),
+                                                 methodp->findIntDType());
+                });
+            });
+        }
+        return paths;
+    }
+    // The member arrays resized by this call, with the other member arrays the constraints
+    // of classp and its base classes are gated on. Those keep their live size in this call.
+    MemberArrays withGatedMemberArrays(AstClass* const classp, const MemberArrays& resizedArrays) {
+        MemberArrays arrays = resizedArrays;
+        const MemberArrays gated = gatedOnlyMemberArrays(classp, resizedArrays);
+        arrays.insert(gated.begin(), gated.end());
+        return arrays;
+    }
+    // Only the gated member arrays this call does not resize
+    MemberArrays gatedOnlyMemberArrays(AstClass* classp, const MemberArrays& resizedArrays) {
+        MemberArrays arrays;
+        for (; classp; classp = classp->extendsp() ? classp->extendsp()->classp() : nullptr) {
+            const auto it = m_gatedMemberPaths.find(classp);
+            if (it == m_gatedMemberPaths.end()) continue;
+            for (const auto& pathSel : it->second) {
+                if (!resizedArrays.count(pathSel.first))
+                    arrays.emplace(pathSel.first, pathSel.second);
+            }
+        }
+        return arrays;
+    }
+    // Keep the live sizes of the gated member arrays this call does not resize, once the
+    // constraints are cleared and set up again
+    void addGatedOnlyPins(FileLine* const fl, AstNodeFTask* const funcp, AstVar* const genp,
+                          const MemberArrays& gatedOnlyArrays) {
+        for (const auto& pathMsel : gatedOnlyArrays) {
+            const AstMemberRef* const mselp = pathMsel.second;
+            AstNodeStmt* const stmtsp = newSizeVarAssign(fl, mselp->varp(), mselp);
+            stmtsp->addNext(newPinSizeVariable(fl, mselp->varp(), genp, mselp));
+            funcp->addStmtsp(newIfNonNullp(fl, stmtsp, mselp));
+        }
+    }
+    std::set<std::string> sizedMemberPaths(AstClass* const classp) const {
+        std::set<std::string> paths;
+        classp->foreachMember([&](AstClass*, AstConstraint* const constrp) {
+            const auto it = m_constraintSizedArrays.find(constrp);
+            if (it != m_constraintSizedArrays.end())
+                paths.insert(it->second.begin(), it->second.end());
+        });
+        return paths;
     }
     // Build a size >= 0 constraint expression (signed int size must be non-negative).
     // Returns a new AstConstraintExpr with user1 bits set for solver visibility.
@@ -7249,49 +7446,63 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstNodeStmt* pinsp = nullptr;  // After registration, before the first solve
     };
     // Use the same mode-wrapped tasks that resize the container, not a historical size proxy.
+    // The size proxies of member object arrays, which the constraints gate on (see
+    // gateOnCurrentSize), are kept the same way while all the constraints sizing them are off.
     RetainedStructSizes newRetainedStructSizes(AstClass* const classp,
                                                const VInsertionSet<AstVar*>& arrays,
                                                const VInsertionSet<AstVar*>& inlineArrays,
+                                               const MemberArrays& memberArrays,
+                                               const std::set<std::string>& inlineMemberPaths,
                                                AstFunc* const randomizep, AstVar* const genp) {
         FileLine* const fl = randomizep->fileline();
         RetainedStructSizes result;
-        std::unordered_map<AstVar*, AstVar*> activeVars;
-        for (AstVar* const arrVarp : arrays) {
-            if (!isSizeBackedStructContainer(arrVarp)) continue;
+        const auto newActiveVarp = [&](bool inlineSized) {
             AstVar* const activep
                 = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VsizeActive"),
                              randomizep->findBitDType()};
             activep->funcLocal(true);
             randomizep->addDeclsp(activep);
-            activeVars.emplace(arrVarp, activep);
             result.setupsp = AstNode::addNextNull(
-                result.setupsp,
-                new AstAssign{fl, new AstVarRef{fl, activep, VAccess::WRITE},
-                              new AstConst{fl, AstConst::WidthedValue{}, 1,
-                                           static_cast<uint32_t>(inlineArrays.exists(arrVarp))}});
+                result.setupsp, new AstAssign{fl, new AstVarRef{fl, activep, VAccess::WRITE},
+                                              new AstConst{fl, AstConst::WidthedValue{}, 1,
+                                                           static_cast<uint32_t>(inlineSized)}});
+            return activep;
+        };
+        std::unordered_map<AstVar*, AstVar*> activeVars;
+        for (AstVar* const arrVarp : arrays) {
+            if (!isSizeBackedStructContainer(arrVarp)) continue;
+            activeVars.emplace(arrVarp, newActiveVarp(inlineArrays.exists(arrVarp)));
         }
-        if (activeVars.empty()) return result;
+        std::map<std::string, AstVar*> activeMembers;  // By member path
+        for (const auto& pathMsel : memberArrays) {
+            activeMembers.emplace(pathMsel.first,
+                                  newActiveVarp(inlineMemberPaths.count(pathMsel.first)));
+        }
+        if (activeVars.empty() && activeMembers.empty()) return result;
         classp->foreachMember([&](AstClass*, AstConstraint* const constrp) {
             const AstTask* const taskp = VN_CAST(constrp->user3p(), Task);
             if (!taskp) return;
-            // Direct resize statements are generated by lowerConstraintMethod; member-object
-            // resizes have a separate nullable path and are outside this direct-container policy.
-            for (const AstNodeStmt* const stmtp : taskp->stmtspList()) {
-                const AstStmtExpr* const exprp = VN_CAST(stmtp, StmtExpr);
-                const AstCMethodHard* const methodp
-                    = exprp ? VN_CAST(exprp->exprp(), CMethodHard) : nullptr;
-                if (!methodp || methodp->method() != VCMethod::DYN_RESIZE) continue;
-                const AstVarRef* const refp = VN_CAST(methodp->fromp(), VarRef);
-                if (!refp) continue;
-                const auto it = activeVars.find(refp->varp());
-                if (it == activeVars.end()) continue;
+            // Resize statements are generated by lowerConstraintMethod, those of member object
+            // arrays under a null check of the object
+            taskp->foreach([&](const AstCMethodHard* const methodp) {
+                if (methodp->method() != VCMethod::DYN_RESIZE) return;
+                AstVar* activep = nullptr;
+                if (const AstVarRef* const refp = VN_CAST(methodp->fromp(), VarRef)) {
+                    const auto it = activeVars.find(refp->varp());
+                    if (it != activeVars.end()) activep = it->second;
+                } else {
+                    const auto it
+                        = activeMembers.find(buildMemberPath(VN_AS(methodp->fromp(), MemberRef)));
+                    if (it != activeMembers.end()) activep = it->second;
+                }
+                if (!activep) return;
                 result.setupsp = AstNode::addNextNull(
                     result.setupsp,
-                    wrapIfConstraintMode(
-                        classp, constrp,
-                        new AstAssign{fl, new AstVarRef{fl, it->second, VAccess::WRITE},
-                                      new AstConst{fl, AstConst::BitTrue{}}}));
-            }
+                    wrapIfConstraintMode(classp, constrp,
+                                         new AstAssign{fl,
+                                                       new AstVarRef{fl, activep, VAccess::WRITE},
+                                                       new AstConst{fl, AstConst::BitTrue{}}}));
+            });
         });
         for (AstVar* const arrVarp : arrays) {
             const auto it = activeVars.find(arrVarp);
@@ -7304,6 +7515,24 @@ class SolverSmtLowering final : public V3SolverLowering {
                 result.pinsp,
                 new AstIf{fl, new AstLogNot{fl, new AstVarRef{fl, it->second, VAccess::READ}},
                           newPinSizeVariable(fl, arrVarp, genp)});
+        }
+        for (const auto& pathMsel : memberArrays) {
+            AstVar* const activep = activeMembers.at(pathMsel.first);
+            const AstMemberRef* const mselp = pathMsel.second;
+            result.setupsp = AstNode::addNextNull(
+                result.setupsp,
+                newIfNonNullp(
+                    fl,
+                    new AstIf{fl, new AstLogNot{fl, new AstVarRef{fl, activep, VAccess::READ}},
+                              newSizeVarAssign(fl, mselp->varp(), mselp)},
+                    mselp));
+            result.pinsp = AstNode::addNextNull(
+                result.pinsp,
+                newIfNonNullp(
+                    fl,
+                    new AstIf{fl, new AstLogNot{fl, new AstVarRef{fl, activep, VAccess::READ}},
+                              newPinSizeVariable(fl, mselp->varp(), genp, mselp)},
+                    mselp));
         }
         return result;
     }
@@ -7490,6 +7719,7 @@ class SolverSmtLowering final : public V3SolverLowering {
                               AstVar* const solveGenp, const VInsertionSet<AstVar*>& sizeArrayVars,
                               const VInsertionSet<AstVar*>& resizedArrayVars,
                               const MemberArrays& memberArrays,
+                              const MemberArrays& gatedOnlyArrays,
                               const std::set<std::string>& writtenVars,
                               AstNodeStmt* const setupStmtsp) {
         FileLine* const fl = randomizep->fileline();
@@ -7514,6 +7744,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             randomizep->addStmtsp(
                 newIfNonNullp(fl, newPinSizeVariable(fl, mselp->varp(), solveGenp, mselp), mselp));
         }
+        addGatedOnlyPins(fl, randomizep, solveGenp, gatedOnlyArrays);
     }
 
 public:
@@ -7529,6 +7760,10 @@ public:
         });
     }
     ~SolverSmtLowering() override {
+        for (auto& classEntry : m_gatedMemberPaths) {
+            for (auto& pathEntry : classEntry.second)
+                VL_DO_DANGLING(pathEntry.second->deleteTree(), pathEntry.second);
+        }
         for (auto& entry : m_stagedFields) {
             if (entry.second.registrationsp)
                 VL_DO_DANGLING(entry.second.registrationsp->deleteTree(),
@@ -7598,6 +7833,9 @@ public:
         AstVar* const fvarp = randomizep->fvarp();
         AstNodeExpr* beginValp = nullptr;
         bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
+        // A constraint is lowered once, into the setup of its declaring class that each class
+        // inheriting it runs, so it can only rely on the paths that class's constraints size
+        std::map<AstClass*, std::set<std::string>> memberSizePaths;
         AstNodeStmt* roundsFirstp = nullptr;  // First statement of the solve
         StagedFieldGroup& staged = stagedFields(nodep);
         AstVar* priorPhasep = nullptr;
@@ -7651,20 +7889,28 @@ public:
                     AstBegin* const holderp = SmtUtil::newItemsHolderp(
                         constrp->fileline(), constrp->itemsp()->unlinkFrBackWithNext());
                     taskp->addStmtsp(holderp);
-                    const ConstraintExprVisitor exprVisitor{classp,
-                                                            m_memberMap,
-                                                            holderp->declsp(),
-                                                            nullptr,
-                                                            genp,
-                                                            randModeVarp,
-                                                            m_writtenVars,
-                                                            &m_uniqueConstraintId,
-                                                            m_uniqueNames,
-                                                            taskp,
-                                                            &sizeArrays,
-                                                            prepareArraysTaskp,
-                                                            &m_newWrittenVars,
-                                                            &stagedFields(classp)};
+                    const auto pathsIt = memberSizePaths.find(classp);
+                    const std::set<std::string>& paths
+                        = pathsIt != memberSizePaths.end()
+                              ? pathsIt->second
+                              : memberSizePaths.emplace(classp, gateMemberPaths(classp))
+                                    .first->second;
+                    const ConstraintExprVisitor exprVisitor{
+                        classp,
+                        m_memberMap,
+                        {m_memberSizeVars, paths, &m_gatedMemberPaths[classp]},
+                        holderp->declsp(),
+                        nullptr,
+                        genp,
+                        randModeVarp,
+                        m_writtenVars,
+                        &m_uniqueConstraintId,
+                        m_uniqueNames,
+                        taskp,
+                        &sizeArrays,
+                        prepareArraysTaskp,
+                        &m_newWrittenVars,
+                        &stagedFields(classp)};
                     std::vector<ConstraintFuncCall>& calls = m_constraintFuncCalls[constrp];
                     const std::vector<ConstraintFuncCall>& newCalls = exprVisitor.funcCalls();
                     calls.insert(calls.end(), newCalls.begin(), newCalls.end());
@@ -7753,8 +7999,9 @@ public:
             VInsertionSet<AstVar*> pinnedArrays = sizeArrayVars;
             MemberArrays memberArrays;
             addResizedArrays(nodep, pinnedArrays, memberArrays);
-            const RetainedStructSizes retained
-                = newRetainedStructSizes(nodep, pinnedArrays, {}, randomizep, genp);
+            const RetainedStructSizes retained = newRetainedStructSizes(
+                nodep, pinnedArrays, {}, withGatedMemberArrays(nodep, memberArrays), {},
+                randomizep, genp);
             if (retained.setupsp) randomizep->addStmtsp(retained.setupsp);
             if (!sizeArrayVars.empty() && prepareArraysTaskp->stmtsp()) {
                 // Before the setup registers the elements
@@ -7787,8 +8034,8 @@ public:
                 randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
                                                     new AstFuncRef{fl, basicRandomizep}});
                 addConstraintRebuild(randomizep, genp, genp, sizeArrayVars, pinnedArrays,
-                                     memberArrays, writtenVars,
-                                     (new AstTaskRef{fl, setupAllTaskp})->makeStmt());
+                                     memberArrays, gatedOnlyMemberArrays(nodep, memberArrays),
+                                     writtenVars, (new AstTaskRef{fl, setupAllTaskp})->makeStmt());
 
                 AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
                                                        nodep->findBasicDType(VBasicDTypeKwd::BIT)};
@@ -8021,12 +8268,24 @@ public:
         // ConstraintExprVisitor::visit(AstConstraintUnique). Merged below with any
         // class-level size-constrained arrays.
         VInsertionSet<AstVar*> allSizeArrays;
+        std::set<std::string> memberSizePaths = sizedMemberPaths(classp);
+        for (const auto& memberArray : memberArrays) memberSizePaths.insert(memberArray.first);
         expandUniqueElementList(holderp->declsp());
-        const ConstraintExprVisitor exprVisitor{
-            classp,        m_memberMap,  holderp->declsp(), setupBlockp,
-            localGenp,     randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
-            m_uniqueNames, nullptr,      &allSizeArrays,    nullptr,
-            nullptr,       &inlineStaged};
+        const ConstraintExprVisitor exprVisitor{classp,
+                                                m_memberMap,
+                                                {m_memberSizeVars, memberSizePaths},
+                                                holderp->declsp(),
+                                                setupBlockp,
+                                                localGenp,
+                                                randModeVarp,
+                                                m_writtenVars,
+                                                &m_uniqueConstraintId,
+                                                m_uniqueNames,
+                                                nullptr,
+                                                &allSizeArrays,
+                                                nullptr,
+                                                nullptr,
+                                                &inlineStaged};
         SmtUtil::replaceWithLowered(holderp);
 
         // A with-block touching a size-constrained array (class-level, or made so by
@@ -8039,6 +8298,8 @@ public:
         // Arrays resized by the class constraints also need their sizes solved first and
         // pinned; their elements are not re-registered unless constrained as above
         VInsertionSet<AstVar*> pinnedArrays = allSizeArrays;
+        std::set<std::string> inlineMemberPaths;  // Sized by this with-block, so always active
+        for (const auto& memberArray : memberArrays) inlineMemberPaths.insert(memberArray.first);
         addResizedArrays(classp, pinnedArrays, memberArrays);
         // Arrays of member objects are resized only in the size phase
         const bool needsSizePhase = !pinnedArrays.empty() || !memberArrays.empty();
@@ -8047,7 +8308,8 @@ public:
         VInsertionSet<AstVar*> sizedArrays = pinnedArrays;
         sizedArrays.insert(inlineSizedArrays.begin(), inlineSizedArrays.end());
         const RetainedStructSizes retained = newRetainedStructSizes(
-            classp, sizedArrays, inlineSizedArrays, randomizeFuncp, localGenp);
+            classp, sizedArrays, inlineSizedArrays, withGatedMemberArrays(classp, memberArrays),
+            inlineMemberPaths, randomizeFuncp, localGenp);
         if (retained.setupsp) {
             if (solveAfterp) {
                 solveAfterp->addNextHere(retained.setupsp);
@@ -8234,6 +8496,7 @@ public:
             expandUniqueElementList(capturedClonep->declsp());
             ConstraintExprVisitor{classp,
                                   m_memberMap,
+                                  {m_memberSizeVars, memberSizePaths},
                                   capturedClonep->declsp(),
                                   elementSetupBlockp,
                                   localGenp,
@@ -8254,6 +8517,8 @@ public:
                 randomizeFuncp->addStmtsp(newIfNonNullp(
                     fl, newPinSizeVariable(fl, mselp->varp(), localGenp, mselp), mselp));
             }
+            addGatedOnlyPins(fl, randomizeFuncp, localGenp,
+                             gatedOnlyMemberArrays(classp, memberArrays));
 
             // Final solve: element values with sizes pinned
             randomizeFuncp->addStmtsp(newFinalSolvep(fl, sizeOkVarp, finalOkVarp, localGenp));
@@ -8327,9 +8592,12 @@ public:
                              nullptr);
         randomizeFuncp->addStmtsp(setupBlockp);
         expandUniqueElementList(holderp->declsp());
+        const std::set<std::string> memberSizePaths;
         const ConstraintExprVisitor exprVisitor{
-            nullptr, m_memberMap,   holderp->declsp(),     setupBlockp,   stdrandp,
-            nullptr, m_writtenVars, &m_uniqueConstraintId, m_uniqueNames, nullptr};
+            nullptr,           m_memberMap,   {m_memberSizeVars, memberSizePaths},
+            holderp->declsp(), setupBlockp,   stdrandp,
+            nullptr,           m_writtenVars, &m_uniqueConstraintId,
+            m_uniqueNames,     nullptr};
         SmtUtil::replaceWithLowered(holderp);
         m_stdFuncRounds[randomizeFuncp] = StdFuncRounds{roundsFirstp, exprVisitor.funcCalls()};
         AstCExpr* const solverCallp = new AstCExpr{fl};
@@ -8379,7 +8647,8 @@ public:
         MemberArrays memberArrays;
         addResizedArrays(classp, sizedArrays, memberArrays);
         for (AstVar* const arrVarp : sizedArrays) funcp->addStmtsp(newSizeVarAssign(fl, arrVarp));
-        for (const auto& pathMsel : memberArrays) {
+        // The gated member arrays are checked at their live sizes too
+        for (const auto& pathMsel : withGatedMemberArrays(classp, memberArrays)) {
             const AstMemberRef* const mselp = pathMsel.second;
             funcp->addStmtsp(newIfNonNullp(fl, newSizeVarAssign(fl, mselp->varp(), mselp), mselp));
         }
