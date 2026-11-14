@@ -79,6 +79,16 @@ class Wide;
   constraint wc {w != v[14:0];}
 endclass
 
+// A variable whose rand_mode is off is still answered, but not written
+class Frozen;
+  rand bit [7:0] f;
+  rand bit [7:0] g;
+  constraint fc {
+    f != g;
+    soft f > 8'd10;
+  }
+endclass
+
 module t;
   // t_randomize_solver_reply runs the +MODE=pins rows alone, so the replies their
   // TAMPER_AT counts start at the first Pinned call
@@ -111,6 +121,25 @@ module t;
     end
   endtask
 
+  // t_randomize_solver_reply runs the +MODE=frozen rows alone, so TAMPER_AT counts the
+  // replies of these calls
+  task automatic frozen_rounds;
+    automatic Frozen fr = new;
+    automatic int npass = 0;
+    automatic int rc;
+    fr.g = 8'd9;
+    fr.g.rand_mode(0);
+    for (int i = 0; i < 4; ++i) begin
+      fr.f = 8'd5;
+      rc = fr.randomize();
+      // A randomize that failed must leave the variables alone
+      if (rc != 0) npass++;
+      else `checkd(fr.f, 8'd5);
+      `checkd(fr.g, 8'd9);
+    end
+    $write("NPASS=%0d\n", npass);
+  endtask
+
   initial begin : checks
     automatic Packet p = new;
     automatic Softy s = new;
@@ -128,6 +157,12 @@ module t;
     end
     if ($test$plusargs("MODE=wide")) begin
       wide_rounds();
+      $write("*-* All Finished *-*\n");
+      $finish;
+      disable checks;
+    end
+    if ($test$plusargs("MODE=frozen")) begin
+      frozen_rounds();
       $write("*-* All Finished *-*\n");
       $finish;
       disable checks;
