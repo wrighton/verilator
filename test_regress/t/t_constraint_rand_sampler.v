@@ -46,6 +46,12 @@ module t;
     randc bit [2:0] r;
   endclass
 
+  // One rand variable, so each UniGen2 witness has one element
+  class Single;
+    rand bit [6:0] v;
+    constraint c {v < 7'd100;}
+  endclass
+
   initial begin
     Scalars s;
     Elems e;
@@ -107,6 +113,20 @@ module t;
     `checkd(randomize_result, 0);
     `checkd(s.a0, 5);
     `checkd(s.b, 5);
+
+    begin
+      automatic Single one = new;
+      automatic bit [6:0] first_v;
+      automatic bit v_varied;
+      for (int i = 0; i < 20; ++i) begin
+        randomize_result = one.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(one.v < 7'd100, 1'b1);
+        if (i == 0) first_v = one.v;
+        else if (one.v != first_v) v_varied = 1'b1;
+      end
+      if ($test$plusargs("check_varied")) `checkd(v_varied, 1'b1);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
