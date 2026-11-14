@@ -46,6 +46,45 @@ module t;
     randc bit [2:0] r;
   endclass
 
+  // Nothing for the sampler to enumerate: a constraint on state only, and an empty queue
+  class StateOnly;
+    int limit;
+    constraint c {limit > 3;}
+  endclass
+
+  class EmptyQueue;
+    rand bit [6:0] q[$];
+    constraint c {foreach (q[i]) q[i] < 7'd10;}
+  endclass
+
+  class EmptyRows;
+    rand bit [6:0] rows[][];
+    function new;
+      rows = new[2];
+    endfunction
+    constraint c {foreach (rows[i, j]) rows[i][j] < 7'd10;}
+  endclass
+
+  // Resized and partly frozen between calls of one constraint set
+  class Interleaved;
+    rand bit [6:0] q[$];
+    rand bit [6:0] x;
+    constraint c {
+      foreach (q[i]) q[i] < 7'd10;
+      x < 7'd10;
+    }
+  endclass
+
+  // A scalar beside an empty queue still has a space to sample
+  class ScalarAndEmpty;
+    rand bit [6:0] s;
+    rand bit [6:0] q[$];
+    constraint c {
+      s < 7'd10;
+      foreach (q[i]) q[i] < 7'd10;
+    }
+  endclass
+
   initial begin
     Scalars s;
     Elems e;
@@ -107,6 +146,84 @@ module t;
     `checkd(randomize_result, 0);
     `checkd(s.a0, 5);
     `checkd(s.b, 5);
+
+    begin
+      automatic StateOnly met = new;
+      automatic StateOnly unmet = new;
+      automatic EmptyQueue empty = new;
+      automatic EmptyRows rows = new;
+      automatic ScalarAndEmpty mixed = new;
+      met.limit = 5;
+      unmet.limit = 2;
+      // Repeated, as the sampler first sees each constraint set without sampling it
+      for (int i = 0; i < 4; ++i) begin
+        randomize_result = met.randomize();
+        `checkd(randomize_result, 1);
+        randomize_result = unmet.randomize();
+        `checkd(randomize_result, 0);
+        randomize_result = empty.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(empty.q.size(), 0);
+        randomize_result = rows.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(rows.rows.size(), 2);
+        `checkd(rows.rows[0].size(), 0);
+        randomize_result = mixed.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(mixed.s < 7'd10, 1'b1);
+        `checkd(mixed.q.size(), 0);
+      end
+    end
+
+    begin
+      automatic EmptyQueue resized = new;
+      automatic Interleaved il = new;
+      // Twice per size, so the sampler samples each set it has seen once
+      for (int i = 0; i < 2; ++i) begin
+        for (int k = 0; k < 2; ++k) begin
+          resized.q = '{};
+          randomize_result = resized.randomize();
+          `checkd(randomize_result, 1);
+          `checkd(resized.q.size(), 0);
+        end
+        for (int k = 0; k < 2; ++k) begin
+          resized.q = '{7'd99, 7'd99, 7'd99};
+          randomize_result = resized.randomize();
+          `checkd(randomize_result, 1);
+          foreach (resized.q[j]) `checkd(resized.q[j] < 7'd10, 1'b1);
+        end
+      end
+      for (int i = 0; i < 4; ++i) begin
+        il.q = '{7'd99};
+        randomize_result = il.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(il.q[0] < 7'd10, 1'b1);
+        `checkd(il.x < 7'd10, 1'b1);
+        il.x.rand_mode(0);
+        il.q = '{7'd99, 7'd99, 7'd99};
+        randomize_result = il.randomize();
+        `checkd(randomize_result, 1);
+        foreach (il.q[j]) `checkd(il.q[j] < 7'd10, 1'b1);
+        il.x.rand_mode(1);
+      end
+    end
+
+    begin
+      // Each std::randomize call site repeated on its own, so the sampler sees the same set
+      // again; every call registers its arrays afresh
+      automatic bit [6:0] sq[$] = '{7'd99, 7'd99, 7'd99};
+      automatic bit [6:0] eq[$];
+      for (int i = 0; i < 4; ++i) begin
+        randomize_result = std::randomize(sq) with {foreach (sq[j]) sq[j] < 7'd10;};
+        `checkd(randomize_result, 1);
+        foreach (sq[j]) `checkd(sq[j] < 7'd10, 1'b1);
+      end
+      for (int i = 0; i < 4; ++i) begin
+        randomize_result = std::randomize(eq) with {foreach (eq[j]) eq[j] < 7'd10;};
+        `checkd(randomize_result, 1);
+        `checkd(eq.size(), 0);
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
