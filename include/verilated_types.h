@@ -366,8 +366,19 @@ public:
         if (t_currentp == this) t_currentp = m_parentp.get();
     }
 
-    void attach(VlProcess* childp) { m_children.insert(childp); }
-    void detach(VlProcess* childp) { m_children.erase(childp); }
+    void attach(VlProcess* childp) {
+        // A killed process runs on until it suspends, so it may fork after leaving its parent.
+        if (m_children.empty() && completed() && m_parentp) m_parentp->attach(this);
+        m_children.insert(childp);
+    }
+    void detach(VlProcess* childp) {
+        if (m_children.erase(childp)) detachIfDone();
+    }
+    // A finished process without children no longer matters to its parent's 'wait fork' or
+    // 'disable fork', so leave the parent even while handles to it keep it alive.
+    void detachIfDone() {
+        if (completed() && m_children.empty() && m_parentp) m_parentp->detach(this);
+    }
 
     int state() const { return m_state; }
     void state(int s);
