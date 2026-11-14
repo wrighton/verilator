@@ -105,6 +105,7 @@ public:
     VDouble0 m_nUnchanged;  // Number of graphs that were left unchanged
     VDouble0 m_nImprovements;  // Number of changes made to graphs
     VDouble0 m_nPrevInserted;  // Number of Prev vertices inserted
+    VDouble0 m_nChunked;  // Number of ranges traced in chunks
 
 private:
     V3DfgBreakCyclesContext()
@@ -115,6 +116,7 @@ private:
         addStat("left unchanged", m_nUnchanged);
         addStat("changes applied", m_nImprovements);
         addStat("prev vertices inserted", m_nPrevInserted);
+        addStat("ranges traced in chunks", m_nChunked);
     }
 };
 class V3DfgCseContext final : public V3DfgSubContext {
