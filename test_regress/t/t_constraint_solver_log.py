@@ -21,5 +21,20 @@ solver_log = test.obj_dir + "/solver.log"
 test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
+# Each operator over one element is just that element's term, never the operator
+# applied to that term alone
+term = r'\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)'
+test.file_grep_not(solver_log, r'\((?:bvadd|bvand|bvmul|bvor|bvxor) +' + term + r'\)')
+# Each collapsed form appears as the bare element term
+test.file_grep(solver_log, r'\(assert \(= #b1 +\(__Vbv \(= #b0010001 x\)\)\)\)')
+test.file_grep(solver_log, r'\(__Vbv \(not \(__Vbool +\(__Vbv \(= #b0010001 y\)\)\)\)\)')
+for name, value in (('sum_a', '0001001'), ('prod_a', '0001010'), ('and_a', '0001011'),
+                    ('or_a', '0001100'), ('xor_a', '0001101')):
+    test.file_grep(solver_log,
+                   r'\(__Vbv \(= +\(select ' + name + r' #x00000000\) #b' + value + r'\)\)')
+test.file_grep(solver_log, r'\(__Vbool +\(__Vbv \(= \(select fixed #x00000000\) #b0000101\)\)\)')
+test.file_grep(
+    solver_log,
+    r'\(__Vbool +\(__Vbv \(= \(select \(select grid #x00000000\) #x00000000\) #b0000110\)\)\)')
 
 test.passes()
