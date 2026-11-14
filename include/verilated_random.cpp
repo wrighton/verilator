@@ -24,6 +24,7 @@
 #include "verilated_random.h"
 
 #include <cassert>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -711,36 +712,46 @@ public:
     bool ok() const { return m_ok; }
 };
 
-static std::string readUntilBalanced(std::istream& stream) {
-    std::string result;
-    std::string token;
-    int parenCount = 1;
-    while (stream >> token) {
-        for (const char c : token) {
-            if (c == '(') {
-                ++parenCount;
-            } else if (c == ')') {
-                --parenCount;
-            }
+// One SMT-LIB term from a solver reply: a symbol or literal, or a parenthesized term
+// through its balancing ')'. Stops before a ')' that closes an enclosing term.
+static std::string readSMTTerm(std::istream& is) {
+    std::string term;
+    int depth = 0;
+    char c = 0;
+    is >> std::ws;
+    while (is.get(c)) {
+        if (depth == 0 && (c == ')' || std::isspace(static_cast<unsigned char>(c)))) {
+            is.unget();
+            break;
         }
-        result += token + " ";
-        if (parenCount == 0) break;
+        term += c;
+        if (c == '(') {
+            ++depth;
+        } else if (c == ')' && --depth == 0) {
+            break;
+        }
     }
-    return result;
+    return term;
 }
 
-static std::string parseNestedSelect(const std::string& nested_select_expr,
-                                     std::vector<std::string>& indices) {
-    std::istringstream nestedStream(nested_select_expr);
-    std::string name;
-    std::string idx;
-    nestedStream >> name;
-    if (name == "(select") {
-        const std::string further_nested_expr = readUntilBalanced(nestedStream);
-        name = parseNestedSelect(further_nested_expr, indices);
-    }
-    std::getline(nestedStream, idx, ')');
-    indices.push_back(idx);
+// The last term of an S-expression, consuming its closing ')'. Anything else before the ')'
+// is kept in the result, so that it is no longer a valid term.
+static std::string readSMTLastTerm(std::istream& is) {
+    const std::string term = readSMTTerm(is);
+    std::string rest;
+    std::getline(is >> std::ws, rest, ')');
+    return rest.empty() ? term : term + ' ' + rest;
+}
+
+// Array name of a (possibly nested) (select <array> <index>) term, appending its
+// index terms in declaration order, the leftmost first; any other term is returned as is.
+static std::string parseSelect(const std::string& term, std::vector<std::string>& indices) {
+    std::istringstream is{term};
+    std::string op;
+    is >> op;
+    if (op != "(select") return term;
+    const std::string name = parseSelect(readSMTTerm(is), indices);
+    indices.push_back(readSMTLastTerm(is));
     return name;
 }
 
@@ -779,10 +790,52 @@ void VlRandomVar::emitConcreteValue(std::ostream& s) const {
     }
 }
 int VlRandomVar::totalWidth() const { return m_width; }
+// Rewrite an indexed bit-vector literal (_ bvX n), of the expected 'width', as the binary
+// literal #b of the same value, so a reply may use either SMT-LIB 2.6 notation. Anything
+// else, including an indexed literal of another width, is left for validSMTNum to reject.
+static void smtIndexedToBinary(std::string& valr, int width) {
+    if (valr.compare(0, 1, "(") != 0) return;
+    // The term's tokens, single-spaced, so any whitespace between them is accepted
+    std::istringstream is{valr.substr(1, valr.size() - 2)};
+    std::string literal = "(";
+    for (std::string token; is >> token;) literal += token + ' ';
+    literal.back() = ')';
+    if (literal.compare(0, 5, "(_ bv") != 0) return;
+    const std::string numeral = literal.substr(5, literal.find(' ', 5) - 5);
+    // A value below 2^width has at most width digits; size() - 1 also rejects no digits
+    if (numeral.find_first_not_of("0123456789") != std::string::npos
+        || numeral.size() - 1 >= static_cast<size_t>(width)
+        || literal.compare(5 + numeral.size(), std::string::npos,
+                           " " + std::to_string(width) + ")")
+               != 0) {
+        return;
+    }
+    // Decimal to binary a word at a time; SMT-LIB makes X >= 2^n an error
+    std::vector<EData> words((static_cast<size_t>(width) + VL_EDATASIZE - 1) / VL_EDATASIZE, 0);
+    bool overflow = false;
+    for (const char digit : numeral) {
+        QData carry = digit - '0';
+        for (EData& word : words) {
+            carry += static_cast<QData>(word) * 10;
+            word = static_cast<EData>(carry);
+            carry >>= VL_EDATASIZE;
+        }
+        overflow |= carry != 0;
+    }
+    overflow |= (words.back() & ~VL_MASK_E(width)) != 0;
+    if (overflow) return;
+    // In binary, as bsat() sends the value back to the solver, and #x spells only widths that
+    // are a multiple of 4
+    valr = "#b";
+    for (int i = width - 1; i >= 0; --i) {
+        valr += ((words[VL_BITWORD_E(i)] >> VL_BITBIT_E(i)) & 1) ? '1' : '0';
+    }
+}
+
 // True if val is "#b/#o/#x/#h" followed by digits legal for that base
 static bool validSMTNum(const std::string& val) {
-    size_t i = val.find('#');
-    if (i == std::string::npos || ++i >= val.size()) return false;
+    if (val.size() < 2 || val[0] != '#') return false;
+    size_t i = 1;
     int base;
     switch (val[i++]) {
     case 'b': base = 2; break;
@@ -808,6 +861,16 @@ static bool validSMTNum(const std::string& val) {
         if (digit >= base) return false;
     }
     return true;
+}
+
+// Width in bits of val, which must have passed validSMTNum
+static size_t smtNumWidth(const std::string& val) {
+    const size_t digits = val.size() - 2;
+    switch (val[1]) {
+    case 'b': return digits;
+    case 'o': return 3 * digits;
+    default: return 4 * digits;
+    }
 }
 
 // val must have passed validSMTNum
@@ -1286,13 +1349,11 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
         Witness witness;
         for (const auto& entry : order) {
             if (VL_UNLIKELY(!(is >> c) || c != '(')) return -1;  // LCOV_EXCL_BR_LINE
-            std::string exprHead;
-            is >> exprHead;  // bare var name, or literally "(select" if an array element
-            const bool isSelect = exprHead == "(select";
-            if (isSelect) readUntilBalanced(is);
-            if (VL_UNLIKELY(!isSelect && exprHead != entry.first)) return -1;
-            std::string value;
-            std::getline(is, value, ')');
+            // The var's name, or an element's (select ...): positional, so not its indices
+            std::vector<std::string> indices;
+            if (VL_UNLIKELY(parseSelect(readSMTTerm(is), indices) != entry.first)) return -1;
+            std::string value = readSMTLastTerm(is);
+            smtIndexedToBinary(value, m_vars.at(entry.first)->width());
             // The batch outlives this call, so reject a bad value before it is cached
             if (VL_UNLIKELY(!validSMTNum(value))) return -1;
             witness[entry.first][entry.second] = value;
@@ -1676,17 +1737,10 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
                        "Internal: Unable to parse solver's response: invalid S-expression");
             return false;
         }
-        std::string name;
         std::string idx;
-        std::string value;
         std::vector<std::string> indices;
-        is >> name;
-        indices.clear();
-        if (name == "(select") {
-            const std::string selectExpr = readUntilBalanced(is);
-            name = parseNestedSelect(selectExpr, indices);
-        }
-        std::getline(is, value, ')');
+        const std::string name = parseSelect(readSMTTerm(is), indices);
+        std::string value = readSMTLastTerm(is);
         const auto it = m_vars.find(name);
         if (it == m_vars.end()) {
             VL_WARN_MT(__FILE__, __LINE__, "randomize",
@@ -1694,9 +1748,47 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
             return false;
         }
         const VlRandomVar& varr = *it->second;
-        std::string key = name;
-        for (const auto& index : indices) key += index;
-        if (!answered.insert(key).second) {
+        smtIndexedToBinary(value, varr.width());
+        // The element is named as ArrayInfo names it, whichever literal notation the solver
+        // answered in: each index of up to 32 bits in decimal, a wider one in hex without
+        // leading zeros
+        std::string element = varr.name();
+        if (!indices.empty()) {
+            const auto infoIt = m_arr_vars.find(generateKey(name, 0));
+            if (infoIt == m_arr_vars.end()
+                || indices.size() != infoIt->second->m_idxWidths.size()) {
+                VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                           "Internal: Unable to parse solver's response: invalid array index");
+                return false;
+            }
+            for (size_t i = 0; i < indices.size(); ++i) {
+                const int width = static_cast<int>(infoIt->second->m_idxWidths[i]);
+                smtIndexedToBinary(indices[i], width);
+                const std::string& index = indices[i];
+                // Of exactly the index's width, so no digit is dropped onto another element
+                if (!validSMTNum(index) || smtNumWidth(index) != static_cast<size_t>(width)) {
+                    VL_WARN_MT(__FILE__, __LINE__, "randomize",
+                               "Internal: Unable to parse solver's response: invalid array index");
+                    return false;
+                }
+                std::vector<EData> words(VL_WORDS_I(width), 0);
+                parseSMTNum(width, WDataOutP::external(words.data()), index);
+                if (width <= VL_IDATASIZE) {
+                    element += "[" + std::to_string(words[0]) + "]";
+                } else {
+                    std::ostringstream hex;
+                    hex << std::hex;
+                    for (size_t w = words.size(); w > 0; --w) {
+                        hex << std::setw(8) << std::setfill('0') << words[w - 1];
+                    }
+                    std::string hexStr = hex.str();
+                    hexStr.erase(0, hexStr.find_first_not_of('0'));
+                    element += "[" + (hexStr.empty() ? "0" : hexStr) + "]";
+                }
+            }
+        }
+        // By element, so the same element written in two notations is still a repeat
+        if (!answered.insert(element).second) {
             VL_WARN_MT(__FILE__, __LINE__, "randomize",
                        "Internal: Unable to parse solver's response: repeated variable");
             return false;
@@ -1710,37 +1802,9 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
         }
         if (m_disabledVars.count(name)) continue;
         if (!indices.empty()) {
-            std::ostringstream oss;
-            oss << varr.name();
-            for (const auto& hex_index : indices) {
-                const size_t start = hex_index.find_first_not_of(" ");
-                if (start == std::string::npos || hex_index.substr(start, 2) != "#x") {
-                    VL_FATAL_MT(__FILE__, __LINE__, "randomize",
-                                "hex_index contains invalid format");
-                    continue;
-                }
-                std::string trimmed_hex = hex_index.substr(start + 2);
-                if (!validSMTNum(hex_index)) {
-                    VL_WARN_MT(__FILE__, __LINE__, "randomize",
-                               "Internal: Unable to parse solver's response: invalid array index");
-                    return false;
-                }
-
-                if (trimmed_hex.size() <= 8) {  // Small numbers: <= 32 bits
-                    // Convert to decimal and output directly
-                    oss << "[" << std::to_string(std::stoll(trimmed_hex, nullptr, 16)) << "]";
-                } else {  // Large numbers: > 32 bits
-                    // Trim leading zeros and handle empty case
-                    trimmed_hex.erase(0, trimmed_hex.find_first_not_of('0'));
-                    oss << "[" << (trimmed_hex.empty() ? "0" : trimmed_hex) << "]";
-                }
-            }
-            const std::string indexed_name = oss.str();
-
-            const auto iti = std::find_if(m_arr_vars.begin(), m_arr_vars.end(),
-                                          [&indexed_name](const auto& entry) {
-                                              return entry.second->m_name == indexed_name;
-                                          });
+            const auto iti = std::find_if(
+                m_arr_vars.begin(), m_arr_vars.end(),
+                [&element](const auto& entry) { return entry.second->m_name == element; });
             if (iti != m_arr_vars.end()) {
                 std::ostringstream ss;
                 ss << "#x" << std::hex << std::setw(8) << std::setfill('0')
