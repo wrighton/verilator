@@ -572,10 +572,18 @@ class VlReadMem final {
     const std::string& m_filename;  // Filename
     const QData m_end;  // End address (as specified by user)
     const bool m_descending;  // Start address is above end, so addresses decrement
+    const QData m_lo;  // Lowest address to load
+    const QData m_hi;  // Highest address to load
     FILE* m_fp = nullptr;  // File handle for filename
     QData m_addr = 0;  // Next address to read
     int m_linenum = 0;  // Line number last read from file
     bool m_anyAddr = false;  // Had address directive in the file
+    bool m_addrDirective = false;  // Next address is from an address directive
+    // Whether the address is one to load
+    bool inRange(QData addr) const { return addr >= m_lo && addr <= m_hi; }
+    // Return the address of a word read, or false to stop loading
+    bool nextAddr(QData& addrr);
+
 public:
     VlReadMem(bool hex, int bits, const std::string& filename, QData start, QData end);
     ~VlReadMem();
