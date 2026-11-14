@@ -143,6 +143,7 @@ private:
     int m_dataCount;  ///< Bytes of data
     int m_recurseCount = 0;  // Now deep in current recursion
     std::unordered_map<const AstNodeFTask*, int> m_activeCalls;  // Calls being evaluated
+    std::unordered_map<const AstVar*, bool> m_portWritten;  // Whether a function writes a port
     AstNode* m_jumptargetp = nullptr;  // AstJumpBlock/AstLoop we are branching over
     // Simulating:
     // Allocators for constants of various data types
@@ -607,6 +608,16 @@ public:
     }
 
 private:
+    bool portWritten(const AstNodeFTask* funcp, const AstVar* portp) {
+        // Whether the function writes its port
+        const auto pair = m_portWritten.emplace(portp, false);
+        if (pair.second) {
+            pair.first->second = funcp->exists([portp](const AstVarRef* refp) {
+                return refp->varp() == portp && refp->access().isWriteOrRW();
+            });
+        }
+        return pair.first->second;
+    }
     AstNodeExpr* newTrackedClone(AstNodeExpr* nodep) {
         AstNodeExpr* const newp = nodep->cloneTree(false);
         m_reclaimValuesp.push_back(newp);
@@ -1775,6 +1786,7 @@ private:
         // Must do this in two steps, eval all params, then apply them
         // Otherwise chained functions may have the wrong results
         std::vector<std::pair<AstVar*, AstNodeExpr*>> portValues;
+        std::vector<std::pair<AstVar*, AstNodeExpr*>> portSharedValues;
         for (V3TaskConnects::iterator it = tconnects.begin(); it != tconnects.end(); ++it) {
             AstVar* const portp = it->first;
             AstNode* const pinp = it->second->exprp();
@@ -1787,15 +1799,35 @@ private:
                 }
                 // Evaluate pin value
                 iterateConst(pinp);
-                // Clone in case are recursing
-                portValues.emplace_back(std::make_pair(portp, newTrackedClone(fetchValue(pinp))));
+                AstNodeExpr* const valuep = fetchValue(pinp);
+                // Share, rather than copy, the aggregate value of a variable of a matching type
+                // (IEEE 1800-2023 6.22.1), so already two-state clean for the port, if nothing can
+                // edit that value in place during the call. Only an element write of a variable
+                // edits its value in place; a select's value aliases its aggregate but is never
+                // written through. The function does not write the port, and a constant function
+                // cannot reference the caller's variables (IEEE 1800-2023 13.4.3), so only a
+                // re-entered function could write the variable, but each call starts its
+                // variables, static ones too, from fresh values (IEEE 1800-2023 13.4.3), and never
+                // writes parameters. A re-entered function restores its port from a copy, so the
+                // port does not alias the variable after a nested call. A constant is copied, as
+                // newValue writes it in place. Else clone in case are recursing.
+                const AstVarRef* const pinRefp = VN_CAST(pinp, VarRef);
+                if (!VN_IS(valuep, Const) && pinRefp
+                    && pinRefp->dtypep()->matchingDType(portp->dtypep())
+                    && !portWritten(funcp, portp)) {
+                    portSharedValues.emplace_back(portp, valuep);
+                } else {
+                    portValues.emplace_back(portp, newTrackedClone(valuep));
+                }
             }
         }
         // Apply value to the function
-        if (!m_checkOnly && optimizable())
+        if (!m_checkOnly && optimizable()) {
             for (const auto& it : portValues) {
                 if (!m_checkOnly && optimizable()) newValue(it.first, it.second);
             }
+            for (const auto& it : portSharedValues) setValue(it.first, it.second);
+        }
         SimStackNode stackNode{nodep, &tconnects};
         // cppcheck-suppress danglingLifetime
         m_callStack.push_back(&stackNode);
@@ -1821,9 +1853,14 @@ private:
             returnp = newTrackedClone(fetchValue(funcp->fvarp()));
             UINFO(5, "func " << nodep->name() << " return = " << returnp);
         }
-        // Restore local automatics (none unless recursed)
+        // Restore local automatics (none unless recursed), not writing through the value of an
+        // expression, which may alias an element
         for (const auto& it : oldValues) {
-            if (it.second) newValue(it.first, it.second);
+            if (VN_IS(it.first, Var)) {
+                newValue(it.first, it.second);
+            } else {
+                setValue(it.first, it.second);
+            }
         }
         if (returnp) newValue(nodep, returnp);
         if (funcp->recursive()) {
