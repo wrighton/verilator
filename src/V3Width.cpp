@@ -7573,7 +7573,15 @@ class WidthVisitor final : public VNVisitor {
             AstNodeExpr* valuep = nullptr;
             const auto it = patmap.find(ent);
             if (it == patmap.end()) {
+                const AstConsArray* const consp = VN_CAST(newp, ConsArray);
+                if (consp && consp->defaultp()) continue;
                 valuep = patternUnkeyedValuep(dtypemap, defaultp, arrayDtp->subDTypep());
+                if (valuep && VN_IS(arrayDtp, UnpackArrayDType)) {
+                    // The elements not given of an unpacked array share one value, its default
+                    if (!newp) newp = new AstConsArray{nodep->fileline(), arrayDtp};
+                    VN_AS(newp, ConsArray)->defaultp(valuep);
+                    continue;
+                }
                 if (!valuep) {
                     nodep->v3error("Assignment pattern missed initializing elements: " << ent);
                     missed = true;
