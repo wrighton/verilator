@@ -1611,7 +1611,8 @@ List Of Warnings
    prefix based on the top module name followed by __02E (a
    Verilator-encoded ASCII "."). This renaming is done even if the two
    modules' signals seem identical, e.g., multiple modules with a "clk"
-   input.
+   input. The same prefix is added, also with a single top module, to an
+   input/output named the same as a top module or a package.
 
    Ignoring this warning will make multiple tops, as described in (3) above.
 
