@@ -264,7 +264,9 @@ public:
                 varNum.opIToRD(pinValuep->num());
                 var = varNum.toDouble();
             }
-            return V3Number::epsilonEqual(var, hierOptParamp->num().toDouble());
+            // Exact, as a different value is a different parameter value; hierarchical block
+            // values are passed as hexadecimal floating point, so are exact too
+            return var == hierOptParamp->num().toDouble();
         }
         // Now integer type is assumed
         // Bitwidth of hierOptParamp is accurate because V3Width already calculated in the
