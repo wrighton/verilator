@@ -1329,10 +1329,9 @@ void VlRandomizer::unigenXors(std::iostream& solver, VlRNG& rngr, int bits) {
     for (int k = 0; k < bits; ++k) solver << (target[k] ? '1' : '0');
     if (bits > 1) solver << " (concat";
     for (int k = 0; k < bits; ++k) {
-        // #b0 seeds the bvxor chain so it's always >=2 operands (valid even
-        // if this equation's coin flips happen to select zero/one bits).
-        // 0 xor 0 == 0, 0 xor 1 == 1, so the seed cannot change the result.
-        solver << " (bvxor #b0";
+        // Two #b0 seed the bvxor chain, so it has at least two operands (SMT-LIB 2.6)
+        // even when this equation's coin flips select no bit; zeros cannot change an xor.
+        solver << " (bvxor #b0 #b0";
         for (const auto& var : m_vars) {
             for (int j = 0; j < var.second->totalWidth(); ++j) {
                 if (VL_RANDOM_RNG_I(rngr) & 1) var.second->emitExtract(solver, j);
