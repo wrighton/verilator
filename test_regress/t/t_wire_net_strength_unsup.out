@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_wire_net_strength_unsup.v:12:32: Unsupported: Assignments with signal strength with LHS of type: SEL
+                                                       : ... note: In instance 't'
+   12 |   assign (weak0, weak1) w[1:0] = x[1:0];
+      |                                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
