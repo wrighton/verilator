@@ -1162,6 +1162,45 @@ class TristateVisitor final : public TristateBaseVisitor {
         m_proceduralEnables.clear();
     }
 
+    void addResolvedAssigns(AstNodeModule* modp, AstVar* invarp, AstVar* envarp, AstNodeExpr* enp,
+                            AstVar* lhsp, AstNodeExpr* orp) {
+        // Assign a resolved net's enable (if envarp) and value (to lhsp). The net delay of
+        // invarp applies to the resolved value, including changes to and from z
+        // (IEEE 1800-2023 28.16), so both go through one delayed assignment, which then
+        // carries the delay instead of the net.
+        FileLine* const fl = invarp->fileline();
+        AstNodeExpr* valuep = orp;
+        AstNodeExpr* enValuep = enp;
+        if (AstDelay* const delayp = invarp->delayp()) {
+            const int width = invarp->width();
+            AstVar* const tmpp
+                = new AstVar{fl, VVarType::MODULETEMP, "__VnetDelay__" + invarp->name(),
+                             VFlagBitPacked{}, envarp ? 2 * width : width};
+            modp->addStmtsp(tmpp);
+            AstAssignW* const tmpAssp = new AstAssignW{
+                fl, new AstVarRef{fl, tmpp, VAccess::WRITE},
+                envarp ? static_cast<AstNodeExpr*>(new AstConcat{fl, enp, orp}) : orp,
+                delayp->unlinkFrBack()};
+            tmpAssp->user2Or(U2_BOTH);
+            modp->addStmtsp(new AstAlways{tmpAssp});
+            valuep = new AstSel{fl, new AstVarRef{fl, tmpp, VAccess::READ}, 0, width};
+            if (envarp) {
+                enValuep = new AstSel{fl, new AstVarRef{fl, tmpp, VAccess::READ}, width, width};
+            }
+        }
+        if (envarp) {
+            AstAssignW* const enAssp
+                = new AstAssignW{fl, new AstVarRef{fl, envarp, VAccess::WRITE}, enValuep};
+            UINFOTREE(9, enAssp, "", "enAssp");
+            modp->addStmtsp(new AstAlways{enAssp});
+        }
+        AstAssignW* const assp
+            = new AstAssignW{fl, new AstVarRef{fl, lhsp, VAccess::WRITE}, valuep};
+        assp->user2Or(U2_BOTH);  // Don't process further; already resolved
+        UINFOTREE(9, assp, "", "lhsp-eqn");
+        modp->addStmtsp(new AstAlways{assp});
+    }
+
     // isIfaceTri: true when the var is a tristate in an interface module (local or external).
     // ifaceDottedPath/ifaceInlinedDots/ifaceModportp are non-empty only for external
     // (cross-module) drivers; empty for local drivers within the interface itself.
@@ -1171,6 +1210,14 @@ class TristateVisitor final : public TristateBaseVisitor {
         UINFO(8, "  TRISTATE EXPANDING:" << invarp);
         ++m_statTriSigs;
         m_tgraph.didProcess(invarp);
+        AstDelay* const netDelayp = invarp->delayp();
+        if (netDelayp && netDelayp->fallDelay()) {
+            // A change to or from z needs its own delay (IEEE 1800-2023 28.16)
+            netDelayp->v3warn(E_UNSUPPORTED, "Unsupported: Tristate net with separate rise and"
+                                             " fall net delays: "
+                                                 << invarp->prettyNameQ());
+            VL_DO_DANGLING(pushDeletep(netDelayp->fallDelay()->unlinkFrBack()), netDelayp);
+        }
 
         // If the lhs var is a port, then we need to create ports for
         // the output (__out) and output enable (__en) signals. The
@@ -1348,7 +1395,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         const bool hasPull = m_varAux(lhsp).pullp || hasPerBitPulls(lhsp);
         if (!outvarp || hasPull) {
             AstNodeExpr* undrivenp;
-            if (envarp) {
+            if (envarp && enp) {
+                // Not envarp, which the net delay delays
+                undrivenp = new AstNot{enp->fileline(), enp->cloneTreePure(false)};
+            } else if (envarp) {
                 undrivenp = new AstNot{envarp->fileline(),
                                        new AstVarRef{envarp->fileline(), envarp, VAccess::READ}};
             } else if (enp) {
@@ -1367,19 +1417,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         // Ensure enp is valid when envarp exists (pullup/pulldown only = no active driver)
         if (envarp && !enp) enp = newAllZerosOrOnes(invarp, false);
 
-        if (envarp) {
-            AstAssignW* const enAssp = new AstAssignW{
-                enp->fileline(), new AstVarRef{envarp->fileline(), envarp, VAccess::WRITE}, enp};
-            UINFOTREE(9, enAssp, "", "enAssp");
-            nodep->addStmtsp(new AstAlways{enAssp});
-        }
-
         // __out (child) or <in> (parent) = drive-value expression
-        AstAssignW* const assp = new AstAssignW{
-            lhsp->fileline(), new AstVarRef{lhsp->fileline(), lhsp, VAccess::WRITE}, orp};
-        assp->user2Or(U2_BOTH);  // Don't process further; already resolved
-        UINFOTREE(9, assp, "", "lhsp-eqn");
-        nodep->addStmtsp(new AstAlways{assp});
+        addResolvedAssigns(nodep, invarp, envarp, enp, lhsp, orp);
 
         // If this is a top-level inout, make sure that the INOUT pins get __en and __out
         if ((v3Global.opt.pinsInoutEnables() || !v3Global.opt.libCreate().empty()) && isTopInout) {
@@ -1916,7 +1955,6 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
         if (m_graphing) {
             if (AstAssignW* assignWp = VN_CAST(nodep, AssignW)) {
-                if (assignWp->getLhsNetDelay()) return;
                 if (assignWp->timingControlp() && !m_currentDelayp) return;
                 // Separate data and enable assignments cannot preserve distinct rise/fall delays.
                 if (m_currentDelayp && m_currentDelayp->fallDelay()) return;
@@ -2638,26 +2676,17 @@ class TristateVisitor final : public TristateBaseVisitor {
                 invarp->user1p(envarp);
             }
 
-            // Assign combined enable
-            AstAssignW* const enAssp
-                = new AstAssignW{fl, new AstVarRef{fl, envarp, VAccess::WRITE}, enp};
-            UINFOTREE(9, enAssp, "", "iface-enAssp");
-            ifaceModp->addStmtsp(new AstAlways{enAssp});
-
             // Pull resolution
             const AstPull* const pullp = m_varAux(invarp).pullp;
             const bool pull1 = pullp && pullp->direction() == 1;  // Else default is down
 
-            AstNodeExpr* undrivenp = new AstNot{fl, new AstVarRef{fl, envarp, VAccess::READ}};
+            // Not envarp, which the net delay delays
+            AstNodeExpr* undrivenp = new AstNot{fl, enp->cloneTreePure(false)};
             undrivenp = new AstAnd{fl, undrivenp, newAllZerosOrOnes(invarp, pull1)};
             orp = new AstOr{fl, orp, undrivenp};
 
-            // Assign final value to invarp
-            AstAssignW* const assp
-                = new AstAssignW{fl, new AstVarRef{fl, invarp, VAccess::WRITE}, orp};
-            assp->user2Or(U2_BOTH);
-            UINFOTREE(9, assp, "", "iface-lhsp-eqn");
-            ifaceModp->addStmtsp(new AstAlways{assp});
+            // Assign combined enable and final value to invarp
+            addResolvedAssigns(ifaceModp, invarp, envarp, enp, invarp, orp);
         }
     }
 
