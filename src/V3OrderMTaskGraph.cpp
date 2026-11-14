@@ -196,6 +196,39 @@ void OrderMTaskGraph::addEdge(LogicMTask* fromp, LogicMTask* top) {
     }
 }
 
+void OrderMTaskGraph::addBuildEdge(LogicMTask* fromp, LogicMTask* top) {
+    UASSERT_OBJ(fromp != top, fromp, "Should not create self-edges");
+    UDEBUGONLY(UASSERT_OBJ(!fromp->hasEdgeTo(top), fromp, "Should not create redundant edges"););
+    new MTaskEdge{this, fromp, top};
+}
+
+template <GraphWay::en N_Way>
+void OrderMTaskGraph::initCriticalPaths() {
+    constexpr GraphWay way{N_Way};
+    constexpr GraphWay inv = way.invert();
+    // Visit the MTasks in topological order of the given direction, so the critical paths of
+    // all MTasks unwayward of an MTask are final when it is visited. The edge heap keys start at
+    // least the cost of the relative, and only increase to its final inclusive critical path.
+    GraphStreamUnordered stream{this, way};
+    size_t nVisited = 0;
+    while (const V3GraphVertex* const vtxp = stream.nextp()) {
+        ++nVisited;
+        LogicMTask* const mtaskp = const_cast<LogicMTask*>(vtxp->as<LogicMTask>());
+        mtaskp->cpExclusive<N_Way>(mtaskp->cpExclusiveFromEdges<N_Way>());
+        const uint64_t inclusiveCp = mtaskp->cpInclusive<way>();
+        for (V3GraphEdge& graphEdge : mtaskp->edges<way>()) {
+            MTaskEdge& edge = static_cast<MTaskEdge&>(graphEdge);
+            EdgeHeap::Node& edgeHeapNode = edge.m_edgeHeapNode[inv];
+            if (inclusiveCp > edgeHeapNode.key().m_cp) {
+                edge.furtherMTaskp<N_Way>()->m_edgeHeap[inv].increaseKey(&edgeHeapNode,
+                                                                         inclusiveCp);
+            }
+        }
+    }
+    // An MTask on a cycle is never visited, and would keep a wrong critical path
+    UASSERT(nVisited == vertices().size(), "MTask graph is cyclic");
+}
+
 void OrderMTaskGraph::mergeMTasks(LogicMTask* recipientp, LogicMTask* donorp) {
     UASSERT_OBJ(recipientp != donorp, recipientp, "Should not merge an MTask with itself");
     UASSERT_OBJ(recipientp->canMergeWith(donorp), recipientp, "Merging different fixed threads");
@@ -591,7 +624,7 @@ class OrderMTaskGraphBuilder final {
     // they are not the same, which happens within a part.
     void addEdge(LogicMTask* srcp, LogicMTask* dstp) {
         if (srcp == dstp || srcp->hasEdgeTo(dstp)) return;  // Don't create redundant edges.
-        m_mtaskGraph.addEdge(srcp, dstp);
+        m_mtaskGraph.addBuildEdge(srcp, dstp);
     }
 
     // CONSTRUCTORS
@@ -672,6 +705,8 @@ class OrderMTaskGraphBuilder final {
             if (mtask.inEmpty()) addEdge(&entry, &mtask);
             if (mtask.outEmpty()) addEdge(&mtask, &exit);
         }
+
+        mtaskGraph.initCriticalPaths();
     }
     ~OrderMTaskGraphBuilder() = default;
     VL_UNCOPYABLE(OrderMTaskGraphBuilder);
