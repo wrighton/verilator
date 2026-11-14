@@ -528,6 +528,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     AstCell* m_cellp = nullptr;  // current cell
     VarMap m_lhsmap;  // Tristate left-hand-side driver map
     VarToAssignsMap m_assigns;  // Assigns in current module
+    // Wired net, or element of an unpacked array of wired nets, by net and unpacked indices
+    using WiredElem = std::pair<AstVar*, std::vector<int>>;
+    std::map<WiredElem, Assigns> m_wiredAssigns;  // Continuous drivers of wired elements
     AssignEnableMap m_assignEnps;  // Raw enable expression for each procedural assignment
     ProceduralEnableMap m_proceduralEnables;  // Enable updates to merge into assignments
     int m_unique = 0;
@@ -1409,7 +1412,17 @@ class TristateVisitor final : public TristateBaseVisitor {
     }
 
     void addToAssignmentList(AstAssignW* nodep) {
-        if (AstVarRef* const varRefp = VN_CAST(nodep->lhsp(), VarRef)) {
+        int lsb;
+        int width;
+        AstVarRef* const varRefp = VN_CAST(nodep->lhsp(), VarRef);
+        if (AstNodeExpr* const elemp = wiredElemp(nodep->lhsp(), lsb, width)) {
+            // Merged with the other drivers of the element in mergeWiredNetsAssignments; a
+            // driver of part of an element with a strength is unsupported below
+            if (varRefp || !nodep->strengthSpecp()) {
+                m_wiredAssigns[wiredElem(elemp)].push_back(nodep);
+            }
+        }
+        if (varRefp) {
             if (varRefp->varp()->isNet()) {
                 m_assigns[varRefp->varp()].push_back(nodep);
             } else if (nodep->strengthSpecp()) {
@@ -1420,6 +1433,43 @@ class TristateVisitor final : public TristateBaseVisitor {
                           "Unsupported: Assignments with signal strength with LHS of type: "
                               << nodep->lhsp()->prettyTypeNameQ());
         }
+    }
+
+    static AstNodeExpr* wiredElemp(AstNode* lhsp, int& lsb, int& width) {
+        // The wired net, or element of an unpacked array of wired nets, of which lhsp writes
+        // constant bits [lsb +: width], else nullptr
+        lsb = 0;
+        width = 0;
+        AstNode* nodep = lhsp;
+        while (const AstSel* const selp = VN_CAST(nodep, Sel)) {
+            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
+            if (!lsbp) return nullptr;
+            lsb += lsbp->toSInt();
+            if (!width) width = selp->widthConst();
+            nodep = selp->fromp();
+        }
+        AstNodeExpr* const elemp = VN_CAST(nodep, NodeExpr);
+        while (const AstArraySel* const aselp = VN_CAST(nodep, ArraySel)) {
+            if (!VN_IS(aselp->bitp(), Const)) return nullptr;
+            nodep = aselp->fromp();
+        }
+        const AstVarRef* const refp = VN_CAST(nodep, VarRef);
+        // The element is a packed value, not an unpacked array the drivers write whole
+        if (!refp || !refp->varp()->isWiredNet()
+            || !elemp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return nullptr;
+        }
+        if (!width) width = elemp->width();
+        return lsb + width <= elemp->width() ? elemp : nullptr;
+    }
+    static WiredElem wiredElem(AstNodeExpr* elemp) {
+        // Net and unpacked indices of an element wiredElemp returned
+        std::vector<int> indices;
+        while (const AstArraySel* const aselp = VN_CAST(elemp, ArraySel)) {
+            indices.insert(indices.begin(), VN_AS(aselp->bitp(), Const)->toSInt());
+            elemp = aselp->fromp();
+        }
+        return {VN_AS(elemp, VarRef)->varp(), indices};
     }
 
     uint8_t getStrength(const AstAssignW* const nodep, bool value) {
@@ -1474,34 +1524,73 @@ class TristateVisitor final : public TristateBaseVisitor {
 
     void mergeWiredNetsAssignments() {
         // Support for WOR/TRIOR/WAND/TRIAND, by merging the Assignments for the
-        // same Net (merge by or for WOR/TIOR and merge by and for WAND/TRIAND).
-        for (auto& varpAssigns : m_assigns) {
-            Assigns& assigns = varpAssigns.second;
+        // same Net (merge by or for WOR/TIOR and merge by and for WAND/TRIAND), or the same
+        // element of an unpacked array of them.
+        // A driver of a part select only affects its own bits; the other bits of the
+        // driver's term are 0 for an or, 1 for an and.
+        std::unordered_set<const AstVar*>
+            elemDrivenps;  // Unpacked wired arrays with element drivers
+        for (const auto& elemAssigns : m_wiredAssigns) {
+            if (!elemAssigns.first.second.empty()) elemDrivenps.insert(elemAssigns.first.first);
+        }
+        // A driver of a whole unpacked array of wired nets is not split into its elements
+        std::vector<const AstAssignW*> unsupps;
+        for (const auto& varpAssigns : m_assigns) {
+            const AstVar* const varp = varpAssigns.first;
+            const Assigns& assigns = varpAssigns.second;
+            if (!varp->isWiredNet() || varp->dtypep()->skipRefp()->isIntegralOrPacked()) continue;
+            if (assigns.size() <= 1 && !elemDrivenps.count(varp)) continue;
+            unsupps.push_back(assigns.back());
+        }
+        // In source order, not the map's
+        std::sort(unsupps.begin(), unsupps.end(), [](const AstAssignW* ap, const AstAssignW* bp) {
+            return ap->fileline()->operatorCompare(*bp->fileline()) < 0;
+        });
+        for (const AstAssignW* const assignp : unsupps) {
+            assignp->v3warn(E_UNSUPPORTED,
+                            "Unsupported: Driver of a whole unpacked array of wired nets,"
+                            " with other drivers of the array: "
+                                << VN_AS(assignp->lhsp(), VarRef)->varp()->prettyNameQ());
+        }
+        for (auto& elemAssigns : m_wiredAssigns) {
+            Assigns& assigns = elemAssigns.second;
             if (assigns.size() <= 1) continue;
-            AstVar* const varp = varpAssigns.first;
-            if (!varp->isWiredNet()) continue;
-            auto it = assigns.begin();
-            AstAssignW* const assignWp0 = *it;
-            FileLine* const fl = assignWp0->fileline();
+            AstVar* const varp = elemAssigns.first.first;
+            int lsb;
+            int selWidth;
+            AstNodeExpr* const elemp = wiredElemp(assigns[0]->lhsp(), lsb, selWidth);
+            const int width = elemp->width();
+            FileLine* const fl = assigns[0]->fileline();
+            V3Number driven{fl, width, 0};  // Bits with any driver
             AstNodeExpr* wExp = nullptr;
-            while (++it != assigns.end()) {
-                AstAssignW* assignWpip = *it;
-                if (!wExp) {
-                    wExp = newMergeExpr(assignWp0->rhsp()->cloneTreePure(false),
-                                        assignWpip->rhsp()->cloneTreePure(false), fl,
-                                        varp->isWor());
-                } else {
-                    wExp = newMergeExpr(wExp, assignWpip->rhsp()->cloneTreePure(false), fl,
-                                        varp->isWor());
+            for (AstAssignW* const assignp : assigns) {
+                AstNodeExpr* termp = assignp->rhsp()->cloneTreePure(false);
+                wiredElemp(assignp->lhsp(), lsb, selWidth);
+                V3Number mask{fl, width, 0};
+                mask.setMask(selWidth, lsb);
+                driven.opOr(V3Number{driven}, mask);
+                if (selWidth != width) {
+                    termp = new AstShiftL{fl, new AstExtend{fl, termp, width},
+                                          new AstConst{fl, static_cast<uint32_t>(lsb)}, width};
+                    if (!varp->isWor()) {
+                        V3Number notMask{fl, width, 0};
+                        notMask.opNot(mask);
+                        termp = new AstOr{fl, termp, new AstConst{fl, notMask}};
+                    }
                 }
-                VL_DO_DANGLING((assignWpip->unlinkFrBack()->deleteTree()), assignWpip);
+                wExp = wExp ? newMergeExpr(wExp, termp, fl, varp->isWor()) : termp;
             }
-            AstVarRef* const wVarRefp = new AstVarRef{fl, varp, VAccess::WRITE};
-            AstAssignW* const wAssignp = new AstAssignW{fl, wVarRefp, wExp};
-            assignWp0->replaceWith(wAssignp);
-            VL_DO_DANGLING(pushDeletep(assignWp0), assignWp0);
-            assigns.clear();
-            assigns.push_back(wAssignp);
+            // Undriven bits of an and are not driven to 1
+            if (!varp->isWor() && !driven.isEqAllOnes()) {
+                wExp = new AstAnd{fl, wExp, new AstConst{fl, driven}};
+            }
+            AstAssignW* const wAssignp = new AstAssignW{fl, elemp->cloneTreePure(false), wExp};
+            assigns[0]->replaceWith(wAssignp);
+            VL_DO_DANGLING(pushDeletep(assigns[0]), assigns[0]);
+            for (size_t i = 1; i < assigns.size(); ++i) {
+                VL_DO_DANGLING(pushDeletep(assigns[i]->unlinkFrBack()), assigns[i]);
+            }
+            if (elemAssigns.first.second.empty()) m_assigns[varp] = {wAssignp};
         }
     }
 
@@ -2255,7 +2344,13 @@ class TristateVisitor final : public TristateBaseVisitor {
             AstVar* const enModVarp = static_cast<AstVar*>(nodep->modVarp()->user1p());
             if (!enModVarp) {
                 // May have an output only that later connects to a tristate, so simplify now.
-                V3Inst::pinReconnectSimple(nodep, m_cellp, false);
+                // An output to a wired net becomes an assignment merged with the net's other
+                // drivers.
+                int lsb;
+                int width;
+                const bool toWiredNet
+                    = nodep->modVarp()->isWritable() && wiredElemp(nodep->exprp(), lsb, width);
+                V3Inst::pinReconnectSimple(nodep, m_cellp, false, toWiredNet);
                 iteratePinGuts(nodep);
                 return;  // No __en signals on this pin
             }
@@ -2524,6 +2619,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         VL_RESTORER(m_unique);
         VL_RESTORER_CLEAR(m_lhsmap);
         VL_RESTORER_CLEAR(m_assigns);
+        VL_RESTORER_CLEAR(m_wiredAssigns);
         VL_RESTORER_CLEAR(m_assignEnps);
         VL_RESTORER_CLEAR(m_proceduralEnables);
         // Not preserved, needs pointer instead: TristateGraph origTgraph = m_tgraph;
