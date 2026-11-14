@@ -334,6 +334,9 @@ bom             [\357\273\277]
         /* Note '(' must IMMEDIATELY follow definition name */
 <DEFFPAR>[(]            { FL_FWDC; appendDefValue("(", 1); LEXP->m_formalLevel=1;
                           FL_BRK; BEGIN(DEFFORM); }
+        /* except after the white space ending an escaped name (IEEE 1800-2023 22.5.1) */
+<DEFFPAR>[ \t\f]/[(]    { FL_FWDC; if (!LEXP->m_defNameEscaped) { yyless(0); yy_pop_state(); return VP_DEFFORM; }
+                          FL_BRK; }
 <DEFFPAR>{crnl}         { FL_FWDC; yy_pop_state(); unput('\n'); yyleng=0; return VP_DEFFORM; }  /* DEFVAL will later grab the return */
 <DEFFPAR><<EOF>>        { FL_FWDC; yy_pop_state(); return VP_DEFFORM; }  /* empty formals */
 <DEFFPAR>.              { FL_FWDC; yy_pop_state(); unput(yytext[yyleng-1]); yyleng=0; return VP_DEFFORM; }  /* empty formals */
@@ -502,9 +505,10 @@ void V3PreLex::pushStateDefArg(int level) {
     m_defValue = "";
 }
 
-void V3PreLex::pushStateDefForm() {
+void V3PreLex::pushStateDefForm(bool nameEscaped) {
     // Enter define formal arguments state
     yy_push_state(DEFFPAR);  // First is an optional ( to begin args
+    m_defNameEscaped = nameEscaped;
     m_parenLevel = 0;
     m_defValue = "";
 }
