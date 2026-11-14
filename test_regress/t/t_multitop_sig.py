@@ -23,5 +23,7 @@ test.file_grep(test.run_log_filename, r"In 'b'")
 test.file_grep(test.run_log_filename, r"In 'b.sub'")
 test.file_grep(test.run_log_filename, r"In 'c'")
 test.file_grep(test.run_log_filename, r"In 'c.sub'")
+test.file_grep(test.run_log_filename, r"In 'd'")
+test.file_grep(test.run_log_filename, r"In 'd.sub'")
 
 test.passes()
