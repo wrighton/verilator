@@ -286,6 +286,7 @@ protected:
     private:
         // Combined sensitivities of all NBAs targeting this variable
         AstSenTree* m_senTreep = nullptr;
+        const AstSenTree* m_lastSenTreep = nullptr;  // Sensitivity last added
 
         // Union of stuff needed for the various schemes - use accessors below!
         union {
@@ -337,16 +338,19 @@ protected:
         // Accessor
         AstSenTree* senTreep() const { return m_senTreep; }
 
-        // Add sensitivities
-        void addSensitivity(AstSenItem* nodep) {
+        // Add sensitivities, duplicates removed by 'mergeSensitivities' once all are added, as
+        // doing so on each addition would be quadratic in the number of distinct sensitivities
+        void addSensitivity(const AstSenTree* nodep) {
+            // Successive NBAs are often under the same sensitivity
+            if (nodep == m_lastSenTreep) return;
+            m_lastSenTreep = nodep;
             if (!m_senTreep) m_senTreep = new AstSenTree{nodep->fileline(), nullptr};
             // Add a copy of each term
-            m_senTreep->addSensesp(nodep->cloneTree(true));
-            // Remove duplicates
-            V3Const::constifyExpensiveEdit(m_senTreep);
+            m_senTreep->addSensesp(nodep->sensesp()->cloneTree(true));
         }
-        // cppcheck-suppress constParameterPointer
-        void addSensitivity(AstSenTree* nodep) { addSensitivity(nodep->sensesp()); }
+        void mergeSensitivities() {
+            if (m_senTreep) V3Const::constifyExpensiveEdit(m_senTreep);
+        }
     };
 
     // Data required to lower an NBA later
@@ -929,11 +933,13 @@ class DelayedAnalysis final : public DelayedBase {
         // Targets updated via a MemberRef use the GenericGlobal scheme. This is the only one
         // that both respects program order and can capture arbitrary LHS expressions.
         for (AstVar* const varp : m_state.nbaVarps) {
+            m_state.targetInfo(varp).mergeSensitivities();
             m_state.targetInfo(varp).m_scheme = Scheme::GenericGlobal;
         }
         // Targets updated directly via an AstVarRef have more choices
         for (AstVarScope* const vscp : m_state.nbaVscps) {
             TargetInfo& targetInfo = m_state.targetInfo(vscp);
+            targetInfo.mergeSensitivities();
             targetInfo.m_scheme = chooseScheme(vscp, targetInfo);
         }
     }
