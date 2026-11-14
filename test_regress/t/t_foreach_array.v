@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkd(gotv, expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checks(gotv, expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 module t_foreach_array;
@@ -148,6 +149,45 @@ module t_foreach_array;
     end
     `checkd(count, 3);
     `checkd(sum, 6);
+  end
+
+  // A string is a dimension of bytes after the array dimensions (IEEE 1800-2023 12.7.3)
+  initial begin
+    string words[2:1];
+    string dyn_words[];
+    string queue_words[$];
+    string chars;
+    int count;
+
+    words = '{"ab", "cde"};
+    count = 0;
+    chars = "";
+    foreach (words[i, j]) begin
+      ++count;
+      chars = {chars, string'(words[i][j])};
+    end
+    `checkd(count, 5);
+    `checks(chars, "abcde");
+
+    dyn_words = '{"f", "", "ghij"};
+    count = 0;
+    chars = "";
+    foreach (dyn_words[i, j]) begin
+      ++count;
+      chars = {chars, string'(dyn_words[i][j])};
+    end
+    `checkd(count, 5);
+    `checks(chars, "fghij");
+
+    queue_words = '{"kl", "m"};
+    count = 0;
+    chars = "";
+    foreach (queue_words[i, j]) begin
+      ++count;
+      chars = {chars, string'(queue_words[i][j])};
+    end
+    `checkd(count, 3);
+    `checks(chars, "klm");
   end
 
   initial begin
