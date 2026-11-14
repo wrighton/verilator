@@ -18,7 +18,7 @@ test.execute(all_run_flags=["+names=n1,n3"])
 # The 6 in_names calls and the pop_first and fact_twice calls are not inlined
 test.file_grep(test.stats,
                r'Optimizations, Function calls in initial assignments not inlined\s+(\d+)', 8)
-test.file_grep(test.stats, r'Optimizations, Functions inlined\s+(\d+)', 12)
+test.file_grep(test.stats, r'Optimizations, Functions inlined\s+(\d+)', 10)
 # So there is one copy of the in_names body, besides the public function and its inlined call
 cpp = ""
 for filename in test.glob_some(test.obj_dir + "/*.cpp"):

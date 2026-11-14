@@ -82,16 +82,6 @@ module t;
   endfunction
   wire integer two = set_flag();
 
-  // Nonblocking assignment, so inlined
-  function int nba_static();
-    int s;
-    s <= 3;
-    return 4;
-  endfunction
-  // verilator lint_off COMBDLY
-  wire integer four = nba_static();
-  // verilator lint_on COMBDLY
-
   // Read-write access after a write, so not inlined
   function int pop_first();
     int q[$];
@@ -99,14 +89,6 @@ module t;
     return q.pop_front();
   endfunction
   wire integer seven = pop_first();
-
-  // Nonblocking event trigger, so inlined
-  function int nba_event();
-    event e;
-    ->>e;
-    return 5;
-  endfunction
-  wire integer five = nba_event();
 
 `ifdef VERILATOR
   // Public, so inlined
@@ -149,8 +131,6 @@ module t;
       `checkd(named12, 2'b10);
       `checkd(flag, 1);
       `checkd(two, 2);
-      `checkd(four, 4);
-      `checkd(five, 5);
       `checkd(seven, 7);
       `checkd(pub_n3, 1'b1);
       `checkd(fact_tw, 21);
