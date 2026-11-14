@@ -25,6 +25,7 @@
 #include <fstream>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -201,6 +202,28 @@ class TraceDriver final : public DfgVisitor {
     std::unordered_map<CacheKey, DfgVertex*, CacheKey::Hash, CacheKey::Equal> m_cache;
     // Cache for boundary vertices (where m_sccInfo.get(*vtxp) != m_component)
     std::unordered_map<CacheKey, DfgVertex*, CacheKey::Hash, CacheKey::Equal> m_boundaryCache;
+    // A packed value traced in chunks (see 'traceChunked'): a packed variable, with index
+    // 'NO_INDEX', or the element at a constant index of an array variable
+    using ChunkKey = std::pair<const DfgVertex*, uint32_t>;
+    static constexpr uint32_t NO_INDEX = ~0U;
+    struct ChunkKeyHash final {
+        size_t operator()(const ChunkKey& key) const {
+            V3Hash hash{key.first};
+            hash += key.second;
+            return hash.value();
+        }
+    };
+    // MSB of the innermost range of each packed value currently being traced, 0 if none
+    std::unordered_map<ChunkKey, uint32_t, ChunkKeyHash> m_activeMsbs;
+    // Components containing an adder, subtractor or left shift by a non-constant amount.
+    // These need all lower bits of an operand, so each chunk of a value in such a component
+    // would re-trace all bits below it.
+    std::unordered_set<uint64_t> m_prefixComponents;
+    // Minimum width of a range traced in chunks. Narrower ranges are traced whole, as the
+    // logic copied per shift step then simulates faster than the serial chain of chunks
+    // (measured break-even with GCC -Os: between 256 and 320 bits).
+    static constexpr uint32_t CHUNK_MIN_WIDTH = 320;
+    size_t m_nChunked = 0;  // Number of ranges traced in chunks
 
 #ifdef VL_DEBUG
     std::ofstream m_lineCoverageFile;  // Line coverage file, just for testing
@@ -430,6 +453,46 @@ class TraceDriver final : public DfgVisitor {
         return resp;
     }
 
+    // Trace the packed value 'key' at [m_msb:m_lsb], read via 'vtxp'. If the same value is
+    // already being traced at a range above the current one, its bits depend on lower bits
+    // of itself, e.g.: 'x = {x[N-2:0] | y[N-2:0], 1'b0}'. Tracing the range whole would
+    // re-trace a range shifted down by the offset again, building a copy of the logic per
+    // shift step, quadratic in the width. Instead trace chunks of the offset from the bottom
+    // up, each reusing the chunk below it. In a cycle through an operation that needs all
+    // lower bits of an operand, the range is traced whole (see 'm_prefixComponents').
+    // 'traceWhole' traces the range in one piece.
+    // Values whose bits depend on higher bits of themselves are always traced whole: their
+    // logic copied per shift step is quadratic in code size, but not in simulation time.
+    template <typename TraceWhole>
+    DfgVertex* traceChunked(DfgVertex* vtxp, const ChunkKey& key, TraceWhole traceWhole) {
+        uint32_t& activeMsbr = m_activeMsbs.emplace(key, 0).first->second;
+        const uint32_t outerMsb = activeMsbr;
+        const uint32_t msb = m_msb;
+        const uint32_t lsb = m_lsb;
+        const uint32_t width = msb - lsb + 1;
+        activeMsbr = msb;
+        DfgVertex* resp = nullptr;
+        if (!m_prefixComponents.count(m_component) && width >= CHUNK_MIN_WIDTH && outerMsb > msb
+            && width > outerMsb - msb) {
+            ++m_nChunked;
+            const uint32_t step = outerMsb - msb;
+            uint32_t cMsb = lsb + (width - 1) % step;
+            resp = trace(vtxp, cMsb, lsb);
+            while (cMsb < msb) {
+                const uint32_t cLsb = cMsb + 1;
+                cMsb += step;
+                DfgConcat* const catp = make<DfgConcat>(vtxp, cMsb - lsb + 1);
+                catp->rhsp(resp);
+                catp->lhsp(trace(vtxp, cMsb, cLsb));
+                resp = catp;
+            }
+        } else {
+            resp = traceWhole();
+        }
+        activeMsbr = outerMsb;
+        return resp;
+    }
+
     // Use this macro to return the result from 'visit' methods. This also emits
     // a line to m_lineCoverageFile for testing.
     // TODO: Use C++20 std::source_location instead of a macro
@@ -591,15 +654,20 @@ class TraceDriver final : public DfgVisitor {
         DfgVertex* const srcp = vtxp->srcp();
         DfgVertex* const defaultp = vtxp->defaultp();
         DfgVertex* const drvp = srcp ? srcp : defaultp;
-        // If we are about to trace a splice, set the defaultp to the corresponding default
-        if (srcp && srcp->is<DfgVertexSplice>()) {
-            m_defaultp = defaultp;
-            m_splicep = srcp;
-        }
         UASSERT_OBJ(drvp, vtxp, "Should not have to trace undriven variable");
-        // Packed variable: trace the driver. Array variable: continue navigating it at
-        // the pending element (both at the same bit range).
-        RETURN_RESULT(m_idxs.empty() ? trace(drvp, m_msb, m_lsb) : traceSameIdx(drvp));
+        const auto traceDriver = [&]() {
+            // If we are about to trace a splice, set the defaultp to the corresponding default
+            if (srcp && srcp->is<DfgVertexSplice>()) {
+                m_defaultp = defaultp;
+                m_splicep = srcp;
+            }
+            // Packed variable: trace the driver. Array variable: continue navigating it at
+            // the pending element (both at the same bit range).
+            return m_idxs.empty() ? trace(drvp, m_msb, m_lsb) : traceSameIdx(drvp);
+        };
+        DfgVertex* const resp
+            = m_idxs.empty() ? traceChunked(vtxp, {vtxp, NO_INDEX}, traceDriver) : traceDriver();
+        RETURN_RESULT(resp);
     }
 
     void visit(DfgArraySel* vtxp) override {
@@ -607,7 +675,13 @@ class TraceDriver final : public DfgVisitor {
         // structure of 'fromp'. This handles arbitrarily nested (multi-dimensional)
         // arrays, as each nested ArraySel pushes a further index.
         if (const DfgConst* const idxp = vtxp->bitp()->cast<DfgConst>()) {
-            RETURN_RESULT(tracePushIdx(vtxp->fromp(), idxp->toU32()));
+            const uint32_t idx = idxp->toU32();
+            const auto traceElement = [&]() { return tracePushIdx(vtxp->fromp(), idx); };
+            // At the packed leaf, the element may be traced in chunks like a variable
+            DfgVertex* const resp = m_idxs.empty()
+                                        ? traceChunked(vtxp, {vtxp->fromp(), idx}, traceElement)
+                                        : traceElement();
+            RETURN_RESULT(resp);
         }
 
         // If index is not constant, independence was proven only if the 'fromp' is
@@ -840,6 +914,13 @@ public:
     TraceDriver(DfgGraph& dfg, SccInfo& sccInfo)
         : m_dfg{dfg}
         , m_sccInfo{sccInfo} {
+        for (const DfgVertex& vtx : dfg.opVertices()) {
+            const DfgShiftL* const shiftlp = vtx.cast<DfgShiftL>();
+            if (vtx.is<DfgAdd>() || vtx.is<DfgSub>()
+                || (shiftlp && !shiftlp->rhsp()->is<DfgConst>())) {
+                m_prefixComponents.emplace(sccInfo.get(vtx));
+            }
+        }
 #ifdef VL_DEBUG
         if (v3Global.opt.debugCheck()) {
             m_lineCoverageFile.open(  //
@@ -859,6 +940,8 @@ public:
         m_component = m_sccInfo.get(vtx);
         return trace(&vtx, lsb + width - 1, lsb);
     }
+
+    size_t nChunked() const { return m_nChunked; }
 };
 
 // A bit mask for each bit in a value, which can be either packed or aggregate type
@@ -1629,7 +1712,7 @@ public:
     // Compute which bits of vertices are independent of the SCC they reside
     // in, and replace rferences to used independent bits with an equivalent
     // vertex that is not part of the same SCC.
-    static size_t apply(DfgGraph& dfg, SccInfo& sccInfo) {
+    static size_t apply(DfgGraph& dfg, SccInfo& sccInfo, V3DfgBreakCyclesContext& ctx) {
         if (!sccInfo.isCyclic()) return 0;
 
         FixUp fixUp{dfg, sccInfo};
@@ -1643,6 +1726,7 @@ public:
             fixUp.main(vtx);
             if (!sccInfo.isCyclic()) break;
         }
+        ctx.m_nChunked += fixUp.m_traceDriver.nChunked();
         // Return the number of improvements made
         return fixUp.m_nImprovements;
     }
@@ -1669,7 +1753,7 @@ void breakCycles(DfgGraph& dfg, V3DfgBreakCyclesContext& ctx) {
         // Fix up independent ranges in vertices
         UINFO(9, "New iteration after " << nImprovements << " improvements");
         prevNImprovements = nImprovements;
-        const size_t nFixed = FixUp::apply(dfg, sccInfo);
+        const size_t nFixed = FixUp::apply(dfg, sccInfo, ctx);
         if (nFixed) {
             nImprovements += nFixed;
             ctx.m_nImprovements += nFixed;
