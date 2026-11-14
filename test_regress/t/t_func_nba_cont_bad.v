@@ -32,5 +32,21 @@ module t;
   logic [7:0] z;
   assign z = nba_event(a);
 
+  // Initial continuous assignments, which call functions not inlined unless they schedule
+  // events
+  function int nba_static();
+    int s;
+    s <= 3;  // <--- Error
+    return 4;
+  endfunction
+  wire integer four = nba_static();
+
+  function int nba_static_event();
+    event se;
+    ->>se;  // <--- Error
+    return 5;
+  endfunction
+  wire integer five = nba_static_event();
+
   ifc i ();
 endmodule
