@@ -1301,7 +1301,9 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
 
         // Forbid this exact assignment so the next
         // (check-sat) is forced to find a genuinely different witness.
-        solver << "(assert (not (and";
+        // SMT-LIB 'and' takes at least two operands, so a lone equality stands alone
+        const bool single = order.size() == 1;
+        solver << (single ? "(assert (not" : "(assert (not (and");
         for (const auto& varEntry : witness) {
             for (const auto& elemEntry : varEntry.second) {
                 solver << " (=";
@@ -1309,7 +1311,7 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
                 solver << ' ' << elemEntry.second << ")";
             }
         }
-        solver << ")))\n";
+        solver << (single ? "))\n" : ")))\n");
         witnesses.push_back(std::move(witness));
     }  // LCOV_EXCL_BR_LINE
     return static_cast<int>(witnesses.size());
