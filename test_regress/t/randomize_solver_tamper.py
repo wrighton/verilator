@@ -11,10 +11,10 @@
 #
 # Input arguments from environment variables:
 # TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | binary
-#         | core_junk | crlf | csa_unsupported | die_at | die_status_at | diversity_model
-#         | dup_model | err_assume | err_cell | err_core | err_extra | err_marker
-#         | err_multiline | err_mute | err_once | err_phase | err_reply | err_trunc | err_unbal
-#         | err_unbal_cont
+#         | close_stdin_at | core_junk | crlf | csa_unsupported | die_at | die_status_at
+#         | diversity_model | dup_model | err_assume | err_cell | err_core | err_extra
+#         | err_marker | err_multiline | err_mute | err_once | err_phase | err_reply | err_trunc
+#         | err_unbal | err_unbal_cont
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
 #         | no_digits | none | octal | oor_assume | phase_model | phase_trunc
@@ -26,6 +26,7 @@
 #   bad_value        - replace the Nth model reply with one well-formed value lacking a base
 #   bare_hash        - replace the Nth model reply with one value that is only "#"
 #   binary           - replace the Nth model reply with binary values
+#   close_stdin_at   - kill and reap the solver, close stdin, then forward the Nth status
 #   core_junk        - prepend garbage to the core reply and close the pipe
 #   crlf             - end every line with CRLF
 #   csa_unsupported  - answer every check-sat-assuming with unsupported
@@ -97,8 +98,8 @@ at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
-STATUS_MODES = ("die_status_at", "err_extra", "err_marker", "err_multiline", "err_mute",
-                "err_once", "err_trunc", "err_unbal", "err_unbal_cont", "garbage_status",
+STATUS_MODES = ("close_stdin_at", "die_status_at", "err_extra", "err_marker", "err_multiline",
+                "err_mute", "err_once", "err_trunc", "err_unbal", "err_unbal_cont", "garbage_status",
                 "unknown_once", "unknown_twice", "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
@@ -317,6 +318,12 @@ for line in proc.stdout:
         emit("((a #b00001011) (b #b00010010))")
         swallow(line)
         continue
+    if mode == "close_stdin_at":
+        proc.kill()
+        proc.wait()
+        os.close(0)
+        forward(line, at_reply_start)
+        sys.exit(0)
     if mode == "core_junk":
         emit("junk((__Vcons0))")
         proc.kill()
