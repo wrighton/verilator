@@ -118,7 +118,7 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(solver_log, r'^  \(push 1\)')
 test.file_grep(solver_log, r'^< \(\(a #b0\) \(b #x12\)\)')
-test.file_grep_not(solver_log, r'\(= a #b0\)')
+test.file_grep_not(solver_log, r'\(= a +#b0\)')
 
 # 4 randomize calls through the diversity pin rounds, alone, from a fixed seed. A round
 # the solver leaves unsettled keeps the base solution, so every call still passes; the
