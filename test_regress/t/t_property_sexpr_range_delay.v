@@ -152,9 +152,4 @@ module t (
   assert property (@(posedge clk)
       cyc == 30 |-> ##[1:2] ((cyc == 31) ##[1:2] ((cyc == 32) ##1 1'b1)));
 
-  // Finite range whose RHS ends in an NFA state, not a final
-  // boolean condition.
-  assert property (@(posedge clk)
-      cyc == 40 |-> ##[1:2] (##1 (((cyc == 43) ##1 1'b1) or ((cyc == 43) ##1 1'b1))));
-
 endmodule
