@@ -23,7 +23,13 @@ runs = [
     ('bad_index', 1, 15),  # a malformed array select index
     ('bad_value', 1, 15),  # a value with no base must not commit the earlier one
     ('bare_hash', 1, 15),  # a value that is only "#"
+    ('bin_literals', 1, 16),  # every literal, select indices too, in binary
     ('binary', 1, 16),  # binary values
+    ('bv_digits', 1, 15),  # an indexed literal of non-decimal digits
+    ('bv_long', 1, 15),  # an indexed literal of more digits than its width allows
+    ('bv_overflow', 1, 15),  # an indexed literal whose value does not fit its width
+    ('bv_sort', 1, 15),  # an indexed literal of another width than the variable
+    ('bv_spaced', 1, 16),  # indexed literals split by tabs and newlines
     ('core_junk', 1, 16),  # garbage opens the core reply, then the pipe closes
     ('crlf', 1, 16),  # CRLF line endings
     ('diversity_model', 2, 16),  # a diversity round answers with an unusable value
@@ -51,6 +57,17 @@ runs = [
     ('oor_assume', 1, 16),  # unsat assumptions naming only an out-of-range literal
     ('phase_model', 1, 15),  # error in place of the final phased model
     ('phase_trunc', 1, 12),  # unterminated phase value reply, then the pipe closes
+    ('select_arity', 1, 15),  # an element of a one-dimensional array with two indices
+    ('select_carry', 1, 15),  # an indexed index of 2^32, whose low bits name q[0]
+    ('select_digit', 1, 15),  # a select with a bare digit after its index
+    ('select_dup', 1, 15),  # one element answered twice, in two notations
+    ('select_extra', 1, 15),  # a select with a term after its index
+    ('select_lead', 1, 15),  # a select with a bare digit before its index
+    ('select_narrow', 1, 15),  # an index narrower than its sort
+    ('select_octal', 1, 15),  # a select with an octal index of another width
+    ('select_prefix', 1, 15),  # a misspelled select operator
+    ('select_scalar', 1, 15),  # a select of a variable that is not an array
+    ('select_wide', 1, 15),  # an index wider than its sort, which must not alias q[0]
     ('short_model', 1, 15),  # a model missing a requested variable is not a model
     ('success', 1, 16),  # print-success echo ahead of every reply
     ('unknown_once', 2, 15),  # unknown answers one check-sat
@@ -58,6 +75,8 @@ runs = [
     ('unknown_var', 1, 15),  # a variable that was never requested
     ('unsupported_once', 2, 15),  # command not supported, so no status ever comes
     ('upper_hex', 1, 16),  # uppercase hex digits
+    ('value_digit', 1, 15),  # a value with a bare digit after it
+    ('value_lead', 1, 15),  # a value with a bare digit before it
 ]
 
 for mode, at, npass in runs:
@@ -66,6 +85,17 @@ for mode, at, npass in runs:
                  run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
                  'TAMPER=' + mode + ' TAMPER_AT=' + str(at))
     test.file_grep(logfile, r'NPASS=(\d+)', npass)
+
+# Every literal, select indices too, as an indexed (_ bvX n) literal. The blocking clauses
+# show the UniGen2 cell enumeration read these replies too, rather than giving up.
+logfile = test.obj_dir + '/sim_bv_literals.log'
+solver_log = test.obj_dir + '/solver_bv_literals.log'
+test.execute(logfile=logfile,
+             all_run_flags=['+verilator+solver+file+' + solver_log],
+             run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+             'TAMPER=bv_literals')
+test.file_grep(logfile, r'NPASS=(\d+)', 16)
+test.file_grep(solver_log, r'^  \(assert \(not \(and .*\(= \(select q #x00000000\) +#b[01]+\)')
 
 # 4 randomize calls through the diversity pin rounds, alone, from a fixed seed. A round
 # the solver leaves unsettled keeps the base solution, so every call still passes; the

@@ -10,21 +10,32 @@
 # Forwards the SMT-LIB conversation to a real solver, tampering the replies.
 #
 # Input arguments from environment variables:
-# TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | binary
+# TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | bin_literals
+#         | binary | bv_digits | bv_literals | bv_long | bv_overflow | bv_sort | bv_spaced
 #         | core_junk | crlf | die_at | die_status_at | diversity_model
 #         | dup_model | err_assume | err_core | err_multiline | err_once
 #         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
 #         | no_digits | none | octal | oor_assume | phase_model | phase_trunc
+#         | select_arity | select_carry | select_digit | select_dup | select_extra | select_lead
+#         | select_narrow | select_octal | select_prefix | select_scalar | select_wide
 #         | short_model | stale_assume | success | unknown_once | unknown_twice
-#         | unknown_var | unsat_recheck | unsupported_once | upper_hex
+#         | unknown_var | unsat_recheck | unsupported_once | upper_hex | value_digit
+#         | value_lead
 #   bad_base         - replace the Nth model reply with a base character that is not b, o, x or h
 #   bad_digits       - replace the Nth model reply with one value holding digits outside its base
 #   bad_index        - replace the first array model reply with a bad select index
 #   bad_value        - replace the Nth model reply with one well-formed value lacking a base
 #   bare_hash        - replace the Nth model reply with one value that is only "#"
+#   bin_literals     - write every hex literal as the same-width binary one, as cvc5 does
 #   binary           - replace the Nth model reply with binary values
+#   bv_digits        - replace the Nth model reply with an indexed literal of non-decimal digits
+#   bv_literals      - write every hex and binary literal as an indexed (_ bvX n) literal
+#   bv_long          - replace the Nth model reply with an indexed literal of too many digits
+#   bv_overflow      - replace the Nth model reply with an indexed literal too big for its width
+#   bv_sort          - replace the Nth model reply with an indexed literal of another width
+#   bv_spaced        - write every hex literal as an indexed one split by tabs and newlines
 #   core_junk        - prepend garbage to the core reply and close the pipe
 #   crlf             - end every line with CRLF
 #   die_at           - kill the solver at the Nth model reply and exit, closing every pipe end
@@ -56,6 +67,17 @@
 #   oor_assume       - answer the unsat assumptions with an out-of-range literal
 #   phase_model      - replace the final phased model reply with (error ...)
 #   phase_trunc      - answer an unterminated phase value reply and close the pipe
+#   select_arity     - replace the Nth array model reply with a select of too many indices
+#   select_carry     - replace the Nth array model reply with an indexed index of 2^width
+#   select_digit     - replace the Nth array model reply with a select of an extra digit
+#   select_dup       - replace the Nth array model reply with one element in two notations
+#   select_extra     - replace the Nth array model reply with a select of an extra term
+#   select_lead      - replace the Nth array model reply with a select of a digit before its index
+#   select_narrow    - replace the Nth array model reply with an index narrower than its sort
+#   select_octal     - replace the Nth array model reply with an octal index of another width
+#   select_prefix    - replace the Nth array model reply with a misspelled select
+#   select_scalar    - replace the Nth array model reply with a select of a scalar
+#   select_wide      - replace the Nth array model reply with an index wider than the index's sort
 #   short_model      - replace the Nth model reply with one omitting a requested variable
 #   stale_assume     - answer every unsat assumptions reply from the Nth with the literal __Va0
 #   success          - echo a print-success line before every reply
@@ -65,6 +87,8 @@
 #   unsat_recheck    - answer the status that follows an unsat with sat
 #   unsupported_once - answer the Nth status with unsupported
 #   upper_hex        - replace the Nth model reply with uppercase hex digits
+#   value_digit      - replace the Nth model reply with an extra digit after a value
+#   value_lead       - replace the Nth model reply with an extra digit before a value
 # TAMPER_AT: reply index to act on (default 3)
 # TAMPER_ONCE: file marking that the tamper already acted. The runtime restarts
 #   a solver that died, which starts this wrapper again, so without the file a
@@ -90,7 +114,9 @@ STATUS_MODES = ("die_status_at", "err_multiline", "err_once", "err_trunc", "err_
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
-SELECT_MODES = ("bad_index", "diversity_model")
+SELECT_MODES = ("bad_index", "diversity_model", "select_arity", "select_carry", "select_digit",
+                "select_dup", "select_extra", "select_lead", "select_narrow", "select_octal",
+                "select_prefix", "select_scalar", "select_wide")
 # Modes acting on the status the solver sends after answering unsat
 RECHECK_MODES = ("unsat_recheck", )
 # phase_model acts on the final phased model; the others on any phase value reply
@@ -100,7 +126,8 @@ ASSUME_MODES = ("err_assume", "garbage_assume", "oor_assume", "stale_assume")
 # Modes acting on an unsat-core reply, which lists __Vcons<N> names
 CORE_MODES = ("core_junk", "err_core")
 # Modes rewriting every line, so they never consume the index
-STREAM_MODES = ("crlf", "indent", "multiline", "success")
+STREAM_MODES = ("bin_literals", "bv_literals", "bv_spaced", "crlf", "indent", "multiline",
+                "success")
 
 
 def real_solver():
@@ -123,6 +150,17 @@ def emit(text):
 
 def forward(text, at_start):
     """Pass a real reply through, applying the whole-stream rewrites"""
+    # Other SMT-LIB 2.6 spellings of the same bit-vector values, select indices included
+    if mode == "bin_literals":
+        text = re.sub(r"#x([0-9a-fA-F]+)",
+                      lambda m: "#b" + bin(int(m[1], 16))[2:].zfill(4 * len(m[1])), text)
+    if mode == "bv_literals":
+        text = re.sub(r"#x([0-9a-fA-F]+)", lambda m: f"(_ bv{int(m[1], 16)} {4 * len(m[1])})",
+                      text)
+        text = re.sub(r"#b([01]+)", lambda m: f"(_ bv{int(m[1], 2)} {len(m[1])})", text)
+    if mode == "bv_spaced":
+        text = re.sub(r"#x([0-9a-fA-F]+)", lambda m: f"( _\tbv{int(m[1], 16)}\n{4 * len(m[1])} )",
+                      text)
     # Solvers echo success per command, so never inside a wrapped S-expression
     if mode == "success" and at_start:
         emit("success")
@@ -236,6 +274,17 @@ for line in proc.stdout:
         emit("((a #b00001011) (b #b00010010))")
         swallow(line)
         continue
+    # Indexed literals the parser must reject: the first, valid one must not be written either
+    bad_bv = {
+        "bv_digits": "(_ bvx12 8)",
+        "bv_long": "(_ bv123456789 8)",
+        "bv_overflow": "(_ bv256 8)",
+        "bv_sort": "(_ bv0 2147483647)"
+    }
+    if mode in bad_bv:
+        emit("((a (_ bv11 8)) (b " + bad_bv[mode] + "))")
+        swallow(line)
+        continue
     if mode == "core_junk":
         emit("junk((__Vcons0))")
         proc.kill()
@@ -344,6 +393,28 @@ for line in proc.stdout:
         proc.kill()
         proc.wait()
         sys.exit(0)
+    # Malformed selects, in a reply that answers each other element. The duplicate takes the
+    # place of q[1], so the reply still has as many answers as requested.
+    q_rest = (" ((select q #x00000002) #x15)"
+              " ((select wide #x0000000123456789abcdef01) #x4d) (z #x00))")
+    bad_select = {
+        "select_digit": "((select q #x00000000 0) #x15) ((select q #x00000001) #x15)",
+        "select_arity":
+        "((select (select q #x00000000) #x00000000) #x15) ((select q #x00000001) #x15)",
+        "select_carry": "((select q (_ bv4294967296 32)) #x15) ((select q #x00000001) #x15)",
+        "select_dup": "((select q #x00000000) #x15) ((select q #b" + "0" * 32 + ") #x16)",
+        "select_lead": "((select q 0 #x00000000) #x15) ((select q #x00000001) #x15)",
+        "select_narrow": "((select q #b0) #x15) ((select q #x00000001) #x15)",
+        "select_octal": "((select q #o00000000000) #x15) ((select q #x00000001) #x15)",
+        "select_wide": "((select q #x100000000) #x15) ((select q #x00000001) #x15)",
+        "select_extra": "((select q #x00000000 #x00000001) #x15) ((select q #x00000001) #x15)",
+        "select_prefix": "((selectx q #x00000000) #x15) ((select q #x00000001) #x15)",
+        "select_scalar": "((select z #x00000000) #x15) ((select q #x00000001) #x15)"
+    }
+    if mode in bad_select:
+        emit("(" + bad_select[mode] + q_rest)
+        swallow(line)
+        continue
     if mode == "short_model":
         emit("((a #x0b))")
         swallow(line)
@@ -375,6 +446,14 @@ for line in proc.stdout:
         continue
     if mode == "unsupported_once":
         emit("unsupported")
+        continue
+    if mode == "value_digit":
+        emit("((a #x0b 0) (b #x12))")
+        swallow(line)
+        continue
+    if mode == "value_lead":
+        emit("((a 0 #x0b) (b #x12))")
+        swallow(line)
         continue
     if mode == "upper_hex":
         emit("((a #xAB) (b #x12))")

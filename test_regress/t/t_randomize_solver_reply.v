@@ -37,10 +37,20 @@ class Phased;
   constraint rel_c {y > x;}
 endclass
 
-// Array element replies, which arrive as (select ...) terms
+// Array element replies, which arrive as (select ...) terms; a key wider than 32 bits
+// names its element in hex
 class Arr;
   rand bit [7:0] q[3];
-  constraint ac {foreach (q[i]) q[i] > 8'd20;}
+  rand bit [7:0] wide[bit [64:0]];
+  rand bit [7:0] z;
+  constraint ac {
+    foreach (q[i]) q[i] > 8'd20;
+    foreach (wide[k]) wide[k] == 8'd77;
+    z != 8'd200;
+  }
+  function new;
+    wide[65'h1_2345_6789_abcd_ef01] = 0;
+  endfunction
 endclass
 
 // Unsatisfiable, so the unsat core is queried
@@ -107,7 +117,10 @@ module t;
       if (rc != 0) npass++;
       ar.q[0] = 8'd7;
       rc = ar.randomize();
-      if (rc != 0) npass++;
+      if (rc != 0) begin
+        npass++;
+        `checkd(ar.wide[65'h1_2345_6789_abcd_ef01], 8'd77);
+      end
       else `checkd(ar.q[0], 8'd7);
       rc = un.randomize();
       `checkd(rc, 0);  // zero-ok: constraints are unsatisfiable
