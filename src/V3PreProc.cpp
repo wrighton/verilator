@@ -364,7 +364,10 @@ void V3PreProcImp::define(FileLine* fl, const string& name, const string& value,
             if (value[pos] == '\n' && (pos == 0 || value[pos - 1] != '\\')) out += '\\';
             out += value[pos];
         }
-        insertUnreadback("`define " + name + params + (out.empty() ? "" : " ") + out + "\n");
+        // An escaped name needs its terminating white space
+        const string nameEnd = name[0] == '\\' ? " " : "";
+        insertUnreadback("`define " + name + nameEnd + params + (out.empty() ? "" : " ") + out
+                         + "\n");
     }
     if (!V3LanguageWords::isKeyword("`"s + name).empty()) {
         fl->v3error("Attempting to define built-in directive: '`" << name
@@ -988,6 +991,7 @@ void V3PreProcImp::addLineComment(int enterExit) {
 void V3PreProcImp::dumpDefines(std::ostream& os) {
     for (const auto& itr : m_defines) {
         os << "`define " << itr.first;
+        if (itr.first[0] == '\\') os << ' ';  // An escaped name needs its terminating white space
         // No need to print "()" below as already part of params()
         if (!itr.second.params().empty()) os << itr.second.params();
         if (!itr.second.value().empty()) os << " " << itr.second.value();
@@ -1205,7 +1209,7 @@ int V3PreProcImp::getStateToken() {
                 } else if (state() == ps_DEFNAME_DEFINE) {
                     // m_lastSym already set.
                     stateChange(ps_DEFFORM);
-                    m_lexp->pushStateDefForm();
+                    m_lexp->pushStateDefForm(m_lastSym[0] == '\\');
                     goto next_tok;
                 } else {  // LCOV_EXCL_LINE
                     v3fatalSrc("Bad case");
