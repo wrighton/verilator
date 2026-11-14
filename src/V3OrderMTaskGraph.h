@@ -332,6 +332,9 @@ class OrderMTaskGraph final : public V3Graph {
     // Part of 'validate'
     template <GraphWay::en N_Way>
     void validateWay() const;
+    // Part of 'initCriticalPaths'
+    template <GraphWay::en N_Way>
+    void initCriticalPaths();
 
 public:
     // ACCESSORS
@@ -353,6 +356,16 @@ public:
 
     // Add an edge to the graph, update impacted critical paths
     void addEdge(LogicMTask* fromp, LogicMTask* top);
+    // Add an edge to the graph being built, without updating critical paths, which
+    // 'initCriticalPaths' then computes for the whole graph at once. Updating them on each edge
+    // added is quadratic, e.g. along a long chain built from its start.
+    void addBuildEdge(LogicMTask* fromp, LogicMTask* top);
+    // Compute all critical paths, once all edges are added by 'addBuildEdge', before any
+    // 'addEdge' or 'mergeMTasks'
+    void initCriticalPaths() {
+        initCriticalPaths<GraphWay::FORWARD>();
+        initCriticalPaths<GraphWay::REVERSE>();
+    }
 
     // Merge 'donorp' into 'recipientp': move the contents and all edges of 'donorp' onto
     // 'recipientp', update impacted critical paths, then delete 'donorp'. The edge connecting the
