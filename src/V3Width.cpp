@@ -4500,7 +4500,7 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(userIterate(itemp, WidthVP{CONTEXT_DET, PRELIM}.p()), itemp);
         }
 
-        AstBasicDType* dtypep = VN_CAST(nodep->exprp()->dtypep(), BasicDType);
+        AstBasicDType* dtypep = VN_CAST(nodep->exprp()->dtypep()->skipRefp(), BasicDType);
         AstNodeDType* expDTypep = nullptr;
 
         if (dtypep && dtypep->isString()) {
