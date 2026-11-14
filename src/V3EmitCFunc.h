@@ -1778,10 +1778,16 @@ public:
     }
     void visit(AstStreamR* nodep) override {
         //The parrent node of our AstStreamR will give just enough info for what streamR should
-        //output if nodep->backp() is not the parent then emitStreamR should have been used. throw
-        //an error
-        bool backpIsParent = (nodep->backp()->op1p() == nodep || nodep->backp()->op2p() == nodep);
-        UASSERT(backpIsParent, "can not find return type for streamR");
+        //output. A later list element, e.g. a call argument, has no queue result context.
+        if (!nodep->firstAbovep()) {
+            if (VN_IS(nodep->lhsp()->dtypep()->skipRefp(), QueueDType)) {
+                emitOpName(nodep, "VL_STREAMR_%nq%lq%rq(%lw, %P, %li, %ri)", nodep->lhsp(),
+                           nodep->rhsp(), nullptr);
+            } else {
+                emitStreamR(nodep, nodep->backp());
+            }
+            return;
+        }
         if (const AstQueueDType* const qdtp
             = VN_CAST(nodep->backp()->dtypep()->skipRefp(), QueueDType)) {
             if (nodep->lhsp()->isWide()) {
