@@ -425,6 +425,8 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_set<AstVar*> m_coercedPortps;  // Input net ports driven inside module
     std::unordered_set<const AstVar*> m_writtenInputps;  // Input net ports written by a reference
     std::unordered_set<const AstVar*> m_procWrittenps;  // Those written other than continuously
+    std::unordered_set<const AstVar*>
+        m_valueConnectedPortps;  // Ports connected to value expressions
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -4245,9 +4247,7 @@ class WidthVisitor final : public VNVisitor {
             }
             // A net input port driven inside its module, also by a bind instance, is coerced
             // to inout, so the driver also reaches the connected net (IEEE 1800-2023 23.3.3.1)
-            if (!hierRef && netPort && contDriver) {
-                m_coercedPortps.emplace(nodep->varp());
-            }
+            if (!hierRef && netPort && contDriver) m_coercedPortps.emplace(nodep->varp());
         } else if (nodep->access().isWriteOrRW() && nodep->varp()->isConst() && !m_paramsOnly
                    && (!m_ftaskp || !m_ftaskp->isConstructor())
                    && !VN_IS(m_procedurep, InitialAutomatic) && !VN_IS(m_procedurep, InitialStatic)
@@ -6068,9 +6068,9 @@ class WidthVisitor final : public VNVisitor {
             // Members selected from the target become randomizable, not the target itself
             bool supported = true;
             while (exprp && !(fromp && V3Randomize::isRandomizeTarget(exprp, fromp))) {
-                if (AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
-                    randVarp = memberRefp->varp();
-                    exprp = memberRefp->fromp();
+                if (AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef)) {
+                    randVarp = memberSelp->varp();
+                    exprp = memberSelp->fromp();
                 } else if (AstVarRef* const varrefp = VN_CAST(exprp, VarRef)) {
                     randVarp = varrefp->varp();
                     exprp = nullptr;
@@ -8466,6 +8466,13 @@ class WidthVisitor final : public VNVisitor {
             if (!nodep->exprp()) {  // No-connect
                 if (nodep->modVarp()->isIfaceArraySplit()) expandIfaceArrayPin(nodep);
                 return;
+            }
+            // Widthing can erase value-only syntax, e.g. lowering a pattern to a concat.
+            // Remember it before typing so it cannot become an inout destination later.
+            if (pinDirection.isInput() && nodep->modVarp()->isNetOrNetPort()
+                && nodep->modVarp()->dtypep()->skipRefp()->isIntegralOrPacked()
+                && !isNetLValueSyntax(nodep->exprp())) {
+                m_valueConnectedPortps.emplace(nodep->modVarp());
             }
             if (VN_IS(nodep->exprp(), NodeStream) && pinDirection.isInoutOrRef()) {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
@@ -12416,6 +12423,27 @@ class WidthVisitor final : public VNVisitor {
         // A select of a multi-dimensional packed array has an unfolded index expression
         return VN_CAST(V3Const::constifyEdit(indexp), Const);
     }
+    // Syntax that can denote a net destination. Select indices are checked after typing.
+    // Unlike a net concatenation, a pattern or cast produces a value even when Width
+    // later lowers it to references to nets.
+    static bool isNetLValueSyntax(const AstNode* exprp) {
+        if (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
+            return isNetLValueSyntax(selp->fromp());
+        }
+        if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            return isNetLValueSyntax(selp->fromp());
+        }
+        if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+            return isNetLValueSyntax(selp->fromp());
+        }
+        if (const AstConcat* const catp = VN_CAST(exprp, Concat)) {
+            return isNetLValueSyntax(catp->lhsp()) && isNetLValueSyntax(catp->rhsp());
+        }
+        if (const AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
+            return isNetLValueSyntax(repp->srcp());
+        }
+        return VN_IS(exprp, NodeVarRef);
+    }
     // Whether an inout port connection could be the expression, adding the nets in it
     static bool coercibleConn(AstNode* exprp, std::vector<AstVar*>& netps) {
         if (AstSel* const selp = VN_CAST(exprp, Sel)) {
@@ -12464,6 +12492,7 @@ public:
         // A port is not coerced, and ASSIGNIN is then the warning the LRM requires, if it is
         // a top-level port, has a type V3Tristate does not resolve, or has a connection an
         // inout cannot take (e.g. a variable, a constant, or a net needing extension).
+        // A bind instance driver is exempt from ASSIGNIN (IEEE 1800-2023 23.11).
         // A port connected to an input port of the parent drives that port as well, so it is
         // coerced only if that port is. With errors the run stops after V3Width anyway.
         // Any other written input net port (e.g. written procedurally, or with a connection an
@@ -12490,8 +12519,8 @@ public:
                 } else if (const AstPull* const pullp = VN_CAST(np, Pull)) {
                     pullp->lhsp()->foreach(
                         [&](const AstNodeVarRef* refp) { drivenps.emplace(refp->varp()); });
-                } else if (const AstMemberRef* const memberRefp = VN_CAST(np, MemberRef)) {
-                    if (memberRefp->access().isWriteOrRW()) drivenps.emplace(memberRefp->varp());
+                } else if (const AstMemberRef* const selp = VN_CAST(np, MemberRef)) {
+                    if (selp->access().isWriteOrRW()) drivenps.emplace(selp->varp());
                 } else if (AstCell* const cellp = VN_CAST(np, Cell)) {
                     // Unconnected inputs may be driven by `unconnected_drive
                     const bool pulled = !cellp->modp()->unconnectedDrive().isDefault();
@@ -12527,6 +12556,7 @@ public:
             if (!pair.second) continue;
             // V3Tristate cannot resolve a procedural driver
             bool ok = !topPortps.count(varp) && !m_procWrittenps.count(varp)
+                      && !m_valueConnectedPortps.count(varp)
                       && varp->dtypep()->skipRefp()->isIntegralOrPacked();
             for (AstPin* const pinp : pinps[varp]) {
                 std::vector<AstVar*> netps;

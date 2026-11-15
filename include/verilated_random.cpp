@@ -1864,7 +1864,7 @@ bool VlRandomizer::func_round_next(const VlRandomizer& solvedr) {
         if (it == solvedr.m_vars.end()) continue;
         std::ostringstream os;
         os << "(__Vbv (= " << argRound.name << ' ';
-        it->second->emitConcreteValue(os);
+        it->second->emitConcreteValue(os, 0);
         os << "))";
         argRound.pin = os.str();
     }

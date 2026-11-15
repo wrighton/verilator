@@ -709,9 +709,10 @@ class TaskVisitor final : public VNVisitor {
                         + std::to_string(
                             m_enumNumbers.emplace(enump, m_enumNumbers.size()).first->second);
         } else if (dtypep->isIntegralOrPacked()) {
-            typeName = string{dtypep->isFourstate() ? "logic" : "bit"}
-                       + (dtypep->isSigned() ? " signed" : "") + "["
-                       + std::to_string(dtypep->width() - 1) + ":0]";
+            // V3Unknown made 4-state types 2-state; they still name their 4-state type
+            const bool fourstate = dtypep->isFourstate() || dtypep->mimicsFourstate();
+            typeName = string{fourstate ? "logic" : "bit"} + (dtypep->isSigned() ? " signed" : "")
+                       + "[" + std::to_string(dtypep->width() - 1) + ":0]";
         }
         typeName
             = "\"" + V3OutFormatter::quoteNameControls(VIdProtect::protect(typeName)) + "\", ";
@@ -2168,7 +2169,7 @@ class TaskVisitor final : public VNVisitor {
     static AstVarRef* getterVarRefp(AstNodeFTask* taskp) {
         // Only the return variable is declared, so no arguments or locals
         const AstVar* const fvarp = taskp->fvarp();
-        if (taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
+        if (!fvarp || taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
         AstNode* stmtp = taskp->stmtsp();
         // Skip the default initialization of the function's return value
         if (const AstAssign* const initp = VN_CAST(stmtp, Assign)) {

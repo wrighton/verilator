@@ -696,8 +696,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         // Members not allowed, such as sample arguments, are reported by
         // CovergroupExprValidVisitor; other values by buildBinCondition.
         const auto notAllowed = [&](const AstNode* nodep) {
-            if (const AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
-                return !memberRefp->varp()->isConst();
+            if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
+                return !selp->varp()->isConst();
             }
             const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
             return refp && !refp->varp()->isConst()

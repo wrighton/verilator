@@ -702,10 +702,7 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         // Add initialization time trigger
         AstNodeExpr* rhsp = nullptr;
         if (pair.second) {
-            // An event qualified with 'iff' triggers only when the condition is true
-            // (IEEE 1800-2023 9.4.2.3)
-            rhsp = senItemp->condp() ? senItemp->condp()->cloneTreePure(false)
-                                     : new AstConst{flp, AstConst::BitTrue{}};
+            rhsp = new AstConst{flp, AstConst::BitTrue{}};
         } else if (v3Global.opt.xInitialEdge()) {
             rhsp = senExprBuilder.buildXInitialEdge(senItemp);
         }
@@ -714,9 +711,10 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
             const int bitIndex = static_cast<int>(i % WORD_SIZE);
             AstNodeExpr* const wordp = new AstArraySel{flp, wr(kit.m_vscp), wrdIndex};
             AstNodeExpr* const lhsp = new AstSel{flp, wordp, bitIndex, 1};
-            // The --x-initial-edge value depends on what initial blocks assigned, so it is
-            // computed with the first trigger evaluation. It is never 0 when the edge was
-            // detected, so assigning it does not lose a trigger.
+            // The --x-initial-edge value depends on what initial blocks assigned, so like the
+            // other initialization time triggers it is computed with the first trigger
+            // evaluation. It is never 0 when the edge was detected, so assigning it does not
+            // lose a trigger.
             initialTrigsp = AstNode::addNext(initialTrigsp, new AstAssign{flp, lhsp, rhsp});
         }
 

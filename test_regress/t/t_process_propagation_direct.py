@@ -9,10 +9,10 @@
 
 import vltest_bootstrap
 
-test.scenarios('vlt')
-test.top_filename = "t/t_lint_iface_topmodule2.v"
+test.scenarios('simulator')
 
-# The symbol table dump reads the dummy cell of each top level interface
-test.lint(verilator_flags2=['--dumpi-V3LinkDot 6'])
+test.compile(verilator_flags2=["--binary"])
+
+test.execute()
 
 test.passes()

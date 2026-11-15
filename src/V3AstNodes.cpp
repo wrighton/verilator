@@ -1777,6 +1777,10 @@ void AstCvtArrayToArray::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, srcElementBits);
     dumpJsonGen(str);
 }
+string AstDefParam::name() const VL_MT_STABLE {
+    const AstParseRef* const refp = VN_CAST(targetp(), ParseRef);
+    return refp ? refp->name() : "";
+}
 void AstDelay::dump(std::ostream& str) const {
     Super::dump(str);
     if (isCycleDelay()) str << " [CYCLE]";

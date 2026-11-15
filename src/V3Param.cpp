@@ -1083,8 +1083,8 @@ class ParamProcessor final {
         newModp->foreach([&](AstPin* pinp) {
             const AstNode* const formalp
                 = pinp->modVarp() ? static_cast<AstNode*>(pinp->modVarp()) : pinp->modPTypep();
-            UASSERT_OBJ(formalp, pinp, "Pin not linked");
-            if (!newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
+            // Not linked if not found in an instance in a generate block, see V3LinkDot
+            if (formalp && !newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
         });
         return newModp;
     }
@@ -1601,7 +1601,7 @@ class ParamProcessor final {
                 cloneVarp->foreach([&](AstVarRef* varrefp) {
                     AstVar* const targetp = varrefp->varp();
                     AstNode* replacep = nullptr;
-                    for (AstPin* const pp : VNList<AstPin>{paramsp}) {
+                    for (AstPin* pp = paramsp; pp; pp = VN_AS(pp->nextp(), Pin)) {
                         if (pp->modVarp() == targetp) {
                             // A pattern or array override names the value too
                             if (VN_IS(pp->exprp(), Const) || VN_IS(pp->exprp(), Pattern)
@@ -1634,7 +1634,7 @@ class ParamProcessor final {
                     AstParamTypeDType* const ptdp = VN_CAST(refp->refDTypep(), ParamTypeDType);
                     if (!ptdp) return;
                     AstPin* overridePinp = nullptr;
-                    for (AstPin* const pp : VNList<AstPin>{paramsp}) {
+                    for (AstPin* pp = paramsp; pp; pp = VN_AS(pp->nextp(), Pin)) {
                         if (pp->modPTypep() == ptdp) {
                             overridePinp = pp;
                             break;

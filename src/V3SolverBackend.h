@@ -58,11 +58,8 @@ union RandomizeMode final {
     uint64_t asUQuad;  // Representation as int to be stored in nodep->user*
 };
 
-// A constraint made by cloning the constraint of an object, or of the objects of an array
-struct ClonedConstraint final {
-    AstNodeExpr* objp;  // The object, or object array, it was cloned for
-};
-using ClonedConstraints = std::map<const AstConstraint*, ClonedConstraint>;
+// Constraints made by cloning -> the object (or object array) they were cloned for
+using ClonedConstraints = std::map<const AstConstraint*, AstNodeExpr*>;
 
 // The per-element rand_mode() state of arrays, created on first use
 class ElemRandModes final {
@@ -197,7 +194,8 @@ public:
     // after the front end has emitted the assignment that evaluates it
     virtual void addAfterClassSolve(AstClass* classp, AstFunc* randomizep) = 0;
     // Complete class solver lowering after both result and basic-randomization assignments,
-    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand.
+    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand, or
+    // __VBasicRandVars of a class whose member objects are randomized after the solve.
     virtual void finishClassRandomize(AstClass* classp, AstFunc* randomizep,
                                       const AstFunc* basicRandomizep)
         = 0;
@@ -208,8 +206,8 @@ public:
         = 0;
     // randomize() with {...} called by nodep: lower the captured constraints
     // into randomizeFuncp, and assign its return value from the solver result
-    // and basicRandomizeCallp (__VBasicRand()). thisVarp is the captured
-    // 'this' of the caller.
+    // and basicRandomizeCallp (__VBasicRand(), or __VBasicRandVars() of such a class).
+    // thisVarp is the captured 'this' of the caller.
     virtual void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp,
                                       AstFunc* randomizeFuncp, AstNode* capturedTreep,
                                       const AstVar* thisVarp, AstNodeExpr* basicRandomizeCallp)

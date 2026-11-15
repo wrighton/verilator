@@ -4371,7 +4371,7 @@ class ConstVisitor final : public VNVisitor {
         }
 
         // JumpGo as last statement in target JumpBlock (including last in a last sub-list of
-        // an 'if' when doing expensive, see visit(AstIf)), is a no-op, remove it.
+        // an 'if' when doing expensive, see visit(AstNodeIf)), is a no-op, remove it.
         // TODO: it would be enough if the sub-list was not a branch.
         if (!nodep->nextp()) {
             const AstNode* const abovep = nodep->abovep();
