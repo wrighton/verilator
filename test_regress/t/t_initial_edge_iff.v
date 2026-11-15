@@ -31,6 +31,25 @@ module t (
 
 `ifdef VERILATOR_TIMING
   initial #1;  // Makes the design use timing
+
+  // An 'iff' condition reading through a handle that is null at initialization. The process
+  // waits on it only once the handle is set.
+  class H;
+    logic en = 1'b1;
+  endclass
+  H h;
+  logic b = 1'b0;
+  int cnt_neg_h = 0;
+  initial begin
+    #2;
+    @(negedge b iff h.en) cnt_neg_h = cnt_neg_h + 1;
+  end
+  initial begin
+    #1 h = new;
+    #2 b = 1'b1;
+    #1 b = 1'b0;
+    #1 `checkd(cnt_neg_h, 1);
+  end
 `endif
 
   always @(posedge clk) begin
