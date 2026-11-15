@@ -60,9 +60,12 @@ module t;
   function automatic string render(input string value = Echo::text($sformatf("%p", next_enum())));
     return value;
   endfunction
+`ifdef TEST_ENUM_STRING_COMPAT
+  // Fork-specific enum-name %s compatibility is exercised by the VLT-only companion.
   function automatic string render_string(input string value = $sformatf("%s", next_enum()));
     return value;
   endfunction
+`endif
   function automatic string recursive(
       input int depth, input string value = Echo::text($sformatf("%p", next_enum())));
     if (depth == 0) return value;
@@ -109,11 +112,13 @@ module t;
       `checks(value, "explicit");
       `checkd(calls, before_calls + 1);
 
+`ifdef TEST_ENUM_STRING_COMPAT
       before_calls = calls;
       value = render_string();
       expected = calls[0] ? "BUSY" : "IDLE";
       `checks(value, expected);
       `checkd(calls, before_calls + 1);
+`endif
 
       before_calls = calls;
       obj = new();
