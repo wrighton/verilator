@@ -445,6 +445,11 @@ class LinkParseVisitor final : public VNVisitor {
                 }
             }
         } else if (m_ftaskp && !nodep->isFuncReturn()) {  // Return variables are created automatic
+            if (m_ftaskp->lifetime().isStatic() && (nodep->isRef() || nodep->isConstRef())) {
+                nodep->v3error(
+                    "It is illegal to use argument passing by reference for subroutines with "
+                    "a lifetime of static (IEEE 1800-2023 13.5.2)");
+            }
             // Variables in static tasks with timing control can be used after the task has ended
             // with use of join..fork_none, so they need to be static
             if (m_ftaskp->lifetime().isStatic() && m_hasTimingControl) {

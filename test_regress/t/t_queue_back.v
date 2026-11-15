@@ -9,7 +9,7 @@ module t;
   int q[$];
   int r;
 
-  function void set_val(ref int lhs, input int rhs);
+  function automatic void set_val(ref int lhs, input int rhs);
     lhs = rhs;
   endfunction
 
