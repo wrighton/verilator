@@ -7,7 +7,7 @@
 module t;
   typedef integer q_t[$];
 
-  function void queue_set(ref q_t q);
+  function automatic void queue_set(ref q_t q);
 `ifdef TEST_NOINLINE
     // verilator no_inline_task
 `endif
@@ -39,7 +39,7 @@ module t;
     if (q[0] != 11) $stop;
   endfunction
 
-  function void queue_check_ref(const ref q_t q);
+  function automatic void queue_check_ref(const ref q_t q);
 `ifdef TEST_NOINLINE
     // verilator no_inline_task
 `endif

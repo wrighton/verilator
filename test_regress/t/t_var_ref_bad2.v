@@ -9,11 +9,11 @@
 
 module t;
 
-  task checkset(const ref int bad_const_set);
+  task automatic checkset(const ref int bad_const_set);
     bad_const_set = 32'h4567;  // Bad setting const
   endtask
 
-  task checkset2(ref int int_ref);
+  task automatic checkset2(ref int int_ref);
   endtask
 
   initial begin
