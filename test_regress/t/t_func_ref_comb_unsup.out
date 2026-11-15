@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_func_ref_comb_unsup.v:20:28: Unsupported: Associative array element passed to a const ref argument in combinational logic.
+   20 |   always_comb a = get_val(m[0]);
+      |                            ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_func_ref_comb_unsup.v:21:26: Unsupported: Associative array element passed to a const ref argument in combinational logic.
+   21 |   always @* b = get_val(m[1]);
+      |                          ^
+%Error-UNSUPPORTED: t/t_func_ref_comb_unsup.v:22:23: Unsupported: Associative array element passed to a const ref argument in combinational logic.
+   22 |   assign c = get_val(m[2]);
+      |                       ^
+%Error-UNSUPPORTED: t/t_func_ref_comb_unsup.v:15:21: Unsupported: Associative array element passed to a const ref argument in combinational logic.
+   15 |     return get_val(m[0]);
+      |                     ^
+%Error: Exiting due to

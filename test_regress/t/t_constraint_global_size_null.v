@@ -33,10 +33,44 @@ class Outer extends OuterBase;
   }
 endclass
 
+// The element constraint in the member's own class, inherited by the outer class
+class InnerOwn;
+  rand int m_q[$];
+  constraint c_elem { foreach (m_q[i]) m_q[i] inside {[0:99]}; }
+endclass
+
+class OuterOwnBase;
+  rand InnerOwn m_in;
+  rand int m_n;
+  constraint c_size { m_in.m_q.size() == m_n; m_n inside {[1:4]}; }
+  function new();
+    m_in = new;
+  endfunction
+endclass
+
+class OuterOwn extends OuterOwnBase;
+endclass
+
 module t;
   initial begin
     Outer o;
+    OuterOwn oo;
     int ok;
+    oo = new;
+    repeat (5) begin
+      ok = oo.randomize();
+      `checkd(ok, 1);
+      `checkd(oo.m_in.m_q.size(), oo.m_n);
+      ok = oo.randomize(null);
+      `checkd(ok, 1);
+      oo.m_in.m_q[0] = 200;
+      ok = oo.randomize(null);
+      `checkd(ok, 0);
+      oo.m_in.m_q[0] = 5;
+      oo.m_in.m_q.push_back(1);
+      ok = oo.randomize(null);
+      `checkd(ok, 0);
+    end
     o = new;
     // The sizes before any randomize()
     o.m_n = 2;

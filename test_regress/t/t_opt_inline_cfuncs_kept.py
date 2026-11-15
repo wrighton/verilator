@@ -12,9 +12,13 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
+if not test.have_solver:
+    test.skip("No constraint solver installed")
+
 test.compile()
 
-# Reg's callbacks are also called from Block, so Reg's randomize() calls them instead of a copy
+# Reg's callbacks are also called from Block, whose constraint selects through Reg's fields, so
+# Reg's randomize() calls them instead of a copy
 calls = set()
 for filename in test.glob_some(test.obj_dir + "/*.cpp"):
     with open(filename, 'r', encoding="utf8") as fh:

@@ -7,7 +7,6 @@
    25 |   constraint scalar_vs_array {unique {x, arr};}
       |                               ^~~~~~
 %Warning-CONSTRAINTIGN: t/t_constraint_unique_unsup.v:28:43: Unsupported: Unique constraint on this expression
-                                                           : ... note: In instance 't'
    28 |   constraint elem_member {unique {objs[0].f};}
       |                                           ^
 %Error: Exiting due to

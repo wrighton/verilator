@@ -13,7 +13,8 @@ module t (
   localparam int P0 = 0;
   localparam int P1 = 1;
 
-  // An element select with a non-constant index writes the whole array (IEEE 1800-2023 11.5.3)
+  // An element select with a non-constant index, or a slice with a variable position, writes
+  // the whole array (IEEE 1800-2023 11.5.3)
 
   logic m1[4];
   initial for (int i = 0; i < 4; i++) m1[i] = 1'b0;
@@ -46,6 +47,10 @@ module t (
   logic [1:0] m7[4];
   always_ff @(posedge clk) m7[2][1] <= d;
   initial for (int i = 0; i < 4; i++) m7[i] = 2'b0;  // <--- Warning
+
+  logic m8[4];
+  always_ff @(posedge clk) m8[a+:2] <= '{d, d};
+  always_ff @(posedge clk) m8[b-:2] <= '{d, d};  // <--- Warning
 
   // Constant indices or slices write disjoint parts
 

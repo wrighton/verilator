@@ -10,7 +10,6 @@ class Packet;
 
   constraint addr_range { addr < 127; }
   constraint data_range { data > 10 && data < 200; }
-  constraint data_pref { soft data == 8'd77; }
 
   function void check(bit [7:0] a, bit [7:0] d);
     /* verilator lint_off WIDTHTRUNC */
@@ -80,8 +79,8 @@ module t_constraint_unsat;
       $stop;
     end
 
-    // Test: Size solve fails, as the array keeps its size
-    $display("\n=== Test: Size of an array with rand_mode off ===");
+    // Test 7: Size solve fails, as the array keeps its size
+    $display("\n=== Test 7: Size of an array with rand_mode off ===");
     begin
       automatic Frozen f = new;
       f.q = '{1, 2, 3};

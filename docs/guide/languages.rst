@@ -331,15 +331,21 @@ class object, is stored as a two-state value, the same as an x.
 An input port of net kind that is driven inside its module, by a continuous
 assignment, an output port connection, or a clocking block output, is
 coerced to inout (IEEE 1800-2023 23.3.3.1), so its drivers also reach the
-connected net, and are resolved with the other drivers of that net. An input
-net port of the parent that such a port is connected to is coerced as well.
-The :option:`ASSIGNIN` warning is still reported on the driver. A port is
-not coerced if it is a port of the top-level module, has an unpacked type,
-is also written procedurally, or if any instance connects it to something
-other than nets, constant bit or part selects of them, and concatenations of
-those (e.g. to a variable, a constant, a narrower net, an unpacked array
-element, or a net of a module other than an interface by a hierarchical
-reference), or to an input port that is not coerced.
+connected net, and are resolved with the other drivers of that net, using the
+tristate resolution described above; this does not provide complete
+four-state contention resolution. An input net port of the parent that such
+a port is connected to is coerced as well. The :option:`ASSIGNIN` warning is
+still reported on the driver; it is an error by default, so must be waived
+for coercion to proceed. Coercion changes both the effective and the
+declared direction, including the direction shown in traces and JSON dumps.
+A port is not coerced if it is a port of the top-level module, has a type
+that is not integral or packed, is also written procedurally, or if any
+instance connects it to something other than writable nets, constant bit or
+part selects of them, and concatenations of those (e.g. to a variable, a
+constant, a narrower net, an assignment pattern, a cast, an unpacked array
+element, a net through an input-only modport, or a net of a module other
+than an interface by a hierarchical reference), or to an input port that is
+not coerced.
 
 An input port of net kind that is written but not coerced, including one
 written procedurally inside its module, through a virtual interface, or by a

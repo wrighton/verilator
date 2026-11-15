@@ -14,7 +14,7 @@ test.scenarios('vlt')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+test.compile(verilator_flags2=['-fno-constraint-fast'])
 
 # Verilator samples, so results vary
 log = test.obj_dir + "/solver.log"

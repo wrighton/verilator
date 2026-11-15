@@ -25,13 +25,16 @@ if test.vlt_all:
 else:
     test.execute()
 
-# Test 4, nested select: with j = 6, bit 6 of pa2 is solved first
+# Test 5, nested select: with j = 6, bit 6 of pa2 is solved first
 if test.vlt_all:
     test.file_grep(solver_log, r'\(get-value \(\(\(_ extract 6 6\) pa2\) \)\)')
 
-# Test 5: the bits not after mz, of mx only, are solved with mz, then the part after mz
+# Test 6: the bits not after mz, of mx only, are solved with mz, then the parts after mz, with
+# all of ma, which has a part after mz
 if test.vlt_all:
     test.file_grep(solver_log, r'\(get-value \(\(\(_ extract 6 4\) mx\) mz \)\)')
-    test.file_grep(solver_log, r'\(get-value \(\(\(_ extract 3 0\) mx\) \)\)')
+    test.file_grep(
+        solver_log, r'\(get-value \(\(\(_ extract 1 0\) \(select ma #x00000001\)\) '
+        r'\(\(_ extract 3 0\) mx\) \(select ma #x00000000\)\(select ma #x00000001\)\)\)')
 
 test.passes()

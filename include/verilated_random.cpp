@@ -126,6 +126,8 @@ class VlRProcess final : private std::streambuf, public std::iostream {
     bool m_logTried = false;  // Log file name looked up, at the first start
     std::unique_ptr<std::ofstream> m_logfp;  // Log file stream
     uint64_t m_logLastTime = ~0ULL;  // Last timestamp for logfile
+    std::string m_logLinePrefix;  // Prefix of the last log line, unfinished if m_logLineOpen
+    bool m_logLineOpen = false;  // Last logged text did not end its line
 
 public:
     typedef std::streambuf::traits_type traits_type;
@@ -318,7 +320,7 @@ public:
             return false;
         }
 
-        log("", "# Open: "s + cmd[0]);
+        log("", "# Open: "s + cmd[0] + "\n");
         const pid_t pid = fork();
         if (VL_UNLIKELY(pid < 0)) {
             perror("VlRProcess::open: fork");
@@ -402,7 +404,7 @@ public:
         si.hStdError = stderrInheritable ? stderrInheritable : fd_stdout_wr;
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
-        log("", "# Open: "s + cmd[0]);
+        log("", "# Open: "s + cmd[0] + "\n");
         const BOOL procOk
             = CreateProcessA(nullptr, &cmdline[0], nullptr, nullptr, TRUE /* inherit */,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -458,18 +460,26 @@ private:
     }
     void log(const std::string& prefix, const std::string& text) {
         if (VL_LIKELY(!m_logfp.get()) || text.empty()) return;
-        if (m_logLastTime != Verilated::threadContextp()->time()) {
+        // Pipe buffers end anywhere, so continue an unfinished line of the same direction
+        // rather than breaking it (inside a token, unreadable by a solver)
+        if (m_logLineOpen && prefix != m_logLinePrefix) {
+            *m_logfp << '\n';
+            m_logLineOpen = false;
+        }
+        if (!m_logLineOpen && m_logLastTime != Verilated::threadContextp()->time()) {
             m_logLastTime = Verilated::threadContextp()->time();
             *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString() << "]\n";
         }
+        m_logLinePrefix = prefix;
         std::size_t startPos = 0;
-        while (1) {
+        while (startPos < text.length()) {
+            if (!m_logLineOpen) *m_logfp << prefix;
             const std::size_t endPos = text.find('\n', startPos);
-            if (endPos == std::string::npos) break;
-            *m_logfp << prefix << text.substr(startPos, endPos - startPos) << '\n';
-            startPos = endPos + 1;
+            m_logLineOpen = endPos == std::string::npos;
+            const std::size_t lineEnd = m_logLineOpen ? text.length() : endPos + 1;
+            *m_logfp << text.substr(startPos, lineEnd - startPos);
+            startPos = lineEnd;
         }
-        if (startPos < text.length()) *m_logfp << prefix << text.substr(startPos) << '\n';
     }
 };
 
@@ -624,12 +634,11 @@ public:
     // The pipe may hold bytes of an abandoned reply, so replace the solver
     void abandon() VL_REQUIRES(m_mutex) { m_dirty = true; }
 
-    // Read a check-sat status; once one fails, so does every later read of the transaction
+    // Read a check-sat status; once one fails, so does every later read
     VlSolverStatus readStatus() VL_REQUIRES(m_mutex) {
-        // A failed read may have taken the error reply to an earlier command of
-        // the batch, which the solver did not execute (SMT-LIB 2.6 section 4.1.2),
-        // so no later status can be trusted to answer what was sent; the replies
-        // of the later commands are still queued, and end() skips them.
+        // A status the runtime cannot use fails the call. It may be the error
+        // reply to an earlier command of the batch, so the replies of the later
+        // commands are still queued; they are skipped when the transaction ends.
         if (m_stale) return VlSolverStatus::FAIL;
         const VlSolverStatus status = ::readStatus(m_proc);
         m_stale = status == VlSolverStatus::FAIL;
@@ -686,8 +695,9 @@ private:
     bool resync() VL_REQUIRES(m_mutex) {
         m_proc << "(echo \"vl_resync\")\n";
         std::string line;
-        // SMT-LIB 2.6 section 4.2.9 echoes the string with its quotes, z3 without them
-        while (readLine(m_proc, line) && line != "vl_resync" && line != "\"vl_resync\"") {}
+        // z3 prints the echoed string without quotes, the SMT-LIB 2.6 response with them; the
+        // replies queued before it answer earlier commands, so cannot contain it
+        while (readLine(m_proc, line) && line.find("vl_resync") == std::string::npos) {}
         return !m_proc.fail();
     }
 
@@ -1039,7 +1049,7 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
             // The elements of a randc array, by their keys as VlRandomArrayVarTemplate::datap()
             // finds them, so a resized array gets a different hash
             int elements = 0;
-            while (m_arr_vars.count(var.first + std::to_string(elements))) ++elements;
+            while (m_arr_vars.count({var.first, elements})) ++elements;
             h ^= std::hash<int>{}(elements) + 0x9e3779b9 + (h << 6) + (h >> 2);
         }
     }
@@ -1434,6 +1444,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     for (const FuncArgRound& argRound : m_funcArgRounds) {
         if (argRound.round < m_funcRound && !argRound.pin.empty()) {
             m_constraints.push_back(argRound.pin);
+            m_constraintVarEnds.push_back(m_constraintVarNames.size());  // Names no randc
         }
     }
 
@@ -2785,8 +2796,8 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
             std::string name = root.name;
             if (lo || hi != static_cast<IData>(it.first->width())) {
                 name = "((_ extract " + std::to_string(hi - 1) + " " + std::to_string(lo) + ") "
-                       + root.name + ")";
-                m_solveBeforeParts[name] = std::make_shared<const VlRandomVar>(
+                       + it.first->name() + ")";
+                m_solveBeforeElems[name] = std::make_shared<const VlRandomVar>(
                     name, static_cast<int>(hi - lo), nullptr, 0,
                     std::numeric_limits<std::uint32_t>::max());
             }
@@ -2798,10 +2809,11 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
     return true;
 }
 
-bool VlRandomizer::solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr) const {
-    const auto it = m_vars.find(ref.name);
-    if (it == m_vars.end()) return false;
-    bitsr.rootp = it->second.get();
+bool VlRandomizer::solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr) {
+    bitsr.rootp = solveBeforeVarp(ref.name);
+    if (!bitsr.rootp) return false;
+    const auto arrayIt = m_solveBeforeArrays.find(ref.name);
+    bitsr.arrayp = arrayIt == m_solveBeforeArrays.end() ? nullptr : arrayIt->second;
     const IData varWidth = bitsr.rootp->width();
     if (!ref.width) {
         bitsr.lo = 0;

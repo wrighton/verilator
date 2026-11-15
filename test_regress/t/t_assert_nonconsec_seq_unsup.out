@@ -7,7 +7,6 @@
                                                           : ... note: In instance 't'
    19 |   assert property (@(posedge clk) (a and b) |-> c [=1]);
       |                                      ^~~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:20:38: Unsupported: 'intersect' in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
    20 |   assert property (@(posedge clk) (a intersect b) |-> c [=1]);
@@ -60,28 +59,4 @@
                                                           : ... note: In instance 't'
    34 |   assert property (@(posedge clk) a [=1] |-> c [->1]);
       |                                          ^~~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:33:46: Unsupported: cycle delay in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   33 |   assert property (@(posedge clk) a [=2] |-> ##1 b);
-      |                                              ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:34:48: Unsupported: cycle delay in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   34 |   assert property (@(posedge clk) a [=2] |=> b ##1 c);
-      |                                                ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:36:38: Unsupported: cycle delay in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   36 |   assert property (@(posedge clk) (a ##1 b) |-> c [=1]);
-      |                                      ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:37:37: Unsupported: cycle delay in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   37 |   assert property (@(posedge clk) a ##1 b [=1] |-> c);
-      |                                     ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:38:48: Unsupported: cycle delay in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   38 |   assert property (@(posedge clk) a |-> b [=1] ##1 c);
-      |                                                ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:39:41: Unsupported: cycle delay in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   39 |   assert property (@(posedge clk) a |-> ##1 b [=1]);
-      |                                         ^~
 %Error: Exiting due to

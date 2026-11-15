@@ -36,7 +36,6 @@
    37 |     p.m_objs[0].rand_mode(0);
       |                 ^~~~~~~~~
 %Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:20:13: Unsupported: random member variable with the type of the containing class
-                                                         : ... note: In instance 't'
    20 |   rand Node m_next;
       |             ^~~~~~
 %Error: Exiting due to

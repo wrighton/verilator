@@ -97,9 +97,7 @@ class WidthCommitReadsVisitor final : public VNVisitorConst {
     // A member of a handle is read as a whole, e.g. a signal of a virtual interface
     void visit(AstMemberRef* nodep) override {
         const AstNode* basep = nodep->fromp();
-        while (const AstMemberRef* const memberRefp = VN_CAST(basep, MemberRef)) {
-            basep = memberRefp->fromp();
-        }
+        while (const AstMemberRef* const selp = VN_CAST(basep, MemberRef)) basep = selp->fromp();
         const AstNodeVarRef* const baseRefp = VN_CAST(basep, NodeVarRef);
         if (!baseRefp) {
             iterateChildrenConst(nodep);
@@ -179,14 +177,14 @@ private:
                     << m_ftaskp->warnContextSecondary());
         // Forks V3LinkJump made for disable by name do not block
         const AstFork* const forkp = VN_CAST(nodep, Fork);
+        const bool disableFork = forkp && forkp->forksp() && forkp->forksp()->disableWrapper();
         if (m_alwaysCombp && m_taskRefWarn && nodep->isTimingControl() && !VN_IS(nodep, AssignDly)
-            && !(forkp && forkp->disableWrap())) {
+            && !disableFork) {
             nodep->v3error("Blocking timing controls and fork-join are not legal under "
                            << m_alwaysCombp->keyword().ascii() << " (IEEE 1800-2023 9.2.2.2.2)\n"
                            << nodep->warnMore() << "... Suggest use a normal 'always'");
         }
-        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl()
-            && !(forkp && forkp->disableWrap())) {
+        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl() && !disableFork) {
             nodep->v3error("Timing controls and fork-join are not legal in final blocks"
                            " (IEEE 1800-2023 9.2.3)");
         }
@@ -360,9 +358,9 @@ private:
 
     static std::vector<const AstVar*> ftaskPorts(const AstNodeFTask* nodep) {
         std::vector<const AstVar*> ports;
-        for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-            const AstVar* const portp = VN_CAST(stmtp, Var);
-            if (portp && portp->isIO()) ports.push_back(portp);
+        for (const AstNode* const declp : nodep->declspList()) {
+            const AstVar* const portp = VN_CAST(declp, Var);
+            if (portp && portp->isIO() && !portp->isFuncReturn()) ports.push_back(portp);
         }
         return ports;
     }

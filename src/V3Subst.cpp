@@ -448,7 +448,7 @@ class SubstVisitor final : public VNVisitor {
 
     void visit(AstWith* nodep) override {
         iterateChildren(nodep);
-        // Do not substitute expressions containing a 'with' lambda, as its body holds statements
+        // Do not substitute an array method 'with' lambda, its body is a statement
         m_ops = SUBST_MAX_OPS_NA;
     }
 

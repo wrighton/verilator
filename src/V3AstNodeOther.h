@@ -1406,6 +1406,7 @@ public:
         this->targetp(targetp);
     }
     ASTGEN_MEMBERS_AstDefParam;
+    string name() const override VL_MT_STABLE;  // Name of the parameter set, from targetp
     bool sameNode(const AstNode*) const override { return true; }
 };
 class AstDefaultClocking final : public AstNode {

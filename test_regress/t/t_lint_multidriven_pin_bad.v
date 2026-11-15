@@ -98,7 +98,8 @@ module t_lint_multidriven_pin_bad (
   // assign is a real driver  // <--- Warning
   wire zcmp_pin;
   // A logic variable is not a net, so its port connection is not a
-  // second driver: no warning
+  // second net driver, but a variable has only one continuous driver
+  // (IEEE 1800-2023 6.5)  // <--- Warning
   logic [31:0] logic_pin;
   // Two continuous assignments without a port connection, so no warning
   wire [31:0] no_pin;

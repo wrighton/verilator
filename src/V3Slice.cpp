@@ -267,9 +267,8 @@ class SliceVisitor final : public VNVisitor {
         if (VN_IS(stp, CvtQueueToUnpack) && !lhsSlice) return false;
         if (VN_IS(stp, CReset)) return false;
 
-        // Any isSc variables must be expanded regardless of --fno-slice. So must an array
-        // constructor target (e.g. an output port connected to '{a, b}), as it has no whole
-        // array representation that could be assigned.
+        // Any isSc variables must be expanded regardless of --fno-slice, as must an array
+        // pattern lvalue (e.g. an output port connection), which is not an lvalue in C++
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
         const bool consLhs = VN_IS(nodep->lhsp(), ConsArray);
@@ -488,11 +487,6 @@ class SliceVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
-    void visit(AstScope* nodep) override {
-        VL_RESTORER(m_scopep);
-        m_scopep = nodep;
-        iterateChildren(nodep);
-    }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:

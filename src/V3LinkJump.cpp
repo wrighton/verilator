@@ -279,21 +279,23 @@ class LinkJumpVisitor final : public VNVisitor {
         bodyp->setDisableWrapper();
         bodyp->addStmtsp(getQueuePushProcessSelfp(fl, processQueuep));
         AstFork* const forkp = new AstFork{fl, VJoinType::JOIN};
-        forkp->disableWrap(true);
         forkp->addForksp(bodyp);
-        // The ports of a task are in its declarations, so stay in the task for calls to see them
-        AstNodeBlock* const blockp = VN_CAST(nodep, NodeBlock);
-        AstNodeFTask* const taskp = VN_CAST(nodep, NodeFTask);
-        AstNodeStmt* const stmtsp = blockp ? blockp->stmtsp() : taskp->stmtsp();
-        if (stmtsp) bodyp->addStmtsp(stmtsp->unlinkFrBackWithNext());
-        if (blockp) {
-            blockp->addStmtsp(forkp);
-        } else {
+        if (AstTask* const taskp = VN_CAST(nodep, Task)) {
+            // Variables stay in the task's declarations, ports so calls see them, locals as
+            // they live for the call
+            if (AstNodeStmt* const stmtsp = taskp->stmtsp()) {
+                bodyp->addStmtsp(stmtsp->unlinkFrBackWithNext());
+            }
             taskp->addStmtsp(forkp);
+        } else {
+            AstBegin* const beginp = VN_AS(nodep, Begin);
+            if (beginp->stmtsp()) bodyp->addStmtsp(beginp->stmtsp()->unlinkFrBackWithNext());
+            beginp->addStmtsp(forkp);
         }
-        moveJumpsOutOfProcess(bodyp, nodep->name());
+        moveJumpsOutOfProcess(nodep, bodyp);
     }
-    void moveJumpsOutOfProcess(AstForkItem* const bodyp, const std::string& name) {
+    // 'bodyp' is the process made of the statements of task or named block 'nodep'
+    void moveJumpsOutOfProcess(AstNode* const nodep, AstForkItem* const bodyp) {
         // A jump can't leave a process, so a jump from inside the process to outside it sets a
         // flag and jumps to the end of the process instead, and is taken after the process ends
         std::unordered_set<const AstJumpBlock*> innerBlockps;
@@ -305,16 +307,17 @@ class LinkJumpVisitor final : public VNVisitor {
         if (outerGops.empty()) return;
         FileLine* const fl = bodyp->fileline();
         AstFork* const forkp = VN_AS(bodyp->backp(), Fork);
-        // The flag is declared in a block around the process
-        AstBegin* const wrapp = new AstBegin{fl, "", nullptr, true};
-        forkp->replaceWith(wrapp);
         AstVar* const flagp
-            = new AstVar{fl, VVarType::BLOCKTEMP, m_jumpNames.get(name), bodyp->findIntDType()};
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_jumpNames.get(nodep->name()),
+                         bodyp->findIntDType()};
         flagp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-        wrapp->addDeclsp(flagp);
-        wrapp->addStmtsp(
+        if (AstTask* const taskp = VN_CAST(nodep, Task)) {
+            taskp->addDeclsp(flagp);
+        } else {
+            VN_AS(nodep, Begin)->addDeclsp(flagp);
+        }
+        forkp->addHereThisAsNext(
             new AstAssign{fl, new AstVarRef{fl, flagp, VAccess::WRITE}, new AstConst{fl, 0}});
-        wrapp->addStmtsp(forkp);
         AstJumpBlock* const endBlockp = getJumpBlock(bodyp, false);
         uint32_t jumpNum = 0;
         for (AstJumpGo* const gop : outerGops) {
@@ -322,10 +325,11 @@ class LinkJumpVisitor final : public VNVisitor {
             FileLine* const gopFl = gop->fileline();
             gop->addHereThisAsNext(new AstAssign{
                 gopFl, new AstVarRef{gopFl, flagp, VAccess::WRITE}, new AstConst{gopFl, jumpNum}});
-            wrapp->addStmtsp(new AstIf{gopFl,
-                                       new AstEq{gopFl, new AstVarRef{gopFl, flagp, VAccess::READ},
-                                                 new AstConst{gopFl, jumpNum}},
-                                       new AstJumpGo{gopFl, gop->blockp()}});
+            forkp->addNextHere(
+                new AstIf{gopFl,
+                          new AstEq{gopFl, new AstVarRef{gopFl, flagp, VAccess::READ},
+                                    new AstConst{gopFl, jumpNum}},
+                          new AstJumpGo{gopFl, gop->blockp()}});
             gop->replaceWith(new AstJumpGo{gopFl, endBlockp});
             VL_DO_DANGLING(pushDeletep(gop), gop);
         }
@@ -677,16 +681,16 @@ class LinkJumpVisitor final : public VNVisitor {
                 } else {
                     // Disable inside a fork branch of this named block must also kill the
                     // process running the block, so the block needs a process of its own
-                    AstNode* const branchp = innerForkItemEndp(beginp);
-                    if (branchp) needBeginDisableProcess(beginp, nodep->fileline());
+                    AstNode* const branchEndp = innerForkItemEndp(beginp);
+                    if (branchEndp) needBeginDisableProcess(beginp, nodep->fileline());
                     AstVar* const processQueuep
                         = getOrCreateBeginDisableQueuep(beginp, nodep->fileline());
                     AstStmtExpr* const killStmtp = insertKillStmtp(nodep, processQueuep);
 
                     // process::kill does not terminate the currently running process immediately.
-                    // Jump to the end of the fork branch or block it runs to prevent statements
+                    // Jump to the end of the fork item or block it runs to prevent statements
                     // after disable from executing.
-                    addJumpAfterKill(killStmtp, branchp ? branchp : beginp);
+                    addJumpAfterKill(killStmtp, branchEndp ? branchEndp : beginp);
                 }
             } else if (inFunction() || maySuspend(beginp)) {  // As for a task target
                 needBeginDisableProcess(beginp, nodep->fileline());

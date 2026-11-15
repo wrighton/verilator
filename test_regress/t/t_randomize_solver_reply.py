@@ -37,7 +37,7 @@ runs = [
     ('dup_model', 1, 15),  # the same variable answered twice
     ('err_assume', 1, 16),  # error in place of the unsat assumptions
     ('err_core', 1, 16),  # error in place of the unsat core
-    ('err_extra', 4, 15),  # error replying to a soft constraint, ahead of the relaxation status
+    ('err_extra', 2, 15),  # error replying to an earlier command, ahead of the status
     ('err_multiline', 2, 15),  # solver rejects a command with an error spanning two lines
     ('err_once', 2, 15),  # solver rejects a command instead of answering
     ('err_phase', 1, 15),  # error in place of an intermediate phase value reply
@@ -112,8 +112,8 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(solver_log, r'^  \(assert \(not \(and .*\(= \(select q #x00000000\) +#b[01]+\)')
 
-# The first UniGen2 sampler reply, for Packet's second call. Replies 1 to 15 answer the
-# first calls' solves and diversity rounds, so their count depends on the solver's models:
+# The first UniGen2 sampler reply, for Packet's second call. The replies before it answer
+# the first calls' solves and diversity rounds, so their count depends on the solver's models:
 # the injected reply must be the one right after the sampler's push and get-value, else
 # this case does not test the sampler. A value of the wrong width must not reach a
 # blocking clause, and the call still passes.
@@ -122,7 +122,7 @@ solver_log = test.obj_dir + '/solver_bsat_narrow.log'
 test.execute(logfile=logfile,
              all_run_flags=['+verilator+solver+file+' + solver_log],
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=value_narrow TAMPER_AT=16')
+             'TAMPER=value_narrow TAMPER_AT=14')
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(
     solver_log, r'^  \(push 1\)\n  \(check-sat\)\n< sat\n  \(get-value \( a b\)\)\n'

@@ -1505,10 +1505,11 @@ List Of Warnings
    ``release`` of such a variable is not reported, as it overrides rather
    than drives the variable, nor is a ``$readmemb`` or ``$readmemh`` load of
    a memory.
-   An unpacked array element written with a non-constant index counts as a
-   write of the whole array (its longest static prefix), so conflicts with
-   any other write of the array; elements written with constant indices are
-   not compared with each other.
+   An unpacked array element written with a non-constant index, or a slice
+   written at a non-constant position, counts as a write of the whole array
+   (its longest static prefix), so conflicts with any other write of the
+   array; elements written with constant indices are not compared with each
+   other.
 
    Faulty example:
 

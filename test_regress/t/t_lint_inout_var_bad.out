@@ -14,6 +14,11 @@
                                                : ... note: In instance 't'
    33 |   sub u_sel (.y(arr[idx+:2]));   
       |                 ^~~
+%Error: t/t_lint_inout_var_bad.v:33:21: Inout port connection 'y' requires constant selection indices (IEEE 1800-2023 23.3.3, 10.2, A.8.5).
+                                      : ... note: In instance 't'
+   33 |   sub u_sel (.y(arr[idx+:2]));   
+      |                     ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Warning-NONSTD: t/t_lint_inout_var_bad.v:34:24: Inout port 'y' is connected to variable 'v', but should be connected to a net (IEEE 1800-2023 23.3.3.2)
                                                : ... note: In instance 't'
    34 |   sub u_cat (.y({w[0], v[0]}));   

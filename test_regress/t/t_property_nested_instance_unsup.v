@@ -38,17 +38,7 @@ module t (
   assert property (@(posedge clk) b |-> q_loc);
   // A property instance as an actual argument
   assert property (@(posedge clk) a |-> q_arg(q_ovl));
-  // A property instance as a sequence operand
-  assert property (@(posedge clk) q_ovl ##1 a);
-  assert property (@(posedge clk) a ##1 q_ovl);
-  assert property (@(posedge clk) q_ovl [*2]);
-  assert property (@(posedge clk) q_ovl [->2]);
-  assert property (@(posedge clk) q_ovl [=2]);
-  assert property (@(posedge clk) q_ovl intersect (a ##1 b));
-  assert property (@(posedge clk) q_ovl within (a ##1 b));
-  assert property (@(posedge clk) a throughout q_ovl);
-  // A property instance as an implication antecedent
-  assert property (@(posedge clk) q_ovl |-> a);
-  assert property (@(posedge clk) q_ovl |-> ##1 a);
+  // A property instance as a sequence operand or implication antecedent is illegal, see
+  // t_property_sexpr_bad
 
 endmodule

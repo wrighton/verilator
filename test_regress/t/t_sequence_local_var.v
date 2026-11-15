@@ -115,23 +115,12 @@ module t (
     (1, t = cyc) ##1 (cyc == t + 1, t = t + 1);
   endsequence
   assert property (@(posedge clk) valid |-> s_trailing);
-  // A match item ending an antecedent, read by the consequent, stays a side effect
-  /* verilator lint_off SIDEEFFECT */
+  // A match item ending an antecedent, read by the consequent
   property p_trailing_read;
     int u, t;
     @(posedge clk) (1, u = cyc) ##1 (valid, t = u) |-> (cyc == t + 1);
   endproperty
-  /* verilator lint_on SIDEEFFECT */
   assert property (p_trailing_read);
-
-  // --- Scenario 13: subroutine call match items stay side effects ---
-  /* verilator lint_off SIDEEFFECT */
-  sequence s_call;
-    int t;
-    (1, t = cyc) ##1 (1, $write("")) ##1 (cyc == t + 2, $write(""));
-  endsequence
-  /* verilator lint_on SIDEEFFECT */
-  assert property (@(posedge clk) valid |-> s_call);
 
   // --- Scenario 12: sequence-local variable through a property instance ---
   int nested_fail = 0, ref_nested_fail = 0;

@@ -1028,7 +1028,8 @@ class LinkParseVisitor final : public VNVisitor {
             m_genblkAbove = 0;
             m_genblkNum = 0;
             collectGenblkDeclNames(nodep->itemsp());
-            if (nodep->genforp()) collectGenblkDeclNames(nodep->genforp()->itemsp());
+            if (nodep->genforp())
+                collectGenblkDeclNames(nodep->genforp()->itemsp());
             iterateChildren(nodep);
         } else {
             iterateChildren(nodep);
@@ -1222,7 +1223,7 @@ class LinkParseVisitor final : public VNVisitor {
         // ')' (IEEE 1800-2023 16.12), clocks the property as if not parenthesized
         if (!nodep->sensesp()) {
             if (AstSClocked* const clockedp = VN_CAST(nodep->propp(), SClocked)) {
-                nodep->sensesp(clockedp->sensesp()->unlinkFrBackWithNext());
+                nodep->addSensesp(clockedp->sensesp()->unlinkFrBackWithNext());
                 clockedp->replaceWith(clockedp->exprp()->unlinkFrBack());
                 VL_DO_DANGLING(pushDeletep(clockedp), clockedp);
             }

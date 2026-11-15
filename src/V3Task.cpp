@@ -22,6 +22,9 @@
 //          with a member reference)
 //      Look for TASKs
 //          Remove them, they're inlined
+// Then, with calls inlined into their processes:
+//      Look for associative array elements V3Width made const ref actuals create
+//          Make the process write the array
 //
 //*************************************************************************
 
@@ -810,9 +813,10 @@ class TaskVisitor final : public VNVisitor {
                         + std::to_string(
                             m_enumNumbers.emplace(enump, m_enumNumbers.size()).first->second);
         } else if (dtypep->isIntegralOrPacked()) {
-            typeName = string{dtypep->isFourstate() ? "logic" : "bit"}
-                       + (dtypep->isSigned() ? " signed" : "") + "["
-                       + std::to_string(dtypep->width() - 1) + ":0]";
+            // V3Unknown made 4-state types 2-state; they still name their 4-state type
+            const bool fourstate = dtypep->isFourstate() || dtypep->mimicsFourstate();
+            typeName = string{fourstate ? "logic" : "bit"} + (dtypep->isSigned() ? " signed" : "")
+                       + "[" + std::to_string(dtypep->width() - 1) + ":0]";
         }
         typeName
             = "\"" + V3OutFormatter::quoteNameControls(VIdProtect::protect(typeName)) + "\", ";
@@ -2270,7 +2274,7 @@ class TaskVisitor final : public VNVisitor {
     static AstVarRef* getterVarRefp(AstNodeFTask* taskp) {
         // Only the return variable is declared, so no arguments or locals
         const AstVar* const fvarp = taskp->fvarp();
-        if (taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
+        if (!fvarp || taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
         AstNode* stmtp = taskp->stmtsp();
         // Skip the default initialization of the function's return value
         if (const AstAssign* const initp = VN_CAST(stmtp, Assign)) {
@@ -2501,7 +2505,6 @@ class TaskVisitor final : public VNVisitor {
                 AstNode* const impurep = m_statep->checkImpure(nodep);
                 for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
                     nextp = stmtp->nextp();
-                    if (VN_IS(stmtp, Var)) continue;
                     // Keep the impure reference, IMPURE warnings on callers may show it
                     if (impurep
                         && stmtp->exists([&](const AstVarRef* refp) { return refp == impurep; })) {
@@ -2588,6 +2591,123 @@ public:
         V3Stats::addStat("Optimizations, Function getters replaced with reads", m_statGetters);
         V3Stats::addStat("Optimizations, Hierarchical DPI wrappers with costs",
                          m_statHierDpisWithCosts);
+    }
+};
+
+//######################################################################
+// Visitor for associative array elements created by const ref actuals
+
+class TaskAssocCreateVisitor final : public VNVisitor {
+    // STATE - for current visit position (use VL_RESTORER)
+    bool m_inProcess = false;  // In a process, not a function
+    bool m_combo = false;  // Current process is combinational logic
+    VDouble0 m_statCreatingSels;  // Statistic tracking
+    VDouble0 m_statWrittenRefs;  // Statistic tracking
+
+    // METHODS
+    // Whether a process body controls timing, as V3Active checks; forks are other processes
+    class TimingControlVisitor final : public VNVisitorConst {
+        bool m_found = false;  // Found a timing control
+        void visit(AstFork* nodep) override { m_found |= nodep->isTimingControl(); }
+        void visit(AstNode* nodep) override {
+            if (nodep->isTimingControl()) m_found = true;
+            if (!m_found) iterateChildrenConst(nodep);
+        }
+
+    public:
+        explicit TimingControlVisitor(AstNode* nodep) { iterateAndNextConstNull(nodep); }
+        bool found() const { return m_found; }
+    };
+
+    // VISITORS
+    void visit(AstNodeProcedure* nodep) override {
+        VL_RESTORER(m_inProcess);
+        VL_RESTORER(m_combo);
+        m_inProcess = true;
+        // As V3Active: with a sensitivity list only if it has no signals (@*); without one if
+        // not 'always' or no timing control in the body. Level-sensitive processes stay
+        // clocked, as the call is impure.
+        const AstAlways* const alwaysp = VN_CAST(nodep, Always);
+        if (!alwaysp) {
+            m_combo = false;
+        } else if (alwaysp->sentreep()) {
+            m_combo = !alwaysp->sentreep()->hasClocked();
+        } else {
+            m_combo = alwaysp->keyword() != VAlwaysKwd::ALWAYS
+                      || !TimingControlVisitor{alwaysp->stmtsp()}.found();
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstCFunc* nodep) override {
+        // A function body runs in its callers; inlined bodies are in their processes
+        VL_RESTORER(m_inProcess);
+        m_inProcess = false;
+        iterateChildren(nodep);
+    }
+    void visit(AstCMethodHard* nodep) override {
+        if (!isAssocAtWrite(nodep)) {
+            iterateChildren(nodep);
+            return;
+        }
+        // The element is created, so the array is written; but only the selects were made
+        // writable, if the array itself is still only read (see V3Width), as written arrays
+        // are otherwise found ordinarily. Impure from now on; they were pure only to keep
+        // V3LiftExpr from copying an enclosing select, within the call's actual.
+        std::vector<AstCMethodHard*> atWriteps{nodep};
+        AstNodeExpr* exprp = nodep->fromp();
+        while (true) {
+            if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                exprp = selp->fromp();
+            } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else if (AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+                if (isAssocAtWrite(methodp)) atWriteps.push_back(methodp);
+                exprp = methodp->fromp();
+            } else {
+                break;
+            }
+        }
+        AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+        AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef);
+        if ((refp && refp->access().isReadOnly())
+            || (memberSelp && memberSelp->access().isReadOnly())) {
+            for (AstCMethodHard* const atWritep : atWriteps) {
+                atWritep->method(VCMethod::ASSOC_AT_WRITE);
+                ++m_statCreatingSels;
+            }
+            if (m_combo) {
+                // Would read and write the array in the same combinational logic
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Associative array element passed "
+                                             "to a const ref argument in combinational logic.");
+            } else if (m_inProcess && refp) {
+                refp->access(VAccess::READWRITE);
+                ++m_statWrittenRefs;
+            } else if (m_inProcess) {
+                memberSelp->access(VAccess::READWRITE);
+                ++m_statWrittenRefs;
+            }
+        }
+        iterateAndNextNull(nodep->pinsp());
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    static bool isAssocAtWrite(const AstCMethodHard* nodep) {
+        const AstNodeDType* const dtypep = nodep->fromp()->dtypep()->skipRefp();
+        return nodep->method() == VCMethod::ARRAY_AT_WRITE
+               && (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, WildcardArrayDType));
+    }
+
+public:
+    // CONSTRUCTORS
+    explicit TaskAssocCreateVisitor(AstNetlist* nodep) {
+        iterate(nodep);
+        VIsCached::clearCacheTree();  // Purity changed
+    }
+    ~TaskAssocCreateVisitor() override {
+        V3Stats::addStat("Tasks, Assoc selects creating elements for const ref",
+                         m_statCreatingSels);
+        V3Stats::addStat("Tasks, Assoc array references written by element creation",
+                         m_statWrittenRefs);
     }
 };
 
@@ -3051,6 +3171,7 @@ void V3Task::taskAll(AstNetlist* nodep) {
     {
         TaskStateVisitor visitors{nodep};
         const TaskVisitor visitor{nodep, &visitors};
-    }  // Destruct before checking
+    }
+    { TaskAssocCreateVisitor{nodep}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("task", 0, dumpTreeEitherLevel() >= 3);
 }

@@ -719,7 +719,7 @@ public:
             puts(", ");
             puts(cvtToStr(castp->dstElementBits()));
             // Descending unpacked dest: reverse after copy
-            if (unpackDtp && !unpackDtp->declRange().ascending()) reverseUnpack = true;
+            if (unpackDtp) reverseUnpackCall = EmitCUtil::unpackReverseCall(unpackDtp);
         } else if (nodep->isWide() && !unpackDtp && VN_IS(nodep->lhsp(), VarRef)  //
                    && !VN_IS(nodep->rhsp(), CExpr)  //
                    && !VN_IS(nodep->rhsp(), CMethodHard)  //

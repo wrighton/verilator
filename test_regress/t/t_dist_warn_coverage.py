@@ -85,6 +85,7 @@ for s in [
         'Unsupported: Assignments with signal strength with LHS of type:',
         'Unsupported: Bind with instance list',
         'Unsupported: Cast to',
+        'Unsupported: Complex expression captured from',
         'Unsupported: Concatenation to form',
         'Unsupported: Creating tristate signal not underneath a module:',
         'Unsupported: Default value on module inout/ref/constref:',

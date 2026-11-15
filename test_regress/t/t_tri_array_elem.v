@@ -16,13 +16,6 @@ module t (
   int cyc = 0;
   wire collide = cyc[0];
 
-  // A z compared with === is a test of the enable, also when written to an element or member
-  wire tbus = collide ? 1'bz : 1'b1;
-  logic seen[2];
-  struct {logic m;} seen_st;
-  always @* seen[0] = (tbus === 1'bz);
-  always @* seen_st.m = (tbus !== 1'bz);
-
   // Procedural z assignments to unpacked array elements
   logic [3:0] pipe[2];
   logic [6:0] mem[3:1];

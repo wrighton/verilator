@@ -781,7 +781,8 @@ void v3errorEnd(std::ostringstream& sstr) VL_RELEASE(V3Error::s().m_mutex) VL_MT
     do { \
         if (VL_UNCOVERABLE(!(condition))) (obj)->v3fatalSrc(stmsg); \
     } while (false)
-// For use in V3Ast static functions only
+// For use in V3Ast static functions only. The tree may be inconsistent or in use by
+// another thread, so abort without global shutdown or reentering structured error handling.
 #define UASSERT_STATIC(condition, stmsg) \
     do { \
         if (VL_UNCOVERABLE(!(condition))) { \
