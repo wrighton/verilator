@@ -9,4 +9,8 @@ module t;
   // constant
   byte bytes[0:2];
   initial bytes = $typename(bytes);
+
+  // A numeric constant is not converted to an unpacked array of bytes
+  byte numeric_bytes[0:1];
+  initial numeric_bytes = 16'h6162;
 endmodule
