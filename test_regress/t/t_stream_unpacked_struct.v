@@ -133,6 +133,31 @@ module t;
 
   assign{>>{simple_cont_out}} = 20'habcde;
 
+  // Members selected from a wide target across word boundaries, with a partial top word
+  typedef struct {logic [6:0] m[10];} sel7_struct_t;
+  initial begin
+    sel7_struct_t sel7_struct;
+    logic [69:0] sel7_bits;
+    logic [6:0] sel7_patterns[4];
+    logic [6:0] sel7_seed;
+`ifdef VERILATOR
+    sel7_seed = $c(7'h0);
+`else
+    sel7_seed = 7'h0;
+`endif
+    // Zero, all-ones and alternating members
+    sel7_patterns = '{7'h00, 7'h7f, 7'h55, 7'h2a};
+    foreach (sel7_patterns[k]) begin
+      foreach (sel7_struct.m[i]) sel7_struct.m[i] = sel7_seed ^ sel7_patterns[k];
+      sel7_bits = {>>{sel7_struct}};
+      foreach (sel7_struct.m[i]) `checkh(sel7_bits[69-7*i-:7], sel7_seed ^ sel7_patterns[k]);
+    end
+    // Members that differ
+    foreach (sel7_struct.m[i]) sel7_struct.m[i] = sel7_seed + 7'h11 + 7'(i);
+    sel7_bits = {>>{sel7_struct}};
+    foreach (sel7_struct.m[i]) `checkh(sel7_bits[69-7*i-:7], sel7_seed + 7'h11 + 7'(i));
+  end
+
   initial begin
     byteswapped_bits = {<<8{32'h11223344}};
     `checkh(byteswapped_bits, 32'h44332211);
