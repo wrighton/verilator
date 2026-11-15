@@ -203,6 +203,12 @@ module t (/*AUTOARG*/
      return value;
   endfunction
 
+  function automatic e_t capture_enum(input bit value);
+    return value ? ONE : ZERO;
+  endfunction
+  string capture_enum_text;
+  initial capture_enum_text = $sformatf("%p", capture_enum(in));
+
   Iface the_ifaces [3:0] (.*);
   localparam int CP_SCOPE_PARAM = ClsParam#(bit, 2)::PP;
 
