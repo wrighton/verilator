@@ -15,7 +15,6 @@
    49 |     @(vif.cb_not_listed);   
       |           ^~~~~~~~~~~~~
 %Error: t/t_interface_virtual_modport_bad.v:50:9: Attempt to drive input-only modport: 'alias_b'
-                                                : ... note: In instance 't'
    50 |     vif.alias_b = 1;   
       |         ^~~~~~~
 %Error: Exiting due to
