@@ -7,7 +7,7 @@
 module t;
   typedef integer q_t[$];
 
-  function void queue_set(ref q_t q);
+  function automatic void queue_set(ref q_t q);
     q.push_back(42);
   endfunction
 

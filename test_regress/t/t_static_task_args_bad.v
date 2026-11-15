@@ -12,4 +12,21 @@ module t;
   task t1(ref int x);
     x = #1 1;
   endtask
+
+  task static untimed_ref(ref int x);
+    x = 1;
+  endtask
+
+  task static untimed_constref(const ref int x);
+    if (x != 0) $stop;
+  endtask
+
+  initial begin
+    int ref_actual;
+    int constref_actual;
+    ref_actual = 0;
+    constref_actual = 0;
+    untimed_ref(ref_actual);
+    untimed_constref(constref_actual);
+  end
 endmodule
