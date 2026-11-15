@@ -10720,7 +10720,9 @@ class WidthVisitor final : public VNVisitor {
             if (const AstUnpackArrayDType* const arrayp
                 = VN_CAST(lhsDTypep->skipRefp(), UnpackArrayDType)) {
                 if (AstBasicDType* basicp = VN_CAST(arrayp->subDTypep()->skipRefp(), BasicDType)) {
-                    if (basicp->width() == 8 && constp->num().isFromString()) {
+                    // A string-typed constant such as $typename is not a string literal
+                    if (basicp->width() == 8 && constp->num().isFromString()
+                        && !constp->num().isString()) {
                         // Left justified: the first character goes to the left element, a
                         // shorter string is padded with zeros, a longer string loses its last
                         // characters
