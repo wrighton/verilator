@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkr(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got=%f exp=%f\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 // Unpacked array members of unpacked structs take their declaration initializers
@@ -14,11 +15,32 @@
 
 typedef struct {bit [3:0] a = 4'd1; bit [3:0] b;} inner_t;
 
+typedef enum logic [2:0] {E0, E1 = 3'd3, E2 = 3'd5} enum_t;
+typedef bit [5:0] six_t;
+typedef six_t six2_t[2:1];
+typedef struct packed {bit [2:0] x; bit [4:0] y;} packed_t;
+
 class Leaf;
 endclass
 
 typedef struct {
   byte uniform[4] = '{4{8'd1}};
+  byte ieee[4] = '{4{1}};
+  // A string literal fills an unpacked array of bytes of its length (IEEE 1800-2023 5.9)
+  byte beq[4] = "abcd";
+  bit [7:0] beu[0:2] = "xyz";
+  bit [32:0] q33[2] = '{33'h1_0000_0001, 33'h1_0000_0002};
+  bit [39:0] q40[2] = '{40'h12_3456_789a, 40'h1};
+  logic [62:0] q63[3] = '{default: 63'h4000_0000_0000_0001};
+  bit [63:0] q64[3] = '{default: 64'hffff_0000_0000_0001, 1: 64'h8000_0000_0000_0000};
+  bit [71:0] w72[2] = '{72'h80_0000_0000_0000_0003, 72'h1};
+  real r[2] = '{0.5, -2.25};
+  enum_t en[3] = '{E1, E2, E0};
+  six_t td[2:1] = '{6'd33, 6'd34};
+  six2_t ta = '{6'd35, 6'd36};
+  packed_t pk[2] = '{'{x: 3'd1, y: 5'd2}, '{x: 3'd3, y: 5'd4}};
+  logic [3:0] lx[2] = '{4'b10x1, 4'h2};
+  logic [3:0] sx = 4'b10x1;
   bit [4:0] odd[3] = '{5'd17, 5'd18, 5'd19};
   bit [6:0] rev[2:0] = '{7'd70, 7'd71, 7'd72};
   bit [9:0] sparse[5] = '{1: 10'd513, 3: 10'd770, default: 10'd5};
@@ -48,6 +70,45 @@ module t;
   task automatic check(outer_t o);
     `checkh(o.uniform[0], 8'd1);
     `checkh(o.uniform[3], 8'd1);
+    `checkh(o.ieee[0], 8'd1);
+    `checkh(o.ieee[1], 8'd1);
+    `checkh(o.ieee[2], 8'd1);
+    `checkh(o.ieee[3], 8'd1);
+    `checkh(o.beq[0], "a");
+    `checkh(o.beq[1], "b");
+    `checkh(o.beq[2], "c");
+    `checkh(o.beq[3], "d");
+    `checkh(o.beu[0], "x");
+    `checkh(o.beu[1], "y");
+    `checkh(o.beu[2], "z");
+    `checkh(o.q33[0], 33'h1_0000_0001);
+    `checkh(o.q33[1], 33'h1_0000_0002);
+    `checkh(o.q40[0], 40'h12_3456_789a);
+    `checkh(o.q40[1], 40'h1);
+    `checkh(o.q63[0], 63'h4000_0000_0000_0001);
+    `checkh(o.q63[1], 63'h4000_0000_0000_0001);
+    `checkh(o.q63[2], 63'h4000_0000_0000_0001);
+    `checkh(o.q64[0], 64'hffff_0000_0000_0001);
+    `checkh(o.q64[1], 64'h8000_0000_0000_0000);
+    `checkh(o.q64[2], 64'hffff_0000_0000_0001);
+    `checkh(o.w72[0], 72'h80_0000_0000_0000_0003);
+    `checkh(o.w72[1], 72'h1);
+    `checkr(o.r[0], 0.5);
+    `checkr(o.r[1], -2.25);
+    `checkh(o.en[0], E1);
+    `checkh(o.en[1], E2);
+    `checkh(o.en[2], E0);
+    `checkh(o.td[2], 6'd33);
+    `checkh(o.td[1], 6'd34);
+    `checkh(o.ta[2], 6'd35);
+    `checkh(o.ta[1], 6'd36);
+    `checkh(o.pk[0].x, 3'd1);
+    `checkh(o.pk[0].y, 5'd2);
+    `checkh(o.pk[1].x, 3'd3);
+    `checkh(o.pk[1].y, 5'd4);
+    // An X bit takes the same value as in a scalar member's initializer
+    `checkh(o.lx[0], o.sx);
+    `checkh(o.lx[1], 4'h2);
     `checkh(o.odd[0], 5'd17);
     `checkh(o.odd[2], 5'd19);
     `checkh(o.rev[2], 7'd70);
@@ -88,6 +149,12 @@ module t;
     outer_t l;
     check(l);
     l.uniform[2] = 8'd5;
+    l.beq[1] = 8'd0;
+    l.q33[0] = '0;
+    l.w72[0] = '0;
+    l.r[1] = 0.0;
+    l.en[0] = E0;
+    l.pk[1].y = 5'd0;
     l.up[4] = 5'd0;
     l.down[2] = 7'd0;
     l.keyed[3] = 0;
