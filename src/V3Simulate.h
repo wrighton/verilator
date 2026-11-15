@@ -142,6 +142,7 @@ private:
     int m_instrCount;  ///< Number of nodes
     int m_dataCount;  ///< Bytes of data
     int m_recurseCount = 0;  // Now deep in current recursion
+    std::unordered_map<const AstNodeFTask*, int> m_activeCalls;  // Calls being evaluated
     AstNode* m_jumptargetp = nullptr;  // AstJumpBlock/AstLoop we are branching over
     // Simulating:
     // Allocators for constants of various data types
@@ -1425,8 +1426,9 @@ private:
                     clearOptimizable(nodep, "Unsupported array element type");
                     return;
                 }
-                newValue(nodep, valuep);
-                VL_DO_DANGLING(valuep->deleteTree(), valuep);
+                // Not newValue, as the previous value may alias an element of the array
+                m_reclaimValuesp.push_back(valuep);
+                setValue(nodep, valuep);
                 return;
             }
             AstNodeExpr* const itemp = consp->valuep(indexp->toUInt());
@@ -1739,8 +1741,12 @@ private:
         // Values from previous call, so can save to stack
         // The "stack" is this visit function's local stack, as this visit is itself recursing
         std::map<AstNode*, AstNodeExpr*> oldValues;
+        // Only one function of a mutually recursive cycle is marked recursive, so a function
+        // may also be re-entered while one of its calls is active
+        int& activeCalls = m_activeCalls[funcp];
+        const bool reentered = funcp->recursive() || activeCalls > 0;
 
-        if (funcp->recursive() && !m_checkOnly) {
+        if (reentered && !m_checkOnly) {
             // Save local automatics
             funcp->foreach([this, &oldValues](AstVar* varp) {
                 if (varp->lifetime().isAutomatic()) {  // This also does function's I/O
@@ -1804,7 +1810,9 @@ private:
         }
 
         // Evaluate the function
+        ++activeCalls;
         iterateConst(funcp);
+        --activeCalls;
         m_callStack.pop_back();
         const AstNodeExpr* returnp = nullptr;
         if (!m_checkOnly && optimizable()) {
