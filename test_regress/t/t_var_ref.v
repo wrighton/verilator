@@ -24,7 +24,7 @@ module t (
 
   //====
 
-  task fun(ref int r, const ref int c);
+  task automatic fun(ref int r, const ref int c);
 `ifdef T_NOINLINE
     // verilator no_inline_task
 `endif
@@ -42,7 +42,7 @@ module t (
 
   //====
 
-  task fun_array(ref int af[2], const ref int cf[2]);
+  task automatic fun_array(ref int af[2], const ref int cf[2]);
 `ifdef T_NOINLINE
     // verilator no_inline_task
 `endif
