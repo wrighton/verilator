@@ -2871,7 +2871,7 @@ AstFunc* V3Randomize::newSRandomFunc(VMemberMap& memberMap, AstClass* nodep) {
         funcp->classMethod(true);
         funcp->isVirtual(false);
         basep->addMembersp(funcp);
-        memberMap.insert(nodep, funcp);
+        memberMap.insert(basep, funcp);
         // For std::process, seed the per-process RNG via m_process->srandom()
         // For regular classes, seed the per-object RNG via __Vm_rng
         AstCStmt* const cstmtp = new AstCStmt{basep->fileline()};
