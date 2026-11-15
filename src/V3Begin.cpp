@@ -78,6 +78,8 @@ class BeginVisitor final : public VNVisitor {
     string m_unnamedScope;  // Name of begin blocks, including unnamed blocks
     std::map<const AstNodeFTask*, string> m_forkBranchScopes;  // m_displayScope at the call
     int m_ifDepth = 0;  // Current if depth
+    bool m_inStaticInit = false;  // Initializer executes outside its containing subroutine
+    V3UniqueNames m_exprTempNames;  // Clone-distinct expression captures within a module
 
     // METHODS
 
@@ -148,7 +150,9 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstNodeModule* nodep) override {
         if (nodep->user1SetOnce()) return;
         VL_RESTORER(m_modp);
+        VL_RESTORER_COPY(m_exprTempNames);
         m_modp = nodep;
+        m_exprTempNames.reset();
         // Rename it (e.g. class under a generate)
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));
@@ -167,7 +171,9 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstNodeProcedure* nodep) override {
         if (nodep->user1SetOnce()) return;
         VL_RESTORER(m_procedurep);
+        VL_RESTORER(m_inStaticInit);
         m_procedurep = nodep;
+        m_inStaticInit = VN_IS(nodep, InitialStatic);
         iterateChildren(nodep);
     }
     void visit(AstNodeFTask* nodep) override {
@@ -195,10 +201,12 @@ class BeginVisitor final : public VNVisitor {
         // Process children
         VL_RESTORER(m_ftaskp);
         VL_RESTORER(m_liftedp);
+        VL_RESTORER(m_inStaticInit);
         VL_RESTORER_CLEAR(m_namedScope);
         VL_RESTORER_CLEAR(m_unnamedScope);
 
         m_ftaskp = nodep;
+        m_inStaticInit = false;
         m_liftedp = nullptr;
         iterateChildren(nodep);
         nodep->foreach([&](AstInitialStatic* const initp) {
@@ -245,6 +253,23 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstBegin* nodep) override {
         if (nodep->user1SetOnce()) return;
+        // A capture block's declarations follow cloned expressions into the actual caller scope.
+        const bool expressionBlock = nodep->unnamed() && VN_IS(nodep->firstAbovep(), ExprStmt);
+        if (expressionBlock) {
+            while (AstNode* const declp = nodep->declsp()) {
+                AstVar* const varp = VN_AS(declp, Var);
+                varp->unlinkFrBack();
+                varp->name(m_exprTempNames.get(varp->name()));
+                const bool inFunction = m_ftaskp && !m_inStaticInit;
+                varp->funcLocal(inFunction);
+                if (inFunction) {
+                    m_liftedp = AstNode::addNextNull(m_liftedp, varp);
+                } else {
+                    varp->lifetime(VLifetime::STATIC_EXPLICIT);
+                    m_modp->addStmtsp(varp);
+                }
+            }
+        }
         // Begin blocks were only useful in variable creation, change names and delete
         UINFO(8, "  " << nodep);
         VL_RESTORER_COPY(m_displayScope);
@@ -334,6 +359,8 @@ class BeginVisitor final : public VNVisitor {
                 AstNode* const newp = new AstInitialStatic{
                     nodep->fileline(), nodep->stmtsp()->unlinkFrBackWithNext()};
                 wasUnderp->addHereThisAsNext(newp);
+                VL_RESTORER(m_inStaticInit);
+                m_inStaticInit = true;
                 iterateChildren(newp);
             }
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
