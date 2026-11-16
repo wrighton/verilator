@@ -3021,18 +3021,20 @@ inline WDataOutP VL_SEL_WWII(int obits, int lbits, WDataOutP owp, WDataInP const
     return owp;
 }
 
-template <typename T>
-inline VlQueue<T> VL_CLONE_Q(const VlQueue<T>& from, int lbits, int srcElementBits,
-                             int dstElementBits) {
-    VlQueue<T> ret;
+// Return a converted copy of a queue; N_MaxSize is as in VlQueue, for a bounded result
+template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
+inline VlQueue<T, N_MaxSize> VL_CLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
+                                        int srcElementBits, int dstElementBits) {
+    VlQueue<T, N_MaxSize> ret;
     VL_COPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
 
-template <typename T>
-inline VlQueue<T> VL_REVCLONE_Q(const VlQueue<T>& from, int lbits, int srcElementBits,
-                                int dstElementBits) {
-    VlQueue<T> ret;
+// Return a converted copy of a queue, reversed; N_MaxSize as for VL_CLONE_Q
+template <size_t N_MaxSize = 0, typename T, size_t N_FromMaxSize>
+inline VlQueue<T, N_MaxSize> VL_REVCLONE_Q(const VlQueue<T, N_FromMaxSize>& from, int lbits,
+                                           int srcElementBits, int dstElementBits) {
+    VlQueue<T, N_MaxSize> ret;
     VL_REVCOPY_Q(ret, from, lbits, srcElementBits, dstElementBits);
     return ret;
 }
@@ -3197,6 +3199,33 @@ inline void VL_REVCOPY_Q(VlQueue<T_Dst>& q, const VlQueue<T_Src>& from, int lbit
     }
 }
 
+// Convert a queue into a queue, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_COPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+          int srcElementBits, int dstElementBits) {
+    // Convert unbounded copies, then assign, which discards elements beyond the destination's
+    // bound with a warning (IEEE 1800-2023 7.10.5)
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_COPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
+}
+
+// Convert a queue into a queue, reversed, either of them bounded
+template <typename T_Dst, size_t N_DstMaxSize, typename T_Src, size_t N_SrcMaxSize>
+inline typename std::enable_if<N_DstMaxSize || N_SrcMaxSize>::type
+VL_REVCOPY_Q(VlQueue<T_Dst, N_DstMaxSize>& q, const VlQueue<T_Src, N_SrcMaxSize>& from, int lbits,
+             int srcElementBits, int dstElementBits) {
+    // As VL_COPY_Q above
+    VlQueue<T_Src> src;
+    src = from;
+    VlQueue<T_Dst> dst;
+    VL_REVCOPY_Q(dst, src, lbits, srcElementBits, dstElementBits);
+    q = dst;
+}
+
 // Overloads for VlUnpacked source -> VlQueue destination
 template <typename T, std::size_t N_Depth>
 inline void VL_COPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int lbits,
@@ -3217,18 +3246,18 @@ inline void VL_REVCOPY_Q(VlQueue<T>& q, const VlUnpacked<T, N_Depth>& from, int 
 }
 
 // Overloads for VlQueue source -> fixed-size VlUnpacked destination
-template <typename T_Dst, std::size_t N_Depth, typename T_Src>
-inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src>& from, int lbits,
-                      int srcElementBits, int dstElementBits) {
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
+inline void VL_COPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                      int lbits, int srcElementBits, int dstElementBits) {
     VlQueue<T_Dst> dstQ;
     VL_COPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
     // Elements past a shorter stream read as zero (IEEE 1800-2023 11.4.14)
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
 }
 
-template <typename T_Dst, std::size_t N_Depth, typename T_Src>
-inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src>& from, int lbits,
-                         int srcElementBits, int dstElementBits) {
+template <typename T_Dst, std::size_t N_Depth, typename T_Src, size_t N_SrcMaxSize>
+inline void VL_REVCOPY_Q(VlUnpacked<T_Dst, N_Depth>& q, const VlQueue<T_Src, N_SrcMaxSize>& from,
+                         int lbits, int srcElementBits, int dstElementBits) {
     VlQueue<T_Dst> dstQ;
     VL_REVCOPY_Q(dstQ, from, lbits, srcElementBits, dstElementBits);
     for (size_t i = 0; i < N_Depth; ++i) q[i] = dstQ.at(i);
