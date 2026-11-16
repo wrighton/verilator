@@ -1,4 +1,5 @@
 // DESCRIPTION: Assertion state serialization and live destination registration.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 #include VM_PREFIX_INCLUDE
 #include "verilated_save.h"
