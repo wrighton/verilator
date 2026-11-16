@@ -1749,6 +1749,29 @@ class ConstVisitor final : public VNVisitor {
         return true;
     }
 
+    bool packStreamOperand(AstNodeStream* streamp) {
+        // Pack a fixed-size unpacked operand, so the stream is a packed one
+        if (!VN_IS(streamp->dtypep(), StreamDType)) return false;
+        AstNodeExpr* const fromp = streamp->lhsp();
+        if (!fromp->dtypep()->isStreamableFixedAggregate()) return false;
+        fromp->unlinkFrBack();
+        AstNodeExpr* packedp;
+        if (lowerAsFixedAggregate(fromp->dtypep())) {
+            packedp = packFixedAggregate(fromp);
+        } else {
+            // Converted as a whole, so the operand is evaluated once
+            const int width = fromp->dtypep()->widthStream();
+            packedp = new AstCvtArrayToPacked{
+                fromp->fileline(), fromp,
+                fromp->findBitOrLogicDType(width, width, VSigning::UNSIGNED,
+                                           fromp->dtypep()->isFourstate())};
+        }
+        streamp->lhsp(packedp);
+        streamp->dtypeSetBitOrLogicUnsized(packedp->width(), packedp->widthMin(),
+                                           VSigning::UNSIGNED, packedp->isFourstateOrNoDtype());
+        if (m_params) iterate(streamp);  // Fold a constant operand
+        return true;
+    }
     bool operandBiExtendConstShrink(AstNodeBiop* nodep) {
         // Loop unrolling favors standalone compares
         // EQ(const{width32}, EXTEND(xx{width3})) -> EQ(const{3}, xx{3})
@@ -4332,6 +4355,19 @@ class ConstVisitor final : public VNVisitor {
         if (operandBoolShift(nodep->condp())) replaceBoolShift(nodep->condp());
     }
 
+    void visit(AstCvtArrayToPacked* nodep) override {
+        iterateChildren(nodep);
+        // Unpacked structs are packed member by member, and so is a constant array, e.g. a
+        // parameter in a stream with other operands, so it folds
+        if (!lowerAsFixedAggregate(nodep->fromp()->dtypep())
+            && !(m_params && VN_IS(nodep->fromp(), ConsArray))) {
+            return;
+        }
+        AstNodeExpr* const newp = packFixedAggregate(nodep->fromp()->unlinkFrBack());
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        iterate(newp);
+    }
     void visit(AstConsArray* nodep) override { iterateChildren(nodep); }
     void visit(AstConsStruct* nodep) override { iterateChildren(nodep); }
     void visit(AstConsStructItem* nodep) override { iterateChildren(nodep); }
@@ -4633,6 +4669,8 @@ class ConstVisitor final : public VNVisitor {
     TREEOP ("AstShiftL{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstShiftR{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstWordSel{operandWordOOB(nodep)}",        "replaceZero(nodep)");
+    TREEOPV("AstCvtPackString{$lhsp.castNodeStream, packStreamOperand(VN_AS(nodep->lhsp(),, NodeStream))}", "DONE");
+    TREEOPV("AstNodeStream{m_params, packStreamOperand(nodep)}", "DONE");
     // Compress out EXTENDs to appease loop unroller
     TREEOPV("AstEq    {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
     TREEOPV("AstNeq   {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
@@ -4890,14 +4928,25 @@ void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const 
     const AstNodeDType* const dtypep = fromp->dtypep()->skipRefp();
     const AstNodeUOrStructDType* const sdtypep = VN_CAST(dtypep, NodeUOrStructDType);
     if (const AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+        const AstConsArray* const consp = VN_CAST(fromp, ConsArray);
         const AstSliceSel* const slicep = VN_CAST(fromp, SliceSel);
         for (const int index : adtypep->declRange().seqLeftToRight()) {
-            // Select from the sliced array, as a slice is a copy that cannot be written
-            AstArraySel* const selp
-                = slicep ? new AstArraySel{flp, slicep->fromp()->cloneTree(false, warnImpure),
-                                           slicep->declRange().lo() + index - adtypep->lo()}
-                         : new AstArraySel{flp, fromp->cloneTree(false, warnImpure),
-                                           index - adtypep->lo()};
+            // Select by offset from the low index, from a constant array directly
+            AstNodeExpr* selp;
+            if (consp) {
+                AstNodeExpr* const valuep = consp->valuep(index - adtypep->lo());
+                UASSERT_OBJ(valuep, consp, "Constant array element missing");
+                selp = valuep->cloneTree(false);
+            } else if (slicep && VN_IS(slicep->lsbp(), Const)) {
+                // Select from the sliced array, as a slice is a copy that cannot be written.
+                // A variable slice is selected from in V3Slice, after V3Unknown checks that
+                // the whole slice is within the array.
+                const int offset = slicep->declRange().lo() + index - adtypep->lo();
+                selp = new AstArraySel{flp, slicep->fromp()->cloneTree(false, warnImpure), offset};
+            } else {
+                selp = new AstArraySel{flp, fromp->cloneTree(false, warnImpure),
+                                       index - adtypep->lo()};
+            }
             collectFixedAggregateTerms(deleter, selp, termps, packReal, warnImpure);
         }
     } else if (sdtypep && !sdtypep->packed()) {
