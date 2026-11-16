@@ -1779,7 +1779,10 @@ public:
                   ? VN_CAST(nodep->backp()->dtypep()->skipRefp(), QueueDType)
                   : nullptr;
         if (qdtp) {
-            if (nodep->lhsp()->isWide()) {
+            // A packed source into wide elements also needs the element width to justify
+            if (nodep->lhsp()->isWide()
+                || (qdtp->subDTypep()->isWide()
+                    && nodep->lhsp()->dtypep()->skipRefp()->isIntegralOrPacked())) {
                 emitOpName(nodep,
                            "VL_STREAMR_%nq%lq%rq(%lw," + std::to_string(qdtp->subDTypep()->width())
                                + ", %P, %li, %ri)",
