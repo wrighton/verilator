@@ -503,7 +503,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         return nullptr;
     }
 
-    AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
+    AstSFormatF* getConstFormat(AstNodeExpr* const nodep) const {
         return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
                                nodep};
     }
@@ -811,6 +811,21 @@ class ConstraintExprVisitor final : public VNVisitor {
         return formatp;
     }
 
+    // The instance field's mode is read from its selected object.
+    AstNodeExpr* newMemberModep(const AstMemberRef* const memberRefp, AstVar* const modeVarp,
+                                AstNodeExpr* const elemReadp) const {
+        AstVar* const varp = memberRefp->varp();
+        const RandomizeMode mode = {.asUQuad = varp->user1()};
+        if (!mode.usesMode) return nullptr;
+        FileLine* const flp = memberRefp->fileline();
+        UASSERT_OBJ(modeVarp, memberRefp, "Field mode without a mode array");
+        AstNodeExpr* const arrayp = new AstMemberRef{flp, elemReadp->cloneTree(false), modeVarp};
+        AstCMethodHard* const atp
+            = new AstCMethodHard{flp, arrayp, VCMethod::ARRAY_AT, new AstConst{flp, mode.index}};
+        atp->dtypeSetUInt32();
+        return atp;
+    }
+
     void setRandMode(AstVar* const varp, AstMemberRef* const memberRefp,
                      const std::string& smtName, const RandomizeMode& randMode,
                      AstBegin* const initp) {
@@ -907,12 +922,14 @@ class ConstraintExprVisitor final : public VNVisitor {
     void createWriteVarForClassFields(AstClass* const elemClassp, const std::string& smtName,
                                       AstVar* const iterVarp, const bool isUnpackedClassRefArray,
                                       AstNodeModule* const classOrPackagep, AstVar* const varp,
-                                      AstIf* const ifNonNullp,
-                                      AstClassRefDType* elemClassRefDtp) const {
+                                      AstIf* const ifNonNullp, AstClassRefDType* elemClassRefDtp,
+                                      AstNodeExpr* const elemReadp) const {
         FileLine* const fl = varp->fileline();
         AstNodeModule* const varClassp = VN_AS(varp->user2p(), NodeModule);
         const std::string idxFmt
             = isUnpackedClassRefArray ? "%0x" : keyHexFormat(iterVarp->dtypep()->skipRefp());
+        // Resolve the hierarchy-owned instance mode array once, not once per field.
+        AstVar* const modeVarp = RandModeVars::randModeVarp(elemClassp);
 
         for (const AstClass* cp = elemClassp; cp;
              cp = cp->extendsp() ? cp->extendsp()->classp() : nullptr) {
@@ -945,11 +962,48 @@ class ConstraintExprVisitor final : public VNVisitor {
                 writeVarp->addPinsp(memberRefp);
                 writeVarp->addPinsp(
                     new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(memberWidth)});
-                writeVarp->addPinsp(
-                    new AstSFormatF{fl, smtName + "." + idxFmt + "." + memberVarp->name(), false,
-                                    new AstVarRef{fl, iterVarp, VAccess::READ}});
+                AstSFormatF* const namep
+                    = new AstSFormatF{fl, smtName + "." + idxFmt + "." + memberVarp->name(), false,
+                                      new AstVarRef{fl, iterVarp, VAccess::READ}};
+                writeVarp->addPinsp(namep);
                 writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0ULL});
                 ifNonNullp->addThensp(writeVarp->makeStmt());
+                // Only instance scalar/packed leaves have a per-object bit-vector value to pin.
+                // Keep the existing static and structured-field registration protocols unchanged.
+                AstNodeExpr* const modep
+                    = !memberVarp->lifetime().isStatic() && memberDtp->isIntegralOrPacked()
+                          ? newMemberModep(memberRefp, modeVarp, elemReadp)
+                          : nullptr;
+                if (modep) {
+                    AstCMethodHard* const disablep = new AstCMethodHard{
+                        fl, writeVarp->fromp()->cloneTree(false),
+                        VCMethod::RANDOMIZER_SET_VAR_DISABLED, namep->cloneTree(false)};
+                    disablep->dtypeSetVoid();
+                    AstCMethodHard* const enablep = disablep->cloneTree(false);
+                    enablep->method(VCMethod::RANDOMIZER_CLEAR_VAR_DISABLED);
+                    // The frozen scalar remains a solver symbol, pinned to its current value.
+                    // Keep the existing complete-path mode hoist and constraint guards intact.
+                    AstSFormatF* const pinTextp = new AstSFormatF{
+                        fl, "(__Vbv (= %s %s))", false,
+                        AstNode::addNext(namep->cloneTree(false),
+                                         getConstFormat(new AstMemberRef{
+                                             fl, elemReadp->cloneTree(false), memberVarp}))};
+                    AstCMethodHard* const pinp
+                        = new AstCMethodHard{fl, writeVarp->fromp()->cloneTree(false),
+                                             VCMethod::RANDOMIZER_HARD, pinTextp};
+                    // Runtime-formatted names are not borrowed as constraint-name pointers.
+                    pinp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "{}"});
+                    // Every hard pin needs a line record to keep unsat-core indexes aligned.
+                    FileLine* const pinFlp = memberVarp->fileline();
+                    pinp->addPinsp(
+                        new AstCExpr{pinFlp, AstCExpr::Pure{}, "\"" + pinFlp->filename() + "\""});
+                    pinp->addPinsp(new AstConst{pinFlp, static_cast<uint32_t>(pinFlp->lineno())});
+                    pinp->addPinsp(new AstCExpr{pinFlp, AstCExpr::Pure{}, "\"\""});
+                    pinp->dtypeSetVoid();
+                    AstNodeStmt* const frozenp = disablep->makeStmt();
+                    frozenp->addNext(pinp->makeStmt());
+                    ifNonNullp->addThensp(new AstIf{fl, modep, enablep->makeStmt(), frozenp});
+                }
             }
         }
     }
@@ -1011,7 +1065,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         loopp->addStmtsp(ifNonNullp);
 
         createWriteVarForClassFields(elemClassp, smtName, idxVarp, isUnpackedClassRefArray,
-                                     classOrPackagep, varp, ifNonNullp, elemClassRefDtp);
+                                     classOrPackagep, varp, ifNonNullp, elemClassRefDtp, atReadp);
 
         loopp->addStmtsp(new AstAssign{
             fl, new AstVarRef{fl, iterVarp, VAccess::WRITE},
@@ -1020,9 +1074,17 @@ class ConstraintExprVisitor final : public VNVisitor {
         varp->user3(true);
         AstBegin* initp = m_inlineInitBlockp;
         if (!initp) {
-            AstNodeFTask* const taskp = VN_AS(m_memberMap.findMember(varClassp, "new"), NodeFTask);
-            UASSERT_OBJ(taskp, varClassp, "No new() in class");
-            initp = newInitBlockp(taskp);
+            // Mode flags and STATE pins must be refreshed after clearConstraints for every solve,
+            // including first-call randomize(null). The existing setup entry is shared by them.
+            if (RandModeVars::randModeVarp(elemClassp)) {
+                initp
+                    = newInitBlockp(SmtUtil::getCreateConstraintSetupFunc(m_classp, m_memberMap));
+            } else {
+                AstNodeFTask* const taskp
+                    = VN_AS(m_memberMap.findMember(varClassp, "new"), NodeFTask);
+                UASSERT_OBJ(taskp, varClassp, "No new() in class");
+                initp = newInitBlockp(taskp);
+            }
         }
         // At the beginning, so declared before referenced
         initp->addDeclsp(iterVarp);
@@ -4043,7 +4105,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
     }
 
-    static void copyVariableRegistrations(AstFunc* const sourcep, AstFunc* const targetp) {
+    static void copyVariableRegistrations(AstNodeFTask* const sourcep,
+                                          AstNodeFTask* const targetp) {
         for (AstNodeStmt* const stmtp : sourcep->stmtspList()) {
             bool hasRegistration = false;
             bool foundClearConstraints = false;
@@ -4244,6 +4307,19 @@ public:
                 });
                 AstTask* const setupAllTaskp
                     = SmtUtil::getCreateConstraintSetupFunc(nodep, m_memberMap);
+                // Unlowered ancestors have only their own registration blocks. A lowered
+                // ancestor's setup already includes the remaining chain, so copy it just once.
+                for (AstClass* parentClassp
+                     = nodep->extendsp() ? nodep->extendsp()->classp() : nullptr;
+                     parentClassp;
+                     parentClassp
+                     = parentClassp->extendsp() ? parentClassp->extendsp()->classp() : nullptr) {
+                    if (AstTask* const parentSetupTaskp = VN_CAST(
+                            m_memberMap.findMember(parentClassp, "__Vsetup_constraints"), Task)) {
+                        copyVariableRegistrations(parentSetupTaskp, setupAllTaskp);
+                    }
+                    if (m_classWrittenVars.count(parentClassp)) break;
+                }
                 for (int d = maxDepth; d >= 0; --d) {
                     nodep->foreachMember(
                         [&](AstClass* const classp, AstConstraint* const constrp) {
