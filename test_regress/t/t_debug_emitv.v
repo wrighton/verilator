@@ -546,6 +546,10 @@ module t (/*AUTOARG*/
     assert_simple_immediate_stmt: assert(0) $display("pass");
     assert_simple_immediate_stmt_else: assert(0) $display("pass"); else $display("fail");
 
+    $assertoff(0, assert_simple_immediate_else);
+    $asserton(1, assert_simple_immediate_stmt);
+    $assertoff(1);
+
     assume_simple_immediate: assume(0);
     assume_simple_immediate_else: assume(0) else $display("fail");
     assume_simple_immediate_stmt: assume(0) $display("pass");

@@ -754,22 +754,6 @@ AstAssertCtl::AstAssertCtl(FileLine* fl, AstNodeExpr* controlTypep, AstNodeExpr*
     this->directiveTypesp(directiveTypep);
     if (levelp || itemsp) argsp(new AstAssertCtlArgs{fl, levelp, itemsp});
 }
-void AstAssertCtlArgs::dump(std::ostream& str) const {
-    Super::dump(str);
-    if (scoped()) str << " [SCOPED]";
-}
-void AstAssertCtlArgs::dumpJson(std::ostream& str) const {
-    dumpJsonBoolFuncIf(str, scoped);
-    dumpJsonGen(str);
-}
-void AstAssertCtlTarget::dump(std::ostream& str) const {
-    Super::dump(str);
-    str << " depth=" << depth();
-}
-void AstAssertCtlTarget::dumpJson(std::ostream& str) const {
-    dumpJsonNumFunc(str, depth);
-    dumpJsonGen(str);
-}
 void AstAssertCtl::dump(std::ostream& str) const {
     Super::dump(str);
     if (ctlType() != VAssertCtlType::_TO_BE_EVALUATED) {
@@ -784,6 +768,22 @@ void AstAssertCtl::dumpJson(std::ostream& str) const {
         dumpJsonStr(str, "assertTypes", assertTypes().ascii());
         dumpJsonStr(str, "directiveTypes", directiveTypes().ascii());
     }
+    dumpJsonGen(str);
+}
+void AstAssertCtlArgs::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (scoped()) str << " [SCOPED]";
+}
+void AstAssertCtlArgs::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, scoped);
+    dumpJsonGen(str);
+}
+void AstAssertCtlTarget::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " depth=" << depth();
+}
+void AstAssertCtlTarget::dumpJson(std::ostream& str) const {
+    dumpJsonNumFunc(str, depth);
     dumpJsonGen(str);
 }
 void AstAssignW::dump(std::ostream& str) const {

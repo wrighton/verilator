@@ -663,7 +663,133 @@ module t;
                     $display("fail");
                 end
             end
-            begin : assume_simple_immediate
+
+            ???? // ASSERTCTL
+            32'h432'hf32'h7
+            ???? // ASSERTCTLARGS
+            32'sh0
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl8
+            ???? // ASSERTCTL
+            32'h332'hf32'h7
+            ???? // ASSERTCTLARGS
+            32'sh1
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl9
+            ???? // ASSERTCTL
+            32'h432'hf32'h7
+            ???? // ASSERTCTLARGS
+            32'sh1
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl0
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl1
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl2
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl3
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl4
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl5
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl6
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl7
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl8
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl9
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl10
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl11
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl12
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl13
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl14
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl15
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl16
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl17
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl18
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl19
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl20
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl21
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl22
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl23
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl24
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl25
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl26
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl27
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl28
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl29
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl30
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl31
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl32
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl33
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl34
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl35
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl36
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl37
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl38
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl39
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl40
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl41
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl42
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl43
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl44
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl45
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl46
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl47
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl48
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl49
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl50
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl51
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl52
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl53
+            ???? // ASSERTCTLTARGET
+            t.__VassertControl54begin : assume_simple_immediate
                 assume (1'h0) begin
                 end
                 else begin
@@ -1626,6 +1752,281 @@ module t;
     assign __Vcellinp__dump_value__p = in;
     logic __Vcellinp__dump_value__p;
     Iface bound_iface ();
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl0
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl1
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl2
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl3
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl4
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl5
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl6
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl7
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl8
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl9
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl10
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl11
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl12
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl13
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl14
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl15
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl16
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl17
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl18
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl19
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl20
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl21
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl22
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl23
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl24
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl25
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl26
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl27
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl28
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl29
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl30
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl31
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl32
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl33
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl34
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl35
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl36
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl37
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl38
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl39
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl40
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl41
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl42
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl43
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl44
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl45
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl46
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl47
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl48
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl49
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl50
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl51
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl52
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl53
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl54
+    ???? // CDTYPE 'VlAssertControl'
+    ;
     enum logic [2:0] {
         ZERO = 3'h0,
         ONE = 3'h1
