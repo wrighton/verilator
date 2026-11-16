@@ -301,6 +301,22 @@ inline VerilatedDeserialize& operator>>(VerilatedDeserialize& os, std::string& r
     // cppcheck-suppress cstyleCast  // NOLINTNEXTLINE(google-readability-casting)
     return os.read((void*)(rhs.data()), len);
 }
+// Save only semantic state. The declaration's known mask and its live context
+// registration belong to the constructed model, not to the saved byte stream.
+inline VerilatedSerialize& operator<<(VerilatedSerialize& os, const VlAssertControl& rhs) {
+    const uint32_t flags = rhs.m_flags.load();
+    const uint32_t kill = rhs.m_kill.load();
+    return os << flags << kill;
+}
+inline VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VlAssertControl& rhs) {
+    uint32_t flags = 0;
+    uint32_t kill = 0;
+    os >> flags >> kill;
+    rhs.m_flags.store(flags);
+    rhs.m_kill.store(kill);
+    return os;
+}
+
 VerilatedSerialize& operator<<(VerilatedSerialize& os, VerilatedContext* rhsp);
 VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VerilatedContext* rhsp);
 

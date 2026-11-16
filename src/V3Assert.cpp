@@ -3139,18 +3139,25 @@ class AssertVisitor final : public VNVisitor {
         AstVar* const varp
             = new AstVar{exprp->fileline(), VVarType::BLOCKTEMP,
                          "__VassertCtlArg" + std::to_string(m_controlTempNum++), exprp->dtypep()};
-        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-        if (m_ftaskp)
+        if (m_ftaskp) {
+            varp->funcLocal(true);
+            varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
             m_ftaskp->addDeclsp(varp);
-        else
+        } else {
+            // Procedural operands execute without yielding. Module-owned storage
+            // must not pretend to be an automatic enclosing-fork variable.
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
             m_modp->addStmtsp(varp);
+        }
         beginp->addStmtsp(new AstAssign{
             exprp->fileline(), new AstVarRef{exprp->fileline(), varp, VAccess::WRITE}, exprp});
         return varp;
     }
     static AstCStmt* newControlCallp(FileLine* flp, AstVar* controlp, AstVar* typesp,
                                      VAssertDirectiveType directives, AstNodeVarRef* statep) {
-        AstCStmt* const stmtp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->assertCtl("};
+        AstCStmt* const stmtp
+            = new AstCStmt{flp, statep ? "vlSymsp->_vm_contextp__->assertCtlApply("
+                                       : "vlSymsp->_vm_contextp__->assertCtl("};
         stmtp->add(new AstVarRef{flp, controlp, VAccess::READ});
         stmtp->add(", ");
         stmtp->add(new AstVarRef{flp, typesp, VAccess::READ});
@@ -3207,8 +3214,14 @@ class AssertVisitor final : public VNVisitor {
                                beyondp};
             selectedp = AstNode::addNextNull(selectedp, new AstIf{flp, levelCondp, callp});
         }
+        AstCExpr* const validp = new AstCExpr{flp, "vlSymsp->_vm_contextp__->assertCtlValid(", 1};
+        validp->add(new AstVarRef{flp, controlp, VAccess::READ});
+        validp->add(")");
+        // Validate once before applying any selected site, including no selected
+        // sites. The global zero-level route already performs this validation.
+        AstIf* const validatedp = new AstIf{flp, validp, selectedp};
         if (argsp->scoped()) {
-            beginp->addStmtsp(selectedp);
+            beginp->addStmtsp(validatedp);
         } else {
             // With no scope list, zero levels preserves the context-wide control API.
             beginp->addStmtsp(
@@ -3216,7 +3229,7 @@ class AssertVisitor final : public VNVisitor {
                           new AstEq{flp, new AstVarRef{flp, levelp, VAccess::READ},
                                     newControlLevelConstp(flp, levelp, 0)},
                           newControlCallp(flp, controlp, typesp, nodep->directiveTypes(), nullptr),
-                          selectedp});
+                          validatedp});
         }
         return beginp;
     }
