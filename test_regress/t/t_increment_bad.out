@@ -20,4 +20,19 @@
 %Error: t/t_increment_bad.v:34:37: Pre/post increment/decrement operator not allowed in a constraint (IEEE 1800-2023 18.5)
    34 |     void'(c.randomize() with {x == a++;});
       |                                     ^~
+%Error: t/t_increment_bad.v:39:15: Pre/post increment/decrement operator not allowed in a continuous assignment (IEEE 1800-2023 11.3.6)
+   39 |   assign c = a++;
+      |               ^~
+%Error: t/t_increment_bad.v:40:19: Pre/post increment/decrement operator not allowed in a continuous assignment (IEEE 1800-2023 11.3.6)
+   40 |   wire [31:0] w = --a;
+      |                   ^~
+%Error: t/t_increment_bad.v:41:14: Pre/post increment/decrement operator not allowed in an instance connection (IEEE 1800-2023 11.3.6)
+   41 |   sub u (.i(b--));
+      |              ^~
+%Error: t/t_increment_bad.v:44:16: Pre/post increment/decrement operator not allowed in a procedural continuous assignment (IEEE 1800-2023 11.3.6)
+   44 |     assign c = ++e;
+      |                ^~
+%Error: t/t_increment_bad.v:45:16: Pre/post increment/decrement operator not allowed in a procedural continuous assignment (IEEE 1800-2023 11.3.6)
+   45 |     force d = e--;
+      |                ^~
 %Error: Exiting due to
