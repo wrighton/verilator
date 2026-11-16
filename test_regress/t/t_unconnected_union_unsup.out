@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_unconnected_union_unsup.v:15:7: Unsupported: `unconnected_drive of input with unpacked union type: 'iu'
+                                                      : ... note: In instance 't'
+   15 |   sub sub (.o);
+      |       ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
