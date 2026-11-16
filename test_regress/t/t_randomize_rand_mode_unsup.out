@@ -1,14 +1,42 @@
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:16:20: Unsupported: 'rand_mode()' on dynamic array element
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:29:23: Unsupported: 'rand_mode()' on dynamic array element
                                                          : ... note: In instance 't'
-   16 |     p.m_dyn_arr[0].rand_mode(0);
-      |                    ^~~~~~~~~
+   29 |     p.m_dyn_arr[0][1].rand_mode(0);
+      |                       ^~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:17:20: Unsupported: 'rand_mode()' on unpacked array element
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:30:23: Unsupported: 'rand_mode()' on unpacked array element
                                                          : ... note: In instance 't'
-   17 |     p.m_unp_arr[0].rand_mode(0);
-      |                    ^~~~~~~~~
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:18:18: Unsupported: 'rand_mode()' on unpacked struct element
+   30 |     p.m_unp_arr[0][1].rand_mode(0);
+      |                       ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:31:18: Unsupported: 'rand_mode()' on associative array element
                                                          : ... note: In instance 't'
-   18 |     p.m_struct.y.rand_mode(0);
+   31 |     p.m_assoc[0].rand_mode(0);
       |                  ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:32:18: Unsupported: 'rand_mode()' on unpacked struct element
+                                                         : ... note: In instance 't'
+   32 |     p.m_struct.y.rand_mode(0);
+      |                  ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:33:23: Unsupported: 'rand_mode()' on dynamic array element
+                                                         : ... note: In instance 't'
+   33 |     p.m_struct_arr[0].rand_mode(0);
+      |                       ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:34:23: Unsupported: 'rand_mode()' on dynamic array element
+                                                         : ... note: In instance 't'
+   34 |     p.m_static_arr[0].rand_mode(0);
+      |                       ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:35:18: Unsupported: 'rand_mode()' on queue element indexed from '$'
+                                                         : ... note: In instance 't'
+   35 |     p.m_queue[$].rand_mode(0);
+      |                  ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:36:17: Unsupported: 'rand_mode()' on associative array element
+                                                         : ... note: In instance 't'
+   36 |     p.m_wild[1].rand_mode(0);
+      |                 ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:37:17: Unsupported: 'rand_mode()' on dynamic array element
+                                                         : ... note: In instance 't'
+   37 |     p.m_objs[0].rand_mode(0);
+      |                 ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:20:13: Unsupported: random member variable with the type of the containing class
+                                                         : ... note: In instance 't'
+   20 |   rand Node m_next;
+      |             ^~~~~~
 %Error: Exiting due to
