@@ -3093,14 +3093,6 @@ class SvaNfaLowering final {
                 sigs.rejectBasep = orExprs(c.flp, sigs.rejectBasep, srcSigp);
             }
         }
-        if (terminalCountp && c.matchCondp) {
-            // thread_fail_count += final_condition ? 0 : terminal_count;
-            sigs.threadFailCountp
-                = addCountp(c.flp, sigs.threadFailCountp, terminalCountp,
-                            new AstLogNot{c.flp, sampled(c.matchCondp->cloneTreePure(false))});
-        } else if (terminalCountp) {
-            VL_DO_DANGLING(terminalCountp->deleteTree(), terminalCountp);
-        }
         // wireMatchAndMidSources always adds a Link from result.termVertexp
         // to m_matchVertexp, so the loop above always sets terminalActivep.
         UASSERT_OBJ(sigs.terminalActivep, c.graph.m_matchVertexp,
@@ -3367,18 +3359,6 @@ class SvaNfaLowering final {
                     = addCountp(c.flp, nullptr, sigs.threadFailCountp,
                                 new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
             }
-        }
-
-        // A match and vacuous successes of different attempts can coincide; the NFA state
-        // aggregates attempts, so the match and each implication count at most once per tick
-        if (vacuousCountp) {
-            AstNodeExpr* matchp = sigs.terminalActivep->cloneTreePure(false);
-            if (c.matchCondp) {
-                matchp = new AstLogAnd{c.flp, matchp, sampled(c.matchCondp->cloneTreePure(false))};
-            }
-            sigs.successCountp
-                = addCountp(c.flp, new AstExtend{c.flp, matchp, m_u32DTypep->width()},
-                            vacuousCountp, sigs.vacuousp->cloneTreePure(false));
         }
 
         // A match and vacuous successes of different attempts can coincide; the NFA state
