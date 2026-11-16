@@ -14,6 +14,7 @@
 // (IEEE 1800-2023 7.2.2)
 
 typedef struct {bit [3:0] a = 4'd1; bit [3:0] b;} inner_t;
+typedef struct {bit [3:0] lo; bit [3:0] mid = 4'd7; inner_t in; bit [3:0] hi;} wide_t;
 
 typedef enum logic [2:0] {E0, E1 = 3'd3, E2 = 3'd5} enum_t;
 typedef bit [5:0] six_t;
@@ -59,6 +60,12 @@ typedef struct {
   bit [2:0] box[1:2][4:3] = '{'{3'd1, 3'd2}, '{3'd3, 3'd4}};
   inner_t sub[2] = '{'{a: 4'd3, b: 4'd4}, '{a: 4'd5, b: 4'd6}};
   inner_t kept[2];
+  // Struct values whose members are given by name in another order, with a default, or by
+  // position
+  wide_t ord[3] = '{'{hi: 4'd1, in: '{b: 4'd3, a: 4'd2}, mid: 4'd4, lo: 4'd5},
+                    '{in: '{a: 4'd13, b: 4'd14}, default: 4'd6},
+                    '{4'd8, 4'd9, '{4'd10, 4'd11}, 4'd12}};
+  wide_t keptw[2];
   bit [3:0] dflt[3] = '{default: 4'd11};
   bit [3:0] scalar = 4'd9;
   bit [3:0] plain[2];
@@ -166,6 +173,26 @@ module t;
     `checkh(o.sub[1].b, 4'd6);
     `checkh(o.kept[1].a, 4'd1);
     `checkh(o.kept[1].b, 4'd0);
+    `checkh(o.ord[0].lo, 4'd5);
+    `checkh(o.ord[0].mid, 4'd4);
+    `checkh(o.ord[0].in.a, 4'd2);
+    `checkh(o.ord[0].in.b, 4'd3);
+    `checkh(o.ord[0].hi, 4'd1);
+    `checkh(o.ord[1].lo, 4'd6);
+    `checkh(o.ord[1].mid, 4'd6);
+    `checkh(o.ord[1].in.a, 4'd13);
+    `checkh(o.ord[1].in.b, 4'd14);
+    `checkh(o.ord[1].hi, 4'd6);
+    `checkh(o.ord[2].lo, 4'd8);
+    `checkh(o.ord[2].mid, 4'd9);
+    `checkh(o.ord[2].in.a, 4'd10);
+    `checkh(o.ord[2].in.b, 4'd11);
+    `checkh(o.ord[2].hi, 4'd12);
+    `checkh(o.keptw[1].lo, 4'd0);
+    `checkh(o.keptw[1].mid, 4'd7);
+    `checkh(o.keptw[1].in.a, 4'd1);
+    `checkh(o.keptw[1].in.b, 4'd0);
+    `checkh(o.keptw[1].hi, 4'd0);
     `checkh(o.dflt[0], 4'd11);
     `checkh(o.dflt[2], 4'd11);
     `checkh(o.scalar, 4'd9);
@@ -191,6 +218,9 @@ module t;
     l.keyed[3] = 0;
     l.box[2][3] = 3'd0;
     l.sub[1].a = 4'd7;
+    l.ord[0].mid = 4'd0;
+    l.ord[2].in.b = 4'd0;
+    l.keptw[0].mid = 4'd0;
     l.objs[0] = new;
   endtask
 
