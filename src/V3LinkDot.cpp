@@ -100,6 +100,61 @@ static string extractDottedPath(AstNode* nodep, bool& hasPartSelect) {
     }
     return "";
 }
+// Create state only after V3Param has expanded generate loops. Each elaborated
+// assertion owns a distinct declaration; module instances still share a declaration
+// and obtain distinct VarScopes through the ordinary scope pass.
+class AssertControlSeedVisitor final : public VNVisitor {
+    AstNodeModule* m_modp = nullptr;
+    int m_number = 0;
+    void addState(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
+        if (type == VAssertType::INTERNAL) return;
+        AstCDType* const dtypep = new AstCDType{nodep->fileline(), "VlAssertControl"};
+        v3Global.rootp()->typeTablep()->addTypesp(dtypep);
+        AstVar* const varp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
+                                        "__VassertControl" + std::to_string(m_number++), dtypep};
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        varp->isInternal(true);
+        const int typeBit = V3Number::log2bQuad(static_cast<uint32_t>(type));
+        varp->assertCtlMask(static_cast<uint32_t>(directive) << (3 * typeBit));
+        m_modp->addStmtsp(varp);
+        nodep->controlVarp(varp);
+    }
+    void visit(AstNodeModule* nodep) override {
+        VL_RESTORER(m_modp);
+        VL_RESTORER(m_number);
+        m_modp = nodep;
+        m_number = 0;
+        iterateChildren(nodep);
+    }
+    void visit(AstAssert* nodep) override {
+        addState(nodep, nodep->userType(), nodep->directive());
+        iterateChildren(nodep);
+    }
+    void visit(AstCover* nodep) override {
+        addState(nodep, nodep->userType(), nodep->directive());
+        iterateChildren(nodep);
+    }
+    void visit(AstIf* nodep) override {
+        const VAssertType type = nodep->uniquePragma()    ? VAssertType::UNIQUE
+                                 : nodep->unique0Pragma() ? VAssertType::UNIQUE0
+                                                          : VAssertType::INTERNAL;
+        addState(nodep, type, VAssertDirectiveType::ASSERT);
+        iterateChildren(nodep);
+    }
+    void visit(AstCase* nodep) override {
+        const VAssertType type = nodep->priorityPragma()  ? VAssertType::PRIORITY
+                                 : nodep->uniquePragma()  ? VAssertType::UNIQUE
+                                 : nodep->unique0Pragma() ? VAssertType::UNIQUE0
+                                                          : VAssertType::INTERNAL;
+        addState(nodep, type, VAssertDirectiveType::ASSERT);
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+public:
+    explicit AssertControlSeedVisitor(AstNetlist* rootp) { iterate(rootp); }
+};
+
 // Assertion selection is done before V3Begin removes lexical scopes. The emitted
 // references use normal VarXRef/VarScope identity, never runtime path matching.
 class AssertControlTargetVisitor final : public VNVisitor {
@@ -8347,6 +8402,9 @@ void V3LinkDot::linkDotPrimary(AstNetlist* nodep) {
 
 void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
+    if (nodep->exists([](const AstAssertCtl* ctlp) { return ctlp->argsp() != nullptr; })) {
+        AssertControlSeedVisitor{nodep};
+    }
     linkDotGuts(nodep, LDS_PARAMED);
     V3Global::dumpCheckGlobalTree("linkdotparam", 0, dumpTreeEitherLevel() >= 3);
 }

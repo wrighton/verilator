@@ -224,11 +224,16 @@ enum class VerilatedRandSampler : uint8_t {
 using VerilatedAssertType_t = std::underlying_type<VerilatedAssertType>::type;
 using VerilatedAssertDirectiveType_t = std::underlying_type<VerilatedAssertDirectiveType>::type;
 
+class VerilatedSerialize;
+class VerilatedDeserialize;
+
 /// Internal per-assertion state, owned by a generated model instance.
 /// Registration is construction-time only; the context must outlive the model.
 class VlAssertControl final {
     friend class VerilatedContext;
     friend class VerilatedContextImp;
+    friend VerilatedSerialize& operator<<(VerilatedSerialize&, const VlAssertControl&);
+    friend VerilatedDeserialize& operator>>(VerilatedDeserialize&, VlAssertControl&);
     static constexpr uint32_t ON = 1;
     static constexpr uint32_t PASS_VACUOUS = 2;
     static constexpr uint32_t PASS_NONVACUOUS = 4;
@@ -718,6 +723,12 @@ public:
     /// Apply assertion control for given control, assertion, and directive types
     void assertCtl(uint32_t controlType, VerilatedAssertType_t types,
                    VerilatedAssertDirectiveType_t directives) VL_MT_SAFE;
+    /// Internal: validate the effect once, even if static selection is empty.
+    bool assertCtlValid(uint32_t controlType) VL_MT_SAFE;
+    /// Internal: apply an already validated effect to a statically selected site.
+    void assertCtlApply(uint32_t controlType, VerilatedAssertType_t types,
+                        VerilatedAssertDirectiveType_t directives,
+                        VlAssertControl& state) VL_MT_SAFE;
     /// Internal: apply control to one statically selected assertion instance.
     void assertCtl(uint32_t controlType, VerilatedAssertType_t types,
                    VerilatedAssertDirectiveType_t directives, VlAssertControl& state) VL_MT_SAFE;
