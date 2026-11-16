@@ -40,6 +40,13 @@ package pkg;
       return b;
     end
   endfunction
+
+  function automatic logic [7:0] nested_return(input logic [7:0] a, input logic [7:0] b);
+    if (a[0]) begin
+      if (a[1]) return b;
+    end
+    return ~b;
+  endfunction
 endpackage
 
 module t (
@@ -401,6 +408,21 @@ module t (
   end
   `signal(CONDITONAL_L, {conditional_l_b, conditional_l_a});
 
+  logic [1:0] conditional_m;
+  always_comb begin
+    do begin
+      conditional_m = 2'd0;
+      if (rand_a[0]) begin
+        if (rand_a[1]) begin
+          conditional_m = 2'd1;
+          break;
+        end
+      end
+      conditional_m = 2'd2;
+    end while (0);
+  end
+  `signal(CONDITONAL_M, conditional_m);
+
   logic [7:0] partial_conditional_a;
   always_comb begin
     partial_conditional_a[1:0] = 2'd0;
@@ -626,6 +648,9 @@ module t (
 
   wire logic [7:0] func_3 = pkg::branchy(rand_a[7:0], rand_b[7:0]);
   `signal(FUNC_3, func_3);
+
+  wire logic [7:0] func_4 = pkg::nested_return(rand_a[7:0], rand_b[7:0]);
+  `signal(FUNC_4, func_4);
 
   logic [1:0] via_creset;
   always_comb begin
