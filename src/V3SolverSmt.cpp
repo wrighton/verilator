@@ -3016,6 +3016,11 @@ class SolverSmtLowering final : public V3SolverLowering {
     uint32_t m_uniqueConstraintId = 0;  // current ID of unique call
     // Arrays each constraint sizes
     std::map<const AstConstraint*, std::set<AstVar*>> m_constraintSizedArrays;
+    // How lowerClassRandomize solved a class
+    struct ClassSolve final {
+        bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
+    };
+    std::map<const AstClass*, ClassSolve> m_classSolves;  // Per class
 
     // METHODS
     AstVar* getStaticRandModeVar(AstClass* const classp) {
@@ -3974,6 +3979,7 @@ class SolverSmtLowering final : public V3SolverLowering {
     // Rebuild constraints after resize
     void addConstraintRebuild(AstFunc* const randomizep, AstVar* const setupGenp,
                               AstVar* const solveGenp, const VInsertionSet<AstVar*>& sizeArrayVars,
+                              const VInsertionSet<AstVar*>& resizedArrayVars,
                               AstNodeStmt* const setupStmtsp) {
         FileLine* const fl = randomizep->fileline();
         for (AstVar* const arrVarp : sizeArrayVars) {
@@ -3981,7 +3987,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         }
         randomizep->addStmtsp(implementConstraintsClear(fl, setupGenp));
         randomizep->addStmtsp(setupStmtsp);
-        for (AstVar* const arrVarp : sizeArrayVars) {
+        // The arrays are resized once, so their sizes must not change in the final solve
+        for (AstVar* const arrVarp : resizedArrayVars) {
             randomizep->addStmtsp(newPinSizeVariable(fl, arrVarp, solveGenp));
         }
     }
@@ -4047,7 +4054,9 @@ public:
                                      AstVar* randModeVarp) override {
         m_distNum = 0;
         FileLine* const fl = nodep->fileline();
+        AstVar* const fvarp = randomizep->fvarp();
         AstNodeExpr* beginValp = nullptr;
+        bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
         AstVar* genp = SmtUtil::getRandomGenerator(nodep);
         if (genp) {
             // Phase 1: Process all constraints (create tasks, run ConstraintExprVisitor)
@@ -4161,7 +4170,8 @@ public:
             addResizedArrays(nodep, pinnedArrays);
             addFrozenSizePins(pinnedArrays, randomizep, genp, randModeVarp);
 
-            if (!sizeArrayVars.empty()) {
+            sizePhase = !sizeArrayVars.empty();
+            if (sizePhase) {
                 AstVar* const sizeOkVarp = addSizeSolvep(randomizep, genp);
                 if (AstTask* const resizeAllTaskp
                     = VN_AS(m_memberMap.findMember(nodep, "__Vresize_constrained_arrays"), Task)) {
@@ -4169,7 +4179,13 @@ public:
                         new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
                                   (new AstTaskRef{fl, resizeAllTaskp})->makeStmt(), nullptr});
                 }
-                addConstraintRebuild(randomizep, genp, genp, sizeArrayVars,
+                // Basic randomization fills the resized arrays. It runs before the final
+                // solve, so it cannot override a solved leaf of a member object.
+                AstFunc* const basicRandomizep
+                    = V3Randomize::newRandomizeFunc(m_memberMap, nodep, BASIC_RANDOMIZE_FUNC_NAME);
+                randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
+                                                    new AstFuncRef{fl, basicRandomizep}});
+                addConstraintRebuild(randomizep, genp, genp, sizeArrayVars, pinnedArrays,
                                      (new AstTaskRef{fl, setupAllTaskp})->makeStmt());
 
                 AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
@@ -4179,8 +4195,9 @@ public:
                 randomizep->addStmtsp(new AstAssign{
                     fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE}, newSolverCallp(genp)});
 
-                beginValp = new AstAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
-                                       new AstVarRef{fl, finalOkVarp, VAccess::READ}};
+                beginValp = new AstAnd{fl, new AstVarRef{fl, fvarp, VAccess::READ},
+                                       new AstAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                                                  new AstVarRef{fl, finalOkVarp, VAccess::READ}}};
             } else {
                 beginValp = newSolverCallp(genp);
             }
@@ -4202,8 +4219,10 @@ public:
         }
 
         addUpdateRandVarsBody(nodep, randomizep);
+        m_classSolves[nodep] = ClassSolve{sizePhase};
         return beginValp;
     }
+    bool basicInClassSolve(AstClass* nodep) override { return m_classSolves[nodep].sizePhase; }
     void addAfterClassSolve(AstClass* nodep, AstFunc* randomizep) override {
         const auto sizeArraysIt = m_sizeConstrainedArrays.find(nodep);
         const bool needsSizePhase

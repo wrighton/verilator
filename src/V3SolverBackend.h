@@ -40,6 +40,8 @@ class VMemberMap;
 
 // Separates the levels of the name of a global constraint flattened into a class
 static constexpr const char* GLOBAL_CONSTRAINT_SEPARATOR = "__DT__";
+// Name of the method randomizing the variables the solver does not
+static constexpr const char* BASIC_RANDOMIZE_FUNC_NAME = "__VBasicRand";
 
 // ######################################################################
 // Stores info about a variable's rand_mode state/a constraint's constraint_mode state
@@ -127,6 +129,10 @@ public:
     virtual AstNodeExpr* lowerClassRandomize(AstClass* classp, AstFunc* randomizep,
                                              AstVar* randModeVarp)
         = 0;
+    // Class randomize(): whether the solver result lowerClassRandomize returned
+    // already includes __VBasicRand, run between a solve of array sizes and the
+    // final solve. The front end then emits only the assignment of the result.
+    virtual bool basicInClassSolve(AstClass* classp) = 0;
     // Class randomize(): add statements that must follow the solver result,
     // after the front end has emitted the assignment that evaluates it
     virtual void addAfterClassSolve(AstClass* classp, AstFunc* randomizep) = 0;
