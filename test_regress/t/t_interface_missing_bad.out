@@ -1,11 +1,17 @@
+%Error: t/t_interface_missing_bad.v:18:5: Cannot find file containing interface: 'foo_intf'
+   18 |     foo_intf.mp foo
+      |     ^~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_interface_missing_bad.v:13:5: Can't find typedef/interface: 'foo_intf'
    13 |     foo_intf foo
       |     ^~~~~~~~
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_interface_missing_bad.v:19:3: Cannot find file containing interface: 'foo_intf'
-   19 |   foo_intf the_foo ();
+%Error: t/t_interface_missing_bad.v:24:3: Cannot find file containing interface: 'foo_intf'
+   24 |   foo_intf the_foo ();
       |   ^~~~~~~~
-%Error: t/t_interface_missing_bad.v:21:25: Found definition of 'the_foo' as a CELL but expected a variable
-   21 |   foo_mod foo_mod (.foo(the_foo));
+%Error: t/t_interface_missing_bad.v:26:25: Found definition of 'the_foo' as a CELL but expected a variable
+   26 |   foo_mod foo_mod (.foo(the_foo));
       |                         ^~~~~~~
+%Error: t/t_interface_missing_bad.v:27:31: Found definition of 'the_foo' as a CELL but expected a variable
+   27 |   foo_mp_mod foo_mp_mod (.foo(the_foo));
+      |                               ^~~~~~~
 %Error: Exiting due to
