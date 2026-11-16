@@ -245,6 +245,22 @@ void V3AssertCommon::checkSvaInstanceDelays(AstNode* nodep, AstNode* instp) {
     for (AstDelay* const delayp : delayps) checkSvaCycleDelay(delayp, instp);
 }
 
+std::unordered_map<const AstVar*, AstVar*>
+V3AssertCommon::newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* modp,
+                                V3UniqueNames& names) {
+    std::unordered_map<const AstVar*, AstVar*> localVarMap;
+    for (const AstNode* const declp : schemap->declspList()) {
+        const AstVar* const varp = VN_CAST(declp, Var);
+        if (!varp || varp->isIO()) continue;
+        AstVar* const newVarp
+            = new AstVar{varp->fileline(), VVarType::MODULETEMP, names.get(varp), varp->dtypep()};
+        newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
+        modp->addStmtsp(newVarp);
+        localVarMap[varp] = newVarp;
+    }
+    return localVarMap;
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
