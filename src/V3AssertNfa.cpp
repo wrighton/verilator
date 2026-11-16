@@ -3013,6 +3013,14 @@ class SvaNfaLowering final {
                 sigs.rejectBasep = orExprs(c.flp, sigs.rejectBasep, srcSigp);
             }
         }
+        if (terminalCountp && c.matchCondp) {
+            // thread_fail_count += final_condition ? 0 : terminal_count;
+            sigs.threadFailCountp
+                = addCountp(c.flp, sigs.threadFailCountp, terminalCountp,
+                            new AstLogNot{c.flp, sampled(c.matchCondp->cloneTreePure(false))});
+        } else if (terminalCountp) {
+            VL_DO_DANGLING(terminalCountp->deleteTree(), terminalCountp);
+        }
         // wireMatchAndMidSources always adds a Link from result.termVertexp
         // to m_matchVertexp, so the loop above always sets terminalActivep.
         UASSERT_OBJ(sigs.terminalActivep, c.graph.m_matchVertexp,
@@ -3248,6 +3256,35 @@ class SvaNfaLowering final {
         AstNodeExpr* const countp = new AstExtend{c.flp, fixedMatchp, m_u32DTypep->width()};
         if (!ringp) return countp;
         return addCountp(c.flp, countp, ringp->datap()->stateCountSigp->cloneTreePure(false));
+    }
+
+    // Fail count with a top-level synchronous abort (IEEE 1800-2023 16.12.14). Each thread
+    // live at the start of the tick, in a state register, a delay ring, or the attempt
+    // starting now, is one evaluation attempt, which the abort fails or passes.
+    AstNodeExpr* newExactAbortFailCountp(LowerCtx& c, AstNodeExpr* const otherFailCountp) {
+        AstNodeExpr* const firep = sampled(c.exactAbortp->condp()->cloneTreePure(false));
+        if (c.exactAbortp->kind().isAccept()) {
+            return new AstCond{c.flp, firep, newTypedConstp(c.flp, m_u32DTypep, 0),
+                               otherFailCountp};
+        }
+        // Each thread is counted where it starts the tick: zero-delay links only move it
+        AstNodeExpr* liveCountp = nullptr;
+        for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
+            const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
+            if (vtxp == c.graph.m_startVertexp || vtxp->datap()->stateVarp) {
+                liveCountp = addCountp(c.flp, liveCountp,
+                                       vtxp->datap()->stateCountSigp->cloneTreePure(false));
+            } else if (vtxp->datap()->delayRingLiveCountVarp) {
+                liveCountp = addCountp(
+                    c.flp, liveCountp,
+                    new AstVarRef{c.flp, vtxp->datap()->delayRingLiveCountVarp, VAccess::READ});
+            }
+        }
+        if (c.disableExprp) {
+            liveCountp = addCountp(c.flp, nullptr, liveCountp,
+                                   new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+        }
+        return new AstCond{c.flp, firep, liveCountp, otherFailCountp};
     }
 
     SignalSet computeSignals(LowerCtx& c, const bool needThreadFailCount,
@@ -3852,6 +3889,10 @@ public:
         }
 
         m_statVertices += vtx.size();
+
+        // Build lowering context for phase sub-functions.
+        LowerCtx c{flp,           senTreep, disableExprp, matchCondp,  assertType,
+                   directiveType, killVarp, graph,        exactCounts, exactAbortp};
 
         // Phase 1: Resolve combinational Links in dependency order.
         AstNodeExpr* const triggerExprp
