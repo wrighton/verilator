@@ -1,0 +1,26 @@
+%Error: t/t_foreach_write_bad.v:24:7: Writing to foreach loop variable 'i', which is read-only (IEEE 1800-2023 12.7.3)
+                                    : ... note: In instance 't'
+   24 |       i = 2;   
+      |       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_foreach_write_bad.v:27:7: Writing to foreach loop variable 'j', which is read-only (IEEE 1800-2023 12.7.3)
+                                    : ... note: In instance 't'
+   27 |       j++;   
+      |       ^
+%Error: t/t_foreach_write_bad.v:32:9: Writing to foreach loop variable 'i', which is read-only (IEEE 1800-2023 12.7.3)
+                                    : ... note: In instance 't'
+   32 |         i += 1;   
+      |         ^
+%Error: t/t_foreach_write_bad.v:36:7: Writing to foreach loop variable 's', which is read-only (IEEE 1800-2023 12.7.3)
+                                    : ... note: In instance 't'
+   36 |       s = "x";   
+      |       ^
+%Error: t/t_foreach_write_bad.v:49:9: Writing to foreach loop variable 'k', which is read-only (IEEE 1800-2023 12.7.3)
+                                    : ... note: In instance 't'
+   49 |         k.lo = 1;   
+      |         ^
+%Error: t/t_foreach_write_bad.v:50:9: Writing to foreach loop variable 'k', which is read-only (IEEE 1800-2023 12.7.3)
+                                    : ... note: In instance 't'
+   50 |         k[0] = 1'b1;   
+      |         ^
+%Error: Exiting due to
