@@ -3578,6 +3578,8 @@ public:
         dtypeSetBitOrLogic(isFourstateOrNoDtype(lhsp, rhsp));
     }
     ASTGEN_MEMBERS_AstGte;
+    // Return AstGte/AstGteS/AstGteD/AstGteN
+    static AstNodeBiop* newTyped(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp);
     void numberOperate(V3Number& out, const V3Number& lhs, const V3Number& rhs) override {
         out.opGte(lhs, rhs);
     }
@@ -3814,6 +3816,8 @@ public:
         dtypeSetBitOrLogic(isFourstateOrNoDtype(lhsp, rhsp));
     }
     ASTGEN_MEMBERS_AstLte;
+    // Return AstLte/AstLteS/AstLteD/AstLteN
+    static AstNodeBiop* newTyped(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp);
     void numberOperate(V3Number& out, const V3Number& lhs, const V3Number& rhs) override {
         out.opLte(lhs, rhs);
     }
