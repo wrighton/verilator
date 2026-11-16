@@ -2577,6 +2577,13 @@ class LinkDotParamVisitor final : public VNVisitor {
             pinImplicitExprRecurse(nodep->exprp());
         }
     }
+    // Return if a symbol is the given symbol or one of its parents
+    static bool isAboveSym(const VSymEnt* symp, const VSymEnt* belowSymp) {
+        for (; belowSymp; belowSymp = belowSymp->parentp()) {
+            if (belowSymp == symp) return true;
+        }
+        return false;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
@@ -2597,19 +2604,54 @@ class LinkDotParamVisitor final : public VNVisitor {
         UASSERT_OBJ(!hasPartSelect && !path.empty(), nodep, "Unexpected defparam path shape");
         string baddot;
         VSymEnt* okSymp = nullptr;
-        VSymEnt* const scopeSymp = m_statep->getNodeSym(nodep);
+        VSymEnt* const defSymp = m_statep->getNodeSym(nodep);
         VSymEnt* const foundp
-            = m_statep->findDotted(nodep->fileline(), scopeSymp, path, baddot, okSymp, true);
-        AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
-        if (!cellp) {
+            = m_statep->findDotted(nodep->fileline(), defSymp, path, baddot, okSymp, true);
+        // A parameter in a named block, task or function (IEEE 1800-2023 23.10) is set
+        // through the instance containing that scope; walk up one path component per scope.
+        // Also walk generate blocks, to report that parameters under them are localparams.
+        VSymEnt* cellSymp = foundp;
+        string cellPath = path;
+        while (cellSymp
+               && (VN_IS(cellSymp->nodep(), NodeBlock) || VN_IS(cellSymp->nodep(), NodeFTask)
+                   || VN_IS(cellSymp->nodep(), GenBlock))) {
+            const size_t dotPos = cellPath.rfind('.');
+            cellPath.erase(dotPos == string::npos ? 0 : dotPos);
+            cellSymp = cellSymp->parentp();
+        }
+        AstCell* const cellp = cellSymp ? VN_CAST(cellSymp->nodep(), Cell) : nullptr;
+        const VSymEnt* const varSymp = cellSymp != foundp ? foundp->findIdFlat(name) : nullptr;
+        AstVar* const scopedVarp = varSymp ? VN_CAST(varSymp->nodep(), Var) : nullptr;
+        const string varPathQ = AstNode::prettyNameQ(path + "." + name);
+        if (!cellp && !(cellSymp && VN_IS(cellSymp->nodep(), NodeModule))) {
             nodep->v3error("In defparam, instance " << path << " never declared");
+        } else if (cellSymp != foundp && !varSymp) {
+            nodep->v3error("In defparam, parameter " << varPathQ << " never declared");
+        } else if (cellSymp != foundp && !(scopedVarp && scopedVarp->isGParam())) {
+            // A parameter in a generate block, or in a module with a parameter port list, is a
+            // localparam (IEEE 1800-2023 6.20.1, 6.20.4)
+            nodep->v3error("In defparam, "
+                           << varPathQ
+                           << (scopedVarp && scopedVarp->isParam()
+                                   ? " is a local parameter (IEEE 1800-2023 6.20.4)"
+                                   : " is not a parameter"));
+        } else if (!cellp || isAboveSym(cellSymp, defSymp)) {
+            // The path names the instance containing the defparam, or one above it, e.g. by
+            // its module name (IEEE 1800-2023 23.8); a top module has no instance
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: defparam to "
+                              << varPathQ
+                              << " in the instance containing the defparam or above it");
         } else {
             // Path from the defparam's scope, if the instance is under it
             string belowPath;
-            const VSymEnt* symp = foundp;
-            for (; symp && symp != scopeSymp; symp = symp->parentp()) {
+            const VSymEnt* symp = cellSymp;
+            for (; symp && symp != defSymp; symp = symp->parentp()) {
                 belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
             }
+            // Path of a named block, task or function in the instance; in the pin's name, so
+            // V3Param keys the value apart from a parameter of the same name in another scope
+            const string scopePath = cellSymp != foundp ? path.substr(cellPath.size() + 1) : "";
             // If under it, V3Param passes the value down from each instance of this module, so
             // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
             AstNodeExpr* const exprp = symp ? nullptr : nodep->rhsp()->unlinkFrBack();
@@ -2618,18 +2660,20 @@ class LinkDotParamVisitor final : public VNVisitor {
             // Don't need to check the name of the defparam exists.  V3Param does.
             AstPin* const pinp = new AstPin{nodep->fileline(),
                                             -1,  // Pin# not relevant
-                                            name, exprp};
+                                            VString::dot(scopePath, ".", name), exprp};
             pinp->param(true);
-            pinp->paramPath(path);
+            pinp->paramPath(cellPath);
+            pinp->modVarp(scopedVarp);
             cellp->addParamsp(pinp);
             if (!exprp) {
                 pushDeletep(nodep->pathp()->unlinkFrBack());
-                targetp->replaceWith(
-                    new AstVarXRef{targetp->fileline(), name, belowPath, VAccess::WRITE});
+                targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
+                                                    VString::dot(belowPath, ".", scopePath),
+                                                    VAccess::WRITE});
                 VL_DO_DANGLING(pushDeletep(targetp), targetp);
                 return;
             }
-            pinp->user1p(scopeSymp);  // For the value, see ResolveVisitor::visit(AstPin)
+            pinp->user1p(defSymp);  // For the value, see ResolveVisitor::visit(AstPin)
         }
         VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
     }
