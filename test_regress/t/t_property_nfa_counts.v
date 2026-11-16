@@ -173,10 +173,10 @@ module t (
       `checkd(chain_fail, 11);
       `checkd(range_pass, 1);
       `checkd(range_fail, 10);
-      `checkd(range_cover, 1);
+      `checkd(range_cover, 2);
       `checkd(large_pass, 1);
       `checkd(large_fail, 10);
-      `checkd(large_cover, 1);
+      `checkd(large_cover, 2);
       `checkd(large_imp_at_b, 2);
       `checkd(neg_fail_at_b, 1);
       `checkd(neg_large_fail_at_b, 1);

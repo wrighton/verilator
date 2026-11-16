@@ -3214,6 +3214,88 @@ class SvaNfaLowering final {
         sigs.throughoutRejectp = newOrTree(c.flp, rejectps.cbegin(), rejectps.cend());
     }
 
+    // Clock ticks from the attempt start to each vertex by color, or negative if not fixed
+    static std::vector<int> vertexOffsets(const SvaGraph& graph) {
+        // A thread in a vertex of a fixed offset started that many ticks ago, so the threads of
+        // all vertices with one offset belong to one attempt.
+        constexpr int UNSET = -2;  // Not reached from the start vertex (yet)
+        constexpr int VARIABLE = -1;  // Reached at different offsets
+        std::vector<int> offsets(graph.m_graph.vertices().size(), UNSET);
+        offsets[graph.m_startVertexp->color()] = 0;
+        std::vector<const SvaStateVertex*> work{graph.m_startVertexp};
+        // An AND combiner has no in-edges, so the walk cannot tell its offset
+        for (const V3GraphVertex& vtxr : graph.m_graph.vertices()) {
+            const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
+            if (!vtxp->m_isAndCombiner) continue;
+            offsets[vtxp->color()] = VARIABLE;
+            work.push_back(vtxp);
+        }
+        while (!work.empty()) {
+            const SvaStateVertex* const fromp = work.back();
+            work.pop_back();
+            const int fromOffset = offsets[fromp->color()];
+            for (const V3GraphEdge& edger : fromp->outEdges()) {
+                const SvaTransEdge& tedger = static_cast<const SvaTransEdge&>(edger);
+                const SvaStateVertex* const top = tedger.toVtxp();
+                int toOffset = VARIABLE;
+                if (fromOffset >= 0 && !top->m_delayRingSize) {
+                    toOffset = fromOffset + tedger.m_consumesCycle;
+                } else if (fromOffset >= 0 && top->m_isFixedDelayRing
+                           && !top->m_delayRingAdvanceCondp) {
+                    toOffset = fromOffset + static_cast<int>(top->m_delayRingSize);
+                }
+                int& offset = offsets[top->color()];
+                if (offset == VARIABLE || offset == toOffset) continue;
+                offset = offset == UNSET ? toOffset : VARIABLE;
+                work.push_back(top);
+            }
+        }
+        return offsets;
+    }
+
+    // Number of attempts completing this tick, or nullptr if threads cannot tell
+    AstNodeExpr* newAttemptMatchCountp(LowerCtx& c) {
+        // On a tick, all threads of one offset from the attempt start belong to one attempt.
+        // So when all terminal vertices have one fixed offset, their threads are one attempt.
+        // A range ring fed from that offset holds attempts at larger offsets, one per slot.
+        // The final condition clearing the ring also clears its incoming attempts, so its
+        // attempts complete together, and no attempt completes twice.
+        const std::vector<int> offsets = vertexOffsets(c.graph);
+        std::set<int> attemptOffsets;
+        const SvaStateVertex* ringp = nullptr;
+        std::vector<const SvaTransEdge*> fixedEdgeps;
+        for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
+            if (tedgep->toVtxp() != c.graph.m_matchVertexp) continue;
+            const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
+            // The ring must clear exactly when the final condition holds, which an enclosing
+            // operator such as throughout can extend, so compare the two conditions
+            if (fromVtxp->m_delayRingClearCondp
+                && fromVtxp->m_delayRingClearCondp->sameTree(c.matchCondp)) {
+                UASSERT_OBJ(!ringp, fromVtxp, "Second range ring linked to the match");
+                UASSERT_OBJ(!tedgep->m_condp, fromVtxp, "Range ring Link has a condition");
+                ringp = fromVtxp;
+                for (const V3GraphEdge& edger : ringp->inEdges())
+                    attemptOffsets.insert(offsets[edger.fromp()->color()]);
+            } else {
+                attemptOffsets.insert(offsets[fromVtxp->color()]);
+                fixedEdgeps.push_back(tedgep);
+            }
+        }
+        if (attemptOffsets.size() != 1 || *attemptOffsets.begin() < 0) return nullptr;
+        // The first tick of a range is a terminal vertex of its own
+        UASSERT_OBJ(!fixedEdgeps.empty(), c.graph.m_matchVertexp,
+                    "Range ring without its first tick");
+        AstNodeExpr* fixedMatchp = nullptr;
+        for (const SvaTransEdge* const tedgep : fixedEdgeps)
+            fixedMatchp = orExprs(
+                c.flp, fixedMatchp,
+                andCond(c.flp, tedgep->fromVtxp()->datap()->stateSigp->cloneTreePure(false),
+                        tedgep->m_condp));
+        AstNodeExpr* const countp = new AstExtend{c.flp, fixedMatchp, m_u32DTypep->width()};
+        if (!ringp) return countp;
+        return addCountp(c.flp, countp, ringp->datap()->stateCountSigp->cloneTreePure(false));
+    }
+
     SignalSet computeSignals(LowerCtx& c, const bool needThreadFailCount,
                              const bool needRejectCount, const bool needSuccessCount,
                              const bool needMatchCount, const bool countAttempts) {
