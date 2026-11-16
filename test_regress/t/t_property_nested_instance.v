@@ -205,6 +205,57 @@ module t (
   cover property (@(posedge clk) disable iff (cyc < 2) a |-> b)
     count_cover_inline <= count_cover_inline + 1;
 
+  // Test 29-32: the whole body of a clocked property is a property instance, directly
+  // or through a chain, compared with the flat property and a reference model.
+  // Sum of failing cycles checks when each failure is reported, not just how many.
+  int fail_cycs29 = 0;
+  int fail_cycs30 = 0;
+  int fail_cycs31 = 0;
+  int fail_cycs32 = 0;
+  int ref_fail_cycs29 = 0;
+  int ref_fail_cycs31 = 0;
+  // Nonvacuous attempts do not overlap, so each cycle has at most one failure
+  wire a4 = a & (cyc[1:0] == 0);
+
+  property p_imp_seq;
+    a4 |-> b ##1 c;
+  endproperty
+
+  property p_clk_seq;
+    @(posedge clk) disable iff (cyc < 2) p_imp_seq;
+  endproperty
+
+  property p_imp_rep;
+    @(posedge clk) disable iff (cyc < 2) a4 |=> b [* 2];
+  endproperty
+
+  property p_via_rep;
+    p_imp_rep;
+  endproperty
+
+  property p_clk_via_rep;
+    p_via_rep;
+  endproperty
+
+  assert property (p_clk_seq)
+  else fail_cycs29 += cyc;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a4 |-> b ##1 c)
+  else fail_cycs30 += cyc;
+
+  assert property (p_clk_via_rep)
+  else fail_cycs31 += cyc;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a4 |=> b [* 2])
+  else fail_cycs32 += cyc;
+
+  always @(posedge clk) begin
+    if (cyc >= 2 && a4 && !b) ref_fail_cycs29 += cyc;
+    if (cyc >= 3 && $past(a4) && $past(b) && !c) ref_fail_cycs29 += cyc;
+    if (cyc >= 3 && $past(a4) && !b) ref_fail_cycs31 += cyc;
+    if (cyc >= 4 && $past(a4, 2) && $past(b) && !b) ref_fail_cycs31 += cyc;
+  end
+
   // Stimulus on negedge so properties sample stable values (see #7545)
   always @(negedge clk) begin
 `ifdef TEST_VERBOSE
@@ -245,6 +296,12 @@ module t (
       `checkd(count_fail26, 52);
       `checkd(count_fail27, 9);
       `checkd(count_fail28, 9);
+      `checkd(ref_fail_cycs29, 438);
+      `checkd(ref_fail_cycs31, 462);
+      `checkd(fail_cycs29, ref_fail_cycs29);
+      `checkd(fail_cycs30, ref_fail_cycs29);
+      `checkd(fail_cycs31, ref_fail_cycs31);
+      `checkd(fail_cycs32, ref_fail_cycs31);
 `ifdef TEST_COVERAGE
       `checkd(count_cover_nested, 28);
       `checkd(count_cover_inline, 28);
