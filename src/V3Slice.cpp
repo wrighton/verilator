@@ -147,7 +147,8 @@ class SliceVisitor final : public VNVisitor {
                 return resultSelp;
             }
         } else if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, NodeSel) || VN_IS(nodep, CMethodHard)
-                   || VN_IS(nodep, MemberRef) || VN_IS(nodep, StructSel)) {
+                   || VN_IS(nodep, MemberRef) || VN_IS(nodep, StructSel)
+                   || VN_IS(nodep, CvtQueueToUnpack)) {
             UINFO(9, "  cloneSel(" << elements << "," << elemIdx << ") " << nodep);
             const int leOffset = !arrayp->rangep()->ascending()
                                      ? arrayp->rangep()->elementsConst() - 1 - elemIdx
@@ -174,7 +175,30 @@ class SliceVisitor final : public VNVisitor {
         // A slice target can only be written element by element
         const bool lhsSlice = VN_IS(nodep->lhsp(), SliceSel);
         if (VN_IS(stp, CvtPackedToArray) && !lhsSlice) return false;
-        if (VN_IS(stp, CvtQueueToUnpack)) return false;
+        if (VN_IS(stp, CvtArrayToArray)) {
+            if (!lhsSlice) return false;
+            if (VN_IS(nodep, AssignForce) || VN_IS(nodep, AssignCont)) {
+                // Would need the temporary below to follow the stream continuously
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: force or procedural continuous "
+                                             "assignment of a stream of a dynamically sized "
+                                             "array to an unpacked array slice");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return true;
+            }
+            // Convert into a temporary of the slice's type, then copy that element by element
+            FileLine* const flp = stp->fileline();
+            AstVarScope* const tmpp = m_cvtTmps.make(flp, m_scopep, nodep->lhsp()->dtypep());
+            AstVarRef* const tmpRefp = new AstVarRef{flp, tmpp, VAccess::WRITE};
+            AstNodeExpr* const cvtp = VN_AS(stp, NodeExpr)->unlinkFrBack();
+            AstNodeAssign* const cvtAssignp
+                = VN_IS(nodep, AssignW)
+                      ? static_cast<AstNodeAssign*>(new AstAssignW{flp, tmpRefp, cvtp})
+                      : new AstAssign{flp, tmpRefp, cvtp};
+            nodep->addHereThisAsNext(cvtAssignp);
+            nodep->rhsp(new AstVarRef{flp, tmpp, VAccess::READ});
+            stp = nodep->rhsp();
+        }
+        if (VN_IS(stp, CvtQueueToUnpack) && !lhsSlice) return false;
         if (VN_IS(stp, CReset)) return false;
 
         // Any isSc variables must be expanded regardless of --fno-slice. So must an array

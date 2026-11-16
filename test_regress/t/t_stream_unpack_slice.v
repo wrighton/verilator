@@ -59,9 +59,92 @@ module t (
     sl[2:3] <= src;
   end
 
+  // Queue source
+  bit [7:0] qs[4];
+  bit [7:0] q[$];
+  always @(posedge clk) begin
+    q = '{w[7:0], w[15:8]};
+    qs <= '{default: 0};
+    qs[1:2] <= q;
+  end
+
+  // Stream of a queue into a slice, of wider elements, reversed, and continuously assigned
+  logic [15:0] qsl[4];
+  logic [7:0] qdsc[3:0];
+  byte bq[$];
+  byte bq2[$];
+  logic [7:0] cq[4];
+  always @(posedge clk) begin
+    bq = '{w[7:0], w[15:8], w[23:16], w[31:24]};
+    qsl <= '{default: 0};
+    qsl[1:2] <= {>>{bq}};
+    bq2 <= '{w[7:0], w[15:8]};
+    qdsc <= '{default: 0};
+    qdsc[2:1] <= {<<8{bq[0:1]}};
+  end
+  assign cq[1:2] = {>>{bq2}};
+  assign cq[0] = 8'h0;
+  assign cq[3] = 8'h0;
+
+  // Slices of unpacked structure elements
+  typedef struct {
+    logic [3:0] a;
+    logic [3:0] b;
+  } s_t;
+  s_t sarr[4];
+  s_t sdsc[5:2];
+  logic [15:0] spacked;
+  always @(posedge clk) begin
+    sarr <= '{default: '{0, 0}};
+    {>>{sarr[1:2]}} <= w[15:0];
+    sdsc <= '{default: '{0, 0}};
+    {>>{sdsc[4:3]}} <= w[31:16];
+  end
+  always_comb spacked = {>>{sarr[1:2]}};
+
+  // Slices with a variable position
+  logic [2:0] pos;
+  s_t varr[5];
+  s_t vdsc[6:2];
+  logic [15:0] vpacked;
+  logic [15:0] vdpacked;
+  always @(posedge clk) begin
+    pos <= 3'(cyc % 4);
+    varr <= '{default: '{0, 0}};
+    {>>{varr[pos+:2]}} <= w[15:0];
+    vdsc <= '{default: '{0, 0}};
+    {>>{vdsc[pos+2+:2]}} <= w[15:0];
+  end
+  always_comb vpacked = {>>{varr[pos+:2]}};
+  always_comb vdpacked = {>>{vdsc[pos+2+:2]}};
+
+  // A variable slice partly out of range is invalid as a whole, for elements of any type
+  typedef struct {
+    bit [3:0] a;
+    bit [3:0] b;
+  } bs_t;
+  bs_t os[5];
+  bit [7:0] ol[5];
+  logic [15:0] opacked;
+  int opos = 4;
+  initial begin
+    os = '{default: '{4'h1, 4'h2}};
+    ol = '{default: 8'h12};
+    {>>{os[opos+:2]}} = 16'h3456;
+    {>>{ol[opos+:2]}} = 16'h3456;
+    `checkh({os[4].a, os[4].b}, 8'h12);
+    `checkh(ol[4], 8'h12);
+    opacked = {>>{os[opos+:2]}};
+    `checkh(opacked, 16'h0);
+    opacked = {>>{ol[opos+:2]}};
+    `checkh(opacked, 16'h0);
+  end
+
   logic [31:0] w_d;  // w of the previous cycle
+  logic [2:0] pos_d;  // pos of the previous cycle
   always @(posedge clk) begin
     w_d <= w;
+    pos_d <= pos;
     if (cyc > 2) begin
       `checkh(arr[0], 8'h0);
       `checkh(arr[1], w_d[23:16]);
@@ -83,7 +166,38 @@ module t (
       `checkh(sl[2], w_d[7:0]);
       `checkh(sl[3], w_d[15:8]);
       `checkh(packed_r, {arr[1], arr[2]});
+      `checkh(qs[0], 8'h0);
+      `checkh(qs[1], w_d[7:0]);
+      `checkh(qs[2], w_d[15:8]);
+      `checkh(qs[3], 8'h0);
+      `checkh(qsl[0], 16'h0);
+      `checkh(qsl[1], {w_d[7:0], w_d[15:8]});
+      `checkh(qsl[2], {w_d[23:16], w_d[31:24]});
+      `checkh(qsl[3], 16'h0);
+      `checkh(qdsc[3], 8'h0);
+      `checkh(qdsc[2], w_d[15:8]);
+      `checkh(qdsc[1], w_d[7:0]);
+      `checkh(qdsc[0], 8'h0);
+      `checkh(cq[1], w_d[7:0]);
+      `checkh(cq[2], w_d[15:8]);
+      `checkh({sarr[0].a, sarr[0].b}, 8'h0);
+      `checkh({sarr[1].a, sarr[1].b}, w_d[15:8]);
+      `checkh({sarr[2].a, sarr[2].b}, w_d[7:0]);
+      `checkh({sarr[3].a, sarr[3].b}, 8'h0);
+      `checkh({sdsc[5].a, sdsc[5].b}, 8'h0);
+      `checkh({sdsc[4].a, sdsc[4].b}, w_d[31:24]);
+      `checkh({sdsc[3].a, sdsc[3].b}, w_d[23:16]);
+      `checkh({sdsc[2].a, sdsc[2].b}, 8'h0);
+      `checkh(spacked, w_d[15:0]);
       `checkh(packed_l, {arr[2], arr[1]});
+      for (int i = 0; i < 5; ++i) begin
+        `checkh({varr[i].a, varr[i].b},
+                i == 32'(pos_d) ? w_d[15:8] : i == 32'(pos_d) + 1 ? w_d[7:0] : 8'h0);
+        `checkh({vdsc[i + 2].a, vdsc[i + 2].b},
+                i == 32'(pos_d) + 1 ? w_d[15:8] : i == 32'(pos_d) ? w_d[7:0] : 8'h0);
+      end
+      `checkh(vpacked, {varr[pos].a, varr[pos].b, varr[pos+1].a, varr[pos+1].b});
+      `checkh(vdpacked, {vdsc[pos+3].a, vdsc[pos+3].b, vdsc[pos+2].a, vdsc[pos+2].b});
     end
     if (cyc == 10) begin
       $write("*-* All Finished *-*\n");
