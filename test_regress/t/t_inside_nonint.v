@@ -37,6 +37,35 @@ function bit check_signed_range(int i);
   endcase
 endfunction
 
+function int check_case_ranges(string s, real d);
+  case (s) inside
+    ["a":"c"]: return 1;
+    default: ;
+  endcase
+  case (d) inside
+    [1:2]: return 2;
+    default: return 0;
+  endcase
+endfunction
+
+function bit check_case_upper_real(int n);
+  case (n) inside
+    [1:2.5]: return 1'b1;
+    default: return 1'b0;
+  endcase
+endfunction
+
+function bit check_case_upper_wide(logic [7:0] x);
+  case (x) inside
+    [8'd0:16'd300]: return 1'b1;
+    default: return 1'b0;
+  endcase
+endfunction
+
+function bit check_upper_wide(logic [7:0] x);
+  return x inside {[8'd0:16'd300]};
+endfunction
+
 module t;
   typedef real real_t;
   typedef string string_t;
@@ -73,6 +102,25 @@ module t;
       `checkd(tr inside {[2.2:2.3]}, 1'b1);
       `checkd(ts inside {["a":"c"]}, 1'b1);
       `checkd(ts inside {["c":"d"]}, 1'b0);
+    end
+    begin
+      // Range bounds converted to the case expression type
+      `checkd(check_case_ranges("b", 0.0), 1);
+      `checkd(check_case_ranges("d", 1.5), 2);
+      `checkd(check_case_ranges("d", 2.5), 0);
+    end
+    begin
+      // Both bounds determine the comparison type
+      int n;
+      logic [7:0] x;
+      n = 3;
+      x = 100;
+      `checkd(check_case_upper_real(3), 1'b0);
+      `checkd(check_case_upper_real(2), 1'b1);
+      `checkd(check_case_upper_wide(100), 1'b1);
+      `checkd(n inside {[1:2.5]}, 1'b0);
+      `checkd(n inside {[2.5:3]}, 1'b1);
+      `checkd(check_upper_wide(x), 1'b1);
     end
     begin
       // Ranges with negative bounds compare signed
