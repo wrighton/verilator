@@ -111,4 +111,70 @@
                                                 : ... Right-hand data type: 'logic$[0:1][0:1]'
    58 |   assign rows3 = rows2;
       |                ^
+%Error: t/t_assignment_compatibility_bad.v:66:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[string]'
+                                                : ... Right-hand data type: 'int$[int]'
+   66 |     assocStrA = assocIntA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:67:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]$[string]'
+                                                : ... Right-hand data type: 'int$[byte]$[string]'
+   67 |     assocNestA = assocNestB;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:68:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[integer]'
+   68 |     assocIntA = assocIntegerA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:82:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[string]'
+   82 |     assocIntA = assocStrA;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:83:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[real]'
+                                                : ... Right-hand data type: 'int$[int]'
+   83 |     assocRealA = assocIntA;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:84:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[class Cls1]'
+                                                : ... Right-hand data type: 'int$[class Cls2]'
+   84 |     assocCls1A = assocCls2A;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:85:15: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[int]'
+                                                : ... Right-hand data type: 'int$[class Cls1]'
+   85 |     assocIntA = assocCls1A;
+      |               ^
+%Error: t/t_assignment_compatibility_bad.v:86:16: Illegal assignment: Associative array index types are not equivalent (IEEE 1800-2023 7.9.9)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'int$[class Cls1]'
+                                                : ... Right-hand data type: 'int$[int]'
+   86 |     assocCls1A = assocIntA;
+      |                ^
+%Error: t/t_assignment_compatibility_bad.v:87:14: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'real$[]'
+                                                : ... Right-hand data type: 'int$[]'
+   87 |     dynRealA = dynIntA;
+      |              ^
+%Error: t/t_assignment_compatibility_bad.v:88:14: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'real$[]'
+                                                : ... Right-hand data type: 'logic[3:0][1:0]$[]'
+   88 |     dynRealA = dynPackA;
+      |              ^
+%Error: t/t_assignment_compatibility_bad.v:89:14: Illegal assignment: Array element types are not equivalent (IEEE 1800-2023 6.22.2)
+                                                : ... note: In instance 't'
+                                                : ... Left-hand data type: 'logic[3:0][1:0]$[]'
+                                                : ... Right-hand data type: 'real$[]'
+   89 |     dynPackA = dynRealA;
+      |              ^
 %Error: Exiting due to
