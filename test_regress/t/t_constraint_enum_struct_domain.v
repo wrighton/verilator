@@ -10,9 +10,10 @@
 `define check(cond) do if (!(cond)) begin $write("%%Error: %s:%0d: check failed\n", `__FILE__,`__LINE__); `stop; end while(0);
 // verilog_format: on
 
-// Every enum field of a rand unpacked struct, and every enum slice of a rand
-// packed array or packed struct, solved by the constraint solver keeps its
-// enum domain (IEEE 1800-2023 18.4), including fields no constraint mentions
+// Every enum field of a rand unpacked struct, and every enum element of a rand
+// packed array, solved by the constraint solver keeps its enum domain, including
+// fields no constraint mentions; an enum member of a packed struct or packed union
+// does not (IEEE 1800-2023 18.4)
 typedef enum logic [4:0] {
   A = 5'd1,
   B = 5'd9,
@@ -117,18 +118,38 @@ class AllX;
   constraint c {e != 2'b11;}
 endclass
 
+// The example of IEEE 1800-2023 18.4
+typedef enum bit [1:0] {
+  AB_A = 2'b00,
+  AB_B = 2'b11
+} ab_e;
+typedef struct packed {ab_e ValidAB;} ab_s;
+typedef union packed {
+  ab_e e;
+  bit [1:0] b;
+} ab_u;
+
+class PackedMember;
+  rand ab_s fixed;
+  rand ab_s s;
+  rand ab_u u;
+  // Constrained, so solved: an unconstrained packed struct is randomized member by member,
+  // its enum members restricted, as upstream t_randomize_method expects
+  constraint c {
+    fixed == 2'b01;
+    s <= 2'b11;
+    u.b <= 2'b11;
+  }
+endclass
+
 module t;
   function automatic bit isE(e_t v);
     return v inside {A, B, C};
   endfunction
 
-  function automatic bit isPs(ps_t v);
-    return isE(v.a) && isE(v.c[1]) && isE(v.c[2]);
-  endfunction
-
   function automatic bit isUs(us_t v);
     return isE(v.a) && isE(v.arr[0]) && isE(v.arr[1]) && isE(v.pm[0][0]) && isE(v.pm[0][1])
-      && isE(v.pm[1][0]) && isE(v.pm[1][1]) && isPs(v.p);
+      && isE(v.pm[1][0]) && isE(v.pm[1][1]);
   endfunction
 
   initial begin
@@ -152,13 +173,9 @@ module t;
       `checkd(ok, 1);
       foreach (p.pa[i]) `check(isE(p.pa[i]));
       `check(p.pa[0] != A);
-      `check(isPs(p.ps));
-      foreach (p.psa[i]) `check(isPs(p.psa[i]));
       `check(p.psa[1].a != B);
-      `check(p.pw.w inside {W0, W1});
       foreach (p.upa[i, j]) `check(isE(p.upa[i][j]));
       `check(p.upa[1][0] != B);
-      foreach (p.pq[i]) `check(isPs(p.pq[i]));
       `check(p.plain != 0);
 
       ok = h.randomize();
@@ -171,6 +188,22 @@ module t;
       x = new;
       ok = x.randomize();
       `checkd(ok, 0);
+    end
+    begin
+      PackedMember m;
+      automatic int nonEnumS = 0;
+      automatic int nonEnumU = 0;
+      m = new;
+      // Each misses the two non-enum values with probability 1/2 per try
+      repeat (64) begin
+        ok = m.randomize();
+        `checkd(ok, 1);
+        `checkd(m.fixed, 2'b01);
+        if (!(m.s.ValidAB inside {AB_A, AB_B})) nonEnumS++;
+        if (!(m.u.e inside {AB_A, AB_B})) nonEnumU++;
+      end
+      `check(nonEnumS > 0);
+      `check(nonEnumU > 0);
     end
     $write("*-* All Finished *-*\n");
     $finish;
