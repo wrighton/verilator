@@ -3258,9 +3258,64 @@ VerilatedContext::Serialized::Serialized() {
     m_timeprecision = picosecond;  // Initial value until overridden by _Vconfigure
 }
 
+void VlAssertControl::configure(VerilatedContext* contextp, uint32_t mask) VL_MT_SAFE {
+    if (m_contextp) return;  // Constructor/reset hooks may revisit an already registered object
+    const VerilatedLockGuard lock{contextp->m_assertCtlMutex};
+    m_contextp = contextp;
+    m_mask = mask;
+    uint32_t flags = 0;
+    if (contextp->m_s.m_assertOn & mask) flags |= ON;
+    if (contextp->m_s.m_assertPassOnVacuous & mask) flags |= PASS_VACUOUS;
+    if (contextp->m_s.m_assertPassOnNonvacuous & mask) flags |= PASS_NONVACUOUS;
+    if (contextp->m_s.m_assertFailOn & mask) flags |= FAIL;
+    if (contextp->m_s.m_assertLock & mask) flags |= LOCK;
+    m_flags = flags;
+    m_kill = contextp->m_s.m_assertKill[VL_CLOG2_I(mask)].load();
+    contextp->m_assertControls.emplace(this);
+}
+VlAssertControl::~VlAssertControl() {
+    if (!m_contextp) return;
+    const VerilatedLockGuard lock{m_contextp->m_assertCtlMutex};
+    m_contextp->m_assertControls.erase(this);
+}
+void VlAssertControl::control(uint32_t controlType) VL_MT_SAFE {
+    if (controlType == 1) {
+        m_flags |= LOCK;
+        return;
+    }
+    if (controlType == 2) {
+        m_flags &= ~LOCK;
+        return;
+    }
+    if (m_flags & LOCK) return;
+    switch (controlType) {
+    case 3: m_flags |= ON; break;
+    case 4: m_flags &= ~ON; break;
+    case 5:
+        m_flags &= ~ON;
+        ++m_kill;
+        break;
+    case 6: m_flags |= PASS_VACUOUS | PASS_NONVACUOUS; break;
+    case 7: m_flags &= ~(PASS_VACUOUS | PASS_NONVACUOUS); break;
+    case 8: m_flags |= FAIL; break;
+    case 9: m_flags &= ~FAIL; break;
+    case 10: m_flags |= PASS_NONVACUOUS; break;
+    case 11: m_flags &= ~PASS_VACUOUS; break;
+    default: break;  // Context validates the effect before applying it
+    }
+}
+
 bool VerilatedContext::assertOn() const VL_MT_SAFE { return m_s.m_assertOn; }
 void VerilatedContext::assertOn(bool flag) VL_MT_SAFE {
     if (m_ns.m_assertCtlsLocked) return;
+    const VerilatedLockGuard lock{m_assertCtlMutex};
+    // This C++ API overrides the On state regardless of SV per-assertion Lock.
+    for (VlAssertControl* const statep : m_assertControls) {
+        if (flag)
+            statep->m_flags |= VlAssertControl::ON;
+        else
+            statep->m_flags &= ~VlAssertControl::ON;
+    }
     // Set all assert and directive types when true, clear otherwise.
     m_s.m_assertOn = VL_MASK_I(ASSERT_ON_WIDTH) * flag;
 }
@@ -3270,7 +3325,11 @@ void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t typ
     // selected bits until Unlock; On/Off/Kill leave locked bits unchanged.
     // +verilator+assert+lock freezes everything, including Lock/Unlock itself.
     if (m_ns.m_assertCtlsLocked) return;
+    const VerilatedLockGuard lock{m_assertCtlMutex};
     const uint32_t mask = assertOnMask(types, directives);
+    for (VlAssertControl* const statep : m_assertControls) {
+        if (mask & statep->m_mask) statep->control(controlType);
+    }
     const uint32_t lockedMask = mask & ~m_s.m_assertLock;
     switch (controlType) {
     case 1:  // Lock
@@ -3318,6 +3377,14 @@ void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t typ
                     + "' (IEEE 1800-2023 Table 20-5)")
                        .c_str());
     }
+}
+void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t types,
+                                 VerilatedAssertDirectiveType_t directives,
+                                 VlAssertControl& state) VL_MT_SAFE {
+    if (m_ns.m_assertCtlsLocked) return;
+    const VerilatedLockGuard lock{m_assertCtlMutex};
+    assert(state.m_contextp == this);
+    if (assertOnMask(types, directives) & state.m_mask) state.control(controlType);
 }
 void VerilatedContext::calcUnusedSigs(bool flag) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_mutex};
@@ -3768,6 +3835,10 @@ void VerilatedContextImp::commandArgVl(const std::string& arg) {
         } else if (arg == "+verilator+noassert") {
             // Set directly on to avoid conflicts with +verilator+assert+lock
             m_s.m_assertOn = 0;
+            const VerilatedLockGuard lock{m_assertCtlMutex};
+            for (VlAssertControl* const statep : m_assertControls) {
+                statep->m_flags &= ~VlAssertControl::ON;
+            }
         } else if (commandArgVlUint64(arg, "+verilator+prof+exec+start+", u64)) {
             profExecStart(u64);
         } else if (commandArgVlUint64(arg, "+verilator+prof+exec+window+", u64, 1)) {

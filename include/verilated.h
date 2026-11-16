@@ -224,6 +224,38 @@ enum class VerilatedRandSampler : uint8_t {
 using VerilatedAssertType_t = std::underlying_type<VerilatedAssertType>::type;
 using VerilatedAssertDirectiveType_t = std::underlying_type<VerilatedAssertDirectiveType>::type;
 
+/// Internal per-assertion state, owned by a generated model instance.
+/// Registration is construction-time only; the context must outlive the model.
+class VlAssertControl final {
+    friend class VerilatedContext;
+    friend class VerilatedContextImp;
+    static constexpr uint32_t ON = 1;
+    static constexpr uint32_t PASS_VACUOUS = 2;
+    static constexpr uint32_t PASS_NONVACUOUS = 4;
+    static constexpr uint32_t FAIL = 8;
+    static constexpr uint32_t LOCK = 16;
+    VerilatedContext* m_contextp = nullptr;  // Owning context; null before registration
+    uint32_t m_mask = 0;  // One known assertion-type/directive bit
+    std::atomic<uint32_t> m_flags{0};  // On, action, and lock state
+    std::atomic<uint32_t> m_kill{0};  // Generation aborting this assertion's active attempts
+    void control(uint32_t controlType) VL_MT_SAFE;
+    VL_UNCOPYABLE(VlAssertControl);
+
+public:
+    VlAssertControl() = default;
+    ~VlAssertControl();
+    /// Register before any user static initialization or assertion evaluation.
+    void configure(VerilatedContext* contextp, uint32_t mask) VL_MT_SAFE;
+    /// Read only this assertion's atomics; no lock or registry lookup on the hot path.
+    VL_ATTR_ALWINLINE uint32_t get(VerilatedAssertCtlQuery query) const VL_MT_SAFE {
+        if (query == VerilatedAssertCtlQuery::ASSERT_CTL_KILL) return m_kill.load();
+        static constexpr uint32_t flags[] = {ON, 0, PASS_VACUOUS, PASS_NONVACUOUS, FAIL};
+        const uint32_t index = static_cast<uint32_t>(query);
+        assert(index < sizeof(flags) / sizeof(flags[0]));
+        return (m_flags.load() & flags[index]) != 0;
+    }
+};
+
 // Type trait: whether T is a user-defined custom struct
 template <typename>
 struct VlIsCustomStruct : public std::false_type {};
@@ -586,6 +618,9 @@ protected:
         ~Serialized() = default;
     } m_s;
 
+    friend class VlAssertControl;
+    mutable VerilatedMutex m_assertCtlMutex;  // Protect assertion control registration and updates
+    std::unordered_set<VlAssertControl*> m_assertControls VL_GUARDED_BY(m_assertCtlMutex);
     mutable VerilatedMutex m_timeDumpMutex;  // Protect misc slow strings
     std::string m_timeFormatSuffix VL_GUARDED_BY(m_timeDumpMutex);  // $timeformat printf format
     std::string m_dumpfile VL_GUARDED_BY(m_timeDumpMutex);  // $dumpfile setting
@@ -683,6 +718,9 @@ public:
     /// Apply assertion control for given control, assertion, and directive types
     void assertCtl(uint32_t controlType, VerilatedAssertType_t types,
                    VerilatedAssertDirectiveType_t directives) VL_MT_SAFE;
+    /// Internal: apply control to one statically selected assertion instance.
+    void assertCtl(uint32_t controlType, VerilatedAssertType_t types,
+                   VerilatedAssertDirectiveType_t directives, VlAssertControl& state) VL_MT_SAFE;
     /// Return if calculating of unused signals (for traces)
     bool calcUnusedSigs() const VL_MT_SAFE { return m_s.m_calcUnusedSigs; }
     /// Enable calculation of unused signals (for traces)
