@@ -2535,13 +2535,39 @@ const char* AstNetlist::broken() const {
 }
 const AstNodeModule* AstNetlist::containingModule(const AstNode* nodep) {
     if (const AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) return modp;
-    const auto it = m_containingModules.find(nodep);
-    if (it != m_containingModules.end()) return it->second;
-    // Only true parents are followed.
-    AstNode* const abovep = nodep->aboveLoopp();
-    const AstNodeModule* const modp = abovep ? containingModule(abovep) : nullptr;
-    m_containingModules[nodep] = modp;
-    return modp;
+    // Also record the module of a fixed sample of the nodes passed on the way, siblings
+    // included, so a later walk through them stops at the first one it reaches, and looks only
+    // those up
+    static constexpr uintptr_t SAMPLE_EVERY = 16;
+    const auto sampled = [](const AstNode* passedp) {
+        return (reinterpret_cast<uintptr_t>(passedp) / alignof(std::max_align_t)) % SAMPLE_EVERY
+               == 0;
+    };
+    std::vector<const AstNode*> passed;
+    const auto record = [&](const AstNodeModule* modp) {
+        for (const AstNode* const passedp : passed) m_containingModules.emplace(passedp, modp);
+        return modp;
+    };
+    // Return the module recorded for passedp, a node of the sample, else record it later
+    const auto recordedp = [&](const AstNode* passedp) -> const AstNodeModule* const* {
+        if (passedp != nodep && !sampled(passedp)) return nullptr;
+        const auto it = m_containingModules.find(passedp);
+        if (it != m_containingModules.end()) return &it->second;
+        passed.push_back(passedp);
+        return nullptr;
+    };
+    for (const AstNode* curp = nodep; curp; curp = curp->backp()) {
+        // A generic type is in the type table, so are the other types in its list
+        const AstNodeDType* const dtypep = VN_CAST(curp, NodeDType);
+        if (dtypep && dtypep->generic()) return record(nullptr);
+        if (const AstNodeModule* const* const modpp = recordedp(curp)) return record(*modpp);
+        // Only true parents are modules containing it, not a module before it, e.g. a class
+        const AstNode* const backp = curp->backp();
+        if (backp && backp->nextp() != curp) {
+            if (const AstNodeModule* const modp = VN_CAST(backp, NodeModule)) return record(modp);
+        }
+    }
+    return record(nullptr);
 }
 void AstNetlist::createTopScope(AstScope* scopep) {
     UASSERT(scopep, "Must not be nullptr");
