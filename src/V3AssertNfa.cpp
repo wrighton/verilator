@@ -1439,6 +1439,47 @@ class SvaNfaBuilder final {
         return "sequence 'or' with an operand that is not a fixed-length sequence of boolean"
                " expressions in an asserted property (IEEE 1800-2023 16.9.7)";
     }
+    // Build `b or p` at the end of an asserted property, with b boolean
+    BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
+                                FileLine* flp) {
+        // It holds at once when b holds and otherwise exactly when p does (IEEE 1800-2023
+        // 16.12.4). So p is evaluated only when b is false, with the rejections of a top-level
+        // property.
+        SvaStateVertex* const propEntryp = scopedCreateVertex();
+        guardedLink(entryVtxp, propEntryp,
+                    new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
+        VL_RESTORER(m_wantBoolLeaf);
+        m_wantBoolLeaf = true;
+        const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
+        if (!prop.valid()) return prop;
+        SvaStateVertex* const propTermp = prop.termVertexp;
+        // A ranged end rejects through its ring at the match vertex, which p does not reach
+        if (!prop.midSources.empty()) {
+            flp->v3warn(E_UNSUPPORTED,
+                        "Unsupported: property 'or' with an operand ending in a ranged delay");
+            freeUnlinkedCondp(prop.finalCondp);
+            return BuildResult::failWithError();
+        }
+        UASSERT_OBJ(!propTermp->m_delayRingSize || propTermp->m_isFixedDelayRing, propTermp,
+                    "Ranged delay ring ends a property without mid-window sources");
+        // Otherwise reach the merge vertex as p would reach the match vertex
+        SvaStateVertex* const mergeVtxp = scopedCreateVertex();
+        guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
+        if (!prop.finalCondp) {
+            guardedLink(propTermp, mergeVtxp, flp);
+            return {mergeVtxp, nullptr, {}};
+        }
+        guardedLink(propTermp, mergeVtxp, sampled(prop.finalCondp->cloneTreePure(false)), flp);
+        if (!propTermp->m_isUnbounded) {
+            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+            sinkVtxp->m_isRejectSink = true;
+            SvaTransEdge* const edgep = m_graph.addLink(
+                propTermp, sinkVtxp, sampled(prop.finalCondp->cloneTreePure(false)));
+            edgep->m_rejectOnFail = true;
+        }
+        freeUnlinkedCondp(prop.finalCondp);
+        return {mergeVtxp, nullptr, {}};
+    }
 
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
