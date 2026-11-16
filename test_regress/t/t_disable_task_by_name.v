@@ -49,6 +49,10 @@ task increment_y;
   y++;
 endtask
 
+function void stop_increment_y();
+  disable increment_y;
+endfunction
+
 task finish_z;
   z++;
 endtask
@@ -224,6 +228,19 @@ module t;
   Prog prog1 ();
   WorkerMod mod1 ();
 
+  // Named block disabled by a function
+  int fn_blk_x = 0;
+  initial begin : fn_blk
+    #5 fn_blk_x = 1;
+  end
+  function automatic void stop_fn_blk();
+    disable fn_blk;
+  endfunction
+  initial begin
+    #1 stop_fn_blk();
+    #10 if (fn_blk_x != 0) $stop;
+  end
+
   always #6 disable always_foo;
 
   initial begin
@@ -266,6 +283,15 @@ module t;
     fork
       increment_y();
       #3 disable increment_y;
+    join_none
+    #10;
+    if (y != 1) $stop;
+
+    // Module task disabled by a function
+    y = 0;
+    fork
+      increment_y();
+      #3 stop_increment_y();
     join_none
     #10;
     if (y != 1) $stop;
