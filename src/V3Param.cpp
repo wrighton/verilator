@@ -2269,6 +2269,12 @@ class ParamProcessor final {
         return givesNoValue;
     }
 
+    // True if modp is the mailbox class of the std package
+    bool isStdMailbox(const AstNodeModule* modp) {
+        const AstPackage* const stdp = v3Global.rootp()->stdPackagep();
+        return stdp && m_memberMap.findMember(stdp, "mailbox") == modp;
+    }
+
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides,
                                      bool givesNoValue = false) {
