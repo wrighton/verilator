@@ -6,6 +6,11 @@
 // SPDX-FileCopyrightText: 2025 Wilson Snyder
 // SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
+// verilog_format: off
+`define stop $stop
+`define checkp(gotv,expv_s) do begin string gotv_s; gotv_s = $sformatf("%p", gotv); if ((gotv_s) != (expv_s)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv_s), (expv_s)); `stop; end end while(0);
+// verilog_format: on
+
 typedef struct {
   int x;
   int y;
@@ -94,5 +99,14 @@ module t (
     aq[1] = {11};
     aq[1] = {aq[1], aq[0]};
     if ($sformatf("%p", aq) != "'{'{'ha}, '{'hb, 'ha}}") $stop;
+  end
+
+  // Array method 'with' result assigned to an lvalue it also reads
+  initial begin
+    int aq[int][$];
+    aq[1] = {3, 2, 3};
+    aq[5] = {1, 3};
+    foreach (aq[k]) aq[k] = aq[k].find with (item != 3);
+    `checkp(aq, "'{'h1:'{'h2}, 'h5:'{'h1}}");
   end
 endmodule
