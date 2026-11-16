@@ -879,6 +879,7 @@ void AstCFunc::dump(std::ostream& str) const {
     if (dpiImportWrapper()) str << " [DPIIW]";
     if (dpiPure()) str << " [DPIPURE]";
     if (isConstructor()) str << " [CTOR]";
+    if (fromFTask()) str << " [FTASK]";
     if (isDestructor()) str << " [DTOR]";
     if (isMethod()) str << " [METHOD]";
     if (isLoose()) str << " [LOOSE]";
@@ -906,6 +907,7 @@ void AstCFunc::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, dpiImportWrapper);
     dumpJsonBoolFuncIf(str, dpiContext);
     dumpJsonBoolFuncIf(str, isConstructor);
+    dumpJsonBoolFuncIf(str, fromFTask);
     dumpJsonBoolFuncIf(str, isDestructor);
     dumpJsonBoolFuncIf(str, isUnlikely);
     dumpJsonBoolFuncIf(str, isVirtual);
