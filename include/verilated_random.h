@@ -288,6 +288,8 @@ class VlRandomizer VL_NOT_FINAL {
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
+    // Array elements that solve-before pairs name, as variables of their solver terms
+    std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeElems;
     bool m_checkOnly = false;  // Set for randomize(null)
     // Function argument variable solved in an earlier round (IEEE 1800-2023 18.5.11)
     struct FuncArgRound final {
@@ -400,6 +402,10 @@ class VlRandomizer VL_NOT_FINAL {
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
     // SMT logic for a flat or UniGen2 session
     const char* solverLogic() const;
+    // The variable or array element a solve...before name names, nullptr if none
+    const VlRandomVar* solveBeforeVarp(const std::string& name);
+    // Resolve a solve-before operand to its bits, false if it names none
+    bool solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr);
     const char* phasedLogic() const;
     bool nextPhased(VlRNG& rngr, VlSolverSession& sess,
                     const std::vector<std::string>& uniqueExprs);
