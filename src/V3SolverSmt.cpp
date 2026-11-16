@@ -4276,6 +4276,7 @@ public:
             = VN_AS(m_memberMap.findMember(classp, "__Vresize_constrained_arrays"), Task)) {
             resizeStmtsp = (new AstTaskRef{nodep->fileline(), resizeAllTaskp})->makeStmt();
         }
+        VInsertionSet<AstVar*> inlineSizedArrays;  // Arrays of classp this with-block resizes
         {
             std::vector<AstCMethodHard*> sizeMethodps;
             capturedTreep->foreachAndNext([&](AstCMethodHard* methodp) {
@@ -4313,12 +4314,13 @@ public:
                 // Do not randomize associative array size (IEEE 18.4)
                 if (VN_IS(arrVarp->dtypep()->skipRefp(), AssocArrayDType)) continue;
                 FileLine* const fl = methodp->fileline();
-                const bool wasCreated = !arrVarp->user4p();
                 AstVar* const sizeVarp = createOrGetSizeVar(arrVarp, fl, methodp->findIntDType());
                 // arrVarp and sizeVarp may live in a base class when the
                 // array is inherited; route VarRefs through their declaring
                 // class so V3Scope can resolve them.
-                if (wasCreated) {
+                // Each with-block sizing the array resizes it, even if another created sizeVarp.
+                // An array of a held object is resized each time, as other paths may reach it.
+                if (!VN_IS(rootExprp, VarRef) || inlineSizedArrays.insert(arrVarp)) {
                     AstNodeExpr* const resizeVarRefp = buildMemberRefExprp(rootExprp, arrVarp);
                     AstNodeExpr* const sizeExprp = buildMemberRefExprp(rootExprp, sizeVarp);
                     // Append size >= 0 constraint so ConstraintExprVisitor processes it
@@ -4365,7 +4367,10 @@ public:
         addResizedArrays(classp, pinnedArrays);
         const bool needsSizePhase = !pinnedArrays.empty();
         AstVar* const retVarp = randomizeFuncp->fvarp();
-        addFrozenSizePins(pinnedArrays, randomizeFuncp, localGenp, randModeVarp);
+        // Arrays whose size this call solves; each is pinned when frozen and for the final solve
+        VInsertionSet<AstVar*> sizedArrays = pinnedArrays;
+        sizedArrays.insert(inlineSizedArrays.begin(), inlineSizedArrays.end());
+        addFrozenSizePins(sizedArrays, randomizeFuncp, localGenp, randModeVarp);
 
         if (needsSizePhase) {
             AstVar* const finalOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vfinal_ok",
@@ -4516,7 +4521,7 @@ public:
             SmtUtil::replaceWithLowered(capturedClonep);
 
             // Pin the sizes so the final solve can't move them
-            for (AstVar* const arrVarp : pinnedArrays) {
+            for (AstVar* const arrVarp : sizedArrays) {
                 randomizeFuncp->addStmtsp(newPinSizeVariable(fl, arrVarp, localGenp));
             }
 
