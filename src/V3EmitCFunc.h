@@ -677,7 +677,8 @@ public:
         bool paren = true;
         bool decind = false;
         bool rhs = true;
-        std::string reverseUnpackCall;  // Set for CvtPackedToArray with descending dimensions
+        // Set for CvtPackedToArray/CvtArrayToArray with descending dimensions
+        std::string reverseUnpackCall;
         const AstUnpackArrayDType* const unpackDtp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (AstSel* const selp = VN_CAST(nodep->lhsp(), Sel)) {
@@ -766,6 +767,8 @@ public:
             puts(cvtToStr(castp->srcElementBits()));
             puts(", ");
             puts(cvtToStr(castp->dstElementBits()));
+            // Descending unpacked dest: reverse after copy
+            if (unpackDtp && !unpackDtp->declRange().ascending()) reverseUnpack = true;
         } else if (nodep->isWide() && !unpackDtp && VN_IS(nodep->lhsp(), VarRef)  //
                    && !VN_IS(nodep->rhsp(), CExpr)  //
                    && !VN_IS(nodep->rhsp(), CMethodHard)  //
