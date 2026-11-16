@@ -64,6 +64,13 @@ module t (
     obj.m[2:1] = 2'bz;
   end
 
+  // A z compared with === is a test of the enable, also when written to an element or member
+  wire tbus = collide ? 1'bz : 1'b1;
+  logic seen[2];
+  struct {logic m;} seen_st;
+  always @* seen[0] = (tbus === 1'bz);
+  always @* seen_st.m = (tbus !== 1'bz);
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     `checkh(seen[0], collide);
