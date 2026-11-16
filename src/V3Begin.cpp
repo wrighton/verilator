@@ -75,6 +75,7 @@ class BeginVisitor final : public VNVisitor {
     string m_displayScope;  // Name of %m in $display/AstScopeName
     string m_namedScope;  // Name of begin blocks above us
     string m_unnamedScope;  // Name of begin blocks, including unnamed blocks
+    std::map<const AstNodeFTask*, string> m_forkBranchScopes;  // m_displayScope at the call
     int m_ifDepth = 0;  // Current if depth
 
     // METHODS
@@ -171,7 +172,14 @@ class BeginVisitor final : public VNVisitor {
         UINFO(8, "  " << nodep);
         // %m uses the original name; m_displayScope already has the enclosing blocks
         VL_RESTORER_COPY(m_displayScope);
-        m_displayScope = dot(m_displayScope, nodep->name());
+        if (nodep->forkBranch()) {
+            // The branch keeps the %m of the fork it was moved out of
+            const auto it = m_forkBranchScopes.find(nodep);
+            UASSERT_OBJ(it != m_forkBranchScopes.end(), nodep, "Fork branch before its call");
+            m_displayScope = it->second;
+        } else {
+            m_displayScope = dot(m_displayScope, nodep->name());
+        }
         // Rename it
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));
@@ -227,12 +235,9 @@ class BeginVisitor final : public VNVisitor {
             UASSERT_OBJ(m_ftaskp, nodep, "Unlifted declarations outside a function");
             m_liftedp = AstNode::addNextNull(m_liftedp, declsp->unlinkFrBackWithNext());
         }
-        AstNode* addsp = nullptr;
         if (AstNode* const stmtsp = nodep->stmtsp()) {
-            stmtsp->unlinkFrBackWithNext();
-            addsp = AstNode::addNext(addsp, stmtsp);
+            nodep->addHereThisAsNext(stmtsp->unlinkFrBackWithNext());
         }
-        if (addsp) nodep->addHereThisAsNext(addsp);
         nodep->name("");
     }
     void visit(AstBegin* nodep) override {
@@ -272,11 +277,6 @@ class BeginVisitor final : public VNVisitor {
                 = staticVarName(m_ftaskp->name(), m_unnamedScope, nodep->name());
             m_staticVarScopes.emplace(nodep, m_unnamedScope);
             if (nodep->isIO()) {
-                if (nodep->direction().isRef()) {
-                    nodep->v3error(
-                        "It is illegal to use argument passing by reference for subroutines with "
-                        "a lifetime of static (IEEE 1800-2023 13.5.2)");
-                }
                 // Create a port that is used for passing value between argument and static
                 // variable
                 AstVar* const portp = nodep->cloneTreePure(false);
@@ -382,6 +382,8 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstNodeFTaskRef* nodep) override {
         if (nodep->user1SetOnce()) return;
         m_ftaskRefps.push_back(nodep);
+        if (nodep->taskp()->forkBranch())
+            m_forkBranchScopes.emplace(nodep->taskp(), m_displayScope);
         iterateChildren(nodep);
     }
     void visit(AstIfaceRefDType* nodep) override {
@@ -718,7 +720,7 @@ AstNode* V3Begin::convertToWhile(AstForeach* nodep) {
             } else if (const AstBasicDType* const adtypep = VN_CAST(fromDtp, BasicDType)) {
                 if (adtypep->isString()) {
                     AstConst* const leftp = new AstConst{fl, 0};
-                    AstNodeExpr* const rightp = new AstLenN{fl, fromp->cloneTreePure(false)};
+                    AstNodeExpr* const rightp = new AstLenN{fl, subfromp->cloneTreePure(false)};
                     loopp = createForeachLoop(nodep, blockp, bodyPointp, arrayMayResize, subfromp,
                                               varp, leftp, rightp, VNType::Lt);
                 } else {
