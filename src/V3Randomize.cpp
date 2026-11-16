@@ -322,41 +322,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         }
     }
-    // Whether an array index depends on a variable being randomized, by its marks
-    static bool isMarkedRandIndex(const AstNodeExpr* indexp) {
-        // Not isRandIndex: std::randomize() arguments get their own variables only later
-        return indexp->exists([](const AstNode* const nodep) {
-            return (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) && nodep->user1();
-        });
-    }
-    // Whether a constraint of the class has two member selects not from a variable or member
-    static bool selectsElementMembersTwice(const AstClass* classp) {
-        // Such as selects of object array elements, which a constraint cloned for an object of
-        // the class may not support ("Multiple expressions inside indices"), so such an object
-        // keeps its own randomize()
-        return classp->existsMember([](const AstClass*, const AstConstraint* constrp) {
-            int count = 0;
-            constrp->foreach([&](const AstMemberRef* selp) {
-                if (!VN_IS(selp->fromp(), NodeVarRef) && !VN_IS(selp->fromp(), MemberRef)) ++count;
-            });
-            return count > 1;
-        });
-    }
-    // Mark the rand handles that the member selects of a constraint select through
-    static void markSelectedHandles(AstNode* nodep) {
-        // Such a member is solved with the class of the constraint, so the constraint and the
-        // member's own constraints are solved together (IEEE 1800-2023 18.5.8). Other members
-        // are randomized by their own randomize().
-        nodep->foreach([](const AstMemberRef* selp) {
-            AstVar* varp = nullptr;
-            if (const AstNodeVarRef* const refp = VN_CAST(selp->fromp(), NodeVarRef)) {
-                varp = refp->varp();
-            } else if (const AstMemberRef* const fromSelp = VN_CAST(selp->fromp(), MemberRef)) {
-                varp = fromSelp->varp();
-            }
-            if (varp && varp->rand().isRandomizable()) varp->globalConstrained(true);
-        });
-    }
     // Check if an expression in a 'with' clause is a std::randomize() argument
     bool isStdRandomizeArg(const AstNodeExpr* exprp) const {
         if (!m_inStdWith || !m_stdRandCallp) return false;
