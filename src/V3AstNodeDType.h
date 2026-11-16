@@ -1579,9 +1579,10 @@ public:
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
-    AstBasicDType* basicp() const override VL_MT_STABLE { return subDTypep()->basicp(); }
+    AstBasicDType* basicp() const override VL_MT_STABLE { return nullptr; }
     int widthAlignBytes() const override { return sizeof(std::map<std::string, std::string>); }
     int widthTotalBytes() const override { return sizeof(std::map<std::string, std::string>); }
+    bool isAggregateType() const override { return true; }
     bool isCompound() const override { return true; }
     bool isDynamicallySized() const override { return true; }
 };
