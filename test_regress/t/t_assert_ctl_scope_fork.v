@@ -1,5 +1,6 @@
 // DESCRIPTION: Assertion-control operand ownership in timed fork branches.
 // This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 // verilog_format: off
 `define stop $stop
@@ -19,6 +20,7 @@ module t;
   assertion_leaf a ();
   assertion_leaf b ();
   assertion_leaf c ();
+  assertion_leaf d ();
   int argument_calls = 0;
   function automatic int level_value();
     argument_calls++;
@@ -27,7 +29,16 @@ module t;
   task automatic disable_b(input int level);
     $assertoff(level, b);
   endtask
+  task automatic disable_d_in_fork();
+    fork
+      begin
+        #1;
+        $assertoff(level_value(), d);
+      end
+    join_none
+  endtask
   initial begin
+    disable_d_in_fork();
     fork
       begin
         #1;
@@ -39,10 +50,11 @@ module t;
       end
     join_none
     #3;
-    `checkd(argument_calls, 2);
+    `checkd(argument_calls, 3);
     `checkd(a.failures, 0);
     `checkd(b.failures, 0);
     `checkd(c.failures, 1);
+    `checkd(d.failures, 0);
     $display("*-* All Finished *-*");
     $finish;
   end
