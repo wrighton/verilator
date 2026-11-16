@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_constraint_global_derived_unsup.v:13:16: Unsupported: random member variable with the type of the containing class
+                                                               : ... note: In instance 't'
+   13 |   rand Derived d;
+      |                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
