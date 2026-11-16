@@ -2324,9 +2324,6 @@ public:
         if (AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return buildUntil(untilp, entryVtxp, isTopLevelStep);
         }
-        if (AstSEventually* const evp = VN_CAST(nodep, SEventually)) {
-            return buildSEventually(evp, entryVtxp, isTopLevelStep);
-        }
         // A 'not' of a multi-cycle operand is no boolean leaf; at the top it is unwrapped
         if (VN_IS(nodep, LogNot) && hasMultiCycleExpr(nodep)) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'not' of a multi-cycle operand inside "
