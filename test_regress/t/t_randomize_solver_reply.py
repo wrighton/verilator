@@ -54,7 +54,7 @@ runs = [
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
-    ('model_trunc', 4, 7),  # unterminated reply to a spreading query, then the pipe closes
+    ('model_trunc', 4, 15),  # unterminated reply to a spreading query, then the pipe closes
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
@@ -122,7 +122,7 @@ solver_log = test.obj_dir + '/solver_bsat_narrow.log'
 test.execute(logfile=logfile,
              all_run_flags=['+verilator+solver+file+' + solver_log],
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=value_narrow TAMPER_AT=14')
+             'TAMPER=value_narrow TAMPER_AT=13')
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(
     solver_log, r'^  \(push 1\)\n  \(check-sat\)\n< sat\n  \(get-value \( a b\)\)\n'

@@ -484,6 +484,28 @@ class VlRandomizer VL_NOT_FINAL {
     bool solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
                           const std::vector<std::string>& layerVars,
                           std::map<std::string, std::string>& solvedValuesr);
+    // Whether any of the variables is an array
+    bool layerHasArray(const std::vector<std::string>& layerVars);
+    // Whether to sample a phase, from how often its trials have been satisfiable; counts the
+    // calls that skip sampling and restarts the counts when sampling is tried again
+    bool sampleWorthwhile(const std::vector<std::string>& phaseVars);
+    // Rejection-sample a phase's scalars from the kept solver base
+    VlSolverStatus sampleLayer(VlSolverSession& sess, VlRNG& rngr,
+                               const std::vector<std::string>& phaseVars,
+                               std::map<std::string, std::string>* valuesp);
+    // Phased solve: trials a kept base makes per phase before building a fresh one
+    static constexpr int phaseSampleTries = 32;
+    // Calls without trials before a phase whose trials rarely fit is sampled again
+    static constexpr int phaseSampleRetry = 128;
+    // Trials after which a phase's counts are halved
+    static constexpr int phaseSampleWindow = 8 * phaseSampleTries;
+    // How often a phase's trials were satisfiable, keyed by the phase's first variable
+    struct PhaseSampleStats final {
+        uint64_t tries = 0;  // Recent trials
+        uint64_t accepts = 0;  // Satisfiable trials among them
+        uint64_t skips = 0;  // Calls since the last trials that rebuilt the phase without them
+    };
+    std::unordered_map<std::string, PhaseSampleStats> m_phaseSampleStats;
     bool readPhaseValues(VlSolverSession& sess, std::map<std::string, std::string>& solvedValuesr);
     bool parsePhaseValues(std::istream& is, std::map<std::string, std::string>& solvedValuesr);
 
