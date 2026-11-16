@@ -69,14 +69,17 @@ class Top;
   endfunction
 endclass
 
-// Fixed-size and associative arrays (their objects' own constraints are not cloned)
+// Fixed-size, also multi-dimensional, and associative arrays (the objects' own constraints are
+// not cloned for an associative array)
 class HolderFA;
   rand Item u[3:1];
   rand Item m[int];
   rand Item big[17];
+  rand Item w[2][1:2];
   function new();
     foreach (u[i]) u[i] = new;
     foreach (big[i]) big[i] = new;
+    foreach (w[i, j]) w[i][j] = new;
     m[5] = new;
     m[9] = new;
   endfunction
@@ -87,8 +90,10 @@ class OuterFA;
   rand Holder g;
   constraint c_fa {
     foreach (h.u[i]) h.u[i].v > 7'd100;
+    foreach (h.u[i]) h.u[4 - i].v != 7'd103;
     foreach (h.m[k]) h.m[k].v < 7'd10;
     h.big[1].v > 7'd100;  // Over 16 objects: the index in the solver names is not padded
+    h.w[1][2].v > 7'd100;
   }
   function new();
     h = new;
@@ -232,8 +237,13 @@ module t;
       randomize_result = of.randomize();
       `checkd(randomize_result, 1);
       foreach (of.h.u[i]) `checkd(of.h.u[i].v > 7'd100, 1'b1);
+      foreach (of.h.u[i]) `checkd(of.h.u[i].v[0], 1'b1);
+      foreach (of.h.u[i]) `checkd(of.h.u[i].v != 7'd103, 1'b1);
       foreach (of.h.m[k]) `checkd(of.h.m[k].v < 7'd10, 1'b1);
       `checkd(of.h.big[1].v > 7'd100, 1'b1);
+      foreach (of.h.big[i]) `checkd(of.h.big[i].v[0], 1'b1);
+      `checkd(of.h.w[1][2].v > 7'd100, 1'b1);
+      foreach (of.h.w[i, j]) `checkd(of.h.w[i][j].v[0], 1'b1);
       // Array of a member object referenced only in randomize() with
       randomize_result = of.randomize() with {foreach (g.a[i]) g.a[i].v < 7'd20;};
       `checkd(randomize_result, 1);
