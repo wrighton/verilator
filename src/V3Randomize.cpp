@@ -178,27 +178,6 @@ struct RandModeTarget final {
     }
 };
 
-// Array of the one-dimensional integral or handle element selected by fromp, else nullptr
-static AstVar* randModeElemArrayp(AstNodeExpr* fromp) {
-    AstNodeExpr* arrayp = nullptr;
-    if (const AstArraySel* const arraySelp = VN_CAST(fromp, ArraySel)) {
-        arrayp = arraySelp->fromp();
-    } else if (const AstCMethodHard* const atp = VN_CAST(fromp, CMethodHard)) {
-        if (atp->method() == VCMethod::ARRAY_AT) arrayp = atp->fromp();
-    }
-    AstVar* varp = nullptr;
-    if (const AstVarRef* const varrefp = VN_CAST(arrayp, VarRef)) {
-        varp = varrefp->varp();
-    } else if (const AstMemberRef* const memberRefp = VN_CAST(arrayp, MemberRef)) {
-        varp = memberRefp->varp();
-    }
-    // One dimension of an array of integral or class handle elements
-    if (!varp) return nullptr;
-    const AstNodeDType* const elemDtp = fromp->dtypep()->skipRefp();
-    if (!elemDtp->isIntegralOrPacked() && !VN_IS(elemDtp, ClassRefDType)) return nullptr;
-    return varp;
-}
-
 // Check a rand/randc variable's type against IEEE 1800-2023 18.4's
 // allowed list. Purely diagnostic: codegen sites that would otherwise
 // mishandle one of these types guard themselves on V3Error::errorCount()
@@ -321,6 +300,41 @@ class RandomizeMarkVisitor final : public VNVisitor {
                     varp->globalConstrained(true);
             }
         }
+    }
+    // Whether an array index depends on a variable being randomized, by its marks
+    static bool isMarkedRandIndex(const AstNodeExpr* indexp) {
+        // Not isRandIndex: std::randomize() arguments get their own variables only later
+        return indexp->exists([](const AstNode* const nodep) {
+            return (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) && nodep->user1();
+        });
+    }
+    // Whether a constraint of the class has two member selects not from a variable or member
+    static bool selectsElementMembersTwice(const AstClass* classp) {
+        // Such as selects of object array elements, which a constraint cloned for an object of
+        // the class may not support ("Multiple expressions inside indices"), so such an object
+        // keeps its own randomize()
+        return classp->existsMember([](const AstClass*, const AstConstraint* constrp) {
+            int count = 0;
+            constrp->foreach([&](const AstMemberRef* selp) {
+                if (!VN_IS(selp->fromp(), NodeVarRef) && !VN_IS(selp->fromp(), MemberRef)) ++count;
+            });
+            return count > 1;
+        });
+    }
+    // Mark the rand handles that the member selects of a constraint select through
+    static void markSelectedHandles(AstNode* nodep) {
+        // Such a member is solved with the class of the constraint, so the constraint and the
+        // member's own constraints are solved together (IEEE 1800-2023 18.5.8). Other members
+        // are randomized by their own randomize().
+        nodep->foreach([](const AstMemberRef* selp) {
+            AstVar* varp = nullptr;
+            if (const AstNodeVarRef* const refp = VN_CAST(selp->fromp(), NodeVarRef)) {
+                varp = refp->varp();
+            } else if (const AstMemberRef* const fromSelp = VN_CAST(selp->fromp(), MemberRef)) {
+                varp = fromSelp->varp();
+            }
+            if (varp && varp->rand().isRandomizable()) varp->globalConstrained(true);
+        });
     }
     // Check if an expression in a 'with' clause is a std::randomize() argument
     bool isStdRandomizeArg(const AstNodeExpr* exprp) const {
@@ -484,7 +498,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
         AstConstraint* const cloneConstrp = constrp->cloneTree(false);
         cloneConstrp->name(newName);
-        m_cloneps.insert(cloneConstrp);
 
         // FuncRefs are converted after the traversal. Converting moves the args under the new
         // MethodCall, where foreach would not visit VarRefs or nested calls such as add(lim()).
@@ -1463,7 +1476,6 @@ class RandomizeVisitor final : public VNVisitor {
 
     // STATE
     V3UniqueNames m_inlineUniqueNames;  // For generating unique function names
-    std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
     V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Random array loop indices
     V3UniqueNames m_modeUniqueNames{"__Vmode"};  // For generating unique rand/constraint
                                                  // mode state var names
@@ -1475,7 +1487,6 @@ class RandomizeVisitor final : public VNVisitor {
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstNodeStmt* m_stmtp = nullptr;  // Current statement
     AstDynArrayDType* m_dynarrayDtp = nullptr;  // Dynamic array type (for rand mode)
-    ElemRandModes m_elemModes;  // Per-element rand_mode() state
     int m_randCaseNum = 0;  // Randcase number within a module for var naming
     std::map<std::string, AstCDType*> m_randcDtypes;  // RandC data type deduplication
     AstConstraint* m_constraintp = nullptr;  // Current constraint
@@ -3573,7 +3584,6 @@ public:
             if (classp->extendsp())
                 m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
         });
-        findRandcClasses(nodep);
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.
         // Runs before any class is lowered. Only a randomized class counts, and

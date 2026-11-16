@@ -91,6 +91,7 @@ class UnknownVisitor final : public VNVisitor {
         // Spec says a out-of-range LHS SEL results in a NOP.
         // We wrap the expression into IF
         AstNodeExpr* prep = nodep;
+        const VAccess access = VN_AS(nodep->baseFromp(true), NodeVarRef)->access();
 
         // Scan back to put the condlvalue above all selects (IE top of the lvalue)
         while (VN_IS(prep->backp(), NodeSel) || VN_IS(prep->backp(), Sel)

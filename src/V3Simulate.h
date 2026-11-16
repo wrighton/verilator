@@ -1249,17 +1249,18 @@ private:
             if (const AstArraySel* const aselp = VN_CAST(selp, ArraySel)) {
                 AstConsArray* const consp = VN_AS(itemp, ConsArray);
                 const AstConst* const indexp = fetchConst(aselp->bitp());
-                if (!indexp->num().fitsInUInt()) return;  // X/Z, or out of bounds
+                if (!indexp->num().fitsInUInt()) return nullptr;  // X/Z, or out of bounds
                 const uint32_t index = indexp->toUInt();
                 const int elements
                     = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
-                if (index >= static_cast<uint32_t>(elements)) {
+                if (!indexNum.fitsInUInt()
+                    || indexNum.toUInt() >= static_cast<uint32_t>(elements)) {
                     return;  // Ignore a write out of bounds (IEEE 1800-2023 7.4.6)
                 }
-                itemp = consp->valuep(index);
+                itemp = consp->valuep(indexNum.toUInt());
                 if (itemp == consp->defaultp()) {  // Make a defaulted element explicit
                     itemp = itemp->cloneTree(false);
-                    consp->valuep(index, itemp);
+                    consp->valuep(indexNum.toUInt(), itemp);
                 }
             } else {
                 itemp = VN_AS(itemp, ConsStruct)->memberValuep(selp->name());
@@ -1432,8 +1433,9 @@ private:
                     clearOptimizable(nodep, "Unsupported array element type");
                     return;
                 }
-                newValue(nodep, valuep);
-                VL_DO_DANGLING(valuep->deleteTree(), valuep);
+                // Not newValue, as the previous value may alias an element of the array
+                m_reclaimValuesp.push_back(valuep);
+                setValue(nodep, valuep);
                 return;
             }
             AstNodeExpr* const itemp = consp->valuep(indexp->toUInt());

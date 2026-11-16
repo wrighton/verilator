@@ -112,8 +112,19 @@ class WidthSelVisitor final : public VNVisitor {
             return lhsp;
         } else if (VN_IS(lhsp, Const)) {
             // Optional vs just making add/sub below, but saves constification some work
-            V3Number num(lhsp, lhsp->width());
-            num.opSub(VN_AS(lhsp, Const)->num(), V3Number(lhsp, 32, rhs));
+            // At least 32 bits, as V3Width makes the add/sub below, so the result does not wrap
+            const int width = std::max(lhsp->width(), 32);
+            const V3Number& lhsNum = VN_AS(lhsp, Const)->num();
+            V3Number lhsExtNum{lhsp, width};
+            if (lhsp->isSigned()) {
+                lhsExtNum.opExtendS(lhsNum, lhsNum.width());
+            } else {
+                lhsExtNum.opAssign(lhsNum);
+            }
+            V3Number rhsNum{lhsp, width};
+            rhsNum.opExtendS(V3Number(lhsp, 32, rhs), 32);
+            V3Number num{lhsp, width};
+            num.opSub(lhsExtNum, rhsNum);
             num.isSigned(lhsp->isSigned());
             return new AstConst{lhsp->fileline(), num};
         }

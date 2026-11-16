@@ -162,6 +162,7 @@ module t;
     RandDynIndexCastTest cobj;
     static OutOfRangeIndexTest oor = new;
     static OutOfRangeUnsatTest unsat = new;
+    static RandIndexMemberTest member = new;
     repeat (20) begin
       randomize_result = oor.randomize();
       `checkd(randomize_result, 1);
@@ -173,6 +174,9 @@ module t;
     end
     randomize_result = unsat.randomize();
     `checkd(randomize_result, 0);
+    member.member_c.constraint_mode(0);
+    randomize_result = member.randomize();
+    `checkd(randomize_result, 1);
     repeat (20) begin
       randomize_result = obj.randomize();
       `checkd(randomize_result, 1);
