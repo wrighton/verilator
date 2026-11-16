@@ -86,6 +86,15 @@ public:
 };
 
 //######################################################################
+// Helpers shared by the randomize front end and the back-ends
+
+class RandomizeUtil final {
+public:
+    // Look through unpacked array dimensions to the element type
+    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
+};
+
+//######################################################################
 // Lowering of the randomize sites of one V3Randomize pass, created by
 // V3SolverBackend::newLowering()
 
