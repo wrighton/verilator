@@ -3799,6 +3799,37 @@ public:
         return newIfAssertFailOn(stmtsp, assertp->directive(), assertp->userType());
     }
 
+    // Return the statements run by an assertion failing at end of simulation
+    AstNodeStmt* newFinalFailp(AstNodeCoverOrAssert* assertp) {
+        FileLine* const flp = assertp->fileline();
+        // The fail action replaces the default error (IEEE 1800-2023 16.14.1), unless it has a
+        // timing control, which could not resume in a final block (IEEE 1800-2023 9.2.3)
+        AstNodeStmt* const failsp = VN_AS(assertp, Assert)->failsp();
+        const bool hasTimingControl = failsp && failsp->existsAndNext([](const AstNode* np) {
+            return np->isTimingControl();
+        });
+        AstNodeStmt* stmtsp;
+        if (failsp && !hasTimingControl) {
+            stmtsp = failsp->cloneTree(true);
+            // An NBA, legal in an action block, executes as a blocking assignment in a final
+            // block, so FINALDLY does not apply
+            stmtsp->foreachAndNext([](AstAssignDly* const dlyp) {
+                FileLine* const newfl = new FileLine{dlyp->fileline()};
+                newfl->warnOff(V3ErrorCode::FINALDLY, true);
+                dlyp->fileline(newfl);
+            });
+        } else {
+            // V3Assert turns the DT_ERROR display into the standard "Assertion failed in %m"
+            AstDisplay* const dispp
+                = new AstDisplay{flp, VDisplayType::DT_ERROR, "", nullptr, nullptr};
+            dispp->fmtp()->timeunit(m_modp->timeunit());
+            stmtsp = dispp;
+            if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
+        }
+        // Like a failure during simulation, subject to $assertcontrol FailOff
+        return newIfAssertFailOn(stmtsp, assertp->directive(), assertp->userType());
+    }
+
     // Lower NFA graph to synthesizable AstAlways blocks and raw result signals.
     // Links are combinational; Edges are registered (NBA).
     SignalSet lower(AstNodeCoverOrAssert* const assertp, SvaGraph& graph,
@@ -5030,14 +5061,6 @@ class AssertNfaVisitor final : public VNVisitor {
             iterate(propp->propp());
             // The fail action may also run in the end-of-simulation final block, with no clock
             if (assertAssertp) iterateAndNextNull(assertAssertp->failsp());
-        }
-        // V3AssertPre runs the action block once per failing attempt of a nonconsecutive
-        // repetition, not at each failing match, but does not support it with a cycle delay.
-        // Left after the module defaults are inherited, which V3AssertPre relies on.
-        if (propp->exists([](const AstSNonConsRep*) { return true; })
-            && !propp->exists([](const AstSExpr*) { return true; })) {
-            VL_DO_DANGLING(pushDeletep(senTreep), senTreep);
-            return;
         }
 
         FileLine* const flp = assertp->fileline();
