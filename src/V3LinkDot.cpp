@@ -5029,12 +5029,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         const AstParseRef* const refp = localp ? VN_CAST(localp->rhsp(), ParseRef) : nullptr;
         return refp && localp->lhsp()->name() == "local::" && (refp->isThis() || refp->isSuper());
     }
-    // Is the dot 'local::this.x' or 'local::super.x' (IEEE 1800-2023 18.7.1)
-    static bool isDotLocalThisReference(const AstDot* nodep) {
-        const AstDot* const localp = VN_CAST(nodep->lhsp(), Dot);
-        return localp && localp->lhsp()->name() == "local::" && VN_IS(localp->rhsp(), ParseRef)
-               && (localp->rhsp()->name() == "this" || localp->rhsp()->name() == "super");
-    }
 
     void visit(AstDot* nodep) override {
         // Legal under a DOT: AstDot, AstParseRef, AstPackageRef, AstNodeSel, AstPackArrayDType
