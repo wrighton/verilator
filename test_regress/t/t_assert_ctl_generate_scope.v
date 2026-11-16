@@ -19,8 +19,11 @@ module t;
     else $assertoff(0, g[0].labelled_check);
     #2;
     `checkd(g[0].failures, 0);
-    if ($test$plusargs("GLOBAL")) `checkd(g[1].failures, 0);
-    else `checkd(g[1].failures, 1);
+    if ($test$plusargs("GLOBAL")) begin
+      `checkd(g[1].failures, 0);
+    end else begin
+      `checkd(g[1].failures, 1);
+    end
     $display("*-* All Finished *-*");
     $finish;
   end
