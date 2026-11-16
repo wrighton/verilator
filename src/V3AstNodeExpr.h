@@ -2322,12 +2322,12 @@ class AstSClocked final : public AstNodeExpr {
     // IEEE 1800-2023 16.12: property_expr ::= clocking_event property_expr
     // Leading a property_spec, the clocking event is moved to it by V3LinkParse; leading a
     // sequence, it is hoisted to the enclosing assertion clock by V3AssertNfa.
-    // @astgen op1 := sensesp : AstSenItem
+    // @astgen op1 := sensesp : List[AstSenItem]
     // @astgen op2 := exprp : AstNodeExpr
 public:
     AstSClocked(FileLine* fl, AstSenItem* sensesp, AstNodeExpr* exprp)
         : ASTGEN_SUPER_SClocked(fl) {
-        this->sensesp(sensesp);
+        addSensesp(sensesp);
         this->exprp(exprp);
         dtypeSetBit();
     }
