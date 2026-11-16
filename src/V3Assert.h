@@ -57,6 +57,25 @@ public:
     static std::unordered_map<const AstVar*, AstVar*>
     newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* modp,
                     V3UniqueNames& names) VL_MT_DISABLED;
+    // Relink a body inlined at instp to the instancing scope, returning the possibly replaced body
+    static AstNode* relinkSvaInstanceBody(AstNode* bodyp,
+                                          const AstSchemaRef* instp) VL_MT_DISABLED;
+    // Remove the reduction of each single-bit actual argument substituted for a formal argument
+    static void removeActualReductions(const std::vector<AstNodeExpr*>& actualps) VL_MT_DISABLED;
+    // Check the references of formal arguments with a '$' actual argument, before substitution,
+    // returning the possibly replaced body
+    static AstNode*
+    checkSvaUnboundedActuals(AstNode* nodep,
+                             const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
+                             AstNode* instp) VL_MT_DISABLED;
+    // Give the reads of local variables in one property instance their initial value
+    static void lowerSvaLocalVarInits(
+        AstProperty* propp, AstPropSpec* bodyp,
+        const std::unordered_map<const AstVar*, AstVar*>& localVarMap) VL_MT_DISABLED;
+    // Reduce a whole property 'always p' to p
+    static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
+    // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
+    static AstSenItem* inferredClock(const AstAlways* alwaysp) VL_MT_DISABLED;
 };
 
 class V3Assert final {
