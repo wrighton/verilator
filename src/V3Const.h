@@ -24,6 +24,8 @@
 
 //============================================================================
 
+class VMemberMap;
+
 class V3Const final {
 public:
     static void constifyParamsEdit(AstNode* nodep) VL_MT_DISABLED;
@@ -52,6 +54,14 @@ public:
     // Only the current node and lower, with special SenTree optimization
     // Return new node that may have replaced nodep
     static AstNode* constifyExpensiveEdit(AstNode* nodep) VL_MT_DISABLED;
+    // Construct an owned default value for a resolved dtype (IEEE 1800-2023 7.4.5, Table 7-1).
+    // Unpacked struct member declaration initializers take precedence (7.2.2).
+    // Return nullptr for types without a representable value in this builder.
+    static AstNodeExpr* newDTypeDefaultp(AstNode* nodep, AstNodeDType* dtypep) VL_MT_DISABLED;
+    // Default of a pure read-selection path rooted at boundedElementp. Return a new owned AST,
+    // preserving declaration initializers and symbolic remaining indices without sampling them.
+    static AstNodeExpr* newSelectedDefaultp(AstNodeExpr* readp, AstNodeExpr* boundedElementp,
+                                            VMemberMap& memberMap) VL_MT_DISABLED;
     // Append the leaves of a value to 'termps' leftmost first: the elements and members of an
     // unpacked array or struct, selected from copies of it that warn if impure and 'warnImpure',
     // else the value itself, as its 64 bits if a real and 'packReal'
