@@ -100,6 +100,88 @@ static string extractDottedPath(AstNode* nodep, bool& hasPartSelect) {
     }
     return "";
 }
+// Assertion selection is done before V3Begin removes lexical scopes. The emitted
+// references use normal VarXRef/VarScope identity, never runtime path matching.
+class AssertControlTargetVisitor final : public VNVisitor {
+    AstAssertCtlArgs* const m_argsp;
+    std::unordered_map<string, AstAssertCtlTarget*>& m_targets;
+    string m_instancePath;
+    string m_childPath;
+    int m_depth = 0;
+    void visit(AstNodeModule*) override {}  // Not nested declarations or templates
+    void visit(AstCell* nodep) override {
+        VL_RESTORER_COPY(m_instancePath);
+        VL_RESTORER_COPY(m_childPath);
+        VL_RESTORER(m_depth);
+        m_instancePath = VString::dot(m_childPath, ".", nodep->name());
+        m_childPath = m_instancePath;
+        ++m_depth;
+        iterateAndNextNull(nodep->modp()->stmtsp());
+    }
+    void visit(AstGenBlock* nodep) override {
+        VL_RESTORER_COPY(m_childPath);
+        m_childPath = VString::dot(m_childPath, ".", nodep->name());
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        if (AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt)) {
+            if (AstVar* const varp = stmtp->controlVarp()) {
+                const string key = VString::dot(m_instancePath, ".", varp->name());
+                const auto pair = m_targets.emplace(key, nullptr);
+                if (pair.second) {
+                    AstNodeVarRef* const refp
+                        = m_instancePath.empty()
+                              ? static_cast<AstNodeVarRef*>(
+                                    new AstVarRef{nodep->fileline(), varp, VAccess::READWRITE})
+                              : static_cast<AstNodeVarRef*>(new AstVarXRef{
+                                    nodep->fileline(), varp, m_instancePath, VAccess::READWRITE});
+                    AstAssertCtlTarget* const targetp
+                        = new AstAssertCtlTarget{nodep->fileline(), refp, m_depth};
+                    pair.first->second = targetp;
+                    m_argsp->addTargetsp(targetp);
+                } else {
+                    pair.first->second->depth(std::min(pair.first->second->depth(), m_depth));
+                }
+            }
+        }
+        iterateChildren(nodep);
+    }
+
+public:
+    AssertControlTargetVisitor(AstNode* nodep, AstAssertCtlArgs* argsp, const string& instancePath,
+                               const string& childPath,
+                               std::unordered_map<string, AstAssertCtlTarget*>& targets)
+        : m_argsp{argsp}
+        , m_targets{targets}
+        , m_instancePath{instancePath}
+        , m_childPath{childPath} {
+        if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            iterateAndNextNull(cellp->modp()->stmtsp());
+        } else if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+            iterateAndNextNull(modp->stmtsp());
+        } else {
+            iterateChildren(nodep);
+        }
+    }
+};
+
+static string assertionScopePath(const VSymEnt* symp) {
+    std::vector<string> names;
+    for (; symp; symp = symp->parentp()) {
+        const AstNode* const nodep = symp->nodep();
+        const AstNodeModule* const modp = VN_CAST(nodep, NodeModule);
+        if (VN_IS(nodep, Cell) || VN_IS(nodep, GenBlock) || VN_IS(nodep, NodeBlock)
+            || VN_IS(nodep, NodeFTask) || (modp && modp->isTop())) {
+            if (!nodep->name().empty()) names.push_back(nodep->name());
+        }
+    }
+    string path;
+    for (auto it = names.crbegin(); it != names.crend(); ++it) {
+        path = VString::dot(path, ".", *it);
+    }
+    return path;
+}
+
 static string lexicalDisablePath(AstNode* const targetp) {
     std::vector<string> names;
     for (AstNode* curp = targetp; curp; curp = curp->aboveLoopp()) {
@@ -5402,8 +5484,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                    && VN_IS(m_ds.m_dotp->lhsp(), SchemaRef)
                    && VN_IS(VN_AS(m_ds.m_dotp->lhsp(), SchemaRef)->schemap(), Sequence)) {
             // A sequence instance with arguments
-            replaceSequenceTriggered(nodep,
-                                     VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
+            replaceSequenceTriggered(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
         } else if (m_ds.m_dotPos == DP_MEMBER) {
             // Found a Var, everything following is membership.  {scope}.{var}.HERE {member}
             if (m_ds.m_dotErr) {
@@ -7924,6 +8005,76 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (nodep->cname() != "") taskp->cname(nodep->cname());
         }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+    }
+    string assertControlPath(AstNodeExpr* nodep) {
+        if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
+        if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
+            return VString::dot(assertControlPath(VN_AS(dotp->lhsp(), NodeExpr)), ".",
+                                assertControlPath(VN_AS(dotp->rhsp(), NodeExpr)));
+        }
+        if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
+            symIterateNull(selp->bitp(), m_curSymp);
+            AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
+            const AstConst* const constp = VN_CAST(indexp, Const);
+            const string path = constp ? assertControlPath(selp->fromp()) + "__BRA__"
+                                             + cvtToStr(constp->toSInt()) + "__KET__"
+                                       : "";
+            VL_DO_DANGLING(pushDeletep(indexp), indexp);
+            return path;
+        }
+        return "";
+    }
+    void visit(AstAssertCtlArgs* nodep) override {
+        LINKDOT_VISIT_START();
+        checkNoDot(nodep);
+        iterateAndNextNull(nodep->levelp());
+        // Scope names must not resolve as ordinary value expressions. Resolve them after
+        // parameter and generate expansion, but before assertion lowering removes labels.
+        if (!m_statep->forParamed()) return;
+        std::unordered_map<string, AstAssertCtlTarget*> targets;
+        if (!nodep->scoped()) {
+            for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
+                if (!modp->isTop()) continue;
+                AssertControlTargetVisitor{modp, nodep, modp->name(), modp->name(), targets};
+            }
+        }
+        for (AstNodeExpr* const itemp : nodep->itemspList()) {
+            const string path = assertControlPath(itemp);
+            string baddot;
+            VSymEnt* okSymp = nullptr;
+            VSymEnt* const foundp = path.empty()
+                                        ? nullptr
+                                        : m_statep->findDotted(itemp->fileline(), m_curSymp, path,
+                                                               baddot, okSymp, true);
+            AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
+            if (!targetp
+                || !(VN_IS(targetp, Cell) || VN_IS(targetp, NodeBlock) || VN_IS(targetp, GenBlock)
+                     || VN_IS(targetp, NodeFTask) || VN_IS(targetp, Module)
+                     || VN_IS(targetp, Netlist))) {
+                itemp->v3error("Assertion control target is not a scope or assertion: '"
+                               << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
+                continue;
+            }
+            if (VN_IS(targetp, Netlist)) {
+                for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
+                    if (!modp->isTop()) continue;
+                    AssertControlTargetVisitor{modp, nodep, modp->name(), modp->name(), targets};
+                }
+                continue;
+            }
+            const VSymEnt* instanceSymp = foundp;
+            while (
+                instanceSymp
+                && !(VN_IS(instanceSymp->nodep(), Cell) || VN_IS(instanceSymp->nodep(), Module))) {
+                instanceSymp = instanceSymp->parentp();
+            }
+            AssertControlTargetVisitor{targetp, nodep, assertionScopePath(instanceSymp),
+                                       assertionScopePath(foundp), targets};
+        }
+        if (nodep->itemsp()) {
+            AstNode* itemsp = nodep->itemsp()->unlinkFrBackWithNext();
+            VL_DO_DANGLING(pushDeletep(itemsp), itemsp);
+        }
     }
     void visit(AstDisable* nodep) override {
         LINKDOT_VISIT_START();

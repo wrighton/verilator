@@ -2540,6 +2540,7 @@ class AstVar final : public AstNode {
     bool m_globalConstrained : 1;  // Global constraint per IEEE 1800-2023 18.5.8
     bool m_isStdRandomizeArg : 1;  // Argument variable created for std::randomize (__Varg*)
     bool m_processQueue : 1;  // Process queue variable
+    uint32_t m_assertCtlMask = 0;  // Type/directive bit of per-instance assertion control state
     bool m_mtaskCacheLineAlign : 1;  // Start MTask affinity group on a cache line
     void init() {
         m_libInoutEnable = false;
@@ -2863,6 +2864,8 @@ public:
     }
     bool isIfaceParent() const { return m_isIfaceParent; }
     bool isIfaceArraySplit() const { return m_isIfaceArraySplit; }
+    uint32_t assertCtlMask() const { return m_assertCtlMask; }
+    void assertCtlMask(uint32_t mask) { m_assertCtlMask = mask; }
     bool isInternal() const { return m_isInternal; }
     bool isIfaceParam() const { return m_isIfaceParam; }
     bool isSignal() const VL_MT_SAFE { return varType().isSignal(); }

@@ -225,6 +225,16 @@ class CCtorsVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstVar* nodep) override {
+        if (nodep->assertCtlMask()) {
+            UASSERT_OBJ(m_varResetp, nodep, "Assertion control state outside a module");
+            AstCStmt* const stmtp = new AstCStmt{nodep->fileline()};
+            AstVarRef* const refp = new AstVarRef{nodep->fileline(), nodep, VAccess::READWRITE};
+            refp->selfPointer(VSelfPointerText{VSelfPointerText::This{}});
+            stmtp->add(refp);
+            stmtp->add(".configure(vlSymsp->_vm_contextp__, "
+                       + std::to_string(nodep->assertCtlMask()) + ");\n");
+            m_varResetp->add(stmtp);
+        }
         if (nodep->needsCReset()) {
             AstAssign* const crstp = newResetp(nodep);
             if (m_varResetp) {

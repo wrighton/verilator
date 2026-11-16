@@ -741,9 +741,7 @@ AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assert
     this->controlTypep(new AstConst{fl, ctlType});
     this->assertTypesp(new AstConst{fl, assertType});
     this->directiveTypesp(new AstConst{fl, directiveType});
-    // Parser creates these but are unused, nuke them
-    if (levelp) VL_DO_DANGLING(levelp->deleteTree(), levelp);
-    if (itemsp) VL_DO_DANGLING(itemsp->deleteTree(), itemsp);
+    if (levelp || itemsp) argsp(new AstAssertCtlArgs{fl, levelp, itemsp});
 }
 AstAssertCtl::AstAssertCtl(FileLine* fl, AstNodeExpr* controlTypep, AstNodeExpr* assertTypesp,
                            AstNodeExpr* directiveTypep, AstNodeExpr* levelp, AstNodeExpr* itemsp)
@@ -754,9 +752,23 @@ AstAssertCtl::AstAssertCtl(FileLine* fl, AstNodeExpr* controlTypep, AstNodeExpr*
     this->controlTypep(controlTypep);
     this->assertTypesp(assertTypesp);
     this->directiveTypesp(directiveTypep);
-    // Parser creates these but are unused, nuke them
-    if (levelp) VL_DO_DANGLING(levelp->deleteTree(), levelp);
-    if (itemsp) VL_DO_DANGLING(itemsp->deleteTree(), itemsp);
+    if (levelp || itemsp) argsp(new AstAssertCtlArgs{fl, levelp, itemsp});
+}
+void AstAssertCtlArgs::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (scoped()) str << " [SCOPED]";
+}
+void AstAssertCtlArgs::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, scoped);
+    dumpJsonGen(str);
+}
+void AstAssertCtlTarget::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " depth=" << depth();
+}
+void AstAssertCtlTarget::dumpJson(std::ostream& str) const {
+    dumpJsonNumFunc(str, depth);
+    dumpJsonGen(str);
 }
 void AstAssertCtl::dump(std::ostream& str) const {
     Super::dump(str);
@@ -2961,6 +2973,7 @@ void AstNodeCoverOrAssert::dump(std::ostream& str) const {
     str << " ["s + this->directive().ascii() + "]";
     str << " ["s + this->userType().ascii() + "]";
     if (immediate()) str << " [IMMEDIATE]";
+    if (nfaLowered()) str << " [NFALOWERED]";
     if (senFromAlways()) str << " [SENALW]";
     if (nfaLowered()) str << " [NFALOWERED]";
 }
@@ -2969,6 +2982,7 @@ void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "type", this->userType().ascii());
     dumpJsonGen(str);
     dumpJsonBoolFuncIf(str, immediate);
+    dumpJsonBoolFuncIf(str, nfaLowered);
     dumpJsonBoolFuncIf(str, senFromAlways);
     dumpJsonBoolFuncIf(str, nfaLowered);
 }
@@ -3804,7 +3818,10 @@ void AstNodeReadWriteMem::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isHex);
     dumpJsonGen(str);
 }
-void AstNodeStmt::dump(std::ostream& str) const { Super::dump(str); }
+void AstNodeStmt::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (controlVarp()) str << " controlVarp=" << nodeAddr(controlVarp());
+}
 void AstNodeStmt::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
 const char* AstNodeTriop::broken() const {
     BROKEN_RTN(m_purity.isCached() && m_purity.get() != getPurityRecurse());
@@ -5111,6 +5128,7 @@ string AstVar::dpiTmpVarType(const string& varName) const {
 void AstVar::dump(std::ostream& str) const {
     Super::dump(str);
     if (libInoutId()) str << " libInoutId=" << libInoutId();
+    if (assertCtlMask()) str << " assertCtlMask=" << assertCtlMask();
     if (libInoutEnable()) str << " [LIBINOUTEN]";
     if (isIO()) str << " " << direction().ascii();
     if (declDirection() != direction()) str << " dd=" << direction().ascii();
@@ -5163,6 +5181,7 @@ void AstVar::dump(std::ostream& str) const {
 }
 void AstVar::dumpJson(std::ostream& str) const {
     if (libInoutId()) dumpJsonNumFunc(str, libInoutId);
+    if (assertCtlMask()) dumpJsonNumFunc(str, assertCtlMask);
     dumpJsonBoolFuncIf(str, libInoutEnable);
     dumpJsonStrFunc(str, origName);
     dumpJsonStrFunc(str, verilogName);
