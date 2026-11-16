@@ -2582,6 +2582,8 @@ public:
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            // A defparam path from $root names one instance, any other is matched as a suffix
+            const string rootedName = "$root." + instanceName;
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
                 if (!pinp->exprp()) {  // Value from the instance of the defparam's module
@@ -2594,8 +2596,8 @@ public:
                     // No value: the defparam sets another instance of this module, or is in a
                     // generate block not built. ParamVisitor::iterateDefParams registers values
                     // before specializing any instance they may set.
-                } else if (instanceName == pinp->paramPath()
-                           || VString::endsWith(instanceName, "." + pinp->paramPath())) {
+                } else if (rootedName == pinp->paramPath()
+                           || VString::endsWith(rootedName, "." + pinp->paramPath())) {
                     continue;
                 }
                 VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
