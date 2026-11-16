@@ -23,6 +23,7 @@
 class AstClass;
 class AstFunc;
 class AstNetlist;
+class AstNodeDType;
 class AstNodeExpr;
 class AstNodeModule;
 
@@ -39,6 +40,8 @@ public:
     static AstFunc* newRandomizeStdFunc(AstNodeModule* nodep,
                                         const std::string& name) VL_MT_DISABLED;
     static AstFunc* newSRandomFunc(VMemberMap& memberMap, AstClass* nodep) VL_MT_DISABLED;
+    // SMT Bool term over '__Ve' restricting an element of dtypep to its enum values, or empty
+    static std::string enumDomain(AstNodeDType* dtypep) VL_MT_DISABLED;
     // Whether randomize() argument part 'exprp' is the method call target 'fromp'
     static bool isRandomizeTarget(const AstNodeExpr* exprp,
                                   const AstNodeExpr* fromp) VL_MT_DISABLED;
