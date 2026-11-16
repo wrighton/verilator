@@ -42,6 +42,7 @@
 #include "V3Unknown.h"
 
 #include "V3Const.h"
+#include "V3MemberMap.h"
 #include "V3Stats.h"
 #include "V3UniqueNames.h"
 
@@ -65,6 +66,7 @@ class UnknownVisitor final : public VNVisitor {
     VDouble0 m_statElses;  // Statistic of else branches created for array selects
     V3UniqueNames m_lvboundNames;  // For generating unique temporary variable names
     std::unique_ptr<V3UniqueNames> m_xrandNames;  // For generating unique temporary variable names
+    VMemberMap m_memberMap;  // Member lookup; dtype declarations stay intact during this pass
 
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -167,6 +169,20 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
 
+    // Return the select of a part of 'nodep', or nullptr
+    static AstNodeExpr* selectOfp(AstNodeExpr* nodep) {
+        AstNode* const backp = nodep->backp();
+        const AstNode* fromp = nullptr;
+        if (const AstNodeSel* const selp = VN_CAST(backp, NodeSel)) {
+            fromp = selp->fromp();
+        } else if (const AstSel* const selp = VN_CAST(backp, Sel)) {
+            fromp = selp->fromp();
+        } else if (const AstStructSel* const selp = VN_CAST(backp, StructSel)) {
+            fromp = selp->fromp();
+        }
+        return fromp == nodep ? VN_AS(backp, NodeExpr) : nullptr;
+    }
+
     AstVar* createAddTemp(const AstNodeExpr* const nodep) {
         AstVar* const varp = new AstVar{nodep->fileline(), VVarType::XTEMP,
                                         m_xrandNames->get(nodep), nodep->dtypep()};
@@ -187,6 +203,14 @@ class UnknownVisitor final : public VNVisitor {
             }
         }
         return false;
+    }
+
+    // Return array index 'bitp' truncated to the bits that address 'elements' elements
+    static AstNodeExpr* newIndexTrunc(AstNodeExpr* bitp, int elements) {
+        // V3Width keeps all bits of the index for the bounds check
+        const int width = V3Number::log2b(elements - 1) + 1;
+        if (bitp->width() <= width) return bitp;
+        return V3Const::constifyEdit(new AstSel{bitp->fileline(), bitp, 0, width});
     }
 
     AstNodeExpr* newExprStmtOrClone(AstNodeExpr*& exprp) {
@@ -536,40 +560,40 @@ class UnknownVisitor final : public VNVisitor {
             if (isStaticlyGte(declElementsp, bitp)) {
                 // We don't need to add a conditional; we know the existing expression is ok
                 VL_DO_DANGLING(declElementsp->deleteTree(), declElementsp);
-                nodep->bitp(bitp);
+                nodep->bitp(newIndexTrunc(bitp, declElements));
                 return;
             }
-            nodep->bitp(newExprStmtOrClone(bitp));
+            nodep->bitp(newIndexTrunc(newExprStmtOrClone(bitp), declElements));
             AstNodeExpr* condp = new AstGte{nodep->fileline(), declElementsp, bitp};
-            // Note below has null backp(); the Edit function knows how to deal with that.
-            const AstNodeDType* const nodeDtp = nodep->dtypep()->skipRefp();
-            if (!lvalue
-                // Making a scalar would break if we're making an array
-                && VN_IS(nodeDtp, BasicDType)) {
+            // The value read: this element, or for an element of an outer dimension, the
+            // element, or struct member or bits of it, selected. Not a class member, which is
+            // not part of the array's value.
+            AstNodeExpr* readp = nodep;
+            if (!lvalue) {
+                while (AstNodeExpr* const abovep = selectOfp(readp)) {
+                    // The condition below would skip an impure index; V3LiftExpr lifts them
+                    // out of statements
+                    if (!abovep->isPure()) break;
+                    readp = abovep;
+                }
+            }
+            // Preserve declaration initializers and their containing-member overrides on the
+            // pure selected path without broadening whole-aggregate default eligibility.
+            if (!lvalue) convertMemberInitializers(nodep->dtypep());
+            AstNodeExpr* const defaultp
+                = lvalue ? nullptr : V3Const::newSelectedDefaultp(readp, nodep, m_memberMap);
+            if (defaultp) {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
-                nodep->unlinkFrBack(&replaceHandle);
-                // TODO make a tieoff function that takes AstNode and returns typed value
-                V3Number xnum{nodep, nodep->width()};
-                if (nodeDtp->isDouble()) {
-                    xnum = V3Number{nodep, V3Number::Double{}, 0.0};
-                } else if (nodeDtp->isString()) {
-                    xnum = V3Number{nodep, V3Number::String{}, ""};
-                } else {
-                    if (nodeDtp->isFourstate()) {
-                        xnum.setAllBitsX();
-                    } else {
-                        xnum.setAllBits0();
-                    }
-                }
-                AstNode* const newp = new AstCond{nodep->fileline(), condp, nodep,
-                                                  new AstConst{nodep->fileline(), xnum}};
+                readp->unlinkFrBack(&replaceHandle);
+                AstNode* const newp = new AstCond{readp->fileline(), condp, readp, defaultp};
                 UINFOTREE(9, newp, "", "_new");
                 // Link in conditional, can blow away temp xor
                 replaceHandle.relink(newp);
-                // Added X's, tristate them too
-                iterate(newp);
-            } else if (!lvalue) {  // Mid-multidimension read, just use zero
+                // Added X's, tristate them too. An ancestor's Cond is visited when iteration
+                // continues with it, after the ancestor's own visit, which has not finished.
+                if (readp == nodep) iterate(newp);
+            } else if (!lvalue) {  // No default value, just use zero
                 // ARRAYSEL(...) -> ARRAYSEL(COND(LT(bit<maxbit), bit, 0))
                 VNRelinker replaceHandle;
                 AstNodeExpr* const asBitp = nodep->bitp()->unlinkFrBack(&replaceHandle);
