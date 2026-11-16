@@ -1392,7 +1392,7 @@ class AstDefParam final : public AstNode {
     // A defparam assignment
     // Parents: MODULE
     // @astgen op1 := rhsp : AstNode<AstNodeExpr|AstNodeDType> // Data type for a type parameter
-    // @astgen op2 := pathp : Optional[AstNodeExpr] // Null after V3LinkDot
+    // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if own scope or after V3LinkDot
     // @astgen op3 := targetp : AstNodeExpr // After V3LinkDot, AstVarXRef from this scope
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNode* rhsp)
