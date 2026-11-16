@@ -3443,6 +3443,12 @@ class WidthVisitor final : public VNVisitor {
         // visit
         VL_DO_DANGLING(userIterate(newp, nullptr), newp);
     }
+    void visit(AstCDType* nodep) override {
+        // An internal C++ object has no Verilog range or subtype to resolve.
+        // Its constructor and emitted C++ type own its storage and initialization.
+        if (nodep->didWidthAndSet()) return;
+        nodep->dtypep(nodep);
+    }
     void visit(AstConstraintRefDType* nodep) override {
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
         nodep->dtypep(nodep);
@@ -9325,6 +9331,15 @@ class WidthVisitor final : public VNVisitor {
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
         userIterateAndNext(nodep->passsp(), nullptr);
         userIterateAndNext(nodep->failsp(), nullptr);
+    }
+    void visit(AstAssertCtlTarget* nodep) override {
+        userIterateAndNext(nodep->statep(), WidthVP{SELF, BOTH}.p());
+    }
+    void visit(AstAssertCtlArgs* nodep) override {
+        if (nodep->levelp()) {
+            iterateCheckSizedSelf(nodep, "Levels", nodep->levelp(), SELF, BOTH);
+        }
+        userIterateAndNext(nodep->targetsp(), WidthVP{SELF, BOTH}.p());
     }
     void visit(AstAssertCtl* nodep) override {
         assertAtStatement(nodep);

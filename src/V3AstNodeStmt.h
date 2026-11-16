@@ -30,13 +30,16 @@
 // === Abstract base node types (AstNode*) =====================================
 
 class AstNodeStmt VL_NOT_FINAL : public AstNode {
-    // Procedural statement
+    // Procedural statement; assertions and unique/priority checks may have control state.
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
 protected:
     AstNodeStmt(VNType t, FileLine* fl)
         : AstNode{t, fl} {}
 
 public:
     ASTGEN_MEMBERS_AstNodeStmt;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     // METHODS
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
@@ -100,9 +103,9 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     string m_name;  // Name to report
     const VAssertType m_userType;  // Assertion/cover type for user enable/disable
     const VAssertDirectiveType m_directive;  // Assertion directive type
+    bool m_nfaLowered = false;  // New-attempt gating already emitted by V3AssertNfa
     bool m_senFromAlways = false;  // Sensitivity list copied from upper always
     bool m_immediate = false;  // Immediate assert (may differ from userType being immediate)
-    bool m_nfaLowered = false;  // V3AssertNfa lowered its property to a Boolean output
 
 public:
     AstNodeCoverOrAssert(VNType t, FileLine* fl, AstNode* propp, AstNodeStmt* passsp,
@@ -122,8 +125,9 @@ public:
     ASTGEN_MEMBERS_AstNodeCoverOrAssert;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     bool sameNode(const AstNode* samep) const override {
-        return samep->name() == name()
-               && m_nfaLowered == VN_DBG_AS(samep, NodeCoverOrAssert)->m_nfaLowered;
+        const AstNodeCoverOrAssert* const sp = VN_DBG_AS(samep, NodeCoverOrAssert);
+        return sp->name() == name() && sp->controlVarp() == controlVarp()
+               && sp->nfaLowered() == nfaLowered();
     }
     void name(const string& name) override { m_name = name; }
     void dump(std::ostream& str = std::cout) const override;
@@ -173,6 +177,46 @@ public:
 // === Concrete node types =====================================================
 
 // === AstNode ===
+class AstAssertCtlArgs final : public AstNode {
+    // Retains assertion-control hierarchy arguments until static target selection.
+    // @astgen op1 := levelp : Optional[AstNodeExpr]
+    // @astgen op2 := itemsp : List[AstNodeExpr]
+    // @astgen op3 := targetsp : List[AstAssertCtlTarget]
+    const bool m_scoped;  // Explicit scope list, including a resolved empty selection
+public:
+    AstAssertCtlArgs(FileLine* fl, AstNodeExpr* levelp, AstNodeExpr* itemsp)
+        : ASTGEN_SUPER_AssertCtlArgs(fl)
+        , m_scoped{itemsp != nullptr} {
+        this->levelp(levelp);
+        addItemsp(itemsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlArgs;
+    bool scoped() const { return m_scoped; }
+    bool sameNode(const AstNode* samep) const override {
+        return scoped() == VN_DBG_AS(samep, AssertCtlArgs)->scoped();
+    }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+};
+class AstAssertCtlTarget final : public AstNode {
+    // One statically selected assertion instance, and its distance below a scope.
+    // @astgen op1 := statep : AstNodeVarRef
+    int m_depth;  // Module hierarchy distance; zero for the selected scope itself
+public:
+    AstAssertCtlTarget(FileLine* fl, AstNodeVarRef* statep, int depth)
+        : ASTGEN_SUPER_AssertCtlTarget(fl)
+        , m_depth{depth} {
+        this->statep(statep);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlTarget;
+    int depth() const { return m_depth; }
+    void depth(int value) { m_depth = value; }
+    bool sameNode(const AstNode* samep) const override {
+        return depth() == VN_DBG_AS(samep, AssertCtlTarget)->depth();
+    }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+};
 class AstCaseItem final : public AstNode {
     // Single item of AstCase/AstRandCase
     // @astgen op1 := condsp : List[AstNodeExpr]
@@ -234,6 +278,7 @@ class AstAssertCtl final : public AstNodeStmt {
     // @astgen op1 := controlTypep : AstNodeExpr
     // @astgen op2 := assertTypesp : Optional[AstNodeExpr]
     // @astgen op3 := directiveTypesp : Optional[AstNodeExpr]
+    // @astgen op4 := argsp : Optional[AstAssertCtlArgs]
     // Type of assertcontrol task; either known from parser or from evaluated
     // controlTypep expression.
     VAssertCtlType m_ctlType;  // $assert keyword type (control_type)
@@ -434,7 +479,8 @@ public:
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     string verilogKwd() const override { return casez() ? "casez" : casex() ? "casex" : "case"; }
     bool sameNode(const AstNode* samep) const override {
-        return m_caseType == VN_DBG_AS(samep, Case)->m_caseType;
+        const AstCase* const sp = VN_DBG_AS(samep, Case);
+        return m_caseType == sp->m_caseType && controlVarp() == sp->controlVarp();
     }
     bool casex() const { return m_caseType == VCaseType::CT_CASEX; }
     bool casez() const { return m_caseType == VCaseType::CT_CASEZ; }
@@ -879,7 +925,9 @@ public:
     bool isGateOptimizable() const override { return false; }
     bool isGateDedupable() const override { return true; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
-    bool sameNode(const AstNode* /*samep*/) const override { return true; }
+    bool sameNode(const AstNode* samep) const override {
+        return controlVarp() == VN_DBG_AS(samep, If)->controlVarp();
+    }
     void branchPred(VBranchPred flag) { m_branchPred = flag; }
     VBranchPred branchPred() const { return m_branchPred; }
     void isBoundsCheck(bool flag) { m_isBoundsCheck = flag; }
