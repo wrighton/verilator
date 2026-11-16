@@ -1,6 +1,6 @@
-%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:27:14: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
-   27 |       if (i.s[0].arr.size > 0) {
-      |              ^
+%Error-UNSUPPORTED: t/t_constraint_arr_with_arrsize_unsup.v:91:32: Unsupported: Unsupported size constraint inside 'with' statement of type CLASSREFDTYPE 'Sub'
+   91 |     void'(h.randomize() with {s[0].arr.size() == 2;});
+      |                                ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Warning-CONSTRAINTIGN: t/t_constraint_arr_with_arrsize_unsup.v:91:40: Unsupported: randomizing this expression, treating as state
    91 |     void'(h.randomize() with {s[0].arr.size() == 2;});
