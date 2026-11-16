@@ -56,6 +56,8 @@ endclass
 
 module t;
   import capture_inputs::*;
+  bit scope_done;
+  capture_name_scopes scope_test(scope_done);
 
   function automatic string render(input string value = Echo::text($sformatf("%p", next_enum())));
     return value;
@@ -142,7 +144,55 @@ module t;
       expected = selected ? "BUSY" : "IDLE";
       `checks(continuous_text, expected);
     end
+    `checkd(scope_done, 1);
     $write("*-* All Finished *-*\n");
     $finish;
+  end
+endmodule
+
+module capture_name_scopes(output bit done);
+  typedef enum bit {IDLE, BUSY} state_t;
+  int scope_calls = 0;
+
+  function automatic state_t next_enum();
+    ++scope_calls;
+    return scope_calls[0] ? BUSY : IDLE;
+  endfunction
+
+  function automatic string render(input string value = $sformatf("%p", next_enum()));
+    return value;
+  endfunction
+
+  string direct_before;
+  string default_before;
+  initial begin
+    direct_before = $sformatf("%p", next_enum());
+    default_before = render();
+  end
+
+  // This class visit separates two groups of parent-scope capture declarations.
+  class Boundary;
+    static function string text(input state_t value);
+      return $sformatf("%p", value.next());
+    endfunction
+  endclass
+
+  initial begin
+    string direct_after;
+    string default_after;
+    #1;
+    `checks(direct_before, "BUSY");
+    `checks(default_before, "IDLE");
+    `checkd(scope_calls, 2);
+    direct_after = $sformatf("%p", next_enum());
+    default_after = render();
+    `checks(direct_after, "BUSY");
+    `checks(default_after, "IDLE");
+    `checkd(scope_calls, 4);
+    `checks(render("explicit"), "explicit");
+    `checkd(scope_calls, 4);
+    `checks(Boundary::text(IDLE), "BUSY");
+    `checks(Boundary::text(BUSY), "IDLE");
+    done = 1;
   end
 endmodule
