@@ -62,6 +62,50 @@ module t;
     }
   endclass
 
+  // Test 4: solve before on members of a rand member object, with the class
+  // randomized as a rand member of other objects (global constraints, IEEE 1800-2023 18.5.8)
+  class Coord;
+    rand bit [7:0] x;
+    rand bit [7:0] y;
+    rand bit [3:0] arr[2];
+    rand bit [3:0] darr[];
+    function new();
+      darr = new[3];
+    endfunction
+  endclass
+
+  class Req;
+    rand bit s;
+    rand Coord c;
+    constraint c_order {
+      solve s before c.x, c.y;
+      s -> c.x == 0;
+      solve s before c.arr[1];
+      c.arr[1] != 4'(s);
+      foreach (c.darr[i]) {
+        solve s before c.darr[i];
+        c.darr[i] != 4'(s);
+      }
+    }
+    function new();
+      c = new;
+    endfunction
+  endclass
+
+  class Top;
+    rand Req r;
+    function new();
+      r = new;
+    endfunction
+  endclass
+
+  class Top2;
+    rand Top t;
+    function new();
+      t = new;
+    endfunction
+  endclass
+
   initial begin
     Packet p;
     Simple s;
@@ -107,6 +151,34 @@ module t;
       `checkd(ok, 1);
       ok = (m.c > m.b && m.c < 4'hf) ? 1 : 0;
       `checkd(ok, 1);
+    end
+
+    // Test 4: Nested member objects; without the ordering s is rarely 1
+    begin
+      automatic Req req = new;
+      automatic Top top = new;
+      automatic Top2 top2 = new;
+      automatic int req_count = 0;
+      automatic int top_count = 0;
+      automatic int top2_count = 0;
+      repeat (200) begin
+        randomize_result = req.randomize();
+        `checkd(randomize_result, 1);
+        randomize_result = top.randomize();
+        `checkd(randomize_result, 1);
+        randomize_result = top2.randomize();
+        `checkd(randomize_result, 1);
+        if (top.r.s) `checkd(top.r.c.x, 0);
+        if (top2.t.r.s) `checkd(top2.t.r.c.x, 0);
+        ok = (top.r.c.arr[1] != 4'(top.r.s) && top.r.c.darr[2] != 4'(top.r.s)) ? 1 : 0;
+        `checkd(ok, 1);
+        req_count += int'(req.s);
+        top_count += int'(top.r.s);
+        top2_count += int'(top2.t.r.s);
+      end
+      `check_range(req_count, 60, 140);
+      `check_range(top_count, 60, 140);
+      `check_range(top2_count, 60, 140);
     end
 
     $write("*-* All Finished *-*\n");
