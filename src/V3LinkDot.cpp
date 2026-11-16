@@ -104,8 +104,8 @@ static string extractDottedPath(AstNode* nodep, bool& hasPartSelect) {
 // assertion owns a distinct declaration; module instances still share a declaration
 // and obtain distinct VarScopes through the ordinary scope pass.
 class AssertControlSeedVisitor final : public VNVisitor {
-    AstNodeModule* m_modp = nullptr;
-    int m_number = 0;
+    AstNodeModule* m_modp = nullptr;  // Module owning the elaborated assertion's state declaration
+    int m_number = 0;  // Next per-module control-state declaration number
     void addState(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
         if (type == VAssertType::INTERNAL) return;
         AstCDType* const dtypep = new AstCDType{nodep->fileline(), "VlAssertControl"};
@@ -160,9 +160,9 @@ public:
 class AssertControlTargetVisitor final : public VNVisitor {
     AstAssertCtlArgs* const m_argsp;
     std::unordered_map<string, AstAssertCtlTarget*>& m_targets;
-    string m_instancePath;
-    string m_childPath;
-    int m_depth = 0;
+    string m_instancePath;  // Current module-instance path
+    string m_childPath;  // Path including lexical/generate scopes for child traversal
+    int m_depth = 0;  // Module-instance depth relative to the selected scope
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
         VL_RESTORER_COPY(m_instancePath);
