@@ -9,7 +9,15 @@ module sub (
 );
 endmodule
 
+module sub_written (
+    ref wire rw  // <--- Error: ref port is a net
+);
+  initial rw = '0;
+endmodule
+
 module t;
   logic [1:0] v;
   sub u_sub (.r(v));
+  logic rwv;
+  sub_written u_sub_written (.rw(rwv));
 endmodule
