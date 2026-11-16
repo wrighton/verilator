@@ -1775,7 +1775,9 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
 
         // Forbid this exact assignment so the next
         // (check-sat) is forced to find a genuinely different witness.
-        solver << "(assert (not (and";
+        // SMT-LIB 'and' takes at least two operands, so a lone equality stands alone
+        const bool single = order.size() == 1;
+        solver << (single ? "(assert (not" : "(assert (not (and");
         for (const auto& varEntry : witness) {
             for (const auto& elemEntry : varEntry.second) {
                 solver << " (=";
@@ -1783,7 +1785,7 @@ int VlRandomizer::bsat(VlSolverSession& sess, size_t bound, std::vector<Witness>
                 solver << ' ' << elemEntry.second << ")";
             }
         }
-        solver << ")))\n";
+        solver << (single ? "))\n" : ")))\n");
         witnesses.push_back(std::move(witness));
     }  // LCOV_EXCL_BR_LINE
     return static_cast<int>(witnesses.size());
@@ -1801,10 +1803,9 @@ void VlRandomizer::unigenXors(std::iostream& solver, VlRNG& rngr, int bits) {
     for (int k = 0; k < bits; ++k) solver << (target[k] ? '1' : '0');
     if (bits > 1) solver << " (concat";
     for (int k = 0; k < bits; ++k) {
-        // #b0 seeds the bvxor chain so it's always >=2 operands (valid even
-        // if this equation's coin flips happen to select zero/one bits).
-        // 0 xor 0 == 0, 0 xor 1 == 1, so the seed cannot change the result.
-        solver << " (bvxor #b0";
+        // Two #b0 seed the bvxor chain, so it has at least two operands (SMT-LIB 2.6)
+        // even when this equation's coin flips select no bit; zeros cannot change an xor.
+        solver << " (bvxor #b0 #b0";
         for (const auto& var : m_vars) {
             for (int j = 0; j < var.second->totalWidth(); ++j) {
                 if (VL_RANDOM_RNG_I(rngr) & 1) var.second->emitExtract(solver, j);
