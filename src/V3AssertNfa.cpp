@@ -369,7 +369,6 @@ class SvaNfaBuilder final {
     // Unsupported endpoint topology must reject, not ignore, or the wait hangs
     bool m_isSeqEvent = false;
     bool m_inSequencePrefix = false;  // Prefix composition does not preserve every endpoint
-    bool m_inAntecedent = false;  // Building an implication antecedent, which does not reject
     bool m_wantBoolLeaf = false;  // Building a |-> / |=> or top-level body (see buildOrMerge)
     bool m_trackVacuous = false;  // Record vacuous successes (they fail a negated assertion)
     // Building an implication antecedent, which cannot fail, and every match of which counts
@@ -1450,88 +1449,6 @@ class SvaNfaBuilder final {
         return "sequence 'or' with an operand that is not a fixed-length sequence of boolean"
                " expressions in an asserted property (IEEE 1800-2023 16.9.7)";
     }
-    // Build `b or p` at the end of an asserted property, with b boolean
-    BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
-                                FileLine* flp) {
-        // It holds at once when b holds and otherwise exactly when p does (IEEE 1800-2023
-        // 16.12.4). So p is evaluated only when b is false, with the rejections of a top-level
-        // property.
-        SvaStateVertex* const propEntryp = scopedCreateVertex();
-        guardedLink(entryVtxp, propEntryp,
-                    new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
-        VL_RESTORER(m_wantBoolLeaf);
-        m_wantBoolLeaf = true;
-        const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
-        if (!prop.valid()) return prop;
-        SvaStateVertex* const propTermp = prop.termVertexp;
-        // A ranged end rejects through its ring at the match vertex, which p does not reach
-        if (!prop.midSources.empty()) {
-            flp->v3warn(E_UNSUPPORTED,
-                        "Unsupported: property 'or' with an operand ending in a ranged delay");
-            freeUnlinkedCondp(prop.finalCondp);
-            return BuildResult::failWithError();
-        }
-        UASSERT_OBJ(!propTermp->m_delayRingSize || propTermp->m_isFixedDelayRing, propTermp,
-                    "Ranged delay ring ends a property without mid-window sources");
-        // Otherwise reach the merge vertex as p would reach the match vertex
-        SvaStateVertex* const mergeVtxp = scopedCreateVertex();
-        guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
-        if (!prop.finalCondp) {
-            guardedLink(propTermp, mergeVtxp, flp);
-            return {mergeVtxp, nullptr, {}};
-        }
-        guardedLink(propTermp, mergeVtxp, sampled(prop.finalCondp->cloneTreePure(false)), flp);
-        if (!propTermp->m_isUnbounded) {
-            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
-            sinkVtxp->m_isRejectSink = true;
-            SvaTransEdge* const edgep = m_graph.addLink(
-                propTermp, sinkVtxp, sampled(prop.finalCondp->cloneTreePure(false)));
-            edgep->m_rejectOnFail = true;
-        }
-        freeUnlinkedCondp(prop.finalCondp);
-        return {mergeVtxp, nullptr, {}};
-    }
-    // Build `b or p` at the end of an asserted property, with b boolean
-    BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
-                                FileLine* flp) {
-        // It holds at once when b holds and otherwise exactly when p does (IEEE 1800-2023
-        // 16.12.4). So p is evaluated only when b is false, with the rejections of a top-level
-        // property.
-        SvaStateVertex* const propEntryp = scopedCreateVertex();
-        guardedLink(entryVtxp, propEntryp,
-                    new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
-        VL_RESTORER(m_wantBoolLeaf);
-        m_wantBoolLeaf = true;
-        const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
-        if (!prop.valid()) return prop;
-        SvaStateVertex* const propTermp = prop.termVertexp;
-        // A ranged end rejects through its ring at the match vertex, which p does not reach
-        if (!prop.midSources.empty()) {
-            flp->v3warn(E_UNSUPPORTED,
-                        "Unsupported: property 'or' with an operand ending in a ranged delay");
-            freeUnlinkedCondp(prop.finalCondp);
-            return BuildResult::failWithError();
-        }
-        UASSERT_OBJ(!propTermp->m_delayRingSize || propTermp->m_isFixedDelayRing, propTermp,
-                    "Ranged delay ring ends a property without mid-window sources");
-        // Otherwise reach the merge vertex as p would reach the match vertex
-        SvaStateVertex* const mergeVtxp = scopedCreateVertex();
-        guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
-        if (!prop.finalCondp) {
-            guardedLink(propTermp, mergeVtxp, flp);
-            return {mergeVtxp, nullptr, {}};
-        }
-        guardedLink(propTermp, mergeVtxp, sampled(prop.finalCondp->cloneTreePure(false)), flp);
-        if (!propTermp->m_isUnbounded) {
-            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
-            sinkVtxp->m_isRejectSink = true;
-            SvaTransEdge* const edgep = m_graph.addLink(
-                propTermp, sinkVtxp, sampled(prop.finalCondp->cloneTreePure(false)));
-            edgep->m_rejectOnFail = true;
-        }
-        freeUnlinkedCondp(prop.finalCondp);
-        return {mergeVtxp, nullptr, {}};
-    }
 
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
@@ -2417,6 +2334,9 @@ public:
         if (AstUntil* const untilp = VN_CAST(nodep, Until)) {
             return buildUntil(untilp, entryVtxp, isTopLevelStep);
         }
+        if (AstSEventually* const evp = VN_CAST(nodep, SEventually)) {
+            return buildSEventually(evp, entryVtxp, isTopLevelStep);
+        }
         // A 'not' of a multi-cycle operand is no boolean leaf; at the top it is unwrapped
         if (VN_IS(nodep, LogNot) && hasMultiCycleExpr(nodep)) {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'not' of a multi-cycle operand inside "
@@ -3214,6 +3134,35 @@ class SvaNfaLowering final {
         sigs.throughoutRejectp = newOrTree(c.flp, rejectps.cbegin(), rejectps.cend());
     }
 
+    // Fail count with a top-level synchronous abort (IEEE 1800-2023 16.12.14). Each thread
+    // live at the start of the tick, in a state register, a delay ring, or the attempt
+    // starting now, is one evaluation attempt, which the abort fails or passes.
+    AstNodeExpr* newExactAbortFailCountp(LowerCtx& c, AstNodeExpr* const otherFailCountp) {
+        AstNodeExpr* const firep = sampled(c.exactAbortp->condp()->cloneTreePure(false));
+        if (c.exactAbortp->kind().isAccept()) {
+            return new AstCond{c.flp, firep, newTypedConstp(c.flp, m_u32DTypep, 0),
+                               otherFailCountp};
+        }
+        // Each thread is counted where it starts the tick: zero-delay links only move it
+        AstNodeExpr* liveCountp = nullptr;
+        for (const V3GraphVertex& vtxr : c.graph.m_graph.vertices()) {
+            const SvaStateVertex* const vtxp = static_cast<const SvaStateVertex*>(&vtxr);
+            if (vtxp == c.graph.m_startVertexp || vtxp->datap()->stateVarp) {
+                liveCountp = addCountp(c.flp, liveCountp,
+                                       vtxp->datap()->stateCountSigp->cloneTreePure(false));
+            } else if (vtxp->datap()->delayRingLiveCountVarp) {
+                liveCountp = addCountp(
+                    c.flp, liveCountp,
+                    new AstVarRef{c.flp, vtxp->datap()->delayRingLiveCountVarp, VAccess::READ});
+            }
+        }
+        if (c.disableExprp) {
+            liveCountp = addCountp(c.flp, nullptr, liveCountp,
+                                   new AstLogNot{c.flp, c.disableExprp->cloneTreePure(false)});
+        }
+        return new AstCond{c.flp, firep, liveCountp, otherFailCountp};
+    }
+
     // Clock ticks from the attempt start to each vertex by color, or negative if not fixed
     static std::vector<int> vertexOffsets(const SvaGraph& graph) {
         // A thread in a vertex of a fixed offset started that many ticks ago, so the threads of
@@ -3251,6 +3200,11 @@ class SvaNfaLowering final {
             }
         }
         return offsets;
+    }
+    // Key of the rejections of a vertex's threads, counted once per tick, see computeSignals
+    static int failKey(const std::vector<int>& offsets, const SvaStateVertex* vtxp) {
+        const int offset = offsets[vtxp->color()];
+        return offset >= 0 ? offset : -1 - vtxp->color();
     }
 
     // Number of attempts completing this tick, or nullptr if threads cannot tell
@@ -3734,37 +3688,6 @@ public:
             });
         } else {
             stmtsp = newDefaultFailp(flp, m_modp, "");
-        }
-        // Like a failure during simulation, subject to $assertcontrol FailOff
-        return newIfAssertFailOn(stmtsp, assertp->directive(), assertp->userType());
-    }
-
-    // Return the statements run by an assertion failing at end of simulation
-    AstNodeStmt* newFinalFailp(AstNodeCoverOrAssert* assertp) {
-        FileLine* const flp = assertp->fileline();
-        // The fail action replaces the default error (IEEE 1800-2023 16.14.1), unless it has a
-        // timing control, which could not resume in a final block (IEEE 1800-2023 9.2.3)
-        AstNodeStmt* const failsp = VN_AS(assertp, Assert)->failsp();
-        const bool hasTimingControl = failsp && failsp->existsAndNext([](const AstNode* np) {
-            return np->isTimingControl();
-        });
-        AstNodeStmt* stmtsp;
-        if (failsp && !hasTimingControl) {
-            stmtsp = failsp->cloneTree(true);
-            // An NBA, legal in an action block, executes as a blocking assignment in a final
-            // block, so FINALDLY does not apply
-            stmtsp->foreachAndNext([](AstAssignDly* const dlyp) {
-                FileLine* const newfl = new FileLine{dlyp->fileline()};
-                newfl->warnOff(V3ErrorCode::FINALDLY, true);
-                dlyp->fileline(newfl);
-            });
-        } else {
-            // V3Assert turns the DT_ERROR display into the standard "Assertion failed in %m"
-            AstDisplay* const dispp
-                = new AstDisplay{flp, VDisplayType::DT_ERROR, "", nullptr, nullptr};
-            dispp->fmtp()->timeunit(m_modp->timeunit());
-            stmtsp = dispp;
-            if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
         }
         // Like a failure during simulation, subject to $assertcontrol FailOff
         return newIfAssertFailOn(stmtsp, assertp->directive(), assertp->userType());
