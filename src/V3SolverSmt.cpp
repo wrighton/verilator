@@ -67,28 +67,6 @@ static std::string buildMemberPath(const AstNodeExpr* const exprp) {
 //######################################################################
 // Helpers shared by the lowering visitors
 
-// Whether any operand of nodep depends on a randomized variable
-static bool operandsRand(const AstNode* nodep) {
-    return (nodep->op1p() && nodep->op1p()->user1()) || (nodep->op2p() && nodep->op2p()->user1())
-           || (nodep->op3p() && nodep->op3p()->user1())
-           || (nodep->op4p() && nodep->op4p()->user1());
-}
-
-// Whether an array index depends on a variable being randomized
-static bool isRandIndex(const AstNodeExpr* indexp) {
-    // Not user1, which can be over-marked in sum/with expansion contexts. A std::randomize()
-    // with-clause argument carries no rand qualifier of its own but is still part of the solve.
-    return indexp->exists([](const AstNodeVarRef* const vrefp) {
-        return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
-    });
-}
-
-// Return the index of an array element select
-static AstNodeExpr* selIndexp(AstNode* selp) {
-    if (AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) return arraySelp->bitp();
-    return VN_AS(selp, CMethodHard)->pinsp();
-}
-
 // SMT constant with the value of nodep
 static AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
     return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
@@ -3455,33 +3433,6 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
             const int width = selp->bitp()->width();
             if (!isRandIndex(selp->bitp()) || (width < 32 && (1U << width) <= elements)) continue;
-            FileLine* const fl = selp->fileline();
-            AstNodeExpr* const gtep
-                = new AstGte{fl, new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1},
-                             selp->bitp()->cloneTreePure(false)};
-            gtep->user1(true);
-            condp = condp ? new AstLogAnd{fl, condp, gtep} : gtep;
-            condp->user1(true);
-        }
-        return condp;
-    }
-    // Return whether the index of 'selp' depends on a randomized variable
-    static bool isRandIndex(const AstArraySel* selp) {
-        // Not just user1, which can be over-marked in sum/with expansion contexts. A
-        // std::randomize() with-clause argument carries no rand qualifier of its own but is
-        // still part of the solve.
-        return selp->bitp()->exists([](const AstNodeVarRef* vrefp) {
-            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
-        });
-    }
-    // Return SMT condition that the rand indices of select chain 'nodep' are in range, or nullptr
-    static AstNodeExpr* newIndexInRangep(const AstArraySel* nodep) {
-        AstNodeExpr* condp = nullptr;
-        for (const AstArraySel* selp = nodep; selp; selp = VN_CAST(selp->fromp(), ArraySel)) {
-            const uint32_t elements
-                = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
-            const int width = selp->bitp()->width();
-            if (!isRandIndex(selp) || (width < 32 && (1U << width) <= elements)) continue;
             FileLine* const fl = selp->fileline();
             AstNodeExpr* const gtep
                 = new AstGte{fl, new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1},
