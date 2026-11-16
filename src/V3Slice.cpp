@@ -225,6 +225,9 @@ class SliceVisitor final : public VNVisitor {
         m_assignError = false;
         m_assignp = nodep;
         if (assignOptimize(nodep)) return;
+        // Not sliced, so an array value below, e.g. formatted or the receiver of an array
+        // method, is assigned or consumed whole
+        m_okConsArray = true;
         iterateChildren(nodep);
     }
 
