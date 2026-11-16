@@ -14,6 +14,7 @@ module t (
 );
 
   wire o_n;
+  wire o_p;
   wire o_0;
   wire o_1;
   wire [6:0] ov_0;
@@ -35,6 +36,8 @@ module t (
   sub_0 sub_0 (.o_0, .ov_0, .oa_0);
   sub_1 sub_1 (.o_1, .ov_1, .oa_1, .ot_1, .ota_1, .osa_1, .osb_1, .osra_1, .ovar_1, .or_1);
   sub_n sub_n (.o_n);
+  ifc_1 ifc_1 ();
+  prg_1 prg_1 (.o_p);
   // verilator lint_on PINMISSING
   sub_d sub_d_omit (.od(od_omit));
   sub_d sub_d_empty (
@@ -61,6 +64,8 @@ module t (
     `checkh(od_empty, 3'h7);  // Explicit empty connection, so no default value
     `checkh(od_blank, 3'h2);  // Default value, not pulled
     //4-state if (o_n !== 1'bz) $stop;
+    `checkh(ifc_1.o_i, 1'b1);
+    `checkh(o_p, 1'b1);
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -140,3 +145,19 @@ module sub_n (
 );
   assign o_n = i;
 endmodule
+
+`unconnected_drive pull1
+interface ifc_1 (
+    input i
+);
+  wire o_i;
+  assign o_i = i;
+endinterface
+
+program prg_1 (
+    input i,
+    output wire o_p
+);
+  assign o_p = i;
+endprogram
+`nounconnected_drive
