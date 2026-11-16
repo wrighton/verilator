@@ -1,0 +1,42 @@
+%Error: t/t_timing_ff_bad.v:14:5: Only one event control is legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                : ... note: In instance 't'
+                                : ... Suggest use a normal 'always'
+   14 |     @(posedge clk) q1 <= ~d;   
+      |     ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_timing_ff_bad.v:17:5: Blocking timing controls are not legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                : ... note: In instance 't'
+                                : ... Suggest use a normal 'always'
+   17 |     #1 q2 <= d;   
+      |     ^
+%Error: t/t_timing_ff_bad.v:20:5: Blocking timing controls are not legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                : ... note: In instance 't'
+                                : ... Suggest use a normal 'always'
+   20 |     wait (d) q3 <= d;   
+      |     ^~~~
+%Error: t/t_timing_ff_bad.v:23:8: Blocking timing controls are not legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                : ... note: In instance 't'
+                                : ... Suggest use a normal 'always'
+   23 |     q4 = #1 d;   
+      |        ^
+%Error: t/t_timing_ff_bad.v:26:8: Blocking timing controls are not legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                : ... note: In instance 't'
+                                : ... Suggest use a normal 'always'
+   26 |     q5 = @(negedge clk) d;   
+      |        ^
+%Error: t/t_timing_ff_bad.v:28:28: Only one event control is legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                 : ... note: In instance 't'
+                                 : ... Suggest use a normal 'always'
+   28 |   always_ff @(posedge clk) @(negedge clk) q6 <= d;   
+      |                            ^
+%Error: t/t_timing_ff_bad.v:32:5: Blocking timing controls are not legal under always_ff (IEEE 1800-2023 9.2.2.4)
+                                : ... note: In instance 't'
+                                : ... Suggest use a normal 'always'
+   32 |     ##1;   
+      |     ^~
+%Error-UNSUPPORTED: t/t_timing_ff_bad.v:34:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                            : ... note: In instance 't'
+   34 |     assert property (d ##1 d);
+      |     ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
