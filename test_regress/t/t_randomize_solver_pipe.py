@@ -8,6 +8,9 @@
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
 import os
+import shlex
+import signal
+import sys
 
 import vltest_bootstrap
 
@@ -17,7 +20,7 @@ test.top_filename = "t/t_randomize_solver_fault.v"
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+test.compile(verilator_flags2=['-fno-constraint-fast'])
 
 # Every scenario acts on the first reply of its kind, so the counts do not
 # depend on how many replies a particular solver sends per randomize() call.
@@ -47,6 +50,22 @@ for mode, once, npass in runs:
 
 test.file_grep(test.obj_dir + '/sim_garbage_at_always.log', r'Solver failed repeatedly')
 
+# The harness ignores SIGPIPE; restore the default disposition before the model runs.
+if os.name == 'posix' and hasattr(signal, 'SIGPIPE'):
+    logfile = test.obj_dir + '/sim_close_stdin.log'
+    latch = test.obj_dir + '/close_stdin.latch'
+    if os.path.exists(latch):
+        os.unlink(latch)
+    prefix = (shlex.quote(sys.executable) +
+              ' -c "import os, signal, sys; signal.signal(signal.SIGPIPE, signal.SIG_DFL);'
+              ' os.execv(sys.argv[1], sys.argv[1:])"')
+    test.execute(logfile=logfile,
+                 run_env='VERILATOR_SOLVER="' + sys.executable + ' ' + test.t_dir +
+                 '/randomize_solver_tamper.py" TAMPER=close_stdin_at TAMPER_AT=1 TAMPER_ONCE="' +
+                 latch + '" ' + prefix)
+    test.file_grep(logfile, r'NPASS=(\d+)', 11)
+    test.file_grep(logfile, r'Solver died or replied unreadably')
+
 # A solver that never starts is not restarted, so it is never reported as dead
 logfile = test.obj_dir + '/sim_nosolver.log'
 test.execute(logfile=logfile, run_env='VERILATOR_SOLVER=someimaginarysolver ')
@@ -67,6 +86,17 @@ test.file_grep(logfile, r'NPASS=(\d+)', 11)
 test.file_grep_not(logfile, r'Solver failed repeatedly')
 test.file_grep_not(logfile, r'Solver died')
 
+# A solver that rejects a command and then stops answering is replaced
+logfile = test.obj_dir + '/sim_err_mute.log'
+latch = test.obj_dir + '/err_mute.latch'
+if os.path.exists(latch):
+    os.unlink(latch)
+test.execute(logfile=logfile,
+             run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+             'TAMPER=err_mute TAMPER_AT=2 TAMPER_ONCE="' + latch + '" ')
+test.file_grep(logfile, r'NPASS=(\d+)', 11)
+test.file_grep(logfile, r'Solver died or replied unreadably')
+
 # A reply the unigen2 sampler can't read while it measures the solution space.
 # Falls back to the plain solve, so every randomize still succeeds
 logfile = test.obj_dir + '/sim_ug2_estimate.log'
@@ -76,12 +106,13 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A value the sampler can't parse, and a status it can't use, seen while it
-# enumerates a cell.
+# enumerates a cell. The solver rejects several commands of that call, and the
+# replies queued behind its first error must not answer later calls.
 logfile = test.obj_dir + '/sim_ug2_value.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
              'TAMPER=bad_base TAMPER_AT=7 ')
-test.file_grep(logfile, r'NPASS=(\d+)', 9)
+test.file_grep(logfile, r'NPASS=(\d+)', 11)
 
 # A reply naming a variable the sampler didn't ask for.
 logfile = test.obj_dir + '/sim_ug2_var.log'
