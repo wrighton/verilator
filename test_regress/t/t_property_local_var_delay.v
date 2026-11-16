@@ -194,6 +194,10 @@ module t (
     @(posedge clk) (cyc < 30, t = cyc[6:0]) ##1 ($urandom_range(1, 1) inside {1})
         |-> (cyc[6:0] == t + offset);
   endproperty
+  // Nor in a repetition
+  int fail_inside_rep = 0;
+  assert property (@(posedge clk) cyc < 30 |-> ($urandom_range(1, 1) inside {1}) [* 2])
+  else fail_inside_rep++;
   // verilator lint_on SIDEEFFECT
   assert property (p_inside(1))
   else fail_inside++;
@@ -220,6 +224,7 @@ module t (
     `checkd(fail_no_impl_wrong, 29);
     `checkd(fail_inside, 0);
     `checkd(fail_inside_wrong, 30);
+    `checkd(fail_inside_rep, 0);
     $write("*-* All Finished *-*\n");
     $finish;
   end
