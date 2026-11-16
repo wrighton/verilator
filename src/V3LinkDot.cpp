@@ -1805,10 +1805,6 @@ class LinkDotFindVisitor final : public VNVisitor {
             rewriteIfacePortRefsSingle(newDeclp, portName);
             bodyp->addDeclsp(newDeclp);
         }
-        // The statements go in a block named for the task, as their unnamed blocks are numbered
-        // in this module, so would clash with the interface's own.
-        AstBegin* const bodyp
-            = new AstBegin{nodep->fileline(), "__Vexport_" + nodep->name(), nullptr, true};
         for (AstNodeStmt* const stmtp : nodep->stmtspList()) {
             // Clone this statement and rewrite port references
             AstNodeStmt* const newStmtp = stmtp->cloneTree(false);
