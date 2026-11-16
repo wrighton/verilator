@@ -13,6 +13,6 @@
     9 |   extern task nodef();   
       |               ^~~~~
 %Error: t/t_class_extern_bad.v:12:6: extern not found that declares 'noproto'
-   12 | task Base1::noproto();   
+   12 | task Base1::noproto(int a);   
       |      ^~~~~
 %Error: Exiting due to
