@@ -1,5 +1,6 @@
 // DESCRIPTION: Preserve selected assertion state across a model save/restore.
 // This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 module assertion_leaf (
     input bit clk,
