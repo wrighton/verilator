@@ -1,0 +1,24 @@
+%Error: t/t_string_byte_bad.v:11:17: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                   : ... note: In instance 't'
+                                   : ... Left-hand data type: 'byte$[0:2]'
+                                   : ... Right-hand data type: 'string'
+   11 |   initial bytes = $typename(bytes);
+      |                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Warning-WIDTHTRUNC: t/t_string_byte_bad.v:11:17: Operator ASSIGN expects 8 bits on the Assign RHS, but Assign RHS's CONST '"byte$[0:2]"' generates 64 bits.
+                                                : ... note: In instance 't'
+   11 |   initial bytes = $typename(bytes);
+      |                 ^
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Error: t/t_string_byte_bad.v:15:25: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                   : ... note: In instance 't'
+                                   : ... Left-hand data type: 'byte$[0:1]'
+                                   : ... Right-hand data type: 'bit[15:0]'
+   15 |   initial numeric_bytes = 16'h6162;
+      |                         ^
+%Warning-WIDTHTRUNC: t/t_string_byte_bad.v:15:25: Operator ASSIGN expects 8 bits on the Assign RHS, but Assign RHS's CONST '16'h6162' generates 16 bits.
+                                                : ... note: In instance 't'
+   15 |   initial numeric_bytes = 16'h6162;
+      |                         ^
+%Error: Exiting due to

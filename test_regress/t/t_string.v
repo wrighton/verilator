@@ -65,7 +65,6 @@ module t (
     `checkh(s <= "a", 1'b1);
 
 `ifndef VCS
-`ifndef VERILATOR
 `ifndef NC
     // IEEE 1800-2023 5.9 assignment to byte array
     unpack1 = "five";
@@ -74,7 +73,6 @@ module t (
     `checkh(unpack1[2], "v");
     `checkh(unpack1[3], "e");
     `checkh(unpack1[4], 8'h0);
-`endif
 `endif
 `endif
   end
