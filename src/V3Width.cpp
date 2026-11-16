@@ -3769,17 +3769,6 @@ class WidthVisitor final : public VNVisitor {
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 return;
-            } else if (dynamicAssignable) {
-                // Converted as assigned: a fixed-size array as to a queue, while a dynamic array
-                // and an unbounded queue share a representation
-                newp = nodep->fromp()->unlinkFrBack();
-                if (VN_IS(fromDtp, UnpackArrayDType)) {
-                    newp = new AstCvtUnpackToQueue{nodep->fileline(), newp, toDtp};
-                }
-                newp->dtypeFrom(nodep);
-                nodep->replaceWith(newp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-                return;
             } else if (AstBasicDType* const basicp = toDtp->basicp()) {
                 if (!basicp->isString() && fromDtp->isString()) {
                     newp = new AstNToI{nodep->fileline(), nodep->fromp()->unlinkFrBack(), toDtp};
@@ -7497,6 +7486,15 @@ class WidthVisitor final : public VNVisitor {
                    ? dtypep
                    : nullptr;
     }
+    // Return the value of an array element not given by an index key, or nullptr
+    AstNodeExpr* patternUnkeyedValuep(const DTypeMap& dtypemap, AstPatternItem* defaultp,
+                                      AstNodeDType* elemDTypep) {
+        // The value is from a data type key of the element type, else from the default (IEEE
+        // 1800-2023 10.9.1).
+        const auto it = dtypemap.find(elemDTypep->prettyDTypeName(true));
+        if (it != dtypemap.end()) return patternDefaultValuep(it->second, elemDTypep);
+        return patternDefaultValuep(defaultp, elemDTypep, dtypemap);
+    }
     // An unpacked array concatenation, with each item an element, or an array of the elements
     // spliced in (IEEE 1800-2023 10.10)
     void patternConcatArray(AstPattern* nodep, AstUnpackArrayDType* arrayDtp) {
@@ -7515,12 +7513,7 @@ class WidthVisitor final : public VNVisitor {
             }
             const VCastable castable = AstNode::computeCastable(
                 arrayDtp->subDTypep()->skipRefp(), valuep->dtypep()->skipRefp(), valuep);
-            if (itemArrayDtp) {
-                // A queue or dynamic array of the elements, whose size is only known at run time
-                valuep->v3warn(E_UNSUPPORTED, "Unsupported: Unpacked array concatenation item"
-                                              " of dynamic size for a fixed-size target");
-                error = true;
-            } else if (!castable.isSameish() && !castable.isCompatible()) {
+            if (!castable.isSameish() && !castable.isCompatible()) {
                 valuep->v3error("Unpacked array concatenation item is neither an element nor"
                                 " an array of elements of its target (IEEE 1800-2023 10.10)"
                                 << warnDTypes(valuep, arrayDtp->subDTypep(), valuep->dtypep(),
