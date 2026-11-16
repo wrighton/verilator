@@ -29,12 +29,16 @@ class Softy;
   }
 endclass
 
-// Phased solve...before replies
+// Phased solve...before replies. Random trial values almost never fit x, so its phase is
+// solved afresh and its value comes back in a phase value reply.
 class Phased;
-  rand bit [3:0] x;
+  rand bit [30:0] x;
   rand bit [3:0] y;
   constraint order_c {solve x before y;}
-  constraint rel_c {y > x;}
+  constraint rel_c {
+    x < 31'd15;
+    y > x[3:0];
+  }
 endclass
 
 // Array element replies, which arrive as (select ...) terms
