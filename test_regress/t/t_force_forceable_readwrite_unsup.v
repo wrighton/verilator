@@ -7,7 +7,7 @@
 module t;
   logic value  /* verilator forceable */;
 
-  task take_ref(ref logic i);
+  task automatic take_ref(ref logic i);
     // verilator no_inline_task
   endtask
 
