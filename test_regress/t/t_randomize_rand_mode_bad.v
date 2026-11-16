@@ -24,5 +24,7 @@ module t;
     $display("p.rand_mode()=%0d", p.rand_mode());
     $display(p.rand_mode(0));
     p.m_other_val.rand_mode();
+    arr[0].rand_mode(0);
   end
+  int arr[];
 endmodule

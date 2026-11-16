@@ -31,6 +31,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class V3UniqueNames;
@@ -61,6 +62,26 @@ struct ClonedConstraint final {
     AstNodeExpr* objp;  // The object, or object array, it was cloned for
 };
 using ClonedConstraints = std::map<const AstConstraint*, ClonedConstraint>;
+
+// The per-element rand_mode() state of arrays, created on first use
+class ElemRandModes final {
+    // MEMBERS
+    const std::unordered_set<AstVar*>& m_arrays;  // Arrays with per-element rand_mode()
+    std::unordered_map<const AstVar*, AstVar*> m_modeVars;  // Array -> its element modes
+    AstAssocArrayDType* m_dtypep = nullptr;  // Type of the element modes
+
+public:
+    // CONSTRUCTORS
+    explicit ElemRandModes(const std::unordered_set<AstVar*>& arrays)
+        : m_arrays{arrays} {}
+    // METHODS
+    // Whether no array has per-element rand_mode()
+    bool empty() const { return m_arrays.empty(); }
+    // Whether arrVarp has per-element rand_mode()
+    bool hasModes(AstVar* arrVarp) const { return m_arrays.count(arrVarp); }
+    // Get or create the per-element rand_mode state of an array, nullptr if it has none
+    AstVar* modeVarp(AstVar* arrVarp) VL_MT_DISABLED;
+};
 
 // The rand_mode/constraint_mode state arrays created by the front end
 class RandModeVars final {
@@ -128,16 +149,18 @@ protected:
     VMemberMap& m_memberMap;  // Member names cached for fast lookup
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
     const RandModeVars& m_modeVars;  // rand_mode/constraint_mode state arrays
+    ElemRandModes& m_elemModes;  // Per-element rand_mode() state
     const ClonedConstraints& m_cloneObjps;  // Constraints cloned from objects
     VNDeleter& m_deleter;  // Deferred deletion of nodes removed by the back-end
 
     // CONSTRUCTORS
     V3SolverLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames,
-                     const RandModeVars& modeVars, const ClonedConstraints& cloneObjps,
-                     VNDeleter& deleter)
+                     const RandModeVars& modeVars, ElemRandModes& elemModes,
+                     const ClonedConstraints& cloneObjps, VNDeleter& deleter)
         : m_memberMap{memberMap}
         , m_uniqueNames{uniqueNames}
         , m_modeVars{modeVars}
+        , m_elemModes{elemModes}
         , m_cloneObjps{cloneObjps}
         , m_deleter{deleter} {}
 
@@ -207,7 +230,8 @@ public:
     // Lowering for one V3Randomize pass, sharing the given state with the front end
     virtual std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
-                const ClonedConstraints& cloneObjps, VNDeleter& deleter) const VL_MT_DISABLED
+                ElemRandModes& elemModes, const ClonedConstraints& cloneObjps,
+                VNDeleter& deleter) const VL_MT_DISABLED
         = 0;
 };
 
