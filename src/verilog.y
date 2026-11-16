@@ -5297,7 +5297,9 @@ expr<nodeExprp>:                // IEEE: part of expression/constant_expression/
                                            new AstRefDType{$1, AstRefDType::FlagTypeOfExpr{}, $3}}; }
         |       ySIGNED yP_TICK '(' expr ')'            { $$ = new AstSigned{$1, $4}; }
         |       yUNSIGNED yP_TICK '(' expr ')'          { $$ = new AstUnsigned{$1, $4}; }
-        |       ySTRING yP_TICK '(' expr ')'            { $$ = new AstCvtPackString{$1, $4}; }
+        |       ySTRING yP_TICK '(' expr ')'
+                        { $$ = new AstCast{$2, $4, VFlagChildDType{},
+                                           new AstBasicDType{$1, VBasicDTypeKwd::STRING}}; }
         |       yCONST__ETC yP_TICK '(' expr ')'        { $$ = $4; }  // Not linting const presently
         //                      // Spec only allows primary with addition of a type reference
         //                      // We'll be more general, and later assert LHS was a type.

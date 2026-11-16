@@ -24,6 +24,7 @@ class AstNetlist;
 class AstNode;
 class AstNodeAssign;
 class AstNodeDType;
+class AstNodeExpr;
 
 //============================================================================
 
@@ -34,6 +35,9 @@ public:
     static AstNode* widthGenerateParamsEdit(AstNode* nodep) VL_MT_DISABLED;
     static AstNode* selectNonConstantRecurse(AstNode* nodep, bool inSel = false) VL_MT_DISABLED;
     static void streamAssignLowerEdit(AstNodeAssign* nodep) VL_MT_DISABLED;
+    // Convert a packed vector to a value of a fixed-size bit-stream type
+    static AstNodeExpr* unpackBitStreamEdit(AstNodeExpr* packedp,
+                                            AstNodeDType* dtypep) VL_MT_DISABLED;
 
     // For use only in WidthVisitor
     // Replace AstSelBit, etc with AstSel/AstArraySel
