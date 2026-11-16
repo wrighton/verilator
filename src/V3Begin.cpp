@@ -79,6 +79,7 @@ class BeginVisitor final : public VNVisitor {
     std::map<const AstNodeFTask*, string> m_forkBranchScopes;  // m_displayScope at the call
     int m_ifDepth = 0;  // Current if depth
     bool m_inStaticInit = false;  // Initializer executes outside its containing subroutine
+    bool m_inPersistentRhs = false;  // Continuous evaluation outlives its activating subroutine
     V3UniqueNames m_exprTempNames;  // Clone-distinct expression captures within a module
 
     // METHODS
@@ -125,6 +126,17 @@ class BeginVisitor final : public VNVisitor {
         }
     }
 
+    void iteratePersistentRhs(AstNodeAssign* const nodep) {
+        if (nodep->user1SetOnce()) return;
+        {
+            VL_RESTORER(m_inPersistentRhs);
+            m_inPersistentRhs = true;
+            iterateAndNextNull(nodep->rhsp());
+        }
+        iterateAndNextNull(nodep->lhsp());
+        iterateAndNextNull(nodep->timingControlp());
+    }
+
     void moveToConstPool(AstNodeExpr* nodep, AstVar* varp) {
         // Parameters are constants, so repoint references to a constant pool entry.
         // The variable itself stays, e.g. for VPI, until V3Dead finds it unused.
@@ -150,8 +162,10 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstNodeModule* nodep) override {
         if (nodep->user1SetOnce()) return;
         VL_RESTORER(m_modp);
+        VL_RESTORER(m_inPersistentRhs);
         VL_RESTORER_COPY(m_exprTempNames);
         m_modp = nodep;
+        m_inPersistentRhs = false;
         m_exprTempNames.reset();
         // Rename it (e.g. class under a generate)
         if (m_unnamedScope != "") {
@@ -202,11 +216,13 @@ class BeginVisitor final : public VNVisitor {
         VL_RESTORER(m_ftaskp);
         VL_RESTORER(m_liftedp);
         VL_RESTORER(m_inStaticInit);
+        VL_RESTORER(m_inPersistentRhs);
         VL_RESTORER_CLEAR(m_namedScope);
         VL_RESTORER_CLEAR(m_unnamedScope);
 
         m_ftaskp = nodep;
         m_inStaticInit = false;
+        m_inPersistentRhs = false;
         m_liftedp = nullptr;
         iterateChildren(nodep);
         nodep->foreach([&](AstInitialStatic* const initp) {
@@ -251,6 +267,8 @@ class BeginVisitor final : public VNVisitor {
         }
         nodep->name("");
     }
+    void visit(AstAssignCont* nodep) override { iteratePersistentRhs(nodep); }
+    void visit(AstAssignForce* nodep) override { iteratePersistentRhs(nodep); }
     void visit(AstBegin* nodep) override {
         if (nodep->user1SetOnce()) return;
         // A capture block's declarations follow cloned expressions into the actual caller scope.
@@ -260,9 +278,17 @@ class BeginVisitor final : public VNVisitor {
                 AstVar* const varp = VN_AS(declp, Var);
                 varp->unlinkFrBack();
                 varp->name(m_exprTempNames.get(varp->name()));
-                const bool inFunction = m_ftaskp && !m_inStaticInit;
+                // The value is captured once when the assignment executes, but its value
+                // expression is evaluated again whenever an operand changes
+                if (m_inPersistentRhs) {
+                    varp->v3warn(E_UNSUPPORTED,
+                                 "Unsupported: Enum name or method of a non-variable expression in"
+                                 " a procedural continuous assignment or force value");
+                }
+                const bool inFunction = m_ftaskp && !m_inStaticInit && !m_inPersistentRhs;
                 varp->funcLocal(inFunction);
                 if (inFunction) {
+                    varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
                     m_liftedp = AstNode::addNextNull(m_liftedp, varp);
                 } else {
                     varp->lifetime(VLifetime::STATIC_EXPLICIT);

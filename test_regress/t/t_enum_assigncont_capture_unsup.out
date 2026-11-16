@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_enum_assigncont_capture_unsup.v:21:40: Unsupported: Enum name or method of a non-variable expression in a procedural continuous assignment or force value
+   21 |     assign task_text = $sformatf("%p", choose(selected));
+      |                                        ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_enum_assigncont_capture_unsup.v:26:41: Unsupported: Enum name or method of a non-variable expression in a procedural continuous assignment or force value
+   26 |     force forced_text = $sformatf("%p", choose(selected));
+      |                                         ^~~~~~
+%Error-UNSUPPORTED: t/t_enum_assigncont_capture_unsup.v:32:35: Unsupported: Enum name or method of a non-variable expression in a procedural continuous assignment or force value
+   32 |     assign text = $sformatf("%p", choose(selected));
+      |                                   ^~~~~~
+%Error: Exiting due to

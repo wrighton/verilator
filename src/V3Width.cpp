@@ -12207,7 +12207,8 @@ class WidthVisitor final : public VNVisitor {
     AstExprStmt* newEnumCapture(AstNodeExpr* valuep, AstEnumDType* dtypep) {
         FileLine* const flp = valuep->fileline();
         AstVar* const varp = new AstVar{flp, VVarType::XTEMP, m_enumTempNames.get(valuep), dtypep};
-        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        // Caller-local lifetime is assigned after default cloning during Begin lowering.
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
         varp->noSubst(true);
         AstAssign* const assignp
             = new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, valuep};
