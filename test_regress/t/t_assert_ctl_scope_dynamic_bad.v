@@ -7,15 +7,15 @@
 // verilog_format: on
 module assertion_leaf;
   initial begin
-    labelled_check: assert (1'b1);
+    labelled_check : assert (1'b1);
   end
 endmodule
 module empty_scope;
 endmodule
 module t;
-  assertion_leaf a();
-  assertion_leaf b();
-  empty_scope e();
+  assertion_leaf a ();
+  assertion_leaf b ();
+  empty_scope e ();
   int calls = 0;
   function automatic int bad_effect();
     calls++;
