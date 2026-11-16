@@ -299,6 +299,11 @@ class DeadVisitor final : public VNVisitor {
 
     // cppcheck-suppress constParameterPointer
     void checkAll(AstNode* nodep) {
+        // Before assertion lowering, this semantic pointer is the site's state
+        // reference. Target lists alone do not keep unselected siblings alive.
+        if (AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt)) {
+            if (AstVar* const statep = stmtp->controlVarp()) statep->user1Inc();
+        }
         if (AstNode* const subnodep = nodep->dtypep()) {
             if (nodep != subnodep  // Not NodeDTypes reference themselves
                 && m_curDTypep != subnodep) {  // Not EnumItem referencing parent Enum
