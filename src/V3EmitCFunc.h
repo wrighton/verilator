@@ -1736,6 +1736,13 @@ public:
             // MemberRef name which matches the cell's C++ member (e.g. "tx").
             puts(nodep->nameProtect());
         } else {
+            // A member of the handle's class may shadow a base class member
+            const AstNodeModule* const varModp = EmitCParentModule::get(varp);
+            const AstClassRefDType* const refDTypep
+                = VN_CAST(nodep->fromp()->dtypep()->skipRefp(), ClassRefDType);
+            if (refDTypep && refDTypep->classp() != varModp) {
+                puts(EmitCUtil::prefixNameProtect(varModp) + "::");
+            }
             puts(varName(varp));
         }
         if (dereferenceCovergroupRef) puts(")");
