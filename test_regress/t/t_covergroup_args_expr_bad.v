@@ -51,6 +51,20 @@ module t;
     }
   endgroup
 
+  // A member of the enclosing class that is not an instance constant
+  class Cls;
+    int m_bound;
+    int m_value;
+    covergroup cg_member;
+      cp: coverpoint m_value {
+        bins bad = {m_bound};
+      }
+    endgroup
+    function new;
+      cg_member = new;
+    endfunction
+  endclass
+
   cg cov = new;
   bit constructor_value;
   cg_constructor_ref constructor_cov = new(constructor_value);
