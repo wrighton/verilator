@@ -161,6 +161,58 @@ class test_nested_indices;
   endfunction
 endclass
 
+class test_value_carriers;
+  rand int a[3];
+  rand bit choose;
+  rand int state_sum;
+  rand int state_product;
+  rand int random_sum;
+  rand int random_product;
+  rand int logical_value;
+  rand int function_value;
+  int bias;
+
+  function int keep_value(int value);
+    return value;
+  endfunction
+
+  // Multiple returns keep the call's arguments in the function-value carrier path.
+  function int pick_value(bit selected);
+    if (selected) return 23;
+    return 29;
+  endfunction
+
+  constraint c {
+    foreach (a[i]) a[i] == i + bias;
+    state_sum == a.sum() with (item.index == 1 ? int'(item) : 0);
+    state_product == a.product() with (item.index == 1 ? int'(item) : 1);
+    random_sum == a.sum() with (choose ? int'(item) : 0);
+    random_product == a.product() with (choose ? int'(item) : 1);
+    logical_value == keep_value(int'((a[0] > 0) && (a[2] > 0)));
+    function_value == pick_value(choose);
+  }
+
+  function void verify(int turn);
+    int ok;
+    int sum_value = 0;
+    int product_value = 1;
+    bias = turn + 1;
+    ok = randomize() with {choose == bit'(turn % 2);};
+    `checkd(ok, 1);
+    foreach (a[i]) begin
+      `checkd(a[i], i + bias);
+      sum_value += a[i];
+      product_value *= a[i];
+    end
+    `checkd(state_sum, a[1]);
+    `checkd(state_product, a[1]);
+    `checkd(random_sum, choose ? sum_value : 0);
+    `checkd(random_product, choose ? product_value : 1);
+    `checkd(logical_value, 1);
+    `checkd(function_value, choose ? 23 : 29);
+  endfunction
+endclass
+
 class state_sub;
   rand int r;
   int k;
@@ -969,6 +1021,12 @@ module t;
       ok = g.randomize() with {gate == 0;};
       `checkd(ok, 1);
       `checkd(g.out, 7'd23);
+    end
+
+    // Reduction selectors and values must be prepared at each element, not outside the loop.
+    begin
+      automatic test_value_carriers carrier = new;
+      for (int turn = 0; turn < 8; ++turn) carrier.verify(turn);
     end
 
     $write("*-* All Finished *-*\n");
