@@ -39,6 +39,7 @@
 
 #include "V3Slice.h"
 
+#include "V3SharedTmps.h"
 #include "V3Stats.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -56,8 +57,10 @@ class SliceVisitor final : public VNVisitor {
     // STATE - across all visitors
     VDouble0 m_statAssigns;  // Statistic tracking
     VDouble0 m_statSliceElementSkips;  // Statistic tracking
+    V3SharedTmps m_cvtTmps{"__VsliceCvt", VVarType::MODULETEMP};  // Converted slice sources
 
     // STATE - for current visit position (use VL_RESTORER)
+    AstScope* m_scopep = nullptr;  // Current scope
     AstNode* m_assignp = nullptr;  // Assignment we are under
     bool m_assignError = false;  // True if the current assign already has an error
     bool m_okConsArray = false;  // Allow ConsArray children
@@ -217,9 +220,9 @@ class SliceVisitor final : public VNVisitor {
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
         const bool consLhs = VN_IS(nodep->lhsp(), ConsArray);
-        // Slicing would evaluate an impure side once per element, so copy the whole array,
-        // unless writing a slice, which is only done element by element
-        const bool impure = !nodep->lhsp()->isPure() || !nodep->rhsp()->isPure();
+        // Slicing would evaluate a side that is not repeatable once per element, so copy the
+        // whole array, unless writing a slice, which is only done element by element
+        const bool impure = !nodep->lhsp()->isRepeatable() || !nodep->rhsp()->isRepeatable();
         if (!hasSc && !lhsSlice && !consLhs && (!v3Global.opt.fSlice() || impure)) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
@@ -413,6 +416,11 @@ class SliceVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
+    void visit(AstScope* nodep) override {
+        VL_RESTORER(m_scopep);
+        m_scopep = nodep;
+        iterateChildren(nodep);
+    }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
