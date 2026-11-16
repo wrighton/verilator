@@ -798,7 +798,6 @@ private:
         if (jumpingOver()) return;
         if (!optimizable()) return;  // Accelerate
         UASSERT_OBJ(nodep->varp(), nodep, "Unlinked");
-        iterateChildrenConst(nodep->varp());
         AstNode* const vscp = varOrScope(nodep);
 
         // We can't have non-delayed assignments with same value on LHS and RHS
@@ -833,6 +832,8 @@ private:
                 m_varAux(vscp).usage |= VU_RV;
                 const bool varIsConst = (nodep->varp()->isConst() || nodep->varp()->isParam())
                                         && nodep->varp()->valuep();
+                // Evaluate the value once, as it may be a large aggregate
+                if (varIsConst) iterateChildrenConst(nodep->varp());
                 const AstNodeExpr* const valuep
                     = varIsConst ? fetchValueNull(nodep->varp()->valuep()) : nullptr;
                 // Propagate PARAM constants for constant function analysis
