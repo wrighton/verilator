@@ -2194,6 +2194,8 @@ class ConstVisitor final : public VNVisitor {
                                       : new AstOr{flp, lhsp, rhsp};
         nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        m_pureBitwisep = newp;
+        m_pureBitwiseEditCnt = AstNode::editCountGbl();
         // The iterator revisits newp next to apply its rules (the conversion is only done in
         // the global pass, where no LogAnd/LogOr is visited by a direct iterate()). Its
         // operands are already simplified, so tell iterateBitwiseOperands not to walk them
@@ -3176,11 +3178,21 @@ class ConstVisitor final : public VNVisitor {
         return result;
     }
 
+    // Purity of a LogAnd/LogOr. Any edit clears the cached purity, so an operand just converted
+    // to an And/Or, known to be pure, is not walked again, which on a long chain of operators
+    // would be quadratic.
+    bool isPureLogic(AstNodeBiop* nodep) const {
+        if (AstNode::editCountGbl() == m_pureBitwiseEditCnt) {
+            if (nodep->lhsp() == m_pureBitwisep) return nodep->rhsp()->isPure();
+            if (nodep->rhsp() == m_pureBitwisep) return nodep->lhsp()->isPure();
+        }
+        return nodep->isPure();
+    }
     bool matchBiopToBitwise(AstNodeBiop* const nodep) {
         if (!m_convertLogicToBit) return false;
         if (!nodep->lhsp()->width1()) return false;
         if (!nodep->rhsp()->width1()) return false;
-        if (!nodep->isPure()) return false;
+        if (!isPureLogic(nodep)) return false;
         if (containsMemberAccessRecurse(nodep)) return false;
         return true;
     }
