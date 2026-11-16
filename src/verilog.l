@@ -1172,7 +1172,7 @@ vnum    {vnum1}|{vnum2}|{vnum3}|{vnum4}|{vnum5}
   "`remove_netnames"                    { FL_FWD; FL_BRK; }  // Verilog-XL compatibility
   "`resetall"                           { FL;
                                           PARSEP->lexFileline()->warnOn(V3ErrorCode::I_DEF_NETTYPE_WIRE, true);
-                                          v3Global.rootp()->timeInit();
+                                          PARSEP->lexTimescaleReset();
                                           PARSEP->lexFileline()->celldefineOn(false);
                                           PARSEP->unconnectedDrive(VOptionBool::OPT_DEFAULT_FALSE);
                                           return yaT_RESETALL; }  // Rest handled by preproc
