@@ -46,7 +46,7 @@ template <>
 DfgArraySel* makeVertex<DfgArraySel, AstArraySel>(const AstArraySel* nodep, DfgGraph& dfg,
                                                   const DfgDataType& dtype) {
     // Some earlier passes create malformed ArraySels, just bail on those...
-    // See t_bitsel_wire_array_bad
+    // See t_bitsel_wire_array_const_bad
     if (VN_IS(nodep->fromp(), Const)) return nullptr;
     if (!VN_IS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)) return nullptr;
     return new DfgArraySel{dfg, nodep->fileline(), dtype};
