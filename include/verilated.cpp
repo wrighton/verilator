@@ -2754,6 +2754,8 @@ VlReadMem::VlReadMem(bool hex, int bits, const std::string& filename, QData star
     , m_filename(filename)  // Need () or GCC 4.8 false warning
     , m_end{end}
     , m_descending{start > end}
+    , m_lo{std::min(start, end)}
+    , m_hi{std::max(start, end)}
     , m_addr{start} {
     m_fp = std::fopen(filename.c_str(), "r");
     if (VL_UNLIKELY(!m_fp)) {
@@ -2794,13 +2796,7 @@ bool VlReadMem::get(QData& addrr, std::string& valuer) {
         if (inData && !chIs4StateHex) {
             // printf("Got data @%lx = %s\n", m_addr, valuer.c_str());
             ungetc(c, m_fp);
-            addrr = m_addr;
-            if (m_descending) {
-                --m_addr;
-            } else {
-                ++m_addr;
-            }
-            return true;
+            return nextAddr(addrr);
         }
         // Parse line
         if (c == '\n') {
@@ -2825,6 +2821,7 @@ bool VlReadMem::get(QData& addrr, std::string& valuer) {
             } else if (c == '@') {
                 readingAddress = true;
                 m_anyAddr = true;
+                m_addrDirective = true;
                 m_addr = 0;
             } else if (readingAddress && chIs2StateHex) {
                 c = std::tolower(c);
@@ -2846,15 +2843,36 @@ bool VlReadMem::get(QData& addrr, std::string& valuer) {
         }
         lastCh = c;
     }
+    if (inData) return nextAddr(addrr);
 
-    const bool beforeEnd = m_descending ? m_addr >= m_end : m_addr <= m_end;
-    if (VL_UNLIKELY(m_end != ~0ULL && beforeEnd && !m_anyAddr)) {
+    if (VL_UNLIKELY(m_end != ~0ULL && inRange(m_addr) && !m_anyAddr)) {
         VL_WARN_MT(m_filename.c_str(), m_linenum, "",
                    "$readmem file ended before specified final address (IEEE 1800-2023 21.4)");
     }
-
+    return false;  // EOF
+}
+bool VlReadMem::nextAddr(QData& addrr) {
+    // Words are loaded only from the start address to the finish address (IEEE 1800-2023 21.4)
+    if (VL_UNLIKELY(!inRange(m_addr))) {
+        if (m_addrDirective) {
+            VL_FATAL_MT(m_filename.c_str(), m_linenum, "",
+                        "$readmem file address beyond specified address range"
+                        " (IEEE 1800-2023 21.4)");
+        } else if (!m_anyAddr) {
+            VL_WARN_MT(m_filename.c_str(), m_linenum, "",
+                       "$readmem file has more words than the specified address range"
+                       " (IEEE 1800-2023 21.4)");
+        }
+        return false;
+    }
     addrr = m_addr;
-    return inData;  // EOF
+    m_addrDirective = false;
+    if (m_descending) {
+        --m_addr;
+    } else {
+        ++m_addr;
+    }
+    return true;
 }
 void VlReadMem::setData(void* valuep, const std::string& rhs) {
     const QData shift = m_hex ? 4ULL : 1ULL;
