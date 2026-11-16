@@ -3769,6 +3769,17 @@ class WidthVisitor final : public VNVisitor {
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 return;
+            } else if (dynamicAssignable) {
+                // Converted as assigned: a fixed-size array as to a queue, while a dynamic array
+                // and an unbounded queue share a representation
+                newp = nodep->fromp()->unlinkFrBack();
+                if (VN_IS(fromDtp, UnpackArrayDType)) {
+                    newp = new AstCvtUnpackToQueue{nodep->fileline(), newp, toDtp};
+                }
+                newp->dtypeFrom(nodep);
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                return;
             } else if (AstBasicDType* const basicp = toDtp->basicp()) {
                 if (!basicp->isString() && fromDtp->isString()) {
                     newp = new AstNToI{nodep->fileline(), nodep->fromp()->unlinkFrBack(), toDtp};
