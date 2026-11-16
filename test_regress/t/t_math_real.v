@@ -9,6 +9,7 @@
 // verilog_format: off
 `define stop $stop
 `define checkr(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got=%f exp=%f\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 `define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 `define is_near_real(a,b)  (( ((a)<(b)) ? (b)-(a) : (a)-(b)) < (((a)/(b))*0.0001))
 // verilog_format: on
@@ -29,6 +30,8 @@ module t (
   reg signed [63:0] cis64;
   reg [95:0] ci96;
   reg signed [95:0] cis96;
+  reg [126:0] ci127;
+  reg [100:0] ci101;
   real r, r2;
   integer cyc = 0;
   string s;
@@ -164,6 +167,13 @@ module t (
     if (r != 74276402357122816493947453440.0) $stop;
     r = real'(96'shf0000000_00000000_00000000);
     if (r != -4951760157141521099596496896.0) $stop;
+    // Rounded to the nearest real (IEEE 754), also checked at runtime below
+    `checkh($realtobits(real'(63'h19834c50_c0093492)), 64'h43b9834c_50c00935);
+    `checkh($realtobits(real'(127'h4df25e7e_49b64a08_72e6cc3a_babced20)), 64'h47d37c97_9f926d93);
+    `checkh($realtobits(real'(70'sh200_e67a9b7f_c394724)), 64'hc43ff198_564803c7);
+    `checkh($realtobits(real'(127'h40000000_00000200_00000000_00000001)), 64'h47d00000_00000001);
+    `checkh($realtobits(real'(101'h10_00000000_00008000_00000001)), 64'h46300000_00000001);
+    `checkh($realtobits(real'(101'h10_00000000_00008000_00000000)), 64'h46300000_00000000);
 
     r = 1.5;
     if (r++ != 1.5) $stop;
@@ -209,12 +219,16 @@ module t (
       cis48 <= '0;
       ci96 <= '0;
       cis96 <= '0;
+      ci127 <= '0;
+      ci101 <= '0;
     end
     else if (cyc == 1) begin
       ci48 <= 48'hff00_00000000;
       cis48 <= 48'shff00_00000000;
       ci96 <= 96'hf0000000_00000000_00000000;
       cis96 <= 96'shf0000000_00000000_00000000;
+      ci127 <= 127'h40000000_00000200_00000000_00000001;
+      ci101 <= 101'h10_00000000_00008000_00000001;
     end
     else if (cyc < 80) begin
       if ($time != {32'h0, $rtoi($realtime)}) $stop;
@@ -275,6 +289,9 @@ module t (
       `checkr(r, 74276402357122816493947453440.0);
       r = real'(cis96);
       `checkr(r, -4951760157141521099596496896.0);
+      // Same rounding as the constant conversions
+      `checkh($realtobits(real'(ci127)), $realtobits(real'(127'h40000000_00000200_00000000_00000001)));
+      `checkh($realtobits(real'(ci101)), 64'h46300000_00000001);
     end
     else if (cyc == 90) begin
       ci32 <= '0;
