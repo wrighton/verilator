@@ -661,11 +661,14 @@ class TimingControlVisitor final : public VNVisitor {
         return m_dynamicSensesp;
     }
     // Returns true if we are under a class or the given tree has any references to locals. These
-    // are cases where static, globally-evaluated triggers are not suitable.
+    // are cases where static, globally-evaluated triggers are not suitable. A fork branch may run
+    // as several processes at once, so its automatic variables are local to each process.
     bool needDynamicTrigger(AstNode* const nodep) const {
-        return m_classp || nodep->exists([](AstNode* const nodep) {
+        const bool inForkItem = VN_IS(m_procp, ForkItem);
+        return m_classp || nodep->exists([inForkItem](AstNode* const nodep) {
             if (AstNodeVarRef* varp = VN_CAST(nodep, NodeVarRef)) {
-                return varp->varp()->isFuncLocal();
+                return varp->varp()->isFuncLocal()
+                       || (inForkItem && varp->varp()->lifetime().isAutomatic());
             }
             return !nodep->isPure();
         });
