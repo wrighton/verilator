@@ -248,6 +248,8 @@ module t;
   initial begin
     int randomize_result;
     indep = new;
+    // ssc is not rand, so the size of its array is a state value
+    indep.sc.ssc.subArr = '{1};
     ext0 = new;
     ext1 = new;
     outEmpt = new;
