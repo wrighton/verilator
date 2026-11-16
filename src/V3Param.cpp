@@ -4293,6 +4293,7 @@ class ParamVisitor final : public VNVisitor {
             nodep->addNextHere(forp->unlinkFrBack());
             VL_DO_DANGLING(m_unroller.unroll(forp, beginName), forp);
         } else {
+            m_processor.visitScopeItem(nodep, m_genBlockp);
             VL_RESTORER_COPY(m_generateHierName);
             VL_RESTORER(m_genBlockp);
             // An unnamed block that is not a generate scope has no name
