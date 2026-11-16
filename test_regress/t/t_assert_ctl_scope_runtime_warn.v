@@ -1,5 +1,6 @@
 // DESCRIPTION: Dynamic control-type validation for selected and empty scopes.
 // This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 // verilog_format: off
 `define stop $stop
