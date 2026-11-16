@@ -154,6 +154,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     VInsertionSet<AstVar*>* m_sizeConstrainedArraysp = nullptr;  // Arrays with size constraints
     AstNodeExpr* m_conditionp = nullptr;  // Condition under which current expression is defined
                                           // (nullptr == always defined)
+    const AstArraySel* m_inRangeSelp = nullptr;  // Select already guarded by its range check
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
     uint32_t* m_uniqueConstraintIdp = nullptr;  // Current ID of unique call
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
@@ -1854,20 +1855,69 @@ class ConstraintExprVisitor final : public VNVisitor {
             newp->exprsp()->nextp()->name("%x");
         }
     }
+    // Return whether the index of 'selp' depends on a randomized variable
+    static bool isRandIndex(const AstArraySel* selp) {
+        // Not just user1, which can be over-marked in sum/with expansion contexts. A
+        // std::randomize() with-clause argument carries no rand qualifier of its own but is
+        // still part of the solve.
+        return selp->bitp()->exists([](const AstNodeVarRef* vrefp) {
+            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+        });
+    }
+    // Return SMT condition that the rand indices of select chain 'nodep' are in range, or nullptr
+    static AstNodeExpr* newIndexInRangep(const AstArraySel* nodep) {
+        AstNodeExpr* condp = nullptr;
+        for (const AstArraySel* selp = nodep; selp; selp = VN_CAST(selp->fromp(), ArraySel)) {
+            const uint32_t elements
+                = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+            const int width = selp->bitp()->width();
+            if (!isRandIndex(selp) || (width < 32 && (1U << width) <= elements)) continue;
+            FileLine* const fl = selp->fileline();
+            AstNodeExpr* const gtep
+                = new AstGte{fl, new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1},
+                             selp->bitp()->cloneTreePure(false)};
+            gtep->user1(true);
+            condp = condp ? new AstLogAnd{fl, condp, gtep} : gtep;
+            condp->user1(true);
+        }
+        return condp;
+    }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
-        VNRelinker handle;
-        // Check if index actually references a rand variable (not just user1,
-        // which can be over-marked in sum/with expansion contexts). A
-        // std::randomize() with-clause argument carries no rand qualifier of
-        // its own but is still part of the solve.
-        bool indexIsRand = false;
-        nodep->bitp()->foreach([&](const AstNodeVarRef* vrefp) {
-            if (vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg()) {
-                indexIsRand = true;
+        // An element selected by an out-of-range index reads the default value
+        // (IEEE 1800-2023 7.4.6); only an integral element has one to read instead
+        if (nodep != m_inRangeSelp && nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            if (AstNodeExpr* const inRangep = newIndexInRangep(nodep)) {
+                VNRelinker condHandle;
+                nodep->unlinkFrBack(&condHandle);
+                AstCond* const condp
+                    = new AstCond{fl, inRangep, nodep,
+                                  new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0}};
+                condp->user1(true);
+                condHandle.relink(condp);
+                VL_RESTORER(m_inRangeSelp);
+                m_inRangeSelp = nodep;
+                iterate(condp);
+                return;
             }
-        });
+        }
+        VNRelinker handle;
+        const bool indexIsRand = isRandIndex(nodep);
+        if (!indexIsRand) {
+            // V3Width keeps all index bits; truncate as it did before, as the names of struct
+            // and class array elements depend on the index width
+            const int selWidth
+                = V3Number::log2b(VN_AS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)
+                                      ->declRange()
+                                      .hiMaxSelect())
+                  + 1;
+            if (nodep->bitp()->width() > selWidth) {
+                VNRelinker indexHandle;
+                AstNodeExpr* const bitp = nodep->bitp()->unlinkFrBack(&indexHandle);
+                indexHandle.relink(new AstSel{bitp->fileline(), bitp, 0, selWidth});
+            }
+        }
         if (m_nestedAccessp) {
             AstNodeExpr* const bitp = nodep->bitp()->cloneTreePure(false);
             AstNodeExpr* const bitFormatp
@@ -1890,12 +1940,15 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         if (indexIsRand) {
             // Index depends on rand variable -- keep as SMT symbol.
-            // Array index sort is 32-bit, so zero-extend narrower indices.
+            // Array index sort is 32-bit, so zero-extend narrower indices and truncate wider
+            // ones, which for an integral element are used only when in range.
             AstNodeExpr* indexp = nodep->bitp()->unlinkFrBack(&handle);
             if (indexp->width() < 32) {
-                AstExtend* const extendp = new AstExtend{fl, indexp, 32};
-                extendp->user1(true);
-                indexp = extendp;
+                indexp = new AstExtend{fl, indexp, 32};
+                indexp->user1(true);
+            } else if (indexp->width() > 32) {
+                indexp = new AstSel{fl, indexp, 0, 32};
+                indexp->user1(true);
             }
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
