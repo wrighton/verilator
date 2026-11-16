@@ -2654,6 +2654,7 @@ public:
         return schemap() == VN_DBG_AS(samep, SchemaRef)->schemap();
     }
     AstNodeSchema* schemap() const VL_MT_STABLE { return m_schemap; }
+    void schemap(AstNodeSchema* nodep) { m_schemap = nodep; }
     AstNodeModule* classOrPackagep() const VL_MT_STABLE { return m_classOrPackagep; }
     bool isPure() override { return false; }  // Unknown until substituted
     std::string emitVerilog() final override { V3ERROR_NA_RETURN(""); }
