@@ -4,6 +4,14 @@
 // SPDX-FileCopyrightText: 2025 Antmicro
 // SPDX-License-Identifier: CC0-1.0
 
+class Cls;
+  static int y;
+  static function bit bar;
+    y += 1;
+    return bit'(y % 2);
+  endfunction
+endclass
+
 module t;
   int x;
 
@@ -13,5 +21,10 @@ module t;
   endfunction
 
   always @(posedge foo());
+
+  // Converting Cls::bar first must keep it impure
+  bit b;
+  initial b = Cls::bar();
+  always @(posedge Cls::bar());
 
 endmodule
