@@ -3853,10 +3853,6 @@ public:
 
         m_statVertices += vtx.size();
 
-        // Build lowering context for phase sub-functions.
-        LowerCtx c{flp,           senTreep, disableExprp, matchCondp,  assertType,
-                   directiveType, killVarp, graph,        exactCounts, exactAbortp};
-
         // Phase 1: Resolve combinational Links in dependency order.
         AstNodeExpr* const triggerExprp
             = isSeqEvent ? new AstConst{flp, AstConst::BitTrue{}}
