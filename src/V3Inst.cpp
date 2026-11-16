@@ -95,6 +95,9 @@ class InstVisitor final : public VNVisitor {
         AstVar* const modVarp = nodep->modVarp();
         // An interface reference is aliased via AstAliasScope below, not as a variable
         if (modVarp->isIfaceRef()) return false;
+        // A net delay of the port's net delays the connection's assignment to it
+        // (IEEE 1800-2023 23.3.3, 28.16)
+        if (modVarp->delayp()) return false;
         // An input port stays a variable of its own if its module is not inlined, so the
         // instances can share their code; V3Inline and V3Coalesce remove the rest. A
         // --lib-create wrapper calls into the library and an interface has no code of its
