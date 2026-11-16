@@ -145,6 +145,18 @@ class WidthSelVisitor final : public VNVisitor {
             return newp;
         }
     }
+    // Return an unsigned index one bit wider
+    static AstNodeExpr* newIndexExtendp(AstNodeExpr* indexp) {
+        // Adding the offset of a negative low bound to an index near its maximum would
+        // wrap to a valid element. A narrower index is added at 32 bits, so cannot wrap.
+        AstConst* const constp = VN_CAST(indexp, Const);
+        if (!constp) return new AstExtend{indexp->fileline(), indexp, indexp->width() + 1};
+        // Still a constant, for the SELRANGE check
+        V3Number num{constp, constp->width() + 1};
+        num.opAssign(constp->num());
+        VL_DO_DANGLING(constp->deleteTree(), constp);
+        return new AstConst{indexp->fileline(), num};
+    }
     AstNodeExpr* newSubNeg(int32_t lhs, AstNodeExpr* rhsp) {
         // Return lhs-rhs
         // We must make sure sub gets sign of original value
@@ -245,6 +257,9 @@ class WidthSelVisitor final : public VNVisitor {
             // SELBIT(array, index) -> ARRAYSEL(array, index)
             AstNodeExpr* subp = rhsp;
             if (fromRange.lo() != 0 || fromRange.hi() < 0) {
+                if (fromRange.lo() < 0 && !subp->isSigned() && subp->width() >= 32) {
+                    subp = newIndexExtendp(subp);
+                }
                 // Signed for a signed index, as V3Width keeps the index's full value
                 subp = newSubNeg(subp, fromRange.lo(), subp->isSigned());
             }
