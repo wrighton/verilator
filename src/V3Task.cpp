@@ -281,9 +281,10 @@ private:
     bool writeBeforeRead(const AstNode* np, bool callee) {
         // Check in the called functions too, as if inlined, except those not inlined anyway,
         // as their calls already hide what they do. The functions may write only static
-        // variables of functions besides their own: V3ActiveTop must see writes to variables
-        // the assignment reads later, and V3Delayed handles nonblocking assignments and
-        // nonblocking event triggers only when inlined.
+        // variables of functions besides their own, as V3ActiveTop must see writes to variables
+        // the assignment reads later. Functions with nonblocking assignments or nonblocking
+        // event triggers stay inlined, so V3Active reports them as illegal in a continuous
+        // assignment (IEEE 1800-2023 13.4.4).
         if (const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
             return getFTaskVertex(refp->taskp())->noInline()
                    || writesBeforeReads(refp->taskp()->stmtsp(), true);
