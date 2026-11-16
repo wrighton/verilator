@@ -235,8 +235,12 @@ AstConsArrayItem* AstConsArray::itemsp() const VL_MT_STABLE {
 // Walk up the AST via backp() to find the containing AstNodeModule.
 // Returns nullptr if not found.
 inline AstNodeModule* findParentModule(AstNode* nodep) {
+    const AstNode* prevp = nullptr;
     for (AstNode* curp = nodep; curp; curp = curp->backp()) {
-        if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
+        // A module before it in the same list, e.g. a class, is not its parent
+        AstNodeModule* const modp = VN_CAST(curp, NodeModule);
+        if (modp && (!prevp || modp->nextp() != prevp)) return modp;
+        prevp = curp;
     }
     return nullptr;
 }
