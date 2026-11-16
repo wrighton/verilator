@@ -582,6 +582,10 @@ module t;
     end
     else begin
     end
+    cover property (@(posedge clk) (! strong(in##1 
+                                             sum[0]))
+    ) begin
+    end
     initial begin
         begin
             begin : assert_simple_immediate_else
