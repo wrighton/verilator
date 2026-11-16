@@ -38,6 +38,7 @@ module t;
   initial for (a = 0; a >= THREE; ++a) $display(a);
 
   initial if (THREE) $stop;
+  initial @(a iff THREE) $stop;
 
   // A cast of a call or reference must not suppress warnings in its definition.
   initial begin
