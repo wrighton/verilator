@@ -119,4 +119,10 @@
       |           ^
                       ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
                       ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Error: t/t_array_pattern_bad3.v:54:15: Assignment pattern member is an array of the elements, not an element (IEEE 1800-2023 10.9.1)
+                                      : ... Element data type: 'int'
+                                      : ... Pattern member data type: 'int$[$]'
+                                      : ... Suggest use an unpacked array concatenation {...} to splice arrays
+   54 |       arr = '{q, '0, '1};   
+      |               ^
 %Error: Exiting due to
