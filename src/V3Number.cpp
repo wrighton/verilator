@@ -1039,7 +1039,7 @@ string V3Number::emitC() const VL_MT_STABLE {
             if (std::signbit(dnum)) result += '-';
             result += "std::numeric_limits<double>::quiet_NaN()";
         } else {
-            const char* const fmt = (static_cast<int>(dnum) == dnum && -1000 < dnum && dnum < 1000)
+            const char* const fmt = (-1000 < dnum && dnum < 1000 && static_cast<int>(dnum) == dnum)
                                         ? "%3.1f"  // Force decimal point
                                         : "%.17e";  // %e always yields a float literal
             (void)VL_SNPRINTF(sbuf, bufsize, fmt, dnum);
