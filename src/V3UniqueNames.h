@@ -75,8 +75,45 @@ public:
         return get(V3Hasher::uncachedHash(nodep).toString());
     }
 
+    // Return an empty allocator with the same naming configuration.
+    V3UniqueNames initialState() const { return V3UniqueNames{m_prefix, m_addSuffix}; }
+
     // Reset to initial state (as if just constructed)
     void reset() { m_multiplicity.clear(); }
+
+    static void selfTest() {
+        for (const std::string& prefix : {std::string{}, std::string{"__Vscope"}}) {
+            for (const bool addSuffix : {false, true}) {
+                V3UniqueNames names{prefix, addSuffix};
+                const std::string base = prefix.empty() ? "" : prefix + "_";
+                const std::string first = addSuffix ? base + "item__0" : "item";
+                const std::string second = addSuffix ? base + "item__1" : "item__0";
+                const std::string third = addSuffix ? base + "item__2" : "item__1";
+                const std::string collision = addSuffix ? base + "item__0__0" : "item__0__0";
+                UASSERT_SELFTEST(names.get("item"), first);
+                UASSERT_SELFTEST(names.get("item"), second);
+                UASSERT_SELFTEST(names.get("item__0"), collision);
+                UASSERT_SELFTEST(names.initialState().get("item"), first);
+                {
+                    VL_RESTORER_CLEAR(names);
+                    names = VL_RESTORER_PREV(names).initialState();
+                    UASSERT_SELFTEST(names.get("item"), first);
+                    {
+                        VL_RESTORER_CLEAR(names);
+                        names = VL_RESTORER_PREV(names).initialState();
+                        UASSERT_SELFTEST(names.get("item"), first);
+                        UASSERT_SELFTEST(names.get("item"), second);
+                    }
+                    UASSERT_SELFTEST(names.get("item"), second);
+                    names.reset();
+                    UASSERT_SELFTEST(names.get("item"), first);
+                }
+                UASSERT_SELFTEST(names.get("item"), third);
+                names.reset();
+                UASSERT_SELFTEST(names.get("item"), first);
+            }
+        }
+    }
 };
 
 #endif  // Guard

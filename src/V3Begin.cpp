@@ -161,10 +161,10 @@ class BeginVisitor final : public VNVisitor {
         if (nodep->user1SetOnce()) return;
         VL_RESTORER(m_modp);
         VL_RESTORER(m_inPersistentRhs);
-        VL_RESTORER_COPY(m_exprTempNames);
+        VL_RESTORER_CLEAR(m_exprTempNames);
         m_modp = nodep;
         m_inPersistentRhs = false;
-        m_exprTempNames.reset();
+        m_exprTempNames = VL_RESTORER_PREV(m_exprTempNames).initialState();
         // Rename it (e.g. class under a generate)
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));

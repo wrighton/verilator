@@ -116,6 +116,7 @@
 #include "V3Tristate.h"
 #include "V3Udp.h"
 #include "V3Undriven.h"
+#include "V3UniqueNames.h"
 #include "V3Unknown.h"
 #include "V3Unroll.h"
 #include "V3VariableOrder.h"
@@ -751,6 +752,7 @@ static bool verilate(const string& argString) {
         V3Os::selfTest();
         V3Number::selfTest();
         VString::selfTest();
+        V3UniqueNames::selfTest();
         VHashSha512::selfTest();
         VSpellCheck::selfTest();
         V3Graph::selfTest();
