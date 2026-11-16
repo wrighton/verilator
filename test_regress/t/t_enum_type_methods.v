@@ -101,6 +101,11 @@ module t (
     Z4 = 4
   } z_t;
   z_t z;
+  int z_calls = 0;
+  function automatic z_t z_count(z_t v);
+    ++z_calls;
+    return v;
+  endfunction
 
   // Values above ENUM_LOOKUP_BITS use an associative table
   typedef enum {
@@ -165,6 +170,7 @@ module t (
       `checkh(z.prev(0), Z4);
       `checkh(z.next(1), Z1);
       `checkh(z.prev(4), Z2);
+      z <= z_t'(cyc + 7);  // Above the lookup table, where 9 would alias Z2
     end
     else if (cyc == 3) begin
       `checks(e.name, "E04");
@@ -175,6 +181,11 @@ module t (
       `checkh(e.prev(1), E03);
       `checkh(e.prev(2), E01);
       e <= E01;
+      `checkh(z.next(1), 0);
+      `checkh(z.prev(1), 0);
+      `checkh(z.next(2), 0);
+      `checkh(z_count(z).next(1), 0);
+      `checkh(z_calls, 1);
       //
       s = $sformatf("%p", e);
       `checks(s, "E04");
