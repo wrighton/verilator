@@ -1102,7 +1102,13 @@ class GateDedupe final {
     // Given iterated logic, starting at consumerVtxp, returns a varref that
     // has the same logic input, or nullptr if none
     AstNodeVarRef* visit(GateLogicVertex* lVtxp, const GateVarVertex* consumerVtxp) {
-        for (V3GraphEdge& edge : lVtxp->inEdges()) visit(edge.fromp()->as<GateVarVertex>());
+        // Visit the inputs, unless that would do nothing: beyond the depth limit, or once done
+        // before within it, which marked them all as visited. Logic with many inputs is reached
+        // once per output it drives, so visiting its inputs every time would be quadratic.
+        if (m_depth <= GATE_DEDUP_MAX_DEPTH && !lVtxp->user()) {
+            for (V3GraphEdge& edge : lVtxp->inEdges()) visit(edge.fromp()->as<GateVarVertex>());
+            lVtxp->user(true);
+        }
 
         if (lVtxp->dedupable() && consumerVtxp->dedupable()) {
             // TODO: Doing a simple pointer comparison of activep won't work
@@ -1115,6 +1121,7 @@ class GateDedupe final {
     }
 
     explicit GateDedupe(GateGraph& graph) {
+        graph.userClearVertices();  // GateLogicVertex::user(): bool. Inputs already visited
         // Traverse starting from each of the clocks
         UINFO(9, "Gate dedupe() clocks:");
         for (V3GraphVertex& vtx : graph.vertices()) {
