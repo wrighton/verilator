@@ -253,63 +253,47 @@ static const char* assertPassOnQuery(bool vacuous) {
     return queries[vacuous];
 }
 
-static AstNodeExpr* assertOnCond(FileLine* flp, VAssertType type,
+static AstNodeExpr* assertOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                  VAssertDirectiveType directiveType) {
-    if (!v3Global.opt.assertOn()) { return new AstConst{flp, AstConst::BitFalse{}}; }
-    return new AstCExpr{flp, AstCExpr::Pure{},
-                        V3AssertCommon::assertCtlGetCall("ASSERT_CTL_ON", type, directiveType), 1};
+    if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
+    return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_ON", type, directiveType, statep);
 }
 
-static AstNodeExpr* assertKillGet(FileLine* flp, VAssertType type,
+static AstNodeExpr* assertKillGet(AstVar* statep, FileLine* flp, VAssertType type,
                                   VAssertDirectiveType directiveType) {
-    return new AstCExpr{flp, AstCExpr::Pure{},
-                        V3AssertCommon::assertCtlGetCall("ASSERT_CTL_KILL", type, directiveType),
-                        32};
+    return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_KILL", type, directiveType, statep);
 }
 
-static string assertActionControlPrefix(VAssertDirectiveType directiveType) {
-    const int controlled = !!(static_cast<int>(directiveType)
-                              & (static_cast<int>(VAssertDirectiveType::ASSERT)
-                                 | static_cast<int>(VAssertDirectiveType::COVER)
-                                 | static_cast<int>(VAssertDirectiveType::ASSUME)));
-    const int checkRuntime = controlled & static_cast<int>(v3Global.opt.assertOn());
-    return "("s + std::to_string(controlled ^ 1) + " || ("s + std::to_string(checkRuntime)
-           + " && "s;
-}
-
-static AstNodeExpr* assertPassOnCond(FileLine* flp, VAssertType type,
+static AstNodeExpr* assertPassOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                      VAssertDirectiveType directiveType, bool vacuous) {
-    return new AstCExpr{
-        flp, AstCExpr::Pure{},
-        assertActionControlPrefix(directiveType)
-            + V3AssertCommon::assertCtlGetCall(assertPassOnQuery(vacuous), type, directiveType)
-            + "))"s,
-        1};
+    if (!(static_cast<int>(directiveType) & 7)) return new AstConst{flp, AstConst::BitTrue{}};
+    if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
+    return V3AssertCommon::newAssertCtlGetp(flp, assertPassOnQuery(vacuous), type, directiveType,
+                                            statep);
 }
 
-static AstNodeExpr* assertFailOnCond(FileLine* flp, VAssertType type,
+static AstNodeExpr* assertFailOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                      VAssertDirectiveType directiveType) {
-    return new AstCExpr{
-        flp, AstCExpr::Pure{},
-        assertActionControlPrefix(directiveType)
-            + V3AssertCommon::assertCtlGetCall("ASSERT_CTL_FAIL_ON", type, directiveType) + "))"s,
-        1};
+    if (!(static_cast<int>(directiveType) & 7)) return new AstConst{flp, AstConst::BitTrue{}};
+    if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
+    return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_FAIL_ON", type, directiveType,
+                                            statep);
 }
 
-static AstIf* newPassOnIf(FileLine* flp, AstNodeExpr* firep, AstNodeStmt* bodyp, VAssertType type,
-                          VAssertDirectiveType directiveType, bool vacuous) {
+static AstIf* newPassOnIf(AstVar* statep, FileLine* flp, AstNodeExpr* firep, AstNodeStmt* bodyp,
+                          VAssertType type, VAssertDirectiveType directiveType, bool vacuous) {
     AstNodeExpr* const condp
-        = new AstLogAnd{flp, firep, assertPassOnCond(flp, type, directiveType, vacuous)};
+        = new AstLogAnd{flp, firep, assertPassOnCond(statep, flp, type, directiveType, vacuous)};
     AstIf* const ifp = new AstIf{flp, condp, bodyp};
     ifp->isBoundsCheck(true);
     ifp->user1(true);
     return ifp;
 }
 
-static AstNodeStmt* newIfAssertFailOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
-                                      VAssertType type) {
+static AstNodeStmt* newIfAssertFailOn(AstVar* statep, AstNodeStmt* bodyp,
+                                      VAssertDirectiveType directiveType, VAssertType type) {
     FileLine* const flp = bodyp->fileline();
-    AstNodeExpr* const condp = assertFailOnCond(flp, type, directiveType);
+    AstNodeExpr* const condp = assertFailOnCond(statep, flp, type, directiveType);
     AstIf* const ifp = new AstIf{flp, condp, bodyp};
     ifp->isBoundsCheck(true);
     ifp->user1(true);
@@ -3103,6 +3087,7 @@ class SvaNfaLowering final {
         VAssertType assertType;  // Assertion type for control tasks
         VAssertDirectiveType directiveType;  // Directive type for control tasks
         AstVar* killVarp;  // Last observed kill generation
+        AstVar* controlVarp;  // Per-instance assertion control state
         SvaGraph& graph;  // NFA graph
         bool exactCounts;  // Count threads exactly, each being one attempt
         const AstAbortOn* exactAbortp;  // With exactCounts, top-level synchronous abort, if any
@@ -3173,7 +3158,7 @@ class SvaNfaLowering final {
     }
     static AstNodeExpr* killActive(LowerCtx& c) {
         return new AstNeq{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::READ},
-                          assertKillGet(c.flp, c.assertType, c.directiveType)};
+                          assertKillGet(c.controlVarp, c.flp, c.assertType, c.directiveType)};
     }
     static AstNodeExpr* notKillActive(LowerCtx& c) { return new AstLogNot{c.flp, killActive(c)}; }
     static AstNodeExpr* gateNotKill(LowerCtx& c, AstNodeExpr* exprp) {
@@ -3536,7 +3521,7 @@ class SvaNfaLowering final {
     void emitKillAckNba(LowerCtx& c) {
         AstAssignDly* const ackp
             = new AstAssignDly{c.flp, new AstVarRef{c.flp, c.killVarp, VAccess::WRITE},
-                               assertKillGet(c.flp, c.assertType, c.directiveType)};
+                               assertKillGet(c.controlVarp, c.flp, c.assertType, c.directiveType)};
         m_modp->addStmtsp(
             newAssertAlways(c.flp, VAlwaysKwd::ALWAYS, c.senTreep->cloneTree(false), ackp));
     }
@@ -4282,7 +4267,8 @@ public:
             if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
         }
         // Like a failure during simulation, subject to $assertcontrol FailOff
-        return newIfAssertFailOn(stmtsp, assertp->directive(), assertp->userType());
+        return newIfAssertFailOn(assertp->controlVarp(), stmtsp, assertp->directive(),
+                                 assertp->userType());
     }
 
     // Lower NFA graph to synthesizable AstAlways blocks and raw result signals.
@@ -4446,13 +4432,15 @@ public:
         m_statVertices += vtx.size();
 
         // Build lowering context for phase sub-functions.
-        LowerCtx c{flp,           senTreep, disableExprp, matchCondp,  assertType,
-                   directiveType, killVarp, graph,        exactCounts, exactAbortp};
+        LowerCtx c{flp,        senTreep,      disableExprp, matchCondp,
+                   assertType, directiveType, killVarp,     assertp->controlVarp(),
+                   graph,      exactCounts,   exactAbortp};
 
         // Phase 1: Resolve combinational Links.
         AstNodeExpr* const triggerExprp
             = isSeqEvent ? new AstConst{flp, AstConst::BitTrue{}}
-                         : assertOnCond(flp, assertp->userType(), assertp->directive());
+                         : assertOnCond(assertp->controlVarp(), flp, assertp->userType(),
+                                        assertp->directive());
         resolveLinks(c, triggerExprp, countMatches);
         VL_DO_DANGLING(triggerExprp->deleteTree(), triggerExprp);
 
@@ -5374,13 +5362,13 @@ class AssertNfaVisitor final : public VNVisitor {
             AstNodeExpr* const vacuousp
                 = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
             AstNodeStmt* const vacuousBodyp = V3AssertCommon::cloneAction(passsp, m_actionNames);
-            splitsp = newPassOnIf(flp, vacuousp, vacuousBodyp, assertp->userType(),
+            splitsp = newPassOnIf(assertp->controlVarp(), flp, vacuousp, vacuousBodyp, assertp->userType(),
                                   assertp->directive(), /*vacuous=*/true);
         }
 
-        AstIf* const nonvacuousp
-            = newPassOnIf(flp, nonvacuousMatchp, passsp, assertp->userType(), assertp->directive(),
-                          /*vacuous=*/false);
+        AstIf* const nonvacuousp = newPassOnIf(assertp->controlVarp(), flp, nonvacuousMatchp,
+                                               passsp, assertp->userType(), assertp->directive(),
+                                               /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
         // Another attempt failing on the same tick runs the fail action instead
         prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(splitsp, m_actionNames));
@@ -5506,14 +5494,15 @@ class AssertNfaVisitor final : public VNVisitor {
         if (failCountp) {
             addActionReplay(
                 senTreep, failCountp,
-                newIfAssertFailOn(V3AssertCommon::cloneAction(assertp->failsp(), m_actionNames),
+                newIfAssertFailOn(assertp->controlVarp(),
+                                  V3AssertCommon::cloneAction(assertp->failsp(), m_actionNames),
                                   assertp->directive(), assertp->userType()));
         }
         if (passCountp) {
             FileLine* const flp = assertp->fileline();
             addActionReplay(
                 senTreep, passCountp,
-                newPassOnIf(flp, new AstConst{flp, AstConst::BitTrue{}},
+                newPassOnIf(assertp->controlVarp(), flp, new AstConst{flp, AstConst::BitTrue{}},
                             V3AssertCommon::cloneAction(assertp->passsp(), m_actionNames),
                             assertp->userType(), assertp->directive(), /*vacuous=*/false));
         }
@@ -5548,6 +5537,7 @@ class AssertNfaVisitor final : public VNVisitor {
                          AstSenTree* senTreep, AstNodeExpr* outputp, AstNodeExpr* matchp,
                          AstNodeExpr* matchCountp, AstNodeExpr* failCountp,
                          AstNodeExpr* passCountp) {
+        assertp->nfaLowered(true);
         AstNodeExpr* outputExprp = outputp;
         FileLine* const flp = assertp->fileline();
         AstPropSpec* const propp = VN_AS(assertp->propp(), PropSpec);

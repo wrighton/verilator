@@ -77,6 +77,8 @@ class LinkParseVisitor final : public VNVisitor {
     VLifetime m_lifetime = VLifetime::STATIC_IMPLICIT;  // Propagating lifetime
     bool m_lifetimeAllowed = false;  // True to allow lifetime settings
     bool m_outlivesCall = false;  // If values of the current task can be used after it returns
+    bool m_hasHierarchyControls = false;  // Design needs per-instance assertion state
+    int m_assertControlNum = 0;  // Per-module declaration identity
     bool m_moduleWithGenericIface = false;  // If current module contains generic interface
     std::set<AstVar*> m_portDups;  // Non-ANSI port datatype duplicating input/output decls
     std::set<std::string> m_genblkDeclNames;  // Names declared in current generate scope
@@ -992,6 +994,8 @@ class LinkParseVisitor final : public VNVisitor {
         cleanFileline(nodep);
         // Classes inherit from upper package
         if (m_modp && nodep->timeunit().isNone()) nodep->timeunit(m_modp->timeunit());
+        VL_RESTORER(m_assertControlNum);
+        m_assertControlNum = 0;
         m_modp = nodep;
         if (VN_IS(nodep, Iface)) m_inInterface = true;  // Start or stay within interface
         m_anonUdpId = 0;
@@ -1038,7 +1042,29 @@ class LinkParseVisitor final : public VNVisitor {
         m_procedurep = nodep;
         visitIterateNoValueMod(nodep);
     }
-    void visit(AstCover* nodep) override { visitIterateNoValueMod(nodep); }
+    void addAssertionControl(AstNodeStmt* nodep, VAssertType type,
+                             VAssertDirectiveType directive) {
+        if (!m_hasHierarchyControls || type == VAssertType::INTERNAL) return;
+        const int typeBit = V3Number::log2bQuad(static_cast<uint32_t>(type));
+        AstCDType* const dtypep = new AstCDType{nodep->fileline(), "VlAssertControl"};
+        v3Global.rootp()->typeTablep()->addTypesp(dtypep);
+        AstVar* const varp
+            = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
+                         "__VassertControl" + std::to_string(m_assertControlNum++), dtypep};
+        varp->lifetime(VLifetime::STATIC_EXPLICIT);
+        varp->isInternal(true);
+        varp->assertCtlMask(static_cast<uint32_t>(directive) << (3 * typeBit));
+        m_modp->addStmtsp(varp);
+        nodep->controlVarp(varp);
+    }
+    void visit(AstAssert* nodep) override {
+        addAssertionControl(nodep, nodep->userType(), nodep->directive());
+        visitIterateNoValueMod(nodep);
+    }
+    void visit(AstCover* nodep) override {
+        addAssertionControl(nodep, nodep->userType(), nodep->directive());
+        visitIterateNoValueMod(nodep);
+    }
     void visit(AstRestrict* nodep) override { visitIterateNoValueMod(nodep); }
 
     void visit(AstGenBlock* nodep) override {
@@ -1072,8 +1098,7 @@ class LinkParseVisitor final : public VNVisitor {
             m_genblkAbove = 0;
             m_genblkNum = 0;
             collectGenblkDeclNames(nodep->itemsp());
-            if (nodep->genforp())
-                collectGenblkDeclNames(nodep->genforp()->itemsp());
+            if (nodep->genforp()) collectGenblkDeclNames(nodep->genforp()->itemsp());
             iterateChildren(nodep);
         } else {
             iterateChildren(nodep);
@@ -1145,6 +1170,11 @@ class LinkParseVisitor final : public VNVisitor {
         nodep->prependStmtsp(getBlockAdds());
     }
     void visit(AstCase* nodep) override {
+        const VAssertType type = nodep->priorityPragma()  ? VAssertType::PRIORITY
+                                 : nodep->uniquePragma()  ? VAssertType::UNIQUE
+                                 : nodep->unique0Pragma() ? VAssertType::UNIQUE0
+                                                          : VAssertType::INTERNAL;
+        addAssertionControl(nodep, type, VAssertDirectiveType::ASSERT);
         V3Control::applyCase(nodep);
         // Check for unsupported case matches (for tagged union)
         if (nodep->caseMatches()) {
@@ -1196,6 +1226,10 @@ class LinkParseVisitor final : public VNVisitor {
         }
     }
     void visit(AstIf* nodep) override {
+        const VAssertType type = nodep->uniquePragma()    ? VAssertType::UNIQUE
+                                 : nodep->unique0Pragma() ? VAssertType::UNIQUE0
+                                                          : VAssertType::INTERNAL;
+        addAssertionControl(nodep, type, VAssertDirectiveType::ASSERT);
         cleanFileline(nodep);
         checkIndent(nodep, nodep->elsesp() ? nodep->elsesp() : nodep->thensp());
         iterateChildren(nodep);
@@ -1836,7 +1870,11 @@ class LinkParseVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit LinkParseVisitor(AstNetlist* rootp) { iterate(rootp); }
+    explicit LinkParseVisitor(AstNetlist* rootp) {
+        m_hasHierarchyControls
+            = rootp->exists([](const AstAssertCtl* nodep) { return nodep->argsp() != nullptr; });
+        iterate(rootp);
+    }
     ~LinkParseVisitor() override {
         V3Stats::addStatSum(V3Stats::STAT_SOURCE_MODULES, m_statModules);
     }
