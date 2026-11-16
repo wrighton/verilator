@@ -27,12 +27,21 @@ module t (
   wire osra_1;
   wire [2:0] ovar_1;
   real or_1;
+  wire [2:0] od_omit;
+  wire [2:0] od_empty;
+  wire [2:0] od_blank;
 
   // verilator lint_off PINMISSING
   sub_0 sub_0 (.o_0, .ov_0, .oa_0);
   sub_1 sub_1 (.o_1, .ov_1, .oa_1, .ot_1, .ota_1, .osa_1, .osb_1, .osra_1, .ovar_1, .or_1);
   sub_n sub_n (.o_n);
   // verilator lint_on PINMISSING
+  sub_d sub_d_omit (.od(od_omit));
+  sub_d sub_d_empty (
+      .id(),
+      .od(od_empty)
+  );
+  sub_d sub_d_blank (, od_blank);
 
   always @(posedge clk) begin
     if (o_0 !== 1'b0) $stop;
@@ -48,6 +57,9 @@ module t (
     `checkh(osra_1, 1'b0);  // 4-state would be x, not pulled
     `checkh(ovar_1, 3'h7);
     if (or_1 != 0.0) `stop;
+    `checkh(od_omit, 3'h2);  // Default value, not pulled
+    `checkh(od_empty, 3'h7);  // Explicit empty connection, so no default value
+    `checkh(od_blank, 3'h2);  // Default value, not pulled
     //4-state if (o_n !== 1'bz) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
@@ -112,6 +124,13 @@ module sub_1 (
   assign osra_1 = isr.a;
   assign ovar_1 = ivar;
   assign or_1 = ir;
+endmodule
+
+module sub_d (
+    input [2:0] id = 3'h2,
+    output wire [2:0] od
+);
+  assign od = id;
 endmodule
 
 `nounconnected_drive
