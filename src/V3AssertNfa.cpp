@@ -3381,6 +3381,18 @@ class SvaNfaLowering final {
                             vacuousCountp, sigs.vacuousp->cloneTreePure(false));
         }
 
+        // A match and vacuous successes of different attempts can coincide; the NFA state
+        // aggregates attempts, so the match and each implication count at most once per tick
+        if (vacuousCountp) {
+            AstNodeExpr* matchp = sigs.terminalActivep->cloneTreePure(false);
+            if (c.matchCondp) {
+                matchp = new AstLogAnd{c.flp, matchp, sampled(c.matchCondp->cloneTreePure(false))};
+            }
+            sigs.successCountp
+                = addCountp(c.flp, new AstExtend{c.flp, matchp, m_u32DTypep->width()},
+                            vacuousCountp, sigs.vacuousp->cloneTreePure(false));
+        }
+
         if (sigs.matchCountOverflowp) {
             m_modp->addStmtsp(
                 new AstAlways{c.flp, VAlwaysKwd::ALWAYS, c.senTreep->cloneTree(false),
