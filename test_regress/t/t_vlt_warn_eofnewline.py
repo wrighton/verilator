@@ -12,7 +12,7 @@ import vltest_bootstrap
 test.scenarios('vlt')
 test.top_filename = test.obj_dir + "/t.v"
 
-LATCH = "  always_latch if (c) q <= d;  // COMBDLY\n"
+LATCH = "  always_latch if (c) q <= d;  // LATCHDLY\n"
 
 # Module name -> file contents; all but the last have no newline at end of file
 SOURCES = {
