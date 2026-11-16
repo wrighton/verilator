@@ -270,7 +270,10 @@ class SubstVisitor final : public VNVisitor {
 
     void substitute(AstNode* nodep, AstNodeExpr* substp) {
         AstNodeExpr* newp = substp->backp() ? substp->cloneTreePure(true) : substp;
-        if (!nodep->isQuad() && newp->isQuad()) {
+        // A substitution must not change the width the consumer was built for, e.g. a
+        // whole word substituted for a narrower word select made by V3Expand. CCast can
+        // only express the non-wide C types.
+        if (newp->width() != nodep->width() && !newp->isWide() && !nodep->isWide()) {
             newp = new AstCCast{newp->fileline(), newp, nodep};
         }
         nodep->replaceWith(newp);
