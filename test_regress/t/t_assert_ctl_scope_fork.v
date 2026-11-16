@@ -5,18 +5,20 @@
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
-`timescale 1ns/1ps
+`timescale 1ns / 1ps
 module assertion_leaf;
   int failures = 0;
   initial begin
     #2;
-    labelled_check: assert (1'b0) else failures++;
+    labelled_check :
+    assert (1'b0)
+    else failures++;
   end
 endmodule
 module t;
-  assertion_leaf a();
-  assertion_leaf b();
-  assertion_leaf c();
+  assertion_leaf a ();
+  assertion_leaf b ();
+  assertion_leaf c ();
   int argument_calls = 0;
   function automatic int level_value();
     argument_calls++;
