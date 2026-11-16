@@ -596,12 +596,22 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
         // The value of the struct in an initializer of an enclosing struct member, if any,
         // gives the value of each member
         const AstConsStruct* const consp = VN_CAST(valuep, ConsStruct);
+        // That value has an item for each member, in member order (see AstConsStruct::broken),
+        // so walk the items along with the members rather than look each member up by name,
+        // which would take time quadratic in the number of members
+        const AstConsStructItem* consItemp = consp ? consp->itemsp() : nullptr;
         string literal;
         for (const AstMemberDType* const itemp : sdtypep->memberspList()) {
+            const AstNode* memberValuep = itemp->valuep();
+            if (consp) {
+                UASSERT_OBJ(consItemp && consItemp->memberp()->name() == itemp->name(), consp,
+                            "Structure value without member " << itemp->prettyNameQ());
+                memberValuep = consItemp->valuep();
+                consItemp = VN_AS(consItemp->nextp(), ConsStructItem);
+            }
             const std::string line = emitVarResetRecurse(
                 varp, constructing, varNameProtected + suffix + "." + itemp->nameProtect(),
-                itemp->dtypep(), depth + 1, "",
-                consp ? consp->memberValuep(itemp->name()) : itemp->valuep());
+                itemp->dtypep(), depth + 1, "", memberValuep);
             if (!line.empty()) literal += line;
         }
         return literal;
