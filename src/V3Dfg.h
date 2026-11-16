@@ -703,6 +703,7 @@ class DfgUserMap<T_Value, false> final : public DfgUserMapBase {
 
     // STATE
     std::deque<T_Value> m_storage;  // Storage for T_Value instances
+    std::vector<T_Value*> m_freeps;  // Storage released by 'erase', for reuse
 
     // CONSTRUCTOR
     explicit DfgUserMap(const DfgGraph* dfgp)
@@ -722,14 +723,26 @@ public:
 #endif
         T_Value*& storagepr = reinterpret_cast<T_Value*&>(vtx.m_userStoragep);
         if (vtx.m_userGeneration != m_currentGeneration) {
-            m_storage.emplace_back();
-            storagepr = &m_storage.back();
+            if (m_freeps.empty()) {
+                m_storage.emplace_back();
+                storagepr = &m_storage.back();
+            } else {
+                storagepr = m_freeps.back();
+                m_freeps.pop_back();
+                *storagepr = T_Value{};
+            }
             vtx.m_userGeneration = m_currentGeneration;
         }
         return *storagepr;
     }
     // Same as above with pointer as key
     T_Value& operator[](const DfgVertex* vtxp) { return (*this)[*vtxp]; }
+
+    // Remove mapped value of 'vtx', must be present, and reuse its storage
+    void erase(const DfgVertex& vtx) {
+        m_freeps.push_back(&at(vtx));
+        vtx.m_userGeneration = 0;
+    }
 
     // Retrieve mapped value of 'vtx', must be alerady present
     T_Value& at(const DfgVertex& vtx) const {
