@@ -1091,6 +1091,11 @@ private:
             return;
         }
         const int n = constp->toSInt();
+        // The counter below clones the operand, and checks it in a single cycle
+        if (n > 1 && isMultiCycle(nodep->exprp())
+            && replaceUnsupportedSeq(nodep, "consecutive repetition of a multi-cycle sequence")) {
+            return;
+        }
         FileLine* const flp = nodep->fileline();
         AstNodeExpr* const exprp = nodep->exprp()->unlinkFrBack();
         if (n == 1) {

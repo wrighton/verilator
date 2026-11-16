@@ -1,3 +1,8 @@
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:36:48: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2)
+                                                          : ... note: In instance 't'
+   36 |   assert property (@(posedge clk) a |-> b [=1] ##1 c);
+      |                                                ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:19:38: Unsupported: sequence 'and' in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
    19 |   assert property (@(posedge clk) (a and b) |-> c [=1]);
@@ -27,25 +32,33 @@
                                                           : ... note: In instance 't'
    25 |   assert property (@(posedge clk) a [*1:$] |-> c [=1]);
       |                                     ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:27:35: Unsupported: property 'if' or 'case' in a property with nonconsecutive repetition
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:26:50: Unsupported: consecutive repetition of a multi-cycle sequence in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
-   27 |   assert property (@(posedge clk) if (a) b [=1] else c);
-      |                                   ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:28:45: Unsupported: property 'and' in a property with nonconsecutive repetition
+   26 |   assert property (@(posedge clk) a |-> (c [=1]) [*2]);
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:27:45: Unsupported: consecutive repetition of a multi-cycle sequence in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
-   28 |   assert property (@(posedge clk) (a |-> b) and (c |-> d [=1]));
-      |                                             ^~~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:29:45: Unsupported: property 'or' in a property with nonconsecutive repetition
-                                                          : ... note: In instance 't'
-   29 |   assert property (@(posedge clk) (a |-> b) or (c |-> d [=1]));
+   27 |   assert property (@(posedge clk) (c [->1]) [*2] |-> d [=1]);
       |                                             ^~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:31:43: Unsupported: multi-cycle consequent of a repetition in a property with nonconsecutive repetition
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:29:35: Unsupported: property 'if' or 'case' in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
-   31 |   assert property (@(posedge clk) a [->1] |-> c [=1]);
+   29 |   assert property (@(posedge clk) if (a) b [=1] else c);
+      |                                   ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:30:45: Unsupported: property 'and' in a property with nonconsecutive repetition
+                                                          : ... note: In instance 't'
+   30 |   assert property (@(posedge clk) (a |-> b) and (c |-> d [=1]));
+      |                                             ^~~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:31:45: Unsupported: property 'or' in a property with nonconsecutive repetition
+                                                          : ... note: In instance 't'
+   31 |   assert property (@(posedge clk) (a |-> b) or (c |-> d [=1]));
+      |                                             ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:33:43: Unsupported: multi-cycle consequent of a repetition in a property with nonconsecutive repetition
+                                                          : ... note: In instance 't'
+   33 |   assert property (@(posedge clk) a [->1] |-> c [=1]);
       |                                           ^~~
-%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:32:42: Unsupported: multi-cycle consequent of a repetition in a property with nonconsecutive repetition
+%Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:34:42: Unsupported: multi-cycle consequent of a repetition in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
-   32 |   assert property (@(posedge clk) a [=1] |-> c [->1]);
+   34 |   assert property (@(posedge clk) a [=1] |-> c [->1]);
       |                                          ^~~
 %Error-UNSUPPORTED: t/t_assert_nonconsec_seq_unsup.v:33:46: Unsupported: cycle delay in a property with nonconsecutive repetition
                                                           : ... note: In instance 't'
