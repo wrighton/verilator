@@ -3319,12 +3319,21 @@ void VerilatedContext::assertOn(bool flag) VL_MT_SAFE {
     // Set all assert and directive types when true, clear otherwise.
     m_s.m_assertOn = VL_MASK_I(ASSERT_ON_WIDTH) * flag;
 }
+bool VerilatedContext::assertCtlValid(uint32_t controlType) VL_MT_SAFE {
+    if (m_ns.m_assertCtlsLocked) return false;
+    if (controlType >= 1 && controlType <= 11) return true;
+    VL_WARN_MT("", 0, "",
+               ("Bad $assertcontrol control_type '" + std::to_string(controlType)
+                + "' (IEEE 1800-2023 Table 20-5)")
+                   .c_str());
+    return false;
+}
 void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t types,
                                  VerilatedAssertDirectiveType_t directives) VL_MT_SAFE {
     // IEEE 1800-2023 Table 20-5 control_type. Lock freezes the On/Off state of the
     // selected bits until Unlock; On/Off/Kill leave locked bits unchanged.
     // +verilator+assert+lock freezes everything, including Lock/Unlock itself.
-    if (m_ns.m_assertCtlsLocked) return;
+    if (!assertCtlValid(controlType)) return;
     const VerilatedLockGuard lock{m_assertCtlMutex};
     const uint32_t mask = assertOnMask(types, directives);
     for (VlAssertControl* const statep : m_assertControls) {
@@ -3371,16 +3380,17 @@ void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t typ
     case 11:  // VacuousOff
         m_s.m_assertPassOnVacuous &= ~lockedMask;
         break;
-    default:
-        VL_WARN_MT("", 0, "",
-                   ("Bad $assertcontrol control_type '" + std::to_string(controlType)
-                    + "' (IEEE 1800-2023 Table 20-5)")
-                       .c_str());
+    default: break;  // Validated before any state update
     }
 }
 void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t types,
                                  VerilatedAssertDirectiveType_t directives,
                                  VlAssertControl& state) VL_MT_SAFE {
+    if (assertCtlValid(controlType)) assertCtlApply(controlType, types, directives, state);
+}
+void VerilatedContext::assertCtlApply(uint32_t controlType, VerilatedAssertType_t types,
+                                      VerilatedAssertDirectiveType_t directives,
+                                      VlAssertControl& state) VL_MT_SAFE {
     if (m_ns.m_assertCtlsLocked) return;
     const VerilatedLockGuard lock{m_assertCtlMutex};
     assert(state.m_contextp == this);
