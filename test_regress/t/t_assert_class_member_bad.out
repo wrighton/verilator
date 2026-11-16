@@ -1,0 +1,14 @@
+%Error: t/t_assert_class_member_bad.v:29:7: Concurrent assertion expression references non-static class member 'x' (IEEE 1800-2023 16.6)
+                                          : ... note: In instance 't'
+   29 |     o.x ##1 1'b1;
+      |       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_class_member_bad.v:34:37: Concurrent assertion expression references non-static class member 'x' (IEEE 1800-2023 16.6)
+                                           : ... note: In instance 't'
+   34 |   assert property (@(posedge clk) o.x);
+      |                                     ^
+%Error: t/t_assert_class_member_bad.v:36:37: Concurrent assertion expression references non-static class member 'get' (IEEE 1800-2023 16.6)
+                                           : ... note: In instance 't'
+   36 |   assert property (@(posedge clk) o.get());
+      |                                     ^~~
+%Error: Exiting due to
