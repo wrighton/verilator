@@ -1,14 +1,58 @@
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:26:41: Unsupported: clock event in a nested property instance
-                                                              : ... note: In instance 't'
-   26 |   assert property (@(posedge clk) a |-> q_clk);
-      |                                         ^~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:40:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   40 |   assert property (@(posedge clk) a |-> q_arg(q_ovl));
+      |   ^~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:27:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:42:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   42 |   assert property (@(posedge clk) q_ovl ##1 a);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:43:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   43 |   assert property (@(posedge clk) a ##1 q_ovl);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:44:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   44 |   assert property (@(posedge clk) q_ovl [*2]);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:45:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   45 |   assert property (@(posedge clk) q_ovl [->2]);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:46:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   46 |   assert property (@(posedge clk) q_ovl [=2]);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:47:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   47 |   assert property (@(posedge clk) q_ovl intersect (a ##1 b));
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:48:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   48 |   assert property (@(posedge clk) q_ovl within (a ##1 b));
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:49:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   49 |   assert property (@(posedge clk) a throughout q_ovl);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:52:3: Unsupported: property instance inside a multi-cycle property expression
+                                                             : ... note: In instance 't'
+   52 |   assert property (@(posedge clk) q_ovl |-> ##1 a);
+      |   ^~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:35:41: Unsupported: clock event in a nested property instance
                                                               : ... note: In instance 't'
-   27 |   assert property (@(posedge clk) a |-> q_seq);
+   35 |   assert property (@(posedge clk) a |-> q_clk);
       |                                         ^~~~~
-%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:28:41: Unsupported: multi-cycle body in a nested property instance
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:36:41: Unsupported: multi-cycle body in a nested property instance
                                                               : ... note: In instance 't'
-   28 |   assert property (@(posedge clk) a |-> q_rep);
+   36 |   assert property (@(posedge clk) a |-> q_strong);
+      |                                         ^~~~~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:38:41: Unsupported: multi-cycle body in a nested property instance
+                                                              : ... note: In instance 't'
+   38 |   assert property (@(posedge clk) b |-> q_loc);
       |                                         ^~~~~
+%Error-UNSUPPORTED: t/t_property_nested_instance_unsup.v:51:35: Unsupported: multi-cycle body in a nested property instance
+                                                              : ... note: In instance 't'
+   51 |   assert property (@(posedge clk) q_ovl |-> a);
+      |                                   ^~~~~
 %Error: Exiting due to
