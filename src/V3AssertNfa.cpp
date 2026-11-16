@@ -761,16 +761,6 @@ class SvaNfaBuilder final {
                                               " (IEEE 1800-2023 16.9.2)");
                 return BuildResult::failWithError();
             }
-            // A nonconsecutive repetition has several matches. A later step failing after one of
-            // them must not reject while another may still match, which the merged threads
-            // cannot tell apart, so the later steps would never reject.
-            if (!m_inAntecedent && !m_isCover
-                && preExprp->exists([](const AstSNonConsRep*) { return true; })) {
-                sexprp->v3warn(E_UNSUPPORTED, "Unsupported: nonconsecutive repetition followed by"
-                                              " a later sequence element outside an implication"
-                                              " antecedent (IEEE 1800-2023 16.9.2)");
-                return BuildResult::failWithError();
-            }
             if (isTopLevelStep && !m_isCover && preExprp->exists([](const AstSConsRep* repp) {
                     return repp->maxCountp() != nullptr;
                 })) {
