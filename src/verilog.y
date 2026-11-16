@@ -1554,6 +1554,9 @@ intFront<nodeModulep>:
                         { $$ = new AstIface{$<fl>3, *$3, PARSEP->libname()};
                           $$->inLibrary(true);
                           $$->lifetime($2);
+                          $$->timeunit(PARSEP->timeLastUnit());
+                          PARSEP->rootp()->timeprecisionMerge($$->fileline(),
+                                                              PARSEP->timeLastPrec());
                           PARSEP->rootp()->addModulesp($$); }
         |       intFront sigAttrScope                   { $$ = $1; }
         ;
