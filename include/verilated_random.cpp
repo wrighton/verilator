@@ -62,6 +62,8 @@ static size_t diversitySample(size_t i, size_t n) {
 
 #ifdef _VL_SOLVER_PIPE_UNIX
 # include <sys/wait.h>
+# include <sys/socket.h>
+# include <cerrno>
 # include <csignal>
 # include <fcntl.h>
 #endif
@@ -136,7 +138,16 @@ protected:
         log("  ", std::string(pbase(), size));
         // write() may write only part of the buffer
         for (size_t done = 0; done < size;) {
+#if defined(_VL_SOLVER_PIPE_UNIX) && defined(MSG_NOSIGNAL)
+            const ssize_t n = ::send(m_writeFd, pbase() + done, size - done, MSG_NOSIGNAL);
+#elif defined(_VL_SOLVER_PIPE_UNIX) && defined(SO_NOSIGPIPE)
+            const ssize_t n = ::send(m_writeFd, pbase() + done, size - done, 0);
+#elif defined(_VL_SOLVER_PIPE_UNIX)
+            errno = ENOTSUP;
+            const ssize_t n = -1;
+#else
             const ssize_t n = ::write(m_writeFd, pbase() + done, size - done);
+#endif
             if (VL_UNLIKELY(n == -1)) perror("write");
             if (n <= 0) {
                 wait_report();
@@ -262,15 +273,32 @@ public:
             logOpen();
         }
 #ifdef _VL_SOLVER_PIPE_UNIX
+#if !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE)
+        errno = ENOTSUP;
+        perror("VlRProcess::open: SIGPIPE suppression");
+        return false;
+#endif
         int fd_stdin[2];  // Can't use std::array
         int fd_stdout[2];  // Can't use std::array
         constexpr int P_RD = 0;
         constexpr int P_WR = 1;
 
-        if (VL_UNLIKELY(pipe(fd_stdin) != 0)) {
-            perror("VlRProcess::open: pipe");
+        // Suppress SIGPIPE on the request endpoint without changing program signal state.
+        if (VL_UNLIKELY(socketpair(AF_UNIX, SOCK_STREAM, 0, fd_stdin) != 0)) {
+            perror("VlRProcess::open: socketpair");
             return false;
         }
+#if !defined(MSG_NOSIGNAL) && defined(SO_NOSIGPIPE)
+        const int noSigpipe = 1;
+        if (VL_UNLIKELY(
+                setsockopt(fd_stdin[P_WR], SOL_SOCKET, SO_NOSIGPIPE, &noSigpipe, sizeof(noSigpipe))
+                != 0)) {
+            perror("VlRProcess::open: SO_NOSIGPIPE");
+            close(fd_stdin[P_RD]);
+            close(fd_stdin[P_WR]);
+            return false;
+        }
+#endif
         if (VL_UNLIKELY(pipe(fd_stdout) != 0)) {
             perror("VlRProcess::open: pipe");
             close(fd_stdin[P_RD]);

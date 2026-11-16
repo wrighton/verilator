@@ -12,7 +12,7 @@
 # Input arguments from environment variables:
 # TAMPER: bad_base | bad_digits | bad_index | bad_value | bare_hash | bin_literals
 #         | binary | bv_digits | bv_literals | bv_long | bv_overflow | bv_sort | bv_spaced
-#         | core_junk | crlf | die_at | die_status_at | diversity_model
+#         | close_stdin_at | core_junk | crlf | die_at | die_status_at | diversity_model
 #         | dup_model | err_assume | err_core | err_extra | err_multiline | err_mute | err_once
 #         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont | frozen_value
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
@@ -37,6 +37,7 @@
 #   bv_overflow      - replace the Nth model reply with an indexed literal too big for its width
 #   bv_sort          - replace the Nth model reply with an indexed literal of another width
 #   bv_spaced        - write every hex literal as an indexed one split by tabs and newlines
+#   close_stdin_at   - kill and reap the solver, close stdin, then forward the Nth status
 #   core_junk        - prepend garbage to the core reply and close the pipe
 #   crlf             - end every line with CRLF
 #   die_at           - kill the solver at the Nth model reply and exit, closing every pipe end
@@ -46,7 +47,7 @@
 #   err_assume       - replace the first unsat-assumptions reply with (error ...)
 #   err_core         - replace the first unsat-core reply with (error ...)
 #   err_extra        - send an (error ...) line ahead of the Nth status, as for a rejected
-#                      earlier command; echo the runtime's marker quoted, as SMT-LIB 2.6 does
+#                      earlier command
 #   err_multiline    - answer the Nth status with an (error ...) split over two lines
 #   err_mute         - answer the Nth status with (error ...), then close the reply pipe as mute_at
 #   err_once         - answer the Nth status with one (error ...) line
@@ -118,9 +119,9 @@ at = int(os.environ.get("TAMPER_AT", "3"))
 once = os.environ.get("TAMPER_ONCE", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
-STATUS_MODES = ("die_status_at", "err_extra", "err_multiline", "err_mute", "err_once", "err_trunc",
-                "err_unbal", "err_unbal_cont", "garbage_status", "unknown_once", "unknown_twice",
-                "unsupported_once")
+STATUS_MODES = ("close_stdin_at", "die_status_at", "err_extra", "err_multiline", "err_mute",
+                "err_once", "err_trunc", "err_unbal", "err_unbal_cont", "garbage_status",
+                "unknown_once", "unknown_twice", "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
@@ -235,9 +236,6 @@ inside = False  # Inside an SMT string literal, where parens do not nest
 
 for line in proc.stdout:
     line = line.rstrip("\n")
-    # z3 prints an echoed string bare; SMT-LIB 2.6 section 4.2.9 keeps its quotes
-    if mode == "err_extra" and line == "vl_resync":
-        line = '"vl_resync"'
     at_reply_start = depth == 0
     depth, inside = scan_depth(line, depth, inside)
     is_status = line in ("sat", "unsat", "unknown")
@@ -314,6 +312,12 @@ for line in proc.stdout:
         emit("((a (_ bv11 8)) (b " + bad_bv[mode] + "))")
         swallow(line)
         continue
+    if mode == "close_stdin_at":
+        proc.kill()
+        proc.wait()
+        os.close(0)
+        forward(line, at_reply_start)
+        sys.exit(0)
     if mode == "core_junk":
         emit("junk((__Vcons0))")
         proc.kill()
