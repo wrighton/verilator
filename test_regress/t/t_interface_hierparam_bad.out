@@ -1,0 +1,14 @@
+%Error: t/t_interface_hierparam_bad.v:51:22: Parameter-resolved constants must not use dotted references: 'data'
+                                           : ... note: In instance 't'
+   51 |   relay #(.K($bits(g.data))) r (.src(b));
+      |                      ^~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_hierparam_bad.v:35:22: Parameter-resolved constants must not use dotted references: 'data'
+                                           : ... note: In instance 't.h'
+   35 |   relay #(.K($bits(g.data))) r (.src(b));
+      |                      ^~~~
+%Error: t/t_interface_hierparam_bad.v:40:18: Variable's initial value is circular: 'B'
+                                           : ... note: In instance 't.c'
+   40 |   localparam int B = A;
+      |                  ^
+%Error: Exiting due to
