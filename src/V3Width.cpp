@@ -9076,6 +9076,11 @@ class WidthVisitor final : public VNVisitor {
         UINFO(5, "  FTASKREF " << nodep);
         AstWith* withp = nullptr;
         if (nodep->name() == "rand_mode" || nodep->name() == "constraint_mode") {
+            AstNodeDType* const bitDTypep = nodep->findBitDType();
+            for (const AstArg* const argp : nodep->argspList()) {
+                userIterateAndNext(argp->exprp(), WidthVP{bitDTypep, PRELIM}.p());
+                iterateCheckAssign(nodep, "argument", argp->exprp(), FINAL, bitDTypep);
+            }
             v3Global.useRandomizeMethods(true);
             nodep->dtypep(nodep->findBasicDType(VBasicDTypeKwd::INT));
             return;  // Handled in V3Randomize

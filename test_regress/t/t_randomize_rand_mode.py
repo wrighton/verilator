@@ -11,7 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-test.compile()
+# Exercise the new class-handle mode and alias cases with the conservative two-thread MT profile.
+test.compile(threads=(2 if test.vltmt else 1))
 
 test.execute()
 
