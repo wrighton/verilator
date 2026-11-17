@@ -1,0 +1,46 @@
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:37:14: Unsupported: disable soft of other than a variable, an object member or the size() of a random dynamic array or queue.
+                                                                  : ... note: In instance 't'
+   37 |     n > 0 -> disable soft fa[2];
+      |              ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:27:26: Unsupported: solve...before of this selection of a variable or its size.
+                                                                  : ... note: In instance 't'
+   27 |     solve n before dd[1].size();
+      |                          ^~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:28:25: Unsupported: solve...before of this selection of a variable or its size.
+                                                                  : ... note: In instance 't'
+   28 |     solve n before st.q.size();
+      |                         ^~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:29:16: Unsupported: solve...before of this selection of a variable or its size.
+                                                                  : ... note: In instance 't'
+   29 |     solve st.q.size() before n;
+      |                ^~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:30:37: Unsupported: solve...before of this selection of a variable or its size.
+                                                                  : ... note: In instance 't'
+   30 |     solve n before h.objects[0].arr.size();
+      |                                     ^~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:31:28: Unsupported: solve...before of this selection of a variable or its size.
+                                                                  : ... note: In instance 't'
+   31 |     solve h.objects[1].arr.size() before n;
+      |                            ^~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:32:21: Unsupported: solve...before of this selection of a variable or its size.
+                                                                  : ... note: In instance 't'
+   32 |     solve n before q[$];
+      |                     ^
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:33:5: Unsupported: disable soft of other than a variable, an object member or the size() of a random dynamic array or queue.
+                                                                 : ... note: In instance 't'
+   33 |     disable soft q[$];
+      |     ^~~~~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:34:5: Unsupported: disable soft of other than a variable, an object member or the size() of a random dynamic array or queue.
+                                                                 : ... note: In instance 't'
+   34 |     disable soft in.arr.size();
+      |     ^~~~~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:35:5: Unsupported: disable soft of other than a variable, an object member or the size() of a random dynamic array or queue.
+                                                                 : ... note: In instance 't'
+   35 |     disable soft fa[1];
+      |     ^~~~~~~
+%Error-UNSUPPORTED: t/t_constraint_solve_size_parens_unsup.v:36:5: Unsupported: disable soft of other than a variable, an object member or the size() of a random dynamic array or queue.
+                                                                 : ... note: In instance 't'
+   36 |     disable soft nd.size();
+      |     ^~~~~~~
+%Error: Exiting due to
