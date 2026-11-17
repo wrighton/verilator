@@ -164,4 +164,93 @@ for mode, npass in [(None, 4), ('frozen_value', 3)]:
                           'TAMPER=' + mode + ' TAMPER_AT=1') if mode else '')
     test.file_grep(logfile, r'NPASS=(\d+)', npass)
 
+# 8 phased randomize calls, alone, from a fixed seed. TAMPER_AT counts the phase value
+# replies of the first layer of Phased or PhasedArr: 1 is the first call's, 2 the diversity
+# round's that follows it. A phase value reply is pinned back to the solver, so one that does
+# not answer each requested term once with a value of its sort fails the call; an unusable
+# diversity reply keeps the values before it.
+phased_runs = [
+    (None, 0, 8),
+    ('phase_bare', 1, 7),  # a pair that is not in a list
+    ('phase_dup', 1, 7),  # the same variable answered twice
+    ('phase_elem_bin', 2, 8),  # elements named with binary indices are the same elements
+    ('phase_elem_dup', 1, 7),  # one element answered twice, in two notations
+    ('phase_elem_h', 1, 7),  # element indices in #h notation
+    ('phase_elem_other', 1, 7),  # an index naming no element, in place of a requested one
+    ('phase_hex_h', 2, 8),  # a diversity value that is not an SMT-LIB literal
+    ('phase_junk', 1, 7),  # a value that is not a literal
+    ('phase_junk', 2, 8),  # the same in a diversity reply
+    ('phase_narrow', 1, 7),  # a value narrower than its variable
+    ('phase_narrow', 2, 8),  # the same in a diversity reply
+    ('phase_partial', 2, 8),  # a diversity reply applies none of its values if one is unusable
+    ('phase_short', 1, 7),  # a reply answering nothing
+    ('phase_var', 1, 7),  # a variable of a later layer, in place of the requested one
+    ('phase_whole_asarray', 2, 8),  # an array value that is neither a constant nor a store
+    ('phase_whole_bv', 1, 8),  # indexed literals inside an array value
+    ('phase_whole_bv_bad', 2, 8),  # a malformed indexed literal inside an array value
+    ('phase_whole_bv_open', 2, 8),  # an indexed literal left open, bound in a let
+    ('phase_whole_chain', 1, 8),  # nested lets as deep as solvers write them are a value
+    ('phase_whole_compact', 1, 8),  # an array value spaced tightly is still one
+    ('phase_whole_const_open', 2, 8),  # a constant array with a term after its sort
+    ('phase_whole_deep', 2, 8),  # lets nested deeper than the reader's bound
+    ('phase_whole_elem', 2, 8),  # an array with no element answered with narrower elements
+    ('phase_whole_extra', 2, 8),  # a constant array with an extra term
+    ('phase_whole_extra_store', 2, 8),  # a store with an extra term
+    ('phase_whole_index', 2, 8),  # a store into an array with an index narrower than its sort
+    ('phase_whole_junk', 2, 8),  # an array with no element answered by a non-array value
+    ('phase_whole_let', 1, 8),  # an array value given by a let
+    ('phase_whole_let_dup', 2, 8),  # a let binding one name twice
+    ('phase_whole_let_empty', 2, 8),  # a let binding nothing
+    ('phase_whole_let_free', 2, 8),  # a let binding a name to a term that is not a value
+    ('phase_whole_let_lit', 2, 8),  # a let name that is a literal
+    ('phase_whole_let_nul', 2, 8),  # a let name holding a NUL
+    ('phase_whole_let_num', 2, 8),  # a let name that is a numeral
+    ('phase_whole_let_quoted', 2, 8),  # a quoted let name, which is not supported
+    ('phase_whole_let_reserved', 2, 8),  # a let name that is a reserved word
+    ('phase_whole_let_seq', 2, 8),  # a let whose binding refers to another of its bindings
+    ('phase_whole_let_sort', 2, 8),  # a let whose value is a bit-vector, not an array
+    ('phase_whole_let_spare', 1, 8),  # a valid binding left unused is legal
+    ('phase_whole_let_unused', 2, 8),  # a let with an unused binding that is not a value
+    ('phase_whole_lines', 1, 8),  # an array value over several lines is still one
+    ('phase_whole_shadow_bv', 2, 8),  # a let naming bv0, so (_ bv0 5) is no literal
+    ('phase_whole_shadow_const', 2,
+     8),  # a let naming const, so (as const ...) is no constant array
+    ('phase_whole_shadow_store', 2, 8),  # a let naming store, so (store ...) is no store
+    ('phase_whole_select', 1, 7),  # an element of an array that has none
+    ('phase_whole_sort', 2, 8),  # an array with no element answered with another index sort
+    ('phase_whole_store', 1, 8),  # a store into a constant array is an array value
+    ('phase_whole_store_let', 1, 8),  # a store into an array a let names
+    ('phase_whole_trail', 2, 8),  # an array value followed by another term
+]
+
+for mode, at, npass in phased_runs:
+    logfile = test.obj_dir + '/sim_phased_' + str(mode) + '_' + str(at) + '.log'
+    solver_log = test.obj_dir + '/solver_phased_' + str(mode) + '_' + str(at) + '.log'
+    test.execute(logfile=logfile,
+                 all_run_flags=['+MODE=phased', '+verilator+solver+file+' + solver_log],
+                 run_env=('VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
+                          'TAMPER=' + mode + ' TAMPER_AT=' + str(at)) if mode else '')
+    test.file_grep(logfile, r'NPASS=(\d+)', npass)
+
+# Pins name each element as requested, whichever notation the reply used
+test.file_grep(test.obj_dir + '/solver_phased_phase_elem_bin_2.log',
+               r'^  \(assert \(= \(select w #x00000000\) #b00011\)\)')
+# A rejected value is never pinned
+test.file_grep_not(test.obj_dir + '/solver_phased_phase_junk_2.log', r'\(= x junk\)')
+test.file_grep_not(test.obj_dir + '/solver_phased_phase_var_1.log', r'\(= y #x5\)')
+test.file_grep(test.obj_dir + '/sim_phased_phase_var_1.log',
+               r"Unable to parse solver's response: unknown variable")
+test.file_grep(test.obj_dir + '/sim_phased_phase_elem_dup_1.log',
+               r"Unable to parse solver's response: repeated variable")
+test.file_grep(test.obj_dir + '/sim_phased_phase_bare_1.log',
+               r"Unable to parse solver's response: invalid S-expression")
+test.file_grep(test.obj_dir + '/sim_phased_phase_short_1.log',
+               r"Unable to parse solver's response: incomplete model")
+for mode in [
+        'phase_whole_deep', 'phase_whole_let_dup', 'phase_whole_let_empty',
+        'phase_whole_let_quoted', 'phase_whole_let_reserved', 'phase_whole_trail'
+]:
+    test.file_grep(test.obj_dir + '/sim_phased_' + mode + '_2.log',
+                   r"Unable to parse solver's response: invalid value")
+
 test.passes()

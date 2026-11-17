@@ -17,7 +17,19 @@
 #         | err_phase | err_reply | err_trunc | err_unbal | err_unbal_cont | frozen_value
 #         | garbage_assume | garbage_at | garbage_model | garbage_status
 #         | high_digit | indent | low_digit | model_trunc | multiline | mute_at
-#         | no_digits | none | octal | oor_assume | phase_model | phase_trunc
+#         | no_digits | none | octal | oor_assume | phase_bare | phase_dup | phase_elem_bin
+#         | phase_elem_dup | phase_elem_h | phase_elem_other | phase_hex_h | phase_junk
+#         | phase_model | phase_narrow | phase_partial | phase_short | phase_trunc | phase_var
+#         | phase_whole_asarray | phase_whole_bv | phase_whole_bv_bad | phase_whole_bv_open
+#         | phase_whole_chain | phase_whole_compact | phase_whole_const_open | phase_whole_deep
+#         | phase_whole_elem | phase_whole_extra | phase_whole_extra_store | phase_whole_index
+#         | phase_whole_junk | phase_whole_let | phase_whole_let_dup | phase_whole_let_empty
+#         | phase_whole_let_free | phase_whole_let_lit | phase_whole_let_nul | phase_whole_let_num
+#         | phase_whole_let_quoted | phase_whole_let_reserved | phase_whole_let_seq
+#         | phase_whole_let_sort | phase_whole_let_spare | phase_whole_let_unused
+#         | phase_whole_lines | phase_whole_select | phase_whole_shadow_bv
+#         | phase_whole_shadow_const | phase_whole_shadow_store | phase_whole_sort
+#         | phase_whole_store | phase_whole_store_let | phase_whole_trail
 #         | select_arity | select_carry | select_digit | select_dup | select_empty
 #         | select_extra | select_lead | select_narrow | select_octal | select_prefix
 #         | select_scalar | select_unknown | select_whole | select_wide
@@ -67,8 +79,55 @@
 #   none             - forward every reply unchanged
 #   octal            - replace the Nth model reply with octal values
 #   oor_assume       - answer the unsat assumptions with an out-of-range literal
+#   phase_bare       - replace the Nth x phase value reply with a pair that is not in a list
+#   phase_dup        - replace the Nth x phase value reply with x answered twice
+#   phase_elem_bin   - replace the Nth e/w phase value reply with binary indices
+#   phase_elem_dup   - replace the Nth e/w phase value reply with one element in two notations
+#   phase_elem_h     - replace the Nth e/w phase value reply with #h indices
+#   phase_elem_other - replace the Nth e/w phase value reply with an index naming no element
+#   phase_hex_h      - replace the Nth x phase value reply with a value in #h notation
+#   phase_junk       - replace the Nth x phase value reply with a value that is not a literal
 #   phase_model      - replace the final phased model reply with (error ...)
+#   phase_narrow     - replace the Nth x phase value reply with a value narrower than x
+#   phase_partial    - replace the Nth e/w phase value reply with one whose last value is unusable
+#   phase_short      - replace the Nth x phase value reply with one answering nothing
 #   phase_trunc      - answer an unterminated phase value reply and close the pipe
+#   phase_var        - replace the Nth x phase value reply with one naming the later layer's y
+#   phase_whole_asarray - replace the Nth e/w phase value reply with a non-constant array form
+#   phase_whole_bv   - replace the Nth e/w phase value reply with indexed literals in an array
+#   phase_whole_bv_bad - replace the Nth e/w phase value reply with a bad indexed literal in it
+#   phase_whole_bv_open - replace the Nth e/w phase value reply with an open indexed literal
+#   phase_whole_chain - replace the Nth e/w phase value reply with 3000 nested lets
+#   phase_whole_compact - replace the Nth e/w phase value reply with a whole array spaced tightly
+#   phase_whole_const_open - replace the Nth e/w phase value reply with junk in a constant
+#   phase_whole_deep - replace the Nth e/w phase value reply with lets 100000 deep
+#   phase_whole_elem - replace the Nth e/w phase value reply with a whole array of narrow elements
+#   phase_whole_extra - replace the Nth e/w phase value reply with a constant array of two elements
+#   phase_whole_extra_store - replace the Nth e/w phase value reply with a store of an extra term
+#   phase_whole_index - replace the Nth e/w phase value reply with a store of a narrow index
+#   phase_whole_junk - replace the Nth e/w phase value reply with a whole array that is not one
+#   phase_whole_let  - replace the Nth e/w phase value reply with a whole array in a let
+#   phase_whole_let_dup - replace the Nth e/w phase value reply with a let binding one name twice
+#   phase_whole_let_empty - replace the Nth e/w phase value reply with a let binding nothing
+#   phase_whole_let_free - replace the Nth e/w phase value reply with a let bound to junk
+#   phase_whole_let_lit - replace the Nth e/w phase value reply with a literal let name
+#   phase_whole_let_nul - replace the Nth e/w phase value reply with a NUL in a let name
+#   phase_whole_let_num - replace the Nth e/w phase value reply with a numeral let name
+#   phase_whole_let_quoted - replace the Nth e/w phase value reply with a quoted let name
+#   phase_whole_let_reserved - replace the Nth e/w phase value reply with a reserved let name
+#   phase_whole_let_seq - replace the Nth e/w phase value reply with a let binding read in sequence
+#   phase_whole_let_sort - replace the Nth e/w phase value reply with a let of a bit-vector
+#   phase_whole_let_spare - replace the Nth e/w phase value reply with a binding left unused
+#   phase_whole_let_unused - replace the Nth e/w phase value reply with a junk unused let binding
+#   phase_whole_lines - replace the Nth e/w phase value reply with a whole array over three lines
+#   phase_whole_select - replace the Nth e/w phase value reply with an element of e
+#   phase_whole_shadow_bv - replace the Nth e/w phase value reply with a let naming bv0
+#   phase_whole_shadow_const - replace the Nth e/w phase value reply with a let naming const
+#   phase_whole_shadow_store - replace the Nth e/w phase value reply with a let naming store
+#   phase_whole_sort - replace the Nth e/w phase value reply with a whole array of another sort
+#   phase_whole_store - replace the Nth e/w phase value reply with a store into a whole array
+#   phase_whole_store_let - replace the Nth e/w phase value reply with a store into a let
+#   phase_whole_trail - replace the Nth e/w phase value reply with a term after a whole array
 #   select_arity     - replace the Nth array model reply with a select of too many indices
 #   select_carry     - replace the Nth array model reply with an indexed index of 2^width
 #   select_digit     - replace the Nth array model reply with a select of an extra digit
@@ -129,6 +188,93 @@ SELECT_MODES = ("bad_index", "diversity_model", "select_arity", "select_carry", 
 RECHECK_MODES = ("unsat_recheck", )
 # phase_model acts on the final phased model; the others on any phase value reply
 PHASE_MODES = ("err_phase", "phase_model", "phase_trunc")
+# Modes replacing the Nth phase value reply of Phased's x layer or PhasedArr's e and w layer:
+# (first line of the reply, what a final model of every layer also holds, replacement)
+E5 = "(Array (_ BitVec 32) (_ BitVec 5))"
+EW = " ((select w #x00000000) #b00011) ((select w #x00000001) #b00101))"
+PHASE_VALUE_MODES = {
+    "phase_bare": ("((x", "(y ", "(x #x1)"),
+    "phase_dup": ("((x", "(y ", "((x #x1) (x #b0001))"),
+    "phase_elem_bin": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
+                       " ((select w #b" + "0" * 32 + ") #b00011)"
+                       " ((select w #b" + "0" * 31 + "1) #b00101))"),
+    "phase_elem_dup":
+    ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
+     " ((select w #x00000000) #b00011) ((select w #b" + "0" * 32 + ") #b00011))"),
+    "phase_elem_h": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
+                     " ((select w #h00000000) #b00011) ((select w #h00000001) #b00101))"),
+    "phase_elem_other": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
+                         " ((select w #x00000000) #b00011) ((select w #x00000002) #b00101))"),
+    "phase_hex_h": ("((x", "(y ", "((x #h3))"),
+    "phase_junk": ("((x", "(y ", "((x junk))"),
+    "phase_narrow": ("((x", "(y ", "((x #b1))"),
+    "phase_partial": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
+                      " ((select w #x00000000) #b10101) ((select w #x00000002) #b00101))"),
+    "phase_short": ("((x", "(y ", "()"),
+    "phase_var": ("((x", "(y ", "((y #x5))"),
+    "phase_whole_asarray": ("((e ", "(k ", "((e (_ as-array k!0))" + EW),
+    "phase_whole_bv": ("((e ", "(k ", "((e (store ((as const " + E5 + ") (_ bv0 5)) (_ bv0 32)"
+                       " (_ bv3 5)))" + EW),
+    "phase_whole_bv_bad": ("((e ", "(k ", "((e ((as const " + E5 + ") (_ bv0 5 junk)))" + EW),
+    "phase_whole_bv_open":
+    ("((e ", "(k ", "((e (let ((x (_ bv0 5 z))) ((as const " + E5 + ") x)))" + EW),
+    "phase_whole_chain": ("((e ", "(k ", "((e (let ((a0 ((as const " + E5 + ") #b00000))) " +
+                          "".join(f"(let ((a{k} (store a{k - 1} #x{k:08x} #b00001))) "
+                                  for k in range(1, 3000)) + "a2999" + ")" * 3000 + ")" + EW),
+    "phase_whole_compact": ("((e ", "(k ", "((e (store((as const(Array(_ BitVec 32)(_ BitVec 5)))"
+                            "#b00000)#x00000000 #b00011))" + EW),
+    "phase_whole_const_open":
+    ("((e ", "(k ", "((e (let ((a ((as const " + E5 + " x #b00000) junk))) a))" + EW),
+    "phase_whole_deep": ("((e ", "(k ", "((e " + "(let ((a " * 100000 + "((as const " + E5 +
+                         ") #b00000)" + ")) a)" * 100000 + ")" + EW),
+    "phase_whole_elem": ("((e ", "(k ", "((e ((as const " + E5 + ") #b0000))" + EW),
+    "phase_whole_extra": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000 #b00001))" + EW),
+    "phase_whole_extra_store": ("((e ", "(k ", "((e (store ((as const " + E5 + ") #b00000)"
+                                " #x00000000 #b00011 #b00001))" + EW),
+    "phase_whole_index":
+    ("((e ", "(k ", "((e (store ((as const " + E5 + ") #b00000) #b0 #b00011))" + EW),
+    "phase_whole_junk": ("((e ", "(k ", "((e junk)" + EW),
+    "phase_whole_let": ("((e ", "(k ", "((e (let ((a ((as const " + E5 + ") #b00000)))"
+                        " (store a #x00000000 #b00011)))" + EW),
+    "phase_whole_let_dup": ("((e ", "(k ", "((e (let ((a ((as const " + E5 +
+                            ") #b00000)) (a ((as const " + E5 + ") #b00000))) a))" + EW),
+    "phase_whole_let_empty": ("((e ", "(k ", "((e (let () ((as const " + E5 + ") #b00000)))" + EW),
+    "phase_whole_let_free": ("((e ", "(k ", "((e (let ((a junk)) a))" + EW),
+    "phase_whole_let_lit": ("((e ", "(k ",
+                            "((e (let ((#b00000 ((as const " + E5 + ") #b00000))) #b00000))" + EW),
+    "phase_whole_let_nul": ("((e ", "(k ",
+                            "((e (let ((a\0b ((as const " + E5 + ") #b00000))) a\0b))" + EW),
+    "phase_whole_let_num": ("((e ", "(k ",
+                            "((e (let ((0 ((as const " + E5 + ") #b00000))) 0))" + EW),
+    "phase_whole_let_quoted": ("((e ", "(k ",
+                               "((e (let ((|a| ((as const " + E5 + ") #b00000))) |a|))" + EW),
+    "phase_whole_let_reserved": ("((e ", "(k ",
+                                 "((e (let ((as ((as const " + E5 + ") #b00000))) as))" + EW),
+    "phase_whole_let_seq": ("((e ", "(k ",
+                            "((e (let ((a ((as const " + E5 + ") #b00000)) (b a)) b))" + EW),
+    "phase_whole_let_sort": ("((e ", "(k ", "((e (let ((a #b00000)) a))" + EW),
+    "phase_whole_let_spare": ("((e ", "(k ",
+                              "((e (let ((b #b00000)) ((as const " + E5 + ") #b00000)))" + EW),
+    "phase_whole_let_unused": ("((e ", "(k ",
+                               "((e (let ((b junk)) ((as const " + E5 + ") #b00000)))" + EW),
+    "phase_whole_lines": ("((e ", "(k ", "((e ((as const\n (Array (_ BitVec 32)\n (_ BitVec 5)))"
+                          " #b00000))" + EW),
+    "phase_whole_select": ("((e ", "(k ", "(((select e #x00000000) #b00000)" + EW),
+    "phase_whole_shadow_bv":
+    ("((e ", "(k ",
+     "((e (let ((bv0 #b00000)) (store ((as const " + E5 + ") bv0) #x00000000 (_ bv0 5))))" + EW),
+    "phase_whole_shadow_const":
+    ("((e ", "(k ", "((e (let ((const #b00000)) ((as const " + E5 + ") const)))" + EW),
+    "phase_whole_shadow_store": ("((e ", "(k ", "((e (let ((store ((as const " + E5 +
+                                 ") #b00000))) (store store #x00000000 #b00011)))" + EW),
+    "phase_whole_sort": ("((e ", "(k ", "((e ((as const (Array (_ BitVec 16) (_ BitVec 5)))"
+                         " #b00000))" + EW),
+    "phase_whole_store": ("((e ", "(k ", "((e (store ((as const " + E5 + ") #b00000) #x00000000"
+                          " #b00011))" + EW),
+    "phase_whole_store_let": ("((e ", "(k ", "((e (store (let ((a ((as const " + E5 +
+                              ") #b00000))) a) #x00000000 #b00011))" + EW),
+    "phase_whole_trail": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000) junk)" + EW),
+}
 # Modes acting on an unsat-assumptions reply, which lists __Va<N> literals
 ASSUME_MODES = ("err_assume", "garbage_assume", "oor_assume", "stale_assume")
 # Modes acting on an unsat-core reply, which lists __Vcons<N> names
@@ -235,6 +381,8 @@ for line in proc.stdout:
         counted = is_status and seen_unsat
     elif mode in PHASE_MODES:
         counted = at_reply_start and line.startswith("((x")
+    elif mode in PHASE_VALUE_MODES:
+        counted = at_reply_start and line.startswith(PHASE_VALUE_MODES[mode][0])
     elif mode in ASSUME_MODES:
         counted = at_reply_start and re.match(r"\(__Va\d", line) is not None
     elif mode in CORE_MODES:
@@ -399,6 +547,17 @@ for line in proc.stdout:
         else:
             for part in parts:
                 forward(part, part is parts[0])
+        continue
+    if mode in PHASE_VALUE_MODES:
+        parts = read_full(line)
+        if PHASE_VALUE_MODES[mode][1] in " ".join(parts):
+            # A final model is not a phase value reply; re-arm for the next one
+            replies -= 1
+            done = False
+            for part in parts:
+                forward(part, part is parts[0])
+        else:
+            emit(PHASE_VALUE_MODES[mode][2])
         continue
     if mode == "phase_trunc":
         emit("((x")

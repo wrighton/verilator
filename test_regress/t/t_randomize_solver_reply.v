@@ -37,6 +37,23 @@ class Phased;
   constraint rel_c {y > x;}
 endclass
 
+// Phased replies for an array layer, whose elements arrive as (select ...) terms, and an
+// array with no element, which arrives as a whole array value
+class PhasedArr;
+  rand bit [4:0] w[2];
+  rand bit [4:0] e[];
+  rand bit [3:0] k;
+  constraint order_c {
+    solve w before k;
+    solve e before k;
+  }
+  constraint rel_c {
+    foreach (w[i]) w[i] inside {[5'd1 : 5'd20]};
+    foreach (e[i]) e[i] != {1'b0, k};
+    k != w[0][3:0];
+  }
+endclass
+
 // Array element replies, which arrive as (select ...) terms; a key wider than 32 bits
 // names its element in hex, and an array with no element is still a solver variable
 class Arr;
@@ -120,6 +137,30 @@ module t;
     $write("NPASS=%0d\n", npass);
   endtask
 
+  // t_randomize_solver_reply runs the +MODE=phased rows alone, so TAMPER_AT counts the
+  // phase value replies of these calls
+  task automatic phased_rounds;
+    automatic Phased ph = new;
+    automatic PhasedArr pa = new;
+    automatic int npass = 0;
+    automatic int rc;
+    ph.srandom(7);
+    pa.srandom(7);
+    for (int i = 0; i < 4; ++i) begin
+      rc = ph.randomize();
+      if (rc != 0) begin
+        npass++;
+        `checkd(ph.y > ph.x, 1'b1);
+      end
+      rc = pa.randomize();
+      if (rc != 0) begin
+        npass++;
+        `checkd(pa.k != pa.w[0][3:0], 1'b1);
+      end
+    end
+    $write("NPASS=%0d\n", npass);
+  endtask
+
   initial begin : checks
     automatic Packet p = new;
     automatic Softy s = new;
@@ -133,6 +174,12 @@ module t;
       $write("*-* All Finished *-*\n");
       $finish;
       // $finish ends the run only after this process stops, so leave before the checks
+      disable checks;
+    end
+    if ($test$plusargs("MODE=phased")) begin
+      phased_rounds();
+      $write("*-* All Finished *-*\n");
+      $finish;
       disable checks;
     end
     if ($test$plusargs("MODE=frozen")) begin
