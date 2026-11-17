@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: 2024 Antmicro
 // SPDX-License-Identifier: CC0-1.0
 
+class Element;
+  rand bit v;
+endclass
+
 class Packet;
   rand int m_dyn_arr[][];
   rand int m_unp_arr[10][2];
@@ -13,7 +17,8 @@ class Packet;
   static rand int m_static_arr[];
   rand int m_queue[$];
   rand int m_wild[*];
-  Packet m_objs[];
+  rand struct {rand Element h;} m_s;
+  rand Element m_q_handles[$];
 endclass
 
 class Node;
@@ -34,7 +39,8 @@ module t;
     p.m_static_arr[0].rand_mode(0);
     p.m_queue[$].rand_mode(0);
     p.m_wild[1].rand_mode(0);
-    p.m_objs[0].rand_mode(0);
+    p.m_s.h.rand_mode(0);
+    p.m_q_handles[$].rand_mode(0);
     n.m_arr[0].rand_mode(0);
     void'(n.randomize());
   end

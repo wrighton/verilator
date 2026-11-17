@@ -1,0 +1,12 @@
+%Warning-WIDTHTRUNC: t/t_randomize_mode_width.v:16:5: Operator TASKREF 'rand_mode' expects 1 bits on the argument, but argument's VARREF 'flag' generates 2 bits.
+   16 |     rand_mode(flag);
+      |     ^~~~~~~~~
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: t/t_randomize_mode_width.v:17:5: Operator TASKREF 'rand_mode' expects 1 bits on the argument, but argument's FUNCREF 'wide_mode' generates 2 bits.
+   17 |     rand_mode(wide_mode());
+      |     ^~~~~~~~~
+%Warning-WIDTHTRUNC: t/t_randomize_mode_width.v:18:5: Operator TASKREF 'constraint_mode' expects 1 bits on the argument, but argument's VARREF 'flag' generates 2 bits.
+   18 |     constraint_mode(flag);
+      |     ^~~~~~~~~~~~~~~
+%Error: Exiting due to
