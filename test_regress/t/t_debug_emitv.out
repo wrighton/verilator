@@ -669,13 +669,13 @@ module t;
             ???? // ASSERTCTLARGS
             32'sh0
             ???? // ASSERTCTLTARGET
-            t.__VassertControl8
+            __VassertControl8
             ???? // ASSERTCTL
             32'h332'hf32'h7
             ???? // ASSERTCTLARGS
             32'sh1
             ???? // ASSERTCTLTARGET
-            t.__VassertControl9
+            __VassertControl9
             ???? // ASSERTCTL
             32'h432'hf32'h7
             ???? // ASSERTCTLARGS
