@@ -4346,10 +4346,12 @@ void VerilatedEvalLoop::evalImpl() {
 
     // The remaining regions are nested: each iteration of a region's loop
     // re-runs the loops of all regions that precede it in the scheduling order.
+    // The reactive region set is the exception: it iterates until empty before the active
+    // region set resumes (IEEE 1800-2023 4.5).
     if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPush("loop react");
     uint32_t reactIterCount = 0;
+    bool reacted;
     do {
-        checkConvergence(++reactIterCount, "Reactive", &VerilatedModel::dumpTriggersReact);
         if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPush("loop obs");
         uint32_t obsIterCount = 0;
         do {
@@ -4375,7 +4377,12 @@ void VerilatedEvalLoop::evalImpl() {
             if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPop();  // loop nba
         } while (m_model.evalObs());
         if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPop();  // loop obs
-    } while (m_model.evalReact());
+        reacted = false;
+        while (m_model.evalReact()) {
+            checkConvergence(++reactIterCount, "Reactive", &VerilatedModel::dumpTriggersReact);
+            reacted = true;
+        }
+    } while (reacted);
     if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPop();  // loop react
 
     // The 'Postponed' region runs once, at the end of the time step
