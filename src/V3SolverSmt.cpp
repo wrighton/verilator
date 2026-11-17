@@ -2573,16 +2573,34 @@ private:
         return nullptr;
     }
 
+    // The instance field's mode is read from its selected object.
+    AstNodeExpr* newMemberModep(AstVar* const varp, AstVar* const modeVarp,
+                                AstNodeExpr* const elemReadp) const {
+        const RandomizeMode mode = {.asUQuad = varp->user1()};
+        if (!mode.usesMode) return nullptr;
+        FileLine* const flp = elemReadp->fileline();
+        UASSERT_OBJ(modeVarp, varp, "Field mode without a mode array");
+        AstNodeExpr* const arrayp = new AstMemberRef{flp, elemReadp->cloneTree(false), modeVarp};
+        AstCMethodHard* const atp
+            = new AstCMethodHard{flp, arrayp, VCMethod::ARRAY_AT, new AstConst{flp, mode.index}};
+        atp->dtypeSetUInt32();
+        return atp;
+    }
+
     void createWriteVarForClassFields(AstClass* const elemClassp, const std::string& smtName,
                                       AstVar* const iterVarp, const bool isUnpackedClassRefArray,
                                       AstNodeExpr* const arrayRefp, AstIf* const ifNonNullp,
                                       AstClassRefDType* elemClassRefDtp,
-                                      AstNodeExpr* const activep) const {
+                                      AstNodeExpr* const activep,
+                                      AstNodeExpr* const elemReadp) const {
         FileLine* const fl = arrayRefp->fileline();
         const std::string idxFmt
             = isUnpackedClassRefArray ? "%0x" : keyHexFormat(iterVarp->dtypep()->skipRefp());
         AstNodeStmt* enablesp = nullptr;  // While activep, written back
         AstNodeStmt* disablesp = nullptr;  // Otherwise not
+        AstNodeStmt* fieldModesp = nullptr;  // Then by the mode of each field
+        // Resolve the hierarchy-owned instance mode array once, not once per field.
+        AstVar* const modeVarp = RandModeVars::randModeVarp(elemClassp);
 
         foreachSolverElemField(elemClassp, [&](AstVar* const memberVarp) {
             const int memberWidth = memberVarp->dtypep()->skipRefp()->width();
@@ -2628,11 +2646,54 @@ private:
             writeVarp->addPinsp(namep);
             writeVarp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, 0ULL});
             ifNonNullp->addThensp(writeVarp->makeStmt());
+            // Only instance scalar/packed leaves have a per-object bit-vector value to pin.
+            // Keep the existing static and structured-field registration protocols unchanged.
+            AstNodeExpr* const modep
+                = !memberVarp->lifetime().isStatic()
+                          && memberVarp->dtypep()->skipRefp()->isIntegralOrPacked()
+                      ? newMemberModep(memberVarp, modeVarp, elemReadp)
+                      : nullptr;
+            if (modep) {
+                AstCMethodHard* const disablep = new AstCMethodHard{
+                    fl, writeVarp->fromp()->cloneTree(false),
+                    VCMethod::RANDOMIZER_SET_VAR_DISABLED, namep->cloneTree(false)};
+                disablep->dtypeSetVoid();
+                // Enabled only where the array is active, set before (activep)
+                AstNodeStmt* enablep = nullptr;
+                if (!activep) {
+                    AstCMethodHard* const clearp = disablep->cloneTree(false);
+                    clearp->method(VCMethod::RANDOMIZER_CLEAR_VAR_DISABLED);
+                    enablep = clearp->makeStmt();
+                }
+                // The frozen scalar remains a solver symbol, pinned to its current value.
+                AstSFormatF* const pinTextp = new AstSFormatF{
+                    fl, "(__Vbv (= %s %s))", false,
+                    AstNode::addNext(namep->cloneTree(false),
+                                     getConstFormat(new AstMemberRef{
+                                         fl, elemReadp->cloneTree(false), memberVarp}))};
+                AstCMethodHard* const pinp = new AstCMethodHard{
+                    fl, writeVarp->fromp()->cloneTree(false), VCMethod::RANDOMIZER_HARD, pinTextp};
+                // Runtime-formatted names are not borrowed as constraint-name pointers.
+                pinp->addPinsp(new AstCExpr{fl, AstCExpr::Pure{}, "{}"});
+                // Every hard pin needs a line record to keep unsat-core indexes aligned.
+                FileLine* const pinFlp = memberVarp->fileline();
+                pinp->addPinsp(
+                    new AstCExpr{pinFlp, AstCExpr::Pure{}, "\"" + pinFlp->filename() + "\""});
+                pinp->addPinsp(new AstConst{pinFlp, static_cast<uint32_t>(pinFlp->lineno())});
+                pinp->addPinsp(new AstCExpr{pinFlp, AstCExpr::Pure{}, "\"\""});
+                pinp->dtypeSetVoid();
+                AstNodeStmt* const frozenp = disablep->makeStmt();
+                frozenp->addNext(pinp->makeStmt());
+                fieldModesp
+                    = AstNode::addNext(fieldModesp, new AstIf{fl, modep, enablep, frozenp});
+            }
         });
         // The fields of the objects of an inactive array are not written back
         if (enablesp) {
             ifNonNullp->addThensp(new AstIf{fl, activep->cloneTree(false), enablesp, disablesp});
         }
+        // Nor are those whose mode is off, which keep their values: enabled only if both
+        if (fieldModesp) ifNonNullp->addThensp(fieldModesp);
     }
 
     void createSolverArrayHandle(AstVar* const varp, AstClassRefDType* elemClassRefDtp,
@@ -2696,7 +2757,7 @@ private:
 
         AstNodeExpr* const activep = newHandlesActivep(m_memberMap, arrayReadRefp, true, false);
         createWriteVarForClassFields(elemClassp, smtName, idxVarp, isUnpackedClassRefArray,
-                                     arrayRefp, ifNonNullp, elemClassRefDtp, activep);
+                                     arrayRefp, ifNonNullp, elemClassRefDtp, activep, atReadp);
         if (activep) VL_DO_DANGLING(activep->deleteTree(), activep);
 
         loopp->addStmtsp(new AstAssign{
