@@ -5,6 +5,9 @@
 // SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+
 `define check_rand(cl, field, cond) \
 begin \
   automatic longint prev_result; \
@@ -185,6 +188,18 @@ class J;
   }
 endclass
 
+// Foreach over ranges ending at an end of the range of int, also too long to unroll
+class K;
+  rand bit [6:0] top1[32'sh7fffffff:32'sh7fffffff];
+  rand bit [6:0] top100[32'sh7fffff9c:32'sh7fffffff];
+  rand bit [6:0] bot100[-2147483549:(-2147483647 - 1)];
+  constraint c_k {
+    foreach (top1[i]) top1[i] == 7'd9;
+    foreach (top100[i]) top100[i] == 7'(i & 3);
+    foreach (bot100[i]) bot100[i] == 7'(i + 7);
+  }
+endclass
+
 class GQ;  // G with a queue
   typedef struct { rand bit [31:0]a; rand bit c; } cfg_t;
   rand cfg_t cfg[$];
@@ -256,6 +271,16 @@ module t;
     `check_rand(j, j.a, (j.arr.sum() + j.a == 200));
     foreach (j.arr[i]) begin
         `check_rand(j, j.arr[i], (j.arr[i] inside {[10 : 200]}));
+    end
+    begin
+      automatic K k = new;
+      automatic int ok = k.randomize();
+      `checkd(ok, 1);
+      `checkd(k.top1[32'sh7fffffff], 9);
+      `checkd(k.top100[32'sh7fffff9c], 0);
+      `checkd(k.top100[32'sh7fffffff], 3);
+      `checkd(k.bot100[-2147483549], 106);
+      `checkd(k.bot100[-2147483647 - 1], 7);
     end
     foreach (gq.cfg[i]) begin
       `check_rand_min_count(gq, gq.cfg[i].a, 0, 14);
