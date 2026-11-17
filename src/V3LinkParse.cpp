@@ -644,12 +644,16 @@ class LinkParseVisitor final : public VNVisitor {
                 UINFO(9, "VarInit case1 " << nodep);
             } else if (!m_ftaskp && !VN_IS(m_modp, Class) && nodep->isNonOutput()
                        && !nodep->isInput()) {
-                // 2. Module inout/ref/constref: const default to use
+                // 2. Module inout/ref/constref: default is illegal
                 UINFO(9, "VarInit case2 " << nodep);
                 if (nodep->valuep()) {
-                    nodep->v3warn(E_UNSUPPORTED,
-                                  "Unsupported: Default value on module inout/ref/constref: "
-                                      << nodep->prettyNameQ());
+                    nodep->v3error("Default value on port "
+                                   << nodep->prettyNameQ() << ", but it is "
+                                   << nodep->direction().prettyName()
+                                   << ", not input (IEEE 1800-2023 23.2.2.4)\n"
+                                   << nodep->warnMore()
+                                   << "... Suggest declare the port as input,"
+                                      " or remove the default");
                     nodep->valuep()->unlinkFrBack()->deleteTree();
                 }
             } else if (m_blockp || m_ftaskp) {

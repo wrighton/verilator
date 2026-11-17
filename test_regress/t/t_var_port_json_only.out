@@ -1,100 +1,169 @@
 {"type":"NETLIST","name":"$root","addr":"(B)","loc":"a,0:0,0:0","timeunit":"1ps","timeprecision":"1ps","typeTablep":"(C)","constPoolPkgp":"(D)","dollarUnitPkgp":"(E)",
  "modulesp": [
-  {"type":"MODULE","name":"mh2","addr":"(F)","loc":"d,18:8,18:11","origName":"mh2","verilogName":"mh2","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh0","addr":"(F)","loc":"d,12:8,12:11","origName":"mh0","verilogName":"mh0","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_inout_wire_integer","addr":"(G)","loc":"d,18:27,18:47","dtypep":"(H)","origName":"x_inout_wire_integer","verilogName":"x_inout_wire_integer","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"integer"}
+    {"type":"VAR","name":"x_inout_wire_logic","addr":"(G)","loc":"d,12:18,12:36","dtypep":"(H)","origName":"x_inout_wire_logic","verilogName":"x_inout_wire_logic","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh5","addr":"(I)","loc":"d,24:8,24:11","origName":"mh5","verilogName":"mh5","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh2","addr":"(I)","loc":"d,18:8,18:11","origName":"mh2","verilogName":"mh2","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_input_wire_logic","addr":"(J)","loc":"d,24:19,24:37","dtypep":"(K)","origName":"x_input_wire_logic","verilogName":"x_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_inout_wire_integer","addr":"(J)","loc":"d,18:27,18:47","dtypep":"(K)","origName":"x_inout_wire_integer","verilogName":"x_inout_wire_integer","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"integer"}
   ]},
-  {"type":"MODULE","name":"mh6","addr":"(L)","loc":"d,26:8,26:11","origName":"mh6","verilogName":"mh6","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh3","addr":"(L)","loc":"d,20:8,20:11","origName":"mh3","verilogName":"mh3","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_input_var_logic","addr":"(M)","loc":"d,26:23,26:40","dtypep":"(K)","origName":"x_input_var_logic","verilogName":"x_input_var_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"logic"}
+    {"type":"VAR","name":"x_inout_wire_logic_p6","addr":"(M)","loc":"d,20:19,20:40","dtypep":"(N)","origName":"x_inout_wire_logic_p6","verilogName":"x_inout_wire_logic_p6","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh7","addr":"(N)","loc":"d,28:8,28:11","origName":"mh7","verilogName":"mh7","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh5","addr":"(O)","loc":"d,22:8,22:11","origName":"mh5","verilogName":"mh5","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_input_var_integer","addr":"(O)","loc":"d,28:31,28:50","dtypep":"(H)","origName":"x_input_var_integer","verilogName":"x_input_var_integer","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"integer"}
+    {"type":"VAR","name":"x_input_wire_logic","addr":"(P)","loc":"d,22:19,22:37","dtypep":"(H)","origName":"x_input_wire_logic","verilogName":"x_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh8","addr":"(P)","loc":"d,30:8,30:11","origName":"mh8","verilogName":"mh8","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh6","addr":"(Q)","loc":"d,24:8,24:11","origName":"mh6","verilogName":"mh6","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_output_wire_logic","addr":"(Q)","loc":"d,30:20,30:39","dtypep":"(K)","origName":"x_output_wire_logic","verilogName":"x_output_wire_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_input_var_logic","addr":"(R)","loc":"d,24:23,24:40","dtypep":"(H)","origName":"x_input_var_logic","verilogName":"x_input_var_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh9","addr":"(R)","loc":"d,32:8,32:11","origName":"mh9","verilogName":"mh9","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh7","addr":"(S)","loc":"d,26:8,26:11","origName":"mh7","verilogName":"mh7","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_output_var_logic","addr":"(S)","loc":"d,32:24,32:42","dtypep":"(K)","origName":"x_output_var_logic","verilogName":"x_output_var_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"logic"}
+    {"type":"VAR","name":"x_input_var_integer","addr":"(T)","loc":"d,26:31,26:50","dtypep":"(K)","origName":"x_input_var_integer","verilogName":"x_input_var_integer","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"integer"}
   ]},
-  {"type":"MODULE","name":"mh10","addr":"(T)","loc":"d,34:8,34:12","origName":"mh10","verilogName":"mh10","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh8","addr":"(U)","loc":"d,28:8,28:11","origName":"mh8","verilogName":"mh8","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_output_wire_logic_signed_p6","addr":"(U)","loc":"d,34:33,34:62","dtypep":"(V)","origName":"x_output_wire_logic_signed_p6","verilogName":"x_output_wire_logic_signed_p6","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_output_wire_logic","addr":"(V)","loc":"d,28:20,28:39","dtypep":"(H)","origName":"x_output_wire_logic","verilogName":"x_output_wire_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh11","addr":"(W)","loc":"d,36:8,36:12","origName":"mh11","verilogName":"mh11","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh9","addr":"(W)","loc":"d,30:8,30:11","origName":"mh9","verilogName":"mh9","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_output_var_integer","addr":"(X)","loc":"d,36:28,36:48","dtypep":"(H)","origName":"x_output_var_integer","verilogName":"x_output_var_integer","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"integer"}
+    {"type":"VAR","name":"x_output_var_logic","addr":"(X)","loc":"d,30:24,30:42","dtypep":"(H)","origName":"x_output_var_logic","verilogName":"x_output_var_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh12","addr":"(Y)","loc":"d,38:8,38:12","origName":"mh12","verilogName":"mh12","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh10","addr":"(Y)","loc":"d,32:8,32:12","origName":"mh10","verilogName":"mh10","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_ref_logic_p6","addr":"(Z)","loc":"d,38:23,38:37","dtypep":"(AB)","origName":"x_ref_logic_p6","verilogName":"x_ref_logic_p6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_output_wire_logic_signed_p6","addr":"(Z)","loc":"d,32:33,32:62","dtypep":"(AB)","origName":"x_output_wire_logic_signed_p6","verilogName":"x_output_wire_logic_signed_p6","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh13","addr":"(BB)","loc":"d,40:8,40:12","origName":"mh13","verilogName":"mh13","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh11","addr":"(BB)","loc":"d,34:8,34:12","origName":"mh11","verilogName":"mh11","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_ref_var_logic_u6","addr":"(CB)","loc":"d,40:17,40:35","dtypep":"(DB)","origName":"x_ref_var_logic_u6","verilogName":"x_ref_var_logic_u6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT"}
+    {"type":"VAR","name":"x_output_var_integer","addr":"(CB)","loc":"d,34:28,34:48","dtypep":"(K)","origName":"x_output_var_integer","verilogName":"x_output_var_integer","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"integer"}
   ]},
-  {"type":"MODULE","name":"mh17","addr":"(EB)","loc":"d,50:8,50:12","origName":"mh17","verilogName":"mh17","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh12","addr":"(DB)","loc":"d,36:8,36:12","origName":"mh12","verilogName":"mh12","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_input_var_integer","addr":"(FB)","loc":"d,50:31,50:50","dtypep":"(H)","origName":"x_input_var_integer","verilogName":"x_input_var_integer","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"integer"},
-    {"type":"VAR","name":"y_input_wire_logic","addr":"(GB)","loc":"d,50:57,50:75","dtypep":"(K)","origName":"y_input_wire_logic","verilogName":"y_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
+    {"type":"VAR","name":"x_ref_logic_p6","addr":"(EB)","loc":"d,36:23,36:37","dtypep":"(N)","origName":"x_ref_logic_p6","verilogName":"x_ref_logic_p6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh18","addr":"(HB)","loc":"d,52:8,52:12","origName":"mh18","verilogName":"mh18","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh13","addr":"(FB)","loc":"d,38:8,38:12","origName":"mh13","verilogName":"mh13","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_output_var_logic","addr":"(IB)","loc":"d,52:24,52:42","dtypep":"(K)","origName":"x_output_var_logic","verilogName":"x_output_var_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"logic"},
-    {"type":"VAR","name":"y_input_wire_logic","addr":"(JB)","loc":"d,52:50,52:68","dtypep":"(K)","origName":"y_input_wire_logic","verilogName":"y_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_ref_var_logic_u6","addr":"(GB)","loc":"d,38:17,38:35","dtypep":"(HB)","origName":"x_ref_var_logic_u6","verilogName":"x_ref_var_logic_u6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT"}
   ]},
-  {"type":"MODULE","name":"mh19","addr":"(KB)","loc":"d,54:8,54:12","origName":"mh19","verilogName":"mh19","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh14","addr":"(IB)","loc":"d,40:8,40:12","origName":"mh14","verilogName":"mh14","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_output_wire_logic_signed_p6","addr":"(LB)","loc":"d,54:33,54:62","dtypep":"(V)","origName":"x_output_wire_logic_signed_p6","verilogName":"x_output_wire_logic_signed_p6","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
-    {"type":"VAR","name":"y_output_var_integer","addr":"(MB)","loc":"d,54:72,54:92","dtypep":"(H)","origName":"y_output_var_integer","verilogName":"y_output_var_integer","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"integer"}
+    {"type":"VAR","name":"x_inout_wire_logic","addr":"(JB)","loc":"d,40:18,40:36","dtypep":"(H)","origName":"x_inout_wire_logic","verilogName":"x_inout_wire_logic","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"},
+    {"type":"VAR","name":"y_inout_wire_logic_p8","addr":"(KB)","loc":"d,40:38,40:59","dtypep":"(LB)","origName":"y_inout_wire_logic_p8","verilogName":"y_inout_wire_logic_p8","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE"}
   ]},
-  {"type":"MODULE","name":"mh20","addr":"(NB)","loc":"d,56:8,56:12","origName":"mh20","verilogName":"mh20","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh16","addr":"(MB)","loc":"d,46:8,46:12","origName":"mh16","verilogName":"mh16","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"x_ref_var_logic_p6","addr":"(OB)","loc":"d,56:23,56:41","dtypep":"(AB)","origName":"x_ref_var_logic_p6","verilogName":"x_ref_var_logic_p6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
-    {"type":"VAR","name":"y_ref_var_logic_p6","addr":"(PB)","loc":"d,56:43,56:61","dtypep":"(AB)","origName":"y_ref_var_logic_p6","verilogName":"y_ref_var_logic_p6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_inout_wire_logic_p6","addr":"(NB)","loc":"d,46:19,46:40","dtypep":"(N)","origName":"x_inout_wire_logic_p6","verilogName":"x_inout_wire_logic_p6","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
+    {"type":"VAR","name":"y_inout_wire_logic","addr":"(OB)","loc":"d,46:47,46:65","dtypep":"(H)","origName":"y_inout_wire_logic","verilogName":"y_inout_wire_logic","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
   ]},
-  {"type":"MODULE","name":"mh21","addr":"(QB)","loc":"d,58:8,58:12","origName":"mh21","verilogName":"mh21","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+  {"type":"MODULE","name":"mh17","addr":"(PB)","loc":"d,48:8,48:12","origName":"mh17","verilogName":"mh17","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
    "stmtsp": [
-    {"type":"VAR","name":"ref_var_logic_u6","addr":"(RB)","loc":"d,58:17,58:33","dtypep":"(SB)","origName":"ref_var_logic_u6","verilogName":"ref_var_logic_u6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT"},
-    {"type":"VAR","name":"y_ref_var_logic","addr":"(TB)","loc":"d,58:41,58:56","dtypep":"(K)","origName":"y_ref_var_logic","verilogName":"y_ref_var_logic","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+    {"type":"VAR","name":"x_input_var_integer","addr":"(QB)","loc":"d,48:31,48:50","dtypep":"(K)","origName":"x_input_var_integer","verilogName":"x_input_var_integer","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"integer"},
+    {"type":"VAR","name":"y_input_wire_logic","addr":"(RB)","loc":"d,48:57,48:75","dtypep":"(H)","origName":"y_input_wire_logic","verilogName":"y_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
   ]},
-  {"type":"PACKAGE","name":"$unit","addr":"(E)","loc":"a,0:0,0:0","origName":"__024unit","verilogName":"\\$unit ","level":2,"depth":3,"inLibrary":true,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps"},
+  {"type":"MODULE","name":"mh18","addr":"(SB)","loc":"d,50:8,50:12","origName":"mh18","verilogName":"mh18","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_output_var_logic","addr":"(TB)","loc":"d,50:24,50:42","dtypep":"(H)","origName":"x_output_var_logic","verilogName":"x_output_var_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"VAR","dtypeName":"logic"},
+    {"type":"VAR","name":"y_input_wire_logic","addr":"(UB)","loc":"d,50:50,50:68","dtypep":"(H)","origName":"y_input_wire_logic","verilogName":"y_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mh19","addr":"(VB)","loc":"d,52:8,52:12","origName":"mh19","verilogName":"mh19","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_output_wire_logic_signed_p6","addr":"(WB)","loc":"d,52:33,52:62","dtypep":"(AB)","origName":"x_output_wire_logic_signed_p6","verilogName":"x_output_wire_logic_signed_p6","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
+    {"type":"VAR","name":"y_output_var_integer","addr":"(XB)","loc":"d,52:72,52:92","dtypep":"(K)","origName":"y_output_var_integer","verilogName":"y_output_var_integer","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"integer"}
+  ]},
+  {"type":"MODULE","name":"mh20","addr":"(YB)","loc":"d,54:8,54:12","origName":"mh20","verilogName":"mh20","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_ref_var_logic_p6","addr":"(ZB)","loc":"d,54:23,54:41","dtypep":"(N)","origName":"x_ref_var_logic_p6","verilogName":"x_ref_var_logic_p6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
+    {"type":"VAR","name":"y_ref_var_logic_p6","addr":"(AC)","loc":"d,54:43,54:61","dtypep":"(N)","origName":"y_ref_var_logic_p6","verilogName":"y_ref_var_logic_p6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mh21","addr":"(BC)","loc":"d,56:8,56:12","origName":"mh21","verilogName":"mh21","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"ref_var_logic_u6","addr":"(CC)","loc":"d,56:17,56:33","dtypep":"(DC)","origName":"ref_var_logic_u6","verilogName":"ref_var_logic_u6","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT"},
+    {"type":"VAR","name":"y_ref_var_logic","addr":"(EC)","loc":"d,56:41,56:56","dtypep":"(H)","origName":"y_ref_var_logic","verilogName":"y_ref_var_logic","isPrimaryIO":true,"direction":"REF","declDirection":"REF","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mn0","addr":"(FC)","loc":"d,61:8,61:11","origName":"mn0","verilogName":"mn0","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_inout_wire_logic_p7","addr":"(GC)","loc":"d,61:30,61:51","dtypep":"(HC)","origName":"x_inout_wire_logic_p7","verilogName":"x_inout_wire_logic_p7","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mn1","addr":"(IC)","loc":"d,63:8,63:11","origName":"mn1","verilogName":"mn1","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_inout_wire_integer","addr":"(JC)","loc":"d,63:26,63:46","dtypep":"(K)","origName":"x_inout_wire_integer","verilogName":"x_inout_wire_integer","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"integer"},
+    {"type":"VAR","name":"y_inout_wire_mn_t","addr":"(KC)","loc":"d,63:58,63:75","dtypep":"(LC)","origName":"y_inout_wire_mn_t","verilogName":"y_inout_wire_mn_t","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"mn_t"}
+  ]},
+  {"type":"MODULE","name":"mn2","addr":"(MC)","loc":"d,65:8,65:11","origName":"mn2","verilogName":"mn2","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_inout_wire_logic_signed","addr":"(NC)","loc":"d,65:20,65:45","dtypep":"(OC)","origName":"x_inout_wire_logic_signed","verilogName":"x_inout_wire_logic_signed","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
+    {"type":"VAR","name":"y_inout_wire_logic_signed_p5","addr":"(PC)","loc":"d,65:60,65:88","dtypep":"(QC)","origName":"y_inout_wire_logic_signed_p5","verilogName":"y_inout_wire_logic_signed_p5","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mn3","addr":"(RC)","loc":"d,67:8,67:11","origName":"mn3","verilogName":"mn3","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_inout_wire_logic_signed","addr":"(SC)","loc":"d,67:25,67:50","dtypep":"(OC)","origName":"x_inout_wire_logic_signed","verilogName":"x_inout_wire_logic_signed","isPrimaryIO":true,"direction":"INOUT","declDirection":"INOUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mn4","addr":"(TC)","loc":"d,69:8,69:11","origName":"mn4","verilogName":"mn4","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_input_wire_logic_p3","addr":"(UC)","loc":"d,69:25,69:46","dtypep":"(VC)","origName":"x_input_wire_logic_p3","verilogName":"x_input_wire_logic_p3","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
+    {"type":"VAR","name":"y_input_wire_logic","addr":"(WC)","loc":"d,69:53,69:71","dtypep":"(H)","origName":"y_input_wire_logic","verilogName":"y_input_wire_logic","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"},
+    {"type":"VAR","name":"z_input_wire_logic_signed","addr":"(XC)","loc":"d,70:20,70:45","dtypep":"(OC)","origName":"z_input_wire_logic_signed","verilogName":"z_input_wire_logic_signed","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"},
+    {"type":"VAR","name":"w_input_wire_logic_p2","addr":"(YC)","loc":"d,70:53,70:74","dtypep":"(ZC)","origName":"w_input_wire_logic_p2","verilogName":"w_input_wire_logic_p2","isPrimaryIO":true,"direction":"INPUT","declDirection":"INPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
+  ]},
+  {"type":"MODULE","name":"mn5","addr":"(AD)","loc":"d,72:8,72:11","origName":"mn5","verilogName":"mn5","level":1,"depth":2,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"VAR","name":"x_output_wire_logic_p3","addr":"(BD)","loc":"d,72:26,72:48","dtypep":"(VC)","origName":"x_output_wire_logic_p3","verilogName":"x_output_wire_logic_p3","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"PORT","dtypeName":"logic"},
+    {"type":"VAR","name":"y_output_wire_logic","addr":"(CD)","loc":"d,72:55,72:74","dtypep":"(H)","origName":"y_output_wire_logic","verilogName":"y_output_wire_logic","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"},
+    {"type":"VAR","name":"z_output_wire_logic_signed_p2","addr":"(DD)","loc":"d,73:26,73:55","dtypep":"(ED)","origName":"z_output_wire_logic_signed_p2","verilogName":"z_output_wire_logic_signed_p2","isPrimaryIO":true,"direction":"OUTPUT","declDirection":"OUTPUT","isSigPublic":true,"lifetime":"VSTATICI","varType":"WIRE","dtypeName":"logic"}
+  ]},
+  {"type":"PACKAGE","name":"$unit","addr":"(E)","loc":"a,0:0,0:0","origName":"__024unit","verilogName":"\\$unit ","level":2,"depth":3,"inLibrary":true,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps",
+   "stmtsp": [
+    {"type":"TYPEDEF","name":"mn_t","addr":"(FD)","loc":"d,60:21,60:25","dtypep":"(VC)"}
+  ]},
   {"type":"PACKAGE","name":"__Vconstpool","addr":"(D)","loc":"a,0:0,0:0","origName":"__Vconstpool","verilogName":"__Vconstpool","level":2,"depth":3,"inLibrary":true,"unconnectedDrive":"DEFAULT_FALSE","lifetime":"NONE","timeunit":"1ps"}
 ],
  "miscsp": [
   {"type":"TYPETABLE","addr":"(C)","loc":"a,0:0,0:0",
    "typesp": [
-    {"type":"UNPACKARRAYDTYPE","addr":"(SB)","loc":"d,58:34,58:35","dtypep":"(SB)","declRange":"[5:0]","refDTypep":"(K)",
+    {"type":"BASICDTYPE","name":"logic","addr":"(VC)","loc":"d,60:9,60:14","dtypep":"(VC)","keyword":"logic","range":"2:0","generic":true},
+    {"type":"BASICDTYPE","name":"logic","addr":"(H)","loc":"d,72:55,72:74","dtypep":"(H)","keyword":"logic","generic":true},
+    {"type":"BASICDTYPE","name":"logic","addr":"(ED)","loc":"d,73:20,73:21","dtypep":"(ED)","keyword":"logic","range":"1:0","generic":true,"signed":true},
+    {"type":"BASICDTYPE","name":"logic","addr":"(OC)","loc":"d,70:20,70:45","dtypep":"(OC)","keyword":"logic","generic":true,"signed":true},
+    {"type":"BASICDTYPE","name":"logic","addr":"(ZC)","loc":"d,70:47,70:48","dtypep":"(ZC)","keyword":"logic","range":"1:0","generic":true},
+    {"type":"BASICDTYPE","name":"logic","addr":"(QC)","loc":"d,65:54,65:55","dtypep":"(QC)","keyword":"logic","range":"4:0","generic":true,"signed":true},
+    {"type":"REFDTYPE","name":"mn_t","addr":"(LC)","loc":"d,63:53,63:57","dtypep":"(VC)","refDTypep":"(VC)","classOrPackagep":"(E)"},
+    {"type":"BASICDTYPE","name":"logic","addr":"(HC)","loc":"d,61:18,61:23","dtypep":"(HC)","keyword":"logic","range":"6:0","generic":true},
+    {"type":"UNPACKARRAYDTYPE","addr":"(DC)","loc":"d,56:34,56:35","dtypep":"(DC)","declRange":"[5:0]","refDTypep":"(H)",
      "rangep": [
-      {"type":"RANGE","addr":"(UB)","loc":"d,58:34,58:35",
+      {"type":"RANGE","addr":"(GD)","loc":"d,56:34,56:35",
        "leftp": [
-        {"type":"CONST","name":"32'sh5","addr":"(VB)","loc":"d,58:35,58:36","dtypep":"(WB)"}
+        {"type":"CONST","name":"32'sh5","addr":"(HD)","loc":"d,56:35,56:36","dtypep":"(ID)"}
       ],
        "rightp": [
-        {"type":"CONST","name":"32'sh0","addr":"(XB)","loc":"d,58:37,58:38","dtypep":"(WB)"}
+        {"type":"CONST","name":"32'sh0","addr":"(JD)","loc":"d,56:37,56:38","dtypep":"(ID)"}
       ]}
     ]},
-    {"type":"BASICDTYPE","name":"logic","addr":"(K)","loc":"d,58:41,58:56","dtypep":"(K)","keyword":"logic","generic":true},
-    {"type":"UNPACKARRAYDTYPE","addr":"(DB)","loc":"d,40:36,40:37","dtypep":"(DB)","declRange":"[5:0]","refDTypep":"(K)",
+    {"type":"UNPACKARRAYDTYPE","addr":"(LB)","loc":"d,40:60,40:61","dtypep":"(LB)","declRange":"[7:0]","refDTypep":"(H)",
      "rangep": [
-      {"type":"RANGE","addr":"(YB)","loc":"d,40:36,40:37",
+      {"type":"RANGE","addr":"(KD)","loc":"d,40:60,40:61",
        "leftp": [
-        {"type":"CONST","name":"32'sh5","addr":"(ZB)","loc":"d,40:37,40:38","dtypep":"(WB)"}
+        {"type":"CONST","name":"32'sh7","addr":"(LD)","loc":"d,40:61,40:62","dtypep":"(ID)"}
       ],
        "rightp": [
-        {"type":"CONST","name":"32'sh0","addr":"(AC)","loc":"d,40:39,40:40","dtypep":"(WB)"}
+        {"type":"CONST","name":"32'sh0","addr":"(MD)","loc":"d,40:63,40:64","dtypep":"(ID)"}
       ]}
     ]},
-    {"type":"BASICDTYPE","name":"logic","addr":"(AB)","loc":"d,38:17,38:18","dtypep":"(AB)","keyword":"logic","range":"5:0","generic":true},
-    {"type":"BASICDTYPE","name":"logic","addr":"(V)","loc":"d,34:27,34:28","dtypep":"(V)","keyword":"logic","range":"5:0","generic":true,"signed":true},
-    {"type":"BASICDTYPE","name":"integer","addr":"(H)","loc":"d,18:19,18:26","dtypep":"(H)","keyword":"integer","range":"31:0","generic":true,"signed":true},
-    {"type":"BASICDTYPE","name":"bit","addr":"(WB)","loc":"d,40:37,40:38","dtypep":"(WB)","keyword":"bit","range":"31:0","generic":true,"signed":true}
+    {"type":"UNPACKARRAYDTYPE","addr":"(HB)","loc":"d,38:36,38:37","dtypep":"(HB)","declRange":"[5:0]","refDTypep":"(H)",
+     "rangep": [
+      {"type":"RANGE","addr":"(ND)","loc":"d,38:36,38:37",
+       "leftp": [
+        {"type":"CONST","name":"32'sh5","addr":"(OD)","loc":"d,38:37,38:38","dtypep":"(ID)"}
+      ],
+       "rightp": [
+        {"type":"CONST","name":"32'sh0","addr":"(PD)","loc":"d,38:39,38:40","dtypep":"(ID)"}
+      ]}
+    ]},
+    {"type":"BASICDTYPE","name":"logic","addr":"(AB)","loc":"d,32:27,32:28","dtypep":"(AB)","keyword":"logic","range":"5:0","generic":true,"signed":true},
+    {"type":"BASICDTYPE","name":"logic","addr":"(N)","loc":"d,20:13,20:14","dtypep":"(N)","keyword":"logic","range":"5:0","generic":true},
+    {"type":"BASICDTYPE","name":"integer","addr":"(K)","loc":"d,18:19,18:26","dtypep":"(K)","keyword":"integer","range":"31:0","generic":true,"signed":true},
+    {"type":"BASICDTYPE","name":"bit","addr":"(ID)","loc":"d,38:37,38:38","dtypep":"(ID)","keyword":"bit","range":"31:0","generic":true,"signed":true}
   ]}
 ]}

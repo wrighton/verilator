@@ -88,7 +88,6 @@ for s in [
         'Unsupported: Complex expression captured from',
         'Unsupported: Concatenation to form',
         'Unsupported: Creating tristate signal not underneath a module:',
-        'Unsupported: Default value on module inout/ref/constref:',
         'Unsupported: Modport empty expression',
         'Unsupported: Non-constant default value in missing argument',
         'Unsupported: Only one PSL clock allowed per assertion',
