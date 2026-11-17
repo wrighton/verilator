@@ -10,5 +10,7 @@ module t;
     $assertoff(0, not_a_scope);
     $assertoff(0, missing_scope);
     $assertoff(0, not_a_scope + 1);
+    // A hierarchical_identifier needs an identifier after $root. (IEEE 1800-2023 Syntax 20-12)
+    $assertoff(0, $root);
   end
 endmodule
