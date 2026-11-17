@@ -105,7 +105,9 @@ static string extractDottedPath(AstNode* nodep, bool& hasPartSelect) {
 // and obtain distinct VarScopes through the ordinary scope pass.
 class AssertControlSeedVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Module owning the elaborated assertion's state declaration
-    int m_number = 0;  // Next per-module control-state declaration number
+    // Next control-state declaration number, unique in the netlist so that a name never
+    // denotes different assertions in different elaborations of one module
+    int m_number = 0;
     void addState(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
         if (type == VAssertType::INTERNAL) return;
         AstCDType* const dtypep = new AstCDType{nodep->fileline(), "VlAssertControl"};
@@ -121,9 +123,7 @@ class AssertControlSeedVisitor final : public VNVisitor {
     }
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
-        VL_RESTORER(m_number);
         m_modp = nodep;
-        m_number = 0;
         iterateChildren(nodep);
     }
     void visit(AstAssert* nodep) override {
@@ -163,6 +163,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
     string m_instancePath;  // Current module-instance path
     string m_childPath;  // Path including lexical/generate scopes for child traversal
     int m_depth = 0;  // Module-instance depth relative to the selected scope
+    const bool m_optional;  // Sites of one of several elaborations reached by an upward name
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
         VL_RESTORER_COPY(m_instancePath);
@@ -190,6 +191,9 @@ class AssertControlTargetVisitor final : public VNVisitor {
                                     new AstVarRef{nodep->fileline(), varp, VAccess::READWRITE})
                               : static_cast<AstNodeVarRef*>(new AstVarXRef{
                                     nodep->fileline(), varp, m_instancePath, VAccess::READWRITE});
+                    if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+                        xrefp->assertCtlOptional(m_optional);
+                    }
                     AstAssertCtlTarget* const targetp
                         = new AstAssertCtlTarget{nodep->fileline(), refp, m_depth};
                     pair.first->second = targetp;
@@ -205,11 +209,13 @@ class AssertControlTargetVisitor final : public VNVisitor {
 public:
     AssertControlTargetVisitor(AstNode* nodep, AstAssertCtlArgs* argsp, const string& instancePath,
                                const string& childPath,
-                               std::unordered_map<string, AstAssertCtlTarget*>& targets)
+                               std::unordered_map<string, AstAssertCtlTarget*>& targets,
+                               bool optional = false)
         : m_argsp{argsp}
         , m_targets{targets}
         , m_instancePath{instancePath}
-        , m_childPath{childPath} {
+        , m_childPath{childPath}
+        , m_optional{optional} {
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             iterateAndNextNull(cellp->modp()->stmtsp());
         } else if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
@@ -374,6 +380,8 @@ private:
     IfaceModSyms m_ifaceModSyms;  // List of AstIface+Symbols to be processed
     // Generate block -> earlier same-named alternative it replaced in the symbol table
     std::unordered_map<const VSymEnt*, VSymEnt*> m_genAltPrev;
+    // Symbol of every elaborated instance of each module, for assertion control targets
+    std::unordered_map<const AstNodeModule*, std::vector<VSymEnt*>> m_modInstanceSyms;
     std::set<const AstVar*> m_ownDefparamVars;  // Set by a defparam in their scope
     std::vector<AstCell*> m_topIfaceCellps;  // Dummy cells of top level interfaces
     const VLinkDotStep m_step;  // Operational step
@@ -594,6 +602,7 @@ public:
         symp->parentp(rootEntp());  // Needed so backward search can find name of top module
         symp->fallbackp(dunitEntp());  // Needed so can find $unit stuff
         nodep->user1p(symp);
+        m_modInstanceSyms[nodep].push_back(symp);
         checkDuplicate(rootEntp(), nodep, nodep->origName());
         rootEntp()->insert(nodep->origName(), symp);
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
@@ -607,7 +616,10 @@ public:
         symp->parentp(rootEntp());  // Needed so backward search can find name of top module
         symp->fallbackp(dunitEntp());  // Needed so can find $unit stuff
         nodep->user1p(symp);
-        if (nodep->modp()) nodep->modp()->user1p(symp);
+        if (nodep->modp()) {
+            nodep->modp()->user1p(symp);
+            m_modInstanceSyms[nodep->modp()].push_back(symp);
+        }
         checkDuplicate(rootEntp(), nodep, nodep->origName());
         rootEntp()->insert(nodep->origName(), symp);
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
@@ -623,7 +635,10 @@ public:
         symp->parentp(abovep);
         symp->fallbackp(dunitEntp());  // Needed so can find $unit stuff
         nodep->user1p(symp);
-        if (nodep->modp()) nodep->modp()->user1p(symp);
+        if (nodep->modp()) {
+            nodep->modp()->user1p(symp);
+            m_modInstanceSyms[nodep->modp()].push_back(symp);
+        }
         checkDuplicate(abovep, nodep, nodep->origName());
         abovep->reinsert(nodep->origName(), symp);
         if (forScopeCreation() && abovep != modSymp && !modSymp->findIdFlat(nodep->name())) {
@@ -634,6 +649,9 @@ public:
         }
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
         return symp;
+    }
+    const std::vector<VSymEnt*>& moduleInstanceSyms(const AstNodeModule* modp) {
+        return m_modInstanceSyms[modp];
     }
     void insertMap(VSymEnt* symp, const string& scopename) {
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
@@ -3968,6 +3986,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<const AstSequence*, AstVar*> m_seqTriggeredEvents;
     V3UniqueNames m_seqTriggeredNames{"__Vtriggered"};  // Names of those events
     int m_modportNum = 0;  // Uniqueify modport numbers
+    // Assertion control apply statements of sites another elaboration holds, to remove
+    std::vector<AstCStmt*> m_assertCtlDropps;
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
     bool m_inGenBlock = false;  // True if in generate block
@@ -6484,6 +6504,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
             UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
         }
     }
+    // Whether an assertion control site of possibly another elaboration resolves here
+    bool assertCtlSiteResolves(const AstVarXRef* nodep, VSymEnt* lookupSymp) {
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        VSymEnt* const dotSymp = m_statep->findDotted(nodep->fileline(), lookupSymp,
+                                                      nodep->dotted(), baddot, okSymp, true);
+        return dotSymp && m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true);
+    }
     void visit(AstVarXRef* nodep) override {
         // VarRef: Resolve its reference
         // We always link even if varp() is set, because the module we choose may change
@@ -6500,6 +6528,21 @@ class LinkDotResolveVisitor final : public VNVisitor {
             VSymEnt* lookupSymp = m_curSymp;  // Start search at current scope
             if (nodep->inlinedDots() != "") {  // Correct for current post-inlined scope
                 lookupSymp = findInlinedDotsSym(nodep, nodep->inlinedDots());
+            }
+            if (nodep->assertCtlOptional() && !assertCtlSiteResolves(nodep, lookupSymp)) {
+                // Another elaboration's site: unused by this instance
+                if (m_statep->forScopeCreation()) {
+                    // The reference is an argument within its apply statement
+                    AstNode* headp = nodep;
+                    while (headp->backp()->nextp() == headp) headp = headp->backp();
+                    AstCStmt* const unitp = VN_CAST(headp->backp(), CStmt);
+                    UASSERT_OBJ(unitp, nodep, "Assertion control site outside its statement");
+                    if (std::find(m_assertCtlDropps.begin(), m_assertCtlDropps.end(), unitp)
+                        == m_assertCtlDropps.end()) {
+                        m_assertCtlDropps.push_back(unitp);
+                    }
+                }
+                return;
             }
             string baddot;
             VSymEnt* okSymp;
@@ -6580,6 +6623,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (vscp && errorHierNonPort(nodep, vscp->varp(), dotSymp)) return;
+                if (vscp && nodep->assertCtlOptional()) {
+                    UASSERT_OBJ(vscp->varp() == nodep->varp(), nodep,
+                                "Assertion control site bound to another elaboration");
+                    nodep->assertCtlOptional(false);
+                }
                 if (!vscp) {
                     nodep->v3error("Can't find varpin scope of "
                                    << AstNode::prettyNameQ(baddot) << " in dotted signal: '"
@@ -8079,25 +8127,62 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
+    static bool isAssertControlTarget(const AstNode* nodep) {
+        return VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, GenBlock)
+               || VN_IS(nodep, NodeFTask) || VN_IS(nodep, Module);
+    }
     // The scope whose statements hold the assertions under an assertion control target
     static const AstNode* assertControlTargetBody(const AstNode* nodep) {
         if (const AstCell* const cellp = VN_CAST(nodep, Cell)) return cellp->modp();
         return nodep;
     }
-    // Whether path resolves from every instance of the current module to the same
-    // elaborated scope as targetp
-    bool assertControlSameUpward(FileLine* flp, const string& path, const AstNode* targetp) {
-        const AstNode* const bodyp = assertControlTargetBody(targetp);
-        bool same = true;
-        v3Global.rootp()->foreach([&](AstCell* cellp) {
-            if (!same || cellp->modp() != m_modp || !LinkDotState::existsNodeSym(cellp)) return;
+    // Select the sites of an upward name for every instance of the current module. Instances
+    // can reach differently elaborated scopes: each scope's sites are then added as optional
+    // references, which the scoped pass keeps only in the instances that reach that scope.
+    void assertControlUpward(AstNodeExpr* itemp, AstAssertCtlArgs* argsp, const string& path,
+                             const string& firstName,
+                             std::unordered_map<string, AstAssertCtlTarget*>& targets) {
+        struct Reach final {
+            const AstNode* bodyp;
+            AstNode* targetp;
+            string instancePath;
+            string childPath;
+        };
+        std::vector<Reach> reaches;
+        for (VSymEnt* const cellSymp : m_statep->moduleInstanceSyms(m_modp)) {
             string baddot;
             VSymEnt* okSymp = nullptr;
-            const VSymEnt* const symp = m_statep->findDotted(flp, LinkDotState::getNodeSym(cellp),
-                                                             path, baddot, okSymp, true);
-            same = symp && assertControlTargetBody(symp->nodep()) == bodyp;
-        });
-        return same;
+            const VSymEnt* const foundp
+                = m_statep->findDotted(itemp->fileline(), cellSymp, path, baddot, okSymp, true);
+            const VSymEnt* const firstSymp = m_statep->findDotted(itemp->fileline(), cellSymp,
+                                                                  firstName, baddot, okSymp, true);
+            AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
+            const VSymEnt* instanceSymp = foundp;
+            while (
+                instanceSymp
+                && !(VN_IS(instanceSymp->nodep(), Cell) || VN_IS(instanceSymp->nodep(), Module))) {
+                instanceSymp = instanceSymp->parentp();
+            }
+            string instancePath;
+            string childPath;
+            if (!isAssertControlTarget(targetp) || !firstSymp
+                || !assertionRelativeScopePath(instanceSymp, firstSymp, instancePath)
+                || !assertionRelativeScopePath(foundp, firstSymp, childPath)) {
+                itemp->v3error("Assertion control target is not a scope or assertion: '"
+                               << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
+                return;
+            }
+            const AstNode* const bodyp = assertControlTargetBody(targetp);
+            if (std::none_of(reaches.begin(), reaches.end(),
+                             [&](const Reach& reach) { return reach.bodyp == bodyp; })) {
+                reaches.push_back({bodyp, targetp, VString::dot(firstName, ".", instancePath),
+                                   VString::dot(firstName, ".", childPath)});
+            }
+        }
+        for (const Reach& reach : reaches) {
+            AssertControlTargetVisitor{reach.targetp,   argsp,   reach.instancePath,
+                                       reach.childPath, targets, reaches.size() > 1};
+        }
     }
     string assertControlPath(AstNodeExpr* nodep) {
         if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
@@ -8142,9 +8227,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
             // A bare $root resolves to the netlist, which is not a scope (IEEE 1800-2023
             // Syntax 20-12)
-            if (!targetp
-                || !(VN_IS(targetp, Cell) || VN_IS(targetp, NodeBlock) || VN_IS(targetp, GenBlock)
-                     || VN_IS(targetp, NodeFTask) || VN_IS(targetp, Module))) {
+            if (!isAssertControlTarget(targetp)) {
                 itemp->v3error("Assertion control target is not a scope or assertion: '"
                                << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
                 continue;
@@ -8183,19 +8266,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (!firstLocal && firstSymp && firstSymp->parentp() != m_statep->rootEntp()
                        && assertionRelativeScopePath(instanceSymp, firstSymp, instancePath)
                        && assertionRelativeScopePath(foundp, firstSymp, childPath)) {
-                // Upward name, as written from the first identifier. Its assertions are
-                // enumerated here from one instance, so every instance must reach the same scope.
-                if (!assertControlSameUpward(itemp->fileline(), path, targetp)) {
-                    itemp->v3warn(E_UNSUPPORTED,
-                                  "Unsupported: assertion control scope '"
-                                      << AstNode::prettyName(path)
-                                      << "' reaches differently elaborated scopes from the "
-                                         "instances of "
-                                      << m_modp->prettyNameQ());
-                    continue;
-                }
-                instancePath = VString::dot(firstName, ".", instancePath);
-                childPath = VString::dot(firstName, ".", childPath);
+                // Upward name, as written from the first identifier, which the scoped pass
+                // resolves for each instance
+                assertControlUpward(itemp, nodep, path, firstName, targets);
+                continue;
             } else {
                 instancePath = assertionScopePath(instanceSymp);
                 childPath = assertionScopePath(foundp);
@@ -8383,6 +8457,9 @@ public:
             AstNodeModule* const modp = p.second;
             modp->foreach([](AstNode* const nodep) { nodep->user3(false); });
             iterate(modp);
+        }
+        for (AstCStmt* const unitp : m_assertCtlDropps) {
+            VL_DO_DANGLING(pushDeletep(unitp->unlinkFrBack()), unitp);
         }
         // A wildcard export only exports names its package references (IEEE 1800-2023 26.6)
         std::stable_sort(m_wildcardExportRefs.begin(), m_wildcardExportRefs.end(),

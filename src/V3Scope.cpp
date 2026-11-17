@@ -536,8 +536,9 @@ class ScopeCleanupVisitor final : public VNVisitor {
     void visit(AstCFunc* nodep) override { movedDeleteOrIterate(nodep); }
 
     void visit(AstVarXRef* nodep) override {
-        // The crossrefs are dealt with in V3LinkDot
-        nodep->varp(nullptr);
+        // The crossrefs are dealt with in V3LinkDot. An assertion control site that might be
+        // of another elaboration keeps its variable, which V3LinkDot checks it binds to.
+        if (!nodep->assertCtlOptional()) nodep->varp(nullptr);
     }
     void visit(AstNodeFTaskRef* nodep) override {
         // The crossrefs are dealt with in V3LinkDot

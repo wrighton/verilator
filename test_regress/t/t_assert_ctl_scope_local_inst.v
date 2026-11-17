@@ -22,7 +22,7 @@ module leaf;
 endmodule
 
 module mid (
-    input bit [7:0] ctl
+    input bit [6:0] ctl
 );
   if (1) begin : chk_blk
     int failures = 0;
@@ -37,6 +37,8 @@ module mid (
   if (1) begin : gen
     leaf c2 ();
   end
+  leaf d1 ();
+  leaf d2 ();
   int nb_failures = 0;
   initial begin : nb
     #1;
@@ -61,29 +63,34 @@ module mid (
     if (ctl[0]) $assertoff(0, c);
     if (ctl[1]) $assertoff(0, nb);
     if (ctl[2]) $assertoff(0, t.m1.chk_blk);
-    if (ctl[3]) $assertoff(0, tk);
-    if (ctl[4]) $assertoff(0, gen.c2);
-    if (ctl[5]) $assertoff(0, $root.t.m0.gen.c2);
-    if (ctl[6]) $assertoff(0, m1.c);
-    if (ctl[7]) $assertoff(0, m0.tk);
+    if (ctl[3]) $assertoff(0, m1.gen.c2);
+    if (ctl[4]) $assertoff(0, tk);
+    if (ctl[5]) $assertoff(0, m0.d1);
+    if (ctl[6]) $assertoff(0, $root.t.m0.d2);
   end
 endmodule
 
 module t;
-  mid m0 (.ctl(8'b01000111));
-  mid m1 (.ctl(8'b10111000));
+  // Each local target leaves the other instance's copy on, and each absolute or upward target
+  // leaves the caller's own copy on
+  mid m0 (.ctl(7'b0001111));
+  mid m1 (.ctl(7'b1110000));
   initial begin
     #2;
     `checkd(m0.chk_blk.failures, 1);
     `checkd(m0.c.failures, 0);
     `checkd(m0.nb_failures, 0);
-    `checkd(m0.tk_failures, 0);
-    `checkd(m0.gen.c2.failures, 0);
+    `checkd(m0.tk_failures, 1);
+    `checkd(m0.gen.c2.failures, 1);
+    `checkd(m0.d1.failures, 0);
+    `checkd(m0.d2.failures, 0);
     `checkd(m1.chk_blk.failures, 0);
-    `checkd(m1.c.failures, 0);
+    `checkd(m1.c.failures, 1);
     `checkd(m1.nb_failures, 1);
     `checkd(m1.tk_failures, 0);
     `checkd(m1.gen.c2.failures, 0);
+    `checkd(m1.d1.failures, 1);
+    `checkd(m1.d2.failures, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
