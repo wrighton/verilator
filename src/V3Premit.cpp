@@ -412,6 +412,24 @@ class PremitVisitor final : public VNVisitor {
         }
         // ArraySel are just pointer arithmetic and should never be replaced
     }
+    void visit(AstDynArraySel* nodep) override {
+        iterateAndNextNull(nodep->fromp());
+        {  // Only the 'from' is part of the assignment LHS, not the index
+            VL_RESTORER(m_assignLhs);
+            m_assignLhs = false;
+            iterateAndNextNull(nodep->bitp());
+        }
+        checkNode(nodep);
+    }
+    void visit(AstQueueSel* nodep) override {
+        iterateAndNextNull(nodep->fromp());
+        {  // Only the 'from' is part of the assignment LHS, not the index
+            VL_RESTORER(m_assignLhs);
+            m_assignLhs = false;
+            iterateAndNextNull(nodep->bitp());
+        }
+        checkNode(nodep);
+    }
     void visit(AstAssocSel* nodep) override {
         iterateAndNextNull(nodep->fromp());
         {  // Only the 'from' is part of the assignment LHS
