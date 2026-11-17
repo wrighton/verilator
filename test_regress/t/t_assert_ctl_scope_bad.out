@@ -11,4 +11,8 @@
                                         : ... note: In instance 't'
    12 |     $assertoff(0, not_a_scope + 1);
       |                               ^
+%Error: t/t_assert_ctl_scope_bad.v:14:19: Assertion control target is not a scope or assertion: '$root' (IEEE 1800-2023 20.11).
+                                        : ... note: In instance 't'
+   14 |     $assertoff(0, $root);
+      |                   ^~~~~
 %Error: Exiting due to
