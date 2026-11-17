@@ -52,6 +52,22 @@ module dut_default_input_wire32
 endmodule
 
 
+module dut_default_input_signed
+  (
+  input logic required_input,
+  signed i = 1'b1, // input, inherited
+  [2:0] j = 3'd5, // input, inherited
+  signed [2:0] k = -3'sd3, // input, inherited
+  output logic o,
+  output logic [2:0] oj,
+  output logic [2:0] ok
+   );
+  assign o = i;
+  assign oj = j;
+  assign ok = k;
+endmodule
+
+
 module t
   (/*AUTOARG*/
    // Inputs
@@ -98,6 +114,18 @@ module t
   dut_default_input_logic32 u_dut_logic32_default
     (/*.i(),*/
      .o(dut_logic32_o_default));
+
+  logic dut_signed_o_default;
+  logic [2:0] dut_signed_oj_default;
+  logic [2:0] dut_signed_ok_default;
+  dut_default_input_signed u_dut_signed_default
+    (.required_input(1),
+     /*.i(),*/
+     /*.j(),*/
+     /*.k(),*/
+     .o(dut_signed_o_default),
+     .oj(dut_signed_oj_default),
+     .ok(dut_signed_ok_default));
 
 
   // 2. DUT instances with default values and port open
@@ -195,6 +223,9 @@ module t
       if (dut0_o_default != 0) $error;
       if (dut1_o_default != 1) $error;
       if (dut_logic32_o_default != 32'h1234_5678) $error;
+      if (dut_signed_o_default != 1) $error;
+      if (dut_signed_oj_default != 3'd5) $error;
+      if (dut_signed_ok_default != 3'b101) $error;
 
       $display("[%0t] %m: outputs  - open got {%0d %0d %0x}, want {0 1 12345678}",
                $time,
