@@ -8079,6 +8079,26 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
+    // The scope whose statements hold the assertions under an assertion control target
+    static const AstNode* assertControlTargetBody(const AstNode* nodep) {
+        if (const AstCell* const cellp = VN_CAST(nodep, Cell)) return cellp->modp();
+        return nodep;
+    }
+    // Whether path resolves from every instance of the current module to the same
+    // elaborated scope as targetp
+    bool assertControlSameUpward(FileLine* flp, const string& path, const AstNode* targetp) {
+        const AstNode* const bodyp = assertControlTargetBody(targetp);
+        bool same = true;
+        v3Global.rootp()->foreach([&](AstCell* cellp) {
+            if (!same || cellp->modp() != m_modp || !LinkDotState::existsNodeSym(cellp)) return;
+            string baddot;
+            VSymEnt* okSymp = nullptr;
+            const VSymEnt* const symp = m_statep->findDotted(flp, LinkDotState::getNodeSym(cellp),
+                                                             path, baddot, okSymp, true);
+            same = symp && assertControlTargetBody(symp->nodep()) == bodyp;
+        });
+        return same;
+    }
     string assertControlPath(AstNodeExpr* nodep) {
         if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
         if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
@@ -8152,14 +8172,28 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string instancePath;
             string childPath;
             string firstPath;
-            if (firstSymp && assertionRelativeScopePath(firstSymp, m_modSymp, firstPath)
-                && assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
+            // An upward search can find the instance whose symbols resolve this statement; that
+            // is local only when named by the module's own name
+            const bool firstLocal = firstSymp
+                                    && assertionRelativeScopePath(firstSymp, m_modSymp, firstPath)
+                                    && (firstSymp != m_modSymp || firstName == m_modp->origName());
+            if (firstLocal && assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
                 && assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
                 // Within the calling instance
-            } else if (firstSymp && firstSymp->parentp() != m_statep->rootEntp()
+            } else if (!firstLocal && firstSymp && firstSymp->parentp() != m_statep->rootEntp()
                        && assertionRelativeScopePath(instanceSymp, firstSymp, instancePath)
                        && assertionRelativeScopePath(foundp, firstSymp, childPath)) {
-                // Upward name, as written from the first identifier
+                // Upward name, as written from the first identifier. Its assertions are
+                // enumerated here from one instance, so every instance must reach the same scope.
+                if (!assertControlSameUpward(itemp->fileline(), path, targetp)) {
+                    itemp->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: assertion control scope '"
+                                      << AstNode::prettyName(path)
+                                      << "' reaches differently elaborated scopes from the "
+                                         "instances of "
+                                      << m_modp->prettyNameQ());
+                    continue;
+                }
                 instancePath = VString::dot(firstName, ".", instancePath);
                 childPath = VString::dot(firstName, ".", childPath);
             } else {
