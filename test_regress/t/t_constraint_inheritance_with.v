@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2024 Antmicro
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 `define check_rand(cl, field, constr, cond) \
 begin \
    automatic longint prev_result; \
@@ -45,6 +50,27 @@ class E extends C;
   constraint x_gt_y { x > y; }
 endclass
 
+class G;
+  rand bit [6:0] v;
+  rand bit [6:0] arr[2];
+endclass
+
+// A class's own randomize() with reads the members it inherits as random
+class H extends G;
+  rand bit [6:0] w;
+  constraint c_small {
+    v inside {[1 : 2]};
+    w inside {[1 : 2]};
+    arr[1] inside {[1 : 2]};
+  }
+  function int randomize_distinct();
+    return randomize() with {v != w;};
+  endfunction
+  function int randomize_distinct_elem();
+    return randomize() with {arr[1] != w;};
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic B b = new;
@@ -59,6 +85,20 @@ module t;
     `check_rand(d, d.y, z > x && z < y, d.x > 0 && d.x < d.y);
     `check_rand(e, e.x, x inside {[10:20]}, e.x inside {[10:20]} && e.x > e.y);
     `check_rand(e, e.y, x inside {[10:20]}, e.x inside {[10:20]} && e.x > e.y);
+    begin
+      automatic H h = new;
+      int ok;
+      repeat (20) begin
+        ok = h.randomize_distinct();
+        `checkd(ok, 1);
+        `checkd(h.v != h.w, 1'b1);
+      end
+      repeat (20) begin
+        ok = h.randomize_distinct_elem();
+        `checkd(ok, 1);
+        `checkd(h.arr[1] != h.w, 1'b1);
+      end
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
