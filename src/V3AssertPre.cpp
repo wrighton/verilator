@@ -1359,11 +1359,6 @@ private:
             windowp->addStmtsp(
                 new AstEventControl{flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});
             beginp->addStmtsp(windowp);
-        } else if (isNonConsec) {
-            // Standalone nonconsec: ##1 into window, then pass
-            beginp->addStmtsp(
-                new AstEventControl{flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});
-            beginp->addStmtsp(new AstPExprClause{flp, true});
         } else if (rhsp) {
             // Goto rep: check consequent once at match endpoint
             if (!isOverlapped) {
@@ -1373,7 +1368,8 @@ private:
             beginp->addStmtsp(new AstIf{flp, rhsp, new AstPExprClause{flp, true},
                                         new AstPExprClause{flp, false}});
         } else {
-            // Standalone goto: pass after counting
+            // Standalone: pass at the first match, the N-th b. For b[=N], it ends the first
+            // match of b[->N] ##1 !b[*0:$], as !b[*0] is empty (IEEE 1800-2023 16.9.2).
             beginp->addStmtsp(new AstPExprClause{flp, true});
         }
 

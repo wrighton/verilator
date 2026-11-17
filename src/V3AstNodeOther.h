@@ -1675,6 +1675,8 @@ class AstNetlist final : public AstNode {
     // @astgen ptr := m_delaySchedulerp : Optional[AstVar]  // Delay scheduler variable
     // @astgen ptr := m_activityp : Optional[AstVar]  // Trace activity flags
     // @astgen ptr := m_nbaQueuep : Optional[AstVarScope]  // Global queue of NBAs (V3Delayed)
+    // @astgen ptr := m_reNbaQueuep : Optional[AstVarScope]  // Global queue of Re-NBAs (V3Delayed)
+    // @astgen ptr := m_inReactivep : Optional[AstVarScope]  // Reactive logic running (V3Delayed)
     // @astgen ptr := m_topScopep : Optional[AstTopScope]  // Singleton AstTopScope
     // @astgen ptr := m_stlFirstIterationp: Optional[AstVarScope]  // Settle first iteration flag
     VTimescale m_timeunit;  // Global time unit
@@ -1729,6 +1731,10 @@ public:
     void activityp(AstVar* const varp) { m_activityp = varp; }
     AstVarScope* nbaQueuep() const { return m_nbaQueuep; }
     void nbaQueuep(AstVarScope* varScopep) { m_nbaQueuep = varScopep; }
+    AstVarScope* reNbaQueuep() const { return m_reNbaQueuep; }
+    void reNbaQueuep(AstVarScope* varScopep) { m_reNbaQueuep = varScopep; }
+    AstVarScope* inReactivep() const { return m_inReactivep; }
+    void inReactivep(AstVarScope* varScopep) { m_inReactivep = varScopep; }
     void stdPackagep(AstPackage* const packagep) { m_stdPackagep = packagep; }
     AstPackage* stdPackagep() const { return m_stdPackagep; }
     void stdPackageProcessp(AstClass* const classp) { m_stdPackageProcessp = classp; }

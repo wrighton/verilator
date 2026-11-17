@@ -278,11 +278,15 @@ class OrderGraphBuilder final : public VNVisitorConst {
             }
         }
     }
-    // A call enqueuing an NBA in the function called accesses the global queue of NBAs (see
-    // V3Delayed), ordering it before its commit, and serializing it with the others
+    // A call enqueuing an NBA in the function called accesses the global queues of NBAs and
+    // Re-NBAs (see V3Delayed), ordering it before their commits, and serializing it with the
+    // others
     void accountEnqueuingCall(AstNodeCCall* nodep) {
         if (!nodep->mayEnqueueGlobalNBA()) return;
         accountVarAccess(v3Global.rootp()->nbaQueuep(), VAccess::READWRITE, nodep);
+        if (AstVarScope* const queueVscp = v3Global.rootp()->reNbaQueuep()) {
+            accountVarAccess(queueVscp, VAccess::READWRITE, nodep);
+        }
     }
 
     void visit(AstNodeCCall* nodep) override {

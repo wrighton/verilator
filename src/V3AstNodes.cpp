@@ -2673,6 +2673,8 @@ void AstNetlist::deleteContents() {
     m_dpiExportTriggerp = nullptr;
     m_delaySchedulerp = nullptr;
     m_nbaQueuep = nullptr;
+    m_reNbaQueuep = nullptr;
+    m_inReactivep = nullptr;
     m_topScopep = nullptr;
     m_evalFuncps.fill(nullptr);
     m_dumpTriggersFuncps.fill(nullptr);

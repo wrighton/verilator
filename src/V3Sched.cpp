@@ -201,6 +201,13 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
     LogicClasses result;
     VNDeleter deleter;  // Deletes the AstActives once their processes are moved
 
+    // The commit of the Re-NBAs (see V3Delayed) is post logic of the reactive region
+    const auto isReNbaCommit = [netlistp](const AstActive* activep) {
+        const AstAlwaysPost* const postp = VN_CAST(activep->procsp(), AlwaysPost);
+        const AstNbaCommit* const commitp = postp ? VN_CAST(postp->stmtsp(), NbaCommit) : nullptr;
+        return commitp && commitp->queuep()->varScopep() == netlistp->reNbaQueuep();
+    };
+
     netlistp->foreach([&](AstScope* scopep) {
         scopep->foreach([&](AstActive* activep) {
             AstSenTree* const senTreep = activep->sentreep();
@@ -231,7 +238,7 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
                 UASSERT_OBJ(senTreep->hasClocked(), activep, "What else could it be?");
                 if (VN_IS(activep->procsp(), AlwaysObserved)) {
                     logicClassp = &result.m_observed;
-                } else if (VN_IS(activep->procsp(), AlwaysReactive)) {
+                } else if (VN_IS(activep->procsp(), AlwaysReactive) || isReNbaCommit(activep)) {
                     logicClassp = &result.m_reactive;
                 } else {
                     logicClassp = &result.m_clocked;
@@ -567,6 +574,7 @@ void createEval(AstNetlist* netlistp,  //
                 const EvalKit& nbaKit,  //
                 const EvalKit& obsKit,  //
                 const EvalKit& reactKit,  //
+                const std::set<uint32_t>& reactTriggers,  //
                 TimingKit& timingKit  //
 ) {
     FileLine* const flp = netlistp->fileline();
@@ -719,10 +727,39 @@ void createEval(AstNetlist* netlistp,  //
         // Work statements
         [&]() -> AstNodeStmt* {
             if (reactKit.empty()) return nullptr;
-            // Invoke the 'react' function
-            AstNodeStmt* workp = util::callVoidFunc(reactKit.m_funcp);
+            // Invoke the 'react' function, noting reactive logic runs for V3Delayed's Re-NBAs
+            AstVarScope* const inReactivep = netlistp->inReactivep();
+            AstNodeStmt* workp = inReactivep ? util::setVar(inReactivep, 1) : nullptr;
+            workp = AstNode::addNext(workp, util::callVoidFunc(reactKit.m_funcp));
+            if (inReactivep) workp = AstNode::addNext(workp, util::setVar(inReactivep, 0));
             // Clear the 'react' triggers
             workp = AstNode::addNext(workp, trigKit.newClearCall(reactKit.m_vscp));
+            // The reactive region set iterates until empty before the active region set
+            // resumes (IEEE 1800-2023 4.5). So compute the triggers of what the pass changed:
+            // those of reactive logic trigger the next pass, all are accumulated for 'act'.
+            workp = AstNode::addNext(workp, trigKit.newCompBaseCall());
+            if (timingReadyp) {
+                workp = AstNode::addNext(workp, timingReadyp->cloneTree(false)->makeStmt());
+            }
+            workp = AstNode::addNext(workp,
+                                     trigKit.newOrIntoCall(trigKit.vscAccp(), trigKit.vscp()));
+            std::map<uint32_t, uint64_t> wordMasks;
+            for (const uint32_t index : reactTriggers) {
+                wordMasks[index / TriggerKit::WORD_SIZE] |= 1ULL
+                                                            << (index % TriggerKit::WORD_SIZE);
+            }
+            for (const auto& wordMask : wordMasks) {
+                const auto wordp = [&](AstVarScope* vscp, VAccess access) {
+                    return new AstArraySel{
+                        flp, new AstVarRef{flp, vscp, access},
+                        new AstConst{flp, AstConst::Unsized64{}, wordMask.first}};
+                };
+                AstNodeExpr* const maskedp
+                    = new AstAnd{flp, wordp(trigKit.vscp(), VAccess::READ),
+                                 new AstConst{flp, AstConst::Unsized64{}, wordMask.second}};
+                workp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+                    workp, new AstAssign{flp, wordp(reactKit.m_vscp, VAccess::WRITE), maskedp});
+            }
             return workp;
         }());
 }
@@ -865,9 +902,10 @@ void schedule(AstNetlist* netlistp) {
                                                &logicRegions.m_obs,  //
                                                &logicRegions.m_react,  //
                                                &timingKit.m_procList});
-    const TriggerKit trigKit
-        = TriggerKit::create(netlistp, staticp, senExprBuilder, preTreeps, senTreeps, "act",
-                             extraTriggers, false, v3Global.usesTiming());
+    // The trigger accumulator also carries triggers computed in the 'react' region to 'act'
+    const TriggerKit trigKit = TriggerKit::create(
+        netlistp, staticp, senExprBuilder, preTreeps, senTreeps, "act", extraTriggers, false,
+        v3Global.usesTiming() || !logicRegions.m_react.empty());
 
     // Add post updates from the timing kit
     if (timingKit.m_postUpdatesp) trigKit.compBasep()->addStmtsp(timingKit.m_postUpdatesp);
@@ -953,6 +991,11 @@ void schedule(AstNetlist* netlistp) {
     const EvalKit obsKit = orderIfNonEmpty("obs", {&logicRegions.m_obs, &logicReplicas.m_obs});
 
     // Step 14: Create the 'react' region evaluation function
+    std::set<uint32_t> reactTriggers;  // The triggers of the reactive logic
+    for (const AstSenTree* const senTreep : getSenTreesUsedBy({&logicRegions.m_react})) {
+        const std::set<uint32_t>& indices = trigKit.triggerIndices(senTreep, false);
+        reactTriggers.insert(indices.begin(), indices.end());
+    }
     const EvalKit reactKit
         = orderIfNonEmpty("react", {&logicRegions.m_react, &logicReplicas.m_react});
 
@@ -960,7 +1003,7 @@ void schedule(AstNetlist* netlistp) {
     createPostponed(netlistp, logicClasses);
 
     // Step 16: Populate the eval entry point function of each region of a time step
-    createEval(netlistp, trigKit, actKit, nbaKit, obsKit, reactKit, timingKit);
+    createEval(netlistp, trigKit, actKit, nbaKit, obsKit, reactKit, reactTriggers, timingKit);
 
     // Step 17: Add neccessary evaluation before awaits
     beforeTrigVisitor(netlistp, senExprBuilder, trigKit);
@@ -968,6 +1011,8 @@ void schedule(AstNetlist* netlistp) {
     // Step 18: Clean up
     netlistp->clearStlFirstIterationp();
     netlistp->nbaQueuep(nullptr);  // Finished with this here
+    netlistp->reNbaQueuep(nullptr);
+    netlistp->inReactivep(nullptr);
     if (AstSenTree* const senTreesp = topScopep->senTreesp()) {
         VL_DO_DANGLING(senTreesp->unlinkFrBackWithNext()->deleteTree(), senTreesp);
     }

@@ -197,6 +197,13 @@
 // alias with other targets through virtual interface or class handle. This
 // is a potential future optimization.
 //
+// NBAs executed by reactive region logic (AstAlwaysReactive) update in the
+// Re-NBA region (IEEE 1800-2023 4.4.2.8). Their targets use the GenericGlobal
+// scheme, enqueuing to a second global queue, committed by reactive post logic
+// after each pass of the reactive logic (see V3Sched). An NBA in a function or
+// fork reactive logic may run, which other logic may also run, selects the queue
+// when executed, by whether the reactive logic is running.
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -270,6 +277,8 @@ protected:
         bool m_clocked = false;  // Part of clocked logic
         bool m_unordered = false;  // Part of unordered code
         bool m_init = false;  // Part of init code
+        bool m_reactive = false;  // May be run by reactive region logic (see V3Sched)
+        std::vector<CodeVertex*> m_forkps;  // The forks this code spawns
 
     protected:
         explicit CodeVertex(V3Graph* graphp)
@@ -294,6 +303,9 @@ protected:
             , m_exclusive{isExclusive(procp)} {
             if (procp->isSuspendable()) {
                 m_unordered = true;
+            } else if (VN_IS(procp, AlwaysReactive)) {
+                // Its NBAs are Re-NBAs (IEEE 1800-2023 4.4.2.8)
+                m_reactive = true;
             } else {
                 m_comb = senTreep->hasCombo();
                 m_clocked = senTreep->hasClocked();
@@ -328,6 +340,7 @@ protected:
         bool m_mixed = false;  // Also written by blocking assignments outside init code
         // Also written in init code other than static initializers, or in uncalled functions
         bool m_initWritten = false;
+        bool m_reactive = false;  // Used on LHS of NBA reactive region logic may execute
         // All NBAs write whole elements at constant indices, without consecutive target sites
         bool m_constElems = true;
         uint32_t m_nNbas = 0;  // Number of NBAs to the target
@@ -420,6 +433,7 @@ protected:
         AstNodeStmt* nodep;  // The AstAssignDly, or the non-blocking AstFireEvent
         AstNodeExpr* targetp;  // The AstVarRef it updates, or the AstMemberRef via a handle
         AstScope* scopep;  // The scope the NBA is in
+        const CodeVertex* vtxp;  // The process or function executing the NBA
     };
 
 public:
@@ -574,7 +588,7 @@ class DelayedRecord final : public VNVisitorConst, public DelayedBase {
         // Record the NBA to the vertex for later analysis
         m_vtxp->m_nbaps.insert(nodep);
         // Record the NBA for later conversion
-        m_state.nbas.push_back({nodep, nbaRefp, m_scopep});
+        m_state.nbas.push_back({nodep, nbaRefp, m_scopep, m_vtxp});
 
         // Record write reference
         targetInfo.m_nbaRefps.push_back(nbaRefp);
@@ -624,7 +638,9 @@ class DelayedRecord final : public VNVisitorConst, public DelayedBase {
     }
     void visit(AstFork* nodep) override {
         VL_RESTORER(m_vtxp);
+        CodeVertex* const parentp = m_vtxp;
         m_vtxp = new ForkVertex{&m_state.graph};
+        parentp->m_forkps.push_back(m_vtxp);
         UASSERT_OBJ(!nodep->declsp(), nodep, "Should have been moved by V3Begin");
         UASSERT_OBJ(!nodep->stmtsp(), nodep, "Should have been moved by V3Begin");
         iterateChildrenConst(nodep);
@@ -728,13 +744,24 @@ class DelayedAnalysis final : public DelayedBase {
         std::vector<const CodeVertex*> workList;
         for (const V3GraphVertex& vtx : m_state.graph.vertices()) {
             const CodeVertex* const vtxp = vtx.cast<CodeVertex>();
-            if (vtxp && (vtxp->m_comb || vtxp->m_clocked || vtxp->m_unordered || vtxp->m_init)) {
+            if (vtxp
+                && (vtxp->m_comb || vtxp->m_clocked || vtxp->m_unordered || vtxp->m_init
+                    || vtxp->m_reactive)) {
                 workList.push_back(vtxp);
             }
         }
         while (!workList.empty()) {
             const CodeVertex* const callerp = workList.back();
             workList.pop_back();
+            // A process forked by reactive logic starts in it, as an immediately started fork
+            // made by V3Assert, then continues in the active region set if it suspends
+            // (a caller is only visited again when it gains a kind of logic)
+            if (callerp->m_reactive) {
+                for (CodeVertex* const forkp : callerp->m_forkps) {
+                    forkp->m_reactive = true;
+                    workList.push_back(forkp);
+                }
+            }
             for (const V3GraphEdge& caller2Call : callerp->outEdges()) {
                 const CallVertex* const callp = caller2Call.top()->as<CallVertex>();
                 for (const V3GraphEdge& call2Callee : callp->outEdges()) {
@@ -743,11 +770,15 @@ class DelayedAnalysis final : public DelayedBase {
                     const bool newClocked = callerp->m_clocked && !calleep->m_clocked;
                     const bool newUnordered = callerp->m_unordered && !calleep->m_unordered;
                     const bool newInit = callerp->m_init && !calleep->m_init;
-                    if (!newComb && !newClocked && !newUnordered && !newInit) continue;
+                    const bool newReactive = callerp->m_reactive && !calleep->m_reactive;
+                    if (!newComb && !newClocked && !newUnordered && !newInit && !newReactive) {
+                        continue;
+                    }
                     calleep->m_comb |= callerp->m_comb;
                     calleep->m_clocked |= callerp->m_clocked;
                     calleep->m_unordered |= callerp->m_unordered;
                     calleep->m_init |= callerp->m_init;
+                    calleep->m_reactive |= callerp->m_reactive;
                     workList.push_back(calleep);
                 }
             }
@@ -829,7 +860,7 @@ class DelayedAnalysis final : public DelayedBase {
         for (const V3GraphVertex& vtx : m_state.graph.vertices()) {
             const CodeVertex* const vtxp = vtx.cast<CodeVertex>();
             if (!vtxp) continue;
-            if (!vtxp->m_comb && !vtxp->m_clocked && !vtxp->m_unordered) {
+            if (!vtxp->m_comb && !vtxp->m_clocked && !vtxp->m_unordered && !vtxp->m_reactive) {
                 noteInitWrites(vtxp, var2TargetInfops);
                 continue;
             }
@@ -1067,6 +1098,16 @@ class DelayedAnalysis final : public DelayedBase {
         propagateNbas();
         propagateKind();
 
+        // Note the targets of NBAs reactive logic may execute, which also need a Re-NBA commit
+        for (const NBA& nba : m_state.nbas) {
+            if (!nba.vtxp->m_reactive) continue;
+            const AstMemberRef* const memberRefp = VN_CAST(nba.targetp, MemberRef);
+            TargetInfo& targetInfo
+                = memberRefp ? m_state.targetInfo(memberRefp->varp())
+                             : m_state.targetInfo(VN_AS(nba.targetp, VarRef)->varScopep());
+            targetInfo.m_reactive = true;
+        }
+
         // Report unsupported NBAs
         reportNbasFromComb();
 
@@ -1104,6 +1145,8 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
     V3SharedTmps m_dlyTmps{"__Vdly", VVarType::BLOCKTEMP};  // Temporary variables
     AstNbaCommit* m_globalNbaCommitp = nullptr;  // Commit of the Scheme::GenericGlobal queue
     AstSenTree* m_globalNbaCommitSenTreep = nullptr;  // Sensitivities of m_globalNbaCommitp
+    AstNbaCommit* m_reNbaCommitp = nullptr;  // Commit of the Re-NBA queue
+    AstVarScope* m_inReactiveVscp = nullptr;  // Set while reactive logic runs (see V3Sched)
     // Closure types, by the types of the values they capture
     std::map<std::vector<AstNodeDType*>, AstStructDType*> m_closureDTypeps;
     // Closure pools, by closure type and queue. Committing a queue releases its closures to their
@@ -1346,6 +1389,62 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
         postp->addStmtsp(m_globalNbaCommitp);
         return m_globalNbaCommitp;
     }
+    // Return the commit of the global queue of Re-NBAs, the NBAs executed by reactive region
+    // logic (IEEE 1800-2023 4.4.2.8), creating it on first use. V3Sched schedules it as
+    // reactive logic, committing the Re-NBAs of a pass of the reactive region.
+    AstNbaCommit* getReNbaCommit() {
+        if (m_reNbaCommitp) return m_reNbaCommitp;
+        AstTopScope* const topScopep = v3Global.rootp()->topScopep();
+        FileLine* const flp = topScopep->fileline();
+        AstBasicDType* const dtypep = v3Global.rootp()->typeTablep()->findBasicDType(
+            flp, VBasicDTypeKwd::NBA_GENERIC_QUEUE);
+        AstVarScope* const queueVscp = topScopep->createTemp("__VReNbaGlobalQueue", dtypep);
+        v3Global.rootp()->reNbaQueuep(queueVscp);
+        queueVscp->varp()->setIgnoreSchedWrite();  // As for the NBA queue
+        AstCMethodHard* const triggerp
+            = new AstCMethodHard{flp, new AstVarRef{flp, queueVscp, VAccess::READ},
+                                 VCMethod::NBA_GENERIC_QUEUE_COMMIT_TRIGGER};
+        triggerp->dtypeSetBit();
+        AstSenTree* const senTreep
+            = new AstSenTree{flp, new AstSenItem{flp, VEdgeType::ET_TRUE, triggerp}};
+        // Committed in each pass running reactive logic, which may have enqueued Re-NBAs
+        for (const V3GraphVertex& vtx : m_state.graph.vertices()) {
+            const ProcVertex* const procVtxp = vtx.cast<ProcVertex>();
+            if (!procVtxp || !procVtxp->m_reactive) continue;
+            senTreep->addSensesp(procVtxp->m_senTreep->sensesp()->cloneTree(true));
+        }
+        V3Const::constifyExpensiveEdit(senTreep);  // Remove duplicates
+        AstActive* const activep = new AstActive{flp, "re-nba-enqueued", senTreep};
+        activep->senTreeStorep(senTreep);
+        topScopep->scopep()->addBlocksp(activep);
+        AstAlwaysPost* const postp = new AstAlwaysPost{flp};
+        activep->addProcsp(postp);
+        m_reNbaCommitp = new AstNbaCommit{flp, new AstVarRef{flp, queueVscp, VAccess::READWRITE}};
+        postp->addStmtsp(m_reNbaCommitp);
+        return m_reNbaCommitp;
+    }
+    // Return the flag V3Sched sets while running reactive logic, creating it on first use
+    AstVarScope* getInReactive() {
+        if (m_inReactiveVscp) return m_inReactiveVscp;
+        AstTopScope* const topScopep = v3Global.rootp()->topScopep();
+        m_inReactiveVscp = topScopep->createTemp("__VinReactive", 1);
+        v3Global.rootp()->inReactivep(m_inReactiveVscp);
+        return m_inReactiveVscp;
+    }
+    // Add the variables updated by the NBAs to 'targetp' to those 'commitp' updates
+    void addCommitTargets(AstNbaCommit* commitp, AstNode* targetp) {
+        if (AstVarScope* const vscp = VN_CAST(targetp, VarScope)) {
+            commitp->addTargetsp(new AstVarRef{vscp->fileline(), vscp, VAccess::WRITE});
+            return;
+        }
+        // A MemberRef via a virtual interface may select any instance of that interface
+        for (AstVarScope* const vscp : m_state.ifaceVscps[VN_AS(targetp, Var)]) {
+            // Avoid adding it twice if the instance is also the target of an explicit NBA
+            if (m_state.targetInfo.tryGet(vscp)) continue;
+            commitp->addTargetsp(new AstVarRef{vscp->fileline(), vscp, VAccess::WRITE});
+        }
+    }
+
     // Add the sensitivities to the global NBA commit
     void addGlobalNbaCommitSensitivity(const AstSenTree* senTreep) {
         getGlobalNbaCommit();  // Creates m_globalNbaCommitSenTreep
@@ -1698,22 +1797,13 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
             addGlobalNbaCommitSensitivity(senTreep);
         }
         // Record updated variable
-        if (AstVarScope* const vscp = VN_CAST(targetp, VarScope)) {
-            commitp->addTargetsp(new AstVarRef{vscp->fileline(), vscp, VAccess::WRITE});
-        } else {
-            // A MemberRef via a virtual interface may select any instance of that interface
-            for (AstVarScope* const vscp : m_state.ifaceVscps[VN_AS(targetp, Var)]) {
-                // Avoid adding it twice if the instance is also the target of an explicit NBA
-                if (m_state.targetInfo.tryGet(vscp)) continue;
-                commitp->addTargetsp(new AstVarRef{vscp->fileline(), vscp, VAccess::WRITE});
-            }
-        }
+        addCommitTargets(commitp, targetp);
+        if (targetInfo.m_reactive) addCommitTargets(getReNbaCommit(), targetp);
     }
 
-    // Scheme::GenericLocal/Scheme::GenericGlobal
-    void convertSchemeGeneric(const NBA& nba, TargetInfo& targetInfo) {
-        AstNodeStmt* nodep = nba.nodep;
-        AstScope* const scopep = nba.scopep;
+    // Return a statement enqueuing a closure making the update of the NBA 'nodep' to
+    // 'queueVscp', taking the operands of 'nodep'
+    AstNbaEnqueue* newNbaEnqueue(AstNodeStmt* nodep, AstScope* scopep, AstVarScope* queueVscp) {
         FileLine* const flp = nodep->fileline();
 
         // The update, and the values it needs, to be captured in the closure
@@ -1735,10 +1825,28 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
                 = captureLhs(scopep, nodep, assignp->lhsp()->unlinkFrBack(), "", &captureps);
             updatep = new AstAssign{flp, capturedLhsp, capturedRhsp};
         }
-
-        // Replace the NBA with enqueuing the closure
+        return newEnqueue(flp, queueVscp, updatep, captureps);
+    }
+    // Scheme::GenericLocal/Scheme::GenericGlobal
+    void convertSchemeGeneric(const NBA& nba, TargetInfo& targetInfo) {
+        AstNodeStmt* const nodep = nba.nodep;
         AstVarScope* const queueVscp = targetInfo.genericKit().queueVscp;
-        nodep->replaceWith(newEnqueue(flp, queueVscp, updatep, captureps));
+        AstNodeStmt* newp;
+        if (!nba.vtxp->m_reactive) {
+            newp = newNbaEnqueue(nodep, nba.scopep, queueVscp);
+        } else {
+            // A function might also be executed outside reactive logic, and a fork may resume
+            // in the active region set, so decide when executed
+            FileLine* const flp = nodep->fileline();
+            AstNodeStmt* const copyp = nodep->cloneTree(false);
+            AstNodeStmt* const nbaEnqueuep = newNbaEnqueue(copyp, nba.scopep, queueVscp);
+            VL_DO_DANGLING(pushDeletep(copyp), copyp);
+            newp = new AstIf{
+                flp, new AstVarRef{flp, getInReactive(), VAccess::READ},
+                newNbaEnqueue(nodep, nba.scopep, getReNbaCommit()->queuep()->varScopep()),
+                nbaEnqueuep};
+        }
+        nodep->replaceWith(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
@@ -1757,6 +1865,16 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
                 if (callVtxp->m_nbaps.empty()) continue;
                 callVtxp->m_callp->setMayEnqueueGlobalNBA();
                 addGlobalNbaCommitSensitivity(procVtxp->m_senTreep);
+            }
+        }
+        // Likewise a call in reactive logic, or a fork it immediately starts, is ordered before
+        // the Re-NBA commit
+        for (const V3GraphVertex& vtx : m_state.graph.vertices()) {
+            const CodeVertex* const codeVtxp = vtx.cast<CodeVertex>();
+            if (!codeVtxp || !codeVtxp->m_reactive || codeVtxp->is<FuncVertex>()) continue;
+            for (const V3GraphEdge& edge : codeVtxp->outEdges()) {
+                const CallVertex* const callVtxp = edge.top()->as<CallVertex>();
+                if (!callVtxp->m_nbaps.empty()) callVtxp->m_callp->setMayEnqueueGlobalNBA();
             }
         }
 
