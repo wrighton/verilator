@@ -2031,23 +2031,9 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
             }
         }
-        // Handle MemberRef references created by captureRefByThis()
-        if (VN_IS(nodep->fromp(), VarRef)
-            && nodep->fromp()->user1()  // Depending on a randomized variable
-            && nodep->user2p()  // Pointer to containing module
-            && VN_AS(nodep->user2p(), NodeModule) == nodep->varp()->user2p()) {
-            // Convert to VarRef
-            AstVarRef* const varRefp
-                = new AstVarRef{nodep->fileline(), nodep->varp(), VAccess::READ};
-            varRefp->user1(nodep->varp()->rand().isRandomizable());
-            varRefp->classOrPackagep(VN_AS(nodep->user2p(), NodeModule));
-            nodep->replaceWith(varRefp);
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            visit(varRefp);
-        } else if (nodep->user1() && VN_IS(nodep->fromp(), CMethodHard)
-                   && VN_AS(nodep->fromp(), CMethodHard)->method() == VCMethod::ARRAY_AT) {
+        AstCMethodHard* const cmethodp = VN_CAST(nodep->fromp(), CMethodHard);
+        if (nodep->user1() && cmethodp && cmethodp->method() == VCMethod::ARRAY_AT) {
             // Class ref array element member access (e.g., items[i].val)
-            AstCMethodHard* const cmethodp = VN_AS(nodep->fromp(), CMethodHard);
             AstNodeDType* const arrayDtp = cmethodp->fromp()->dtypep()->skipRefp();
             AstNodeDType* const elemDtp = arrayDtp->subDTypep()->skipRefp();
             if (VN_IS(elemDtp, ClassRefDType)) {

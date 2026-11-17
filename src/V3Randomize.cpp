@@ -865,6 +865,7 @@ class CaptureVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_constraintIterators;  // Enclosing foreach loop variables
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     bool m_staticContext = false;  // True when capturing from a static function context
+    const bool m_thisRandomized;  // True when the object randomized is the caller's this
 
     // METHODS
 
@@ -940,7 +941,16 @@ class CaptureVisitor final : public VNVisitor {
         if (m_staticContext && callerIsClass && varIsFieldOfCaller
             && varRefp->varp()->lifetime().isStatic())
             return CaptureMode::CAP_NO;
-        if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
+        if (callerIsClass && varIsFieldOfCaller) {
+            // A field of the object randomized, also one its class inherits, is a member like
+            // those the inner context names. So is a static member of the class randomized,
+            // which every object of it shares.
+            if (m_thisRandomized
+                || (varRefp->varp()->lifetime().isStatic()
+                    && AstClass::isClassExtendedFrom(m_targetp, varClassp)))
+                return CaptureMode::CAP_NO;
+            return CaptureMode::CAP_THIS;
+        }
         // Static member of a different class: V3Width replaces AstMemberRef with a bare
         // AstVarRef (classOrPackagep set). Capture current value as a function argument.
         if (callerIsClass && varClassp && !varIsFieldOfCaller
@@ -1077,10 +1087,11 @@ class CaptureVisitor final : public VNVisitor {
 
 public:
     explicit CaptureVisitor(AstNode* const nodep, AstNodeModule* callerp, AstClass* const targetp,
-                            bool staticContext = false)
+                            const bool staticContext = false, const bool thisRandomized = false)
         : m_callerp{callerp}
         , m_targetp{targetp}
-        , m_staticContext{staticContext} {
+        , m_staticContext{staticContext}
+        , m_thisRandomized{thisRandomized} {
         iterateAndNextNull(nodep);
     }
 
@@ -2705,7 +2716,9 @@ class RandomizeVisitor final : public VNVisitor {
         }
 
         // Detach the expression and prepare variable copies
-        const CaptureVisitor captured{withp->exprp(), m_modp, classp};
+        // Without a receiver, randomize() is called on this.
+        const bool thisRandomized = !VN_IS(nodep, MethodCall);
+        const CaptureVisitor captured{withp->exprp(), m_modp, classp, false, thisRandomized};
         // Add function arguments
         captured.addFunctionArguments(randomizeFuncp);
 
