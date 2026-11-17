@@ -22,7 +22,7 @@ module leaf;
 endmodule
 
 module mid (
-    input bit [5:0] ctl
+    input bit [7:0] ctl
 );
   if (1) begin : chk_blk
     int failures = 0;
@@ -54,7 +54,8 @@ module mid (
     #1;
     tk();
   end
-  // Local names resolve from the calling instance; absolute names keep their meaning
+  // Local names resolve from the calling instance, upward names by searching upward from it,
+  // and absolute names keep their meaning
   // (IEEE 1800-2023 20.11, 23.6, 23.8)
   initial begin
     if (ctl[0]) $assertoff(0, c);
@@ -63,21 +64,23 @@ module mid (
     if (ctl[3]) $assertoff(0, tk);
     if (ctl[4]) $assertoff(0, gen.c2);
     if (ctl[5]) $assertoff(0, $root.t.m0.gen.c2);
+    if (ctl[6]) $assertoff(0, m1.c);
+    if (ctl[7]) $assertoff(0, m0.tk);
   end
 endmodule
 
 module t;
-  mid m0 (.ctl(6'b000111));
-  mid m1 (.ctl(6'b111000));
+  mid m0 (.ctl(8'b01000111));
+  mid m1 (.ctl(8'b10111000));
   initial begin
     #2;
     `checkd(m0.chk_blk.failures, 1);
     `checkd(m0.c.failures, 0);
     `checkd(m0.nb_failures, 0);
-    `checkd(m0.tk_failures, 1);
+    `checkd(m0.tk_failures, 0);
     `checkd(m0.gen.c2.failures, 0);
     `checkd(m1.chk_blk.failures, 0);
-    `checkd(m1.c.failures, 1);
+    `checkd(m1.c.failures, 0);
     `checkd(m1.nb_failures, 1);
     `checkd(m1.tk_failures, 0);
     `checkd(m1.gen.c2.failures, 0);
