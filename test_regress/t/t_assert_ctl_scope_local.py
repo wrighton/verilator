@@ -9,10 +9,6 @@
 import vltest_bootstrap
 
 test.scenarios('vlt_all')
-test.compile(make_top_shell=False,
-             make_main=False,
-             verilator_flags2=['--binary', '--timing', '--assert'],
-             threads=2 if test.vltmt else 1,
-             make_flags=['-j2'])
+test.compile(verilator_flags2=['--binary', '--assert'], threads=2 if test.vltmt else 1)
 test.execute()
 test.passes()
