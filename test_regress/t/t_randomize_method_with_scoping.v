@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2024 Antmicro Ltd
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 class c1;
       rand int c1_f;
 endclass
@@ -121,13 +126,39 @@ class LocalExt extends LocalBase;
   endfunction
 endclass
 
+// 'local::' names the caller's object even when it is of the class randomized
+class LocalSame;
+  rand int x;
+  function int doit(LocalSame other);
+    x = 9;
+    void'(other.randomize() with { x == local::x; });
+    return other.x;
+  endfunction
+endclass
+
+// A static member is the same for the caller and the object randomized
+class LocalStatic;
+  static rand int s;
+  function int doit(LocalStatic other);
+    s = 0;
+    void'(other.randomize() with { s == 7; });
+    return s;
+  endfunction
+endclass
+
 module t;
   SubC obj = new;
   LocalExt lext = new;
+  LocalSame lsame = new;
+  LocalSame lother = new;
+  LocalStatic lstatic = new;
+  LocalStatic lstatic_other = new;
 
   initial begin
     if (obj.doit != 1) $stop;
     if (lext.doit() != 2) $stop;
+    `checkd(lsame.doit(lother), 9);
+    `checkd(lstatic.doit(lstatic_other), 7);
     $write("*-* All Finished *-*\n");
     $finish;
   end
