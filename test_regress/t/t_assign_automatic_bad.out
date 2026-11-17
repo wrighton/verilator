@@ -19,4 +19,20 @@
                                         : ... note: In instance 't'
    71 |       areg <= @(autom2) 0;   
       |                 ^~~~~~
+%Error: t/t_assign_automatic_bad.v:95:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_a'
+                                       : ... note: In instance 't'
+   95 |     bad_a <= 1;   
+      |     ^~~~~
+%Error: t/t_assign_automatic_bad.v:96:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_o'
+                                       : ... note: In instance 't'
+   96 |     bad_o <= 1;   
+      |     ^~~~~
+%Error: t/t_assign_automatic_bad.v:97:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_r'
+                                       : ... note: In instance 't'
+   97 |     bad_r <= 1;   
+      |     ^~~~~
+%Error: t/t_assign_automatic_bad.v:102:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_m'
+                                        : ... note: In instance 't'
+  102 |       bad_m <= 1;   
+      |       ^~~~~
 %Error: Exiting due to
