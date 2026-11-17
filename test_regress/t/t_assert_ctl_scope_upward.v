@@ -50,6 +50,23 @@ module par (
   mid m (.off_cell, .off_blk);
 endmodule
 
+// Differently elaborated parents holding the same instance target
+module midv (
+    input bit off
+);
+  initial if (off) $assertoff(0, parv.sib);
+endmodule
+
+module parv #(
+    parameter int N = 1
+);
+  for (genvar i = 0; i < N; ++i) begin : g
+    leaf l ();
+  end
+  leaf sib ();
+  midv m (.off(N == 1));
+endmodule
+
 module t;
   par p0 (
       .off_cell(1'b1),
@@ -67,8 +84,12 @@ module t;
       .off_cell(1'b1),
       .off_blk(1'b1)
   );
+  parv #(.N(1)) v0 ();
+  parv #(.N(2)) v1 ();
   initial begin
     #2;
+    `checkd(v0.sib.failures, 0);
+    `checkd(v1.sib.failures, 1);
     `checkd(p0.sib.failures, 0);
     `checkd(p0.gb.failures, 1);
     `checkd(p1.sib.failures, 1);
