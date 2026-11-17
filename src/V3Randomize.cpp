@@ -74,6 +74,26 @@ enum ClassRandom : uint8_t {
 // ######################################################################
 // Establishes the target of a rand_mode() call
 
+// A class-handle expression controls its object's fields unless it selects a rand variable.
+static AstClass* randModeObjectClassp(const AstNodeExpr* const fromp) {
+    if (!fromp || VN_IS(fromp, VarRef) || VN_IS(fromp, MemberRef)) return nullptr;
+    const AstClassRefDType* const classRefp = VN_CAST(fromp->dtypep()->skipRefp(), ClassRefDType);
+    if (!classRefp) return nullptr;
+    const AstNodeExpr* basep = fromp;
+    while (true) {
+        if (VN_IS(basep, StructSel)) return nullptr;
+        const AstNodeSel* const selp = VN_CAST(basep, NodeSel);
+        if (!selp) break;
+        basep = selp->fromp();
+    }
+    if (const AstVarRef* const refp = VN_CAST(basep, VarRef)) {
+        if (refp->varp()->isRand()) return nullptr;
+    } else if (const AstMemberRef* const refp = VN_CAST(basep, MemberRef)) {
+        if (refp->varp()->isRand()) return nullptr;
+    }
+    return classRefp->classp();
+}
+
 struct RandModeTarget final {
     // MEMBERS
     AstVar* const receiverp;  // Variable that is the target of the rand_mode() call
@@ -83,6 +103,7 @@ struct RandModeTarget final {
     // METHODS
     static RandModeTarget get(AstNodeExpr* fromp, AstNodeModule* modp) {
         if (!fromp) return {nullptr, nullptr, VN_AS(modp, Class)};
+        if (AstClass* const classp = randModeObjectClassp(fromp)) return {nullptr, fromp, classp};
         if (AstDynArraySel* const selp = VN_CAST(fromp, DynArraySel)) {
             return RandModeTarget::get(selp->fromp(), modp);
         }
@@ -110,7 +131,7 @@ struct RandModeTarget final {
         if (!receiverp->isRand()) {
             AstClassRefDType* const classRefDtp
                 = VN_CAST(receiverp->dtypep()->skipRefp(), ClassRefDType);
-            if (classRefDtp) classp = classRefDtp->classp();
+            classp = classRefDtp ? classRefDtp->classp() : nullptr;
         }
         return {receiverp, fromp, classp};
     }
@@ -590,7 +611,9 @@ class RandomizeMarkVisitor final : public VNVisitor {
             AstMethodCall* const methodCallp = VN_CAST(nodep, MethodCall);
             AstNodeExpr* const fromp = methodCallp ? methodCallp->fromp() : nullptr;
             bool valid = true;
-            if (VN_IS(fromp, ArraySel)) {
+            if (randModeObjectClassp(fromp)) {
+                // Object receivers retain their selection (IEEE 1800-2023 18.8).
+            } else if (VN_IS(fromp, ArraySel)) {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported: 'rand_mode()' on unpacked array element");
                 valid = false;
@@ -2187,6 +2210,20 @@ class RandomizeVisitor final : public VNVisitor {
         });
     }
 
+    // Evaluate a mode-call operand once before the generated mode loop.
+    AstVarRef* makeModeTempRefp(AstNodeExpr* const exprp) {
+        FileLine* const fl = exprp->fileline();
+        AstVar* const varp
+            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vmode"), exprp->dtypep()};
+        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        varp->noSubst(true);
+        addTempVarsp(varp);
+        AstVarRef* const refp = new AstVarRef{fl, varp, VAccess::READ};
+        exprp->replaceWith(refp);
+        m_stmtp->addHereThisAsNext(
+            new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, exprp});
+        return refp;
+    }
     // Creates a lvalue reference to the randomize mode var. Called by visit(AstNodeFTaskRef*)
     AstNodeExpr* makeModeAssignLhs(FileLine* const fl, AstClass* const classp,
                                    AstNodeExpr* const fromp, AstVar* const modeVarp) {
@@ -2199,8 +2236,8 @@ class RandomizeVisitor final : public VNVisitor {
             if (fromp) VL_DO_DANGLING(fromp->unlinkFrBack()->deleteTree(), fromp);
             return new AstVarRef{fl, VN_AS(modeVarp->user2p(), NodeModule), modeVarp,
                                  VAccess::WRITE};
-        } else if (classp == m_modp) {
-            // Called on 'this' or a member of 'this'
+        } else if (classp == m_modp && !fromp) {
+            // An implicit receiver refers to the current object.
             return new AstVarRef{fl, VN_AS(modeVarp->user2p(), NodeModule), modeVarp,
                                  VAccess::WRITE};
         } else {
@@ -2565,9 +2602,16 @@ class RandomizeVisitor final : public VNVisitor {
                         "Should have checked in RandomizeMarkVisitor");
             AstVar* const receiverp = randModeTarget.receiverp;
             const bool isClassLevel = !(receiverp && receiverp->rand().isRand());
+            AstNodeExpr* modeFromp = randModeTarget.fromp;
+            if (isClassLevel) {
+                // The mark visitor rejected object-only getters, so the argument is present.
+                // The receiver and argument are evaluated once, before changing any field modes.
+                if (modeFromp) modeFromp = makeModeTempRefp(modeFromp);
+                makeModeTempRefp(nodep->argsp()->exprp());
+            }
             // Class-level rand_mode(N) must also flush the shared static array.
             AstNode* classLevelStaticLoopp = nullptr;
-            if (isClassLevel && nodep->argsp()) {
+            if (isClassLevel) {
                 if (AstVar* const sVarp = getStaticRandModeVar(randModeTarget.classp)) {
                     FileLine* const fl = nodep->fileline();
                     AstNodeExpr* const staticLhsp
@@ -2590,7 +2634,7 @@ class RandomizeVisitor final : public VNVisitor {
                 return;
             }
             AstNodeExpr* const lhsp = makeModeAssignLhs(nodep->fileline(), randModeTarget.classp,
-                                                        randModeTarget.fromp, randModeVarp);
+                                                        modeFromp, randModeVarp);
             replaceWithModeAssignAndAppend(
                 nodep, receiverp && receiverp->rand().isRand() ? receiverp : nullptr, lhsp,
                 classLevelStaticLoopp);
@@ -2604,14 +2648,19 @@ class RandomizeVisitor final : public VNVisitor {
             AstClass* classp = VN_CAST(m_modp, Class);
             if (AstConstraintRef* const constrRefp = VN_CAST(fromp, ConstraintRef)) {
                 constrp = constrRefp->constrp();
-                if (constrRefp->fromp()) {
-                    fromp = constrRefp->fromp();
+                fromp = constrRefp->fromp();
+                if (fromp) {
                     classp = VN_AS(fromp->dtypep()->skipRefp(), ClassRefDType)->classp();
                 }
             } else if (fromp) {
                 classp = VN_AS(fromp->dtypep()->skipRefp(), ClassRefDType)->classp();
             }
             UASSERT_OBJ(classp, nodep, "Failed to find class");
+            if (!constrp) {
+                // The mark visitor rejected class-only getters, so the argument is present.
+                if (fromp) fromp = makeModeTempRefp(fromp);
+                makeModeTempRefp(nodep->argsp()->exprp());
+            }
             // Use correct mode variable based on whether constraint is static
             AstVar* const constraintModeVarp = (constrp && constrp->isStatic())
                                                    ? getStaticConstraintModeVar(classp)

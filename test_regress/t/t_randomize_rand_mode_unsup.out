@@ -1,18 +1,42 @@
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:17:20: Unsupported: 'rand_mode()' on dynamic array element
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:30:20: Unsupported: 'rand_mode()' on dynamic array element
                                                          : ... note: In instance 't'
-   17 |     p.m_dyn_arr[0].rand_mode(0);
+   30 |     p.m_dyn_arr[0].rand_mode(0);
       |                    ^~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:18:18: Unsupported: 'rand_mode()' on queue element
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:31:18: Unsupported: 'rand_mode()' on queue element
                                                          : ... note: In instance 't'
-   18 |     p.m_queue[$].rand_mode(0);
+   31 |     p.m_queue[$].rand_mode(0);
       |                  ^~~~~~~~~
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:19:20: Unsupported: 'rand_mode()' on unpacked array element
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:32:20: Unsupported: 'rand_mode()' on unpacked array element
                                                          : ... note: In instance 't'
-   19 |     p.m_unp_arr[0].rand_mode(0);
+   32 |     p.m_unp_arr[0].rand_mode(0);
       |                    ^~~~~~~~~
-%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:20:18: Unsupported: 'rand_mode()' on unpacked struct element
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:33:18: Unsupported: 'rand_mode()' on unpacked struct element
                                                          : ... note: In instance 't'
-   20 |     p.m_struct.y.rand_mode(0);
+   33 |     p.m_struct.y.rand_mode(0);
       |                  ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:35:20: Unsupported: 'rand_mode()' on unpacked array element
+                                                         : ... note: In instance 't'
+   35 |     p.m_handles[0].rand_mode(0);
+      |                    ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:36:24: Unsupported: 'rand_mode()' on dynamic array element
+                                                         : ... note: In instance 't'
+   36 |     p.m_dyn_handles[0].rand_mode(0);
+      |                        ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:37:13: Unsupported: 'rand_mode()' on unpacked struct element
+                                                         : ... note: In instance 't'
+   37 |     p.m_s.h.rand_mode(0);
+      |             ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:38:22: Unsupported: 'rand_mode()' on queue element
+                                                         : ... note: In instance 't'
+   38 |     p.m_q_handles[$].rand_mode(0);
+      |                      ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:22:18: Unsupported: 'rand_mode()' on unpacked array element
+                                                         : ... note: In instance 't'
+   22 |     m_handles[0].rand_mode(0);
+      |                  ^~~~~~~~~
+%Error-UNSUPPORTED: t/t_randomize_rand_mode_unsup.v:23:22: Unsupported: 'rand_mode()' on dynamic array element
+                                                         : ... note: In instance 't'
+   23 |     m_dyn_handles[0].rand_mode(0);
+      |                      ^~~~~~~~~
 %Error: Exiting due to
