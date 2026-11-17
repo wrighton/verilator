@@ -9,9 +9,10 @@
 import vltest_bootstrap
 
 test.scenarios('vlt')
-test.compile(make_top_shell=False, make_main=False, threads=1,
-             verilator_flags2=['--savable', '--no-timing', '--assert',
-                               '--exe', test.pli_filename],
+test.compile(make_top_shell=False,
+             make_main=False,
+             threads=1,
+             verilator_flags2=['--savable', '--no-timing', '--assert', '--exe', test.pli_filename],
              make_flags=['-j2'])
 test.execute()
 test.passes()
