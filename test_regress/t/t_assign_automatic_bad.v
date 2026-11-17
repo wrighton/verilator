@@ -103,4 +103,9 @@ module t (
     endfunction
   endclass
 
+  // A timed NBA is rejected as an automatic-argument write, not as a user-authored fork.
+  task automatic timed_ref_nba(ref int arg);
+    arg <= #1 5;
+  endtask
+
 endmodule

@@ -35,4 +35,8 @@
                                         : ... note: In instance 't'
   102 |       bad_m <= 1;   
       |       ^~~~~
+%Error: t/t_assign_automatic_bad.v:108:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'arg'
+                                        : ... note: In instance 't'
+  108 |     arg <= #1 5;
+      |     ^~~
 %Error: Exiting due to
