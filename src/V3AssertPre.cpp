@@ -658,6 +658,7 @@ private:
             })) {
             sampledp->v3warn(E_UNSUPPORTED, "Unsupported: $sampled inside sensitivity list");
         }
+        iterateChildren(nodep);
     }
     void visit(AstNodeVarRef* nodep) override {
         UINFO(8, " -varref:  " << nodep);
