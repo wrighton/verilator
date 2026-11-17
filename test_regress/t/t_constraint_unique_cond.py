@@ -26,5 +26,6 @@ cpp_files = test.glob_some(test.obj_dir + "/" + test.vm_prefix + "*.cpp")
 test.file_grep_any(cpp_files, r'\{"sel", "x", "y", "z"\}')
 test.file_grep_any(cpp_files, r'\{"arr", "sel"\}')
 test.file_grep_any(cpp_files, r'\{"arr", "s\.on"\}')
+test.file_grep_any(cpp_files, r'\{"o\.two", "sel"\}')
 
 test.passes()
