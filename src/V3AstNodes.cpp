@@ -5558,6 +5558,7 @@ void AstVarXRef::dump(std::ostream& str) const {
     Super::dump(str);
     if (containsGenBlock()) str << " [GENBLK]";
     if (readOnlyModport()) str << " [ROMODPORT]";
+    if (assertCtlOptional()) str << " [ACTLOPT]";
     str << ".=" << dotted() << " ";
     if (inlinedDots() != "") str << " inline.=" << inlinedDots() << " - ";
     if (!resolvedDotted().empty()) str << " resolved.=" << resolvedDotted() << " - ";
@@ -5572,6 +5573,7 @@ void AstVarXRef::dump(std::ostream& str) const {
 void AstVarXRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, containsGenBlock);
     dumpJsonBoolFuncIf(str, readOnlyModport);
+    dumpJsonBoolFuncIf(str, assertCtlOptional);
     dumpJsonStrFunc(str, dotted);
     dumpJsonStrFunc(str, inlinedDots);
     dumpJsonStrFunc(str, resolvedDotted);

@@ -6868,6 +6868,7 @@ class AstVarXRef final : public AstNodeVarRef {
     string m_resolvedDotted;  // Resolved scope path relative to the module, from V3LinkDot
     bool m_containsGenBlock = false;  // Contains gen block reference
     bool m_readOnlyModport = false;  // Linked via an input-only modport
+    bool m_assertCtlOptional = false;  // Assertion control site of another elaboration
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)
@@ -6889,6 +6890,8 @@ public:
     void containsGenBlock(const bool flag) { m_containsGenBlock = flag; }
     bool readOnlyModport() const { return m_readOnlyModport; }
     void readOnlyModport(const bool flag) { m_readOnlyModport = flag; }
+    bool assertCtlOptional() const { return m_assertCtlOptional; }
+    void assertCtlOptional(const bool flag) { m_assertCtlOptional = flag; }
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
@@ -6898,7 +6901,8 @@ public:
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
                 && name() == asamep->name() && dotted() == asamep->dotted()
                 && inlinedDots() == asamep->inlinedDots()
-                && readOnlyModport() == asamep->readOnlyModport());
+                && readOnlyModport() == asamep->readOnlyModport()
+                && assertCtlOptional() == asamep->assertCtlOptional());
     }
 };
 

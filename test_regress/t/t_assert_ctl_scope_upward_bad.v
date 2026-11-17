@@ -1,12 +1,8 @@
-// DESCRIPTION: Verilator: Upward assertion control scope reaching differently elaborated parents
+// DESCRIPTION: Verilator: Upward assertion control scope missing from one elaboration
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
-
-module leaf;
-  initial check : assert (1'b1);
-endmodule
 
 module mid;
   initial $assertoff(0, par.gb);
@@ -15,10 +11,7 @@ endmodule
 module par #(
     parameter int N = 1
 );
-  for (genvar i = 0; i < N; ++i) begin : g
-    leaf l ();
-  end
-  if (1) begin : gb
+  if (N == 2) begin : gb
     initial check : assert (1'b1);
   end
   mid m ();
