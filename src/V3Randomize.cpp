@@ -2643,16 +2643,16 @@ class RandomizeVisitor final : public VNVisitor {
 
     // Evaluate a mode-call operand once before the generated mode loop.
     AstVarRef* makeModeTempRefp(AstNodeExpr* const exprp) {
-        FileLine* const fl = exprp->fileline();
+        FileLine* const flp = exprp->fileline();
         AstVar* const varp
-            = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vmode"), exprp->dtypep()};
+            = new AstVar{flp, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vmode"), exprp->dtypep()};
         varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
         varp->noSubst(true);
         addTempVarsp(varp);
-        AstVarRef* const refp = new AstVarRef{fl, varp, VAccess::READ};
+        AstVarRef* const refp = new AstVarRef{flp, varp, VAccess::READ};
         exprp->replaceWith(refp);
         m_stmtp->addHereThisAsNext(
-            new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, exprp});
+            new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, exprp});
         return refp;
     }
     // Creates a lvalue reference to the randomize mode var. Called by visit(AstNodeFTaskRef*)
