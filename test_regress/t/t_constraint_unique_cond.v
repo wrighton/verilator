@@ -60,11 +60,41 @@ class G;
   endfunction
 endclass
 
+class Arrs;
+  rand bit [1:0] one[1];
+  rand bit [1:0] two[2];
+endclass
+
+// Over arrays of a rand member object, followed by other 'if's of the same
+// constraint, and the single element case that adds no constraint
+class M;
+  rand Arrs o;
+  rand bit sel;
+  rand bit [1:0] x;
+
+  constraint c {
+    if (sel) unique {o.one};
+    if (!sel) x == 2'd3;
+    if (sel) unique {o.two};
+    foreach (o.two[i]) if (x != 2'd3) o.two[i] != 2'd0;
+  }
+  constraint c_alone {if (sel) unique {o.one};}
+  constraint c_else {
+    if (x == 2'd0) unique {o.one};
+    else unique {o.one};
+  }
+
+  function new;
+    o = new;
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic C c = new;
     automatic A a = new;
     automatic G g = new;
+    automatic M m = new;
     int ok;
 
     // The 'then' arm holds: its operands are pairwise distinct
@@ -128,6 +158,28 @@ module t;
       arr[0] == arr[1];
     };
     `checkd(ok, 0);
+
+    // Member object arrays: the guarded constraints after a single element hold
+    for (int i = 0; i < 20; ++i) begin
+      ok = m.randomize();
+      `checkd(ok, 1);
+      if (m.sel) `checkh(m.o.two[0] == m.o.two[1], 1'b0);
+      else `checkd(m.x, 3);
+      if (m.x != 2'd3) `checkh(m.o.two[0] == 2'd0 || m.o.two[1] == 2'd0, 1'b0);
+    end
+    ok = m.randomize() with {
+      sel == 1;
+      o.two[0] == o.two[1];
+    };
+    `checkd(ok, 0);
+    for (int i = 0; i < 20; ++i) begin
+      ok = m.randomize() with {
+        if (sel) unique {o.one};
+        if (sel) x == 2'd1;
+      };
+      `checkd(ok, 1);
+      if (m.sel) `checkd(m.x, 1);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

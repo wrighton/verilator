@@ -1399,7 +1399,6 @@ class RandomizeVisitor final : public VNVisitor {
 
     // STATE
     V3UniqueNames m_inlineUniqueNames;  // For generating unique function names
-    std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
     V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Random array loop indices
     V3UniqueNames m_modeUniqueNames{"__Vmode"};  // For generating unique rand/constraint
                                                  // mode state var names
