@@ -1,4 +1,4 @@
-%Error: t/t_assert_ctl_scope_upward_bad.v:8:28: Assertion control target is not a scope or assertion: 'par.gb' (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_upward_bad.v:8:28: Assertion control target is not a scope or assertion from 't.p0.m': 'par.gb' (IEEE 1800-2023 20.11).
                                               : ... note: In instance 't.p1.m'
     8 |   initial $assertoff(0, par.gb);
       |                            ^

@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_upward_class_unsup.v:15:21: Unsupported: assertion control scope named upward from outside a module instance: 'sib'
+                                                                   : ... note: In instance 't.p1'
+   15 |       $assertoff(0, sib);
+      |                     ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
