@@ -479,6 +479,12 @@ class ConstraintExprVisitor final : public VNVisitor {
                     varp = varrefp->varp();
                 } else if (const AstMemberRef* const memberp
                            = VN_CAST(methodp->fromp(), MemberRef)) {
+                    // A member of an object selected from an array has no solver path.
+                    const AstNodeExpr* rootp = memberp;
+                    while (const AstMemberRef* const refp = VN_CAST(rootp, MemberRef)) {
+                        rootp = refp->fromp();
+                    }
+                    if (!VN_IS(rootp, VarRef)) return nullptr;
                     const std::string path = buildMemberPath(memberp);
                     return new AstConst{fl, AstConst::String{},
                                         path.substr(0, path.size() - memberp->name().size())
@@ -489,7 +495,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                     // ignores the edge when no size variable is registered.
                     return new AstConst{fl, AstConst::String{}, SmtUtil::sizeVarName(varp)};
                 }
+                // The size of an array selected from another or from a struct.
+                return nullptr;
             }
+            // An element at an index from the back of a queue has no solver path.
+            if (methodp->method() != VCMethod::ARRAY_AT) return nullptr;
             return buildPathExpr(fl, exprp, "");
         }
         const AstNodeSel* selp = VN_CAST(exprp, ArraySel);
@@ -2203,7 +2213,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             }
             AstNodeExpr* const lhsTestp = buildSolveBeforeNameExpr(fl, lhsp);
             if (!lhsTestp) {
-                lhsp->v3fatalSrc("Unexpected expression type in solve...before lhs");
+                lhsp->v3warn(E_UNSUPPORTED, "Unsupported: solve...before of this selection of a"
+                                            " variable or its size.");
                 continue;
             }
             VL_DO_DANGLING(lhsTestp->deleteTree(), lhsTestp);
@@ -2213,7 +2224,8 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
                 AstNodeExpr* const rhsNamep = buildSolveBeforeNameExpr(fl, rhsp);
                 if (!rhsNamep) {
-                    rhsp->v3fatalSrc("Unexpected expression type in solve...before rhs");
+                    rhsp->v3warn(E_UNSUPPORTED, "Unsupported: solve...before of this selection"
+                                                " of a variable or its size.");
                     continue;
                 }
                 AstCMethodHard* const callp = new AstCMethodHard{
@@ -2429,7 +2441,11 @@ class ConstraintExprVisitor final : public VNVisitor {
         VL_RESTORER(m_constraintVarsp);
         m_constraintVarsp = m_wantSingle ? &m_constraintVars : &vars;
         if (nodep->isDisableSoft()) {
-            nodep->replaceWith(buildDisableSoftCallStmt(nodep));
+            if (AstNodeStmt* const stmtp = buildDisableSoftCallStmt(nodep)) {
+                nodep->replaceWith(stmtp);
+            } else {
+                nodep->unlinkFrBack();
+            }
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
         }
@@ -2933,8 +2949,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     // Build the runtime statement that calls RANDOMIZER_DISABLE_SOFT on the
-    // variable referenced by the given AstConstraintExpr.  Parser enforces
-    // constraint_primary operand (verilog.y, IEEE 1800-2023 18.5.13).
+    // variable referenced by the given AstConstraintExpr, or nullptr if unsupported.
+    // V3Width enforces the constraint_primary operand (IEEE 1800-2023 18.5.13).
     AstNodeStmt* buildDisableSoftCallStmt(AstConstraintExpr* nodep) {
         std::string varName;
         if (const AstNodeVarRef* const vrefp = VN_CAST(nodep->exprp(), NodeVarRef)) {
@@ -2942,7 +2958,10 @@ class ConstraintExprVisitor final : public VNVisitor {
         } else if (const AstMemberRef* const memberRefp = VN_CAST(nodep->exprp(), MemberRef)) {
             varName = memberRefp->name();
         } else {
-            nodep->v3fatalSrc("Unexpected expression type in disable soft");
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: disable soft of other than a variable, an"
+                                         " object member or the size() of a random dynamic"
+                                         " array or queue.");
+            return nullptr;
         }
         AstCMethodHard* const callp = new AstCMethodHard{
             nodep->fileline(),
@@ -2998,11 +3017,13 @@ class ConstraintExprVisitor final : public VNVisitor {
             } else if (AstConstraintExpr* const exprp = VN_CAST(stmtp, ConstraintExpr)) {
                 if (exprp->isDisableSoft() && outerCondp) {
                     FileLine* const fl = exprp->fileline();
-                    AstIf* const hoistIfp = new AstIf{fl, outerCondp->cloneTreePure(false),
-                                                      buildDisableSoftCallStmt(exprp), nullptr};
-                    hoistListp = hoistListp ? AstNode::addNext(hoistListp,
-                                                               static_cast<AstNode*>(hoistIfp))
-                                            : static_cast<AstNode*>(hoistIfp);
+                    if (AstNodeStmt* const callp = buildDisableSoftCallStmt(exprp)) {
+                        AstIf* const hoistIfp
+                            = new AstIf{fl, outerCondp->cloneTreePure(false), callp, nullptr};
+                        hoistListp = hoistListp ? AstNode::addNext(hoistListp,
+                                                                   static_cast<AstNode*>(hoistIfp))
+                                                : static_cast<AstNode*>(hoistIfp);
+                    }
                     // Replace in-tree disable-soft with a no-op boolean
                     // constraint so editSingle() folds cleanly.
                     AstConstraintExpr* const truep
