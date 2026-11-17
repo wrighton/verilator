@@ -259,7 +259,7 @@ module t (
       `checkd(rep_other_fails, 1)
       `checkd(rep_range_other_fails, 1)
       `checkd(goto_other_fails, 1)
-      `checkd(nonconsec_other_fails, 1)
+      `checkd(nonconsec_other_fails, 2)
       `checkd(past_other_fails, 2)
       `checkd(always_fails, 0)
       `checkd(always_other_fails, 3)
