@@ -26,6 +26,9 @@
 //                              -> INITIAL(VARREF(_{numberedtemp}),
 //                                         OR(5'bx_1_x,AND(random,5'b0_1_x))
 //              OPTIMIZE: Must not collapse this initial back into the equation.
+//      Dynamic array and queue element indices:
+//          Convert to the runtime's 32-bit signed index, keeping an index whose value does
+//          not fit invalid
 //
 //   KnownVisitor:
 //      Variables and expressions:
@@ -170,16 +173,48 @@ class UnknownVisitor final : public VNVisitor {
         return false;
     }
 
+    // Return a reference to a new temporary, replacing 'exprp' with an assignment to it
+    AstVarRef* newExprStmtTemp(AstNodeExpr*& exprp) {
+        AstVar* const varp = createAddTemp(exprp);
+        FileLine* const flp = exprp->fileline();
+        exprp = new AstExprStmt{
+            flp, new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, exprp},
+            new AstVarRef{flp, varp, VAccess::READ}};
+        return new AstVarRef{flp, varp, VAccess::READ};
+    }
+
     AstNodeExpr* newExprStmtOrClone(AstNodeExpr*& exprp) {
-        if (!exprp->isPure()) {
-            AstVar* const varp = createAddTemp(exprp);
-            FileLine* const fl = exprp->fileline();
-            exprp = new AstExprStmt{
-                fl, new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, exprp},
-                new AstVarRef{fl, varp, VAccess::READ}};
-            return new AstVarRef{fl, varp, VAccess::READ};
-        }
+        if (!exprp->isPure()) return newExprStmtTemp(exprp);
         return exprp->cloneTreePure(false);
+    }
+
+    // Return dynamic array or queue element index 'indexp', which is signed and narrower, or
+    // wider, than 32 bits, converted to the runtime's 32-bit signed index, which selects no
+    // element when negative or past the end
+    AstNodeExpr* newDynIndexp(AstNodeExpr* indexp) {
+        FileLine* const flp = indexp->fileline();
+        const int width = indexp->width();
+        if (width < VL_IDATASIZE) return new AstExtendS{flp, indexp, VL_IDATASIZE};
+        // A wider index selects an element only if it fits in 32 signed bits, that is, bits 31
+        // and above are all equal; otherwise use the most negative index, which also selects no
+        // element as an offset from the back, unlike -1 (IEEE 1800-2023 7.4.5, 7.10.1). An
+        // offset from the back counts modulo 2**width, so an unsigned one with all those bits
+        // set is negative as well.
+        // The index is used twice, so use a nontrivial one through a temporary, as a clone
+        // would be evaluated again, doubling nested selects at each level.
+        AstNodeExpr* const valuep = VN_IS(indexp, VarRef) || VN_IS(indexp, Const)
+                                        ? indexp->cloneTreePure(false)
+                                        : newExprStmtTemp(indexp);
+        const int highWidth = width - (VL_IDATASIZE - 1);
+        AstNodeExpr* const highp = new AstSel{flp, indexp, VL_IDATASIZE - 1, highWidth};
+        // All equal, i.e. all clear or all set, if adding one leaves at most one
+        AstNodeExpr* const fitsp = new AstLt{
+            flp, new AstAdd{flp, highp, new AstConst{flp, AstConst::WidthedValue{}, highWidth, 1}},
+            new AstConst{flp, AstConst::WidthedValue{}, highWidth, 2}};
+        AstNodeExpr* const lowp = new AstSel{flp, valuep, 0, VL_IDATASIZE};
+        AstNodeExpr* const invalidp
+            = new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE, 1U << (VL_IDATASIZE - 1)};
+        return new AstCond{flp, fitsp, lowp, invalidp};
     }
 
     // VISITORS
@@ -554,6 +589,22 @@ class UnknownVisitor final : public VNVisitor {
                 replaceBoundLvalue(nodep, condp);
             }
         }
+    }
+    void visit(AstCMethodHard* nodep) override {
+        iterateChildren(nodep);
+        if (!nodep->method().isDynElementAccess()) return;
+        // An associative array element is also selected with these methods, by its key
+        const AstNodeDType* const fromDtypep = nodep->fromp()->dtypep()->skipRefp();
+        if (!VN_IS(fromDtypep, DynArrayDType) && !VN_IS(fromDtypep, QueueDType)) return;
+        AstNodeExpr* const indexp = nodep->pinsp();
+        // A narrower unsigned index is zero extended by the C++ conversion
+        if (indexp->width() < VL_IDATASIZE ? !indexp->isSigned()
+                                           : indexp->width() == VL_IDATASIZE) {
+            return;
+        }
+        VNRelinker relinkHandle;
+        indexp->unlinkFrBack(&relinkHandle);
+        relinkHandle.relink(newDynIndexp(indexp));
     }
     //--------------------
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
