@@ -299,7 +299,9 @@ class ModeCfg;
     dyn[0].v = 7'h35;
     dyn[0].w = 15'h1234;
     repeat (20) begin
-      `checkh(dyn[0].randomize(), 1);
+      int randomize_result;
+      randomize_result = dyn[0].randomize();
+      `checkh(randomize_result, 1);
       `checkh(dyn[0].v, 7'h35);
       `checkh(dyn[0].w, 15'h1234);
     end
@@ -308,7 +310,9 @@ class ModeCfg;
     `checkh(dyn[0].w.rand_mode(), 0);
     changed = 0;
     repeat (20) begin
-      `checkh(dyn[0].randomize(), 1);
+      int randomize_result;
+      randomize_result = dyn[0].randomize();
+      `checkh(randomize_result, 1);
       if (dyn[0].v != 7'h35) changed = 1;
       `checkh(dyn[0].w, 15'h1234);
     end
