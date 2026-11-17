@@ -31,6 +31,7 @@
 
 #include "V3Undriven.h"
 
+#include "V3Const.h"
 #include "V3Stats.h"
 #include "V3UndrivenCapture.h"
 #include "V3Width.h"
@@ -564,6 +565,44 @@ class UndrivenVisitor final : public VNVisitorConst {
         m_contAssTargetp = nullptr;
         iterateConst(nodep);
     }
+    // Returns a new constant for an index made only of constants, parameters with a known
+    // value, and pure operators on them, which are constant expressions (IEEE 1800-2023
+    // 11.2.1) not yet folded at this point; else nullptr. Anything else is rejected rather
+    // than inferred. Folds an owned copy, so the netlist is unchanged; the caller deletes it.
+    static AstConst* newParamIndexp(AstNodeExpr* indexp) {
+        AstNodeExpr* clonep = indexp->cloneTree(false);
+        // Admit by node kind alone: a purity check here could reach a called subroutine, which
+        // the copy shares with the netlist
+        std::vector<AstVarRef*> refps;
+        const bool unknown = clonep->exists([&](AstNode* np) {
+            if (VN_IS(np, Const)) return false;
+            if (AstVarRef* const refp = VN_CAST(np, VarRef)) {
+                refps.push_back(refp);
+                return !refp->varp()->isParam() || !VN_IS(refp->varp()->valuep(), Const);
+            }
+            return !(VN_IS(np, NodeUniop) || VN_IS(np, NodeBiop) || VN_IS(np, NodeTriop));
+        });
+        if (!unknown) {
+            for (AstVarRef* const refp : refps) {
+                AstConst* const newp = VN_AS(refp->varp()->valuep(), Const)->cloneTree(false);
+                if (refp == clonep) {
+                    clonep = newp;
+                } else {
+                    refp->replaceWith(newp);
+                }
+                VL_DO_DANGLING(refp->deleteTree(), refp);
+            }
+            // Only constants and operators remain, so the purity check reads only this copy.
+            // Folding returns the possibly replaced, still unlinked root.
+            if (clonep->isPure()) clonep = V3Const::constifyEdit(clonep);
+        }
+        // An unknown node, an impure operator, or an operator without a constant fold leaves
+        // the index unknown, ending the prefix as for any other expression
+        if (AstConst* const constp = VN_CAST(clonep, Const)) return constp;
+        VL_DO_DANGLING(clonep->deleteTree(), clonep);
+        return nullptr;
+    }
+
     // Returns the static element path written, or false for a write through a
     // constant invalid index, which selects no element (IEEE 1800-2023 7.4.5)
     bool initialContPrefix(const AstNodeVarRef* nodep, std::vector<string>& prefix) const {
@@ -586,17 +625,22 @@ class UndrivenVisitor final : public VNVisitorConst {
         if (exprp != nodep) return true;  // Whole write, or not this variable's select chain
         for (auto it = selects.rbegin(); it != selects.rend(); ++it) {
             if (const AstArraySel* const selp = VN_CAST(*it, ArraySel)) {
-                const AstConst* const constp = VN_CAST(selp->bitp(), Const);
+                AstConst* evalp = nullptr;
+                const AstConst* constp = VN_CAST(selp->bitp(), Const);
+                if (!constp) constp = evalp = newParamIndexp(selp->bitp());
                 if (!constp) break;  // The longest static prefix ends here (IEEE 1800-2023 11.5.3)
                 // V3WidthSel already normalized the index. Never clip wide/X/Z values.
                 const AstUnpackArrayDType* const arrayp
                     = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
-                if (constp->num().isFourState()
-                    || (constp->isSigned() && constp->num().isNegative())
-                    || !constp->num().fitsInUInt()
-                    || constp->toUInt() >= static_cast<uint32_t>(arrayp->elementsConst()))
-                    return false;
-                prefix.push_back("[" + cvtToStr(constp->toUInt()) + "]");
+                const bool invalid
+                    = constp->num().isFourState()
+                      || (constp->isSigned() && constp->num().isNegative())
+                      || !constp->num().fitsInUInt()
+                      || constp->toUInt() >= static_cast<uint32_t>(arrayp->elementsConst());
+                const uint32_t index = invalid ? 0 : constp->toUInt();
+                if (evalp) VL_DO_DANGLING(evalp->deleteTree(), evalp);
+                if (invalid) return false;
+                prefix.push_back("[" + cvtToStr(index) + "]");
             } else if (const AstStructSel* const selp = VN_CAST(*it, StructSel)) {
                 // Union fields alias; only an unpacked struct proves independence.
                 const AstStructDType* const structp
