@@ -106,7 +106,8 @@ static string extractDottedPath(AstNode* nodep, bool& hasPartSelect) {
 class AssertControlSeedVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Module owning the elaborated assertion's state declaration
     // Next control-state declaration number, unique in the netlist so that a name never
-    // denotes different assertions in different elaborations of one module
+    // denotes different assertions in different elaborations of one module. Numbers follow
+    // the module order, so adding a site renumbers the sites of later modules.
     int m_number = 0;
     void addState(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
         if (type == VAssertType::INTERNAL) return;
@@ -3988,6 +3989,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     int m_modportNum = 0;  // Uniqueify modport numbers
     // Assertion control apply statements of sites another elaboration holds, to remove
     std::vector<AstCStmt*> m_assertCtlDropps;
+    std::unordered_set<const AstCStmt*> m_assertCtlDropSet;  // Members of m_assertCtlDropps
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
     bool m_inGenBlock = false;  // True if in generate block
@@ -6504,13 +6506,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
             UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
         }
     }
-    // Whether an assertion control site of possibly another elaboration resolves here
-    bool assertCtlSiteResolves(const AstVarXRef* nodep, VSymEnt* lookupSymp) {
-        string baddot;
-        VSymEnt* okSymp = nullptr;
-        VSymEnt* const dotSymp = m_statep->findDotted(nodep->fileline(), lookupSymp,
-                                                      nodep->dotted(), baddot, okSymp, true);
-        return dotSymp && m_statep->findSymPrefixed(dotSymp, nodep->name(), baddot, true);
+    // An assertion control site of another elaboration, absent here, is not applied here
+    void assertCtlSiteAbsent(AstVarXRef* nodep) {
+        if (!m_statep->forScopeCreation()) return;  // Resolved again for each instance
+        // The reference is an argument within its apply statement
+        AstNode* headp = nodep;
+        while (headp->backp()->nextp() == headp) headp = headp->backp();
+        AstCStmt* const unitp = VN_CAST(headp->backp(), CStmt);
+        UASSERT_OBJ(unitp, nodep, "Assertion control site outside its statement");
+        if (m_assertCtlDropSet.insert(unitp).second) m_assertCtlDropps.push_back(unitp);
     }
     void visit(AstVarXRef* nodep) override {
         // VarRef: Resolve its reference
@@ -6529,20 +6533,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (nodep->inlinedDots() != "") {  // Correct for current post-inlined scope
                 lookupSymp = findInlinedDotsSym(nodep, nodep->inlinedDots());
             }
-            if (nodep->assertCtlOptional() && !assertCtlSiteResolves(nodep, lookupSymp)) {
-                // Another elaboration's site: unused by this instance
-                if (m_statep->forScopeCreation()) {
-                    // The reference is an argument within its apply statement
-                    AstNode* headp = nodep;
-                    while (headp->backp()->nextp() == headp) headp = headp->backp();
-                    AstCStmt* const unitp = VN_CAST(headp->backp(), CStmt);
-                    UASSERT_OBJ(unitp, nodep, "Assertion control site outside its statement");
-                    if (std::find(m_assertCtlDropps.begin(), m_assertCtlDropps.end(), unitp)
-                        == m_assertCtlDropps.end()) {
-                        m_assertCtlDropps.push_back(unitp);
-                    }
+            if (nodep->assertCtlOptional()) {
+                string baddot;
+                VSymEnt* okSymp = nullptr;
+                if (!m_statep->findDotted(nodep->fileline(), lookupSymp, nodep->dotted(), baddot,
+                                          okSymp, true)) {
+                    assertCtlSiteAbsent(nodep);
+                    return;
                 }
-                return;
             }
             string baddot;
             VSymEnt* okSymp;
@@ -6584,6 +6582,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 AstVar* const varp
                     = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr;
+                if (!varp && nodep->assertCtlOptional()) return;  // Another elaboration's site
                 nodep->varp(varp);
                 // A re-resolved read net endpoint can become writable during Width's
                 // port coercion. Keep its input-only view, without extending handle or
@@ -6623,6 +6622,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (vscp && errorHierNonPort(nodep, vscp->varp(), dotSymp)) return;
+                if (!vscp && nodep->assertCtlOptional()) {
+                    assertCtlSiteAbsent(nodep);
+                    return;
+                }
                 if (vscp && nodep->assertCtlOptional()) {
                     UASSERT_OBJ(vscp->varp() == nodep->varp(), nodep,
                                 "Assertion control site bound to another elaboration");
@@ -8148,8 +8151,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string instancePath;
             string childPath;
         };
+        const std::vector<VSymEnt*>& instanceSyms = m_statep->moduleInstanceSyms(m_modp);
+        if (instanceSyms.empty()) {
+            // Such as from a class, which no module instance holds
+            itemp->v3warn(E_UNSUPPORTED, "Unsupported: assertion control scope named upward"
+                                         " from outside a module instance: '"
+                                             << AstNode::prettyName(path) << "'");
+            return;
+        }
         std::vector<Reach> reaches;
-        for (VSymEnt* const cellSymp : m_statep->moduleInstanceSyms(m_modp)) {
+        for (VSymEnt* const cellSymp : instanceSyms) {
             string baddot;
             VSymEnt* okSymp = nullptr;
             const VSymEnt* const foundp
@@ -8168,7 +8179,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (!isAssertControlTarget(targetp) || !firstSymp
                 || !assertionRelativeScopePath(instanceSymp, firstSymp, instancePath)
                 || !assertionRelativeScopePath(foundp, firstSymp, childPath)) {
-                itemp->v3error("Assertion control target is not a scope or assertion: '"
+                itemp->v3error("Assertion control target is not a scope or assertion from '"
+                               << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
                                << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
                 return;
             }
@@ -8565,6 +8577,10 @@ void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
 void V3LinkDot::linkDotScope(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     linkDotGuts(nodep, LDS_SCOPED);
+    // Every assertion control site of possibly another elaboration is now kept or removed
+    nodep->foreach([](const AstVarXRef* refp) {
+        UASSERT_OBJ(!refp->assertCtlOptional(), refp, "Assertion control site left unresolved");
+    });
     V3Global::dumpCheckGlobalTree("linkdot", 0, dumpTreeEitherLevel() >= 3);
 }
 
