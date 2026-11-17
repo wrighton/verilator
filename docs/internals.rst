@@ -557,10 +557,16 @@ runs, and which on the high level has the form:
 
 The remaining regions ('inact', 'obs' and 'react') nest around these in the
 same manner, each iterating the loops of all regions that precede it in the
-SystemVerilog scheduling order. The runtime event loop calls every region
-unconditionally, so scheduling emits an entry point for each one even when
-the design has no logic in it. Such an entry point immediately returns
-false, ending its loop after a single iteration.
+SystemVerilog scheduling order. The exception is the 'react' region, which
+iterates until it has no more work before the other regions run again, like
+the reactive region set (IEEE 1800-2023 4.5). After running its logic, each
+'react' iteration commits the Re-NBAs, the NBAs executed by that logic, then
+computes the triggers of what it changed. Those of 'react' region logic
+trigger its next iteration, and all of them are kept for the next 'act'
+iteration. The runtime event loop calls every region unconditionally, so
+scheduling emits an entry point for each one even when the design has no
+logic in it. Such an entry point immediately returns false, ending its loop
+after a single iteration.
 
 Timing
 ------

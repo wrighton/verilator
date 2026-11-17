@@ -149,7 +149,7 @@ module t (
     `checkd(fails_goto_or, fails_goto_edge);
     `checkd(fails_noncons_edge, 46);
     `checkd(fails_noncons_or, fails_noncons_edge);
-    `checkd(passes_rep_edge, 79);
+    `checkd(passes_rep_edge, 80);
     `checkd(passes_rep_or, passes_rep_edge);
     `checkd(events_xor, 9);
     `checkd(enabled_xor, 8);

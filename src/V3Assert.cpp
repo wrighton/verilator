@@ -1045,6 +1045,9 @@ class AssertVisitor final : public VNVisitor {
     bool m_inSpawnedFork = false;  // Under a fork...join_any or fork...join_none
     AstVar* m_obsEventp = nullptr;  // Current module event to run deferred calls
     AstAlwaysReactive* m_obsReactivep = nullptr;  // Current module block running deferred calls
+    AstVar* m_actionEventp = nullptr;  // Current module event to run queued PExpr actions
+    AstAlwaysReactive* m_actionReactivep = nullptr;  // Current module block running them
+    bool m_inPExprFinal = false;  // In the end-of-simulation check of a PExpr
     AstNodeProcedure* m_procedurep = nullptr;  // Current procedure
     AstAlways* m_assertCoverp = nullptr;  // Process of the current concurrent assertion
     VDouble0 m_statCover;  // Statistic tracking
@@ -1065,7 +1068,7 @@ class AssertVisitor final : public VNVisitor {
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
     V3UniqueNames m_matchCountNames{"__VnfaRemainingMatchCount"};  // Match replay counter names
     V3UniqueNames m_obsNames{"__VassertObs"};  // Observed deferred assertion temp names
-    V3UniqueNames m_actionNames{"__VassertAction"};  // Automatics of cloned actions
+    V3UniqueNames m_actionNames{"__VassertAction"};  // Queued and cloned action temporaries
     // Key equality for the delayed value maps. AstNode::sameTree is not enough, as
     // AstVar::sameNode compares only names, and before V3Begin distinct variables in
     // different scopes (e.g. generate blocks) can have the same name.
@@ -1616,6 +1619,124 @@ class AssertVisitor final : public VNVisitor {
         reactLoopp->addStmtsp(callsp);
         m_obsReactivep->addStmtsp(reactLoopp);
         return queuesp;
+    }
+
+    // Queue the action of a PExpr clause, run in the Reactive region (IEEE 1800-2023 4.4.2.6).
+    // Return what queues it, at the decision of the attempt. An entry of the queue holds the
+    // values of the automatic variables it reads (IEEE 1800-2023 16.14.6.1), the controls of
+    // the action, as they apply at the decision, and the Kill state.
+    AstNodeStmt* newQueuedAction(FileLine* flp, AstNodeStmt* actionsp) {
+        actionsp->foreachAndNext([](AstNodeVarRef* const refp) {
+            // References inside action blocks shouldn't be implicitly sampled
+            // m_passsp/m_failsp have been already visited once and refs explicitly sampled
+            // are handled already
+            refp->user2(1);
+        });
+        // Without timing, assertBody rejects the PExpr
+        if (!v3Global.opt.timing().isSetTrue()) return actionsp;
+        // The end-of-simulation check runs in a final block
+        if (m_inPExprFinal) return actionsp;
+        // A sequence event control resumes its waiters from the cover action
+        const AstCover* const coverp = VN_CAST(m_assertp, Cover);
+        if (coverp && coverp->isSeqEvent()) return actionsp;
+        std::unordered_set<const AstVar*> ownps;  // What the action declares
+        actionsp->foreachAndNext([&](const AstVar* varp) { ownps.insert(varp); });
+        // Automatic inputs of an action shall not be modified (IEEE 1800-2023 16.14.6.1), leave
+        // such an action where V3Fork reports it
+        if (actionsp->existsAndNext([&](const AstVarRef* refp) {
+                return refp->access().isWriteOrRW() && refp->varp()->lifetime().isAutomatic()
+                       && !ownps.count(refp->varp());
+            })) {
+            return actionsp;
+        }
+        // Queued from the process of the attempt, a fork of the process of the assertion
+        const auto newTemp = [&](const string& name, AstNodeDType* dtypep) {
+            AstVar* const varp = newModuleTemp(flp, m_actionNames.get(name), dtypep, m_modp);
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
+            return varp;
+        };
+        if (!m_actionEventp) {
+            m_actionEventp = newTemp("Event", m_modp->findBasicDType(VBasicDTypeKwd::EVENT));
+            v3Global.setHasEvents();
+            m_actionReactivep = new AstAlwaysReactive{
+                flp,
+                new AstSenTree{flp,
+                               new AstSenItem{flp, VEdgeType::ET_EVENT,
+                                              new AstVarRef{flp, m_actionEventp, VAccess::READ}}},
+                nullptr};
+            m_modp->addStmtsp(m_actionReactivep);
+        }
+        // The process running an entry, which first takes its values from the queues
+        AstBegin* const instancep = new AstBegin{flp, "", nullptr, true};
+        AstNodeStmt* queuesp = nullptr;
+        // Push the value of 'exprp' at the decision, return the variable the instance pops it to
+        const auto newCapture = [&](AstNodeExpr* exprp) {
+            AstNodeDType* const dtypep = exprp->dtypep();
+            AstVar* const queuep = newTemp("Queue", newQueueDTypep(flp, dtypep));
+            queuep->setIgnoreSchedWrite();
+            queuesp = AstNode::addNext(queuesp, newQueuePush(flp, queuep, exprp));
+            AstVar* const valuep
+                = new AstVar{flp, VVarType::BLOCKTEMP, m_actionNames.get("Value"), dtypep};
+            valuep->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            instancep->addDeclsp(valuep);
+            instancep->addStmtsp(new AstAssign{flp, new AstVarRef{flp, valuep, VAccess::WRITE},
+                                               newQueuePop(flp, queuep, dtypep)});
+            return valuep;
+        };
+        std::unordered_map<AstVar*, AstVar*> valueps;
+        actionsp->foreachAndNext([&](AstVarRef* refp) {
+            AstVar* const varp = refp->varp();
+            if (!varp->lifetime().isAutomatic() || ownps.count(varp)) return;
+            AstVar*& valuepr = valueps[varp];
+            if (!valuepr) {
+                AstVarRef* const readp = new AstVarRef{flp, varp, VAccess::READ};
+                readp->user2(1);
+                valuepr = newCapture(readp);
+            }
+            refp->varp(valuepr);
+        });
+        // A cover statement controls its own pass action inside, see visitAssertionIterate
+        if (coverp) {
+            for (AstNode* nodep = actionsp; nodep; nodep = nodep->nextp()) {
+                AstIf* const ifp = VN_CAST(nodep, If);
+                if (!ifp) continue;
+                AstNodeExpr* const condp = ifp->condp()->unlinkFrBack();
+                ifp->condp(new AstVarRef{flp, newCapture(condp), VAccess::READ});
+            }
+        }
+        // An attempt the assertion's Kill aborted does not run its action (IEEE 1800-2023 20.11)
+        const auto newKillEpochp = [&]() {
+            return new AstCExpr{flp, AstCExpr::Pure{},
+                                V3AssertCommon::assertCtlGetCall("ASSERT_CTL_KILL",
+                                                                 m_assertp->userType(),
+                                                                 m_assertp->directive()),
+                                32};
+        };
+        AstVar* const epochp = newCapture(newKillEpochp());
+        instancep->addStmtsp(new AstIf{
+            flp, new AstEq{flp, new AstVarRef{flp, epochp, VAccess::READ}, newKillEpochp()},
+            actionsp});
+        // Each entry is run by a process of its own, starting in the Reactive region
+        AstFork* const forkp = new AstFork{flp, VJoinType::JOIN_NONE};
+        forkp->immediateStart(true);
+        forkp->addForksp(new AstForkItem{flp, instancep});
+        // Run every pending entry
+        AstVar* const pendingp = newTemp("Pending", m_modp->findUInt32DType());
+        pendingp->setIgnoreSchedWrite();
+        AstLoop* const loopp = new AstLoop{flp};
+        loopp->addStmtsp(new AstLoopTest{flp, loopp, new AstVarRef{flp, pendingp, VAccess::READ}});
+        loopp->addStmtsp(new AstAssign{
+            flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+            new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
+        loopp->addStmtsp(forkp);
+        m_actionReactivep->addStmtsp(loopp);
+        queuesp = AstNode::addNext(
+            queuesp, new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+                                   new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ},
+                                              new AstConst{flp, 1}}});
+        return AstNode::addNext(
+            queuesp,
+            new AstFireEvent{flp, new AstVarRef{flp, m_actionEventp, VAccess::WRITE}, false});
     }
 
     void visitAssertionIterate(AstNodeCoverOrAssert* nodep, AstNodeStmt* failsp) {
@@ -2223,20 +2344,16 @@ class AssertVisitor final : public VNVisitor {
             // The first clause takes the action, later ones a clone.
             stmtsp = m_passsp->backp() ? V3AssertCommon::cloneAction(m_passsp, m_actionNames)
                                        : m_passsp;
+            stmtsp = newQueuedAction(nodep->fileline(), stmtsp);
             stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
                                        nodep->vacuous());
         } else if (!nodep->pass() && m_failsp) {
             stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
                                        : m_failsp;
+            stmtsp = newQueuedAction(nodep->fileline(), stmtsp);
             stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
         }
         if (stmtsp) {
-            stmtsp->foreachAndNext([](AstNodeVarRef* const refp) {
-                // References inside action blocks shouldn't be implicitly sampled
-                // m_passsp/m_failsp have been already visited once and refs explicitly sampled
-                // are handled already
-                refp->user2(1);
-            });
             nodep->replaceWith(stmtsp);
         } else {
             nodep->unlinkFrBack();
@@ -2247,7 +2364,10 @@ class AssertVisitor final : public VNVisitor {
         if (m_inRestrict) {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
         } else {
-            iterateChildren(nodep);
+            iterateAndNextNull(nodep->bodyp());
+            VL_RESTORER(m_inPExprFinal);
+            m_inPExprFinal = true;
+            iterateAndNextNull(nodep->finalp());
         }
     }
 
@@ -2485,6 +2605,9 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_obsFlushp);
         VL_RESTORER(m_obsEventp);
         VL_RESTORER(m_obsReactivep);
+        VL_RESTORER_COPY(m_actionNames);
+        VL_RESTORER(m_actionEventp);
+        VL_RESTORER(m_actionReactivep);
         VL_RESTORER(m_modPastNum);
         VL_RESTORER(m_modStrobeNum);
         VL_RESTORER(m_finalp);
@@ -2497,6 +2620,9 @@ class AssertVisitor final : public VNVisitor {
         m_obsFlushp = nullptr;
         m_obsEventp = nullptr;
         m_obsReactivep = nullptr;
+        m_actionNames.reset();
+        m_actionEventp = nullptr;
+        m_actionReactivep = nullptr;
         m_modStrobeNum = 0;
         m_finalp = nullptr;
         iterateChildren(nodep);
