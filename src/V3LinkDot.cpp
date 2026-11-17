@@ -8136,12 +8136,33 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 instanceSymp = instanceSymp->parentp();
             }
             // This statement is resolved once for all instances of its module, from the symbol
-            // table of one of them. A target inside the calling instance is named relative to it,
-            // so that each instance selects its own assertions (IEEE 1800-2023 23.8).
+            // table of one of them, so name each target by how its first identifier resolves
+            // (IEEE 1800-2023 23.6, 23.8):
+            // - found within the calling instance: relative to that instance;
+            // - found above it, but not at the top: as written, resolved later per instance;
+            // - otherwise ($root or a top module name): the absolute path found here.
+            const string firstName = path.substr(0, path.find('.'));
+            string firstBaddot;
+            VSymEnt* firstOkSymp = nullptr;
+            const VSymEnt* const firstSymp
+                = firstName == "$root"
+                      ? nullptr
+                      : m_statep->findDotted(itemp->fileline(), m_curSymp, firstName, firstBaddot,
+                                             firstOkSymp, true);
             string instancePath;
             string childPath;
-            if (!assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
-                || !assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
+            string firstPath;
+            if (firstSymp && assertionRelativeScopePath(firstSymp, m_modSymp, firstPath)
+                && assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
+                && assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
+                // Within the calling instance
+            } else if (firstSymp && firstSymp->parentp() != m_statep->rootEntp()
+                       && assertionRelativeScopePath(instanceSymp, firstSymp, instancePath)
+                       && assertionRelativeScopePath(foundp, firstSymp, childPath)) {
+                // Upward name, as written from the first identifier
+                instancePath = VString::dot(firstName, ".", instancePath);
+                childPath = VString::dot(firstName, ".", childPath);
+            } else {
                 instancePath = assertionScopePath(instanceSymp);
                 childPath = assertionScopePath(foundp);
             }
