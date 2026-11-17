@@ -237,6 +237,24 @@ static string assertionScopePath(const VSymEnt* symp) {
     return path;
 }
 
+// Path of symp below the scope of rootp, or false if symp is not under it
+static bool assertionRelativeScopePath(const VSymEnt* symp, const VSymEnt* rootp, string& path) {
+    std::vector<string> names;
+    for (; symp && symp != rootp; symp = symp->parentp()) {
+        const AstNode* const nodep = symp->nodep();
+        if (VN_IS(nodep, Cell) || VN_IS(nodep, GenBlock) || VN_IS(nodep, NodeBlock)
+            || VN_IS(nodep, NodeFTask)) {
+            if (!nodep->name().empty()) names.push_back(nodep->name());
+        }
+    }
+    if (!symp) return false;
+    path.clear();
+    for (auto it = names.crbegin(); it != names.crend(); ++it) {
+        path = VString::dot(path, ".", *it);
+    }
+    return true;
+}
+
 static string lexicalDisablePath(AstNode* const targetp) {
     std::vector<string> names;
     for (AstNode* curp = targetp; curp; curp = curp->aboveLoopp()) {
@@ -8102,8 +8120,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                         : m_statep->findDotted(itemp->fileline(), m_curSymp, path,
                                                                baddot, okSymp, true);
             AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
-            // A hierarchical_identifier names a scope below $root, never $root itself
-            // (IEEE 1800-2023 Syntax 20-12)
+            // A bare $root resolves to the netlist, which is not a scope (IEEE 1800-2023
+            // Syntax 20-12)
             if (!targetp
                 || !(VN_IS(targetp, Cell) || VN_IS(targetp, NodeBlock) || VN_IS(targetp, GenBlock)
                      || VN_IS(targetp, NodeFTask) || VN_IS(targetp, Module))) {
@@ -8117,8 +8135,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 && !(VN_IS(instanceSymp->nodep(), Cell) || VN_IS(instanceSymp->nodep(), Module))) {
                 instanceSymp = instanceSymp->parentp();
             }
-            AssertControlTargetVisitor{targetp, nodep, assertionScopePath(instanceSymp),
-                                       assertionScopePath(foundp), targets};
+            // This statement is resolved once for all instances of its module, from the symbol
+            // table of one of them. A target inside the calling instance is named relative to it,
+            // so that each instance selects its own assertions (IEEE 1800-2023 23.8).
+            string instancePath;
+            string childPath;
+            if (!assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
+                || !assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
+                instancePath = assertionScopePath(instanceSymp);
+                childPath = assertionScopePath(foundp);
+            }
+            AssertControlTargetVisitor{targetp, nodep, instancePath, childPath, targets};
         }
         if (nodep->itemsp()) {
             AstNode* itemsp = nodep->itemsp()->unlinkFrBackWithNext();
