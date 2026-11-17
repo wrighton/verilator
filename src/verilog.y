@@ -104,10 +104,16 @@ const VBasicDTypeKwd LOGIC_IMPLICIT = VBasicDTypeKwd::LOGIC_IMPLICIT;
     { GRAMMARP->m_varDecl = VVarType::type; }
 #define VARIO(type) \
     { GRAMMARP->m_varIO = VDirection::type; }
-// Set direction to default-input when detect inside an ANSI port list
+// Default the direction of an ANSI port with a data type, var, interface or interconnect to input
+// Deviation: IEEE 1800-2023 23.2.2.3 makes these inout (interfaces excepted; var is then illegal)
 #define VARIOANSI() \
     { \
         if (GRAMMARP->m_varIO == VDirection::NONE) VARIO(INPUT); \
+    }
+// Set direction to default-inout for an ANSI net port (IEEE 1800-2023 23.2.2.3)
+#define VARIOANSINET() \
+    { \
+        if (GRAMMARP->m_varIO == VDirection::NONE) VARIO(INOUT); \
     }
 #define VARLIFE(flag) \
     { GRAMMARP->m_varLifetime = flag; }
@@ -1489,24 +1495,24 @@ port<nodep>:                    // ==IEEE: port
         |       portDirNetE signing             portSig variable_dimensionListE sigAttrListE
                         { $$ = $3;
                           AstNodeDType* const dtp = new AstBasicDType{$3->fileline(), LOGIC_IMPLICIT, $2};
-                          VARDTYPE_NDECL(dtp); VARIOANSI();
+                          VARDTYPE_NDECL(dtp); VARIOANSINET();
                           addNextNull($$, VARDONEP($$, $4, $5)); }
         |       portDirNetE signing             portSig variable_dimensionListE sigAttrListE '=' constExpr
                         { $$ = $3;
                           AstNodeDType* const dtp = new AstBasicDType{$3->fileline(), LOGIC_IMPLICIT, $2};
-                          VARDTYPE_NDECL(dtp); VARIOANSI();
+                          VARDTYPE_NDECL(dtp); VARIOANSINET();
                           if (AstVar* vp = VARDONEP($$, $4, $5)) { addNextNull($$, vp); vp->valuep($7); } }
         |       portDirNetE signingE rangeList  portSig variable_dimensionListE sigAttrListE
                         { $$ = $4;
                           AstNodeDType* const dtp = GRAMMARP->addRange(
                                     new AstBasicDType{$3->fileline(), LOGIC_IMPLICIT, $2}, $3, true);
-                          VARDTYPE_NDECL(dtp);
+                          VARDTYPE_NDECL(dtp); VARIOANSINET();
                           addNextNull($$, VARDONEP($$, $5, $6)); }
         |       portDirNetE signingE rangeList  portSig variable_dimensionListE sigAttrListE '=' constExpr
                         { $$ = $4;
                           AstNodeDType* const dtp = GRAMMARP->addRange(
                                     new AstBasicDType{$3->fileline(), LOGIC_IMPLICIT, $2}, $3, true);
-                          VARDTYPE_NDECL(dtp);
+                          VARDTYPE_NDECL(dtp); VARIOANSINET();
                           if (AstVar* vp = VARDONEP($$, $5, $6)) { addNextNull($$, vp); vp->valuep($8); } }
         |       portDirNetE /*implicit*/        portSig variable_dimensionListE sigAttrListE
                         { $$ = $2; /*VARDTYPE-same*/ addNextNull($$, VARDONEP($$, $3, $4)); }
@@ -1529,7 +1535,7 @@ portDirNetE:                    // IEEE: part of port, optional net type and/or 
         //                      // The higher level rule may override this VARDTYPE with one later in the parse.
         |       port_direction                                  { GRAMMARP->m_portDirOmitted = false; VARDECL(PORT); VARDTYPE_NDECL(nullptr); }
         |       port_direction { GRAMMARP->m_portDirOmitted = false; VARDECL(PORT); } net_type      { VARDTYPE_NDECL(nullptr); }  // net_type calls VARDECL
-        |       net_type                                        { GRAMMARP->m_portDirOmitted = false; VARDTYPE_NDECL(nullptr); }  // net_type calls VARDECL
+        |       net_type                                        { GRAMMARP->m_portDirOmitted = false; VARDTYPE_NDECL(nullptr); VARIOANSINET(); }  // net_type calls VARDECL
         ;
 
 port_declNetE:                  // IEEE: part of port_declaration, optional net type
