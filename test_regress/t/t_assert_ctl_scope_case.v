@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 `timescale 1ns / 1ps
 
 module sub;
@@ -52,11 +57,20 @@ module t;
     // for all directives (7) (IEEE 1800-2023 20.11 Tables 20-5, 20-6, 20-7; 12.5.3)
     $assertcontrol(4, 32, 7, 0, t.a.then_blk);
     #1;
+    // Each immediate unique case violation is reported when the case evaluates, so
+    // the expected output may repeat a report within a time step
     drive("match both", 1, 2'd1, 0, 2'd2);
-    if (a.o !== 21 || b.o !== 32) $stop;
+    `checkd(a.o, 21);
+    `checkd(b.o, 32);
     drive("no match in a then arm (off)", 1, 2'd3, 0, 2'd0);
+    `checkd(a.o, 1);
     drive("no match in a else arm (on)", 0, 2'd3, 0, 2'd0);
+    `checkd(a.o, 2);
     drive("no match in b then arm (on)", 0, 2'd0, 1, 2'd3);
+    `checkd(b.o, 1);
+    drive("match both again", 1, 2'd1, 0, 2'd2);
+    `checkd(a.o, 21);
+    `checkd(b.o, 32);
     $display("*-* All Finished *-*");
     $finish;
   end
