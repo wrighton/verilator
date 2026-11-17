@@ -6,7 +6,7 @@
 
 // verilog_format: off
 `define stop $stop
-`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__, `__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 `timescale 1ns/1ps
@@ -65,6 +65,9 @@ module t;
   int local_gated, local_body;
   int edges, expected, expected_post;
   clockvar_monitor mon;
+  // The event expression itself must use the sampled clockvar (14.13).
+  int sensp, expected_rises;
+  always @(posedge i.cb.v[0]) ++sensp;
   always @(i.cb iff i.cb.v[0]) ++gated;
   always @(i.cb) if (i.cb.v[0]) ++body;
   always @(i.cb iff i.cb.inv[0]) ++inverted;
@@ -96,11 +99,13 @@ module t;
     #CHECK;
     expected += int'(PRE[edges][0]);
     expected_post += int'((edges == 19 ? 7'h69 : PRE[edges + 1]) & 7'h01);
+    if (PRE[edges][0] && !(edges == 0 ? 1'b0 : PRE[edges - 1][0])) ++expected_rises;
     `checkd(i.cb.v, PRE[edges]);
     `checkd(i.cb.vr, PRE[edges]);
     `checkd(i.cb.inv, ~PRE[edges]);
     `checkd(i.cb0.v, edges == 19 ? 7'h69 : PRE[edges + 1]);
     `checkd(i.cbn.v, edges == 19 ? 7'h69 : PRE[edges + 1]);
+    `checkd(sensp, expected_rises);
     `checkd(gated, expected);
     `checkd(body, expected);
     `checkd(inverted, edges + 1 - expected);
@@ -117,6 +122,7 @@ module t;
     if (edges == 20) begin
       `checkd(expected, 11);
       `checkd(expected_post, 12);
+      `checkd(expected_rises, 5);
       $write("*-* All Finished *-*\n");
       $finish;
     end
