@@ -380,7 +380,16 @@ class PremitVisitor final : public VNVisitor {
         checkNode(nodep);
     }
     void visit(AstCMethodHard* nodep) override {
-        iterateChildren(nodep);
+        if (nodep->method().isDynElementAccess()) {
+            iterateAndNextNull(nodep->fromp());
+            {  // Only the 'from' is part of the assignment LHS, not the index
+                VL_RESTORER(m_assignLhs);
+                m_assignLhs = false;
+                iterateAndNextNull(nodep->pinsp());
+            }
+        } else {
+            iterateChildren(nodep);
+        }
         checkNode(nodep);
     }
     void visit(AstNodeCCall* nodep) override {
