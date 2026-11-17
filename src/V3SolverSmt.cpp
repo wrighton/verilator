@@ -2340,9 +2340,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                 : varp->user3();
                 if (memberRefp) {
                     // Registered as by a member select in any other constraint
-                    std::set<std::string> names;  // Only a hard constraint lists its names
+                    // Only a hard() constraint lists names, and a fold gets the name below only
+                    // when its text constrains the array
+                    std::set<std::string> names;
                     VL_RESTORER(m_constraintVarsp);
-                    m_constraintVarsp = m_wantSingle ? &m_constraintVars : &names;
+                    m_constraintVarsp = &names;
                     iterate(itemp);
                 } else if (!alreadyWritten) {
                     varp->user3(true);  // Solver owns it; __VBasicRand must not overwrite
