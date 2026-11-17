@@ -654,6 +654,9 @@ public:
     const std::vector<VSymEnt*>& moduleInstanceSyms(const AstNodeModule* modp) {
         return m_modInstanceSyms[modp];
     }
+    void insertInstanceSym(const AstNodeModule* modp, VSymEnt* symp) {
+        m_modInstanceSyms[modp].push_back(symp);
+    }
     void insertMap(VSymEnt* symp, const string& scopename) {
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
     }
@@ -1705,6 +1708,11 @@ class LinkDotFindVisitor final : public VNVisitor {
             m_classOrPackagep = nodep;
             m_curSymp = m_modSymp
                 = m_statep->insertBlock(upperSymp, nodep->name(), nodep, m_classOrPackagep);
+            // A class's names resolve from where it is declared (IEEE 1800-2023 8.23, 23.8), so
+            // from each instance of its declaring scope. V3Param copies a module per instance
+            // for a class naming a scope (see instanceStateRefp), and V3Scope reports a class
+            // used by several instances otherwise.
+            m_statep->insertInstanceSym(nodep, m_curSymp);
             m_statep->insertMap(m_curSymp, m_scope);
             UINFO(9, "New module scope " << m_curSymp);
             //
@@ -8152,13 +8160,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string childPath;
         };
         const std::vector<VSymEnt*>& instanceSyms = m_statep->moduleInstanceSyms(m_modp);
-        if (instanceSyms.empty()) {
-            // Such as from a class, which no module instance holds
-            itemp->v3warn(E_UNSUPPORTED, "Unsupported: assertion control scope named upward"
-                                         " from outside a module instance: '"
-                                             << AstNode::prettyName(path) << "'");
-            return;
-        }
+        UASSERT_OBJ(!instanceSyms.empty(), itemp, "Module resolving names has no instance");
         std::vector<Reach> reaches;
         for (VSymEnt* const cellSymp : instanceSyms) {
             string baddot;
