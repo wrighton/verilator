@@ -1,0 +1,6 @@
+%Error: t/t_assert_ctl_scope_root_bad.v:10:19: Assertion control target is not a scope or assertion: '$root' (IEEE 1800-2023 20.11).
+                                             : ... note: In instance 't'
+   10 |     $assertoff(0, $root);
+      |                   ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

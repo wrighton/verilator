@@ -8102,19 +8102,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                         : m_statep->findDotted(itemp->fileline(), m_curSymp, path,
                                                                baddot, okSymp, true);
             AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
+            // A hierarchical_identifier names a scope below $root, never $root itself
+            // (IEEE 1800-2023 Syntax 20-12)
             if (!targetp
                 || !(VN_IS(targetp, Cell) || VN_IS(targetp, NodeBlock) || VN_IS(targetp, GenBlock)
-                     || VN_IS(targetp, NodeFTask) || VN_IS(targetp, Module)
-                     || VN_IS(targetp, Netlist))) {
+                     || VN_IS(targetp, NodeFTask) || VN_IS(targetp, Module))) {
                 itemp->v3error("Assertion control target is not a scope or assertion: '"
                                << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
-                continue;
-            }
-            if (VN_IS(targetp, Netlist)) {
-                for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
-                    if (!modp->isTop()) continue;
-                    AssertControlTargetVisitor{modp, nodep, modp->name(), modp->name(), targets};
-                }
                 continue;
             }
             const VSymEnt* instanceSymp = foundp;
