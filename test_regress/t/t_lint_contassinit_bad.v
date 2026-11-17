@@ -194,6 +194,43 @@ module t (
   assign dynamic_element.elements[0] = out;
   initial dynamic_element.elements[index[0]] = 0;
 
+  // Parameter indices are constant, so these prefixes overlap as literal ones do.
+  localparam int SAME = 1;
+  logic param_overlap[3];
+  assign param_overlap[SAME] = out;
+  initial param_overlap[1] = 0;
+  logic param_offset_overlap[4:6];
+  initial param_offset_overlap[SAME+4] = 0;
+  assign param_offset_overlap[5] = out;
+  // A parameter invalid index selects no element, as a literal one does.
+  localparam int OUTSIDE = 9;
+  logic param_invalid[2];
+  assign param_invalid[0] = out;
+  initial param_invalid[OUTSIDE] = 0;
+
+  // An unknown condition selects an index with X bits, so no element (IEEE 1800-2023 11.4.11).
+  localparam logic X_SEL = 1'bx;
+  logic param_x_index[3];
+  assign param_x_index[X_SEL ? 2 : 0] = out;
+  initial param_x_index[2] = 0;
+  // An index that is not a constant expression keeps the whole array as the prefix.
+  localparam int TABLE[2] = '{0, 1};
+  logic param_table[2];
+  assign param_table[TABLE[1]] = out;
+  initial param_table[1] = 0;
+  logic param_random[2];
+  assign param_random[1] = out;
+  initial param_random[$urandom_range(1, 0)] = 0;
+  function automatic int pick();
+    return 1;
+  endfunction
+  logic param_call[2];
+  assign param_call[1] = out;
+  initial param_call[pick()] = 0;
+  logic param_call_sum[2];
+  assign param_call_sum[1] = out;
+  initial param_call_sum[SAME + pick() - 1] = 0;
+
   // The queue receiver is modified by a method, not a continuous queue driver.
   class source_pool;
     static bit [6:0] values[$] = '{7'd23};

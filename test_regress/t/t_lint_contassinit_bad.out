@@ -255,4 +255,52 @@
                     t/t_lint_contassinit_bad.v:194:10: ... Location of continuous assignment
   194 |   assign dynamic_element.elements[0] = out;
       |          ^~~~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:201:11: Continuous assignment to variable with initial value: 'param_overlap'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  201 |   initial param_overlap[1] = 0;
+      |           ^~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:200:10: ... Location of continuous assignment
+  200 |   assign param_overlap[SAME] = out;
+      |          ^~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:203:11: Continuous assignment to variable with initial value: 'param_offset_overlap'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  203 |   initial param_offset_overlap[SAME+4] = 0;
+      |           ^~~~~~~~~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:204:10: ... Location of continuous assignment
+  204 |   assign param_offset_overlap[5] = out;
+      |          ^~~~~~~~~~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:220:11: Continuous assignment to variable with initial value: 'param_table'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  220 |   initial param_table[1] = 0;
+      |           ^~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:219:10: ... Location of continuous assignment
+  219 |   assign param_table[TABLE[1]] = out;
+      |          ^~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:223:11: Continuous assignment to variable with initial value: 'param_random'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  223 |   initial param_random[$urandom_range(1, 0)] = 0;
+      |           ^~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:222:10: ... Location of continuous assignment
+  222 |   assign param_random[1] = out;
+      |          ^~~~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:229:11: Continuous assignment to variable with initial value: 'param_call'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  229 |   initial param_call[pick()] = 0;
+      |           ^~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:228:10: ... Location of continuous assignment
+  228 |   assign param_call[1] = out;
+      |          ^~~~~~~~~~
+%Error-CONTASSINIT: t/t_lint_contassinit_bad.v:232:11: Continuous assignment to variable with initial value: 'param_call_sum'
+                                                     : ... note: In instance 't'
+                                                     : ... Location of variable initialization
+  232 |   initial param_call_sum[SAME + pick() - 1] = 0;
+      |           ^~~~~~~~~~~~~~
+                    t/t_lint_contassinit_bad.v:231:10: ... Location of continuous assignment
+  231 |   assign param_call_sum[1] = out;
+      |          ^~~~~~~~~~~~~~
 %Error: Exiting due to
