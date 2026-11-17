@@ -42,4 +42,10 @@ if test.vlt_all:
         solver_log, r'\(get-value \(\(\(_ extract 1 0\) \(select ma #x00000001\)\) '
         r'\(\(_ extract 3 0\) mx\) \(select ma #x00000000\)\(select ma #x00000001\)\)\)')
 
+# Elements and their whole array: the phase of eq's elements asks for each element once
+if test.vlt_all:
+    test.file_grep(solver_log, r'\(get-value \(\(select eq #x00000000\)')
+    test.file_grep_not(solver_log,
+                       r'\(get-value .*\(select eq #x00000000\).*\(select eq #x00000000\)')
+
 test.passes()

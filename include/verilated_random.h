@@ -378,6 +378,9 @@ class VlRandomizer VL_NOT_FINAL {
                           const std::vector<std::string>* layerVarsp = nullptr);
     // Fetch the model and write it into the registered variables.
     bool applyModel(VlSolverSession& sess);
+    // The element name a select of varr with these index terms names, as ArrayInfo names it
+    bool elementName(const VlRandomVar& varr, std::vector<std::string> indices,
+                     std::string& elementr) const;
     bool parseModel(std::istream& is, size_t requested);
     // Keep each lower 32-bit key word intact and pad to the stored key width.
     static std::string assocStructKeySuffix(const std::vector<size_t>& words, size_t idxWidth) {
@@ -506,8 +509,12 @@ class VlRandomizer VL_NOT_FINAL {
         uint64_t skips = 0;  // Calls since the last trials that rebuilt the phase without them
     };
     std::unordered_map<std::string, PhaseSampleStats> m_phaseSampleStats;
-    bool readPhaseValues(VlSolverSession& sess, std::map<std::string, std::string>& solvedValuesr);
-    bool parsePhaseValues(std::istream& is, std::map<std::string, std::string>& solvedValuesr);
+    // The variable or element a phase term names, with its key, or nullptr
+    const VlRandomVar* phaseTermKey(const std::string& term, std::string& keyr) const;
+    bool readPhaseValues(VlSolverSession& sess, const std::string& terms,
+                         std::map<std::string, std::string>& solvedValuesr);
+    bool parsePhaseValues(std::istream& is, const std::string& terms,
+                          std::map<std::string, std::string>& solvedValuesr);
 
 public:
     // CONSTRUCTORS

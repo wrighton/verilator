@@ -47,14 +47,32 @@ class SoftUnknown;
 endclass
 
 // Phased solve...before replies. Random trial values almost never fit x, so its phase is
-// solved afresh and its value comes back in a phase value reply.
+// solved afresh and its value comes back in a phase value reply. x is a whole number of hex
+// digits wide, so a reply can write it in #h notation.
 class Phased;
-  rand bit [30:0] x;
+  rand bit [27:0] x;
   rand bit [3:0] y;
   constraint order_c {solve x before y;}
   constraint rel_c {
-    x < 31'd15;
+    x < 28'd15;
     y > x[3:0];
+  }
+endclass
+
+// Phased replies for an array layer, whose elements arrive as (select ...) terms, and an
+// array with no element, which arrives as a whole array value
+class PhasedArr;
+  rand bit [4:0] w[2];
+  rand bit [4:0] e[];
+  rand bit [3:0] k;
+  constraint order_c {
+    solve w before k;
+    solve e before k;
+  }
+  constraint rel_c {
+    foreach (w[i]) w[i] inside {[5'd1 : 5'd20]};
+    foreach (e[i]) e[i] != {1'b0, k};
+    k != w[0][3:0];
   }
 endclass
 
@@ -180,6 +198,30 @@ module t;
     $write("NPASS=%0d\n", npass);
   endtask
 
+  // t_randomize_solver_reply runs the +MODE=phased rows alone, so TAMPER_AT counts the
+  // phase value replies of these calls
+  task automatic phased_rounds;
+    automatic Phased ph = new;
+    automatic PhasedArr pa = new;
+    automatic int npass = 0;
+    automatic int rc;
+    ph.srandom(7);
+    pa.srandom(7);
+    for (int i = 0; i < 4; ++i) begin
+      rc = ph.randomize();
+      if (rc != 0) begin
+        npass++;
+        `checkd(ph.y > ph.x[3:0], 1'b1);
+      end
+      rc = pa.randomize();
+      if (rc != 0) begin
+        npass++;
+        `checkd(pa.k != pa.w[0][3:0], 1'b1);
+      end
+    end
+    $write("NPASS=%0d\n", npass);
+  endtask
+
   initial begin : checks
     automatic Packet p = new;
     automatic Softy s = new;
@@ -199,6 +241,12 @@ module t;
       $write("*-* All Finished *-*\n");
       $finish;
       // $finish ends the run only after this process stops, so leave before the checks
+      disable checks;
+    end
+    if ($test$plusargs("MODE=phased")) begin
+      phased_rounds();
+      $write("*-* All Finished *-*\n");
+      $finish;
       disable checks;
     end
     if ($test$plusargs("MODE=frozen")) begin

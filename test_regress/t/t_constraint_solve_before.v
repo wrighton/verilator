@@ -232,6 +232,23 @@ module t;
   endclass
 `endif
 
+  // Elements solved before others share a phase with their whole array, which asks for every
+  // element, so each element is asked for once
+  class ElemAndWhole;
+    rand bit [3:0] a;
+    rand bit [2:0] eq[4];
+    rand bit [2:0] eb[4];
+
+    constraint c_order {
+      solve a before eq;
+      foreach (eq[i]) {
+        solve eq[i] before eb[i];
+        eb[i] != eq[i];
+        eq[i] != a[2:0];
+      }
+    }
+  endclass
+
   initial begin
     Packet p;
     Simple s;
@@ -374,6 +391,19 @@ module t;
       `checkd(randomize_result, 0);
     end
 `endif
+
+    // Test: Elements and their whole array in one phase
+    begin
+      automatic ElemAndWhole ew = new;
+      repeat (20) begin
+        randomize_result = ew.randomize();
+        `checkd(randomize_result, 1);
+        foreach (ew.eq[i]) begin
+          ok = (ew.eb[i] != ew.eq[i] && ew.eq[i] != ew.a[2:0]) ? 1 : 0;
+          `checkd(ok, 1);
+        end
+      end
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
