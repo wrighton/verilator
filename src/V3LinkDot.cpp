@@ -156,6 +156,10 @@ public:
     explicit AssertControlSeedVisitor(AstNetlist* rootp) { iterate(rootp); }
 };
 
+// Whether assertion control sites of possibly another elaboration were made, to check in
+// linkDotScope that each is kept or removed
+static bool s_assertCtlOptionalMade = false;
+
 // Assertion selection is done before V3Begin removes lexical scopes. The emitted
 // references use normal VarXRef/VarScope identity, never runtime path matching.
 class AssertControlTargetVisitor final : public VNVisitor {
@@ -194,6 +198,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
                                     nodep->fileline(), varp, m_instancePath, VAccess::READWRITE});
                     if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
                         xrefp->assertCtlOptional(m_optional);
+                        s_assertCtlOptionalMade |= m_optional;
                     }
                     AstAssertCtlTarget* const targetp
                         = new AstAssertCtlTarget{nodep->fileline(), refp, m_depth};
@@ -8580,9 +8585,12 @@ void V3LinkDot::linkDotScope(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     linkDotGuts(nodep, LDS_SCOPED);
     // Every assertion control site of possibly another elaboration is now kept or removed
-    nodep->foreach([](const AstVarXRef* refp) {
-        UASSERT_OBJ(!refp->assertCtlOptional(), refp, "Assertion control site left unresolved");
-    });
+    if (s_assertCtlOptionalMade) {
+        nodep->foreach([](const AstVarXRef* refp) {
+            UASSERT_OBJ(!refp->assertCtlOptional(), refp,
+                        "Assertion control site left unresolved");
+        });
+    }
     V3Global::dumpCheckGlobalTree("linkdot", 0, dumpTreeEitherLevel() >= 3);
 }
 

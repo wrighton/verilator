@@ -629,11 +629,14 @@ static const AstNode* instanceStateRefp(const AstNode* nodep,
             const AstNodeFTask* const taskp = taskRefp->taskp();
             found = !taskRefp->classOrPackagep() && taskp && visitedr.insert(taskp).second
                     && instanceStateRefp(taskp, ownVarps, visitedr);
-        } else if (VN_IS(refp, AssertCtlArgs)) {
+        } else if (const AstAssertCtlArgs* const argsp = VN_CAST(refp, AssertCtlArgs)) {
             // An assertion control scope resolves from the instance like a hierarchical
-            // reference, before LinkDot resolves it. Conservatively also an absolute scope,
-            // or none, only adding copies.
-            found = true;
+            // reference, before LinkDot resolves it, unless it is named from $root
+            for (const AstNode* itemp = argsp->itemsp(); itemp; itemp = itemp->nextp()) {
+                const AstNode* firstp = itemp;
+                while (const AstDot* const dotp = VN_CAST(firstp, Dot)) firstp = dotp->lhsp();
+                if (firstp->name() != "$root") found = true;
+            }
         } else {
             // A hierarchical reference is relative to the instance
             found = VN_IS(refp, VarXRef);
