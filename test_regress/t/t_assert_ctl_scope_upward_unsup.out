@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_upward_unsup.v:12:28: Unsupported: assertion control scope 'par.gb' reaches differently elaborated scopes from the instances of 'mid'
+                                                             : ... note: In instance 't.p1.m'
+   12 |   initial $assertoff(0, par.gb);
+      |                            ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
