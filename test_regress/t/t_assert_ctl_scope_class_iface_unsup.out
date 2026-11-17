@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_class_iface_unsup.v:8:19: Unsupported: Class referencing '__VassertControl0' of interface 'ifc' instantiated more than once
+                                                                 : ... note: In instance 't.i1'
+    8 |   initial check : assert (1'b1);
+      |                   ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
