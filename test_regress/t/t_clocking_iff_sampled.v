@@ -13,7 +13,10 @@
 
 interface clockvar_if(input logic clk);
   logic [6:0] v;
+  // The ascending non-zero range checks clockvar bit orientation.
+  // verilator lint_off ASCRANGE
   logic [3:9] vr;
+  // verilator lint_on ASCRANGE
   logic driven;
   assign vr = v;
   clocking cb @(posedge clk);
