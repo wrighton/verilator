@@ -945,7 +945,14 @@ class CaptureVisitor final : public VNVisitor {
         if (m_staticContext && callerIsClass && varIsFieldOfCaller
             && varRefp->varp()->lifetime().isStatic())
             return CaptureMode::CAP_NO;
-        if (callerIsClass && varIsFieldOfCaller) return CaptureMode::CAP_THIS;
+        if (callerIsClass && varIsFieldOfCaller) {
+            // A static member of the class randomized, which every object of it shares, is a
+            // member like those the inner context names.
+            if (varRefp->varp()->lifetime().isStatic()
+                && AstClass::isClassExtendedFrom(m_targetp, varClassp))
+                return CaptureMode::CAP_NO;
+            return CaptureMode::CAP_THIS;
+        }
         // Static member of a different class: V3Width replaces AstMemberRef with a bare
         // AstVarRef (classOrPackagep set). Capture current value as a function argument.
         if (callerIsClass && varClassp && !varIsFieldOfCaller
