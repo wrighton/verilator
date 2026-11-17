@@ -199,6 +199,24 @@ class RandIndexMemberTest;
   endfunction
 endclass
 
+// A state index of another width than 32 bits selects the element of its full value, or no
+// element if out of range (IEEE 1800-2023 7.4.5)
+class StateWideIndexTest;
+  bit [6:0] dyn[];
+  bit [6:0] q[$];
+  longint idx;
+  bit signed [2:0] sidx;
+  rand bit [6:0] dyn_value;
+  rand bit [6:0] q_value;
+  rand bit [6:0] sidx_value;
+
+  constraint value_match {
+    dyn_value == dyn[idx];
+    q_value == q[idx];
+    sidx_value == dyn[sidx];
+  }
+endclass
+
 module t;
   initial begin
     int randomize_result;
@@ -248,6 +266,23 @@ module t;
       static RandDynOobTest oobj = new();
       randomize_result = oobj.randomize();
       `checkd(randomize_result, 1);
+    end
+    begin
+      static StateWideIndexTest sobj = new();
+      sobj.dyn = '{3, 42, 5, 6, 7, 8, 9, 10, 11};
+      sobj.q = '{13, 14, 15};
+      for (int k = 0; k < 6; k++) begin
+        sobj.idx = {32'(k % 2), 32'(k / 2)};
+        sobj.sidx = 3'(k + 3);
+        randomize_result = sobj.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(sobj.dyn_value, k % 2 == 1 ? 0 : sobj.dyn[k / 2]);
+        `checkd(sobj.dyn_value, sobj.dyn[sobj.idx]);
+        `checkd(sobj.q_value, k % 2 == 1 ? 0 : sobj.q[k / 2]);
+        `checkd(sobj.q_value, sobj.q[sobj.idx]);
+        `checkd(sobj.sidx_value, k == 0 ? 6 : k == 5 ? 3 : 0);
+        `checkd(sobj.sidx_value, sobj.dyn[sobj.sidx]);
+      end
     end
     $write("*-* All Finished *-*\n");
     $finish;
