@@ -30,6 +30,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -133,6 +134,7 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
     int m_scopeArraySize = 0;  // Number of scopes held in __Vscopesp
     ScopeNames m_vpiScopeCandidates;  // All scopes for VPI
+    std::unordered_set<std::string> m_packageScopeNames;  // Symbol names of package scopes
     std::vector<IfaceRefData> m_ifaceRefs;  // Each interface reference, for VPI
     // The actual hierarchy of scopes
     std::map<const std::string, std::vector<std::string>> m_vpiScopeHierarchy;
@@ -874,6 +876,11 @@ class EmitCSyms final : EmitCBaseVisitorConst {
                 if (pair.second) pair.first->second.m_arrayIndex = m_scopeArraySize++;
             }
         }
+        // A package scope added for DPI or a %m is a package, as for VPI
+        for (const std::string& name : m_packageScopeNames) {
+            const auto it = m_scopeNames.find(name);
+            if (it != m_scopeNames.end()) it->second.m_type = "SCOPE_PACKAGE";
+        }
 
         // Sort by names, so line/process order matters less
         std::stable_sort(m_scopes.begin(), m_scopes.end(),
@@ -929,6 +936,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         if (!nodep->protect() || nodep->modp()->verilatorLib()) m_origTopNames = true;
 
         m_scopes.emplace_back(nodep, m_modp);
+        if (VN_IS(nodep->modp(), Package))
+            m_packageScopeNames.emplace(scopeSymString(nodep->name()));
 
         // The scopes of the instance of a library are its own, so register none for its stub
         if (v3Global.opt.vpi() && !nodep->isTop() && !nodep->modp()->verilatorLib()) {

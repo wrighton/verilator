@@ -207,6 +207,9 @@ protected:
     // Used by scopeInsert, scopeFind, scopeErase, scopeNameMap
     mutable VerilatedMutex m_nameMutex;  // Protect m_nameMap
     VerilatedScopeNameMap m_nameMap VL_GUARDED_BY(m_nameMutex);
+    // Map of <package identifier, package scope>, a scope for each model with that package
+    // Used by scopeInsert, scopeErase, packageScopeFind
+    std::multimap<std::string, const VerilatedScope*> m_packageMap VL_GUARDED_BY(m_nameMutex);
 
     // Map of <interface_reference_name, interface reference>
     // Used by ifaceRefInsert, ifaceRefFind, ifaceRefErase, ifaceRefMap
@@ -279,6 +282,8 @@ public:  // But only for verilated*.cpp
     // METHODS - scope name - INTERNAL only for verilated*.cpp
     void scopeInsert(const VerilatedScope* scopep) VL_MT_SAFE;
     void scopeErase(const VerilatedScope* scopep) VL_MT_SAFE;
+    const VerilatedScope* packageScopeFind(const VerilatedSyms* symsp,
+                                           const char* namep) const VL_MT_SAFE;
 
     // METHODS - interface references - INTERNAL only for verilated*.cpp
     const VerilatedIfaceRef* ifaceRefInsert(const VerilatedIfaceRef& ifaceRef) VL_MT_SAFE;
