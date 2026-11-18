@@ -13,13 +13,17 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <future>
 #include <memory>
 #include <string>
 #include <svdpi.h>
+#include <thread>
 
 #include VM_PREFIX_INCLUDE
 
 extern "C" int p_id();
+extern "C" int q_id();
+extern "C" int pq_id();
 extern "C" void dpic_check();
 
 #define CHECK(cond) \
@@ -85,6 +89,7 @@ int main() {
         const vpiHandle pkgh = vpi_handle_by_name(const_cast<PLI_BYTE8*>("m_a.p"), nullptr);
         CHECK(pkgh);
         CHECK(vpi_get(vpiType, pkgh) == vpiPackage);
+        CHECK(std::string{vpi_get_str(vpiFullName, pkgh)} == "m_a.p::");
         vpi_release_handle(pkgh);
         bool listed = false;
         const vpiHandle iterh = vpi_iterate(vpiInstance, nullptr);
@@ -97,6 +102,13 @@ int main() {
             vpi_release_handle(insth);
         }
         CHECK(listed);
+        // Test: the name of an escaped package is all of its name
+        const vpiHandle escapedh = vpi_handle_by_name(const_cast<PLI_BYTE8*>("m_a.p.q"), nullptr);
+        CHECK(escapedh);
+        CHECK(vpi_get(vpiType, escapedh) == vpiPackage);
+        CHECK(std::string{vpi_get_str(vpiName, escapedh)} == "p.q");
+        CHECK(std::string{vpi_get_str(vpiFullName, escapedh)} == "m_a.p.q::");
+        vpi_release_handle(escapedh);
     }
 #endif
 
@@ -108,9 +120,21 @@ int main() {
     CHECK(found("p") == "m_b.p");
     svSetScope(aTopScope);
     CHECK(found("p") == "m_a.p");
+    // Test: a package by its own name, also an escaped name, but not by a part of it
+    CHECK(found("q") == "m_a.q");
+    svSetScope(svGetScopeFromName("q"));
+    CHECK(q_id() == 111);
+    svSetScope(aTopScope);
+    CHECK(found("p.q") == "m_a.p.q");
+    svSetScope(svGetScopeFromName("p.q"));
+    CHECK(pq_id() == 211);
+    svSetScope(aTopScope);
+    CHECK(found("s") == "<none>");
+    CHECK(found("r.s") == "m_a.r.s");
+    CHECK(found("m_a.p.q") == "m_a.p.q");
     // Test: names other than a package's own name are unchanged
     CHECK(found("t") == "<none>");
-    CHECK(found("q") == "<none>");
+    CHECK(found("z") == "<none>");
     CHECK(found("nope") == "<none>");
     CHECK(found("m_b.p") == "m_b.p");
     // Test: a scope of another context is not found
@@ -152,6 +176,64 @@ int main() {
     svSetScope(svGetScopeFromName("m_f.p"));
     CHECK(p_id() == 42);
     svSetScope(nullptr);
+
+    // Test: the scope set by an import of a deleted model selects no model
+    const std::unique_ptr<VerilatedContext> ctx5{new VerilatedContext};
+    std::unique_ptr<VM_PREFIX> gp{new VM_PREFIX{ctx5.get(), "m_g"}};
+    const std::unique_ptr<VM_PREFIX> hp{new VM_PREFIX{ctx5.get(), "m_h"}};
+    runModel(hp.get(), 52, "m_h.p", 52);
+    runModel(gp.get(), 51, "m_g.p", 51);
+    gp.reset();
+    CHECK(found("p") == "<none>");
+    CHECK(found("nope") == "<none>");
+    CHECK(found("m_h.p") == "m_h.p");
+    // Test: as the scope saved and set again by svSetScope
+    const svScope hTopScope = svGetScopeFromName("m_h.t");
+    CHECK(hTopScope);
+    const svScope deletedScope = svSetScope(hTopScope);
+    CHECK(found("p") == "m_h.p");
+    svSetScope(deletedScope);
+    CHECK(found("p") == "<none>");
+    // Test: also when another model is added
+    std::unique_ptr<VM_PREFIX> kp{new VM_PREFIX{ctx5.get(), "m_k"}};
+    CHECK(found("p") == "<none>");
+    CHECK(found("m_k.p") == "m_k.p");
+    // Test: deleting a model other than the one of the scope set keeps its selection
+    svSetScope(hTopScope);
+    kp.reset();
+    CHECK(found("p") == "m_h.p");
+    {
+        const std::unique_ptr<VerilatedContext> ctx6{new VerilatedContext};
+        std::unique_ptr<VM_PREFIX>{new VM_PREFIX{ctx6.get(), "m_other"}};
+    }
+    Verilated::threadContextp(ctx5.get());
+    CHECK(found("p") == "m_h.p");
+    // Test: a scope set while it is not of the thread's context selects no model
+    Verilated::threadContextp(ctx1.get());
+    svSetScope(hTopScope);
+    Verilated::threadContextp(ctx5.get());
+    CHECK(found("p") == "<none>");
+    svSetScope(hTopScope);
+    CHECK(found("p") == "m_h.p");
+    // Test: a model added again under a deleted model's name selects itself
+    kp.reset(new VM_PREFIX{ctx5.get(), "m_k"});
+    runModel(kp.get(), 54, "m_k.p", 54);
+    // Test: the scope set by an import on another thread, after the model is deleted
+    std::unique_ptr<VM_PREFIX> mp{new VM_PREFIX{ctx5.get(), "m_m"}};
+    std::promise<void> ranPromise;
+    std::promise<void> deletedPromise;
+    std::thread thread{[&]() {
+        runModel(mp.get(), 55, "m_m.p", 55);
+        ranPromise.set_value();
+        deletedPromise.get_future().wait();
+        Verilated::threadContextp(ctx5.get());
+        CHECK(found("p") == "<none>");
+        CHECK(found("m_h.p") == "m_h.p");
+    }};
+    ranPromise.get_future().wait();
+    mp.reset();
+    deletedPromise.set_value();
+    thread.join();
 
     printf("*-* All Finished *-*\n");
     return 0;
