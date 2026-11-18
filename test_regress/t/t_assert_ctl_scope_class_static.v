@@ -1,4 +1,4 @@
-// DESCRIPTION: Verilator: A class in a module with assertion controls that do not name a scope
+// DESCRIPTION: Verilator: A class in a module with assertion controls that do not depend on the instance
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
@@ -12,21 +12,31 @@
 `timescale 1ns / 1ps
 
 module par;
-  // One class shared by all instances: its static member counts every instance's call
-  // (IEEE 1800-2023 8.9). Global and $root-anchored controls do not depend on the instance.
+  // One class serves all instances of this module here, so its static member counts every
+  // instance's call; IEEE 1800-2023 leaves this open for a class that is not generic
+  // (cf. 8.25). Controls naming no scope, an absolute scope, or a scope of the class itself
+  // do not depend on the instance, so they keep the class shared.
   class D;
     static int n = 0;
     function void f();
       n++;
-      $asserton(0);
-      $asserton(0, $root.t);
+      begin : blk
+        $assertoff(0);
+        $assertoff(0, $root.t);
+        $assertoff(0, t);
+        $assertoff(0, blk);
+      end
     endfunction
   endclass
   int seen = 0;
+  int failures = 0;
   initial begin
     automatic D d = new;
     d.f();
     #1;
+    check :
+    assert (1'b0)
+    else failures++;
     seen = d.n;
   end
 endmodule
@@ -34,10 +44,18 @@ endmodule
 module t;
   par q0 ();
   par q1 ();
+  int top_failures = 0;
   initial begin
-    #2;
+    #1;
+    top_check :
+    assert (1'b0)
+    else top_failures++;
+    #1;
     `checkd(q0.seen, 2);
     `checkd(q1.seen, 2);
+    `checkd(q0.failures, 0);
+    `checkd(q1.failures, 0);
+    `checkd(top_failures, 0);
     $display("*-* All Finished *-*");
     $finish;
   end
