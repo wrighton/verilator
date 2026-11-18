@@ -14,8 +14,9 @@ test.scenarios('simulator_st')
 test.compile(verilator_flags2=["--stats", "-fno-case-table", "-fno-case-decoder"])
 
 if test.vlt_all:
-    test.file_grep(test.stats, r'Optimizations, Tables created\s+(\d+)', 2)
-    test.file_grep(test.stats, r'ConstPool, CONSARRAY emitted\s+(\d+)', 1)
+    test.file_grep(test.stats, r'Optimizations, Tables created\s+(\d+)', 11)
+    test.file_grep(test.stats, r'Optimizations, Tables reused\s+(\d+)', 5)
+    test.file_grep(test.stats, r'ConstPool, CONSARRAY emitted\s+(\d+)', 10)
 
 test.execute(expect_filename=test.golden_filename)
 
