@@ -35,7 +35,7 @@ module t (
   localparam int DIRECTED = 32;  // Ticks with hand-derived stimulus
   localparam int LAST = 231;
   localparam int TICKS = 256;
-  localparam int NCASE = 12;
+  localparam int NCASE = 13;
 
   int cyc = 0;
   int tick = 0;  // Value of cyc sampled at the current clock tick
@@ -74,12 +74,13 @@ module t (
   bit hist_h[TICKS], hist_r[TICKS], hist_a[TICKS], hist_b[TICKS];
   bit hist_c[TICKS], hist_p[TICKS], hist_q[TICKS];
 
-  // Inner `!r`, `b` or `p ##1 q` matches in [s:e]
+  // Inner `!r`, `b`, `p ##1 q` or `p ##3 q` matches in [s:e]
   function automatic bit innerIn(int s, int e, int kind);
     for (int k = s; k <= e; ++k) begin
       if (kind == 0 && !hist_r[k]) return 1;
       if (kind == 1 && hist_b[k]) return 1;
       if (kind == 2 && k < e && hist_p[k] && hist_q[k+1]) return 1;
+      if (kind == 3 && k + 3 <= e && hist_p[k] && hist_q[k+3]) return 1;
     end
     return 0;
   endfunction
@@ -120,7 +121,8 @@ module t (
       7: return runOuter(s, e, 3, -1) && innerIn(s, e, 0);
       8: return runOuter(s, e, 1, 200) && innerIn(s, e, 0);
       9: return hist_a[s] && runOuter(s, e, 1, -1) && hist_c[e] && innerIn(s, e, 0);
-      default: return highRun(s, e) && innerIn(s, e, 0);
+      10, 11: return highRun(s, e) && innerIn(s, e, 0);
+      default: return runOuter(s, e, 1, 2) && innerIn(s, e, 3);
     endcase
   endfunction
 
@@ -175,6 +177,11 @@ module t (
   cover property (@(posedge clk) disable iff (cyc < FIRST)
       !r within (~h ##1 h[+] ##1 ~h))
     ++got[11][tick];
+  // Test: an inner sequence of 4 ticks, which fits the outer matches of 4 ticks but not those
+  // of 3, so only some later-phase states are reachable
+  cover property (@(posedge clk) disable iff (cyc < FIRST)
+      (p ##3 q) within (h ##1 !h[*1:2] ##1 h))
+    ++got[12][tick];
 
   within_if wif (
       .clk(clk),
