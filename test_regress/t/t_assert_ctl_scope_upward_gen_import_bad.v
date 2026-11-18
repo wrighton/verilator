@@ -28,7 +28,23 @@ module par;
   mid m ();
 endmodule
 
+// From the mid2 in qar2, pk is likewise not visible; from the mid2 in par2, no pk exists
+module mid2;
+  initial $assertoff(0, pk);
+endmodule
+
+module qar2;
+  import pkg::*;
+  mid2 m ();
+endmodule
+
+module par2;
+  mid2 m ();
+endmodule
+
 module t;
   qar q ();
   par p ();
+  par2 p2 ();
+  qar2 q2 ();
 endmodule
