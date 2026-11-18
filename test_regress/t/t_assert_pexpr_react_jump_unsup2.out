@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup2.v:20:55: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                              : ... note: In instance 't'
+   20 |       assert property (p until q) else begin $finish; break; end
+      |                                                       ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup2.v:25:55: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                              : ... note: In instance 't'
+   25 |       assert property (p until q) else begin $finish; break; end
+      |                                                       ^~~~~
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup2.v:34:7: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                             : ... note: In instance 't'
+   34 |       disable nb;
+      |       ^~~~~~~
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup2.v:42:12: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                              : ... note: In instance 't'
+   42 |       else continue;
+      |            ^~~~~~~~
+%Error: Exiting due to

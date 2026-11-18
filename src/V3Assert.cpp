@@ -2092,13 +2092,12 @@ class AssertVisitor final : public VNVisitor {
             }
         }
         for (AstJumpGo* const gop : gops) {
-            // As V3LinkJump visit(AstFinish) adds it: next to the $finish, with its file line,
-            // to the jump block around the whole loop
+            // As V3LinkJump visit(AstFinish) adds it, and nothing else does: next to the
+            // $finish, with the $finish's own file line, to the jump block around the loop (which
+            // V3Width may have converted from a foreach)
             const AstFinish* const finishp = VN_CAST(gop->backp(), Finish);
-            const AstNode* const targetp = gop->blockp()->stmtsp();
-            const bool finishExit = finishp && finishp->nextp() == gop
-                                    && gop->fileline() == finishp->fileline()
-                                    && (VN_IS(targetp, Loop) || VN_IS(targetp, Foreach));
+            const bool finishExit
+                = finishp && finishp->nextp() == gop && gop->fileline() == finishp->fileline();
             if (finishExit) {
                 // Never the head of a list, it follows its $finish
                 VL_DO_DANGLING(pushDeletep(gop->unlinkFrBack()), gop);
