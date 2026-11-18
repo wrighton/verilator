@@ -955,6 +955,10 @@ public:  // But for internal use only
     // Keep first so is at zero offset for fastest code
     VerilatedContext* const _vm_contextp__;  // Context for current model
     VerilatedEvalMsgQueue* __Vm_evalMsgQp;
+    // Next __Vm_generation; 0 means no model
+    static std::atomic<uint64_t> s_nextGeneration;
+    // Identifies this model, as no other model of the process has it, unlike its address
+    const uint64_t __Vm_generation = s_nextGeneration++;
     explicit VerilatedSyms(VerilatedContext* contextp);  // Pass null for default context
     ~VerilatedSyms();
     VL_UNCOPYABLE(VerilatedSyms);
@@ -1142,6 +1146,8 @@ class Verilated final {
         // Messages maybe pending on thread, needs end-of-eval calls
         uint32_t t_endOfEvalReqd = 0;
         const VerilatedScope* t_dpiScopep = nullptr;  // DPI context scope
+        // __Vm_generation of the model of t_dpiScopep, or 0 if unknown
+        uint64_t t_dpiGeneration = 0;
         const char* t_dpiFilename = nullptr;  // DPI context filename
         int t_dpiLineno = 0;  // DPI context line number
 
@@ -1337,14 +1343,24 @@ public:
 
     // Internal: Get and set DPI context
     static const VerilatedScope* dpiScope() VL_MT_SAFE { return t_s.t_dpiScopep; }
-    static void dpiScope(const VerilatedScope* scopep) VL_MT_SAFE { t_s.t_dpiScopep = scopep; }
+    static uint64_t dpiGeneration() VL_MT_SAFE { return t_s.t_dpiGeneration; }
+    static void dpiScope(const VerilatedScope* scopep, uint64_t generation) VL_MT_SAFE {
+        t_s.t_dpiScopep = scopep;
+        t_s.t_dpiGeneration = generation;
+    }
+    // For the scope of a DPI import, which is valid
     static void dpiContext(const VerilatedScope* scopep, const char* filenamep,
                            int lineno) VL_MT_SAFE {
+        dpiContext(scopep, scopep->symsp()->__Vm_generation, filenamep, lineno);
+    }
+    static void dpiContext(const VerilatedScope* scopep, uint64_t generation,
+                           const char* filenamep, int lineno) VL_MT_SAFE {
         t_s.t_dpiScopep = scopep;
+        t_s.t_dpiGeneration = generation;
         t_s.t_dpiFilename = filenamep;
         t_s.t_dpiLineno = lineno;
     }
-    static void dpiClearContext() VL_MT_SAFE { t_s.t_dpiScopep = nullptr; }
+    static void dpiClearContext() VL_MT_SAFE { dpiScope(nullptr, 0); }
     static bool dpiInContext() VL_MT_SAFE { return t_s.t_dpiScopep != nullptr; }
     static const char* dpiFilenamep() VL_MT_SAFE { return t_s.t_dpiFilename; }
     static int dpiLineno() VL_MT_SAFE { return t_s.t_dpiLineno; }
