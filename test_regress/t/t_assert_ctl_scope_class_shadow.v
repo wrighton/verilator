@@ -38,12 +38,23 @@ module par (
     if (off) begin
       automatic C c = new;
       c.off_l();
+      // $root.t is the top module, not the block named like it
+      $assertoff(0, $root.t.tb);
     end
   end
 endmodule
 
 module t;
   int top_failures = 0;
+  int tb_failures = 0;
+  if (1) begin : tb
+    initial begin
+      #1;
+      check :
+      assert (1'b0)
+      else tb_failures++;
+    end
+  end
   par p0 (.off(1'b1));
   par p1 (.off(1'b0));
   initial begin
@@ -55,6 +66,7 @@ module t;
     `checkd(p0.t.l.failures, 0);
     `checkd(p1.t.l.failures, 1);
     `checkd(top_failures, 1);
+    `checkd(tb_failures, 0);
     $display("*-* All Finished *-*");
     $finish;
   end
