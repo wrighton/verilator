@@ -8173,6 +8173,19 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (symp == firstSymp || !symp) return nullptr;
         return VN_IS(symp->nodep(), Cell) || VN_IS(symp->nodep(), Module) ? symp : nullptr;
     }
+    // True if an instance of the current module resolves the first identifier of a name to
+    // another node than firstSymp's (an imported name has a symbol of its own in each importer)
+    bool assertControlFirstVaries(FileLine* fl, const string& firstName,
+                                  const VSymEnt* firstSymp) {
+        for (VSymEnt* const cellSymp : m_statep->moduleInstanceSyms(m_modp)) {
+            string baddot;
+            VSymEnt* okSymp = nullptr;
+            const VSymEnt* const symp
+                = m_statep->findDotted(fl, cellSymp, firstName, baddot, okSymp, true);
+            if (!symp || symp->nodep() != firstSymp->nodep()) return true;
+        }
+        return false;
+    }
     static bool isAssertControlTarget(const AstNode* nodep) {
         return VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, GenBlock)
                || VN_IS(nodep, NodeFTask) || VN_IS(nodep, Module);
@@ -8229,22 +8242,21 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                   << AstNode::prettyName(path) << "'");
                 return;
             }
-            // The target was found down from the first identifier: its instance is below that
-            // scope, or holds it
+            // The target is found down from the first identifier, and its instance is below that
+            // scope or holds it, unless a later name was found outside the first scope
             UASSERT_OBJ(firstSymp, itemp,
                         "Upward assertion control scope without its first scope");
             string instancePath;
             string childPath;
-            const bool instanceBelow
-                = assertionRelativeScopePath(instanceSymp, firstSymp, instancePath);
-            if (!instanceBelow) {
-                string holdingPath;
-                const bool holding
-                    = assertionRelativeScopePath(firstSymp, instanceSymp, holdingPath);
-                UASSERT_OBJ(holding, itemp, "Upward assertion control instance outside its scope");
+            string holdingPath;
+            if ((!assertionRelativeScopePath(instanceSymp, firstSymp, instancePath)
+                 && !assertionRelativeScopePath(firstSymp, instanceSymp, holdingPath))
+                || !assertionRelativeScopePath(foundp, firstSymp, childPath)) {
+                itemp->v3error("Assertion control target is not a scope or assertion from '"
+                               << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
+                               << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
+                return;
             }
-            const bool inScope = assertionRelativeScopePath(foundp, firstSymp, childPath);
-            UASSERT_OBJ(inScope, itemp, "Upward assertion control scope outside its first scope");
             const AstNode* const bodyp = assertControlTargetBody(targetp);
             if (std::none_of(reaches.begin(), reaches.end(),
                              [&](const Reach& reach) { return reach.bodyp == bodyp; })) {
@@ -8378,10 +8390,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 && assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
                 // Within the calling instance
             } else if (!firstLocal && firstSymp
-                       && (VN_IS(firstSymp->nodep(), Cell) || upwardScopeInstance(firstSymp))) {
+                       && (VN_IS(firstSymp->nodep(), Cell) || upwardScopeInstance(firstSymp)
+                           || assertControlFirstVaries(itemp->fileline(), firstName, firstSymp))) {
                 // Upward name, as written from the first identifier, an instance or a scope such
-                // as a generate block within one, which the scoped pass resolves for each
-                // instance (IEEE 1800-2023 23.8)
+                // as a generate block within one, or found differently by the instances, which
+                // the scoped pass resolves for each instance (IEEE 1800-2023 23.8)
                 assertControlUpward(itemp, nodep, path, firstName, targets);
                 continue;
             } else {
