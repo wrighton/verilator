@@ -279,6 +279,110 @@ private:
         }
         return newp;
     }
+    // Record fresh clockvar references for the final name repair before Scope relinks them.
+    AstNodeExpr* newSampledClonep(AstNodeExpr* const exprp, const bool trackClockvars) {
+        AstNodeExpr* const clonep = exprp->cloneTreePure(false);
+        if (trackClockvars) {
+            // Each scan covers only freshly allocated clone nodes, not overlapping old subtrees.
+            clonep->foreach([this](AstVarXRef* const refp) {
+                const AstVar* const varp = refp->varp();
+                if (VN_IS(varp->user1p() ? varp->user1p() : varp->firstAbovep(), ClockingItem)) {
+                    m_xrefsp.emplace_back(refp);
+                }
+            });
+        }
+        return clonep;
+    }
+
+    void lowerFell(AstFell* nodep, const bool trackClockvars = false) {
+        checkSamplingFuncDType(nodep, nodep->exprp());
+        FileLine* const fl = nodep->fileline();
+        AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
+        if (exprp->width() > 1) exprp = new AstSel{fl, exprp, 0, 1};
+        AstSenTree* sentreep = nodep->sentreep();
+        if (sentreep) sentreep->unlinkFrBack();
+        AstPast* const pastp = new AstPast{fl, exprp};
+        pastp->dtypeFrom(exprp);
+        pastp->sentreep(newSenTree(nodep, sentreep));
+        exprp = new AstAnd{fl, pastp, new AstNot{fl, newSampledClonep(exprp, trackClockvars)}};
+        exprp->dtypeSetBit();
+        nodep->replaceWith(exprp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void lowerRose(AstRose* nodep, const bool trackClockvars = false) {
+        checkSamplingFuncDType(nodep, nodep->exprp());
+        FileLine* const fl = nodep->fileline();
+        AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
+        if (exprp->width() > 1) exprp = new AstSel{fl, exprp, 0, 1};
+        AstSenTree* sentreep = nodep->sentreep();
+        if (sentreep) sentreep->unlinkFrBack();
+        AstPast* const pastp = new AstPast{fl, exprp};
+        pastp->dtypeFrom(exprp);
+        pastp->sentreep(newSenTree(nodep, sentreep));
+        exprp = new AstAnd{fl, new AstNot{fl, pastp}, newSampledClonep(exprp, trackClockvars)};
+        exprp->dtypeSetBit();
+        nodep->replaceWith(exprp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void lowerStable(AstStable* nodep, const bool trackClockvars = false) {
+        checkSamplingFuncDType(nodep, nodep->exprp());
+        FileLine* const fl = nodep->fileline();
+        AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
+        AstSenTree* sentreep = nodep->sentreep();
+        if (sentreep) sentreep->unlinkFrBack();
+        AstPast* const pastp = new AstPast{fl, exprp};
+        pastp->dtypeFrom(exprp);
+        pastp->sentreep(newSenTree(nodep, sentreep));
+        exprp = new AstEq{fl, pastp, newSampledClonep(exprp, trackClockvars)};
+        exprp->dtypeSetBit();
+        nodep->replaceWith(exprp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+
+    // Collect disjoint outermost clocked functions, then lower outside the read-only walk.
+    void lowerClockedSenFunctions(AstNode* const nodep) {
+        //######################################################################
+        // AssertPre: Collect explicit-clocked sampled functions in event expressions.
+        // Prune their subtrees so lowering starts only after the read-only walk ends.
+        class AssertPreClockedSamplesVisitor final : public VNVisitorConst {
+            std::vector<AstNodeExpr*>& m_nodes;
+
+            void visit(AstFell* const nodep) override {
+                if (nodep->sentreep()) m_nodes.emplace_back(nodep);
+                else iterateChildrenConst(nodep);
+            }
+            void visit(AstRose* const nodep) override {
+                if (nodep->sentreep()) m_nodes.emplace_back(nodep);
+                else iterateChildrenConst(nodep);
+            }
+            void visit(AstStable* const nodep) override {
+                if (nodep->sentreep()) m_nodes.emplace_back(nodep);
+                else iterateChildrenConst(nodep);
+            }
+            void visit(AstNode* const nodep) override { iterateChildrenConst(nodep); }
+
+        public:
+            AssertPreClockedSamplesVisitor(AstNode* const rootp, std::vector<AstNodeExpr*>& nodes)
+                : m_nodes{nodes} {
+                iterateChildrenConst(rootp);
+            }
+        };
+        std::vector<AstNodeExpr*> nodes;
+        { AssertPreClockedSamplesVisitor{nodep, nodes}; }
+        for (AstNodeExpr* const samplep : nodes) {
+            if (samplep->user1SetOnce()) continue;
+            // Recurse selectively: unclocked functions and other handlers are not dispatched.
+            lowerClockedSenFunctions(samplep);
+            if (AstFell* const fellp = VN_CAST(samplep, Fell)) {
+                lowerFell(fellp, true);
+            } else if (AstRose* const rosep = VN_CAST(samplep, Rose)) {
+                lowerRose(rosep, true);
+            } else {
+                lowerStable(VN_AS(samplep, Stable), true);
+            }
+        }
+    }
+
     // VISITORS
     //========== Statements
     void visit(AstClocking* const nodep) override {
@@ -666,6 +770,7 @@ private:
                 visit(refp);
             }
         });
+        lowerClockedSenFunctions(nodep);
     }
     void visit(AstNodeVarRef* nodep) override {
         UINFO(8, " -varref:  " << nodep);
@@ -813,22 +918,10 @@ private:
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstFell* nodep) override {
+    void visit(AstFell* const nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        checkSamplingFuncDType(nodep, nodep->exprp());
-        FileLine* const fl = nodep->fileline();
-        AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
-        if (exprp->width() > 1) exprp = new AstSel{fl, exprp, 0, 1};
-        AstSenTree* sentreep = nodep->sentreep();
-        if (sentreep) sentreep->unlinkFrBack();
-        AstPast* const pastp = new AstPast{fl, exprp};
-        pastp->dtypeFrom(exprp);
-        pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, pastp, new AstNot{fl, exprp->cloneTreePure(false)}};
-        exprp->dtypeSetBit();
-        nodep->replaceWith(exprp);
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        lowerFell(nodep);
     }
     void visit(AstFuture* nodep) override {
         if (nodep->user1SetOnce()) return;
@@ -908,22 +1001,10 @@ private:
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstRose* nodep) override {
+    void visit(AstRose* const nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        checkSamplingFuncDType(nodep, nodep->exprp());
-        FileLine* const fl = nodep->fileline();
-        AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
-        if (exprp->width() > 1) exprp = new AstSel{fl, exprp, 0, 1};
-        AstSenTree* sentreep = nodep->sentreep();
-        if (sentreep) sentreep->unlinkFrBack();
-        AstPast* const pastp = new AstPast{fl, exprp};
-        pastp->dtypeFrom(exprp);
-        pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, new AstNot{fl, pastp}, exprp->cloneTreePure(false)};
-        exprp->dtypeSetBit();
-        nodep->replaceWith(exprp);
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        lowerRose(nodep);
     }
     static AstAssocArrayDType* getProcessAssocArrayType(FileLine* const flp) {
         // Type of __VassertsActive___x[std::process]
@@ -1040,21 +1121,10 @@ private:
         nodep->replaceWith(m_pexprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstStable* nodep) override {
+    void visit(AstStable* const nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        checkSamplingFuncDType(nodep, nodep->exprp());
-        FileLine* const fl = nodep->fileline();
-        AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
-        AstSenTree* sentreep = nodep->sentreep();
-        if (sentreep) sentreep->unlinkFrBack();
-        AstPast* const pastp = new AstPast{fl, exprp};
-        pastp->dtypeFrom(exprp);
-        pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstEq{fl, pastp, exprp->cloneTreePure(false)};
-        exprp->dtypeSetBit();
-        nodep->replaceWith(exprp);
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        lowerStable(nodep);
     }
     void visit(AstSteady* nodep) override {
         if (nodep->user1SetOnce()) return;
