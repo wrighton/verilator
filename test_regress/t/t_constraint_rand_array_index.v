@@ -133,26 +133,15 @@ class RandDynOobTest;
   }
 endclass
 
-// A random index selecting a member of an unpacked struct or class array element
-// must verilate. Solving such a select is not supported, so its constraint is
-// disabled before randomizing.
+// A random index selecting a member of an unpacked struct array element must
+// verilate. Solving such a select is not supported, so its constraint is disabled
+// before randomizing.
 typedef struct {bit [6:0] tag;} tag_t;
-
-class RandIndexItem;
-  rand bit [14:0] val;
-endclass
 
 class RandIndexMemberTest;
   rand int idx;
   rand tag_t tags[3];
-  rand RandIndexItem items[3];
-  constraint member_c {
-    tags[idx].tag == 7'h5;
-    items[idx].val == 15'h6;
-  }
-  function new();
-    foreach (items[i]) items[i] = new;
-  endfunction
+  constraint member_c {tags[idx].tag == 7'h5;}
 endclass
 
 // A state index of another width than 32 bits selects the element of its full value, or no

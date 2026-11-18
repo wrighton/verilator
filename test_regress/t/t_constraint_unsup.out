@@ -2,6 +2,9 @@
     9 |   constraint cons { x + 1.0 > 0.0; }
       |                             ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:23:18: Unsupported: Randomized index into an array of class objects selecting a member.
+   23 |     soft dynElems[idx].y == 4'h7;
+      |                  ^
 %Error-UNSUPPORTED: t/t_constraint_unsup.v:26:29: Unsupported: 'disable soft' of 'y' of an object selected by a random index
    26 |     disable soft elems[idx].y;
       |                             ^
@@ -14,4 +17,16 @@
 %Error-UNSUPPORTED: t/t_constraint_unsup.v:45:31: Unsupported: 'disable soft' of 'y' of an object not selected only by members and array elements
    45 |     disable soft holders[1].h.y;
       |                               ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:65:10: Unsupported: Randomized index into an array of class objects selecting a member.
+   65 |     items[k].v == 7'd5;
+      |          ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:66:11: Unsupported: Randomized index into an array of class objects selecting a member.
+   66 |     ditems[k].v == 7'd6;
+      |           ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:67:11: Unsupported: Randomized index into an array of class objects selecting a member.
+   67 |     qitems[k].v == 7'd7;
+      |           ^
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:68:9: Unsupported: Randomized index into an array of class objects selecting a member.
+   68 |     rows[k][0].v == 7'd8;
+      |         ^
 %Error: Exiting due to

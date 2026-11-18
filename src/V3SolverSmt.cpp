@@ -2470,6 +2470,14 @@ private:
         selp->user1(false);
         editFormat(selp);
     }
+    // The fields of the objects of an array are named by their index
+    // (createWriteVarForClassFields), which a random index does not give before solving
+    void unsupportedObjectRandIndex(AstNodeExpr* const selp) {
+        selp->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into an array of class "
+                                    "objects selecting a member.");
+        selp->user1(false);
+        editFormat(selp);
+    }
 
     // Add registration regp of a variable reached through member objects
     void addMemberRefRegistration(AstNodeStmt* regp, AstVar* const varp,
@@ -4859,6 +4867,8 @@ private:
         }
         if (indexIsRand && !nodep->fromp()->user1()) {
             unsupportedStateArraySel(nodep);
+        } else if (indexIsRand && objectElem && m_structSel) {
+            unsupportedObjectRandIndex(nodep);
         } else if (indexIsRand) {
             // Index depends on rand variable -- keep as SMT symbol.
             // The offset from the low bound is unsigned, even when computed as signed
@@ -5760,6 +5770,11 @@ private:
         if (nodep->method() == VCMethod::ARRAY_AT) {
             addStringNamePart(nodep->pinsp(), "%x");
             const bool indexIsRand = isRandIndex(nodep->pinsp());
+            if (indexIsRand && m_structSel && nodep->fromp()->user1()
+                && VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType)) {
+                unsupportedObjectRandIndex(nodep);
+                return;
+            }
             if (nodep->fromp()->user1()) {
                 // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
                 // only. A std::randomize() with-clause argument carries no rand qualifier of its
