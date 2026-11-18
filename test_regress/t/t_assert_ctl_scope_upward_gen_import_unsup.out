@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_upward_gen_import_unsup.v:14:25: Unsupported: upward assertion control scope outside an instance from 't.q.m': 'pk'
+                                                                        : ... note: In instance 't.p.m'
+   14 |   initial $assertoff(0, pk);
+      |                         ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
