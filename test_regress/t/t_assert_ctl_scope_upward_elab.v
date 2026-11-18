@@ -145,20 +145,53 @@ module pc #(
 endmodule
 
 module t;
-  par #(.N(2), .OFF(1)) p0 ();
-  par #(.N(1), .OFF(1)) p1 ();
-  par #(.N(1), .OFF(0)) p2 ();
-  par #(.N(2), .OFF(0)) p3 ();
-  gp #(.N(2), .OFF(0)) q0 ();
-  gp #(.N(1), .OFF(1)) q1 ();
-  gp #(.N(2), .OFF(1)) q2 ();
+  par #(
+      .N(2),
+      .OFF(1)
+  ) p0 ();
+  par #(
+      .N(1),
+      .OFF(1)
+  ) p1 ();
+  par #(
+      .N(1),
+      .OFF(0)
+  ) p2 ();
+  par #(
+      .N(2),
+      .OFF(0)
+  ) p3 ();
+  gp #(
+      .N(2),
+      .OFF(0)
+  ) q0 ();
+  gp #(
+      .N(1),
+      .OFF(1)
+  ) q1 ();
+  gp #(
+      .N(2),
+      .OFF(1)
+  ) q2 ();
   pp #(.N(2)) s0 (.off(1'b1));
   pp #(.N(2)) s1 (.off(1'b0));
   pp #(.N(1)) s2 (.off(1'b1));
-  pc #(.N(2), .OFF(1)) r0 ();
-  pc #(.N(1), .OFF(0)) r1 ();
-  pc #(.N(2), .OFF(0)) r2 ();
-  pc #(.N(1), .OFF(1)) r3 ();
+  pc #(
+      .N(2),
+      .OFF(1)
+  ) r0 ();
+  pc #(
+      .N(1),
+      .OFF(0)
+  ) r1 ();
+  pc #(
+      .N(2),
+      .OFF(0)
+  ) r2 ();
+  pc #(
+      .N(1),
+      .OFF(1)
+  ) r3 ();
   initial begin
     #2;
     `checkd(s0.gb_failures, 0);

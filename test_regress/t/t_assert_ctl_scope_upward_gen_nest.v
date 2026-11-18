@@ -56,8 +56,14 @@ module qar #(
 endmodule
 
 module t;
-  qar #(.OFF_P(1), .OFF_Q(0)) q0 ();
-  qar #(.OFF_P(0), .OFF_Q(1)) q1 ();
+  qar #(
+      .OFF_P(1),
+      .OFF_Q(0)
+  ) q0 ();
+  qar #(
+      .OFF_P(0),
+      .OFF_Q(1)
+  ) q1 ();
   initial begin
     #2;
     `checkd(q0.p.failures, 0);

@@ -57,9 +57,15 @@ endmodule
 
 module t;
   par #(.DIRECT(1)) p0 ();
-  par #(.DIRECT(1), .OFF(0)) p1 ();
+  par #(
+      .DIRECT(1),
+      .OFF(0)
+  ) p1 ();
   par #(.DIRECT(0)) q0 ();
-  par #(.DIRECT(0), .OFF(0)) q1 ();
+  par #(
+      .DIRECT(0),
+      .OFF(0)
+  ) q1 ();
   initial begin
     #2;
     `checkd(p0.inner_failures, 0);
