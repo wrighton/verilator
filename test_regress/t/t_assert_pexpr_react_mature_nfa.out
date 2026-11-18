@@ -1,0 +1,16 @@
+[5] observer cyc=0
+[5] nfa fail cyc=0
+[5] %Error: t_assert_pexpr_react_mature_nfa.v:19: Assertion failed in top.t: 'assert' failed.
+-Info: t/t_assert_pexpr_react_mature_nfa.v:19: Verilog $stop, ignored due to +verilator+error+limit
+[15] observer cyc=1
+[15] nfa fail cyc=1
+[15] %Error: t_assert_pexpr_react_mature_nfa.v:19: Assertion failed in top.t: 'assert' failed.
+[25] observer cyc=2
+[25] %Error: t_assert_pexpr_react_mature_nfa.v:19: Assertion failed in top.t: 'assert' failed.
+[35] observer cyc=3
+[35] nfa pass cyc=3
+[35] %Error: t_assert_pexpr_react_mature_nfa.v:19: Assertion failed in top.t: 'assert' failed.
+[45] observer cyc=4
+[45] nfa pass cyc=4
+[45] %Error: t_assert_pexpr_react_mature_nfa.v:19: Assertion failed in top.t: 'assert' failed.
+*-* All Finished *-*

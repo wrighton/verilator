@@ -102,6 +102,7 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     const VAssertDirectiveType m_directive;  // Assertion directive type
     bool m_senFromAlways = false;  // Sensitivity list copied from upper always
     bool m_immediate = false;  // Immediate assert (may differ from userType being immediate)
+    bool m_nfaLowered = false;  // V3AssertNfa lowered its property to a Boolean output
 
 public:
     AstNodeCoverOrAssert(VNType t, FileLine* fl, AstNode* propp, AstNodeStmt* passsp,
@@ -120,7 +121,10 @@ public:
     }
     ASTGEN_MEMBERS_AstNodeCoverOrAssert;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
-    bool sameNode(const AstNode* samep) const override { return samep->name() == name(); }
+    bool sameNode(const AstNode* samep) const override {
+        return samep->name() == name()
+               && m_nfaLowered == VN_DBG_AS(samep, NodeCoverOrAssert)->m_nfaLowered;
+    }
     void name(const string& name) override { m_name = name; }
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
@@ -131,6 +135,8 @@ public:
     void immediate(bool flag) { m_immediate = flag; }
     bool senFromAlways() const VL_MT_STABLE { return m_senFromAlways; }
     void senFromAlways(bool flag) { m_senFromAlways = flag; }
+    bool nfaLowered() const { return m_nfaLowered; }
+    void nfaLowered(bool flag) { m_nfaLowered = flag; }
 };
 class AstNodeReadWriteMem VL_NOT_FINAL : public AstNodeStmt {
     // @astgen op1 := filenamep : AstNodeExpr
