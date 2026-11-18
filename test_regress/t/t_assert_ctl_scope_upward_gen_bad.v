@@ -1,4 +1,4 @@
-// DESCRIPTION: Verilator: Upward assertion control name through a farther generate block
+// DESCRIPTION: Verilator: Upward assertion control name missing above one instance
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
@@ -8,21 +8,21 @@ module mid;
   initial $assertoff(0, gb.inner);
 endmodule
 
-module par #(
-    parameter bit HAS = 1
-);
-  if (HAS) begin : gb
+module par;
+  if (1) begin : gb
     if (1) begin : inner
       initial check : assert (1'b1);
     end
-    // This instance of par has no gb, so gb.inner is found in the par above it
-    par #(.HAS(0)) sub ();
   end
-  else begin : leaf
-    mid m ();
-  end
+  mid m ();
+endmodule
+
+// No gb is above this mid
+module qar;
+  mid m ();
 endmodule
 
 module t;
-  par p0 ();
+  qar q ();
+  par p ();
 endmodule
