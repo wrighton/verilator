@@ -145,6 +145,10 @@ public:
                                     const std::vector<AstVar*>& idxVarps) VL_MT_DISABLED;
     // Whether varp is an unpacked array of class handles
     static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
+    // Return the random index select into a random array that exprp reads through
+    static AstNodeExpr* randArrayIndexSelp(
+        AstNodeExpr* exprp,
+        const std::function<bool(const AstNodeExpr* indexp)>& isRandIndexp) VL_MT_DISABLED;
     // Whether the array element at indexp has rand_mode off, given the array's modesp
     static AstNodeExpr* newElemModeOffp(AstNodeExpr* modesp, AstNodeExpr* indexp) VL_MT_DISABLED;
     // Read reference to member varp of objp, or of 'this' if objp is nullptr
