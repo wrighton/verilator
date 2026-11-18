@@ -27,8 +27,9 @@ module mid (
 endmodule
 
 // No gb is above the mid in qar, so its gb.inner is the compilation unit task's block
-// (IEEE 1800-2023 23.8). The mid in par does not control: Verilator would look up gb in the
-// compilation unit before par's generate block, unlike 23.8 a and b, for any hierarchical name.
+// (IEEE 1800-2023 23.8). The mid in par does not control: Verilator looks up gb in the
+// compilation unit before par's generate block. Whether 23.8.1, for task and function names,
+// makes that the expected binding for a name used as an assertion control scope is open.
 module qar;
   mid m (1'b1);
 endmodule
