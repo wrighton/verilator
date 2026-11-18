@@ -1,6 +1,0 @@
-%Error-UNSUPPORTED: t/t_assert_ctl_scope_class_member_unsup.v:15:21: Unsupported: assertion control scope in another class: 'tk'
-                                                                   : ... note: In instance 't'
-   15 |       $assertoff(0, tk);
-      |                     ^~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error: Exiting due to
