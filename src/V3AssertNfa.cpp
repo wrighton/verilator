@@ -1701,6 +1701,48 @@ class SvaNfaBuilder final {
         SvaStateVertex* const termp
             = arrivals[term] ? junctionps[lastPhase][term] : copyps[lastPhase][term];
         UASSERT_OBJ(termp, nodep, "Variable-length within outer sequence ends on its entry");
+        // A thread can only be in a vertex reachable from the entry. Later phases have no copy of
+        // the entry, so some of their vertices are not, and as their state would have no inputs,
+        // remove them. Phase 0 is reachable, as it is built from the entry.
+        std::unordered_set<const SvaStateVertex*> reachedps{startp};
+        std::vector<const SvaStateVertex*> workps{startp};
+        while (!workps.empty()) {
+            const SvaStateVertex* const vtxp = workps.back();
+            workps.pop_back();
+            for (const V3GraphEdge& edger : vtxp->outEdges()) {
+                const SvaStateVertex* const top = static_cast<const SvaTransEdge&>(edger).toVtxp();
+                if (reachedps.emplace(top).second) workps.push_back(top);
+            }
+        }
+        const bool termReached = reachedps.count(termp);
+        for (size_t q = 1; q <= lastPhase; ++q) {
+            for (std::vector<SvaStateVertex*>* const phasepsp : {&copyps[q], &junctionps[q]}) {
+                for (SvaStateVertex*& vtxp : *phasepsp) {
+                    if (vtxp && !reachedps.count(vtxp)) {
+                        VL_DO_CLEAR(vtxp->unlinkDelete(&m_graph.m_graph), vtxp = nullptr);
+                    }
+                }
+            }
+        }
+        // Ignoring conditions, a path reaches the last phase of the terminal exactly if seq2 has
+        // a match of at least as many ticks as seq1, so otherwise seq1 is longer than every
+        // match of seq2 (IEEE 1800-2023 16.9.10)
+        if (!termReached) {
+            for (size_t q = 1; q <= lastPhase; ++q) {
+                for (SvaStateVertex* const vtxp : copyps[q]) {
+                    if (vtxp) vtxp->unlinkDelete(&m_graph.m_graph);
+                }
+                for (SvaStateVertex* const vtxp : junctionps[q]) {
+                    if (vtxp) vtxp->unlinkDelete(&m_graph.m_graph);
+                }
+            }
+            for (size_t i = vtxps.size() - 1; i > 0; --i) {
+                VL_DO_DANGLING(vtxps[i]->unlinkDelete(&m_graph.m_graph), vtxps[i]);
+            }
+            freeUnlinkedCondp(outer.finalCondp);
+            return buildNeverMatchIntersect(
+                nodep, startp, false, "the inner sequence is longer than the outer sequence");
+        }
         return {termp, outer.finalCondp, {}};
     }
 
