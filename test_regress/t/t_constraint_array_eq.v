@@ -160,6 +160,23 @@ class Outer;
   endfunction
 endclass
 
+// State arrays compared with the arguments of std::randomize() in a class method: of the
+// class, and of an object of a rand handle array
+class StdState;
+  rand Holder items[2];
+  row_t sarr;
+  row_t va;
+  function new;
+    foreach (items[i]) items[i] = new;
+  endfunction
+  function int randomize_from_own();
+    return std::randomize(va) with {va == sarr;};
+  endfunction
+  function int randomize_from_item();
+    return std::randomize(va) with {va == items[1].frozen;};
+  endfunction
+endclass
+
 module t;
   initial begin
     begin
@@ -337,6 +354,23 @@ module t;
         `checkd(o.y != o.h.frozen, 1'b1);
         `checkd(o.y != o.z, 1'b1);
       end
+    end
+    begin
+      automatic StdState s = new;
+      automatic row_t x;
+      int ok;
+      s.sarr = '{7'd11, 7'd12, 7'd13};
+      s.items[1].frozen = '{7'd21, 7'd22, 7'd23};
+      ok = s.randomize_from_own();
+      `checkd(ok, 1);
+      `checkd(s.va == s.sarr, 1'b1);
+      ok = s.randomize_from_item();
+      `checkd(ok, 1);
+      `checkd(s.va == s.items[1].frozen, 1'b1);
+      ok = std::randomize(x) with {x == s.items[1].frozen;};
+      `checkd(ok, 1);
+      `checkd(x == s.items[1].frozen, 1'b1);
+      `checkd(s.items[1].frozen == '{7'd21, 7'd22, 7'd23}, 1'b1);
     end
     $write("*-* All Finished *-*\n");
     $finish;
