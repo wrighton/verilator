@@ -8162,6 +8162,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
+    // The instance holding the scope an upward name starts with, if that scope is not itself an
+    // instance, nor in a module that is not instantiated as a cell
+    static const VSymEnt* upwardScopeInstance(const VSymEnt* firstSymp) {
+        const VSymEnt* symp = firstSymp;
+        while (symp && !VN_IS(symp->nodep(), Cell) && !VN_IS(symp->nodep(), NodeModule)) {
+            symp = symp->parentp();
+        }
+        return symp != firstSymp && symp && VN_IS(symp->nodep(), Cell) ? symp : nullptr;
+    }
     static bool isAssertControlTarget(const AstNode* nodep) {
         return VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, GenBlock)
                || VN_IS(nodep, NodeFTask) || VN_IS(nodep, Module);
@@ -8174,9 +8183,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
     // Select the sites of an upward name for every instance of the current module. Instances
     // can reach differently elaborated scopes: each scope's sites are then added as optional
     // references, which the scoped pass keeps only in the instances that reach that scope.
+    // A non-empty writtenPath is the name as written, which every instance must resolve to the
+    // same scope as path.
     void assertControlUpward(AstNodeExpr* itemp, AstAssertCtlArgs* argsp, const string& path,
                              const string& firstName,
-                             std::unordered_map<string, AstAssertCtlTarget*>& targets) {
+                             std::unordered_map<string, AstAssertCtlTarget*>& targets,
+                             const string& writtenPath = "") {
+        const string& shownPath = writtenPath.empty() ? path : writtenPath;
         struct Reach final {
             const AstNode* bodyp;
             AstNode* targetp;
@@ -8193,6 +8206,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 = m_statep->findDotted(itemp->fileline(), cellSymp, path, baddot, okSymp, true);
             const VSymEnt* const firstSymp = m_statep->findDotted(itemp->fileline(), cellSymp,
                                                                   firstName, baddot, okSymp, true);
+            if (!writtenPath.empty()
+                && m_statep->findDotted(itemp->fileline(), cellSymp, writtenPath, baddot, okSymp,
+                                        true)
+                       != foundp) {
+                itemp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: upward assertion control scope that is not in the "
+                              "nearest '"
+                                  << AstNode::prettyName(firstName) << "' instance from '"
+                                  << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
+                                  << AstNode::prettyName(writtenPath) << "'");
+                return;
+            }
             AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
             const VSymEnt* instanceSymp = foundp;
             while (
@@ -8207,7 +8232,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 || !assertionRelativeScopePath(foundp, firstSymp, childPath)) {
                 itemp->v3error("Assertion control target is not a scope or assertion from '"
                                << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
-                               << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
+                               << AstNode::prettyName(shownPath) << "' (IEEE 1800-2023 20.11).");
                 return;
             }
             const AstNode* const bodyp = assertControlTargetBody(targetp);
@@ -8348,6 +8373,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 // Upward name, as written from the first identifier, which the scoped pass
                 // resolves for each instance
                 assertControlUpward(itemp, nodep, path, firstName, targets);
+                continue;
+            } else if (const VSymEnt* const anchorSymp = upwardScopeInstance(firstSymp)) {
+                // Upward name whose first identifier is a scope, such as a generate block, within
+                // an instance above (IEEE 1800-2023 23.8 b): select through that instance's
+                // module name, which each instance must resolve to the same scope
+                const string anchorName = VN_AS(anchorSymp->nodep(), Cell)->modp()->origName();
+                const bool within = assertionRelativeScopePath(foundp, anchorSymp, childPath);
+                UASSERT_OBJ(within, itemp, "Upward assertion control scope outside its instance");
+                assertControlUpward(itemp, nodep, VString::dot(anchorName, ".", childPath),
+                                    anchorName, targets, path);
                 continue;
             } else {
                 instancePath = assertionScopePath(instanceSymp);
