@@ -1,0 +1,26 @@
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:76:29: Assertion control target is not a scope or assertion from 't.wb0.x.l': 'hh.p.a1' (IEEE 1800-2023 20.11).
+                                                   : ... note: In instance 't.wb0.x.l'
+   76 |   initial $assertoff(0, hh.p.a1);
+      |                             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:71:26: Assertion control target is not a scope or assertion from 't.spe': 'p.pk_tsk' (IEEE 1800-2023 20.11).
+                                                   : ... note: In instance 't.spe'
+   71 |   initial $assertoff(0, p.pk_tsk);
+      |                          ^
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:64:20: Assertion control target is not a scope or assertion from 't.spk': 'p.pk_tsk' (IEEE 1800-2023 20.11).
+                                                   : ... note: In instance 't.spk'
+   64 |     $assertoff(0, p.pk_tsk);
+      |                    ^
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:65:22: Assertion control target is not a scope or assertion from 't.spk': 'p.C.tk' (IEEE 1800-2023 20.11).
+                                                   : ... note: In instance 't.spk'
+   65 |     $assertoff(0, p.C.tk);
+      |                      ^
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:55:26: Assertion control target is not a scope or assertion from 't.su': 'p.unit_tsk' (IEEE 1800-2023 20.11).
+                                                   : ... note: In instance 't.su'
+   55 |   initial $assertoff(0, p.unit_tsk);
+      |                          ^
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:48:26: Assertion control target is not a scope or assertion: 'p.a1' (IEEE 1800-2023 20.11).
+                                                   : ... note: In instance 't.sm'
+   48 |   initial $assertoff(0, p.a1);
+      |                          ^
+%Error: Exiting due to
