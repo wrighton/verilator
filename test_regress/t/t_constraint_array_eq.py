@@ -14,8 +14,11 @@ test.scenarios('simulator')
 if not test.have_solver:
     test.skip("No constraint solver installed")
 
-test.compile()
+test.compile(verilator_flags2=['--stats'])
 
 test.execute(all_run_flags=['+verilator+wno+unsatconstr+1'])
+
+# Each whole-array comparison is a loop over its elements, not unrolled code
+test.file_grep(test.stats, r'Optimizations, Loop unrolling, Pragma unroll_disable\s+(\d+)', 27)
 
 test.passes()
