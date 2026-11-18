@@ -1615,11 +1615,9 @@ class SvaNfaBuilder final {
         guardedLink(entryVtxp, startp, flp);
         BuildResult outer;
         {
-            // Each match of seq2 counts, as one without seq1 does not end the attempt, and
-            // none rejects
-            VL_RESTORER(m_inAntecedent);
+            // In a cover property each match of seq2 counts, as one without seq1 does not end
+            // the attempt, and none rejects
             VL_RESTORER(m_perTickVertices);
-            m_inAntecedent = true;
             m_perTickVertices = true;
             outer = buildExpr(nodep->rhsp(), startp);
         }
