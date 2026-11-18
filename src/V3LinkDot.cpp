@@ -8303,9 +8303,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                    && !VN_IS(ownerSymp->nodep(), Cell)) {
                 ownerSymp = ownerSymp->parentp();
             }
-            if (ownerSymp && VN_IS(ownerSymp->nodep(), Class) && ownerSymp->nodep() != m_modp) {
-                // Assertion control state is static in the class owning the assertion, so the
-                // same from every instance and object: reference it through that class
+            if (ownerSymp && VN_IS(ownerSymp->nodep(), Class)) {
+                // Assertion control state is static in the class owning the assertion, this one
+                // or another, so the same from every instance and object: reference it through
+                // that class
                 AssertControlTargetVisitor{targetp, nodep, "", "", targets, false, false, m_modp};
                 continue;
             }
