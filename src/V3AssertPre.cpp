@@ -841,6 +841,14 @@ private:
             })) {
             sampledp->v3warn(E_UNSUPPORTED, "Unsupported: $sampled inside sensitivity list");
         }
+        // Clockvar references in event expressions need resolving without lowering sampled values.
+        nodep->foreach([this](AstNode* const np) {
+            if (AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef)) {
+                visit(refp);
+            } else if (AstMemberRef* const refp = VN_CAST(np, MemberRef)) {
+                visit(refp);
+            }
+        });
     }
     void visit(AstNodeVarRef* nodep) override {
         UINFO(8, " -varref:  " << nodep);
