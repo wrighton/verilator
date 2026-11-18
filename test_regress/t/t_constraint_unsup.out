@@ -5,9 +5,9 @@
 %Error-UNSUPPORTED: t/t_constraint_unsup.v:14:19: Unsupported expression inside constraint
    14 |   constraint c { w[3] == 5; }
       |                   ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:28:18: Unsupported: Randomized index into an array of class objects selecting a member.
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:28:24: Unsupported: Randomized index into an array of class objects selecting a member in a soft constraint.
    28 |     soft dynElems[idx].y == 4'h7;
-      |                  ^
+      |                        ^
 %Error-UNSUPPORTED: t/t_constraint_unsup.v:31:29: Unsupported: 'disable soft' of 'y' of an object selected by a random index
                                                 : ... note: In instance 't'
    31 |     disable soft elems[idx].y;
@@ -24,16 +24,7 @@
                                                 : ... note: In instance 't'
    50 |     disable soft holders[1].h.y;
       |                               ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:70:10: Unsupported: Randomized index into an array of class objects selecting a member.
-   70 |     items[k].v == 7'd5;
-      |          ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:71:11: Unsupported: Randomized index into an array of class objects selecting a member.
-   71 |     ditems[k].v == 7'd6;
-      |           ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:72:11: Unsupported: Randomized index into an array of class objects selecting a member.
-   72 |     qitems[k].v == 7'd7;
-      |           ^
-%Error-UNSUPPORTED: t/t_constraint_unsup.v:73:9: Unsupported: Randomized index into an array of class objects selecting a member.
-   73 |     rows[k][0].v == 7'd8;
+%Error-UNSUPPORTED: t/t_constraint_unsup.v:67:9: Unsupported: Randomized index into an array of class objects selecting a member.
+   67 |     rows[k][0].v == 7'd8;
       |         ^
 %Error: Exiting due to
