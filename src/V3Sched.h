@@ -341,7 +341,8 @@ public:
     static AstAssign* createSenTrigVecAssignment(AstVarScope* const targetp,
                                                  std::vector<AstNodeExpr*>& trigps);
 
-    // Create a TriggerKit for the given AstSenTree vector
+    // Create a TriggerKit for the given AstSenTree vector. The trigger computation function is
+    // not split, as the caller might add to it, so the caller splits it when it is complete.
     static TriggerKit create(AstNetlist* netlistp,  //
                              AstCFunc* const initFuncp,  //
                              SenExprBuilder& senExprBuilder,  //
