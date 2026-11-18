@@ -1909,6 +1909,19 @@ private:
         return new AstSFormatF{fl, fmt.str(), false, exprsp};
     }
 
+    // Index, as in ArraySel, of the element of arrayp at loop variable idxVarp of a foreach over
+    // it: the offset from the low bound for a fixed-size array, whose loop goes over the declared
+    // indices. A negative low bound wraps around in the 32-bit index as ArraySel's does.
+    static AstNodeExpr* newForeachOffsetp(FileLine* const fl, const AstNodeExpr* const arrayp,
+                                          AstVar* const idxVarp) {
+        AstNodeExpr* const refp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        const AstUnpackArrayDType* const adtypep
+            = VN_CAST(arrayp->dtypep()->skipRefp(), UnpackArrayDType);
+        // A zero-based index stays the loop variable, which a nested access path names
+        if (!adtypep || !adtypep->lo()) return refp;
+        return new AstSub{fl, refp, new AstConst{fl, static_cast<uint32_t>(adtypep->lo())}};
+    }
+
     AstNodeExpr* newSel(FileLine* fl, AstNodeExpr* arrayp, AstNodeExpr* idxp) {
         // similar to V3WidthSel.cpp
         // skipRefp() unwraps typedef wrappers (AstRefDType) so the dtype kind
@@ -5859,7 +5872,7 @@ private:
 
             AstVar* const newVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, "__Vinside", nodep->findIntDType()};
-            AstNodeExpr* const idxRefp = new AstVarRef{nodep->fileline(), newVarp, VAccess::READ};
+            AstNodeExpr* const idxRefp = newForeachOffsetp(fl, nodep->fromp(), newVarp);
             AstForeachHeader* const headerp
                 = new AstForeachHeader{fl, nodep->fromp()->cloneTreePure(false), newVarp};
             AstNodeExpr* const selp = newSel(nodep->fileline(), nodep->fromp(), idxRefp);
