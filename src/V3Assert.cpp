@@ -1921,8 +1921,11 @@ class AssertVisitor final : public VNVisitor {
         // after their registers updated (IEEE 1800-2023 16.9.3)
         std::vector<AstVarRef*> pastRefps;
         beginsp->foreach([&](AstVarRef* refp) {
+            // Already sampled only if wrapped itself: the node before a list element, as of an
+            // unsigned format argument, is its preceding sibling, not its parent
+            const AstSampled* const sampledp = VN_CAST(refp->backp(), Sampled);
             if (refp->access().isReadOnly() && m_pastVarps.count(refp->varp())
-                && !VN_IS(refp->backp(), Sampled)) {
+                && !(sampledp && sampledp->exprp() == refp)) {
                 pastRefps.push_back(refp);
             }
         });
