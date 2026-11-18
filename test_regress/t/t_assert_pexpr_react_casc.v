@@ -25,6 +25,9 @@ module t;
   bit q = Q[0];
   int dq = 0;
   int nfail = 0;
+  // Triggers the observer, an event control, so a process of the active region set (Verilator
+  // evaluates an always block sensitive to a variable as combinational logic)
+  event obs_e;
   int seen_dq = 0;
   int exp_nfail = 0;
   int exp_dq = 0;
@@ -37,13 +40,14 @@ module t;
   else begin
     cb.dq <= 1000 + cyc;
     ++nfail;
+    ->obs_e;
   end
 
   always #5 clk = ~clk;
 
   always @(posedge clk) cyc <= cyc + 1;
 
-  always @(nfail) seen_dq = dq;
+  always @(obs_e) seen_dq = dq;
 
   always @(negedge clk) begin
     exp_nfail += NFAIL[cyc-1];

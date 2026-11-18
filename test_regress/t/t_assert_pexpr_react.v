@@ -27,6 +27,9 @@ module t;
   bit p = P[0];
   bit q = Q[0];
   int nfail = 0;  // Completions, blocking
+  // Triggers the observer, an event control, so a process of the active region set (Verilator
+  // evaluates an always block sensitive to a variable as combinational logic)
+  event obs_e;
   int nfail_coal = 0;  // Coalescing Re-NBA counter
   int npass = 0;
   int npass_coal = 0;
@@ -90,6 +93,7 @@ module t;
     box.w <= cyc + 7;
     h.set(cyc);
     ++nfail;
+    ->obs_e;
   end
 
   always #5 clk = ~clk;
@@ -101,7 +105,7 @@ module t;
   end
 
   // Active logic woken by the actions, after the reactive region set
-  always @(nfail) begin
+  always @(obs_e) begin
     seen_r = r;
     seen_r2 = r2;
     seen_m = box.v;

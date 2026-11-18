@@ -274,6 +274,7 @@ class AstCAwait final : public AstNodeStmt {
     // @astgen op2 := resultp : Optional[AstNodeExpr]  // Result assignment target
     //
     // @astgen ptr := m_sentreep : Optional[AstSenTree]  // Sentree related to this await
+    bool m_reactive = false;  // Resumed in the reactive region set (see V3Timing)
 public:
     AstCAwait(FileLine* fl, AstNodeExpr* exprp, AstSenTree* sentreep = nullptr)
         : ASTGEN_SUPER_CAwait(fl)
@@ -281,6 +282,11 @@ public:
         this->exprp(exprp);
     }
     ASTGEN_MEMBERS_AstCAwait;
+    bool sameNode(const AstNode* samep) const override {
+        return m_reactive == VN_DBG_AS(samep, CAwait)->m_reactive;
+    }
+    bool reactive() const { return m_reactive; }
+    void reactive(bool flag) { m_reactive = flag; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     const char* broken() const override;
