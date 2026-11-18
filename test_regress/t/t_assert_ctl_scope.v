@@ -10,11 +10,11 @@
 // verilog_format: on
 
 module t (
-  input clk
+    input clk
 );
-  checked a(clk);
-  checked b(clk);
-  empty_scope e();
+  checked a (clk);
+  checked b (clk);
+  empty_scope e ();
   int phase = 0;
   int last_as = 0;
   int last_ao = 0;
@@ -40,8 +40,7 @@ module t (
     return level_value;
   endfunction
 
-  task automatic check_counts(int asel, int aother, int achild,
-                              int bsel, int bother, int bchild);
+  task automatic check_counts(int asel, int aother, int achild, int bsel, int bother, int bchild);
     // The oracle deliberately uses if/stop, never an assertion subject to control.
     `checkd(a.selected_fails - last_as, asel);
     `checkd(a.other_fails - last_ao, aother);
@@ -156,19 +155,29 @@ endmodule
 module empty_scope;
 endmodule
 
-module checked(input clk);
+module checked (
+    input clk
+);
   int selected_fails = 0;
   int other_fails = 0;
-  leaf child(clk);
+  leaf child (clk);
   always @(posedge clk) begin
-    selected_check: assert (!clk) else selected_fails++;
-    other_check: assert (!clk) else other_fails++;
+    selected_check :
+    assert (!clk)
+    else selected_fails++;
+    other_check :
+    assert (!clk)
+    else other_fails++;
   end
 endmodule
 
-module leaf(input clk);
+module leaf (
+    input clk
+);
   int selected_fails = 0;
   always @(posedge clk) begin
-    selected_check: assert (!clk) else selected_fails++;
+    selected_check :
+    assert (!clk)
+    else selected_fails++;
   end
 endmodule

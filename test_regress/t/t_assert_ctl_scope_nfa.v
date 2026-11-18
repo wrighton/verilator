@@ -10,11 +10,17 @@
 // verilog_format: on
 
 module t (
-  input clk
+    input clk
 );
   int cyc = 0;
-  late_check a(clk, cyc);
-  late_check b(clk, cyc);
+  late_check a (
+      clk,
+      cyc
+  );
+  late_check b (
+      clk,
+      cyc
+  );
   always @(posedge clk) cyc <= cyc + 1;
   always @(negedge clk) begin
     case (cyc)
@@ -33,13 +39,18 @@ module t (
         $write("*-* All Finished *-*\n");
         $finish;
       end
-      default: begin end
+      default: begin
+      end
     endcase
   end
 endmodule
 
-module late_check(input clk, input int cyc);
+module late_check (
+    input clk,
+    input int cyc
+);
   int failures = 0;
-  check_late: assert property (@(posedge clk) (cyc == 2 || cyc == 7) |-> ##2 1'b0)
-    else failures++;
+  check_late :
+  assert property (@(posedge clk) (cyc == 2 || cyc == 7) |-> ##2 1'b0)
+  else failures++;
 endmodule

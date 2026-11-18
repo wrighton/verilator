@@ -47,7 +47,10 @@ module par (
       else failures++;
     end
   end
-  mid m (.off_cell, .off_blk);
+  mid m (
+      .off_cell,
+      .off_blk
+  );
 endmodule
 
 // Differently elaborated parents holding the same instance target

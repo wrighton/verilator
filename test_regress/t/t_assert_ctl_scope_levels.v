@@ -30,7 +30,7 @@ module t;
   mid b ();
   initial begin
     // An omitted levels argument selects every level below the scope (IEEE 1800-2023 20.11)
-    $assertcontrol(4, 15, 7, , t.a);
+    $assertcontrol(4, 15, 7,, t.a);
     #2;
     `checkd(a.l.failures, 0);
     `checkd(b.l.failures, 1);
