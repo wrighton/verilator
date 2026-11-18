@@ -8234,12 +8234,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 instanceSymp = instanceSymp->parentp();
             }
             if (!instanceSymp) {
-                // A scope of a package, class or compilation unit, reached from this instance
-                itemp->v3warn(E_UNSUPPORTED,
-                              "Unsupported: upward assertion control scope outside an instance "
-                              "from '"
-                                  << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
-                                  << AstNode::prettyName(path) << "'");
+                // A scope outside any instance, such as a package task imported into an instance
+                // above, which is not visible by hierarchical reference (IEEE 1800-2023 26.3)
+                itemp->v3error("Assertion control target is not a scope or assertion from '"
+                               << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
+                               << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
                 return;
             }
             // The target is found down from the first identifier, and its instance is below that
