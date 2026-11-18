@@ -1026,8 +1026,10 @@ class AssertVisitor final : public VNVisitor {
     //  AstAlways::user2p()      -> std::vector<AstVar*>. Delayed variables via 'm_delayed'
     //  AstNodeVarRef::user2()   -> bool.  True if shouldn't be sampled
     //  AstIf::user2()           -> bool.  True for assertOn() checks inserted in this pass
+    //  AstNodeStmt::user3()     -> bool.  True for a wait of a PExpr attempt (abortWhenKilled)
     const VNUser1InUse m_user1InUse;
     const VNUser2InUse m_user2InUse;
+    const VNUser3InUse m_user3InUse;
     VNUser2Allocator<AstAlways, std::vector<AstVar*>> m_delayed;
 
     // STATE
@@ -1045,9 +1047,14 @@ class AssertVisitor final : public VNVisitor {
     bool m_inSpawnedFork = false;  // Under a fork...join_any or fork...join_none
     AstVar* m_obsEventp = nullptr;  // Current module event to run deferred calls
     AstAlwaysReactive* m_obsReactivep = nullptr;  // Current module block running deferred calls
-    AstVar* m_actionEventp = nullptr;  // Current module event to run queued PExpr actions
-    AstAlwaysReactive* m_actionReactivep = nullptr;  // Current module block running them
+    AstVar* m_actionEventp = nullptr;  // Current process's event to run queued PExpr actions
+    AstAlwaysReactive* m_actionReactivep = nullptr;  // Block running them, beside the process
+    std::vector<const AstBegin*> m_namedBeginps;  // Named blocks in the current process
     bool m_inPExprFinal = false;  // In the end-of-simulation check of a PExpr
+    AstBegin* m_pexprBodyp = nullptr;  // Body of the current PExpr, its attempt's process
+    AstVar* m_strongPassOnp = nullptr;  // Strong property's active attempts started PassOn
+    AstVar* m_strongFailOnp = nullptr;  // Strong property's active attempts started FailOn
+    std::unordered_map<std::string, AstVar*> m_pexprStartVarps;  // Controls read at its start
     AstNodeProcedure* m_procedurep = nullptr;  // Current procedure
     AstAlways* m_assertCoverp = nullptr;  // Process of the current concurrent assertion
     VDouble0 m_statCover;  // Statistic tracking
@@ -1326,29 +1333,26 @@ class AssertVisitor final : public VNVisitor {
         newp->user2(true);  // Mark as an assertOn() check
         return newp;
     }
-    static AstNodeStmt* newIfAssertPassOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
-                                          VAssertType type, bool vacuous) {
-        // Add an internal if to check assertion passOn is enabled.
-        // Don't make this an AND term, as it's unlikely to need to test this.
-        FileLine* const fl = bodyp->fileline();
-        AstNodeExpr* const condp = assertPassOnCond(fl, type, directiveType, vacuous);
-        AstIf* const newp = new AstIf{fl, condp, bodyp};
+    // Gate 'bodyp' by 'condp' as an assertion control check
+    static AstIf* newIfControl(AstNodeExpr* condp, AstNodeStmt* bodyp) {
+        AstIf* const newp = new AstIf{condp->fileline(), condp, bodyp};
         newp->isBoundsCheck(true);  // To avoid LATCH warning
         newp->user1(true);  // Don't assert/cover this if
         newp->user2(true);  // Mark as an assertOn() check
         return newp;
     }
+    static AstNodeStmt* newIfAssertPassOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
+                                          VAssertType type, bool vacuous) {
+        // Add an internal if to check assertion passOn is enabled.
+        // Don't make this an AND term, as it's unlikely to need to test this.
+        return newIfControl(assertPassOnCond(bodyp->fileline(), type, directiveType, vacuous),
+                            bodyp);
+    }
     static AstNodeStmt* newIfAssertFailOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
                                           VAssertType type) {
         // Add an internal if to check assertion failOn is enabled.
         // Don't make this an AND term, as it's unlikely to need to test this.
-        FileLine* const fl = bodyp->fileline();
-        AstNodeExpr* const condp = assertFailOnCond(fl, type, directiveType);
-        AstIf* const newp = new AstIf{fl, condp, bodyp};
-        newp->isBoundsCheck(true);  // To avoid LATCH warning
-        newp->user1(true);  // Don't assert/cover this if
-        newp->user2(true);  // Mark as an assertOn() check
-        return newp;
+        return newIfControl(assertFailOnCond(bodyp->fileline(), type, directiveType), bodyp);
     }
 
     static AstIf* assertCond(const AstNodeCoverOrAssert* nodep, AstNodeExpr* propp,
@@ -1600,6 +1604,7 @@ class AssertVisitor final : public VNVisitor {
                                new AstSenItem{flp, VEdgeType::ET_EVENT,
                                               new AstVarRef{flp, m_obsEventp, VAccess::READ}}},
                 nullptr};
+            m_obsReactivep->deferredReports(true);
             m_modp->addStmtsp(m_obsReactivep);
         }
         queuesp = AstNode::addNext(
@@ -1621,24 +1626,162 @@ class AssertVisitor final : public VNVisitor {
         return queuesp;
     }
 
+    // Return the variable holding the value of 'condp' at the start of the current PExpr's
+    // attempt, which the assertion controls apply to (IEEE 1800-2023 20.11)
+    AstVar* getPExprStartVarp(const std::string& key, AstNodeExpr* condp) {
+        AstVar*& varpr = m_pexprStartVarps[key];
+        if (varpr) {
+            VL_DO_DANGLING(pushDeletep(condp), condp);
+            return varpr;
+        }
+        FileLine* const flp = condp->fileline();
+        varpr = new AstVar{flp, VVarType::BLOCKTEMP, m_actionNames.get("Start"), condp->dtypep()};
+        varpr->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        m_pexprBodyp->addDeclsp(varpr);
+        AstAssign* const initp
+            = new AstAssign{flp, new AstVarRef{flp, varpr, VAccess::WRITE}, condp};
+        if (AstNode* const stmtsp = m_pexprBodyp->stmtsp()) {
+            stmtsp->addHereThisAsNext(initp);
+        } else {
+            m_pexprBodyp->addStmtsp(initp);
+        }
+        return varpr;
+    }
+    // The Kill count of the current assertion
+    AstNodeExpr* newKillCountp(FileLine* flp) const {
+        return new AstCExpr{flp, AstCExpr::Pure{},
+                            V3AssertCommon::assertCtlGetCall(
+                                "ASSERT_CTL_KILL", m_assertp->userType(), m_assertp->directive()),
+                            32};
+    }
+    // A Kill aborts an executing attempt (IEEE 1800-2023 20.11): after each wait of the attempt
+    // of 'nodep' (marked by user3), end it if killed since its start, so it evaluates nothing
+    // further.
+    void abortWhenKilled(AstPExpr* nodep) {
+        AstBegin* const bodyp = nodep->bodyp();
+        FileLine* const flp = bodyp->fileline();
+        AstVar* const killp = getPExprStartVarp("kill", newKillCountp(flp));
+        AstNodeStmt* const stmtsp = bodyp->stmtsp();
+        UASSERT_OBJ(stmtsp, bodyp, "Empty PExpr body");
+        AstJumpBlock* const blockp = new AstJumpBlock{flp, stmtsp->unlinkFrBackWithNext()};
+        bodyp->addStmtsp(blockp);
+        std::vector<AstNodeStmt*> waitps;
+        blockp->foreach([&](AstNodeStmt* stmtp) {
+            if (stmtp->user3()) waitps.push_back(stmtp);
+            stmtp->user3(false);  // Not for an enclosing PExpr
+        });
+        for (AstNodeStmt* const waitp : waitps) {
+            waitp->addNextHere(new AstIf{
+                flp, new AstNeq{flp, new AstVarRef{flp, killp, VAccess::READ}, newKillCountp(flp)},
+                new AstJumpGo{flp, blockp}});
+        }
+        if (nodep->finalp()) dropKilledAtFinal(nodep);
+    }
+    // The end-of-simulation check of a strong property checks the attempts V3AssertPre records
+    // as active, in an associative array by process, or a count, which the check reads first.
+    // The attempts executing at a Kill are aborted (IEEE 1800-2023 20.11), and aborted attempts
+    // do not retire themselves, so once the Kill count differs from that of the attempts
+    // recorded, they are all dropped, at the start of the next attempt or of the check.
+    void dropKilledAtFinal(AstPExpr* nodep) {
+        AstBegin* const finalp = VN_AS(nodep->finalp(), Begin);
+        FileLine* const flp = finalp->fileline();
+        const AstAssign* const countp = VN_CAST(finalp->stmtsp(), Assign);
+        UASSERT_OBJ(countp, finalp, "Expected the count of the active attempts first");
+        AstNodeStmt* clearp = nullptr;
+        AstVar* activep = nullptr;
+        if (const AstCMethodHard* const sizep = VN_CAST(countp->rhsp(), CMethodHard)) {
+            UASSERT_OBJ(sizep->method() == VCMethod::ASSOC_SIZE, sizep, "Expected a size");
+            activep = VN_AS(sizep->fromp(), VarRef)->varp();
+            AstCMethodHard* const callp = new AstCMethodHard{
+                flp, new AstVarRef{flp, activep, VAccess::WRITE}, VCMethod::ASSOC_CLEAR};
+            callp->dtypeSetVoid();
+            clearp = callp->makeStmt();
+        } else {
+            activep = VN_AS(countp->rhsp(), VarRef)->varp();
+            clearp
+                = new AstAssign{flp, new AstVarRef{flp, activep, VAccess::WRITE},
+                                new AstConst{flp, AstConst::WidthedValue{}, activep->width(), 0}};
+        }
+        AstVar* const epochp
+            = newModuleTemp(flp, m_actionNames.get("Epoch"), m_modp->findUInt32DType(), m_modp);
+        epochp->lifetime(VLifetime::STATIC_EXPLICIT);
+        const auto newDropIfp = [&](bool update) {
+            AstIf* const ifp = new AstIf{
+                flp,
+                new AstNeq{flp, new AstVarRef{flp, epochp, VAccess::READ}, newKillCountp(flp)},
+                clearp->cloneTree(false)};
+            for (AstVar* const countp : {m_strongPassOnp, m_strongFailOnp}) {
+                ifp->addThensp(new AstAssign{flp, new AstVarRef{flp, countp, VAccess::WRITE},
+                                             new AstConst{flp, AstConst::WidthedValue{}, 32, 0}});
+            }
+            if (update) {
+                ifp->addThensp(new AstAssign{flp, new AstVarRef{flp, epochp, VAccess::WRITE},
+                                             newKillCountp(flp)});
+            }
+            return ifp;
+        };
+        AstNodeStmt* const blockp = nodep->bodyp()->stmtsp();
+        blockp->addHereThisAsNext(newDropIfp(true));
+        finalp->stmtsp()->addHereThisAsNext(newDropIfp(false));
+        // Count the recorded attempts by the controls at their start, where V3AssertPre records
+        // and retires them
+        const VAssertDirectiveType directive = m_assertp->directive();
+        const VAssertType type = m_assertp->userType();
+        AstVar* const passStartp
+            = getPExprStartVarp("pass0", assertPassOnCond(flp, type, directive, false));
+        AstVar* const failStartp
+            = getPExprStartVarp("fail", assertFailOnCond(flp, type, directive));
+        const auto newCountp = [&](bool inc) {
+            AstNodeStmt* stmtsp = nullptr;
+            for (AstVar* const countp : {m_strongPassOnp, m_strongFailOnp}) {
+                AstNodeExpr* const onep = new AstConst{flp, AstConst::WidthedValue{}, 32, 1};
+                AstNodeExpr* const valuep
+                    = inc ? static_cast<AstNodeExpr*>(
+                                new AstAdd{flp, new AstVarRef{flp, countp, VAccess::READ}, onep})
+                          : new AstSub{flp, new AstVarRef{flp, countp, VAccess::READ}, onep};
+                stmtsp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+                    stmtsp,
+                    new AstIf{
+                        flp,
+                        new AstVarRef{flp, countp == m_strongPassOnp ? passStartp : failStartp,
+                                      VAccess::READ},
+                        new AstAssign{flp, new AstVarRef{flp, countp, VAccess::WRITE}, valuep}});
+            }
+            return stmtsp;
+        };
+        std::vector<AstNodeStmt*> recordps;
+        std::vector<AstNodeStmt*> retireps;
+        blockp->foreach([&](AstNodeStmt* stmtp) {
+            if (const AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+                const AstAssocSel* const selp = VN_CAST(assignp->lhsp(), AssocSel);
+                const AstVarRef* const refp
+                    = VN_CAST(selp ? selp->fromp() : assignp->lhsp(), VarRef);
+                if (!refp || refp->varp() != activep) return;
+                if (selp || VN_IS(assignp->rhsp(), Add)) recordps.push_back(stmtp);
+                if (VN_IS(assignp->rhsp(), Sub)) retireps.push_back(stmtp);
+            } else if (const AstStmtExpr* const exprp = VN_CAST(stmtp, StmtExpr)) {
+                const AstCMethodHard* const methodp = VN_CAST(exprp->exprp(), CMethodHard);
+                if (methodp && methodp->method() == VCMethod::ASSOC_ERASE
+                    && VN_AS(methodp->fromp(), VarRef)->varp() == activep) {
+                    retireps.push_back(stmtp);
+                }
+            }
+        });
+        UASSERT_OBJ(!recordps.empty(), nodep, "Expected the record of a strong attempt");
+        for (AstNodeStmt* const stmtp : recordps) stmtp->addNextHere(newCountp(true));
+        for (AstNodeStmt* const stmtp : retireps) stmtp->addNextHere(newCountp(false));
+        VL_DO_DANGLING(pushDeletep(clearp), clearp);
+    }
     // Queue the action of a PExpr clause, run in the Reactive region (IEEE 1800-2023 4.4.2.6).
     // Return what queues it, at the decision of the attempt. An entry of the queue holds the
-    // values of the automatic variables it reads (IEEE 1800-2023 16.14.6.1), the controls of
-    // the action, as they apply at the decision, and the Kill state.
+    // values of the automatic variables it reads (IEEE 1800-2023 16.14.6.1).
     AstNodeStmt* newQueuedAction(FileLine* flp, AstNodeStmt* actionsp) {
-        actionsp->foreachAndNext([](AstNodeVarRef* const refp) {
-            // References inside action blocks shouldn't be implicitly sampled
-            // m_passsp/m_failsp have been already visited once and refs explicitly sampled
-            // are handled already
-            refp->user2(1);
-        });
         // Without timing, assertBody rejects the PExpr
         if (!v3Global.opt.timing().isSetTrue()) return actionsp;
-        // The end-of-simulation check runs in a final block
-        if (m_inPExprFinal) return actionsp;
-        // A sequence event control resumes its waiters from the cover action
+        // A sequence event control resumes its waiters from the cover action, and without
+        // coverage the cover statement is deleted
         const AstCover* const coverp = VN_CAST(m_assertp, Cover);
-        if (coverp && coverp->isSeqEvent()) return actionsp;
+        if (coverp && (coverp->isSeqEvent() || !v3Global.opt.coverageUser())) return actionsp;
         std::unordered_set<const AstVar*> ownps;  // What the action declares
         actionsp->foreachAndNext([&](const AstVar* varp) { ownps.insert(varp); });
         // Automatic inputs of an action shall not be modified (IEEE 1800-2023 16.14.6.1), leave
@@ -1646,6 +1789,15 @@ class AssertVisitor final : public VNVisitor {
         if (actionsp->existsAndNext([&](const AstVarRef* refp) {
                 return refp->access().isWriteOrRW() && refp->varp()->lifetime().isAutomatic()
                        && !ownps.count(refp->varp());
+            })) {
+            return actionsp;
+        }
+        // Also leave an action jumping out of itself, e.g. disabling a block of the process
+        std::unordered_set<const AstJumpBlock*> blockps;  // What the action contains
+        actionsp->foreachAndNext([&](const AstJumpBlock* blockp) { blockps.insert(blockp); });
+        if (actionsp->existsAndNext([&](const AstNode* np) {
+                const AstJumpGo* const gop = VN_CAST(np, JumpGo);
+                return VN_IS(np, Disable) || (gop && !blockps.count(gop->blockp()));
             })) {
             return actionsp;
         }
@@ -1664,58 +1816,44 @@ class AssertVisitor final : public VNVisitor {
                                new AstSenItem{flp, VEdgeType::ET_EVENT,
                                               new AstVarRef{flp, m_actionEventp, VAccess::READ}}},
                 nullptr};
-            m_modp->addStmtsp(m_actionReactivep);
+            // Beside the process of the assertion, in the scope of its generate blocks
+            (m_assertCoverp ? static_cast<AstNodeProcedure*>(m_assertCoverp) : m_procedurep)
+                ->addNextHere(m_actionReactivep);
         }
         // The process running an entry, which first takes its values from the queues
         AstBegin* const instancep = new AstBegin{flp, "", nullptr, true};
         AstNodeStmt* queuesp = nullptr;
-        // Push the value of 'exprp' at the decision, return the variable the instance pops it to
-        const auto newCapture = [&](AstNodeExpr* exprp) {
-            AstNodeDType* const dtypep = exprp->dtypep();
-            AstVar* const queuep = newTemp("Queue", newQueueDTypep(flp, dtypep));
-            queuep->setIgnoreSchedWrite();
-            queuesp = AstNode::addNext(queuesp, newQueuePush(flp, queuep, exprp));
-            AstVar* const valuep
-                = new AstVar{flp, VVarType::BLOCKTEMP, m_actionNames.get("Value"), dtypep};
-            valuep->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
-            instancep->addDeclsp(valuep);
-            instancep->addStmtsp(new AstAssign{flp, new AstVarRef{flp, valuep, VAccess::WRITE},
-                                               newQueuePop(flp, queuep, dtypep)});
-            return valuep;
-        };
         std::unordered_map<AstVar*, AstVar*> valueps;
         actionsp->foreachAndNext([&](AstVarRef* refp) {
             AstVar* const varp = refp->varp();
             if (!varp->lifetime().isAutomatic() || ownps.count(varp)) return;
             AstVar*& valuepr = valueps[varp];
             if (!valuepr) {
+                // Push the value at the decision, pop it in the entry's process
+                AstNodeDType* const dtypep = varp->dtypep();
+                AstVar* const queuep = newTemp("Queue", newQueueDTypep(flp, dtypep));
+                queuep->setIgnoreSchedWrite();
                 AstVarRef* const readp = new AstVarRef{flp, varp, VAccess::READ};
                 readp->user2(1);
-                valuepr = newCapture(readp);
+                queuesp = AstNode::addNext(queuesp, newQueuePush(flp, queuep, readp));
+                valuepr = new AstVar{flp, VVarType::BLOCKTEMP, m_actionNames.get("Value"), dtypep};
+                valuepr->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+                instancep->addDeclsp(valuepr);
+                instancep->addStmtsp(new AstAssign{flp,
+                                                   new AstVarRef{flp, valuepr, VAccess::WRITE},
+                                                   newQueuePop(flp, queuep, dtypep)});
             }
             refp->varp(valuepr);
         });
-        // A cover statement controls its own pass action inside, see visitAssertionIterate
-        if (coverp) {
-            for (AstNode* nodep = actionsp; nodep; nodep = nodep->nextp()) {
-                AstIf* const ifp = VN_CAST(nodep, If);
-                if (!ifp) continue;
-                AstNodeExpr* const condp = ifp->condp()->unlinkFrBack();
-                ifp->condp(new AstVarRef{flp, newCapture(condp), VAccess::READ});
-            }
+        // The action keeps the scope of the assertion, under the named blocks of its process,
+        // which V3Begin would have added
+        std::string scope;
+        for (const AstBegin* const beginp : m_namedBeginps) scope += "__DOT__" + beginp->name();
+        if (!scope.empty()) {
+            actionsp->foreachAndNext(
+                [&](AstScopeName* namep) { namep->scopeAttr(scope + namep->scopeAttr()); });
         }
-        // An attempt the assertion's Kill aborted does not run its action (IEEE 1800-2023 20.11)
-        const auto newKillEpochp = [&]() {
-            return new AstCExpr{flp, AstCExpr::Pure{},
-                                V3AssertCommon::assertCtlGetCall("ASSERT_CTL_KILL",
-                                                                 m_assertp->userType(),
-                                                                 m_assertp->directive()),
-                                32};
-        };
-        AstVar* const epochp = newCapture(newKillEpochp());
-        instancep->addStmtsp(new AstIf{
-            flp, new AstEq{flp, new AstVarRef{flp, epochp, VAccess::READ}, newKillEpochp()},
-            actionsp});
+        instancep->addStmtsp(actionsp);
         // Each entry is run by a process of its own, starting in the Reactive region
         AstFork* const forkp = new AstFork{flp, VJoinType::JOIN_NONE};
         forkp->immediateStart(true);
@@ -1762,6 +1900,49 @@ class AssertVisitor final : public VNVisitor {
             return;
         }
         if (m_beginp && nodep->name() == "") nodep->name(m_beginp->name());
+        // A const cast takes its value when a procedural concurrent assertion is queued, at its
+        // statement (IEEE 1800-2023 16.14.6.1). The attempt gets its own copy (see V3Fork), and
+        // so does each entry of its queued actions (see newQueuedAction).
+        // Inner casts first, so an outer one reads their copies. A cast of variables declared
+        // in the assertion, e.g. in an action block, only has their values there.
+        // Those of a concurrent assertion in an action block are its own.
+        std::vector<AstConstCast*> castps;  // In post-order, so inner ones first
+        const std::function<void(AstNode*)> collect = [&](AstNode* np) {
+            for (; np; np = np->nextp()) {
+                const AstNodeCoverOrAssert* const assertp = VN_CAST(np, NodeCoverOrAssert);
+                if (assertp && !assertp->immediate()) continue;
+                collect(np->op1p());
+                collect(np->op2p());
+                collect(np->op3p());
+                collect(np->op4p());
+                if (AstConstCast* const castp = VN_CAST(np, ConstCast)) castps.push_back(castp);
+            }
+        };
+        collect(nodep->op1p());
+        collect(nodep->op2p());
+        collect(nodep->op3p());
+        collect(nodep->op4p());
+        std::unordered_set<const AstVar*> localps;
+        nodep->foreach([&](const AstVar* varp) { localps.insert(varp); });
+        for (AstConstCast* const castp : castps) {
+            AstNodeExpr* const exprp = castp->lhsp()->unlinkFrBack();
+            const bool local = exprp->exists([&](const AstNode* np) {
+                const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef);
+                return VN_IS(np, LambdaArgRef) || (refp && localps.count(refp->varp()));
+            });
+            if (m_procedurep && !nodep->immediate() && !local) {
+                FileLine* const flp = castp->fileline();
+                AstVar* const varp
+                    = newModuleTemp(flp, m_actionNames.get("Const"), exprp->dtypep(), m_modp);
+                varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+                nodep->addHereThisAsNext(
+                    new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, exprp});
+                castp->replaceWith(new AstVarRef{flp, varp, VAccess::READ});
+            } else {
+                castp->replaceWith(exprp);
+            }
+            VL_DO_DANGLING(pushDeletep(castp), castp);
+        }
 
         // Only a concurrent assertion has a property or sequence expression, so visit(AstFuture)
         // rejects future value functions in immediate assertions and $cast (IEEE 1800-2023 16.9.4)
@@ -2340,18 +2521,75 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstPExprClause* nodep) override {
         AstNodeStmt* stmtsp = nullptr;
         if (nodep->pass() && m_passsp) {
-            // Cover adds COVERINC by AstNode::addNext, so the action is a list.
-            // The first clause takes the action, later ones a clone.
+            // The first clause takes the action; later ones clone it with shared statics.
             stmtsp = m_passsp->backp() ? V3AssertCommon::cloneAction(m_passsp, m_actionNames)
                                        : m_passsp;
-            stmtsp = newQueuedAction(nodep->fileline(), stmtsp);
-            stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
-                                       nodep->vacuous());
         } else if (!nodep->pass() && m_failsp) {
             stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
                                        : m_failsp;
-            stmtsp = newQueuedAction(nodep->fileline(), stmtsp);
-            stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
+        }
+        if (stmtsp) {
+            stmtsp->foreachAndNext([](AstNodeVarRef* const refp) {
+                // References inside action blocks shouldn't be implicitly sampled
+                // m_passsp/m_failsp have been already visited once and refs explicitly sampled
+                // are handled already
+                refp->user2(1);
+            });
+        }
+        const AstCover* const coverp = VN_CAST(m_assertp, Cover);
+        FileLine* const clauseFlp = nodep->fileline();
+        if (stmtsp && m_inPExprFinal && m_strongPassOnp) {
+            // The end-of-simulation check of a strong property checks attempts, which all have
+            // the same outcome there, so act for as many as started with it enabled
+            // (IEEE 1800-2023 20.11)
+            AstVar* const countp = nodep->pass() ? m_strongPassOnp : m_strongFailOnp;
+            AstIf* const ifp = newIfControl(
+                new AstNeq{clauseFlp, new AstVarRef{clauseFlp, countp, VAccess::READ},
+                           new AstConst{clauseFlp, AstConst::WidthedValue{}, 32, 0}},
+                new AstAssign{
+                    clauseFlp, new AstVarRef{clauseFlp, countp, VAccess::WRITE},
+                    new AstSub{clauseFlp, new AstVarRef{clauseFlp, countp, VAccess::READ},
+                               new AstConst{clauseFlp, AstConst::WidthedValue{}, 32, 1}}});
+            ifp->addThensp(stmtsp);
+            stmtsp = ifp;
+        } else if (stmtsp && (m_inPExprFinal || (coverp && coverp->isSeqEvent()))) {
+            // The end-of-simulation check runs in a final block, and the attempts of a sequence
+            // event control are not assertion attempts, so both keep the controls applying now
+            if (nodep->pass()) {
+                stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
+                                           nodep->vacuous());
+            } else {
+                stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
+            }
+        } else if (stmtsp) {
+            // The controls apply to attempts starting after them; one already executing is not
+            // affected, unless killed (IEEE 1800-2023 20.11). A cover statement controls its
+            // own pass action inside, see visitAssertionIterate.
+            FileLine* const flp = nodep->fileline();
+            const VAssertDirectiveType directive = m_assertp->directive();
+            const VAssertType type = m_assertp->userType();
+            if (VN_IS(m_assertp, Cover)) {
+                for (AstNode* np = stmtsp; np; np = np->nextp()) {
+                    AstIf* const ifp = VN_CAST(np, If);
+                    if (!ifp || !ifp->user2()) continue;  // Only the assertOn() check
+                    pushDeletep(ifp->condp()->unlinkFrBack());
+                    ifp->condp(new AstVarRef{
+                        flp,
+                        getPExprStartVarp("pass0", assertPassOnCond(flp, type, directive, false)),
+                        VAccess::READ});
+                }
+            }
+            AstVar* const enablep
+                = nodep->pass()
+                      ? getPExprStartVarp(nodep->vacuous() ? "pass1" : "pass0",
+                                          assertPassOnCond(flp, type, directive, nodep->vacuous()))
+                      : getPExprStartVarp("fail", assertFailOnCond(flp, type, directive));
+            AstVar* const killp = getPExprStartVarp("kill", newKillCountp(flp));
+            stmtsp = newQueuedAction(flp, stmtsp);
+            stmtsp = newIfControl(new AstVarRef{flp, enablep, VAccess::READ}, stmtsp);
+            stmtsp = newIfControl(
+                new AstEq{flp, new AstVarRef{flp, killp, VAccess::READ}, newKillCountp(flp)},
+                stmtsp);
         }
         if (stmtsp) {
             nodep->replaceWith(stmtsp);
@@ -2360,11 +2598,53 @@ class AssertVisitor final : public VNVisitor {
         }
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    void visit(AstConstCast* nodep) override {
+        // Moved out of its assertion by V3AssertPre; only the expression
+        AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
+        nodep->replaceWith(lhsp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        iterate(lhsp);
+    }
     void visit(AstPExpr* nodep) override {
         if (m_inRestrict) {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
         } else {
-            iterateAndNextNull(nodep->bodyp());
+            VL_RESTORER(m_strongPassOnp);
+            VL_RESTORER(m_strongFailOnp);
+            m_strongPassOnp = nullptr;
+            m_strongFailOnp = nullptr;
+            const AstCover* const seqCoverp = VN_CAST(m_assertp, Cover);
+            if (nodep->finalp() && !nodep->user1() && !(seqCoverp && seqCoverp->isSeqEvent())) {
+                FileLine* const flp = nodep->fileline();
+                for (AstVar** const varpp : {&m_strongPassOnp, &m_strongFailOnp}) {
+                    *varpp = newModuleTemp(flp, m_actionNames.get("StrongOn"),
+                                           m_modp->findUInt32DType(), m_modp);
+                    (*varpp)->lifetime(VLifetime::STATIC_EXPLICIT);
+                }
+            }
+            {
+                VL_RESTORER(m_pexprBodyp);
+                VL_RESTORER_CLEAR(m_pexprStartVarps);
+                m_pexprBodyp = nodep->bodyp();
+                // The waits of the attempt itself: not of action blocks added in its place, which
+                // a Kill does not abort once started, nor of other processes in it
+                const std::function<void(AstNode*)> findWaits = [&](AstNode* np) {
+                    for (; np; np = np->nextp()) {
+                        if (VN_IS(np, PExpr) || VN_IS(np, Fork) || VN_IS(np, NodeExpr)) continue;
+                        if (VN_IS(np, EventControl) || VN_IS(np, Delay)) np->user3(true);
+                        findWaits(np->op1p());
+                        findWaits(np->op2p());
+                        findWaits(np->op3p());
+                        findWaits(np->op4p());
+                    }
+                };
+                // Once, though the PExpr may be visited again
+                const bool first = !nodep->user1SetOnce();
+                if (first) findWaits(nodep->bodyp()->stmtsp());
+                iterateAndNextNull(nodep->bodyp());
+                const AstCover* const coverp = VN_CAST(m_assertp, Cover);
+                if (first && (!coverp || !coverp->isSeqEvent())) abortWhenKilled(nodep);
+            }
             VL_RESTORER(m_inPExprFinal);
             m_inPExprFinal = true;
             iterateAndNextNull(nodep->finalp());
@@ -2635,7 +2915,12 @@ class AssertVisitor final : public VNVisitor {
         // The process of a concurrent assertion, not a procedural context. The assertion clocks
         // it, or it goes with the assertion.
         VL_RESTORER(m_assertCoverp);
+        VL_RESTORER(m_actionEventp);
+        VL_RESTORER(m_actionReactivep);
+        VL_RESTORER_CLEAR(m_namedBeginps);
         m_assertCoverp = nodep;
+        m_actionEventp = nullptr;
+        m_actionReactivep = nullptr;
         iterateChildren(nodep);
         if (nodep->keyword() == VAlwaysKwd::ASSERT_COVER) {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
@@ -2646,7 +2931,12 @@ class AssertVisitor final : public VNVisitor {
         VL_RESTORER(m_obsFlushp);
         VL_RESTORER(m_obsDoneVarp);
         VL_RESTORER_CLEAR(m_obsWaitsp);
+        VL_RESTORER(m_actionEventp);
+        VL_RESTORER(m_actionReactivep);
+        VL_RESTORER_CLEAR(m_namedBeginps);
         m_procedurep = nodep;
+        m_actionEventp = nullptr;
+        m_actionReactivep = nullptr;
         AstBegin* const scopep = VN_CAST(nodep->stmtsp(), Begin);
         iterateChildren(nodep);
         // IEEE 1800-2023 16.4.2: The process resumes from its event control, or was declared by
@@ -2680,7 +2970,9 @@ class AssertVisitor final : public VNVisitor {
         // because V3Assert is called before V3Begin
         VL_RESTORER(m_beginp);
         m_beginp = nodep;
+        if (!nodep->name().empty()) m_namedBeginps.push_back(nodep);
         iterateChildren(nodep);
+        if (!nodep->name().empty()) m_namedBeginps.pop_back();
         // If the body is a single assertOn check, bubble it up for combining
         if (!nodep->declsp()) {
             if (AstIf* const ifp = VN_CAST(nodep->stmtsp(), If)) {

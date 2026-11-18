@@ -408,6 +408,12 @@ class TimingKit final {
 public:
     ProcessList m_procList;  // Processes that resume timing schedulers
     AstNodeStmt* m_postUpdatesp = nullptr;  // Post updates for the trigger eval function
+    // Resumes of the schedulers of the reactive region set, made by createResume
+    AstNodeStmt* m_reactResumesp = nullptr;
+    std::set<uint32_t> m_reactTriggers;  // Their triggers, set by createResume
+    std::set<const AstVarScope*> m_reactSchedps;  // These schedulers, set by createResume
+    // Set when an await readies one of them outside a trigger computation (see V3SchedTrigger)
+    AstVarScope* m_reactReadyp = nullptr;
 
     // Trigger indices of the external domains of each variable
     std::map<const AstVarScope*, std::vector<uint32_t>>
@@ -548,7 +554,7 @@ void splitCheck(AstCFunc* ofuncp);
 }  // namespace util
 
 void beforeTrigVisitor(AstNetlist* netlistp, SenExprBuilder& senExprBuilder,
-                       const TriggerKit& trigKit);
+                       const TriggerKit& trigKit, const TimingKit& timingKit);
 
 }  // namespace V3Sched
 

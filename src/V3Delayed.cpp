@@ -200,9 +200,10 @@
 // NBAs executed by reactive region logic (AstAlwaysReactive) update in the
 // Re-NBA region (IEEE 1800-2023 4.4.2.8). Their targets use the GenericGlobal
 // scheme, enqueuing to a second global queue, committed by reactive post logic
-// after each pass of the reactive logic (see V3Sched). An NBA in a function or
-// fork reactive logic may run, which other logic may also run, selects the queue
-// when executed, by whether the reactive logic is running.
+// once the reactive region set has no other work (see V3Sched). An NBA in a
+// function or fork reactive logic may run, which other logic may also run,
+// selects the queue when executed, by whether the reactive region set is
+// running, also in a process continuing there after it suspends (see V3Timing).
 //
 //*************************************************************************
 
@@ -754,10 +755,11 @@ class DelayedAnalysis final : public DelayedBase {
             const CodeVertex* const callerp = workList.back();
             workList.pop_back();
             // A process forked by reactive logic starts in it, as an immediately started fork
-            // made by V3Assert, then continues in the active region set if it suspends
-            // (a caller is only visited again when it gains a kind of logic)
+            // made by V3Assert, and continues in the reactive region set if it suspends (see
+            // V3Timing) (a caller is only visited again when it gains a kind of logic)
             if (callerp->m_reactive) {
                 for (CodeVertex* const forkp : callerp->m_forkps) {
+                    if (forkp->m_reactive) continue;
                     forkp->m_reactive = true;
                     workList.push_back(forkp);
                 }
@@ -1146,7 +1148,6 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
     AstNbaCommit* m_globalNbaCommitp = nullptr;  // Commit of the Scheme::GenericGlobal queue
     AstSenTree* m_globalNbaCommitSenTreep = nullptr;  // Sensitivities of m_globalNbaCommitp
     AstNbaCommit* m_reNbaCommitp = nullptr;  // Commit of the Re-NBA queue
-    AstVarScope* m_inReactiveVscp = nullptr;  // Set while reactive logic runs (see V3Sched)
     // Closure types, by the types of the values they capture
     std::map<std::vector<AstNodeDType*>, AstStructDType*> m_closureDTypeps;
     // Closure pools, by closure type and queue. Committing a queue releases its closures to their
@@ -1389,9 +1390,9 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
         postp->addStmtsp(m_globalNbaCommitp);
         return m_globalNbaCommitp;
     }
-    // Return the commit of the global queue of Re-NBAs, the NBAs executed by reactive region
-    // logic (IEEE 1800-2023 4.4.2.8), creating it on first use. V3Sched schedules it as
-    // reactive logic, committing the Re-NBAs of a pass of the reactive region.
+    // Return the commit of the global queue of Re-NBAs, the NBAs executed in the reactive region
+    // set (IEEE 1800-2023 4.4.2.8), creating it on first use. V3Sched schedules it as reactive
+    // logic, committing the Re-NBAs once the Reactive and Re-Inactive regions are empty.
     AstNbaCommit* getReNbaCommit() {
         if (m_reNbaCommitp) return m_reNbaCommitp;
         AstTopScope* const topScopep = v3Global.rootp()->topScopep();
@@ -1407,13 +1408,6 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
         triggerp->dtypeSetBit();
         AstSenTree* const senTreep
             = new AstSenTree{flp, new AstSenItem{flp, VEdgeType::ET_TRUE, triggerp}};
-        // Committed in each pass running reactive logic, which may have enqueued Re-NBAs
-        for (const V3GraphVertex& vtx : m_state.graph.vertices()) {
-            const ProcVertex* const procVtxp = vtx.cast<ProcVertex>();
-            if (!procVtxp || !procVtxp->m_reactive) continue;
-            senTreep->addSensesp(procVtxp->m_senTreep->sensesp()->cloneTree(true));
-        }
-        V3Const::constifyExpensiveEdit(senTreep);  // Remove duplicates
         AstActive* const activep = new AstActive{flp, "re-nba-enqueued", senTreep};
         activep->senTreeStorep(senTreep);
         topScopep->scopep()->addBlocksp(activep);
@@ -1423,13 +1417,14 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
         postp->addStmtsp(m_reNbaCommitp);
         return m_reNbaCommitp;
     }
-    // Return the flag V3Sched sets while running reactive logic, creating it on first use
+    // Return the flag V3Sched sets while running reactive logic, creating it on first use,
+    // unless V3Timing did
     AstVarScope* getInReactive() {
-        if (m_inReactiveVscp) return m_inReactiveVscp;
-        AstTopScope* const topScopep = v3Global.rootp()->topScopep();
-        m_inReactiveVscp = topScopep->createTemp("__VinReactive", 1);
-        v3Global.rootp()->inReactivep(m_inReactiveVscp);
-        return m_inReactiveVscp;
+        AstNetlist* const netlistp = v3Global.rootp();
+        if (!netlistp->inReactivep()) {
+            netlistp->inReactivep(netlistp->topScopep()->createTemp("__VinReactive", 1));
+        }
+        return netlistp->inReactivep();
     }
     // Add the variables updated by the NBAs to 'targetp' to those 'commitp' updates
     void addCommitTargets(AstNbaCommit* commitp, AstNode* targetp) {
@@ -1439,8 +1434,10 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
         }
         // A MemberRef via a virtual interface may select any instance of that interface
         for (AstVarScope* const vscp : m_state.ifaceVscps[VN_AS(targetp, Var)]) {
-            // Avoid adding it twice if the instance is also the target of an explicit NBA
-            if (m_state.targetInfo.tryGet(vscp)) continue;
+            // Avoid adding it twice if the instance is also the target of an explicit NBA,
+            // which adds it to the commits of its own NBAs
+            const TargetInfo* const infop = m_state.targetInfo.tryGet(vscp);
+            if (infop && (commitp != m_reNbaCommitp || infop->m_reactive)) continue;
             commitp->addTargetsp(new AstVarRef{vscp->fileline(), vscp, VAccess::WRITE});
         }
     }
