@@ -1713,14 +1713,19 @@ class ConstraintExprVisitor final : public VNVisitor {
             = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
         AstNodeExpr* const lhsp = makeArrayOperandp(blockp, nodep->lhsp());
         AstNodeExpr* const rhsp = makeArrayOperandp(blockp, nodep->rhsp());
-        AstVar* const idxVarp
-            = new AstVar{fl, VVarType::BLOCKTEMP, "__VeqIdx", nodep->findIntDType()};
-        AstForeachHeader* const headerp
-            = new AstForeachHeader{fl, lhsp->cloneTreePure(false), idxVarp};
-        AstNodeExpr* const offsetp
-            = new AstSub{fl, new AstVarRef{fl, idxVarp, VAccess::READ},
-                         new AstConst{fl, static_cast<uint32_t>(adtypep->lo())}};
-        offsetp->dtypeFrom(idxVarp);
+        // The offset of each element, in a loop that is not unrolled, so the size of the code
+        // does not grow with the elements. The elements are visited in the order of a foreach,
+        // from the left bound, which keeps the order of the solver terms.
+        AstVar* const idxVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VeqIdx"),
+                                           nodep->findUInt32DType()};
+        idxVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        blockp->addDeclsp(idxVarp);
+        const uint32_t elements = static_cast<uint32_t>(adtypep->elementsConst());
+        AstNodeExpr* offsetp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        if (!adtypep->declRange().ascending()) {
+            offsetp = new AstSub{fl, new AstConst{fl, elements - 1}, offsetp};
+            offsetp->dtypeFrom(idxVarp);
+        }
         AstNodeExpr* const lhsSelp = newElementSelp(lhsp, offsetp->cloneTreePure(false));
         AstNodeExpr* const rhsSelp = newElementSelp(rhsp, offsetp);
         AstEq* const itemp = new AstEq{fl, lhsSelp, rhsSelp};
@@ -1732,7 +1737,18 @@ class ConstraintExprVisitor final : public VNVisitor {
         // Starting from the identity, bvand always has at least two operands
         blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
                                         new AstConst{fl, AstConst::String{}, "#b1"}});
-        blockp->addStmtsp(new AstForeach{fl, headerp, appendp});
+        blockp->addStmtsp(
+            new AstAssign{fl, new AstVarRef{fl, idxVarp, VAccess::WRITE}, new AstConst{fl, 0U}});
+        AstLoop* const loopp = new AstLoop{fl};
+        loopp->unroll(VOptionBool::OPT_FALSE);
+        loopp->addStmtsp(new AstLoopTest{
+            fl, loopp,
+            new AstLt{fl, new AstVarRef{fl, idxVarp, VAccess::READ}, new AstConst{fl, elements}}});
+        loopp->addStmtsp(appendp);
+        loopp->addStmtsp(new AstAssign{
+            fl, new AstVarRef{fl, idxVarp, VAccess::WRITE},
+            new AstAdd{fl, new AstVarRef{fl, idxVarp, VAccess::READ}, new AstConst{fl, 1U}}});
+        blockp->addStmtsp(loopp);
         AstNodeExpr* const allEqp
             = new AstConcatN{fl,
                              new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(bvand "},
