@@ -630,16 +630,12 @@ static const AstNode* instanceStateRefp(const AstNode* nodep,
             found = !taskRefp->classOrPackagep() && taskp && visitedr.insert(taskp).second
                     && instanceStateRefp(taskp, ownVarps, visitedr);
         } else if (const AstAssertCtlArgs* const argsp = VN_CAST(refp, AssertCtlArgs)) {
-            // An assertion control scope resolves from the instance like a hierarchical
-            // reference, before LinkDot resolves it, unless it is named from $root
-            for (const AstNode* itemp = argsp->itemsp(); itemp; itemp = itemp->nextp()) {
-                const AstNode* firstp = itemp;
-                while (const AstDot* const dotp = VN_CAST(firstp, Dot)) firstp = dotp->lhsp();
-                if (firstp->name() != "$root") found = true;
-            }
-        } else {
-            // A hierarchical reference is relative to the instance
-            found = VN_IS(refp, VarXRef);
+            // An assertion control scope resolves like a hierarchical reference, before
+            // linkDotParamed resolves it; linkDotPrimary found which depend on the instance
+            found = argsp->instanceDependent();
+        } else if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+            // A hierarchical reference is relative to the instance, unless absolute
+            found = !xrefp->assertCtlAbsolute();
         }
         if (found) foundp = refp;
         return found;
@@ -781,9 +777,11 @@ void AstAssertCtl::dumpJson(std::ostream& str) const {
 void AstAssertCtlArgs::dump(std::ostream& str) const {
     Super::dump(str);
     if (scoped()) str << " [SCOPED]";
+    if (instanceDependent()) str << " [INSTDEP]";
 }
 void AstAssertCtlArgs::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, scoped);
+    dumpJsonBoolFuncIf(str, instanceDependent);
     dumpJsonGen(str);
 }
 void AstAssertCtlTarget::dump(std::ostream& str) const {
@@ -5523,6 +5521,7 @@ void AstVarXRef::dump(std::ostream& str) const {
     if (containsGenBlock()) str << " [GENBLK]";
     if (readOnlyModport()) str << " [ROMODPORT]";
     if (assertCtlOptional()) str << " [ACTLOPT]";
+    if (assertCtlAbsolute()) str << " [ACTLABS]";
     str << ".=" << dotted() << " ";
     if (inlinedDots() != "") str << " inline.=" << inlinedDots() << " - ";
     if (varScopep()) {
@@ -5537,6 +5536,7 @@ void AstVarXRef::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, containsGenBlock);
     dumpJsonBoolFuncIf(str, readOnlyModport);
     dumpJsonBoolFuncIf(str, assertCtlOptional);
+    dumpJsonBoolFuncIf(str, assertCtlAbsolute);
     dumpJsonStrFunc(str, dotted);
     dumpJsonStrFunc(str, inlinedDots);
     dumpJsonGen(str);
