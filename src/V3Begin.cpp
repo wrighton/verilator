@@ -591,9 +591,25 @@ static AstNodeStmt* createForeachLoopRanged(AstForeach* nodep, AstBegin* blockp,
     right.setLongS(declRange.right());
     AstNodeExpr* const leftp = new AstConst{fl, left};
     AstNodeExpr* const rightp = new AstConst{fl, right};
-    return createForeachLoop(nodep, blockp, bodysp, false /*fixed array size*/, subfromp, varp,
-                             leftp, rightp,
-                             declRange.left() <= declRange.right() ? VNType::LteS : VNType::GteS);
+    const bool ascending = declRange.left() <= declRange.right();
+    AstNodeStmt* const stmtsp
+        = createForeachLoop(nodep, blockp, bodysp, false /*fixed array size*/, subfromp, varp,
+                            leftp, rightp, ascending ? VNType::LteS : VNType::GteS);
+    // Stepping past a last index at an end of the range of int wraps around to the other end,
+    // where the loop condition still holds: end such a loop when the index has wrapped around
+    // to before the first index instead.
+    if (declRange.right()
+        == (ascending ? std::numeric_limits<int>::max() : std::numeric_limits<int>::min())) {
+        AstLoopTest* const testp = VN_AS(VN_AS(stmtsp->nextp(), Loop)->stmtsp(), LoopTest);
+        AstNodeExpr* const varRefp = new AstVarRef{fl, varp, VAccess::READ};
+        AstNodeExpr* const firstp = new AstConst{fl, left};
+        AstNodeExpr* const condp
+            = ascending ? static_cast<AstNodeExpr*>(new AstGteS{fl, varRefp, firstp})
+                        : new AstLteS{fl, varRefp, firstp};
+        testp->condp()->unlinkFrBack()->deleteTree();
+        testp->condp(condp);
+    }
+    return stmtsp;
 }
 static AstNodeStmt* createForeachAssoc(FileLine* fl, AstBegin* blockp, AstVar* varp,
                                        AstNodeExpr* subfromp, AstNodeDType* fromDtp,

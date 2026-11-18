@@ -221,6 +221,18 @@ class CaptureMatrix;
   rand int cube[2][2][2];
 endclass
 
+// Foreach over ranges ending at an end of the range of int, also too long to unroll
+class K;
+  rand bit [6:0] top1[32'sh7fffffff:32'sh7fffffff];
+  rand bit [6:0] top100[32'sh7fffff9c:32'sh7fffffff];
+  rand bit [6:0] bot100[-2147483549:(-2147483647 - 1)];
+  constraint c_k {
+    foreach (top1[i]) top1[i] == 7'd9;
+    foreach (top100[i]) top100[i] == 7'(i & 3);
+    foreach (bot100[i]) bot100[i] == 7'(i + 7);
+  }
+endclass
+
 module t;
   initial begin
     automatic C c = new;
@@ -304,6 +316,16 @@ module t;
       };
       `checkd(randomize_result, 1);
       foreach (matrix[i, j]) `checkd(matrix[i][j], 16 * i + j + offset);
+    end
+    begin
+      automatic K k = new;
+      automatic int ok = k.randomize();
+      `checkd(ok, 1);
+      `checkd(k.top1[32'sh7fffffff], 9);
+      `checkd(k.top100[32'sh7fffff9c], 0);
+      `checkd(k.top100[32'sh7fffffff], 3);
+      `checkd(k.bot100[-2147483549], 106);
+      `checkd(k.bot100[-2147483647 - 1], 7);
     end
     $write("*-* All Finished *-*\n");
     $finish;
