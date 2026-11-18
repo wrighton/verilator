@@ -84,6 +84,8 @@ module t;
   clocking local_cb @(posedge clk);
     input lfsr;
   endclocking
+  global clocking @(negedge clk);
+  endclocking
 
   int gated, body, inverted, reversed, zero_skew, negedge_gated, off_edge;
   int local_gated, local_body;
@@ -91,6 +93,9 @@ module t;
   clockvar_monitor mon;
   // The event expression itself must use the sampled clockvar (14.13).
   int sensp, expected_rises;
+  // The clockvar settled at the preceding posedge; its cloned references retain that sample.
+  int gclk_rises;
+  always @(negedge clk iff $rose_gclk(i.cb.v[0]))++gclk_rises;
   always @(posedge i.cb.v[0])++sensp;
   always @(i.cb iff i.cb.v[0])++gated;
   always @(i.cb) if (i.cb.v[0])++body;
@@ -131,6 +136,7 @@ module t;
     `checkd(i.cb0.v, edges == 19 ? 7'h69 : PRE[edges+1]);
     `checkd(i.cbn.v, edges == 19 ? 7'h69 : PRE[edges+1]);
     `checkd(sensp, expected_rises);
+    `checkd(gclk_rises, expected_rises);
     `checkd(gated, expected);
     `checkd(body, expected);
     `checkd(inverted, edges + 1 - expected);
