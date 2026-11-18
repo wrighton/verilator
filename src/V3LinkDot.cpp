@@ -198,7 +198,8 @@ class AssertControlTargetVisitor final : public VNVisitor {
                               : static_cast<AstNodeVarRef*>(new AstVarXRef{
                                     nodep->fileline(), varp, m_instancePath, VAccess::READWRITE});
                     if (AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
-                        // The state of a site in a package task is the package's
+                        // The state of a site in a package task is the package's; seeding adds
+                        // state as direct statements of the module, class or package owning it
                         const AstNode* headp = varp;
                         while (headp->backp()->nextp() == headp) headp = headp->backp();
                         if (AstPackage* const pkgp = VN_CAST(headp->backp(), Package)) {
@@ -8252,15 +8253,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 VSymEnt* okSymp = nullptr;
                 const VSymEnt* symp = m_statep->findDotted(itemp->fileline(), m_curSymp, firstName,
                                                            baddot, okSymp, true);
-                // Owned by an instance below the top, not by a class, a package or the top
+                // Not found yet, or owned by an instance below the top: not a class, package,
+                // $unit, top module or top interface
+                if (!symp) dependent = true;
                 for (; symp; symp = symp->parentp()) {
-                    const AstNode* const ownerp = symp->nodep();
-                    if (VN_IS(ownerp, Cell) || VN_IS(ownerp, Class) || VN_IS(ownerp, Package)
-                        || VN_IS(ownerp, NodeModule)) {
+                    if (VN_IS(symp->nodep(), NodeModule)) break;
+                    if (VN_IS(symp->nodep(), Cell)) {
+                        if (symp->parentp() != m_statep->rootEntp()) dependent = true;
                         break;
                     }
                 }
-                if (!symp || VN_IS(symp->nodep(), Cell)) dependent = true;
             }
             nodep->instanceDependent(dependent);
         }
@@ -8289,6 +8291,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (!isAssertControlTarget(targetp)) {
                 itemp->v3error("Assertion control target is not a scope or assertion: '"
                                << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
+                continue;
+            }
+            const VSymEnt* ownerSymp = foundp;
+            while (ownerSymp && !VN_IS(ownerSymp->nodep(), NodeModule)
+                   && !VN_IS(ownerSymp->nodep(), Cell)) {
+                ownerSymp = ownerSymp->parentp();
+            }
+            if (ownerSymp && VN_IS(ownerSymp->nodep(), Class) && ownerSymp->nodep() != m_modp) {
+                // Its state is of each object of that class, not of an instance
+                itemp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: assertion control scope in another class: '"
+                                  << AstNode::prettyName(path) << "'");
                 continue;
             }
             const VSymEnt* instanceSymp = foundp;
