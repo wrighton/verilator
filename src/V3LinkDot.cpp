@@ -8287,6 +8287,242 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                        reach.childPath, targets, reaches.size() > 1};
         }
     }
+    // The last port of interface type in a scope name, as found from one instance's symbols
+    struct AssertCtlPortCrossing final {
+        size_t components = 0;  // Written components up to and including that port, or 0
+        VSymEnt* anchorp = nullptr;  // Interface instance the symbols reach through it
+        const VSymEnt* foundp = nullptr;  // The whole name, resolved below the anchor
+        bool modport = false;  // That port selects a modport
+        bool isVirtual = false;  // A component is a virtual interface variable
+    };
+    // Resolve a scope name component by component. Past a port of interface type, the rest of
+    // the name is resolved within the interface instance the symbols reach through that port.
+    AssertCtlPortCrossing assertControlPortCrossing(FileLine* flp, VSymEnt* lookupSymp,
+                                                    const std::vector<string>& names) {
+        AssertCtlPortCrossing crossing;
+        VSymEnt* basep = lookupSymp;
+        size_t baseIndex = 0;
+        for (size_t i = 0; i < names.size(); ++i) {
+            string rest;
+            for (size_t j = baseIndex; j <= i; ++j) rest = VString::dot(rest, ".", names[j]);
+            string baddot;
+            VSymEnt* okSymp = nullptr;
+            // Past a port, only names within the interface instance (or modport) reached
+            const VSymEnt* const symp
+                = m_statep->findDotted(flp, basep, rest, baddot, okSymp, baseIndex == 0);
+            if (!symp) break;
+            if (i + 1 == names.size()) crossing.foundp = symp;
+            const AstVar* const varp = VN_CAST(symp->nodep(), Var);
+            if (!varp) continue;
+            AstIfaceRefDType* const ifacerefp = LinkDotState::ifaceRefFromArray(varp->subDTypep());
+            if (!ifacerefp) continue;
+            if (ifacerefp->isVirtual()) {
+                crossing.isVirtual = true;
+                continue;
+            }
+            AstIface* const ifacep = ifacerefp->ifaceViaCellp();
+            if (!ifacep || !LinkDotState::existsNodeSym(ifacep)) continue;
+            // Only through an instance of the interface, not a top-level interface module
+            if (!VN_IS(LinkDotState::getNodeSym(ifacep)->nodep(), Cell)) continue;
+            crossing.components = i + 1;
+            crossing.anchorp = LinkDotState::getNodeSym(ifacep);
+            crossing.modport = ifacerefp->isModport();
+            crossing.foundp = nullptr;
+            // Through a modport, only the names it lists are found, as for other references
+            basep = crossing.anchorp;
+            if (crossing.modport) {
+                VSymEnt* const modportSymp
+                    = crossing.anchorp->findIdFlat(ifacerefp->modportName());
+                if (!modportSymp || !VN_IS(modportSymp->nodep(), Modport)) break;
+                // A name the modport does not list, such as an assertion label, is not reached
+                if (i + 1 < names.size() && !modportSymp->findIdFlat(names[i + 1])) break;
+                basep = modportSymp;
+            }
+            baseIndex = i + 1;
+        }
+        return crossing;
+    }
+    // The scope of this statement within one instance of its module: the instance's copies of
+    // the blocks and subroutines holding it
+    VSymEnt* assertControlCallerScope(VSymEnt* callerSymp) {
+        if (callerSymp == m_modSymp) return m_curSymp;
+        std::vector<const VSymEnt*> chain;
+        for (const VSymEnt* symp = m_curSymp; symp != m_modSymp; symp = symp->parentp()) {
+            UASSERT_OBJ(symp, m_modp, "Assertion control statement scope outside its module");
+            chain.push_back(symp);
+        }
+        VSymEnt* scopep = callerSymp;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            // By node, as generated block names (e.g. of foreach) can differ between instances
+            VSymEnt* nextp = nullptr;
+            for (const auto& entry : scopep->idNameMap()) {
+                if (entry.second->nodep() == (*it)->nodep()) {
+                    nextp = entry.second;
+                    break;
+                }
+            }
+            UASSERT_OBJ(nextp, m_modp, "Module instance without an assertion control scope");
+            scopep = nextp;
+        }
+        return scopep;
+    }
+    // A scope name through a port of interface type names the instance connected to the port
+    // (IEEE 1800-2023 20.11, 25.3). The symbols here reach one representative instance of the
+    // interface instead, so the name is kept as written up to the last such port, and the
+    // scoped pass binds it through each instance's actual connection, as it does other
+    // references through ports. The remainder below that port is the same in every instance of
+    // the interface body reached. The name is resolved from the statement's scope in every
+    // instance of the module holding it: instances connected to differently elaborated bodies
+    // (other parameters or interface types) add each body's sites as optional references, as
+    // for upward names. Returns whether the name crosses such a port, and so was handled here.
+    bool assertControlThroughPort(AstNodeExpr* itemp, AstAssertCtlArgs* argsp, const string& path,
+                                  std::unordered_map<string, AstAssertCtlTarget*>& targets) {
+        FileLine* const flp = itemp->fileline();
+        std::vector<string> names;
+        for (const string& name : VString::split(path, '.')) names.push_back(name);
+        std::vector<VSymEnt*> scopes;
+        const std::vector<VSymEnt*>& callerSyms = m_statep->moduleInstanceSyms(m_modp);
+        for (VSymEnt* const callerSymp : callerSyms) {
+            scopes.push_back(assertControlCallerScope(callerSymp));
+        }
+        // Package code, which has no instances, and cannot name a port
+        if (scopes.empty()) scopes.push_back(m_curSymp);
+        std::vector<AssertCtlPortCrossing> crossings;
+        size_t crossingCount = 0;
+        for (VSymEnt* const scopep : scopes) {
+            crossings.push_back(assertControlPortCrossing(flp, scopep, names));
+            const AssertCtlPortCrossing& crossing = crossings.back();
+            if (crossing.isVirtual) {
+                itemp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: assertion control scope through a virtual interface: '"
+                                  << AstNode::prettyName(path) << "'");
+                return true;
+            }
+            // A name a modport does not list keeps the existing diagnostic
+            if (crossing.components
+                && !(crossing.modport && crossing.components < names.size() && !crossing.foundp)) {
+                ++crossingCount;
+            }
+        }
+        if (!crossingCount) return false;
+        if (crossingCount < scopes.size()) {
+            // An instance where the name names no scope gets the existing diagnostic
+            for (size_t idx = 0; idx < scopes.size(); ++idx) {
+                const AssertCtlPortCrossing& crossing = crossings[idx];
+                const VSymEnt* targetSymp = nullptr;
+                if (crossing.components) {
+                    targetSymp
+                        = crossing.components == names.size() ? crossing.anchorp : crossing.foundp;
+                } else {
+                    string baddot;
+                    VSymEnt* okSymp = nullptr;
+                    targetSymp
+                        = m_statep->findDotted(flp, scopes[idx], path, baddot, okSymp, true);
+                }
+                if (!targetSymp || !isAssertControlTarget(targetSymp->nodep())) {
+                    itemp->v3error("Assertion control target is not a scope or assertion from '"
+                                   << AstNode::prettyName(assertionScopePath(scopes[idx]))
+                                   << "': '" << AstNode::prettyName(path)
+                                   << "' (IEEE 1800-2023 20.11).");
+                    return true;
+                }
+            }
+            itemp->v3warn(E_UNSUPPORTED, "Unsupported: assertion control scope that crosses an "
+                                         "interface port from only some instances: '"
+                                             << AstNode::prettyName(path) << "'");
+            return true;
+        }
+        // A name from $root, or from a top module in every instance, is the same from every
+        // instance, so it is absolute; AssertControlTargetVisitor prefixes $root, which also keeps
+        // a closer scope of the same name from hiding it. Otherwise each instance resolves the
+        // name as written.
+        const bool fromRoot = names[0] == "$root";
+        bool absolute = true;
+        if (!fromRoot) {
+            for (VSymEnt* const scopep : scopes) {
+                string baddot;
+                VSymEnt* okSymp = nullptr;
+                const VSymEnt* const firstSymp
+                    = m_statep->findDotted(flp, scopep, names[0], baddot, okSymp, true);
+                const AstNodeModule* const firstModp
+                    = firstSymp ? VN_CAST(firstSymp->nodep(), NodeModule) : nullptr;
+                if (!firstModp || !firstModp->isTop()
+                    || firstSymp->parentp() != m_statep->rootEntp()) {
+                    absolute = false;
+                }
+            }
+        }
+        struct Reach final {
+            const AstNode* bodyp;
+            AstNode* targetp;
+            string instancePath;
+            string childPath;
+        };
+        std::vector<Reach> reaches;
+        for (size_t idx = 0; idx < scopes.size(); ++idx) {
+            const AssertCtlPortCrossing& crossing = crossings[idx];
+            const string fromName = AstNode::prettyName(assertionScopePath(scopes[idx]));
+            const VSymEnt* const foundp = crossing.foundp;
+            const bool portTarget = crossing.components == names.size();
+            AstNode* const targetp = portTarget ? crossing.anchorp->nodep()
+                                     : foundp   ? foundp->nodep()
+                                                : nullptr;
+            if (!isAssertControlTarget(targetp)) {
+                itemp->v3error("Assertion control target is not a scope or assertion from '"
+                               << fromName << "': '" << AstNode::prettyName(path)
+                               << "' (IEEE 1800-2023 20.11).");
+                return true;
+            }
+            if (crossing.modport) {
+                // A modport lists the names reachable through the port, which cannot include
+                // assertion control state
+                itemp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: assertion control scope through a modport port: '"
+                                  << AstNode::prettyName(path) << "'");
+                return true;
+            }
+            // The target must be within the interface instance reached through the port, and not
+            // through a class type (IEEE 1800-2023 8.23): a name imported into the interface is
+            // not visible by a hierarchical reference into it (IEEE 1800-2023 26.3)
+            const VSymEnt* const targetSymp = portTarget ? crossing.anchorp : foundp;
+            const VSymEnt* instanceSymp = nullptr;
+            bool withinAnchor = false;
+            for (const VSymEnt* symp = targetSymp; symp; symp = symp->parentp()) {
+                if (VN_IS(symp->nodep(), Class)) break;
+                if (!instanceSymp && VN_IS(symp->nodep(), Cell)) instanceSymp = symp;
+                if (symp == crossing.anchorp) {
+                    withinAnchor = true;
+                    break;
+                }
+            }
+            string instanceRest;
+            string childRest;
+            if (!withinAnchor || !instanceSymp
+                || !assertionRelativeScopePath(instanceSymp, crossing.anchorp, instanceRest)
+                || !assertionRelativeScopePath(targetSymp, crossing.anchorp, childRest)) {
+                itemp->v3error("Assertion control target is not a scope or assertion from '"
+                               << fromName << "': '" << AstNode::prettyName(path)
+                               << "' (IEEE 1800-2023 20.11).");
+                return true;
+            }
+            string prefix;
+            for (size_t i = fromRoot ? 1 : 0; i < crossing.components; ++i) {
+                prefix = VString::dot(prefix, ".", names[i]);
+            }
+            const AstNode* const bodyp = assertControlTargetBody(targetp);
+            if (std::none_of(reaches.begin(), reaches.end(),
+                             [&](const Reach& reach) { return reach.bodyp == bodyp; })) {
+                reaches.push_back({bodyp, targetp, VString::dot(prefix, ".", instanceRest),
+                                   VString::dot(prefix, ".", childRest)});
+            }
+        }
+        for (const Reach& reach : reaches) {
+            AssertControlTargetVisitor{reach.targetp,   argsp,   reach.instancePath,
+                                       reach.childPath, targets, reaches.size() > 1,
+                                       absolute};
+        }
+        return true;
+    }
     string assertControlPath(AstNodeExpr* nodep) {
         if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
         if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
@@ -8355,6 +8591,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         for (AstNodeExpr* const itemp : nodep->itemspList()) {
             const string path = assertControlPath(itemp);
+            if (!path.empty() && assertControlThroughPort(itemp, nodep, path, targets)) continue;
             string baddot;
             VSymEnt* okSymp = nullptr;
             VSymEnt* const foundp = path.empty()
