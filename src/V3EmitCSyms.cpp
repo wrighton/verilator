@@ -1504,8 +1504,11 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
             const std::pair<size_t, std::string> top = EmitCUtil::splitTopPath(sd.m_prettyName);
             row += V3OutFormatter::quoteNameControls(VIdProtect::protectWordsIf(top.second, true));
             row += "\", \"";
+            // A package is outside the hierarchy, so its whole name, which may be an escaped
+            // identifier with a '.', is its identifier
             row += V3OutFormatter::quoteNameControls(
-                protect(scopeDecodeIdentifier(sd.m_prettyName)));
+                protect(sd.m_type == "SCOPE_PACKAGE" ? sd.m_prettyName
+                                                     : scopeDecodeIdentifier(sd.m_prettyName)));
             row += "\", \"";
             row += V3OutFormatter::quoteNameControls(sd.m_defName);
             row += "\", ";
