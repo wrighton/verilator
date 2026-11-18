@@ -8,6 +8,7 @@ module t (
     input clk
 );
   logic a, b, c, d;
+  logic [1:0] v2;
   bit qq[$];
   int n;
   class Cls;
@@ -27,6 +28,7 @@ module t (
 
   // The bounded repetition would need too many states
   cover property (@(posedge clk) a within (b ##1 !b[*1:6000] ##1 b));
+  cover property (@(posedge clk) a within (b ##1 !b[*1:20000] ##1 b));
 
   // A variable-length outer sequence is only supported as a repetition of a
   // pure boolean, between ticks requiring its negation, as the whole sequence
@@ -46,6 +48,17 @@ module t (
   cover property (@(posedge clk) a within ((obj != null) ##1 !(obj != null)[+] ##1 (obj != null)));
   cover property (@(posedge clk) a within (b ##1 !b[+] ##1 (##1 b)));
   cover property (@(posedge clk) a within (b ##1 !b[+] ##1 b ##1 !b[+] ##1 b));
+  cover property (@(posedge clk) a within (b ##2 !b[+] ##1 b));
+  cover property (@(posedge clk) a within (b ##1 !b[+] ##2 b));
+  cover property (@(posedge clk) a within (!b[+] ##1 b));
+  cover property (@(posedge clk) a within (b ##1 c[->2] ##1 d));
+  cover property (@(posedge clk) a within (b ##1 (!b ##1 c)[+] ##1 b));
+  cover property (@(posedge clk) a within ((b ##[1:2] c) ##1 !b[+] ##1 b));
+  cover property (@(posedge clk) (a[*2] ##1 c) within (b ##1 !b[+] ##1 b));
+  cover property (@(posedge clk) (a ##1 c[*2]) within (b ##1 !b[+] ##1 b));
+  cover property (@(posedge clk) a within ((a && c) ##1 !b[+] ##1 b));
+  cover property (@(posedge clk) a within (~c ##1 b[+] ##1 ~c));
+  cover property (@(posedge clk) a within ((v2 != 0) ##1 ~v2[+] ##1 (v2 != 0)));
   cover property (@(posedge clk) (a within (b ##1 !b[+] ##1 b)) ##1 c);
   cover property (@(posedge clk) (a within (b ##1 !b[+] ##1 b)) |-> c);
   cover property (@(posedge clk) not (a within (b ##1 !b[+] ##1 b)));
