@@ -838,7 +838,7 @@ public:
 class AstCellInlineScope final : public AstNode {
     // A named block or inlined cell flattened into a scope, kept so it can be
     // reported as a VPI scope. Only created with --vpi, by V3Scope for named
-    // blocks, and by V3Inline for inlined cells.
+    // blocks, and by V3Inline for inlined cells, above a variable VPI can reach.
     // Parents: Scope
     // Children: none
     std::string m_name;  // Flattened name relative to the containing scope
@@ -2729,6 +2729,9 @@ public:
     void trace(bool flag) { m_trace = flag; }
     void isLatched(bool flag) { m_isLatched = flag; }
     bool isForceable() const { return m_isForceable; }
+    // VPI may access this variable, or the helpers V3Force makes for it. (A public read-write
+    // variable is also public readable.)
+    bool isVpiVisible() const { return isSigUserRdPublic() || isForceable(); }
     AstVar* forceRdVarp() const { return m_forceRdVarp; }
     void forceRdVarp(AstVar* const nodep) { m_forceRdVarp = nodep; }
     AstVar* forceEnVarp() const { return m_forceEnVarp; }
