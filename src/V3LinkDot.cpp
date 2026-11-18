@@ -169,6 +169,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
     string m_childPath;  // Path including lexical/generate scopes for child traversal
     int m_depth = 0;  // Module-instance depth relative to the selected scope
     const bool m_optional;  // Sites of one of several elaborations reached by an upward name
+    const bool m_absolute;  // Sites named by an absolute path, the same from every instance
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
         VL_RESTORER_COPY(m_instancePath);
@@ -198,6 +199,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
                                     nodep->fileline(), varp, m_instancePath, VAccess::READWRITE});
                     if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
                         xrefp->assertCtlOptional(m_optional);
+                        xrefp->assertCtlAbsolute(m_absolute);
                         s_assertCtlOptionalMade |= m_optional;
                     }
                     AstAssertCtlTarget* const targetp
@@ -216,12 +218,13 @@ public:
     AssertControlTargetVisitor(AstNode* nodep, AstAssertCtlArgs* argsp, const string& instancePath,
                                const string& childPath,
                                std::unordered_map<string, AstAssertCtlTarget*>& targets,
-                               bool optional = false)
+                               bool optional = false, bool absolute = false)
         : m_argsp{argsp}
         , m_targets{targets}
         , m_instancePath{instancePath}
         , m_childPath{childPath}
-        , m_optional{optional} {
+        , m_optional{optional}
+        , m_absolute{absolute} {
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             iterateAndNextNull(cellp->modp()->stmtsp());
         } else if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
@@ -8225,6 +8228,31 @@ class LinkDotResolveVisitor final : public VNVisitor {
         LINKDOT_VISIT_START();
         checkNoDot(nodep);
         iterateAndNextNull(nodep->levelp());
+        if (m_statep->forPrimary()) {
+            // Whether a scope name depends on the instance holding this statement, by how its
+            // first name is visible from here (IEEE 1800-2023 23.8): not from $root, a top
+            // module, or within the holding scope itself. V3Param copies a module per instance
+            // for a class whose scope names depend on it (see AstClass::instanceStateRefp).
+            bool dependent = false;
+            for (AstNodeExpr* const itemp : nodep->itemspList()) {
+                const string path = assertControlPath(itemp);
+                const string firstName = path.substr(0, path.find('.'));
+                string baddot;
+                VSymEnt* okSymp = nullptr;
+                const VSymEnt* const firstSymp
+                    = firstName == "$root" ? nullptr
+                                           : m_statep->findDotted(itemp->fileline(), m_curSymp,
+                                                                  firstName, baddot, okSymp, true);
+                string firstPath;
+                if (firstName != "$root"
+                    && !(firstSymp
+                         && (firstSymp->parentp() == m_statep->rootEntp()
+                             || assertionRelativeScopePath(firstSymp, m_modSymp, firstPath)))) {
+                    dependent = true;
+                }
+            }
+            nodep->instanceDependent(dependent);
+        }
         // Scope names must not resolve as ordinary value expressions. Resolve them after
         // parameter and generate expansion, but before assertion lowering removes labels.
         if (!m_statep->forParamed()) return;
@@ -8232,7 +8260,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (!nodep->scoped()) {
             for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
                 if (!modp->isTop()) continue;
-                AssertControlTargetVisitor{modp, nodep, modp->name(), modp->name(), targets};
+                AssertControlTargetVisitor{modp,    nodep, modp->name(), modp->name(),
+                                           targets, false, true};
             }
         }
         for (AstNodeExpr* const itemp : nodep->itemspList()) {
@@ -8274,6 +8303,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string instancePath;
             string childPath;
             string firstPath;
+            bool absolute = false;
             // An upward search can find the instance whose symbols resolve this statement; that
             // is local only when named by the module's own name
             const bool firstLocal = firstSymp
@@ -8292,8 +8322,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else {
                 instancePath = assertionScopePath(instanceSymp);
                 childPath = assertionScopePath(foundp);
+                absolute = true;
             }
-            AssertControlTargetVisitor{targetp, nodep, instancePath, childPath, targets};
+            AssertControlTargetVisitor{targetp, nodep, instancePath, childPath,
+                                       targets, false, absolute};
         }
         if (nodep->itemsp()) {
             AstNode* itemsp = nodep->itemsp()->unlinkFrBackWithNext();
