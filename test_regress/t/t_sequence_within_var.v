@@ -35,7 +35,7 @@ module t (
   localparam int DIRECTED = 32;  // Ticks with hand-derived stimulus
   localparam int LAST = 231;
   localparam int TICKS = 256;
-  localparam int NCASE = 13;
+  localparam int NCASE = 15;
 
   int cyc = 0;
   int tick = 0;  // Value of cyc sampled at the current clock tick
@@ -74,13 +74,14 @@ module t (
   bit hist_h[TICKS], hist_r[TICKS], hist_a[TICKS], hist_b[TICKS];
   bit hist_c[TICKS], hist_p[TICKS], hist_q[TICKS];
 
-  // Inner `!r`, `b`, `p ##1 q` or `p ##3 q` matches in [s:e]
+  // Inner `!r`, `b`, `p ##1 q`, `p ##3 q` or `!r ##0 p` matches in [s:e]
   function automatic bit innerIn(int s, int e, int kind);
     for (int k = s; k <= e; ++k) begin
       if (kind == 0 && !hist_r[k]) return 1;
       if (kind == 1 && hist_b[k]) return 1;
       if (kind == 2 && k < e && hist_p[k] && hist_q[k+1]) return 1;
       if (kind == 3 && k + 3 <= e && hist_p[k] && hist_q[k+3]) return 1;
+      if (kind == 4 && !hist_r[k] && hist_p[k]) return 1;
     end
     return 0;
   endfunction
@@ -122,7 +123,10 @@ module t (
       8: return runOuter(s, e, 1, 200) && innerIn(s, e, 0);
       9: return hist_a[s] && runOuter(s, e, 1, -1) && hist_c[e] && innerIn(s, e, 0);
       10, 11: return highRun(s, e) && innerIn(s, e, 0);
-      default: return runOuter(s, e, 1, 2) && innerIn(s, e, 3);
+      12: return runOuter(s, e, 1, 2) && innerIn(s, e, 3);
+      // `(##1 h) ##1 !h[+] ##1 h`: the first tick of the match is not checked
+      13: return hist_h[s+1] && lowRun(s + 2, e - 1, 1, -1) && hist_h[e] && innerIn(s, e, 0);
+      default: return runOuter(s, e, 1, -1) && innerIn(s, e, 4);
     endcase
   endfunction
 
@@ -182,6 +186,14 @@ module t (
   cover property (@(posedge clk) disable iff (cyc < FIRST)
       (p ##3 q) within (h ##1 !h[*1:2] ##1 h))
     ++got[12][tick];
+  // Test: an outer sequence starting with a delay, so its first tick is unchecked but in it
+  cover property (@(posedge clk) disable iff (cyc < FIRST)
+      !r within ((##1 h) ##1 !h[+] ##1 h))
+    ++got[13][tick];
+  // Test: two inner booleans on one tick
+  cover property (@(posedge clk) disable iff (cyc < FIRST)
+      (!r ##0 p) within (h ##1 !h[+] ##1 h))
+    ++got[14][tick];
 
   within_if wif (
       .clk(clk),
@@ -228,6 +240,8 @@ module t (
         `checkd(expCount[2][t], int'(t == 6 || t == 9 || t == 23));
         `checkd(expCount[3][t], int'(t == 6));
         `checkd(expCount[7][t], int'(t == 23));
+        // Windows [2,6], [6,9], [11,14], [18,23]: !r at 3, 9, 11 (the unchecked first tick), 21
+        `checkd(expCount[13][t], int'(t == 6 || t == 9 || t == 14 || t == 23));
       end
       for (int i = 0; i < NCASE; ++i) begin
         total[i] = 0;
