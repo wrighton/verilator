@@ -2063,6 +2063,56 @@ class AssertVisitor final : public VNVisitor {
         return newIfAssertOn(queuesp, nodep->directive(), nodep->userType());
     }
 
+    // The action lists of a concurrent assertion that run in a process of their own: a jump that
+    // V3LinkJump made to a block outside them cannot leave that process. The loop exit after a
+    // $finish in a loop of the procedure only ends that loop, so it is dropped and the $finish
+    // stays; any other such jump is reported as unsupported. A cover deleted without coverage
+    // takes its actions along, so it is left alone.
+    void dropOutwardActionJumps(AstNodeCoverOrAssert* nodep) {
+        const AstCover* const coverp = VN_CAST(nodep, Cover);
+        if (coverp && !coverp->isSeqEvent() && !v3Global.opt.coverageUser()) return;
+        AstNode* failsp = nullptr;
+        if (AstAssert* const assertp = VN_CAST(nodep, Assert)) {
+            failsp = assertp->failsp();
+        } else if (AstAssertIntrinsic* const assertp = VN_CAST(nodep, AssertIntrinsic)) {
+            failsp = assertp->failsp();
+        }
+        std::unordered_set<const AstJumpBlock*> innerps;
+        std::vector<AstJumpGo*> gops;
+        for (AstNode* const listp : {failsp, static_cast<AstNode*>(nodep->passsp())}) {
+            for (AstNode* np = listp; np; np = np->nextp()) {
+                np->foreach([&](const AstJumpBlock* blockp) { innerps.insert(blockp); });
+            }
+        }
+        for (AstNode* const listp : {failsp, static_cast<AstNode*>(nodep->passsp())}) {
+            for (AstNode* np = listp; np; np = np->nextp()) {
+                np->foreach([&](AstJumpGo* gop) {
+                    if (!innerps.count(gop->blockp())) gops.push_back(gop);
+                });
+            }
+        }
+        for (AstJumpGo* const gop : gops) {
+            // As V3LinkJump visit(AstFinish) adds it: next to the $finish, with its file line,
+            // to the jump block around the whole loop
+            const AstFinish* const finishp = VN_CAST(gop->backp(), Finish);
+            const AstNode* const targetp = gop->blockp()->stmtsp();
+            const bool finishExit = finishp && finishp->nextp() == gop
+                                    && gop->fileline() == finishp->fileline()
+                                    && (VN_IS(targetp, Loop) || VN_IS(targetp, Foreach));
+            if (finishExit) {
+                // Never the head of a list, it follows its $finish
+                VL_DO_DANGLING(pushDeletep(gop->unlinkFrBack()), gop);
+                continue;
+            }
+            gop->v3warn(E_UNSUPPORTED, "Unsupported: control transfer out of a concurrent"
+                                       " assertion action block, which runs in a process of"
+                                       " its own");
+            // Keep the action list non-empty
+            gop->replaceWith(new AstBegin{gop->fileline(), "", nullptr, true});
+            VL_DO_DANGLING(pushDeletep(gop), gop);
+        }
+    }
+
     void visitAssertionIterate(AstNodeCoverOrAssert* nodep, AstNodeStmt* failsp) {
         FileLine* const flp = nodep->fileline();
         const bool obsDeferred = nodep->userType() == VAssertType::OBSERVED_DEFERRED_IMMEDIATE;
@@ -2187,6 +2237,8 @@ class AssertVisitor final : public VNVisitor {
             }
             // A task is not a process, so the assertion gets its own beside the task
             if (m_ftaskp) {
+                // Its actions move with it, out of the task
+                dropOutwardActionJumps(nodep);
                 m_ftaskp->addNextHere(
                     new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, nodep->unlinkFrBack()});
                 return;  // Later iterate will pick up
@@ -2196,6 +2248,17 @@ class AssertVisitor final : public VNVisitor {
                 procClockp = sentreep;
                 sentreep = nullptr;
             }
+        }
+        // The attempt of a property expression runs in a forked process (assertBody), with its
+        // actions
+        if (!nodep->immediate() && v3Global.opt.timing().isSetTrue()) {
+            const AstPropSpec* const specp = VN_CAST(nodep->propp(), PropSpec);
+            const AstNode* propp = specp ? specp->propp() : nodep->propp();
+            // V3AssertPre samples the whole property; visit(AstSampled) removes that later
+            if (const AstSampled* const sampledp = VN_CAST(propp, Sampled)) {
+                propp = sampledp->exprp();
+            }
+            if (VN_IS(propp, PExpr)) dropOutwardActionJumps(nodep);
         }
         //
         const string& message = nodep->name();
