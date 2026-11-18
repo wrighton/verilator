@@ -119,4 +119,8 @@ module t (
     endfunction
   endclass
 
+  task automatic timed_ref_nba(ref int arg);
+    arg <= #1 5;  // Error: timed nonblocking automatic task ref
+  endtask
+
 endmodule
