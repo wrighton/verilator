@@ -377,6 +377,7 @@ void createSettle(AstNetlist* netlistp, AstCFunc* const initFuncp, SenExprBuilde
     const auto& senTreeps = getSenTreesUsedBy({&comb, &hybrid});
     const TriggerKit trigKit = TriggerKit::create(netlistp, initFuncp, senExprBulider, {},
                                                   senTreeps, "stl", extraTriggers, true, false);
+    util::splitCheck(trigKit.compBasep());
 
     // Add trigger indices (comb has none, so only do the hybrid)
     addTriggerIndices(hybrid, trigKit, false);
@@ -490,6 +491,7 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
     }
     addVirtIfaceTriggerAssignments(netlistp, initFuncp, virtIfaceTriggers, firstVifTriggerIndex,
                                    trigKit);
+    util::splitCheck(trigKit.compBasep());
 
     // Add trigger indices
     addTriggerIndices(logic, trigKit, false);
@@ -859,6 +861,7 @@ void schedule(AstNetlist* netlistp) {
     }
     addVirtIfaceTriggerAssignments(netlistp, staticp, virtIfaceTriggers, firstVifTriggerIndex,
                                    trigKit);
+    util::splitCheck(trigKit.compBasep());
     if (v3Global.opt.stats()) V3Stats::statsStage("sched-create-triggers");
 
     // Note: Experiments so far show that running the Act (or Ico) regions on
