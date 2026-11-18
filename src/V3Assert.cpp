@@ -2230,16 +2230,23 @@ class AssertVisitor final : public VNVisitor {
                 nodep->v3warn(E_UNSUPPORTED,
                               "Unsupported: Procedural concurrent assertion with"
                               " clocking event inside always (IEEE 1800-2023 16.14.6)");
+                // Its actions move with it, out of the procedure
+                dropOutwardActionJumps(nodep);
+                // Leave an empty statement, so a block of the procedure whose only statement
+                // this was keeps a body (V3LinkJump's disable target wrapper expects one)
+                nodep->replaceWith(new AstBegin{flp, "", nullptr, true});
                 m_procedurep->addNext(
-                    new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, nodep->unlinkFrBack()});
+                    new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, nodep});
                 return;  // Later iterate will pick up
             }
             // A task is not a process, so the assertion gets its own beside the task
             if (m_ftaskp) {
                 // Its actions move with it, out of the task
                 dropOutwardActionJumps(nodep);
+                // As above, for a block under a fork item in the task
+                nodep->replaceWith(new AstBegin{flp, "", nullptr, true});
                 m_ftaskp->addNextHere(
-                    new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, nodep->unlinkFrBack()});
+                    new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, nodep});
                 return;  // Later iterate will pick up
             }
             sentreep->unlinkFrBack();
