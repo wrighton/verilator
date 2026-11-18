@@ -655,18 +655,20 @@ class RandomizeMarkVisitor final : public VNVisitor {
             }
         });
         FileLine* const fl = arrVarp->fileline();
+        // Rand fields that are arrays or objects are not solver variables of the elements (see
+        // createWriteVarForClassFields), so the items of the constraints on them are ignored.
+        // This includes the constraints the element class has cloned from its own rand
+        // objects.
+        const auto isIgnoredItem = [](const AstNode* const itemp) {
+            return itemp->exists([](const AstVarRef* const refp) {
+                const AstVar* const varp = refp->varp();
+                const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+                return varp->isClassMember() && varp->rand().isRandomizable()
+                       && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
+            });
+        };
         for (AstConstraint* const constrp : constrps) {
-            // Rand fields that are arrays or objects are not solver variables of the elements
-            // (see createWriteVarForClassFields), so constraints on them stay ignored. This
-            // includes the constraints the element class has cloned from its own rand objects.
-            if (!constrp->itemsp() || constrp->exists([](const AstVarRef* refp) {
-                    const AstVar* const varp = refp->varp();
-                    const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
-                    return varp->isClassMember() && varp->rand().isRandomizable()
-                           && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
-                })) {
-                continue;
-            }
+            if (!constrp->itemsp()) continue;
             // An index for each dimension
             std::vector<AstVar*> idxVarps;
             AstNode* idxVarsp = nullptr;
@@ -684,6 +686,24 @@ class RandomizeMarkVisitor final : public VNVisitor {
                 = cloneObjectConstraint(constrp, elemp, prefix, targetClassp);
             VL_DO_DANGLING(elemp->deleteTree(), elemp);
             if (!cloneConstrp) {
+                VL_DO_DANGLING(idxVarsp->deleteTree(), idxVarsp);
+                continue;
+            }
+            // The cloned items are in the order of the original ones
+            const AstNode* origItemp = constrp->itemsp();
+            for (AstNode *itemp = cloneConstrp->itemsp(), *nextp; itemp;
+                 itemp = nextp, origItemp = origItemp->nextp()) {
+                nextp = itemp->nextp();
+                if (!isIgnoredItem(origItemp)) continue;
+                // Reported once for each location, also when cloned for several arrays
+                origItemp->v3warn(CONSTRAINTIGN,
+                                  "Unsupported: Constraint item on an array or object member of an"
+                                  " element of a rand class handle array, which the containing"
+                                  " class solves; ignored.");
+                VL_DO_DANGLING(itemp->unlinkFrBack()->deleteTree(), itemp);
+            }
+            if (!cloneConstrp->itemsp()) {
+                VL_DO_DANGLING(cloneConstrp->deleteTree(), cloneConstrp);
                 VL_DO_DANGLING(idxVarsp->deleteTree(), idxVarsp);
                 continue;
             }

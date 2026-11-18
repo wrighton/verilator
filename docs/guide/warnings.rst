@@ -525,6 +525,12 @@ List Of Warnings
    ``constraint``, ``constraint_mode``, or ``rand_mode``, and
    the construct was ignored.
 
+   For example, when a class solves the objects of a rand array of class
+   objects that it constrains, each top-level item of the objects' class
+   constraints that references a random (``rand`` or ``randc``) array or
+   object member of the objects is ignored; the other items of those
+   constraints are solved.
+
    Ignoring this warning may make Verilator randomize() simulations differ
    from other simulators.
 
