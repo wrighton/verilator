@@ -958,6 +958,8 @@ class ConstVisitor final : public VNVisitor {
     const AstArraySel* m_selp = nullptr;  // Current select
     const AstScope* m_scopep = nullptr;  // Current scope
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
+    const AstNodeExpr* m_extendp = nullptr;  // Last Extend/ExtendS made by replaceExtend
+    uint64_t m_extendEditCnt = 0;  // AstNode::editCountGbl() when m_extendp was made
     VDouble0 m_statBitOpReduction;  // Ops reduced in ConstBitOpTreeVisitor
     VDouble0 m_statConcatMerge;  // Concat merges
     VDouble0 m_statCondExprRedundant;  // Conditional repeated expressions
@@ -2302,6 +2304,8 @@ class ConstVisitor final : public VNVisitor {
                    : static_cast<AstNodeExpr*>(new AstExtend{nodep->fileline(), arg0p}));
         nodep->replaceWithKeepDType(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        m_extendp = newp;
+        m_extendEditCnt = AstNode::editCountGbl();
     }
     void replacePowShift(AstNodeBiop* nodep) {  // Pow or PowS
         UINFO(5, "POW(2,b)->SHIFTL(1,b) " << nodep);
@@ -3378,6 +3382,26 @@ class ConstVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
+    void iterateExtendOperand(AstNodeUniop* nodep) {
+        // The iterator revisits an Extend or ExtendS made by replaceExtend next. Its operand was
+        // visited just before, and walking it again on every level of a long concatenation with
+        // zeros or of nested sign extensions, which become a chain of extends bottom up, would
+        // be quadratic. No edit since shows that nodep is that node, with that operand. Nodes
+        // built under the operand without being visited, as by moveConcat, are left to a later
+        // V3Const run.
+        if (nodep != m_extendp || AstNode::editCountGbl() != m_extendEditCnt) {
+            iterateChildren(nodep);
+        }
+    }
+    void visit(AstExtend* nodep) override {
+        iterateExtendOperand(nodep);
+        visitGen(nodep);
+    }
+    void visit(AstExtendS* nodep) override {
+        iterateExtendOperand(nodep);
+        visitGen(nodep);
+    }
+
     void visit(AstAttrOf* nodep) override {
         VL_RESTORER(m_attrp);
         m_attrp = nodep;
@@ -4390,6 +4414,8 @@ class ConstVisitor final : public VNVisitor {
     // clang-format off
     TREE_SKIP_VISIT("ArraySel");
     TREE_SKIP_VISIT("CAwait");
+    TREE_SKIP_VISIT("Extend");
+    TREE_SKIP_VISIT("ExtendS");
 
     //-----
     //  "AstNODETYPE {             # bracket not paren
