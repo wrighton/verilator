@@ -50,6 +50,34 @@ class DisableStructHandle;
   endfunction
 endclass
 
+class RandIndexElem;
+  rand bit [6:0] v;
+endclass
+
+class RandIndexObject;
+  rand RandIndexElem items[3];
+  rand RandIndexElem ditems[];
+  rand RandIndexElem qitems[$];
+  rand RandIndexElem rows[$][2];
+  rand int unsigned k;
+  constraint c_index {
+    k < 3;
+    items[k].v == 7'd5;
+    ditems[k].v == 7'd6;
+    qitems[k].v == 7'd7;
+    rows[k][0].v == 7'd8;
+  }
+  function new();
+    foreach (items[i]) items[i] = new;
+    ditems = new[3];
+    foreach (ditems[i]) ditems[i] = new;
+    repeat (3) qitems.push_back(null);
+    foreach (qitems[i]) qitems[i] = new;
+    rows = '{'{null, null}, '{null, null}};
+    foreach (rows[i, j]) rows[i][j] = new;
+  endfunction
+endclass
+
 module t;
   Packet p;
   DisableRandIndex d;
@@ -62,5 +90,9 @@ module t;
     void'(d.randomize());
     s = new;
     void'(s.randomize());
+    begin
+      automatic RandIndexObject o = new;
+      void'(o.randomize());
+    end
   end
 endmodule
