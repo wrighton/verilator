@@ -1,4 +1,4 @@
-// DESCRIPTION: Verilator: Selective assertion control of unique case and casez checks in named if/else arms
+// DESCRIPTION: Verilator: Selective control of unique case and casez checks in if/else arms
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder

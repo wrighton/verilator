@@ -31,20 +31,25 @@ int main(int argc, char** argv) {
     contextp->assertCtl(4, types, directives);  // Off
     contextp->assertCtl(1, types, directives);  // Lock
     const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{contextp.get()}};
+    // Instance b carries the checks: a's own code also turns off and locks a
     topp->clk = 0;
     topp->eval();
     pulse(*topp);
-    require(topp->afails == 0 && topp->bfails == 0, "Off before construction not applied");
+    require(topp->bfails == 0, "Off and FailOff before construction not applied");
 
     contextp->assertCtl(3, types, directives);  // On, but locked
+    contextp->assertCtl(8, types, directives);  // FailOn, but locked
     pulse(*topp);
-    require(topp->afails == 0 && topp->bfails == 0, "Lock before construction not applied");
+    require(topp->bfails == 0, "Lock before construction not applied");
 
     contextp->assertCtl(2, types, directives);  // Unlock
-    contextp->assertCtl(3, types, directives);  // On
-    contextp->assertCtl(8, types, directives);  // FailOn
+    contextp->assertCtl(8, types, directives);  // FailOn, still Off
     pulse(*topp);
-    require(topp->afails == 1 && topp->bfails == 1, "Unlock, On and FailOn not applied");
+    require(topp->bfails == 0, "Off before construction not applied");
+
+    contextp->assertCtl(3, types, directives);  // On
+    pulse(*topp);
+    require(topp->bfails == 1, "Unlock and On not applied");
 
     topp->final();
     std::puts("*-* All Finished *-*");
