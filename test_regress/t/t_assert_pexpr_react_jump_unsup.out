@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup.v:17:7: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                            : ... note: In instance 't'
+   17 |       disable blk;
+      |       ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup.v:25:12: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                             : ... note: In instance 't'
+   25 |       else break;
+      |            ^~~~~
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup.v:35:9: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                            : ... note: In instance 't'
+   35 |         break;
+      |         ^~~~~
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup.v:44:12: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                             : ... note: In instance 't'
+   44 |       else disable tblk;
+      |            ^~~~~~~
+%Error-UNSUPPORTED: t/t_assert_pexpr_react_jump_unsup.v:51:10: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                             : ... note: In instance 't'
+   51 |     else return;
+      |          ^~~~~~
+%Error: Exiting due to
