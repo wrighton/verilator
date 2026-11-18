@@ -1,6 +1,0 @@
-%Error-UNSUPPORTED: t/t_assert_ctl_scope_upward_gen_unsup.v:8:27: Unsupported: upward assertion control scope that is not in the nearest 'par' instance from 't.p0.gb.sub.leaf.m': 'gb.inner'
-                                                                : ... note: In instance 't.p0.gb.sub.leaf.m'
-    8 |   initial $assertoff(0, gb.inner);
-      |                           ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error: Exiting due to
