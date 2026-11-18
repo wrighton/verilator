@@ -26,8 +26,9 @@ module mid (
   initial if (off) $assertoff(0, gb.inner);
 endmodule
 
-// No gb is above the mid in qar, so its gb.inner is the compilation unit task's block; the mid
-// in par finds par's generate block (IEEE 1800-2023 23.8)
+// No gb is above the mid in qar, so its gb.inner is the compilation unit task's block
+// (IEEE 1800-2023 23.8). The mid in par does not control: Verilator would look up gb in the
+// compilation unit before par's generate block, unlike 23.8 a and b, for any hierarchical name.
 module qar;
   mid m (1'b1);
 endmodule
