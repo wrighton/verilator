@@ -318,6 +318,13 @@ with respect to that top level module, then the scope could be set with
 
 (Remember that Verilator adds a "TOP" to the top of the module hierarchy.)
 
+Scope names start with the name of the model, so a package is named, for
+example, "TOP.pkg". Some simulators instead name a package by its own name,
+as UVM's DPI code expects. When no scope has that name and a scope is set
+(during a DPI context import, or after svSetScope), svGetScopeFromName also
+finds a package by its own name, "pkg", in the model of the scope that is
+set. Without a scope set, only the full name finds a package.
+
 Scope can also be set from within a DPI imported C function that has been
 called from Verilog by querying the scope of that function. See the
 sections on DPI Context Functions and DPI Header Isolation below and the
