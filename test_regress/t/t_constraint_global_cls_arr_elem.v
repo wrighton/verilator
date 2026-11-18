@@ -184,6 +184,25 @@ class RandIndexed;
   }
 endclass
 
+// Of an element constraint, the items on the element's scalar members are solved, and those
+// on its rand array members, not solver variables of the elements, are not
+class MixedItems;
+  rand bit [6:0] v;
+  rand bit [6:0] arr[2];
+  constraint ec {
+    v < 7'd5;
+    arr[0] < 7'd5;
+    v < arr[1];
+    if (v > 7'd1) {arr[1] > 7'd2;}
+  }
+  constraint ac {arr[0] > 7'd1;}
+endclass
+
+class MixedHolder;
+  rand MixedItems ms[];
+  constraint c_g {foreach (ms[i]) ms[i].v != 7'd3;}
+endclass
+
 module t;
   task automatic check_items(Item items[$], int above, int below);
     foreach (items[i]) begin
@@ -391,7 +410,20 @@ module t;
     repeat (40) if (r.randomize() == 1) `checkd(r.ps[r.k] != null, 1'b1);
   endtask
 
+  task automatic test_mixed_items;
+    MixedHolder h = new;
+    int randomize_result;
+    h.ms = new[3];
+    foreach (h.ms[i]) h.ms[i] = new;
+    repeat (20) begin
+      randomize_result = h.randomize();
+      `checkd(randomize_result, 1);
+      foreach (h.ms[i]) `checkd(h.ms[i].v < 7'd5 && h.ms[i].v != 7'd3, 1'b1);
+    end
+  endtask
+
   initial begin
+    test_mixed_items();
     test_guarded();
     test_rand_indexed();
     test_per_object();

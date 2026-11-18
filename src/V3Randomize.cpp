@@ -619,18 +619,20 @@ class RandomizeMarkVisitor final : public VNVisitor {
             return;
         }
         FileLine* const fl = arrVarp->fileline();
+        // Rand fields that are arrays or objects are not solver variables of the elements (see
+        // createWriteVarForClassFields), so the items of a constraint on them stay ignored, and
+        // its other items are solved. This includes the constraints the element class has cloned
+        // from its own rand objects.
+        const auto isIgnoredItem = [](const AstNode* const itemp) {
+            return itemp->exists([](const AstVarRef* const refp) {
+                const AstVar* const varp = refp->varp();
+                const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+                return varp->isClassMember() && varp->rand().isRandomizable()
+                       && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
+            });
+        };
         const auto cloneConstraint = [&](AstConstraint* const constrp) {
-            // Rand fields that are arrays or objects are not solver variables of the elements
-            // (see createWriteVarForClassFields), so constraints on them stay ignored. This
-            // includes the constraints the element class has cloned from its own rand objects.
-            if (!constrp->itemsp() || constrp->exists([](const AstVarRef* refp) {
-                    const AstVar* const varp = refp->varp();
-                    const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
-                    return varp->isClassMember() && varp->rand().isRandomizable()
-                           && (VN_IS(dtypep, ClassRefDType) || dtypep->isNonPackedArray());
-                })) {
-                return;
-            }
+            if (!constrp->itemsp()) return;
             AstVar* const idxVarp
                 = new AstVar{fl, VVarType::BLOCKTEMP, "__Vi", arrVarp->findIntDType()};
             AstNodeExpr* const elemArrRefp = arrRefp->cloneTree(false);
@@ -642,7 +644,16 @@ class RandomizeMarkVisitor final : public VNVisitor {
             elemp->dtypep(elemRefDtp);
             AstConstraint* const cloneConstrp
                 = cloneObjectConstraint(constrp, elemp, prefix, targetClassp);
-            if (!cloneConstrp) {
+            // The cloned items are in the order of the original ones
+            const AstNode* origItemp = constrp->itemsp();
+            for (AstNode *itemp = cloneConstrp ? cloneConstrp->itemsp() : nullptr, *nextp; itemp;
+                 itemp = nextp, origItemp = origItemp->nextp()) {
+                nextp = itemp->nextp();
+                if (isIgnoredItem(origItemp))
+                    VL_DO_DANGLING(itemp->unlinkFrBack()->deleteTree(), itemp);
+            }
+            if (!cloneConstrp || !cloneConstrp->itemsp()) {
+                if (cloneConstrp) VL_DO_DANGLING(cloneConstrp->deleteTree(), cloneConstrp);
                 VL_DO_DANGLING(elemp->deleteTree(), elemp);
                 VL_DO_DANGLING(idxVarp->deleteTree(), idxVarp);
                 return;
