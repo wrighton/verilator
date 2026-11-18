@@ -167,8 +167,10 @@ bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
            && VN_IS(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
 }
 
-AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
-                                          bool (*isRandIndexp)(const AstNodeExpr* indexp)) {
+// The random index select into an array, random or not as randArray, that exprp reads through
+static AstNodeExpr*
+randIndexSelImpp(AstNodeExpr* exprp, bool randArray,
+                 const std::function<bool(const AstNodeExpr* indexp)>& isRandIndexp) {
     // exprp is the select itself, or reached from it through member and element selects and
     // array methods, e.g. 'arr[idx].q.size()'. Each step is to the first operand, fromp.
     for (AstNodeExpr* curp = exprp;;) {
@@ -190,9 +192,19 @@ AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
         } else {
             return nullptr;
         }
-        if (indexp && !fromp->user1() && isRandIndexp(indexp)) return curp;
+        if (indexp && (fromp->user1() != 0) == randArray && isRandIndexp(indexp)) return curp;
         curp = fromp;
     }
+}
+
+AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
+                                          bool (*isRandIndexp)(const AstNodeExpr* indexp)) {
+    return randIndexSelImpp(exprp, false, isRandIndexp);
+}
+
+AstNodeExpr* RandomizeUtil::randArrayIndexSelp(
+    AstNodeExpr* exprp, const std::function<bool(const AstNodeExpr* indexp)>& isRandIndexp) {
+    return randIndexSelImpp(exprp, true, isRandIndexp);
 }
 
 AstNodeExpr* RandomizeUtil::newElemModeOffp(AstNodeExpr* const modesp, AstNodeExpr* const indexp) {
