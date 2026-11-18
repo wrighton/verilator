@@ -8303,17 +8303,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (firstName == "$root") continue;
                 string baddot;
                 VSymEnt* okSymp = nullptr;
-                const VSymEnt* symp = m_statep->findDotted(itemp->fileline(), m_curSymp, firstName,
-                                                           baddot, okSymp, true);
+                const VSymEnt* const firstSymp = m_statep->findDotted(
+                    itemp->fileline(), m_curSymp, firstName, baddot, okSymp, true);
                 // Not found yet, or owned by an instance below the top: not a class, package,
                 // $unit, top module or top interface
-                if (!symp) dependent = true;
+                if (!firstSymp) dependent = true;
+                const VSymEnt* symp = firstSymp;
                 for (; symp; symp = symp->parentp()) {
                     if (VN_IS(symp->nodep(), NodeModule)) break;
                     if (VN_IS(symp->nodep(), Cell)) {
                         if (symp->parentp() != m_statep->rootEntp()) dependent = true;
                         break;
                     }
+                }
+                // Or, outside a class, found differently by the instances of the class's module
+                if (firstSymp && !(symp && VN_IS(symp->nodep(), Class)) && VN_IS(m_modp, Class)
+                    && assertControlFirstVaries(itemp->fileline(), firstName, firstSymp)) {
+                    dependent = true;
                 }
             }
             nodep->instanceDependent(dependent);
