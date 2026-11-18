@@ -3556,6 +3556,109 @@ private:
         AstNodeExpr* const rhsp = lowerLayoutOperand(nodep->rhsp());
         editSMT(nodep, lhsp, rhsp);
     }
+    // Element at offset idxp of operand exprp, with its dependence on random variables
+    AstNodeExpr* newElementSelp(AstNodeExpr* const exprp, AstNodeExpr* const idxp) {
+        const bool isRand = exprp->user1();
+        AstNodeExpr* const selp = newSel(exprp->fileline(), exprp, idxp);
+        selp->user1(isRand);
+        return selp;
+    }
+    // Operand exprp of a whole-array comparison, whose elements are read in a loop. A state value
+    // other than a variable is evaluated once, into a temporary of blockp the operand is replaced
+    // with, instead of again for each element.
+    AstNodeExpr* makeArrayOperandp(AstBegin* const blockp, AstNodeExpr* const exprp) {
+        if (exprp->user1()) return exprp;
+        // Reading a variable's elements directly avoids copying it
+        const AstNodeExpr* rootp = exprp;
+        while (true) {
+            if (const AstArraySel* const selp = VN_CAST(rootp, ArraySel)) {
+                rootp = selp->fromp();
+            } else if (const AstMemberRef* const memberRefp = VN_CAST(rootp, MemberRef)) {
+                rootp = memberRefp->fromp();
+            } else {
+                break;
+            }
+        }
+        if (VN_IS(rootp, NodeVarRef)) return exprp;
+        FileLine* const fl = exprp->fileline();
+        AstVar* const varp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VeqOperand"),
+                                        exprp->dtypep()};
+        varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        blockp->addDeclsp(varp);
+        AstVarRef* const refp = new AstVarRef{fl, varp, VAccess::READ};
+        exprp->replaceWith(refp);
+        blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, exprp});
+        return refp;
+    }
+    // Fixed-size unpacked arrays are equal when all their elements are
+    // (IEEE 1800-2023 7.4.6, 11.2.2). Their solver arrays also have elements outside the
+    // declared range, which are free, so an SMT array disequality could hold with every element
+    // equal: compare the elements one by one instead. They correspond by their offset from the
+    // low bound, as in ArraySel.
+    void handleEq(AstNodeBiop* const nodep) {
+        if (editOneHotCount(nodep)) return;
+        if (editFormat(nodep)) return;
+        const AstUnpackArrayDType* const adtypep
+            = VN_CAST(nodep->lhsp()->dtypep()->skipRefp(), UnpackArrayDType);
+        // A member of an element at a random index is a whole term of its own, see
+        // lowerRandIndexedStructSel
+        if (!adtypep || randIndexedArraySel(nodep->lhsp()) || randIndexedArraySel(nodep->rhsp())) {
+            editSMT(nodep, nodep->lhsp(), nodep->rhsp());
+            return;
+        }
+        FileLine* const fl = nodep->fileline();
+        AstBegin* const blockp
+            = new AstBegin{fl, m_uniqueNames.get("__VrandBlock"), nullptr, true};
+        AstNodeExpr* const lhsp = makeArrayOperandp(blockp, nodep->lhsp());
+        AstNodeExpr* const rhsp = makeArrayOperandp(blockp, nodep->rhsp());
+        // The offset of each element, in a loop that is not unrolled, so the size of the code
+        // does not grow with the elements. The elements are visited in the order of a foreach,
+        // from the left bound, which keeps the order of the solver terms.
+        AstVar* const idxVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VeqIdx"),
+                                           nodep->findUInt32DType()};
+        idxVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+        blockp->addDeclsp(idxVarp);
+        const uint32_t elements = static_cast<uint32_t>(adtypep->elementsConst());
+        AstNodeExpr* offsetp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        if (!adtypep->declRange().ascending()) {
+            offsetp = new AstSub{fl, new AstConst{fl, elements - 1}, offsetp};
+            offsetp->dtypeFrom(idxVarp);
+        }
+        AstNodeExpr* const lhsSelp = newElementSelp(lhsp, offsetp->cloneTreePure(false));
+        AstNodeExpr* const rhsSelp = newElementSelp(rhsp, offsetp);
+        AstEq* const itemp = new AstEq{fl, lhsSelp, rhsSelp};
+        itemp->user1(true);
+        AstVar* const textVarp = newTextVarp(nodep);
+        AstNodeStmt* const appendp = newTermAppendp(
+            fl, textVarp, nullptr, VN_AS(iterateSubtreeReturnEdits(itemp), NodeExpr));
+        blockp->addDeclsp(textVarp);
+        // Starting from the identity, bvand always has at least two operands
+        blockp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, textVarp, VAccess::WRITE},
+                                        new AstConst{fl, AstConst::String{}, "#b1"}});
+        blockp->addStmtsp(
+            new AstAssign{fl, new AstVarRef{fl, idxVarp, VAccess::WRITE}, new AstConst{fl, 0U}});
+        AstLoop* const loopp = new AstLoop{fl};
+        loopp->unroll(VOptionBool::OPT_FALSE);
+        loopp->addStmtsp(new AstLoopTest{
+            fl, loopp,
+            new AstLt{fl, new AstVarRef{fl, idxVarp, VAccess::READ}, new AstConst{fl, elements}}});
+        loopp->addStmtsp(appendp);
+        loopp->addStmtsp(new AstAssign{
+            fl, new AstVarRef{fl, idxVarp, VAccess::WRITE},
+            new AstAdd{fl, new AstVarRef{fl, idxVarp, VAccess::READ}, new AstConst{fl, 1U}}});
+        blockp->addStmtsp(loopp);
+        AstNodeExpr* const allEqp
+            = new AstConcatN{fl,
+                             new AstConcatN{fl, new AstConst{fl, AstConst::String{}, "(bvand "},
+                                            new AstVarRef{fl, textVarp, VAccess::READ}},
+                             new AstConst{fl, AstConst::String{}, ")"}};
+        AstSFormatF* newp = new AstSFormatF{fl, "%s", false, new AstExprStmt{fl, blockp, allEqp}};
+        if (VN_IS(nodep, Neq)) newp = new AstSFormatF{fl, "(bvnot %s)", false, newp};
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void visit(AstEq* nodep) override { handleEq(nodep); }
+    void visit(AstNeq* nodep) override { handleEq(nodep); }
     void visit(AstNodeBiop* nodep) override {
         if (editOneHotCount(nodep)) return;
         if (editFormat(nodep)) return;
