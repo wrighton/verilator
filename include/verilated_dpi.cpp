@@ -772,8 +772,16 @@ const char* svGetNameFromScope(const svScope scope) {
 }
 
 svScope svGetScopeFromName(const char* scopeName) {
+    VerilatedContext* const contextp = Verilated::threadContextp();
+    const VerilatedScope* scopep = contextp->scopeFind(scopeName);
+    // Scope names start with the model name, so also find a package by its own name, as in
+    // simulators without that prefix, in the model of the scope set
+    const VerilatedScope* const selectedp = Verilated::dpiScope();
+    if (!scopep && selectedp) {
+        scopep = contextp->impp()->packageScopeFind(selectedp->symsp(), scopeName);
+    }
     // NOLINTNEXTLINE(google-readability-casting)
-    return (svScope)(Verilated::threadContextp()->scopeFind(scopeName));
+    return (svScope)(scopep);
 }
 
 int svPutUserData(const svScope scope, void* userKey, void* userData) {

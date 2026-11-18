@@ -3934,6 +3934,9 @@ void VerilatedContextImp::scopeInsert(const VerilatedScope* scopep) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_impdatap->m_nameMutex};
     const auto it = m_impdatap->m_nameMap.find(scopep->name());
     if (it == m_impdatap->m_nameMap.end()) m_impdatap->m_nameMap.emplace(scopep->name(), scopep);
+    if (scopep->type() == VerilatedScope::SCOPE_PACKAGE) {
+        m_impdatap->m_packageMap.emplace(scopep->identifier(), scopep);
+    }
 }
 void VerilatedContextImp::scopeErase(const VerilatedScope* scopep) VL_MT_SAFE {
     // Slow ok - called once/scope at destruction
@@ -3941,6 +3944,26 @@ void VerilatedContextImp::scopeErase(const VerilatedScope* scopep) VL_MT_SAFE {
     VerilatedImp::userEraseScope(scopep);
     const auto it = m_impdatap->m_nameMap.find(scopep->name());
     if (it != m_impdatap->m_nameMap.end()) m_impdatap->m_nameMap.erase(it);
+    if (scopep->type() == VerilatedScope::SCOPE_PACKAGE) {
+        const auto range = m_impdatap->m_packageMap.equal_range(scopep->identifier());
+        for (auto it = range.first; it != range.second;) {
+            if (it->second == scopep) {
+                it = m_impdatap->m_packageMap.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+}
+const VerilatedScope* VerilatedContextImp::packageScopeFind(const VerilatedSyms* symsp,
+                                                            const char* namep) const VL_MT_SAFE {
+    // A model has one package of each name (IEEE 1800-2023 3.13)
+    const VerilatedLockGuard lock{m_impdatap->m_nameMutex};
+    const auto range = m_impdatap->m_packageMap.equal_range(namep);
+    for (auto it = range.first; it != range.second; ++it) {
+        if (it->second->symsp() == symsp) return it->second;
+    }
+    return nullptr;
 }
 const VerilatedScope* VerilatedContext::scopeFind(const char* namep) const VL_MT_SAFE {
     // Thread save only assuming this is called only after model construction completed

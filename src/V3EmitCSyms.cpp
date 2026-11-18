@@ -141,6 +141,7 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     std::unordered_map<std::string, std::pair<const AstScope*, const AstCellInlineScope*>>
         m_inlinedScopes;
     VDouble0 m_statInlinedScopes;  // Statistic tracking
+    std::unordered_set<std::string> m_packageScopeNames;  // Symbol names of package scopes
     std::vector<IfaceRefData> m_ifaceRefs;  // Each interface reference, for VPI
     // The actual hierarchy of scopes
     std::map<const std::string, std::vector<std::string>> m_vpiScopeHierarchy;
@@ -923,6 +924,11 @@ class EmitCSyms final : EmitCBaseVisitorConst {
                 if (pair.second) pair.first->second.m_arrayIndex = m_scopeArraySize++;
             }
         }
+        // A package scope added for DPI or a %m is a package, as for VPI
+        for (const std::string& name : m_packageScopeNames) {
+            const auto it = m_scopeNames.find(name);
+            if (it != m_scopeNames.end()) it->second.m_type = "SCOPE_PACKAGE";
+        }
 
         // Sort by names, so line/process order matters less
         std::stable_sort(m_scopes.begin(), m_scopes.end(),
@@ -967,6 +973,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
 
         m_scopes.emplace_back(nodep, m_modp);
         if (v3Global.opt.vpi()) m_pendingScopeps.emplace(nodep);
+        if (VN_IS(nodep->modp(), Package))
+            m_packageScopeNames.emplace(scopeSymString(nodep->name()));
 
         // The scopes of the instance of a library are its own, so register none for its stub
         if (v3Global.opt.vpi() && !nodep->isTop() && !nodep->modp()->verilatorLib()) {
