@@ -42,6 +42,7 @@ public:
     // METHODS
 
     // Compute hash of node. This method caches the hash in the node's user4().
+    // A node with a non-zero user4() is hashed as that value, so callers may preset it.
     V3Hash operator()(AstNode* nodep) const;
 
     // Re-compute hash of this node, discarding cached value, but used cached hash of children.
