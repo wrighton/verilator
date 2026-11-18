@@ -584,6 +584,11 @@ class ActiveVisitor final : public VNVisitor {
     void visit(AstAlwaysObserved* nodep) override {
         UASSERT_OBJ(nodep->sentreep(), nodep, "Should have a sentree");
         markEventEdges(nodep->sentreep());
+        // Also the event controls of the procedural concurrent assertion attempts it may begin
+        // (see V3Assert)
+        if (AstNode* const stmtsp = nodep->stmtsp()) {
+            stmtsp->foreachAndNext([](AstSenTree* sentreep) { markEventEdges(sentreep); });
+        }
         AstSenTree* const sentreep = nodep->sentreep();
         sentreep->unlinkFrBack();
         // Make a new active for it, needs to be the only item under the active for V3Sched
