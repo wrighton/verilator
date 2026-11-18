@@ -18,7 +18,8 @@ test.compile(verilator_flags2=['--stats'])
 
 test.execute(all_run_flags=['+verilator+wno+unsatconstr+1'])
 
-# Each whole-array comparison is a loop over its elements, not unrolled code
-test.file_grep(test.stats, r'Optimizations, Loop unrolling, Pragma unroll_disable\s+(\d+)', 27)
+# Each whole-array comparison is a loop over its elements, not unrolled code; the count is of
+# unroll attempts that met a disabled loop, a deterministic anchor rather than a loop count
+test.file_grep(test.stats, r'Optimizations, Loop unrolling, Pragma unroll_disable\s+(\d+)', 30)
 
 test.passes()
