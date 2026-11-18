@@ -1,4 +1,4 @@
-// DESCRIPTION: Verilator: Upward assertion control name found as an imported package task
+// DESCRIPTION: Verilator: Upward assertion control name imported into an instance above
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
@@ -14,8 +14,8 @@ module mid;
   initial $assertoff(0, pk);
 endmodule
 
-// From the mid in qar, pk is the package task imported into qar; from the mid in par, it is
-// par's generate block
+// From the mid in par, pk is par's generate block. From the mid in qar no pk is visible: the
+// task imported into qar is not visible by hierarchical reference into qar (IEEE 1800-2023 26.3)
 module qar;
   import pkg::*;
   mid m ();
