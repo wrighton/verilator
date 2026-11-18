@@ -43,8 +43,11 @@ private:
     using IfaceMember = std::pair<const AstIface*, std::string>;
     using IfaceCallable = std::pair<AstIface*, AstCFunc*>;
 
-    // Set of (iface, member) pairs written through VIF -- defines which members need triggers
-    std::set<IfaceMember> m_vifWrittenMembers;
+    // (iface, member) pairs written through VIF, in the order found -- defines which members need
+    // triggers, and the order of the triggers
+    std::vector<IfaceMember> m_vifWrittenMembers;
+    // Members already added to m_vifWrittenMembers
+    std::set<IfaceMember> m_seenVifWrittenMembers;
     // All candidate VarScopes of interface members (keyed by interface type + member name)
     std::map<IfaceMember, std::vector<AstVarScope*>> m_candidateVscps;
     std::set<std::pair<IfaceMember, AstVarScope*>> m_seenCandidateVscps;
@@ -76,7 +79,7 @@ private:
             AstIfaceRefDType* const dtypep
                 = VN_CAST(nodep->fromp()->dtypep()->skipRefp(), IfaceRefDType);
             if (dtypep && dtypep->isVirtual()) {
-                m_vifWrittenMembers.emplace(dtypep->ifacep(), nodep->varp()->name());
+                addVifWrittenMember(dtypep->ifacep(), nodep->varp()->name());
             }
         }
         iterateChildren(nodep);
@@ -112,6 +115,11 @@ private:
         iterateChildren(nodep);
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    void addVifWrittenMember(const AstIface* const ifacep, const std::string& name) {
+        const IfaceMember member{ifacep, name};
+        if (m_seenVifWrittenMembers.emplace(member).second) m_vifWrittenMembers.push_back(member);
+    }
 
     void addCandidateVscp(const AstIface* const ifacep, AstVarScope* const vscp) {
         const IfaceMember member{ifacep, vscp->varp()->name()};
@@ -155,7 +163,7 @@ public:
                         return;
                     }
                     varp->sensIfacep(callable.first);
-                    m_vifWrittenMembers.emplace(callable.first, varp->name());
+                    addVifWrittenMember(callable.first, varp->name());
                     const auto it = m_vscpsByVar.find(varp);
                     UASSERT_OBJ(it != m_vscpsByVar.end(), varp,
                                 "No VarScope for interface member");
