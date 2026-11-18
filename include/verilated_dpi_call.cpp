@@ -98,8 +98,9 @@ void VlDpiCall::markAborted() VL_MT_UNSAFE_ONE {
 
 void VlDpiCall::stopWorker() VL_MT_UNSAFE_ONE {
     const VerilatedScope* const scopep = Verilated::dpiScope();
+    const uint64_t generation = Verilated::dpiGeneration();
     const char* const filenamep = Verilated::dpiFilenamep();
     const int lineno = Verilated::dpiLineno();
     t_currentp->handoff(false);
-    Verilated::dpiContext(scopep, filenamep, lineno);
+    Verilated::dpiContext(scopep, generation, filenamep, lineno);
 }
