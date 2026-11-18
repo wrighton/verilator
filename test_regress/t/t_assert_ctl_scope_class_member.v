@@ -11,7 +11,43 @@
 
 `timescale 1ns / 1ps
 
+// A class's own task and block, from a class in a module instantiated twice
+module par;
+  class C;
+    static int tk_failures = 0;
+    static int blk_failures = 0;
+    task own_tk();
+      check :
+      assert (1'b0)
+      else tk_failures++;
+    endtask
+    function void off_tk();
+      $assertoff(0, own_tk);
+    endfunction
+    function void blk();
+      begin : own_blk
+        $assertoff(0, own_blk);
+        check :
+        assert (1'b0)
+        else blk_failures++;
+      end
+    endfunction
+  endclass
+  int tk_seen = 0;
+  int blk_seen = 0;
+  initial begin
+    automatic C c = new;
+    c.off_tk();
+    c.own_tk();
+    c.blk();
+    tk_seen = C::tk_failures;
+    blk_seen = C::blk_failures;
+  end
+endmodule
+
 module t;
+  par q0 ();
+  par q1 ();
   // Assertion control state is static in the class declaring the assertion, so a task of a
   // base class, or of an enclosing class from a nested class, selects the same assertion from
   // every object (IEEE 1800-2023 8.23, 20.11)
@@ -54,6 +90,7 @@ module t;
     automatic Outer o = new;
     automatic Outer::Inner i = new;
     automatic Other x = new;
+    #1;
     d.off();
     i.off();
     d.tk();
@@ -62,6 +99,10 @@ module t;
     `checkd(B::failures, 0);
     `checkd(Outer::failures, 0);
     `checkd(Other::failures, 1);
+    `checkd(q0.tk_seen, 0);
+    `checkd(q1.tk_seen, 0);
+    `checkd(q0.blk_seen, 0);
+    `checkd(q1.blk_seen, 0);
     $display("*-* All Finished *-*");
     $finish;
   end
