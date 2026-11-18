@@ -6,11 +6,12 @@
 # or the Perl Artistic License Version 2.0.
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
-
 import vltest_bootstrap
 
-test.scenarios('vlt')
+test.scenarios('vlt_all')
 
-test.lint(verilator_flags2=['--assert'], fails=True, expect_filename=test.golden_filename)
+test.compile(verilator_flags2=['--binary', '--assert'], threads=2 if test.vltmt else 1)
+
+test.execute()
 
 test.passes()

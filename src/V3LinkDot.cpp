@@ -170,6 +170,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
     int m_depth = 0;  // Module-instance depth relative to the selected scope
     const bool m_optional;  // Sites of one of several elaborations reached by an upward name
     const bool m_absolute;  // Sites named by an absolute path, the same from every instance
+    const AstNodeModule* m_classp = nullptr;  // Class whose code references the state
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
         VL_RESTORER_COPY(m_instancePath);
@@ -202,8 +203,10 @@ class AssertControlTargetVisitor final : public VNVisitor {
                         // state as direct statements of the module, class or package owning it
                         const AstNode* headp = varp;
                         while (headp->backp()->nextp() == headp) headp = headp->backp();
-                        if (AstPackage* const pkgp = VN_CAST(headp->backp(), Package)) {
-                            varRefp->classOrPackagep(pkgp);
+                        AstNodeModule* const ownerp = VN_CAST(headp->backp(), NodeModule);
+                        if (VN_IS(ownerp, Package)
+                            || (VN_IS(ownerp, Class) && ownerp != m_classp)) {
+                            varRefp->classOrPackagep(ownerp);
                         }
                     }
                     if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
@@ -227,7 +230,8 @@ public:
     AssertControlTargetVisitor(AstNode* nodep, AstAssertCtlArgs* argsp, const string& instancePath,
                                const string& childPath,
                                std::unordered_map<string, AstAssertCtlTarget*>& targets,
-                               bool optional = false, bool absolute = false)
+                               bool optional = false, bool absolute = false,
+                               const AstNodeModule* classp = nullptr)
         : m_argsp{argsp}
         , m_targets{targets}
         // An absolute path is resolved from $root, so no closer scope of the same name hides it
@@ -235,7 +239,8 @@ public:
                                                            : instancePath}
         , m_childPath{absolute && !childPath.empty() ? "$root." + childPath : childPath}
         , m_optional{optional}
-        , m_absolute{absolute} {
+        , m_absolute{absolute}
+        , m_classp{classp} {
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             iterateAndNextNull(cellp->modp()->stmtsp());
         } else if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
@@ -8299,10 +8304,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 ownerSymp = ownerSymp->parentp();
             }
             if (ownerSymp && VN_IS(ownerSymp->nodep(), Class) && ownerSymp->nodep() != m_modp) {
-                // Its state is of each object of that class, not of an instance
-                itemp->v3warn(E_UNSUPPORTED,
-                              "Unsupported: assertion control scope in another class: '"
-                                  << AstNode::prettyName(path) << "'");
+                // Assertion control state is static in the class owning the assertion, so the
+                // same from every instance and object: reference it through that class
+                AssertControlTargetVisitor{targetp, nodep, "", "", targets, false, false, m_modp};
                 continue;
             }
             const VSymEnt* instanceSymp = foundp;
