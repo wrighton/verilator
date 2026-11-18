@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_assert_procedural_clock_disable_unsup.v:14:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                                                    : ... note: In instance 't'
+   14 |     assert property (@(posedge clk2) q)
+      |     ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_procedural_clock_disable_unsup.v:15:10: Unsupported: control transfer out of a concurrent assertion action block, which runs in a process of its own
+                                                                     : ... note: In instance 't'
+   15 |     else disable b1;
+      |          ^~~~~~~
+%Error-UNSUPPORTED: t/t_assert_procedural_clock_disable_unsup.v:18:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
+                                                                    : ... note: In instance 't'
+   18 |     assert property (@(posedge clk2) q);
+      |     ^~~~~~
+%Error: Exiting due to
