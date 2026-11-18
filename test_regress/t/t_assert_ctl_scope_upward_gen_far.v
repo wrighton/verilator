@@ -40,7 +40,10 @@ module par #(
       assert (1'b0)
       else other_failures++;
     end
-    par #(.HAS(0), .OFF(OFF)) sub ();
+    par #(
+        .HAS(0),
+        .OFF(OFF)
+    ) sub ();
   end
   else begin : leaf
     mid m (OFF);
