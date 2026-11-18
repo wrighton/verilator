@@ -197,6 +197,14 @@ class AssertControlTargetVisitor final : public VNVisitor {
                                     new AstVarRef{nodep->fileline(), varp, VAccess::READWRITE})
                               : static_cast<AstNodeVarRef*>(new AstVarXRef{
                                     nodep->fileline(), varp, m_instancePath, VAccess::READWRITE});
+                    if (AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
+                        // The state of a site in a package task is the package's
+                        const AstNode* headp = varp;
+                        while (headp->backp()->nextp() == headp) headp = headp->backp();
+                        if (AstPackage* const pkgp = VN_CAST(headp->backp(), Package)) {
+                            varRefp->classOrPackagep(pkgp);
+                        }
+                    }
                     if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
                         xrefp->assertCtlOptional(m_optional);
                         xrefp->assertCtlAbsolute(m_absolute);
@@ -221,8 +229,10 @@ public:
                                bool optional = false, bool absolute = false)
         : m_argsp{argsp}
         , m_targets{targets}
-        , m_instancePath{instancePath}
-        , m_childPath{childPath}
+        // An absolute path is resolved from $root, so no closer scope of the same name hides it
+        , m_instancePath{absolute && !instancePath.empty() ? "$root." + instancePath
+                                                           : instancePath}
+        , m_childPath{absolute && !childPath.empty() ? "$root." + childPath : childPath}
         , m_optional{optional}
         , m_absolute{absolute} {
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
@@ -8237,19 +8247,20 @@ class LinkDotResolveVisitor final : public VNVisitor {
             for (AstNodeExpr* const itemp : nodep->itemspList()) {
                 const string path = assertControlPath(itemp);
                 const string firstName = path.substr(0, path.find('.'));
+                if (firstName == "$root") continue;
                 string baddot;
                 VSymEnt* okSymp = nullptr;
-                const VSymEnt* const firstSymp
-                    = firstName == "$root" ? nullptr
-                                           : m_statep->findDotted(itemp->fileline(), m_curSymp,
-                                                                  firstName, baddot, okSymp, true);
-                string firstPath;
-                if (firstName != "$root"
-                    && !(firstSymp
-                         && (firstSymp->parentp() == m_statep->rootEntp()
-                             || assertionRelativeScopePath(firstSymp, m_modSymp, firstPath)))) {
-                    dependent = true;
+                const VSymEnt* symp = m_statep->findDotted(itemp->fileline(), m_curSymp, firstName,
+                                                           baddot, okSymp, true);
+                // Owned by an instance below the top, not by a class, a package or the top
+                for (; symp; symp = symp->parentp()) {
+                    const AstNode* const ownerp = symp->nodep();
+                    if (VN_IS(ownerp, Cell) || VN_IS(ownerp, Class) || VN_IS(ownerp, Package)
+                        || VN_IS(ownerp, NodeModule)) {
+                        break;
+                    }
                 }
+                if (!symp || VN_IS(symp->nodep(), Cell)) dependent = true;
             }
             nodep->instanceDependent(dependent);
         }
