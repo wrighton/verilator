@@ -1758,8 +1758,8 @@ class SvaNfaBuilder final {
 
     // Whether boolean chain operandp checks a pure boolean requiring boolean condp to be false
     // on its last (else first) tick: its last (first) boolean, which is checked on that tick
-    static bool edgeExcludes(const AstNodeExpr* operandp, bool last, const AstNodeExpr* condp) {
-        while (const AstSExpr* const sexprp = VN_CAST(operandp, SExpr)) {
+    static bool edgeExcludes(AstNodeExpr* operandp, bool last, const AstNodeExpr* condp) {
+        while (AstSExpr* const sexprp = VN_CAST(operandp, SExpr)) {
             // A leading delay leaves the first tick unchecked
             if (!last && !sexprp->preExprp()) return false;
             operandp = last ? sexprp->exprp() : sexprp->preExprp();
