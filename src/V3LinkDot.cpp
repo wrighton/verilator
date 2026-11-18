@@ -8186,6 +8186,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         return false;
     }
+    // True if a dotted name, found from lookupSymp as foundp, continues past a class type: a
+    // class member is named with '::', not '.' (IEEE 1800-2023 8.23, 23.7.1)
+    bool assertControlThroughClass(FileLine* fl, VSymEnt* lookupSymp, const string& path,
+                                   const VSymEnt* foundp) {
+        const string firstName = path.substr(0, path.find('.'));
+        if (firstName == path) return false;
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        const VSymEnt* const firstSymp
+            = firstName == "$root"
+                  ? nullptr
+                  : m_statep->findDotted(fl, lookupSymp, firstName, baddot, okSymp, true);
+        for (const VSymEnt* symp = foundp->parentp(); symp; symp = symp->parentp()) {
+            if (VN_IS(symp->nodep(), Class)) return true;
+            if (symp == firstSymp) break;
+        }
+        return false;
+    }
     static bool isAssertControlTarget(const AstNode* nodep) {
         return VN_IS(nodep, Cell) || VN_IS(nodep, NodeBlock) || VN_IS(nodep, GenBlock)
                || VN_IS(nodep, NodeFTask) || VN_IS(nodep, Module);
@@ -8221,7 +8239,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const VSymEnt* const firstSymp = m_statep->findDotted(itemp->fileline(), cellSymp,
                                                                   firstName, baddot, okSymp, true);
             AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
-            if (!isAssertControlTarget(targetp)) {
+            if (!isAssertControlTarget(targetp)
+                || assertControlThroughClass(itemp->fileline(), cellSymp, path, foundp)) {
                 itemp->v3error("Assertion control target is not a scope or assertion from '"
                                << AstNode::prettyName(assertionScopePath(cellSymp)) << "': '"
                                << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
@@ -8345,7 +8364,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
             // A bare $root resolves to the netlist, which is not a scope (IEEE 1800-2023
             // Syntax 20-12)
-            if (!isAssertControlTarget(targetp)) {
+            if (!isAssertControlTarget(targetp)
+                || assertControlThroughClass(itemp->fileline(), m_curSymp, path, foundp)) {
                 itemp->v3error("Assertion control target is not a scope or assertion: '"
                                << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
                 continue;
