@@ -183,6 +183,7 @@ class AstAssertCtlArgs final : public AstNode {
     // @astgen op2 := itemsp : List[AstNodeExpr]
     // @astgen op3 := targetsp : List[AstAssertCtlTarget]
     const bool m_scoped;  // Explicit scope list, including a resolved empty selection
+    bool m_instanceDependent = true;  // A scope name resolves from the holding instance
 public:
     AstAssertCtlArgs(FileLine* fl, AstNodeExpr* levelp, AstNodeExpr* itemsp)
         : ASTGEN_SUPER_AssertCtlArgs(fl)
@@ -192,8 +193,11 @@ public:
     }
     ASTGEN_MEMBERS_AstAssertCtlArgs;
     bool scoped() const { return m_scoped; }
+    bool instanceDependent() const { return m_instanceDependent; }
+    void instanceDependent(bool flag) { m_instanceDependent = flag; }
     bool sameNode(const AstNode* samep) const override {
-        return scoped() == VN_DBG_AS(samep, AssertCtlArgs)->scoped();
+        const AstAssertCtlArgs* const asamep = VN_DBG_AS(samep, AssertCtlArgs);
+        return scoped() == asamep->scoped() && instanceDependent() == asamep->instanceDependent();
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
