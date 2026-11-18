@@ -2900,6 +2900,7 @@ void AstNodeCoverOrAssert::dump(std::ostream& str) const {
     str << " ["s + this->userType().ascii() + "]";
     if (immediate()) str << " [IMMEDIATE]";
     if (senFromAlways()) str << " [SENALW]";
+    if (nfaLowered()) str << " [NFALOWERED]";
 }
 void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "directive", this->directive().ascii());
@@ -2907,6 +2908,7 @@ void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonGen(str);
     dumpJsonBoolFuncIf(str, immediate);
     dumpJsonBoolFuncIf(str, senFromAlways);
+    dumpJsonBoolFuncIf(str, nfaLowered);
 }
 uint32_t AstNodeDType::arrayUnpackedElements() const {
     uint32_t entries = 1;
