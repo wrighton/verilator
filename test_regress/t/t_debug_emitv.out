@@ -681,115 +681,115 @@ module t;
             ???? // ASSERTCTLARGS
             32'sh1
             ???? // ASSERTCTLTARGET
-            t.__VassertControl0
+            $root.t.__VassertControl0
             ???? // ASSERTCTLTARGET
-            t.__VassertControl1
+            $root.t.__VassertControl1
             ???? // ASSERTCTLTARGET
-            t.__VassertControl2
+            $root.t.__VassertControl2
             ???? // ASSERTCTLTARGET
-            t.__VassertControl3
+            $root.t.__VassertControl3
             ???? // ASSERTCTLTARGET
-            t.__VassertControl4
+            $root.t.__VassertControl4
             ???? // ASSERTCTLTARGET
-            t.__VassertControl5
+            $root.t.__VassertControl5
             ???? // ASSERTCTLTARGET
-            t.__VassertControl6
+            $root.t.__VassertControl6
             ???? // ASSERTCTLTARGET
-            t.__VassertControl7
+            $root.t.__VassertControl7
             ???? // ASSERTCTLTARGET
-            t.__VassertControl8
+            $root.t.__VassertControl8
             ???? // ASSERTCTLTARGET
-            t.__VassertControl9
+            $root.t.__VassertControl9
             ???? // ASSERTCTLTARGET
-            t.__VassertControl10
+            $root.t.__VassertControl10
             ???? // ASSERTCTLTARGET
-            t.__VassertControl11
+            $root.t.__VassertControl11
             ???? // ASSERTCTLTARGET
-            t.__VassertControl12
+            $root.t.__VassertControl12
             ???? // ASSERTCTLTARGET
-            t.__VassertControl13
+            $root.t.__VassertControl13
             ???? // ASSERTCTLTARGET
-            t.__VassertControl14
+            $root.t.__VassertControl14
             ???? // ASSERTCTLTARGET
-            t.__VassertControl15
+            $root.t.__VassertControl15
             ???? // ASSERTCTLTARGET
-            t.__VassertControl16
+            $root.t.__VassertControl16
             ???? // ASSERTCTLTARGET
-            t.__VassertControl17
+            $root.t.__VassertControl17
             ???? // ASSERTCTLTARGET
-            t.__VassertControl18
+            $root.t.__VassertControl18
             ???? // ASSERTCTLTARGET
-            t.__VassertControl19
+            $root.t.__VassertControl19
             ???? // ASSERTCTLTARGET
-            t.__VassertControl20
+            $root.t.__VassertControl20
             ???? // ASSERTCTLTARGET
-            t.__VassertControl21
+            $root.t.__VassertControl21
             ???? // ASSERTCTLTARGET
-            t.__VassertControl22
+            $root.t.__VassertControl22
             ???? // ASSERTCTLTARGET
-            t.__VassertControl23
+            $root.t.__VassertControl23
             ???? // ASSERTCTLTARGET
-            t.__VassertControl24
+            $root.t.__VassertControl24
             ???? // ASSERTCTLTARGET
-            t.__VassertControl25
+            $root.t.__VassertControl25
             ???? // ASSERTCTLTARGET
-            t.__VassertControl26
+            $root.t.__VassertControl26
             ???? // ASSERTCTLTARGET
-            t.__VassertControl27
+            $root.t.__VassertControl27
             ???? // ASSERTCTLTARGET
-            t.__VassertControl28
+            $root.t.__VassertControl28
             ???? // ASSERTCTLTARGET
-            t.__VassertControl29
+            $root.t.__VassertControl29
             ???? // ASSERTCTLTARGET
-            t.__VassertControl30
+            $root.t.__VassertControl30
             ???? // ASSERTCTLTARGET
-            t.__VassertControl31
+            $root.t.__VassertControl31
             ???? // ASSERTCTLTARGET
-            t.__VassertControl32
+            $root.t.__VassertControl32
             ???? // ASSERTCTLTARGET
-            t.__VassertControl33
+            $root.t.__VassertControl33
             ???? // ASSERTCTLTARGET
-            t.__VassertControl34
+            $root.t.__VassertControl34
             ???? // ASSERTCTLTARGET
-            t.__VassertControl35
+            $root.t.__VassertControl35
             ???? // ASSERTCTLTARGET
-            t.__VassertControl36
+            $root.t.__VassertControl36
             ???? // ASSERTCTLTARGET
-            t.__VassertControl37
+            $root.t.__VassertControl37
             ???? // ASSERTCTLTARGET
-            t.__VassertControl38
+            $root.t.__VassertControl38
             ???? // ASSERTCTLTARGET
-            t.__VassertControl39
+            $root.t.__VassertControl39
             ???? // ASSERTCTLTARGET
-            t.__VassertControl40
+            $root.t.__VassertControl40
             ???? // ASSERTCTLTARGET
-            t.__VassertControl41
+            $root.t.__VassertControl41
             ???? // ASSERTCTLTARGET
-            t.__VassertControl42
+            $root.t.__VassertControl42
             ???? // ASSERTCTLTARGET
-            t.__VassertControl43
+            $root.t.__VassertControl43
             ???? // ASSERTCTLTARGET
-            t.__VassertControl44
+            $root.t.__VassertControl44
             ???? // ASSERTCTLTARGET
-            t.__VassertControl45
+            $root.t.__VassertControl45
             ???? // ASSERTCTLTARGET
-            t.__VassertControl46
+            $root.t.__VassertControl46
             ???? // ASSERTCTLTARGET
-            t.__VassertControl47
+            $root.t.__VassertControl47
             ???? // ASSERTCTLTARGET
-            t.__VassertControl48
+            $root.t.__VassertControl48
             ???? // ASSERTCTLTARGET
-            t.__VassertControl49
+            $root.t.__VassertControl49
             ???? // ASSERTCTLTARGET
-            t.__VassertControl50
+            $root.t.__VassertControl50
             ???? // ASSERTCTLTARGET
-            t.__VassertControl51
+            $root.t.__VassertControl51
             ???? // ASSERTCTLTARGET
-            t.__VassertControl52
+            $root.t.__VassertControl52
             ???? // ASSERTCTLTARGET
-            t.__VassertControl53
+            $root.t.__VassertControl53
             ???? // ASSERTCTLTARGET
-            t.__VassertControl54begin : assume_simple_immediate
+            $root.t.__VassertControl54begin : assume_simple_immediate
                 assume (1'h0) begin
                 end
                 else begin
