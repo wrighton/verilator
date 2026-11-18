@@ -10,8 +10,8 @@ module t;
   end
   int i = 0;
   initial begin
-    // A hierarchical_identifier selects a generate scope by a constant index only
-    // (IEEE 1800-2023 23.6)
+    // A hierarchical_identifier selects a generate scope by a constant_bit_select only
+    // (IEEE 1800-2023 A.9.3, 23.6)
     $assertoff(0, g[i]);
   end
 endmodule

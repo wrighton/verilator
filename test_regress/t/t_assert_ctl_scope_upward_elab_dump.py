@@ -15,8 +15,8 @@ test.top_filename = 't/t_assert_ctl_scope_upward_elab.v'
 test.compile(verilator_flags2=['--binary', '--assert', '--dump-tree'])
 
 # Sites of another elaboration are marked until scoped linking keeps or removes them
-test.file_grep(glob.glob(test.obj_dir + "/*_linkdotparam.tree")[0], r'\[ACTLOPT\]')
-for filename in glob.glob(test.obj_dir + "/*_linkdot.tree"):
+test.file_grep(test.glob_one(test.obj_dir + "/*_linkdotparam.tree"), r'\[ACTLOPT\]')
+for filename in test.glob_some(test.obj_dir + "/*_linkdot.tree"):
     test.file_grep_not(filename, r'\[ACTLOPT\]')
 
 test.execute()
