@@ -662,6 +662,14 @@ void AstAlways::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "keyword", keyword().ascii());
     dumpJsonGen(str);
 }
+void AstAlwaysReactive::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (deferredReports()) str << " [DEFERREDREPORTS]";
+}
+void AstAlwaysReactive::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, deferredReports);
+    dumpJsonGen(str);
+}
 const char* AstAnd::widthMismatch() const VL_MT_STABLE {
     BROKEN_RTN(lhsp()->widthMin() != rhsp()->widthMin());
     BROKEN_RTN(lhsp()->widthMin() != widthMin());
@@ -883,12 +891,16 @@ const char* AstCAwait::broken() const {
 }
 void AstCAwait::dump(std::ostream& str) const {
     Super::dump(str);
+    if (reactive()) str << " [REACTIVE]";
     if (sentreep()) {
         str << " => ";
         sentreep()->dump(str);
     }
 }
-void AstCAwait::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
+void AstCAwait::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, reactive);
+    dumpJsonGen(str);
+}
 void AstCCast::dump(std::ostream& str) const {
     Super::dump(str);
     str << " sz" << size();
@@ -2675,6 +2687,8 @@ void AstNetlist::deleteContents() {
     m_nbaQueuep = nullptr;
     m_reNbaQueuep = nullptr;
     m_inReactivep = nullptr;
+    m_reactSchedp = nullptr;
+    m_reInactSchedp = nullptr;
     m_topScopep = nullptr;
     m_evalFuncps.fill(nullptr);
     m_dumpTriggersFuncps.fill(nullptr);

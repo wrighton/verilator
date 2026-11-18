@@ -4352,6 +4352,7 @@ void VerilatedEvalLoop::evalImpl() {
     uint32_t reactIterCount = 0;
     bool reacted;
     do {
+        checkConvergence(++reactIterCount, "Reactive", &VerilatedModel::dumpTriggersReact);
         if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPush("loop obs");
         uint32_t obsIterCount = 0;
         do {
@@ -4378,8 +4379,9 @@ void VerilatedEvalLoop::evalImpl() {
         } while (m_model.evalObs());
         if VL_CONSTEXPR_CXX17 (Profiling) m_profilerp->sectionPop();  // loop obs
         reacted = false;
+        uint32_t passIterCount = 0;
         while (m_model.evalReact()) {
-            checkConvergence(++reactIterCount, "Reactive", &VerilatedModel::dumpTriggersReact);
+            checkConvergence(++passIterCount, "Reactive", &VerilatedModel::dumpTriggersReact);
             reacted = true;
         }
     } while (reacted);

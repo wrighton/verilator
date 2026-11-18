@@ -197,16 +197,16 @@ void createEvalRegion(
 //============================================================================
 // Collect and classify all logic in the design
 
+// Whether a process commits the Re-NBAs (see V3Delayed), post logic of the reactive region
+bool isReNbaCommit(const AstNetlist* netlistp, const AstNodeProcedure* procp) {
+    const AstAlwaysPost* const postp = VN_CAST(procp, AlwaysPost);
+    const AstNbaCommit* const commitp = postp ? VN_CAST(postp->stmtsp(), NbaCommit) : nullptr;
+    return commitp && commitp->queuep()->varScopep() == netlistp->reNbaQueuep();
+}
+
 LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
     LogicClasses result;
     VNDeleter deleter;  // Deletes the AstActives once their processes are moved
-
-    // The commit of the Re-NBAs (see V3Delayed) is post logic of the reactive region
-    const auto isReNbaCommit = [netlistp](const AstActive* activep) {
-        const AstAlwaysPost* const postp = VN_CAST(activep->procsp(), AlwaysPost);
-        const AstNbaCommit* const commitp = postp ? VN_CAST(postp->stmtsp(), NbaCommit) : nullptr;
-        return commitp && commitp->queuep()->varScopep() == netlistp->reNbaQueuep();
-    };
 
     netlistp->foreach([&](AstScope* scopep) {
         scopep->foreach([&](AstActive* activep) {
@@ -238,7 +238,8 @@ LogicClasses gatherLogicClasses(AstNetlist* netlistp) {
                 UASSERT_OBJ(senTreep->hasClocked(), activep, "What else could it be?");
                 if (VN_IS(activep->procsp(), AlwaysObserved)) {
                     logicClassp = &result.m_observed;
-                } else if (VN_IS(activep->procsp(), AlwaysReactive) || isReNbaCommit(activep)) {
+                } else if (VN_IS(activep->procsp(), AlwaysReactive)
+                           || isReNbaCommit(netlistp, activep->procsp())) {
                     logicClassp = &result.m_reactive;
                 } else {
                     logicClassp = &result.m_clocked;
@@ -568,13 +569,19 @@ struct EvalKit final {
 //============================================================================
 // Create the evaluation function of each region of a time step
 
+// The triggers of the reactive region
+struct ReactTriggers final {
+    std::set<uint32_t> m_logic;  // Of logic, triggering a next pass of the reactive region set
+    std::set<uint32_t> m_reNbaCommit;  // Of the commit of the Re-NBAs
+};
+
 void createEval(AstNetlist* netlistp,  //
                 const TriggerKit& trigKit,  //
                 const EvalKit& actKit,  //
                 const EvalKit& nbaKit,  //
                 const EvalKit& obsKit,  //
                 const EvalKit& reactKit,  //
-                const std::set<uint32_t>& reactTriggers,  //
+                const ReactTriggers& reactTriggers,  //
                 TimingKit& timingKit  //
 ) {
     FileLine* const flp = netlistp->fileline();
@@ -717,51 +724,205 @@ void createEval(AstNetlist* netlistp,  //
             return workp;
         }());
 
-    // Create the 'react' region
+    // Create the 'react' region. The reactive region set iterates until empty before the active
+    // region set resumes (IEEE 1800-2023 4.5).
+    AstVarScope* const inReactivep = netlistp->inReactivep();
+    // The schedulers of processes continuing in the reactive region set (see V3Timing): those
+    // waiting for the Re-Inactive region in the previous pass first, then those resumed
+    // outside the reactive region set
+    std::vector<AstVarScope*> contSchedps;
+    for (AstVarScope* const schedp : {netlistp->reInactSchedp(), netlistp->reactSchedp()}) {
+        if (schedp) contSchedps.push_back(schedp);
+    }
+    const auto newSchedCallp = [&](AstVarScope* schedp, VCMethod method) {
+        AstCMethodHard* const callp
+            = new AstCMethodHard{flp, new AstVarRef{flp, schedp, VAccess::READWRITE}, method};
+        if (method == VCMethod::SCHED_EMPTY) {
+            callp->dtypeSetBit();
+        } else {
+            callp->dtypeSetVoid();
+            AstCExpr* const descp = new AstCExpr{flp, "\"reactive region set\""};
+            descp->dtypeSetString();
+            callp->addPinsp(descp);
+        }
+        return callp;
+    };
+    // An await readied a process waiting in the reactive region set, see V3SchedTrigger
+    if (!timingKit.m_reactSchedps.empty()) {
+        timingKit.m_reactReadyp = netlistp->topScopep()->createTemp("__VreactReady", 1);
+    }
+    AstVarScope* const reactReadyp = timingKit.m_reactReadyp;
+    // Whether processes continue in the reactive region set, by 'schedps' or readied
+    const auto newPendingp = [&](const std::vector<AstVarScope*>& schedps) -> AstNodeExpr* {
+        AstNodeExpr* condp
+            = reactReadyp ? new AstVarRef{flp, reactReadyp, VAccess::READ} : nullptr;
+        for (AstVarScope* const schedp : schedps) {
+            AstNodeExpr* const pendingp
+                = new AstLogNot{flp, newSchedCallp(schedp, VCMethod::SCHED_EMPTY)};
+            condp = condp ? new AstLogOr{flp, condp, pendingp} : pendingp;
+        }
+        return condp;
+    };
+    const auto newContinuationsp = [&]() { return newPendingp(contSchedps); };
+    // Latch the triggers in 'indices' as the 'react' triggers
+    const auto newLatchp = [&](const std::set<uint32_t>& indices) {
+        std::map<uint32_t, uint64_t> wordMasks;
+        for (const uint32_t index : indices) {
+            wordMasks[index / TriggerKit::WORD_SIZE] |= 1ULL << (index % TriggerKit::WORD_SIZE);
+        }
+        AstNodeStmt* stmtsp = nullptr;
+        for (const auto& wordMask : wordMasks) {
+            const auto wordp = [&](AstVarScope* vscp, VAccess access) {
+                return new AstArraySel{flp, new AstVarRef{flp, vscp, access},
+                                       new AstConst{flp, AstConst::Unsized64{}, wordMask.first}};
+            };
+            AstNodeExpr* const valuep
+                = new AstOr{flp, wordp(reactKit.m_vscp, VAccess::READ),
+                            new AstAnd{flp, wordp(trigKit.vscp(), VAccess::READ),
+                                       new AstConst{flp, AstConst::Unsized64{}, wordMask.second}}};
+            stmtsp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+                stmtsp, new AstAssign{flp, wordp(reactKit.m_vscp, VAccess::WRITE), valuep});
+        }
+        return stmtsp;
+    };
+    // The Re-NBA commit: its trigger fires once per enqueuing into an empty queue, so it is noted
+    // as pending until the reactive region set has no other work; then the commit is armed for
+    // the next pass. A commit trigger reaching the 'react' region otherwise, e.g. through the
+    // 'act' accumulator, is dropped.
+    const std::set<uint32_t>& commitTriggers = reactTriggers.m_reNbaCommit;
+    AstVarScope* pendingp = nullptr;
+    AstVarScope* armedp = nullptr;
+    std::map<uint32_t, uint64_t> commitMasks;
+    if (!reactKit.empty() && !commitTriggers.empty()) {
+        pendingp = netlistp->topScopep()->createTemp("__VreNbaPending", 1);
+        armedp = netlistp->topScopep()->createTemp("__VreNbaArmed", 1);
+        for (const uint32_t index : commitTriggers) {
+            commitMasks[index / TriggerKit::WORD_SIZE] |= 1ULL << (index % TriggerKit::WORD_SIZE);
+        }
+    }
+    const auto commitWordp = [&](uint32_t word, VAccess access) {
+        return new AstArraySel{flp, new AstVarRef{flp, reactKit.m_vscp, access},
+                               new AstConst{flp, AstConst::Unsized64{}, word}};
+    };
+    const bool useCond = !reactKit.empty() && (!contSchedps.empty() || reactReadyp);
     createEvalRegion(  //
         netlistp, VEval::REACT, 0, trigKit,
-        // Use trigger
-        reactKit.m_vscp, nullptr,
+        // Use trigger, or with continuing processes, an explicit condition
+        useCond ? nullptr : reactKit.m_vscp,
+        useCond ? new AstLogOr{flp, trigKit.newAnySetCall(reactKit.m_vscp), newContinuationsp()}
+                : nullptr,
         // Prep statements
         nullptr,
         // Work statements
         [&]() -> AstNodeStmt* {
             if (reactKit.empty()) return nullptr;
-            // Invoke the 'react' function, noting reactive logic runs for V3Delayed's Re-NBAs
-            AstVarScope* const inReactivep = netlistp->inReactivep();
-            AstNodeStmt* workp = inReactivep ? util::setVar(inReactivep, 1) : nullptr;
+            // Note reactive logic runs, for V3Delayed and V3Timing
+            AstNodeStmt* workp = nullptr;
+            if (armedp) {
+                AstIf* const ifp = new AstIf{
+                    flp, new AstLogNot{flp, new AstVarRef{flp, armedp, VAccess::READ}}};
+                for (const auto& wordMask : commitMasks) {
+                    ifp->addThensp(new AstAssign{
+                        flp, commitWordp(wordMask.first, VAccess::WRITE),
+                        new AstAnd{flp, commitWordp(wordMask.first, VAccess::READ),
+                                   new AstConst{flp, AstConst::Unsized64{}, ~wordMask.second}}});
+                }
+                workp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(workp, ifp);
+                workp = AstNode::addNext(workp, util::setVar(armedp, 0));
+            }
+            if (inReactivep) workp = AstNode::addNext(workp, util::setVar(inReactivep, 1));
+            // Resume the processes continuing in the Reactive region: those resumed outside the
+            // reactive region set, and those triggered, waiting in it. Only once there are none,
+            // nor Reactive logic to run, those waiting for the Re-Inactive region
+            // (IEEE 1800-2023 4.5).
+            AstNodeStmt* reactivep = reactReadyp ? util::setVar(reactReadyp, 0) : nullptr;
+            AstVarScope* const reactSchedp = netlistp->reactSchedp();
+            if (reactSchedp) {
+                reactivep = AstNode::addNext(
+                    reactivep,
+                    newSchedCallp(reactSchedp, VCMethod::SCHED_MOVE_TO_RESUME_QUEUE)->makeStmt());
+                reactivep = AstNode::addNext(
+                    reactivep, newSchedCallp(reactSchedp, VCMethod::SCHED_RESUME)->makeStmt());
+            }
+            reactivep = AstNode::addNext(reactivep, timingKit.m_reactResumesp);
+            if (AstVarScope* const reInactp = netlistp->reInactSchedp()) {
+                AstNodeExpr* condp = trigKit.newAnySetCall(reactKit.m_vscp);
+                std::vector<AstVarScope*> reactSchedps;
+                if (reactSchedp) reactSchedps.push_back(reactSchedp);
+                if (AstNodeExpr* const pendingp = newPendingp(reactSchedps)) {
+                    condp = new AstLogOr{flp, condp, pendingp};
+                }
+                AstIf* const ifp = new AstIf{flp, condp, reactivep};
+                ifp->addElsesp(
+                    newSchedCallp(reInactp, VCMethod::SCHED_MOVE_TO_RESUME_QUEUE)->makeStmt());
+                ifp->addElsesp(newSchedCallp(reInactp, VCMethod::SCHED_RESUME)->makeStmt());
+                workp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(workp, ifp);
+            } else if (reactivep) {
+                workp = AstNode::addNext(workp, reactivep);
+            }
+            // Invoke the 'react' function
             workp = AstNode::addNext(workp, util::callVoidFunc(reactKit.m_funcp));
             if (inReactivep) workp = AstNode::addNext(workp, util::setVar(inReactivep, 0));
             // Clear the 'react' triggers
             workp = AstNode::addNext(workp, trigKit.newClearCall(reactKit.m_vscp));
-            // The reactive region set iterates until empty before the active region set
-            // resumes (IEEE 1800-2023 4.5). So compute the triggers of what the pass changed:
-            // those of reactive logic trigger the next pass, all are accumulated for 'act'.
+            // Compute the triggers of what the pass changed: those of reactive logic trigger
+            // the next pass, all are accumulated for 'act'
             workp = AstNode::addNext(workp, trigKit.newCompBaseCall());
             if (timingReadyp) {
                 workp = AstNode::addNext(workp, timingReadyp->cloneTree(false)->makeStmt());
             }
             workp = AstNode::addNext(workp,
                                      trigKit.newOrIntoCall(trigKit.vscAccp(), trigKit.vscp()));
-            std::map<uint32_t, uint64_t> wordMasks;
-            for (const uint32_t index : reactTriggers) {
-                wordMasks[index / TriggerKit::WORD_SIZE] |= 1ULL
-                                                            << (index % TriggerKit::WORD_SIZE);
-            }
-            for (const auto& wordMask : wordMasks) {
-                const auto wordp = [&](AstVarScope* vscp, VAccess access) {
+            // But not the Re-NBA commit trigger, which 'act' has no use for. The other triggers
+            // of 'react' logic reach the 'react' region again through 'act', which reactive
+            // logic tolerates: an action runner or a scheduler with nothing pending does nothing
+            for (const auto& wordMask : commitMasks) {
+                const auto accp = [&](VAccess access) {
                     return new AstArraySel{
-                        flp, new AstVarRef{flp, vscp, access},
+                        flp, new AstVarRef{flp, trigKit.vscAccp(), access},
                         new AstConst{flp, AstConst::Unsized64{}, wordMask.first}};
                 };
-                AstNodeExpr* const maskedp
-                    = new AstAnd{flp, wordp(trigKit.vscp(), VAccess::READ),
-                                 new AstConst{flp, AstConst::Unsized64{}, wordMask.second}};
                 workp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
-                    workp, new AstAssign{flp, wordp(reactKit.m_vscp, VAccess::WRITE), maskedp});
+                    workp, new AstAssign{flp, accp(VAccess::WRITE),
+                                         new AstAnd{flp, accp(VAccess::READ),
+                                                    new AstConst{flp, AstConst::Unsized64{},
+                                                                 ~wordMask.second}}});
+            }
+            std::set<uint32_t> logicTriggers = reactTriggers.m_logic;
+            logicTriggers.insert(timingKit.m_reactTriggers.begin(),
+                                 timingKit.m_reactTriggers.end());
+            workp = AstNode::addNext(workp, newLatchp(logicTriggers));
+            // The Re-NBA region runs once the Reactive and Re-Inactive regions are empty
+            // (IEEE 1800-2023 4.4.2.8, 4.5)
+            if (pendingp) {
+                workp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+                    workp,
+                    new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+                                  new AstLogOr{flp, new AstVarRef{flp, pendingp, VAccess::READ},
+                                               new AstTriggered{flp,
+                                                                trigKit.vscp(),
+                                                                {commitTriggers.begin(),
+                                                                 commitTriggers.end()}}}});
+                AstNodeExpr* condp
+                    = new AstLogAnd{flp, new AstVarRef{flp, pendingp, VAccess::READ},
+                                    new AstLogNot{flp, trigKit.newAnySetCall(reactKit.m_vscp)}};
+                if (AstNodeExpr* const contp = newContinuationsp()) {
+                    condp = new AstLogAnd{flp, condp, new AstLogNot{flp, contp}};
+                }
+                AstIf* const ifp = new AstIf{flp, condp, util::setVar(pendingp, 0)};
+                ifp->addThensp(util::setVar(armedp, 1));
+                for (const auto& wordMask : commitMasks) {
+                    ifp->addThensp(new AstAssign{
+                        flp, commitWordp(wordMask.first, VAccess::WRITE),
+                        new AstOr{flp, commitWordp(wordMask.first, VAccess::READ),
+                                  new AstConst{flp, AstConst::Unsized64{}, wordMask.second}}});
+                }
+                workp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(workp, ifp);
             }
             return workp;
         }());
+    // The flag is read through calls V3Life may not follow, e.g. virtual ones
+    if (inReactivep) netlistp->evalFuncp(VEval::REACT)->noLife(true);
 }
 
 }  // namespace
@@ -991,10 +1152,16 @@ void schedule(AstNetlist* netlistp) {
     const EvalKit obsKit = orderIfNonEmpty("obs", {&logicRegions.m_obs, &logicReplicas.m_obs});
 
     // Step 14: Create the 'react' region evaluation function
-    std::set<uint32_t> reactTriggers;  // The triggers of the reactive logic
-    for (const AstSenTree* const senTreep : getSenTreesUsedBy({&logicRegions.m_react})) {
-        const std::set<uint32_t>& indices = trigKit.triggerIndices(senTreep, false);
-        reactTriggers.insert(indices.begin(), indices.end());
+    ReactTriggers reactTriggers;
+    for (const Process& process : logicRegions.m_react) {
+        // Observed deferred reports mature in the Observed region first (IEEE 1800-2023 16.4.1)
+        const AstAlwaysReactive* const reactp = VN_CAST(process.m_procp, AlwaysReactive);
+        if (reactp && reactp->deferredReports()) continue;
+        const std::set<uint32_t>& indices = trigKit.triggerIndices(process.m_senTreep, false);
+        std::set<uint32_t>& setr = isReNbaCommit(netlistp, process.m_procp)
+                                       ? reactTriggers.m_reNbaCommit
+                                       : reactTriggers.m_logic;
+        setr.insert(indices.begin(), indices.end());
     }
     const EvalKit reactKit
         = orderIfNonEmpty("react", {&logicRegions.m_react, &logicReplicas.m_react});
@@ -1006,13 +1173,15 @@ void schedule(AstNetlist* netlistp) {
     createEval(netlistp, trigKit, actKit, nbaKit, obsKit, reactKit, reactTriggers, timingKit);
 
     // Step 17: Add neccessary evaluation before awaits
-    beforeTrigVisitor(netlistp, senExprBuilder, trigKit);
+    beforeTrigVisitor(netlistp, senExprBuilder, trigKit, timingKit);
 
     // Step 18: Clean up
     netlistp->clearStlFirstIterationp();
     netlistp->nbaQueuep(nullptr);  // Finished with this here
     netlistp->reNbaQueuep(nullptr);
     netlistp->inReactivep(nullptr);
+    netlistp->reactSchedp(nullptr);
+    netlistp->reInactSchedp(nullptr);
     if (AstSenTree* const senTreesp = topScopep->senTreesp()) {
         VL_DO_DANGLING(senTreesp->unlinkFrBackWithNext()->deleteTree(), senTreesp);
     }

@@ -67,6 +67,8 @@ AstCCall* TimingKit::createResume(AstVarScope* trigVscp) {
         scopeTopp->addBlocksp(m_resumeFuncp);
 
         for (const Process& process : m_procList) {
+            // Schedulers of the reactive region set are resumed there.
+            if (VN_IS(process.m_procp, AlwaysReactive)) continue;
             process.m_procp->foreach([this](AstCMethodHard* const exprp) {
                 if (exprp->method() != VCMethod::SCHED_RESUME) return;
                 AstNodeExpr* const fromp = exprp->fromp();
@@ -93,7 +95,18 @@ AstCCall* TimingKit::createResume(AstVarScope* trigVscp) {
                 = VN_AS(VN_AS(resumeStmtp->exprp(), CMethodHard)->fromp(), VarRef);
 
             AstNodeStmt* const actionp = resumeStmtp->unlinkFrBack();
-            if (schedrefp->varScopep()->dtypep()->basicp()->isDelayScheduler()) {
+            if (VN_IS(process.m_procp, AlwaysReactive)) {
+                AstCMethodHard* const movep = new AstCMethodHard{
+                    schedrefp->fileline(), schedrefp->cloneTree(false),
+                    VCMethod::SCHED_MOVE_TO_RESUME_QUEUE,
+                    VN_AS(resumeStmtp->exprp(), CMethodHard)->pinsp()->cloneTree(false)};
+                movep->dtypeSetVoid();
+                m_reactResumesp = AstNode::addNext(m_reactResumesp, movep->makeStmt());
+                m_reactResumesp = AstNode::addNext(m_reactResumesp, actionp);
+                const std::set<uint32_t>& triggers = m_procList.triggers(process.m_senTreep);
+                m_reactTriggers.insert(triggers.begin(), triggers.end());
+                m_reactSchedps.insert(schedrefp->varScopep());
+            } else if (schedrefp->varScopep()->dtypep()->basicp()->isDelayScheduler()) {
                 FileLine* const flp = trigVscp->fileline();
                 const std::set<uint32_t>& triggers = m_procList.triggers(process.m_senTreep);
                 AstTriggered* const condp

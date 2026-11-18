@@ -1677,6 +1677,8 @@ class AstNetlist final : public AstNode {
     // @astgen ptr := m_nbaQueuep : Optional[AstVarScope]  // Global queue of NBAs (V3Delayed)
     // @astgen ptr := m_reNbaQueuep : Optional[AstVarScope]  // Global queue of Re-NBAs (V3Delayed)
     // @astgen ptr := m_inReactivep : Optional[AstVarScope]  // Reactive logic running (V3Delayed)
+    // @astgen ptr := m_reactSchedp : Optional[AstVarScope]  // Continuations (V3Timing)
+    // @astgen ptr := m_reInactSchedp : Optional[AstVarScope]  // Re-Inactive waits (V3Timing)
     // @astgen ptr := m_topScopep : Optional[AstTopScope]  // Singleton AstTopScope
     // @astgen ptr := m_stlFirstIterationp: Optional[AstVarScope]  // Settle first iteration flag
     VTimescale m_timeunit;  // Global time unit
@@ -1735,6 +1737,10 @@ public:
     void reNbaQueuep(AstVarScope* varScopep) { m_reNbaQueuep = varScopep; }
     AstVarScope* inReactivep() const { return m_inReactivep; }
     void inReactivep(AstVarScope* varScopep) { m_inReactivep = varScopep; }
+    AstVarScope* reactSchedp() const { return m_reactSchedp; }
+    void reactSchedp(AstVarScope* varScopep) { m_reactSchedp = varScopep; }
+    AstVarScope* reInactSchedp() const { return m_reInactSchedp; }
+    void reInactSchedp(AstVarScope* varScopep) { m_reInactSchedp = varScopep; }
     void stdPackagep(AstPackage* const packagep) { m_stdPackagep = packagep; }
     AstPackage* stdPackagep() const { return m_stdPackagep; }
     void stdPackageProcessp(AstClass* const classp) { m_stdPackageProcessp = classp; }
@@ -3729,6 +3735,7 @@ public:
 class AstAlwaysReactive final : public AstNodeProcedure {
     // Like always but Reactive scheduling region
     // @astgen op1 := sentreep : Optional[AstSenTree] // Sensitivity list, removed in V3Active
+    bool m_deferredReports = false;  // Runs observed deferred assertion reports (see V3Assert)
 
 public:
     AstAlwaysReactive(FileLine* fl, AstSenTree* sentreep, AstNodeStmt* bodysp)
@@ -3736,6 +3743,13 @@ public:
         this->sentreep(sentreep);
     }
     ASTGEN_MEMBERS_AstAlwaysReactive;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    bool sameNode(const AstNode* samep) const override {
+        return m_deferredReports == VN_DBG_AS(samep, AlwaysReactive)->m_deferredReports;
+    }
+    bool deferredReports() const { return m_deferredReports; }
+    void deferredReports(bool flag) { m_deferredReports = flag; }
 };
 class AstFinal final : public AstNodeProcedure {
 public:
