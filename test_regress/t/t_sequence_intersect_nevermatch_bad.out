@@ -12,4 +12,8 @@
                                                               : ... note: In instance 't'
    57 |   assert property (disable iff (cyc < 2) ((a ##3 b) within (c ##1 d)) |-> 1'b0)
       |                                                     ^~~~~~
+%Warning-NEVERMATCH: t/t_sequence_intersect_nevermatch.v:64:51: Sequence can never match because the inner sequence is longer than the outer sequence.
+                                                              : ... note: In instance 't'
+   64 |   cover property (disable iff (cyc < 2) (a ##3 b) within (c ##1 !c[*1] ##1 c));
+      |                                                   ^~~~~~
 %Error: Exiting due to
