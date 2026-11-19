@@ -7,4 +7,17 @@
                                                   : ... note: In instance 't'
    19 |     (1, in = 1);
       |         ^~
+%Error: t/t_sequence_local_var_bad.v:32:30: Actual argument of formal argument 'lv', which the sequence assigns, is not an entire local variable (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   32 |     @(posedge clk) s_assign(t[1]) |=> t[1];
+      |                              ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_sequence_local_var_bad.v:40:36: Actual argument of formal argument 'lv', which the sequence assigns, is not an entire local variable (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   40 |     @(posedge clk) s_assign_outer(t[2]) |=> t[2];
+      |                                    ^
+%Error: t/t_sequence_local_var_bad.v:49:44: Actual argument of formal argument 'lv', which the sequence assigns, is not an entire local variable (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   49 |   assert property (@(posedge clk) s_assign(static_var) |=> static_var);
+      |                                            ^~~~~~~~~~
 %Error: Exiting due to

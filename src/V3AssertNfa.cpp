@@ -15,6 +15,8 @@
 //*************************************************************************
 // V3AssertNfa's Transformations:
 //
+//  - Lower the local variable assignments of match items into temps read
+//    through $past.
 //  - Convert multi-cycle SVA sequences/properties into NFA graphs.
 //  - Attach inherited assertion clocks before moving sampled-value functions.
 //  - Emit module-level state registers driven by AstAlways blocks.
@@ -2925,6 +2927,713 @@ public:
     }
 };
 
+//######################################################################
+// Subtree sizes
+
+// Number the nodes of a property in walk order, the operands of each parallel operator in order,
+// and count the nodes of each subtree, so the smaller operand of a parallel operator can be walked
+// first
+class AssertNfaSizeVisitor final : public VNVisitorConst {
+public:
+    struct Size final {
+        size_t ordinal;  // Number of the node in walk order
+        size_t count;  // Nodes in its subtree
+    };
+
+private:
+    std::unordered_map<const AstNode*, Size>& m_sizes;  // Of each node
+    size_t& m_countr;  // Nodes numbered so far
+    void setSize(const AstNode* const nodep, const size_t ordinal) {
+        const bool inserted = m_sizes.emplace(nodep, Size{ordinal, m_countr - ordinal}).second;
+        UASSERT_OBJ(inserted, nodep, "Node numbered twice");
+    }
+    // A match item is walked with its subsequence before its statements, the order in which an
+    // unassigned read in an assigned value is reported
+    void visit(AstExprStmt* nodep) override {
+        const size_t ordinal = m_countr++;
+        iterateAndNextConstNull(nodep->resultp());
+        iterateAndNextConstNull(nodep->stmtsp());
+        setSize(nodep, ordinal);
+    }
+    void visit(AstNode* nodep) override {
+        const size_t ordinal = m_countr++;
+        iterateChildrenConst(nodep);
+        setSize(nodep, ordinal);
+    }
+
+public:
+    AssertNfaSizeVisitor(AstNode* const nodep, std::unordered_map<const AstNode*, Size>& sizes,
+                         size_t& countr)
+        : m_sizes{sizes}
+        , m_countr{countr} {
+        iterateConst(nodep);
+    }
+};
+
+//######################################################################
+// Match item lowering
+
+// Lower the local variable assignments of match items (IEEE 1800-2023 16.10) before NFA
+// construction, as the NFA keeps no per-attempt storage. The property is walked forward in
+// time, keeping the latest value assigned to each local variable and the cycle it was assigned
+// in. Assignments of one match item take effect in list order at the end of its subsequence, so
+// a reassignment applies from there on. Each value read is computed every cycle into a module
+// temp, its own reads lowered the same way, and a read becomes $past of the temp delayed to the
+// cycle of the read; the assignment is removed. A value is so evaluated every cycle, so an
+// impure value is reported as unsupported. A random function call in a value is drawn by $past
+// of its own call, with a history of its own, so the temp has an input changing every cycle, and
+// each assignment draws its own value.
+// A value is only tracked along a single thread of fixed cycle delays, so its read is a
+// constant number of cycles after its assignment. Each operand of a composite sequence
+// operator is walked as a thread of its own, in an operand walk of its own: an operand of 'and',
+// 'intersect' or 'or' starts with the variables assigned before the operator, and the
+// variables flowing out of the operator follow IEEE 1800-2023 16.10. A thread is summarized by
+// its effect on each variable it assigns: the variable's state at its end, met with the state
+// at its entry for a variable flowing out of only one operand of 'or'. The summary of an
+// operand of a sequential operator is concatenated to the summary of its thread before it; the
+// smaller operand of a parallel operator is walked first, its changes undone after it, and its
+// summary merged into the other's, a variable only the other assigns being met with its
+// incoming state after 'or' by a single epoch. A concatenation iterates the summary with fewer
+// effects, and a parallel merge the summary of the operand with fewer nodes. Either way a
+// summary receiving an effect holds all effects of the one it came from, and covers at least
+// twice the nodes or holds at least twice the effects, so an effect moves a logarithmic number
+// of times. A read of a value live at a range delay or at a composite operator, and a read of a
+// variable an operand of a composite operator assigned, are reported as unsupported; a read with
+// no assignment before it on its thread is an error. Only the instance copies of declared local
+// variables are tracked, so an assignment to any other variable, e.g. a temporary made by
+// V3Width, stays in place.
+class AssertNfaMatchItemVisitor final : public VNVisitor {
+    // TYPES
+    struct Value final {
+        AstNodeExpr* exprp;  // Assigned value, its reads already lowered
+        AstVar* tempp;  // Temp computing the value every cycle, made at the first read
+        uint32_t cycle;  // Cycle of the walk it was assigned in
+        bool inAntecedent;  // Assigned in the antecedent of an implication
+        size_t ordinal;  // Number of its assignment in walk order
+    };
+    struct Untimed final {
+        AstNode* nodep;  // Range delay or composite operator the value was live at
+        const char* whatp;  // What nodep is
+        bool fromAntecedent;  // A value assigned in the antecedent was live at nodep
+    };
+    // The state of a variable at a point of a thread whose value is not tracked
+    struct State final {
+        enum Kind : uint8_t {
+            UNASSIGNED,  // Not assigned, or blocked
+            UNTIMED,  // Its value was live at an untimed node in operand walk 'operand'
+            UNTRACKED  // Assigned in an operand of a composite operator
+        };
+        Kind kind;
+        uint32_t operand;  // If UNTIMED, the operand walk its value became untimed in
+        Untimed untimed;  // If UNTIMED, the untimed node
+    };
+    // The effect of a subtree on a variable: its state at the end of the subtree is 'value', met
+    // with its state at the entry of the subtree if 'meetIn' (IEEE 1800-2023 16.10 'or')
+    struct Effect final {
+        bool meetIn;  // 'value' is met with the incoming state
+        State value;  // State at the end, or met with the incoming state
+        State in;  // State at the entry of the subtree
+        uint64_t epoch;  // When set; it is 'meetIn' if before its summary's 'meetInEpoch'
+    };
+    // The effects of a subtree on the variables it assigns
+    struct Summary final {
+        std::unordered_map<const AstVar*, Effect> effects;  // Of each variable it assigns
+        uint64_t meetInEpoch = 0;  // Effects set before are met with the incoming state
+    };
+    // The summary holding a variable's effect, before a change undone after its operand
+    struct Change final {
+        const AstVar* varp;  // Variable changed
+        Summary* summaryp;  // Summary holding its effect before, nullptr if none
+    };
+    // A temp computing a value every cycle
+    struct Temp final {
+        AstVar* varp;  // The temp, named after the walk
+        AstNodeExpr* exprp;  // Value it computes
+        AstAlways* alwaysp;  // Block computing it
+    };
+
+    // STATE
+    AstNodeModule* const m_modp;  // Module to receive the value temps
+    V3UniqueNames& m_tempNames;  // Value temp names
+    std::unordered_map<const AstVar*, Value> m_values;  // Live value of each assigned variable
+    // Summary holding each variable's effect at this point, if any: its state not in m_values.
+    // An effect is looked up by its variable in the summary, which is never deleted during the
+    // walk, so neither this nor a saved change ever refers to a deleted summary.
+    std::unordered_map<const AstVar*, Summary*> m_summaryps;
+    std::vector<Change> m_changes;  // Changes of m_summaryps to undo after their operands
+    std::unique_ptr<Summary> m_summaryp{new Summary};  // Summary of the thread walked
+    std::vector<std::unique_ptr<Summary>> m_mergedSummaryps;  // Merged into another, now empty
+    uint64_t m_epoch = 0;  // Last effect epoch
+    std::vector<bool> m_operandWalking{true};  // Whether each operand walk is still walking
+    std::unordered_map<const AstNode*, AssertNfaSizeVisitor::Size> m_sizes;  // Of each node
+    // Value temps, by the walk order of their assignments, added to the module after the walk,
+    // as the operands of a parallel operator may be walked out of order
+    std::map<size_t, Temp> m_temps;
+    std::map<size_t, AstNodeExpr*> m_valueps;  // Removed values, by walk order
+    std::vector<AstAlways*> m_alwaysps;  // Blocks computing the value temps
+    // Match items left without statements, replaced by their subsequence after the walk, as
+    // a replacement during the walk would be iterated again
+    std::vector<AstExprStmt*> m_emptyItemps;
+    std::vector<AstRand*>* m_randpsp = nullptr;  // Random function calls of the value walked
+    uint32_t m_cycle = 0;  // Current cycle of the walk, only ever increasing
+    uint32_t m_operand = 0;  // Operand walk walking: an operand of a composite operator
+    uint32_t m_undoDepth = 0;  // Number of operands walked whose changes are undone
+    bool m_operandStart = false;  // Next node visited is an operand of a composite operator
+    bool m_inConsequent = false;  // In the consequent of an implication
+    bool m_inOperand = false;  // In an operand of a non-sequential operator
+    bool m_failed = false;  // An error was found
+    const AstNode* m_unsupportedp = nullptr;  // First unsupported construct found, reported after
+    std::string m_unsupportedMsg;  // Its message
+    size_t m_statValues = 0;  // Values lowered
+    size_t m_statReads = 0;  // Reads of values lowered
+    size_t m_statTemps = 0;  // Value temps made
+    size_t m_statWork = 0;  // Nodes visited and references inspected
+    size_t m_statFlow = 0;  // Nodes numbered, and effects looked up, set, merged and undone
+
+    // METHODS
+    // The live values reach a node from which their cycle is unknown; a later read is reported
+    void untimeValues(AstNode* const nodep, const char* const whatp) {
+        bool fromAntecedent = false;
+        for (const auto& itr : m_values) fromAntecedent |= itr.second.inAntecedent;
+        for (const auto& itr : m_values) {
+            setState(itr.first,
+                     State{State::UNTIMED, m_operand, Untimed{nodep, whatp, fromAntecedent}});
+        }
+        m_values.clear();
+    }
+    // The state of a variable, with an untimed value of an operand walk ended untracked
+    State normalized(const State& stater) const {
+        if (stater.kind != State::UNTIMED || m_operandWalking[stater.operand]) return stater;
+        return State{State::UNTRACKED, 0, Untimed{}};
+    }
+    // The state of a variable assigned on either of two threads (IEEE 1800-2023 16.10 'or')
+    static State meet(const State& ar, const State& br) {
+        if (ar.kind == State::UNASSIGNED) return ar;
+        if (br.kind == State::UNASSIGNED) return br;
+        return State{State::UNTRACKED, 0, Untimed{}};
+    }
+    // An effect as set, or met with the incoming state if set before its summary's meetInEpoch
+    static Effect effectOf(const Summary& summaryr, const Effect& effectr) {
+        Effect effect = effectr;
+        effect.meetIn |= effect.epoch < summaryr.meetInEpoch;
+        if (effect.value.kind == State::UNASSIGNED) effect.meetIn = false;
+        return effect;
+    }
+    // The state of a variable at this point, its value not in m_values
+    State stateOf(const AstVar* const varp) {
+        ++m_statFlow;
+        const auto it = m_summaryps.find(varp);
+        if (it == m_summaryps.end()) return State{State::UNASSIGNED, 0, Untimed{}};
+        const Summary& summaryr = *it->second;
+        const auto effectIt = summaryr.effects.find(varp);
+        UASSERT_OBJ(effectIt != summaryr.effects.end(), varp,
+                    "Summary not holding the variable's effect");
+        const Effect effect = effectOf(summaryr, effectIt->second);
+        return effect.meetIn ? meet(effect.value, effect.in) : effect.value;
+    }
+    // Hold a variable's effect in a summary, saving the change to undo if needed
+    void setSummary(const AstVar* const varp, Summary* const summaryp) {
+        ++m_statFlow;
+        Summary*& summarypr = m_summaryps[varp];
+        if (summarypr == summaryp) return;
+        if (m_undoDepth) m_changes.push_back(Change{varp, summarypr});
+        summarypr = summaryp;
+    }
+    // Undo the changes saved since the mark
+    void undoChanges(const size_t mark) {
+        for (size_t i = m_changes.size(); i > mark; --i) {
+            ++m_statFlow;
+            const Change& changer = m_changes[i - 1];
+            if (changer.summaryp) {
+                m_summaryps[changer.varp] = changer.summaryp;
+            } else {
+                m_summaryps.erase(changer.varp);
+            }
+        }
+        // The first change of each variable restored a summary from before the mark, still
+        // holding its effect
+        for (size_t i = mark; i < m_changes.size(); ++i) {
+            const Change& changer = m_changes[i];
+            const auto it = m_summaryps.find(changer.varp);
+            UASSERT_OBJ(it == m_summaryps.end() || it->second->effects.count(changer.varp),
+                        changer.varp, "Restored summary not holding the variable's effect");
+        }
+        m_changes.resize(mark);
+    }
+    // Keep a summary merged into another, its effects freed, so it is not deleted while a change
+    // may refer to it
+    void retire(std::unique_ptr<Summary>& summaryp) {
+        std::unordered_map<const AstVar*, Effect>{}.swap(summaryp->effects);
+        m_mergedSummaryps.push_back(std::move(summaryp));
+    }
+    // Set the state of a variable at this point of the thread walked
+    void setState(const AstVar* const varp, const State& stater) {
+        ++m_statFlow;
+        const auto pair = m_summaryp->effects.emplace(varp, Effect{false, stater, {}, ++m_epoch});
+        if (!pair.second) {
+            pair.first->second = Effect{false, stater, pair.first->second.in, m_epoch};
+            return;
+        }
+        // Inserted, so the current summary did not hold varp, and stateOf reads its prior owner
+        pair.first->second.in = stateOf(varp);
+        setSummary(varp, m_summaryp.get());
+    }
+    // Make an effect held by a summary a new one
+    void renewEffect(Summary& summaryr, const AstVar* const varp, Effect& effectr) {
+        ++m_statFlow;
+        effectr.epoch = ++m_epoch;
+        if (effectr.value.kind == State::UNASSIGNED) effectr.meetIn = false;
+        setSummary(varp, &summaryr);
+    }
+    // The effect of 'first' then 'then'
+    Effect compose(const Effect& first, const Effect& then) const {
+        if (!then.meetIn) return Effect{false, then.value, first.in, 0};
+        return Effect{first.meetIn, meet(then.value, first.value), first.in, 0};
+    }
+    // Concatenate the summary of a subtree to the summary 'firstr' of the subtree before it,
+    // iterating the smaller one. Keys in both are composed, the others are relative to the
+    // entry of the concatenation already.
+    void concatenate(std::unique_ptr<Summary>& firstr, std::unique_ptr<Summary>& thenr) {
+        if (firstr->effects.size() >= thenr->effects.size()) {
+            for (const auto& itr : thenr->effects) {
+                ++m_statFlow;
+                const Effect then = effectOf(*thenr, itr.second);
+                const auto pair = firstr->effects.emplace(itr.first, then);
+                if (!pair.second) {
+                    pair.first->second = compose(effectOf(*firstr, pair.first->second), then);
+                }
+                renewEffect(*firstr, itr.first, pair.first->second);
+            }
+        } else {
+            for (const auto& itr : firstr->effects) {
+                ++m_statFlow;
+                const Effect first = effectOf(*firstr, itr.second);
+                const auto pair = thenr->effects.emplace(itr.first, first);
+                if (!pair.second) {
+                    pair.first->second = compose(first, effectOf(*thenr, pair.first->second));
+                }
+                renewEffect(*thenr, itr.first, pair.first->second);
+            }
+            firstr.swap(thenr);
+        }
+        retire(thenr);
+    }
+    const AssertNfaSizeVisitor::Size& sizeOf(const AstNode* const nodep) const {
+        const auto it = m_sizes.find(nodep);
+        UASSERT_OBJ(it != m_sizes.end(), nodep, "Node not numbered before the walk");
+        return it->second;
+    }
+    // Note an unsupported construct, stopping the walk. Only the first in walk order is
+    // reported, after the walk, as the operands of a parallel operator may be walked out of order.
+    void unsupported(const AstNode* const nodep, const std::string& msg) {
+        UASSERT_OBJ(!m_unsupportedp, nodep, "Unsupported construct after the walk stopped");
+        m_failed = true;
+        m_unsupportedp = nodep;
+        m_unsupportedMsg = msg;
+    }
+    void unsupportedUntimed(const Untimed& untimedr) {
+        if (m_inConsequent && untimedr.fromAntecedent) {
+            unsupported(untimedr.nodep, "Unsupported: property local variable used across "s
+                                            + untimedr.whatp
+                                            + " in consequent (IEEE 1800-2023 16.10)");
+        } else {
+            unsupported(untimedr.nodep, "Unsupported: local variable used across "s
+                                            + untimedr.whatp
+                                            + " in sequence (IEEE 1800-2023 16.10)");
+        }
+    }
+    // A read of a variable assigned in an operand of a composite sequence operator
+    void unsupportedUntrackedRead(AstNode* const nodep) {
+        unsupported(nodep, "Unsupported: local variable referenced after an operand"
+                           " of a composite sequence operator assigned it"
+                           " (IEEE 1800-2023 16.10).");
+    }
+    // The local variable assigned by a match item statement, if any
+    static const AstVarRef* assignedLocalp(const AstNode* const itemp) {
+        const AstAssign* const assignp = VN_CAST(itemp, Assign);
+        const AstVarRef* const lhsp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+        return lhsp && lhsp->varp()->isAssertLocal() ? lhsp : nullptr;
+    }
+    // Walk an operand of a composite operator as a thread of its own, from the state before it,
+    // returning its summary. If 'undo', the variables' states are as before it after it.
+    std::unique_ptr<Summary> iterateOperand(AstNode* const nodep, const bool undo) {
+        UASSERT_OBJ(!nodep->nextp(), nodep, "Operand of a composite operator is not a list");
+        UASSERT_OBJ(m_values.empty(), nodep, "Values not untimed before a composite operator");
+        VL_RESTORER(m_inOperand);
+        VL_RESTORER(m_operandStart);
+        VL_RESTORER(m_operand);
+        VL_RESTORER(m_undoDepth);
+        std::unique_ptr<Summary> summaryp{new Summary};
+        m_summaryp.swap(summaryp);  // Now the outer thread's summary
+        m_inOperand = false;
+        m_operandStart = false;
+        m_operand = m_operandWalking.size();
+        m_operandWalking.push_back(true);
+        const size_t mark = m_changes.size();
+        if (undo) ++m_undoDepth;
+        iterateAndNextNull(nodep);
+        // A value assigned in the operand is not tracked after it
+        if (!m_failed) {
+            for (const auto& itr : m_values) {
+                setState(itr.first, State{State::UNTRACKED, 0, Untimed{}});
+            }
+        }
+        m_values.clear();
+        if (undo) undoChanges(mark);
+        // A value untimed in the operand is no longer untimed after it, as the operand assigned it
+        m_operandWalking[m_operand] = false;
+        m_summaryp.swap(summaryp);
+        return summaryp;
+    }
+    // Walk an operand starting from the state before it
+    void iterateSequentialOperand(AstNode* const nodep) {
+        std::unique_ptr<Summary> summaryp = iterateOperand(nodep, false);
+        concatenate(m_summaryp, summaryp);
+    }
+    // A sequence that is not a single thread of fixed cycle delays: a composite operator, or a
+    // sequence in an operand of a non-sequential operator, walked as a single operand
+    void visitComposite(AstNodeExpr* const nodep) {
+        if (m_failed) return;
+        untimeValues(nodep, "composite sequence operator");
+        if (m_inOperand) {
+            iterateSequentialOperand(nodep);
+            return;
+        }
+        const bool isOr = VN_IS(nodep, SOr);
+        if (!isOr && !VN_IS(nodep, SAnd) && !VN_IS(nodep, SIntersect)) {
+            // Sequential operands: each starts from the previous
+            VL_RESTORER(m_operandStart);
+            m_operandStart = true;
+            iterateChildren(nodep);
+            return;
+        }
+        const AstNodeBiop* const biopp = VN_AS(nodep, NodeBiop);
+        AstNode* firstp = biopp->lhsp();
+        AstNode* lastp = biopp->rhsp();
+        // The smaller operand is walked first, its changes undone, its summary merged into the
+        // other
+        const bool swapped = sizeOf(firstp).count > sizeOf(lastp).count;
+        if (swapped) std::swap(firstp, lastp);
+        // Both operands start from before the operator
+        std::unique_ptr<Summary> firstSummaryp = iterateOperand(firstp, true);
+        if (m_failed && swapped) {
+            // Report the left operand's unsupported construct, if any, as if walked first
+            const AstNode* const rightp = m_unsupportedp;
+            const std::string rightMsg = m_unsupportedMsg;
+            m_failed = false;
+            m_unsupportedp = nullptr;
+            std::unique_ptr<Summary> summaryp = iterateOperand(lastp, true);
+            retire(summaryp);
+            if (!m_unsupportedp) {
+                m_unsupportedp = rightp;
+                m_unsupportedMsg = rightMsg;
+            }
+            m_failed = true;
+        }
+        if (m_failed) {
+            retire(firstSummaryp);
+            return;
+        }
+        std::unique_ptr<Summary> lastSummaryp = iterateOperand(lastp, false);
+        if (m_failed) {
+            retire(firstSummaryp);
+            retire(lastSummaryp);
+            return;
+        }
+        // A variable flows out of 'or' as met from both operands. It is blocked by 'and' or
+        // 'intersect' if both assign it, else flows out of the operand assigning it.
+        std::vector<std::pair<const AstVar*, Effect>> effects;
+        effects.reserve(firstSummaryp->effects.size());
+        for (const auto& itr : firstSummaryp->effects) {
+            ++m_statFlow;
+            const Effect first = effectOf(*firstSummaryp, itr.second);
+            const auto lastIt = lastSummaryp->effects.find(itr.first);
+            if (!isOr) {
+                effects.emplace_back(
+                    itr.first,
+                    lastIt == lastSummaryp->effects.end()
+                        ? first
+                        : Effect{false, State{State::UNASSIGNED, 0, Untimed{}}, first.in, 0});
+            } else if (lastIt == lastSummaryp->effects.end()) {
+                // An operand not assigning a variable leaves its incoming state
+                effects.emplace_back(itr.first, Effect{true, first.value, first.in, 0});
+            } else {
+                const Effect last = effectOf(*lastSummaryp, lastIt->second);
+                effects.emplace_back(itr.first,
+                                     Effect{first.meetIn || last.meetIn,
+                                            meet(first.value, last.value), first.in, 0});
+            }
+        }
+        // A variable only the other operand assigns is met with its incoming state
+        if (isOr) lastSummaryp->meetInEpoch = ++m_epoch;
+        for (const auto& itr : effects) {
+            Effect& effectr = lastSummaryp->effects[itr.first];
+            effectr = itr.second;
+            renewEffect(*lastSummaryp, itr.first, effectr);
+        }
+        retire(firstSummaryp);
+        concatenate(m_summaryp, lastSummaryp);
+    }
+    // Remove the local variable assignments of a match item, after its subsequence
+    void lowerItems(AstExprStmt* const nodep) {
+        AstNode* nextp;
+        for (AstNode* itemp = nodep->stmtsp(); itemp; itemp = nextp) {
+            nextp = itemp->nextp();
+            const AstVarRef* const lhsp = assignedLocalp(itemp);
+            if (!lhsp) {
+                const AstNodeVarRef* writep = nullptr;
+                itemp->exists([&](const AstNodeVarRef* refp) {
+                    ++m_statWork;
+                    if (refp->access().isWriteOrRW() && refp->varp()->isAssertLocal()) {
+                        writep = refp;
+                    }
+                    return writep != nullptr;
+                });
+                if (writep) {
+                    unsupported(writep, "Unsupported: match item assigning part of a"
+                                        " local variable (IEEE 1800-2023 16.10).");
+                    return;
+                }
+                // E.g. a subroutine call (IEEE 1800-2023 16.11) stays, reading values in order
+                iterateChildren(itemp);
+                if (m_failed) return;
+                continue;
+            }
+            AstAssign* const assignp = VN_AS(itemp, Assign);
+            std::vector<AstRand*> randps;
+            VL_RESTORER(m_randpsp);
+            m_randpsp = &randps;
+            iterateAndNextNull(assignp->rhsp());
+            if (m_failed) return;
+            AstNodeExpr* const valuep = assignp->rhsp();
+            VIsCached::clearCacheTree();  // Reads lowered above change its purity
+            if (!valuep->isPure()) {
+                unsupported(valuep, "Unsupported: match item assigning an impure value"
+                                    " to a local variable.");
+                return;
+            }
+            drawRandoms(randps);
+            const size_t ordinal = sizeOf(assignp).ordinal;
+            m_values[lhsp->varp()]
+                = Value{assignp->rhsp(), nullptr, m_cycle, !m_inConsequent, ordinal};
+            const bool inserted = m_valueps.emplace(ordinal, assignp->rhsp()).second;
+            UASSERT_OBJ(inserted, assignp, "Assignment lowered twice");
+            ++m_statValues;
+            assignp->unlinkFrBack();
+            pushDeletep(assignp);
+        }
+    }
+    // Replace each random function call in the value walked with $past of the call, drawn
+    // every cycle into a history of its own
+    static void drawRandoms(const std::vector<AstRand*>& randps) {
+        for (AstRand* const randp : randps) {
+            FileLine* const flp = randp->fileline();
+            VNRelinker relinkHandle;
+            randp->unlinkFrBack(&relinkHandle);
+            // Not property timing, so the history starts with a draw of its own
+            AstPast* const pastp = new AstPast{
+                flp, randp, new AstConst{flp, AstConst::WidthedValue{}, 32, 1}, nullptr, false};
+            pastp->ownHistory(true);
+            pastp->dtypeFrom(randp);
+            relinkHandle.relink(pastp);
+        }
+    }
+    // The temp computing a value every cycle
+    AstVar* valueTempp(Value& valuer) {
+        if (valuer.tempp) return valuer.tempp;
+        AstNodeExpr* const exprp = valuer.exprp;
+        FileLine* const flp = exprp->fileline();
+        // Named after the walk
+        valuer.tempp = new AstVar{flp, VVarType::MODULETEMP, "", exprp->dtypep()};
+        AstAssign* const assignp = new AstAssign{
+            flp, new AstVarRef{flp, valuer.tempp, VAccess::WRITE}, sampled(exprp->unlinkFrBack())};
+        const bool inserted
+            = m_temps
+                  .emplace(valuer.ordinal,
+                           Temp{valuer.tempp, exprp,
+                                newAssertAlways(flp, VAlwaysKwd::ALWAYS_COMB, nullptr, assignp)})
+                  .second;
+        UASSERT_OBJ(inserted, exprp, "Value temp made twice");
+        ++m_statTemps;
+        return valuer.tempp;
+    }
+
+    // VISITORS
+    void visit(AstSExpr* nodep) override {
+        ++m_statWork;
+        if (m_operandStart) {
+            iterateSequentialOperand(nodep);
+            return;
+        }
+        if (m_inOperand) {
+            visitComposite(nodep);
+            return;
+        }
+        iterateAndNextNull(nodep->preExprp());
+        if (m_failed) return;
+        // IEEE 1800-2023 16.9.2: the cycle delay of a sequence is folded to a constant before
+        // this pass, a range delay `##[m:n]` aside
+        const AstDelay* const delayp = VN_AS(nodep->delayp(), Delay);
+        const AstConst* const cyclesp = VN_CAST(delayp->lhsp(), Const);
+        UASSERT_OBJ(delayp->isCycleDelay() && cyclesp, nodep,
+                    "SVA cycle delay must have a constant lhsp");
+        if (delayp->isRangeDelay()) {
+            untimeValues(nodep, "non-constant cycle delay");
+        } else {
+            m_cycle += cyclesp->toUInt();
+        }
+        iterateAndNextNull(nodep->exprp());
+    }
+    void visit(AstExprStmt* nodep) override {
+        ++m_statWork;
+        if (m_operandStart) {
+            iterateSequentialOperand(nodep);
+            return;
+        }
+        if (m_inOperand) {
+            visitComposite(nodep);
+            return;
+        }
+        iterateAndNextNull(nodep->resultp());
+        if (m_failed) return;
+        lowerItems(nodep);
+        if (!nodep->stmtsp()) m_emptyItemps.push_back(nodep);
+    }
+    void visit(AstVarRef* nodep) override {
+        ++m_statWork;
+        if (m_operandStart) {
+            iterateSequentialOperand(nodep);
+            return;
+        }
+        if (m_failed || !nodep->access().isReadOnly()) return;
+        const auto it = m_values.find(nodep->varp());
+        if (it == m_values.end()) {
+            const State state = normalized(stateOf(nodep->varp()));
+            if (state.kind == State::UNTIMED) {
+                unsupportedUntimed(state.untimed);
+            } else if (state.kind == State::UNTRACKED) {
+                unsupportedUntrackedRead(nodep);
+            }  // Else reported after the walk
+            return;
+        }
+        Value& valuer = it->second;
+        FileLine* const flp = nodep->fileline();
+        AstNodeExpr* newp = new AstVarRef{flp, valueTempp(valuer), VAccess::READ};
+        if (const uint32_t ticks = m_cycle - valuer.cycle) {
+            AstPast* const pastp
+                = new AstPast{flp, newp, new AstConst{flp, AstConst::WidthedValue{}, 32, ticks},
+                              nullptr, /* propertyTiming */ true};
+            pastp->dtypeFrom(newp);
+            newp = pastp;
+        }
+        ++m_statReads;
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    void visit(AstRand* nodep) override {
+        if (m_randpsp) m_randpsp->push_back(nodep);
+        visit(static_cast<AstNodeExpr*>(nodep));
+    }
+    void visit(AstNodeExpr* nodep) override {
+        ++m_statWork;
+        if (m_operandStart) {
+            iterateSequentialOperand(nodep);
+            return;
+        }
+        if (nodep->isMultiCycleSva()) {
+            visitComposite(nodep);
+            return;
+        }
+        // The operands of a non-sequential operator, e.g. a nested overlapped implication, are
+        // walked in order, each sequence in them a thread of its own
+        VL_RESTORER(m_inOperand);
+        m_inOperand = true;
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override {
+        ++m_statWork;
+        iterateChildren(nodep);
+    }
+
+    // A read left in the property or in a removed value, with no assignment before it
+    bool unassignedRead(const AstVarRef* const refp) {
+        ++m_statWork;
+        if (!refp->access().isReadOnly() || !refp->varp()->isAssertLocal()) return false;
+        refp->v3error("Local variable " << AstNode::prettyNameQ(refp->varp()->origName())
+                                        << " referenced before it is assigned"
+                                           " (IEEE 1800-2023 16.10).");
+        m_failed = true;
+        return true;
+    }
+
+    // CONSTRUCTORS
+    AssertNfaMatchItemVisitor(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                              AstNodeExpr* const antecedentp, const bool isOverlapped,
+                              AstNodeExpr* const bodyp, AstNode* const propp)
+        : m_modp{modp}
+        , m_tempNames{tempNames} {
+        size_t ordinal = 0;
+        if (antecedentp) { AssertNfaSizeVisitor{antecedentp, m_sizes, ordinal}; }
+        { AssertNfaSizeVisitor{bodyp, m_sizes, ordinal}; }
+        m_statFlow += m_sizes.size();
+        if (antecedentp) {
+            iterateAndNextNull(antecedentp);
+            if (!isOverlapped) ++m_cycle;
+            m_inConsequent = true;
+        }
+        if (!m_failed) iterateAndNextNull(bodyp);
+        if (m_unsupportedp) m_unsupportedp->v3warn(E_UNSUPPORTED, m_unsupportedMsg);
+        for (const auto& itr : m_temps) {
+            const Temp& tempr = itr.second;
+            const std::string name = m_tempNames.get(tempr.exprp);
+            tempr.varp->name(name);
+            tempr.varp->origName(name);
+            m_modp->addStmtsp(tempr.varp);
+            m_alwaysps.push_back(tempr.alwaysp);
+            m_modp->addStmtsp(tempr.alwaysp);
+        }
+        const auto unassignedReadFunc
+            = [this](const AstVarRef* refp) { return unassignedRead(refp); };
+        if (!m_failed) propp->exists(unassignedReadFunc);
+        for (const auto& itr : m_valueps) {
+            const AstNodeExpr* const valuep = itr.second;
+            if (m_failed) break;
+            valuep->exists(unassignedReadFunc);
+        }
+        for (AstExprStmt* const stmtp : m_emptyItemps) {
+            stmtp->replaceWith(stmtp->resultp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(stmtp), stmtp);
+        }
+        // Lowering changes the purity of ancestors
+        VIsCached::clearCacheTree();
+    }
+
+public:
+    // Lower the match items of an implication, or of a property without one if antecedentp is
+    // nullptr. Append the blocks computing value temps to alwaysps, unless an error was
+    // reported, then return true.
+    static bool lowerFailed(AstNodeModule* const modp, V3UniqueNames& tempNames,
+                            AstNodeExpr* const antecedentp, const bool isOverlapped,
+                            AstNodeExpr* const bodyp, AstNode* const propp,
+                            std::vector<AstAlways*>& alwaysps) {
+        AssertNfaMatchItemVisitor visitor{modp,         tempNames, antecedentp,
+                                          isOverlapped, bodyp,     propp};
+        if (visitor.m_failed) {
+            for (AstAlways* const alwaysp : visitor.m_alwaysps) {
+                visitor.pushDeletep(alwaysp->unlinkFrBack());
+            }
+            return true;
+        }
+        V3Stats::addStatSum("Assertions, local variable values", visitor.m_statValues);
+        V3Stats::addStatSum("Assertions, local variable reads", visitor.m_statReads);
+        V3Stats::addStatSum("Assertions, local variable value temps", visitor.m_statTemps);
+        V3Stats::addStatSum("Assertions, local variable lowering work", visitor.m_statWork);
+        V3Stats::addStatSum("Assertions, local variable flow entries", visitor.m_statFlow);
+        alwaysps = visitor.m_alwaysps;
+        return false;
+    }
+};
+
 }  // namespace
 
 //######################################################################
@@ -2938,6 +3647,7 @@ class AssertNfaVisitor final : public VNVisitor {
     SvaNfaLowering* m_loweringp = nullptr;  // NFA-to-hardware lowering engine
     AstSenTree* m_sampledValueClockp = nullptr;  // Inherited clock during scoped attachment
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
+    V3UniqueNames m_localValueNames{"__VnfaLocalValue"};  // Local variable value temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
 
     template <typename T_Node>
@@ -3202,105 +3912,6 @@ class AssertNfaVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(innerPropp), innerPropp);
     }
 
-    // Replace one VarRef to a captured local var with $past(rhs, K)
-    // (or rhs inline when K == 0). No-op if refp is not in matchMap.
-    void substituteMatchItemRef(AstVarRef* refp, unsigned K,
-                                const std::unordered_map<const AstVar*, AstNodeExpr*>& matchMap) {
-        const auto it = matchMap.find(refp->varp());
-        if (it == matchMap.end()) return;
-        AstNodeExpr* newp = it->second->cloneTreePure(false);
-        if (K > 0) {
-            AstConst* const ticksp = new AstConst{refp->fileline(), AstConst::WidthedValue{}, 32,
-                                                  static_cast<uint32_t>(K)};
-            AstPast* const pastp = new AstPast{refp->fileline(), newp, ticksp, nullptr,
-                                               /* propertyTiming */ true};
-            pastp->dtypeFrom(newp);
-            newp = pastp;
-        }
-        refp->replaceWith(newp);
-        VL_DO_DANGLING(pushDeletep(refp), refp);
-        return;
-    }
-
-    // Recursively walk a consequent. Returns cycle length consumed and
-    // substitutes each VarRef to a captured local var with $past(rhs, K)
-    // (or rhs inline when K == 0). Reports E_UNSUPPORTED on non-constant
-    // delays or composite sequence operators and returns -1 on failure.
-    int
-    walkSubstituteMatchItems(AstNodeExpr* nodep, unsigned K,
-                             const std::unordered_map<const AstVar*, AstNodeExpr*>& matchItems) {
-        if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
-            // IEEE 1800-2023 16.9.2: cycle_delay's lhsp is a constant_expression
-            // and the delay form in a sequence is always `##N`, folded by
-            // V3Const + V3Param before V3AssertNfa. Range form `##[m:n]` is the
-            // only user-visible reject here.
-            AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
-            UASSERT_OBJ(delayp->isCycleDelay() && VN_IS(delayp->lhsp(), Const), sexprp,
-                        "SVA cycle delay must have a constant lhsp");
-            if (delayp->isRangeDelay()) {
-                sexprp->v3warn(E_UNSUPPORTED, "Unsupported: property local variable used across "
-                                              "non-constant cycle delay in consequent"
-                                              " (IEEE 1800-2023 16.10)");
-                return -1;
-            }
-            const unsigned delayCycles = VN_AS(delayp->lhsp(), Const)->toUInt();
-            int preLen = 0;
-            if (AstNodeExpr* const prep = sexprp->preExprp()) {
-                preLen = walkSubstituteMatchItems(prep, K, matchItems);
-                if (preLen < 0) return -1;
-            }
-            const int bodyLen
-                = walkSubstituteMatchItems(sexprp->exprp(), K + preLen + delayCycles, matchItems);
-            if (bodyLen < 0) return -1;
-            return preLen + delayCycles + bodyLen;
-        }
-        if (nodep->isMultiCycleSva()) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: property local variable used across "
-                                         "composite sequence operator in consequent"
-                                         " (IEEE 1800-2023 16.10)");
-            return -1;
-        }
-        std::vector<AstVarRef*> refs;
-        nodep->foreach([&refs](AstVarRef* p) { refs.push_back(p); });
-        for (AstVarRef* const refp : refs) substituteMatchItemRef(refp, K, matchItems);
-        return 0;
-    }
-
-    // Lower property-local match-item assignments before NFA construction.
-    // Without this, the antecedent's AstExprStmt(<x = rhs_expr>, antBool)
-    // survives into every NFA edge as a continuous-alias side-effect, so the
-    // local-var temp tracks the current cycle's rhs_expr rather than the
-    // antecedent-match cycle's value -- wrong for `|-> ##N` and `|=> ##N`
-    // with N > 0 (issue #7587). Each consequent reference to the local var
-    // is replaced with `$past(rhs_expr, K)` where K = (overlapped ? 0 : 1)
-    // plus any accumulated `##N` delay. Returns true if E_UNSUPPORTED was
-    // emitted; caller must replace the body with BitFalse and bail.
-    bool liftMatchItemSubstitutions(PropertyParts& parts, AstNodeExpr* seqBodyp) {
-        if (!parts.hasImplication) return false;
-        AstExprStmt* const exprStmtp = VN_CAST(parts.triggerExprp, ExprStmt);
-        if (!exprStmtp) return false;
-        // IEEE 1800-2023 16.10 BNF requires `(expr, match_item {, match_item})`
-        // with at least one match item; V3LinkParse only emits ExprStmt for
-        // this form and only emits AstAssign with VarRef LHS for each item.
-        std::unordered_map<const AstVar*, AstNodeExpr*> matchItems;
-        for (AstNode* const stmtp : exprStmtp->stmtspList()) {
-            AstAssign* const assignp = VN_AS(stmtp, Assign);
-            AstVarRef* const lhsRefp = VN_AS(assignp->lhsp(), VarRef);
-            matchItems[lhsRefp->varp()] = assignp->rhsp();
-        }
-        const unsigned startK = parts.isOverlapped ? 0 : 1;
-        const int length = walkSubstituteMatchItems(seqBodyp, startK, matchItems);
-        // Match-item substitution / strip mutates ancestor purity. Release
-        // builds don't auto-clear caches on edits, so refresh here.
-        VIsCached::clearCacheTree();
-        if (length < 0) return true;
-        AstNodeExpr* const antBoolp = exprStmtp->resultp()->unlinkFrBack();
-        exprStmtp->replaceWith(antBoolp);
-        VL_DO_DANGLING(pushDeletep(exprStmtp), exprStmtp);
-        parts.triggerExprp = antBoolp;
-        return false;
-    }
-
     // Outcome counts for a property if/case are wrong in an outcome-multiplying
     // context. Returns that context, or nullptr when the shape is supported.
     static const char* unsupportedPropertyControl(const AstNodeCoverOrAssert* assertp,
@@ -3319,7 +3930,20 @@ class AssertNfaVisitor final : public VNVisitor {
             // Leave a chain of property instances to V3AssertPre: the NFA lowering
             // reports one fail for attempts failing in the same cycle, e.g. after a goto
             // repetition antecedent, but each attempt fails (IEEE 1800-2023 16.14.1).
-            if (specp->fromInstanceChain()) return nullptr;
+            if (specp->fromInstanceChain()) {
+                // V3AssertPre keeps no per-attempt storage for a local variable
+                const AstVarRef* localp = nullptr;
+                specp->exists([&](const AstVarRef* refp) {
+                    if (refp->varp()->isAssertLocal()) localp = refp;
+                    return localp != nullptr;
+                });
+                if (localp) {
+                    localp->v3warn(E_UNSUPPORTED, "Unsupported: local variable in a chain of"
+                                                  " property instances (IEEE 1800-2023 16.10).");
+                    replaceBodyOnBuildError(specp->fileline(), specp, /*errorEmitted=*/true);
+                }
+                return nullptr;
+            }
             if (hoistClockedSeq(specp)) return nullptr;
         }
 
@@ -3357,14 +3981,19 @@ class AssertNfaVisitor final : public VNVisitor {
         const char* const propertyControlp
             = unsupportedPropertyControl(assertp, seqBodyp, negated);
 
-        // Substitute property-local match-item refs in consequent with
-        // $past(rhs, K) before NFA build (IEEE 1800-2023 16.10).
-        if (liftMatchItemSubstitutions(parts, seqBodyp)) {
+        std::vector<AstAlways*> localValueps;  // Blocks computing local variable values
+        if (AssertNfaMatchItemVisitor::lowerFailed(
+                m_modp, m_localValueNames, parts.hasImplication ? parts.triggerExprp : nullptr,
+                parts.isOverlapped, seqBodyp, propp->propp(), localValueps)) {
             AstPropSpec* const psp = VN_CAST(assertp->propp(), PropSpec);
             UASSERT_OBJ(psp, assertp, "Concurrent assertion must have PropSpec");
             replaceBodyOnBuildError(assertp->fileline(), psp, /*errorEmitted=*/true);
             return;
         }
+        // Lowering replaced each match item with its subsequence
+        parts = decomposeProperty(propp);
+        seqBodyp = parts.seqExprp;
+        while (AstLogNot* const notp = VN_CAST(seqBodyp, LogNot)) seqBodyp = notp->lhsp();
 
         AstCover* const coverp = VN_CAST(assertp, Cover);
         const bool isCoverSeq = coverp && coverp->isCoverSeq();
@@ -3391,6 +4020,7 @@ class AssertNfaVisitor final : public VNVisitor {
             VL_RESTORER(m_sampledValueClockp);
             m_sampledValueClockp = senTreep;
             iterate(propp->propp());
+            for (AstAlways* const alwaysp : localValueps) iterate(alwaysp);
             // The final block clones the action block, so resolve its clocks while in scope
             if (AstAssert* const ap = VN_CAST(assertp, Assert)) {
                 iterateAndNextNull(ap->failsp());
@@ -3460,7 +4090,9 @@ class AssertNfaVisitor final : public VNVisitor {
         VL_RESTORER(m_loweringp);
         VL_RESTORER(m_defaultClockingp);
         VL_RESTORER(m_defaultDisablep);
+        VL_RESTORER_COPY(m_localValueNames);
         m_modp = nodep;
+        m_localValueNames.reset();
         // A class nested in a module is in the scope of the module's default clocking
         if (!VN_IS(nodep, Class)) m_defaultClockingp = nullptr;
         m_defaultDisablep = nodep->defaultDisablep();

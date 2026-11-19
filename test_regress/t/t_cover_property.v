@@ -50,6 +50,27 @@ module t (
   cp_named :
   cover property (pr) n_named++;
 
+  // IEEE 1800-2023 16.10: a local variable of a named sequence
+  int n_seq_local = 0;
+  sequence s_local;
+    logic [6:0] t;
+    (a, t = cyc[6:0]) ##1 (b && cyc[6:0] == t + 7'd1);
+  endsequence
+  cp_seq_local :
+  cover property (s_local) n_seq_local++;
+
+  // A local variable of a property assigned through an untyped formal argument
+  int n_seq_formal = 0;
+  sequence s_assign(lv);
+    (a, lv = cyc[0]);
+  endsequence
+  property p_seq_formal;
+    bit t;
+    s_assign(t) ##1 (b && cyc[0] != t);
+  endproperty
+  cp_seq_formal :
+  cover property (p_seq_formal) n_seq_formal++;
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     crc <= {crc[62:0], crc[63] ^ crc[2] ^ crc[1] ^ crc[0]};
@@ -76,6 +97,8 @@ module t (
     `checkd(n_strong, 28);
     `checkd(n_bool, 55);  // Other sims: pass, 25
     `checkd(n_named, 28);  // Other sims: 73, 54, 54
+    `checkd(n_seq_local, n_seq);
+    `checkd(n_seq_formal, n_seq);
   end
 
 endmodule

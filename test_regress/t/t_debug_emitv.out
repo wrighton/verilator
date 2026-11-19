@@ -593,6 +593,44 @@ module t;
         else begin
         end
     end
+    property p_local;
+    int captured;
+    @(posedge clk) 
+    ???? // IMPLICATION
+    $_EXPRSTMT(
+        captured = sum;
+        , in);
+    ##1 (sum != captured)
+    endproperty
+    assert property (@(posedge clk) 
+        ???? // IMPLICATION
+        $_EXPRSTMT(
+            __Vpropvar_h34541112__0 = sum;
+            , in);
+        ##1 (sum != __Vpropvar_h34541112__0)
+    ) begin
+    end
+    else begin
+    end
+    property p_local_random;
+    int drawn;
+    @(posedge clk) 
+    ???? // IMPLICATION
+    $_EXPRSTMT(
+        drawn = $urandom();
+        , in);
+    ##1 (sum != drawn)
+    endproperty
+    assert property (@(posedge clk) 
+        ???? // IMPLICATION
+        $_EXPRSTMT(
+            __Vpropvar_h7c329738__0 = $urandom();
+            , in);
+        ##1 (sum != __Vpropvar_h7c329738__0)
+    ) begin
+    end
+    else begin
+    end
     assert property (@( clk) (! ##1 in)
     ) begin
     end
@@ -1573,6 +1611,8 @@ module t;
         ZERO = 3'h0,
         ONE = 3'h1
     } __Venum_ha0f45658__0;
+    int __Vpropvar_h34541112__0;
+    int __Vpropvar_h7c329738__0;
 endmodule
 class Cls;
     bit cg_clk;

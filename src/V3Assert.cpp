@@ -729,10 +729,14 @@ class AssertVisitor final : public VNVisitor {
         return varp;
     }
 
-    AstAlways* getDelayedAlways(AstNodeExpr* exprp, AstNodeExpr* initp, AstSenTree* senTreep) {
+    // The always block computing the delayed values, shared by identical expressions unless
+    // 'ownHistory'
+    AstAlways* getDelayedAlways(AstNodeExpr* exprp, AstNodeExpr* initp, AstSenTree* senTreep,
+                                bool ownHistory) {
         auto& expr2Sen2Alwaysr
             = initp ? m_modExpr2Sen2DefaultDelayedAlwaysp : m_modExpr2Sen2DelayedAlwaysp;
-        AstAlways*& alwayspr = expr2Sen2Alwaysr[*exprp][*senTreep];
+        AstAlways* ownAlwaysp = nullptr;
+        AstAlways*& alwayspr = ownHistory ? ownAlwaysp : expr2Sen2Alwaysr[*exprp][*senTreep];
         if (!alwayspr) {
             FileLine* const flp = exprp->fileline();
             // Create the always block that computes the delayed values
@@ -753,11 +757,11 @@ class AssertVisitor final : public VNVisitor {
     }
 
     AstNodeExpr* getPastValue(AstNodeExpr* exprp, AstNodeExpr* initp, AstSenTree* senTreep,
-                              uint32_t ticks) {
+                              uint32_t ticks, bool ownHistory) {
         UASSERT_OBJ(ticks > 0, exprp, "Delay must be > 0");
         FileLine* const flp = exprp->fileline();
-        AstAlways* const alwaysp
-            = getDelayedAlways(exprp, initp ? initp->cloneTreePure(false) : nullptr, senTreep);
+        AstAlways* const alwaysp = getDelayedAlways(
+            exprp, initp ? initp->cloneTreePure(false) : nullptr, senTreep, ownHistory);
         AstNodeExpr* const resultp = pastValueRef(alwaysp, flp, ticks, initp);
         if (initp) VL_DO_DANGLING(pushDeletep(initp), initp);
         return resultp;
@@ -1404,7 +1408,8 @@ class AssertVisitor final : public VNVisitor {
             // A sampling-tick finish reads one stage deeper (IEEE 1800-2023 16.9.3).
             FileLine* const flp = nodep->fileline();
             AstAlways* const alwaysp
-                = getDelayedAlways(exprp, initp ? initp->cloneTreePure(false) : nullptr, senTreep);
+                = getDelayedAlways(exprp, initp ? initp->cloneTreePure(false) : nullptr, senTreep,
+                                   nodep->ownHistory());
             AstNodeExpr* const betweenTicksp = pastValueRef(alwaysp, flp, ticks, initp);
             AstNodeExpr* const onTickp = pastValueRef(alwaysp, flp, ticks + 1, initp);
             if (initp) VL_DO_DANGLING(pushDeletep(initp), initp);
@@ -1416,7 +1421,7 @@ class AssertVisitor final : public VNVisitor {
             condp->dtypeFrom(onTickp);
             inp = condp;
         } else {
-            inp = getPastValue(exprp, initp, senTreep, ticks);
+            inp = getPastValue(exprp, initp, senTreep, ticks, nodep->ownHistory());
         }
         nodep->replaceWith(inp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
