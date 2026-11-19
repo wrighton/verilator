@@ -42,6 +42,17 @@ package std;
   );
     protected int m_bound;
     protected T m_queue[$];
+`ifdef VERILATOR_TIMING
+    // Waiting queues, which only this code uses: V3Param makes them wait queues of the timing
+    // scheduler (see VlWaitQueue). A process waits only if the mailbox is empty, or full for a
+    // put(), and then behind those waiting already, as the waiting queue is first-in first-out
+    // (IEEE 1800-2023 15.4.5). A wake resumes only the first one, which passes the turn on when
+    // it proceeds, with the messages or the room it leaves.
+    // The processes in get() or peek() wait for a message on the first, and the processes in
+    // put() of a bounded mailbox wait for room on the second.
+    local chandle m_getQueue;
+    local chandle m_putQueue;
+`endif
 
     function new(int bound = 0);
       m_bound = bound;
@@ -53,15 +64,46 @@ package std;
 
     task put(T message);
 `ifdef VERILATOR_TIMING
-      while (m_bound != 0 && m_queue.size() >= m_bound)  //
-        wait (m_queue.size() < m_bound);
-      m_queue.push_back(message);
+      if (m_putQueue.__Vpolled()) begin
+        // Waits as a process testing its condition, as the design has a wait condition that may
+        // change a mailbox as the triggers are evaluated (see V3Timing)
+        while (m_bound != 0 && m_queue.size() >= m_bound)  //
+          wait (m_queue.size() < m_bound);
+        m_queue.push_back(message);
+      end
+      else begin
+        if (m_bound != 0) begin
+          // Waits its turn on the wait queue, which only the process that waited ends. Two
+          // event controls, as GCC -Os compiles one into code that loads the resume index of
+          // the coroutine wider than it stored it, which made this task 8% slower when it does
+          // not wait.
+          if (m_queue.size() >= m_bound) begin
+            @m_putQueue;
+            while (m_queue.size() >= m_bound) @m_putQueue;
+            m_queue.push_back(message);
+            m_putQueue.__Vrelease(m_bound - m_queue.size());
+          end
+          else begin
+            m_queue.push_back(message);
+            if (m_putQueue.__Vlisted()) m_putQueue.__Vtake(m_bound - m_queue.size());
+          end
+        end
+        else begin
+          m_queue.push_back(message);
+        end
+        if (m_getQueue.__Vlisted()) m_getQueue.__Vwake(m_queue.size());
+      end
 `endif
     endtask
 
+    // Does not wait, so it may pass the processes waiting
     function int try_put(T message);
       if (m_bound == 0 || num() < m_bound) begin
         m_queue.push_back(message);
+`ifdef VERILATOR_TIMING
+        if (m_getQueue.__Vlisted()) m_getQueue.__Vwake(m_queue.size());
+        if (m_putQueue.__Vlisted()) m_putQueue.__Vtake(m_bound - m_queue.size());
+`endif
         return 1;
       end
       return 0;
@@ -69,18 +111,39 @@ package std;
 
     task get(ref T message);
 `ifdef VERILATOR_TIMING
-      while (m_queue.size() == 0) begin
-        wait (m_queue.size() > 0);
+      // As in put()
+      if (m_getQueue.__Vpolled()) begin
+        while (m_queue.size() == 0) begin
+          wait (m_queue.size() > 0);
+        end
+        message = m_queue.pop_front();
       end
-      message = m_queue.pop_front();
+      else begin
+        if (m_queue.size() == 0) begin
+          @m_getQueue;
+          while (m_queue.size() == 0) @m_getQueue;
+          message = m_queue.pop_front();
+          m_getQueue.__Vrelease(m_queue.size());
+        end
+        else begin
+          message = m_queue.pop_front();
+          if (m_getQueue.__Vlisted()) m_getQueue.__Vtake(m_queue.size());
+        end
+        if (m_putQueue.__Vlisted()) m_putQueue.__Vwake(m_bound - m_queue.size());
+      end
 `endif
     endtask
 
+    // Does not wait, so it may pass the processes waiting
     function int try_get(ref T message);
       if (num() > 0) begin
         // A typeless mailbox message must match the type of the variable (IEEE 1800-2023 15.4.6)
         if ($c("!VlMailboxMessage::match(", message, ", ", m_queue[0], ")")) return -1;
         message = m_queue.pop_front();
+`ifdef VERILATOR_TIMING
+        if (m_getQueue.__Vlisted()) m_getQueue.__Vtake(m_queue.size());
+        if (m_putQueue.__Vlisted()) m_putQueue.__Vwake(m_bound - m_queue.size());
+`endif
         return 1;
       end
       return 0;
@@ -88,10 +151,25 @@ package std;
 
     task peek(ref T message);
 `ifdef VERILATOR_TIMING
-      while (m_queue.size() == 0) begin
-        wait (m_queue.size() > 0);
+      // As in put(). The message stays, so the next waiter may proceed too
+      // (IEEE 1800-2023 15.4.7).
+      if (m_getQueue.__Vpolled()) begin
+        while (m_queue.size() == 0) begin
+          wait (m_queue.size() > 0);
+        end
+        message = m_queue[0];
       end
-      message = m_queue[0];
+      else begin
+        if (m_queue.size() == 0) begin
+          @m_getQueue;
+          while (m_queue.size() == 0) @m_getQueue;
+          message = m_queue[0];
+          m_getQueue.__Vrelease(m_queue.size());
+        end
+        else begin
+          message = m_queue[0];
+        end
+      end
 `endif
     endtask
 

@@ -9,7 +9,9 @@
 
 import vltest_bootstrap
 
-test.scenarios('simulator')
+# The order of the processes woken in the same evaluation, and the waiters finishing resumes,
+# are rules of Verilator
+test.scenarios('vlt_all')
 
 flags = ["--binary", "--stats"]
 if test.vltmt:
@@ -23,7 +25,8 @@ test.compile(verilator_flags2=flags, threads=(2 if test.vltmt else 1))
 test.execute()
 
 if test.vlt_all:
-    test.file_grep(test.stats, r'Timing, event controls on event wait lists\s+(\d+)', 11)
+    test.file_grep(test.stats, r'Timing, event controls on event wait lists\s+(\d+)', 12)
+    test.file_grep(test.stats, r'Timing, event controls on wait queues\s+(\d+)', 4)
 if test.vltmt:
     # The blocks that kill processes, or start them through a class task, run alone
     test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 3)

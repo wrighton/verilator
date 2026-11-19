@@ -9,8 +9,8 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// Class processes waiting on events that logic in separate MTasks, which may run in parallel,
-// fires
+// Class processes waiting on events and mailboxes that logic in separate MTasks, which may run
+// in parallel, fires and fills
 module t;
   logic clk = 1'b0;
   always #5 clk = ~clk;
@@ -20,7 +20,11 @@ module t;
   event e2;
   event ek;
   event never;
+  mailbox #(int) ma = new;
+  mailbox #(int) mb = new;
+  mailbox #(int) mka = new;
   process kp;
+  process kpm;
   process kpa;
   process kpc;
   process kpp;
@@ -29,24 +33,35 @@ module t;
   int acyc = 0;
   int bcyc = 0;
   always_ff @(posedge clk) begin
+    int v;
     acyc <= acyc + 1;
     a <= a * 31'd3 + 31'd1;
     if (a[3] && acyc < 90) ->e1;
+    void'(ma.try_put(int'(a[6:0])));
+    void'(ma.try_get(v));
     if (acyc >= 2 && acyc < 90) ->ek;
     // Same cycle as the other kill, so both resumed processes start waiting in one evaluation
     if (acyc == 3) kpa.kill();
+    if (acyc == 4) kpm.kill();
+    if (acyc == 5) void'(mka.try_put(acyc));
     // Same cycle as the other block kills the process this kill resumes
     if (acyc == 7) kpc.kill();
   end
-  // Finishing with a pending fire resumes no waiter, as on a single thread
+  // Finishing with a pending fire or wake resumes no waiter on a wait list, on any number of
+  // threads, so the last fire and put are not counted (see VlDynamicTriggerScheduler::evaluate)
   always_ff @(posedge clk) begin
     bcyc <= bcyc + 1;
     b <= b * 33'd5 + 33'd7;
-    if (b[2] && bcyc < 90) ->e2;
+    if (b[2] && bcyc < 90) begin
+      ->e2;
+      void'(mb.try_put(int'(b[6:0])));
+    end
     if (bcyc == 3) kp.kill();
     if (bcyc == 7) kpp.kill();
     if (bcyc == 95) begin
       ->e2;
+      void'(mb.try_put(1));
+      fin.go = 1;
       $finish;
     end
   end
@@ -73,6 +88,8 @@ module t;
     int nk;
     int nka;
     int npp;
+    int nb;
+    int nkm;
     task wait_e1();
       forever begin
         @e1;
@@ -83,6 +100,13 @@ module t;
       forever begin
         @e2;
         ++n2;
+      end
+    endtask
+    task get_b();
+      int v;
+      forever begin
+        mb.get(v);
+        ++nb;
       end
     endtask
     // The kill of its child in another MTask resumes this process, which then waits again
@@ -105,6 +129,17 @@ module t;
       join
       @ek;
       ++nka;
+    endtask
+    task join_killed_m();
+      int v;
+      fork
+        begin
+          kpm = process::self();
+          @never;
+        end
+      join
+      mka.get(v);
+      ++nkm;
     endtask
     // The kill of its child in one MTask resumes this process, which starts waiting while
     // another MTask kills it
@@ -129,8 +164,54 @@ module t;
       w.join_killed();
       w.join_killed_a();
       w.join_killed_both();
+      w.get_b();
+      w.join_killed_m();
     join_none
   end
+
+  // A process woken while $finish is pending, as evaluated triggers still are, fills a mailbox,
+  // which wakes no waiter, on any number of threads
+  class Finish;
+    mailbox #(int) m = new;
+    bit go;
+    int got;
+    task get_m();
+      int v;
+      m.get(v);
+      ++got;
+    endtask
+    task put_m();
+      wait (go);
+      m.put(1);
+    endtask
+  endclass
+  Finish fin = new;
+  initial begin
+    fork
+      fin.get_m();
+      fin.put_m();
+    join_none
+  end
+
+  // Blocks that only fill a mailbox run in parallel, waking waiters
+  mailbox #(int) mc = new;
+  mailbox #(int) md = new;
+  int nmc = 0;
+  int nmd = 0;
+  always_ff @(posedge clk) if (acyc < 60) void'(mc.try_put(acyc));
+  always_ff @(posedge clk) if (bcyc < 60) void'(md.try_put(bcyc));
+  initial
+    forever begin
+      int v;
+      mc.get(v);
+      ++nmc;
+    end
+  initial
+    forever begin
+      int v;
+      md.get(v);
+      ++nmd;
+    end
 
   // A combinational block starts processes that wait on a member event. It runs alone, as it
   // starts them through a class task; the block firing the event does not run alone.
@@ -203,6 +284,11 @@ module t;
   always_ff @(posedge clk) if (acyc < 40) o2.fire();
 
   final begin
+    `checkd(w.nb, count_b());
+    `checkd(w.nkm, 1);
+    `checkd(fin.got, 0);
+    `checkd(nmc, 60);
+    `checkd(nmd, 60);
     `checkd(order.size(), 3 * 40);
     foreach (order[i]) `checkd(order[i], i % 3 == 0 ? 2 : i % 3 - 1);
     `checkd(w.n1, count_a());

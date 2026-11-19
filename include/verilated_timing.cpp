@@ -274,6 +274,10 @@ void VlTriggerScheduler::dump(const char* eventDescription) const {
 //======================================================================
 // VlDynamicTriggerScheduler:: Methods
 
+#ifdef VL_DEBUG
+std::atomic<size_t> VlWaitQueue::s_maxSlotsForTest{0};
+#endif
+
 bool VlDynamicTriggerScheduler::evaluate() {
     if (VL_UNLIKELY(Verilated::threadContextp()->gotFinish())) {
         m_anyTriggered = false;
@@ -281,9 +285,11 @@ bool VlDynamicTriggerScheduler::evaluate() {
         m_suspended.clear();
         m_evaluated.clear();
         m_triggered.clear();
+        m_selectedWaiters.clear();
         m_post.clear();
         return false;
     }
+    ++m_evals;
     // As the trigger of an evaluated named-event wait (see V3SenExprBuilder), resume no waiter
     // once $finish is pending
     bool woken = false;
@@ -296,7 +302,11 @@ bool VlDynamicTriggerScheduler::evaluate() {
     m_anyTriggered = false;
     VL_DEBUG_IF(dump(););
     std::swap(m_suspended, m_evaluated);
+    // In a design with wait queues, evaluating a trigger changes no mailbox (see V3Timing), so a
+    // waiter selected above would have seen the same had it tested its condition here
+    m_evaluating = true;
     for (auto& coro : m_evaluated) coro.resume();
+    m_evaluating = false;
     m_evaluated.clear();
     return m_anyTriggered || woken;
 }
@@ -308,11 +318,17 @@ void VlDynamicTriggerScheduler::shutdown() {
     // unlinked from its list.
     VlCoroutineVec waiters;
     m_pendingHeadp.store(nullptr, std::memory_order_relaxed);
+    m_passedTo.clear();
     for (VlEventWaitList& list : m_waitLists) {
-        // A free list has neither an event nor waiters. A fired list that a newer one replaced
-        // on its event has only waiters (see waitListOf).
-        if (!list.m_eventp && list.m_waiters.empty()) continue;
-        if (list.m_eventp) detach(list);
+        // A free list has neither an event, a wait queue nor waiters. A fired list that a newer
+        // one replaced on its event has only waiters (see waitListOf).
+        if (!list.m_eventp && !list.m_queuep && list.m_waiters.empty()
+            && !list.m_selectedProcess) {
+            continue;
+        }
+        detach(list);
+        // A waiter selected on a wait queue is linked to the list until it resumes
+        if (list.m_selectedProcess) list.m_selectedProcess->waitListp(nullptr);
         for (VlCoroutineHandle& coro : list.m_waiters) {
             coro.waitListp(nullptr);
             waiters.push_back(std::move(coro));
@@ -321,6 +337,21 @@ void VlDynamicTriggerScheduler::shutdown() {
     }
     m_firedEventps.clear();
     m_firedKeepps.clear();
+}
+
+VlEventWaitList& VlDynamicTriggerScheduler::takeWaitList() {
+    VlEventWaitList* listp;
+    if (m_freeWaitLists.empty()) {
+        m_waitLists.emplace_back();
+        listp = &m_waitLists.back();
+        listp->m_headpp = &m_pendingHeadp;
+        listp->m_schedp = this;
+    } else {
+        listp = m_freeWaitLists.back();
+        m_freeWaitLists.pop_back();
+    }
+    listp->m_seq = m_nextSeq++;
+    return *listp;
 }
 
 VlEventWaitList& VlDynamicTriggerScheduler::waitListOf(VlEvent& event) {
@@ -336,16 +367,8 @@ VlEventWaitList& VlDynamicTriggerScheduler::waitListOf(VlEvent& event) {
             if (listp->m_keepp) m_firedKeepps.push_back(std::move(listp->m_keepp));
             listp->m_eventp = nullptr;
         }
-        if (m_freeWaitLists.empty()) {
-            m_waitLists.emplace_back();
-            listp = &m_waitLists.back();
-            listp->m_headpp = &m_pendingHeadp;
-        } else {
-            listp = m_freeWaitLists.back();
-            m_freeWaitLists.pop_back();
-        }
+        listp = &takeWaitList();
         listp->m_eventp = &event;
-        listp->m_seq = m_nextSeq++;
         event.waitp(listp);
     }
     return *listp;
@@ -366,24 +389,240 @@ void VlDynamicTriggerScheduler::addWaiter(VlEvent& event, std::shared_ptr<VlEven
     }
 }
 
+void VlDynamicTriggerScheduler::addQueueWaiter(const VlWaitQueue& queue,
+                                               std::coroutine_handle<VlPromise> coro,
+                                               VlProcessRef process, VlFileLineDebug fileline) {
+    if (!queue.m_listp) {
+        VlEventWaitList& list = takeWaitList();
+        list.m_isQueue = true;
+        list.m_queuep = &queue;
+        queue.m_listp = &list;
+    }
+    VlEventWaitList& list = *queue.m_listp;
+    VlCoroutineVec& waiters = list.m_waiters;
+    size_t index;
+    // A killed selected waiter ends its turn before it is destroyed (see resumeSelected), so no
+    // other frame in the storage of its frame is taken for it
+    if (list.m_selectedFramep == coro.address()) {
+        // The selected waiter may not proceed yet, so it takes back its slot, ahead of the later
+        // waiters, and ends its turn
+        index = list.m_selectedSlot;
+        waiters[index] = VlCoroutineHandle{coro, process, fileline};
+        list.m_selectedFramep = nullptr;
+        list.m_selectedProcess.reset();
+        --list.m_emptySlots;
+        if (index < list.m_headSlot) list.m_headSlot = index;
+    } else {
+        index = waiters.size();
+        waiters.emplace_back(coro, process, fileline);
+        list.m_enrolledAt.emplace_back();
+    }
+    // A waiter that starts waiting now would test its condition at the next trigger evaluation
+    list.m_enrolledAt[index] = m_evals;
+    ++list.m_live;
+    // A killed process runs on until it waits, which only leaves its destruction
+    if (VlProcess* const processp = waiters[index].processp()) {
+        processp->waitIndex(index);
+        processp->waitListp(&list);
+        if (VL_UNLIKELY(processp->state() == VlProcess::KILLED)) list.noteKilled(*processp);
+    }
+    // Compact once half the slots are empty, so each served waiter costs O(1) amortized, unless
+    // a slot is kept for a selected waiter
+    if (!list.m_selectedFramep && list.m_emptySlots >= waiters.size() - list.m_emptySlots) {
+        compact(list);
+    }
+#ifdef VL_DEBUG
+    size_t most = VlWaitQueue::s_maxSlotsForTest.load(std::memory_order_relaxed);
+    while (most < waiters.size()
+           && !VlWaitQueue::s_maxSlotsForTest.compare_exchange_weak(most, waiters.size(),
+                                                                    std::memory_order_relaxed)) {}
+#endif
+}
+
+size_t VlDynamicTriggerScheduler::firstWaiterSlot(VlEventWaitList& list) {
+    VlCoroutineVec& waiters = list.m_waiters;
+    size_t& slot = list.m_headSlot;
+    // Empty, or with a killed waiter, which the next drain of the list drops
+    while (slot < waiters.size() && (!waiters[slot].framep() || waiters[slot].killed())) ++slot;
+    return slot;
+}
+
+bool VlDynamicTriggerScheduler::selectFirst(VlEventWaitList& list) {
+    VlCoroutineVec& waiters = list.m_waiters;
+    size_t& slot = list.m_headSlot;
+    if (firstWaiterSlot(list) < waiters.size()) {
+        VlCoroutineHandle& coro = waiters[slot];
+        list.m_selectedFramep = coro.framep();
+        list.m_selectedSlot = slot;
+        // The process stays linked to the list until it resumes, so that killing it before
+        // then passes its turn on (see resumeSelected).
+        if (VlProcess* const processp = coro.processp()) {
+            processp->waitIndex(VlEventWaitLink::SELECTED);
+            list.m_selectedProcess = coro.process();
+        }
+        --list.m_live;
+        ++list.m_emptySlots;
+        if (m_resuming) {
+            // Passed the turn while resuming (see queuePassTurn)
+            m_passedTo.emplace_back(std::move(coro), &list);
+        } else {
+            // Resumed only if not finishing by then (see resume)
+            m_selectedWaiters.emplace_back(m_triggered.size(), &list);
+            m_triggered.push_back(std::move(coro));
+        }
+        ++slot;
+        return true;
+    }
+    return false;
+}
+
+void VlDynamicTriggerScheduler::queueWake(VlEventWaitList& list, IData available) {
+    // Logic in parallel MTasks may call this. 'm_resuming' is false then, so apart from its
+    // availability bookkeeping it only reads the state of the list, which nothing writes while
+    // they run, and notifies the list (see VlEventWaitLink). It does not make concurrent
+    // accesses to one mailbox safe.
+    setAvailable(list, available);
+    // A selected waiter takes its turn, or waits again, before another one is selected
+    if (!list.m_live || list.m_selectedFramep) return;
+    // Added while resuming, else by logic in an MTask, or before the trigger evaluation
+    if (m_resuming) {
+        queuePassTurn(list);
+    } else {
+        list.notifyOne();
+    }
+}
+
+void VlDynamicTriggerScheduler::setAvailable(VlEventWaitList& list, IData available) {
+    // Called like queueWake()
+    VL_DEBUG_IFDEF(assert(!m_evaluating););
+    // The first change since the last trigger evaluation notes what was available then
+    if (list.m_availTag != m_evals) {
+        list.m_availTag = m_evals;
+        list.m_availAtEval = list.m_available;
+    }
+    list.m_available = available;
+}
+
+bool VlDynamicTriggerScheduler::queueEligible(const VlEventWaitList& list, size_t slot) const {
+    // Had it tested its condition at the last trigger evaluation, the waiter would resume in
+    // this resume() if it waited then, and its mailbox had a message or room then
+    const bool availAtEval
+        = list.m_availTag == m_evals ? list.m_availAtEval : list.m_available != 0;
+    return list.m_enrolledAt[slot] < m_evals && availAtEval;
+}
+
+void VlDynamicTriggerScheduler::queuePassTurn(VlEventWaitList& list) {
+    const size_t slot = firstWaiterSlot(list);
+    VL_DEBUG_IFDEF(assert(slot < list.m_waiters.size()););
+    // No waiter on a wait list resumes once $finish is pending
+    const VerilatedContext* const contextp = Verilated::threadContextp();
+    if (!queueEligible(list, slot) || contextp->gotFinish() || contextp->finishPending()) {
+        list.notifyOne();
+        return;
+    }
+    selectFirst(list);
+}
+
+void VlDynamicTriggerScheduler::queueRelease(VlEventWaitList& list, IData remaining) {
+    setAvailable(list, remaining);
+    // Only the selected waiter releases its turn (see verilated_std.sv)
+    VL_DEBUG_IFDEF(assert(list.m_selectedFramep););
+    list.m_selectedFramep = nullptr;
+    list.m_selectedProcess.reset();
+    // Waiters that arrived while one was selected were added without compacting the list (see
+    // addQueueWaiter), so compact here
+    if (list.m_emptySlots >= list.m_waiters.size() - list.m_emptySlots) compact(list);
+    // The selected waiter resumes only while resuming
+    VL_DEBUG_IFDEF(assert(m_resuming););
+    if (remaining && list.m_live) queuePassTurn(list);
+    freeIfIdle(list);
+}
+
+void VlDynamicTriggerScheduler::dropSelected(VlEventWaitList& list, VlCoroutineHandle& coro) {
+    // Its kill put a killed one on the killed chain of the list, which only holds the kills since
+    // the last drain, so finding it is linear in those
+    if (VlProcess* const killedp = coro.killed() ? coro.processp() : nullptr) {
+        VlProcess* prevp = nullptr;
+        for (VlProcess* processp = list.m_killedHeadp; processp != killedp;
+             processp = processp->nextKilledp()) {
+            prevp = processp;
+        }
+        if (prevp) {
+            prevp->nextKilledp(killedp->nextKilledp());
+        } else {
+            list.m_killedHeadp = killedp->nextKilledp();
+        }
+    }
+    coro.waitListp(nullptr);
+    list.m_selectedFramep = nullptr;
+    list.m_selectedProcess.reset();
+}
+
+void VlDynamicTriggerScheduler::freeIfIdle(VlEventWaitList& list) {
+    // A list on the pending chain is freed by its drain
+    if (list.m_selectedFramep || list.m_emptySlots != list.m_waiters.size()
+        || list.m_pending.load(std::memory_order_relaxed)) {
+        return;
+    }
+    detach(list);
+    recycle(list);
+}
+
+bool VlDynamicTriggerScheduler::drainQueue(VlEventWaitList& list, VlCoroutineVec& killed) {
+    VlCoroutineVec& waiters = list.m_waiters;
+    const bool wake = list.m_wokenOne.exchange(false, std::memory_order_relaxed);
+    for (VlProcess* processp = list.takeKilled(); processp;) {
+        VlProcess* const nextp = processp->nextKilledp();
+        const size_t index = processp->waitIndex();
+        // A selected waiter killed before it resumed passed its turn on where it would have
+        // resumed (see resumeSelected)
+        VL_DEBUG_IFDEF(assert(index < waiters.size() && waiters[index].processp() == processp););
+        waiters[index].waitListp(nullptr);
+        killed.push_back(std::move(waiters[index]));
+        ++list.m_emptySlots;
+        processp = nextp;
+    }
+    // A selected waiter resumes before the next drain, which clears a killed one
+    VL_DEBUG_IFDEF(assert(!list.m_selectedFramep););
+    if (list.m_emptySlots >= waiters.size() - list.m_emptySlots) compact(list);
+    // Only if there is something to take, as what woke it may have been taken since, which a
+    // later message or room notifies again
+    if (wake && list.m_available && selectFirst(list)) return true;
+    // A list whose wait queue was destroyed has no waiters, as they keep its class object alive
+    freeIfIdle(list);
+    return false;
+}
+
 void VlDynamicTriggerScheduler::compact(VlEventWaitList& list) {
     VlCoroutineVec& waiters = list.m_waiters;
+    const bool ordered = !list.m_enrolledAt.empty();
     size_t kept = 0;
     for (size_t i = 0; i < waiters.size(); ++i) {
         if (!waiters[i].framep()) continue;
-        if (kept != i) waiters[kept] = std::move(waiters[i]);
+        if (kept != i) {
+            waiters[kept] = std::move(waiters[i]);
+            if (ordered) list.m_enrolledAt[kept] = list.m_enrolledAt[i];
+        }
         waiters[kept].waitIndex(kept);
         ++kept;
     }
     waiters.erase(waiters.begin() + kept, waiters.end());
+    if (ordered) list.m_enrolledAt.resize(kept);
     list.m_emptySlots = 0;
+    list.m_headSlot = 0;
 }
 
 void VlDynamicTriggerScheduler::detach(VlEventWaitList& list) {
     // The waiters still keep the event's storage alive. A newer wait list may already have
     // replaced this one on the event.
-    if (list.m_eventp->waitp() == &list) list.m_eventp->waitp(nullptr);
-    list.m_eventp = nullptr;
+    if (list.m_eventp) {
+        if (list.m_eventp->waitp() == &list) list.m_eventp->waitp(nullptr);
+        list.m_eventp = nullptr;
+    }
+    if (list.m_queuep) {
+        list.m_queuep->m_listp = nullptr;
+        list.m_queuep = nullptr;
+    }
 }
 
 void VlDynamicTriggerScheduler::recycle(VlEventWaitList& list) {
@@ -394,10 +633,24 @@ void VlDynamicTriggerScheduler::recycle(VlEventWaitList& list) {
     }
     list.m_pending.store(false, std::memory_order_relaxed);
     list.m_fired.store(false, std::memory_order_relaxed);
+    list.m_wokenOne.store(false, std::memory_order_relaxed);
+    list.m_live = 0;
     list.m_keepp.reset();
     // Its killed chain is dropped unread: its waiters are gone, or the model finished
     list.m_killedHeadp = nullptr;
     list.m_emptySlots = 0;
+    list.m_isQueue = false;
+    list.m_headSlot = 0;
+    list.m_selectedFramep = nullptr;
+    list.m_selectedSlot = 0;
+    list.m_selectedProcess.reset();
+    list.m_available = 0;
+    if (list.m_enrolledAt.capacity() > MAX_FREE_CAPACITY) {
+        std::vector<uint64_t>{}.swap(list.m_enrolledAt);
+    } else {
+        list.m_enrolledAt.clear();
+    }
+    list.m_availTag = 0;
     m_freeWaitLists.push_back(&list);
 }
 
@@ -418,6 +671,10 @@ bool VlDynamicTriggerScheduler::wakePending(VlCoroutineVec& killed) {
     for (VlEventWaitList* const listp : m_drainedLists) {
         VlEventWaitList& list = *listp;
         list.m_pending.store(false, std::memory_order_relaxed);
+        if (list.m_isQueue) {
+            woken |= drainQueue(list, killed);
+            continue;
+        }
         VlCoroutineVec& waiters = list.m_waiters;
         if (list.m_fired.load(std::memory_order_relaxed)) {
             woken = true;
@@ -497,11 +754,55 @@ void VlDynamicTriggerScheduler::resume() {
                     susp.dump();
                 });
     if (VL_UNLIKELY(Verilated::threadContextp()->gotFinish())) {
+        for (const std::pair<size_t, VlEventWaitList*>& selected : m_selectedWaiters) {
+            dropSelected(*selected.second, m_triggered[selected.first]);
+        }
         m_triggered.clear();
+        m_selectedWaiters.clear();
         return;
     }
-    for (auto& coro : m_triggered) coro.resume();
+    // Each waiter a coroutine passes the turn of a wait queue to resumes right after it, before
+    // the next coroutine
+    m_resuming = true;
+    size_t nextSelected = 0;
+    for (size_t i = 0; i < m_triggered.size(); ++i) {
+        VlCoroutineHandle coro = std::move(m_triggered[i]);
+        VlEventWaitList* listp = nullptr;
+        if (nextSelected < m_selectedWaiters.size()
+            && m_selectedWaiters[nextSelected].first == i) {
+            listp = m_selectedWaiters[nextSelected++].second;
+        }
+        resumeSelected(coro, listp);
+        while (!m_passedTo.empty()) {
+            std::pair<VlCoroutineHandle, VlEventWaitList*> passedTo
+                = std::move(m_passedTo.front());
+            m_passedTo.pop_front();
+            resumeSelected(passedTo.first, passedTo.second);
+        }
+    }
+    m_resuming = false;
     m_triggered.clear();
+    m_selectedWaiters.clear();
+}
+
+void VlDynamicTriggerScheduler::resumeSelected(VlCoroutineHandle& coro, VlEventWaitList* listp) {
+    // No waiter on a wait list resumes once $finish is pending, so one selected before, for
+    // example by a turn passed before a $finish in this resume(), is destroyed instead, as the
+    // model then finishes. Only a $finish in this resume() gets here, as one from a parallel
+    // MTask was pending before the selection (see queuePassTurn and evaluate),
+    // unless the model is evaluated from an MTask of another one, which this does not cover.
+    if (listp) {
+        const bool finishing = Verilated::threadContextp()->gotFinish();
+        if (VL_UNLIKELY(finishing || coro.killed())) {
+            dropSelected(*listp, coro);
+            if (finishing) return;
+            // Killed since it was selected, so it is destroyed instead, and the next waiter takes
+            // the turn if it would have resumed in this resume() had it tested its condition, and
+            // something is still available
+            if (listp->m_available && listp->m_live) queuePassTurn(*listp);
+        }
+    }
+    coro.resume();
 }
 
 #ifdef VL_DEBUG
