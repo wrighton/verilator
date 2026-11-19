@@ -308,6 +308,10 @@ public:
 //######################################################################
 // Outline class functions
 
+bool V3Outline::passLocals(AstCFunc* funcp, AstCCall* callp) {
+    return OutlineArgsVisitor{funcp, callp}.hasAwait();
+}
+
 void V3Outline::outlineAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     OutlineVisitor::apply(nodep);
