@@ -31,8 +31,10 @@
 #include "V3ConstPool.h"
 #include "V3Control.h"
 
+#include <cstring>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -61,6 +63,12 @@ class ScopeVisitor final : public VNVisitor {
     // STATE, for passing down one level of hierarchy (may need save/restore)
     AstCell* m_aboveCellp = nullptr;  // Cell that instantiates this module
     AstScope* m_aboveScopep = nullptr;  // Scope that instantiates this scope
+    // Per module, the named blocks, and "" for the module itself, that hold a variable VPI can
+    // reach, or an instance of a module that does. VPI looks up only the scopes above such
+    // variables, so only these blocks get an AstCellInlineScope.
+    std::unordered_map<const AstNodeModule*, std::unordered_set<std::string>> m_vpiBlocks;
+    // m_vpiBlocks of the module being scoped, nullptr without VPI
+    const std::unordered_set<std::string>* m_vpiBlocksp = nullptr;
     bool m_last = false;  // Scoping the last instantiation of the current module
 
     std::unordered_map<AstNodeModule*, AstScope*>
@@ -179,6 +187,32 @@ class ScopeVisitor final : public VNVisitor {
         }
     }
 
+    // Compute m_vpiBlocks of a module, after the modules of its instances.
+    const std::unordered_set<std::string>& vpiBlocks(const AstNodeModule* const modp) {
+        const auto pair = m_vpiBlocks.emplace(modp, std::unordered_set<std::string>{});
+        std::unordered_set<std::string>& blocks = pair.first->second;
+        if (!pair.second) return blocks;
+        for (const AstNode* const nodep : modp->stmtspList()) {
+            bool reached = false;
+            if (const AstVar* const varp = VN_CAST(nodep, Var)) {
+                reached = varp->isVpiVisible();
+            } else if (const AstCell* const cellp = VN_CAST(nodep, Cell)) {
+                const auto it = m_vpiBlocks.find(cellp->modp());
+                UASSERT_OBJ(it != m_vpiBlocks.end(), cellp, "Instance scoped before its module");
+                reached = !it->second.empty();
+            }
+            if (!reached) continue;
+            // V3Begin named the item after the blocks around it: {block}__DOT__...{item}
+            blocks.emplace("");
+            const std::string& name = nodep->name();
+            for (size_t pos = name.find("__DOT__"); pos != std::string::npos;
+                 pos = name.find("__DOT__", pos + std::strlen("__DOT__"))) {
+                blocks.emplace(name.substr(0, pos));
+            }
+        }
+        return blocks;
+    }
+
     // VISITORS
     void visit(AstNetlist* nodep) override {
         AstNodeModule* const modp = nodep->topModulep();
@@ -203,6 +237,7 @@ class ScopeVisitor final : public VNVisitor {
         if (!m_programInitials.empty()) makeProgramFinish(nodep->topScopep());
     }
     void visit(AstNodeModule* nodep) override {
+        VL_RESTORER(m_vpiBlocksp);
         // Create required blocks and add to module
         string scopename;
         if (!m_aboveScopep) {
@@ -251,6 +286,7 @@ class ScopeVisitor final : public VNVisitor {
         UINFO(4, " back AT " << scopename << "  " << nodep);
         AstNode::user1ClearTree();
         m_modp = nodep;
+        if (v3Global.opt.vpi()) m_vpiBlocksp = &vpiBlocks(nodep);
         if (m_modp->isTop()) {
             v3Global.rootp()->createTopScope(m_scopep);
         } else {
@@ -313,7 +349,7 @@ class ScopeVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstCellInline* nodep) override {  //
-        if (!v3Global.opt.vpi()) return;
+        if (!m_vpiBlocksp || !m_vpiBlocksp->count(nodep->name())) return;
         m_scopep->addInlinesp(
             new AstCellInlineScope{nodep->fileline(), nodep->name(), nodep->origModName()});
     }
