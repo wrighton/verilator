@@ -19,6 +19,6 @@ test.compile(make_top_shell=False,
              ],
              make_flags=['-j2'])
 
-test.execute()
+test.execute(all_run_flags=['+verilator+coverage+file+' + test.coverage_filename])
 
 test.passes()
