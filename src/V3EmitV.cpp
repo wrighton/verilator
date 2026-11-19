@@ -1761,6 +1761,9 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         puts(")");
         if (nodep->withp()) iterateConst(nodep->withp());
     }
+    void visit(AstConstCast* nodep) override {
+        emitVerilogFormat(nodep, nodep->emitVerilog(), nodep->lhsp());
+    }
     void visit(AstCast* nodep) override {
         puts("(");
         UASSERT_OBJ(nodep->childDTypep(), nodep, "AstCast without child dtype");
