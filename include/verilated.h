@@ -1058,7 +1058,7 @@ public:  // But internals only - called from verilated modules, VerilatedSyms
     void* exportFindError(int funcnum) const VL_MT_SAFE;
     static void* exportFindNullError(int funcnum) VL_MT_SAFE;
     static void* exportFind(const VerilatedScope* scopep, int funcnum) VL_MT_SAFE;
-    Type type() const { return m_type; }
+    Type type() const VL_MT_SAFE_POSTINIT { return m_type; }
     VerilatedContext* contextp() const { return m_symsp->_vm_contextp__; }
 };
 
