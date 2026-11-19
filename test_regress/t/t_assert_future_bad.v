@@ -48,6 +48,11 @@ module t (
 
   sub u_sub (.a(a), .clk(clk));
 
+  // A $cast task argument is not a property or sequence expression
+  typedef enum logic {E0} e_t;
+  e_t e;
+  always @(posedge clk) $cast(e, $future_gclk(a));
+
   initial $stop;
 
 endmodule
