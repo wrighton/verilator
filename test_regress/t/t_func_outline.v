@@ -430,10 +430,68 @@ class Timed;
   endtask
 endclass
 
+// A function calling std::process::self() twice, that also forks a process, gets the same
+// process both times
+class ProcSelf;
+  static std::process s_forked;
+  static function void forkSelf();
+    fork
+      s_forked = std::process::self();
+    join_none
+  endfunction
+  static function bit run(int x, output int res);
+    std::process p1;
+    std::process p2;
+    automatic int m = x;
+    p1 = std::process::self();
+    m = m * 3 + 0;
+    m ^= m >>> 2;
+    m = m * 3 + 1;
+    m ^= m >>> 2;
+    m = m * 3 + 2;
+    m ^= m >>> 2;
+    m = m * 3 + 3;
+    m ^= m >>> 2;
+    m = m * 3 + 4;
+    m ^= m >>> 2;
+    m = m * 3 + 5;
+    m ^= m >>> 2;
+    m = m * 3 + 6;
+    m ^= m >>> 2;
+    m = m * 3 + 7;
+    m ^= m >>> 2;
+    m = m * 3 + 8;
+    m ^= m >>> 2;
+    m = m * 3 + 9;
+    m ^= m >>> 2;
+    m = m * 3 + 10;
+    m ^= m >>> 2;
+    m = m * 3 + 11;
+    m ^= m >>> 2;
+    m = m * 3 + 12;
+    m ^= m >>> 2;
+    m = m * 3 + 13;
+    m ^= m >>> 2;
+    m = m * 3 + 14;
+    m ^= m >>> 2;
+    p2 = std::process::self();
+    forkSelf();
+    res = m;
+    return p1 == p2;
+  endfunction
+endclass
+
 module t;
   // Same computation as the straight-line bodies, as a loop
   function automatic int mix(int x);
     for (int k = 0; k < 30; k++) begin
+      x = x * 3 + k;
+      x ^= x >>> 2;
+    end
+    return x;
+  endfunction
+  function automatic int mix15(int x);
+    for (int k = 0; k < 15; k++) begin
       x = x * 3 + k;
       x ^= x >>> 2;
     end
@@ -573,8 +631,9 @@ module t;
   endfunction
 
   // A DPI export using a module variable, which needs vlSymsp, and calling a function
-  // that needs a process, which its new functions take from it
+  // that needs a process, which is the same process throughout
   std::process dexp_proc;
+  bit dexp_same;
   int dexp_calls = 0;
   export "DPI-C" function dexp;
   function int dexp(int x);
@@ -641,7 +700,7 @@ module t;
     x = x * 3 + 29;
     x ^= x >>> 2;
     dexp_calls++;
-    dexp_proc = std::process::self();
+    dexp_same = dexp_proc == std::process::self();
     return x;
   endfunction
 
@@ -714,6 +773,14 @@ module t;
     return x;
   endfunction
 
+  initial begin : process_self
+    bit same;
+    int res;
+    same = ProcSelf::run(7, res);
+    `checkd(same, 1'b1);
+    `checkd(res, mix15(7));
+  end
+
   int seed;
   MemView v;
 
@@ -766,6 +833,7 @@ module t;
     `checkd(cuser(seed + 5), mix(seed + 5) + seed + 5);
     `checkd(dexp(seed + 2), mix(seed + 2));
     `checkd(dexp_calls, 2);
+    `checkd(dexp_same, 1'b1);
     `checkd(pubf(seed + 2, 1), mix(seed + 3));
     begin : coroutine
       Timed::s_handle = new;
