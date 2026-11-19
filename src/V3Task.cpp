@@ -130,6 +130,8 @@ class TaskStateVisitor final : public VNVisitor {
     // Calls in continuous assignments, with the assignment
     std::vector<std::pair<AstNodeProcedure*, AstNodeFTaskRef*>> m_assignCalls;
     AstNodeProcedure* m_assignp = nullptr;  // Current continuous assignment
+    // Variables assigned by procedural continuous assignments
+    std::unordered_set<const AstVar*> m_contAssignedVarps;
     VDouble0 m_statInitCalls;  // Statistic tracking
     bool m_underPortVar = false;  // Visiting under a port AstVar; any expression there
                                   // is a default value, evaluated at call sites only
@@ -277,6 +279,9 @@ private:
         const AstVarRef* const vrefp = VN_CAST(np, VarRef);
         if (!vrefp) return true;
         const AstVar* const varp = vrefp->varp();
+        // V3Force later reads the force value instead of a forced variable, or of one assigned
+        // by a procedural continuous assignment, which it makes a force
+        if (varp->isForced() || m_contAssignedVarps.count(varp)) return false;
         // Variables of the called function become temporaries written first
         if (varp->user4u().toGraphVertex() != m_curVxp) return true;
         if (vrefp->access().isWriteOrRW()) {
@@ -316,6 +321,11 @@ private:
     }
 
     // VISITORS
+    void visit(AstAssignCont* nodep) override {
+        nodep->lhsp()->foreach(
+            [&](const AstVarRef* refp) { m_contAssignedVarps.emplace(refp->varp()); });
+        iterateChildren(nodep);
+    }
     void visit(AstNodeProcedure* nodep) override {
         VL_RESTORER(m_assignp);
         const AstAlways* const alwaysp = VN_CAST(nodep, Always);
