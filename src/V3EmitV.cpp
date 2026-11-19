@@ -115,7 +115,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                      itemp = VN_AS(itemp->nextp(), EnumItem)) {
                     const AstConst* const ivalp = VN_CAST(itemp->valuep(), Const);
                     if (ivalp && ivalp->num().isCaseEq(constp->num())) {
-                        puts(itemp->prettyName());
+                        puts(itemp->verilogIdent());
                         return;
                     }
                 }
@@ -143,7 +143,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                 puts("void ");
             }
         }
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         puts("(");
         bool first = true;
         for (AstNode* const itemp : nodep->declspList()) {
@@ -159,7 +159,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                 m_arrayPost = false;
                 iterateConstNull(portp->subDTypep());  // type before the name
                 puts(" ");
-                puts(portp->prettyName());
+                puts(portp->verilogIdent());
                 m_arrayPost = true;
                 iterateConstNull(portp->subDTypep());  // "[$]", "[]", "[string]", "[4]"
             }  // m_arrayPost restored: the default is an ordinary expression
@@ -172,13 +172,13 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void emitDpiExport(AstNodeFTask* nodep) {
         puts("export \"DPI-C\" " + nodep->verilogKwd() + " ");
-        putqs(nodep, nodep->prettyName() + ";\n");
+        putqs(nodep, nodep->verilogIdent() + ";\n");
     }
     // VISITORS
     void visit(AstNetlist* nodep) override { iterateAndNextConstNull(nodep->modulesp()); }
     void visit(AstNodeModule* nodep) override {
         putfs(nodep, nodep->verilogKwd() + " ");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         puts(";\n");
         iterateChildrenConst(nodep);
         putqs(nodep, "end" + nodep->verilogKwd() + "\n");
@@ -189,7 +189,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             return;
         }
         putfs(nodep, nodep->verilogKwd() + " ");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         puts(";\n");
         iterateChildrenConst(nodep);
         putqs(nodep, "end" + nodep->verilogKwd() + "\n");
@@ -203,7 +203,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         if (nodep->dpiExport()) emitDpiExport(nodep);
         putfs(nodep, nodep->verilogKwd());
         puts(" ");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         puts(";\n");
         // Only putfs the first time for each visitor; later for same node is putqs
         for (AstNode* const declp : nodep->declspList()) {
@@ -215,14 +215,14 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstNodeSchema* nodep) override {
         putfs(nodep, nodep->verilogKwd());
         puts(" ");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         puts(";\n");
         iterateChildrenConst(nodep);
         putqs(nodep, "end" + nodep->verilogKwd() + "\n");
     }
 
     void visit(AstGenBlock* nodep) override {
-        const std::string name = nodep->name().empty() ? "" : " : " + nodep->name();
+        const std::string name = nodep->name().empty() ? "" : " : " + nodep->verilogIdent();
         putbs("/* generate */ begin" + name + '\n');
         iterateChildrenConst(nodep);
         puts("end" + name + '\n');
@@ -273,7 +273,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         if (nodep->name() == "") {
             putbs("begin\n");
         } else {
-            putbs("begin : " + nodep->name() + "\n");
+            putbs("begin : " + nodep->verilogIdent() + "\n");
         }
         iterateChildrenConst(nodep);
         puts("end\n");
@@ -282,7 +282,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         if (nodep->name() == "") {
             putbs("fork\n");
         } else {
-            putbs("fork : " + nodep->name() + "\n");
+            putbs("fork : " + nodep->verilogIdent() + "\n");
         }
         iterateChildrenConst(nodep);
         puts(nodep->joinType().verilogKwd());
@@ -452,7 +452,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
     }
     void visit(AstCoverpoint* nodep) override {
-        putfs(nodep, nodep->name() + ": coverpoint ");
+        putfs(nodep, nodep->verilogIdent() + ": coverpoint ");
         iterateAndNextConstNull(nodep->exprp());
         if (nodep->binsp() || nodep->optionsp()) {
             puts(" {\n");
@@ -479,7 +479,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstCoverBin* nodep) override {
         putfs(nodep, std::string{nodep->isWildcard() ? "wildcard " : ""}
                          + nodep->binsType().verilogKwd() + " ");
-        puts(nodep->name());
+        puts(nodep->verilogIdent());
         if (nodep->isArray()) {
             puts("[");
             if (nodep->arraySizep()) iterateConst(nodep->arraySizep());
@@ -524,7 +524,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstCoverBinsof* nodep) override {
         putfs(nodep, nodep->isNegated() ? "!binsof(" : "binsof(");
         iterateConst(nodep->pointp());
-        if (!nodep->name().empty()) puts("." + nodep->name());
+        if (!nodep->name().empty()) puts("." + nodep->verilogIdent());
         puts(")");
         if (nodep->rangesp()) {
             puts(" intersect {");
@@ -533,7 +533,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
     }
     void visit(AstCoverCrossBin* nodep) override {
-        putfs(nodep, nodep->verilogKwd() + " " + nodep->name() + " = ");
+        putfs(nodep, nodep->verilogKwd() + " " + nodep->verilogIdent() + " = ");
         iterateConstNull(nodep->selectp());
         if (nodep->iffp()) {
             puts(" iff (");
@@ -542,7 +542,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
         puts(";\n");
     }
-    void visit(AstCoverCrossRef* nodep) override { putfs(nodep, nodep->name()); }
+    void visit(AstCoverCrossRef* nodep) override { putfs(nodep, nodep->verilogIdent()); }
     void visit(AstCoverCrossSelect* nodep) override {
         putfs(nodep, "(");
         iterateConstNull(nodep->lhsp());
@@ -564,11 +564,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
     }
     void visit(AstCoverpointRef* nodep) override {
-        putfs(nodep, nodep->name());
+        putfs(nodep, nodep->verilogIdent());
         iterateConstNull(nodep->exprp());
     }
     void visit(AstCoverCross* nodep) override {
-        putfs(nodep, nodep->name() + ": cross ");
+        putfs(nodep, nodep->verilogIdent() + ": cross ");
         for (AstNode* const itemp : nodep->itemspList()) {
             if (itemp != nodep->itemsp()) puts(", ");
             iterateConst(itemp);
@@ -651,7 +651,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
         puts(");\n");
     }
-    void visit(AstDisable* nodep) override { putbs("disable " + nodep->name() + ";\n"); }
+    void visit(AstDisable* nodep) override { putbs("disable " + nodep->verilogIdent() + ";\n"); }
     void visit(AstDisplay* nodep) override {
         visitNodeDisplay(nodep, nodep->filep(), nodep->fmtp()->text(), nodep->fmtp()->exprsp());
     }
@@ -1015,12 +1015,12 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstMemberRef* nodep) override {
         iterateConst(nodep->fromp());
         puts(".");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
     }
     void visit(AstStructSel* nodep) override {
         iterateConst(nodep->fromp());
         puts(".");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
     }
     void visit(AstAttrOf* nodep) override {
         putfs(nodep, "$_ATTROF(");
@@ -1143,7 +1143,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         putfs(nodep, "typedef ");
         m_arrayPost = false;
         iterateConstNull(nodep->subDTypep());
-        puts(" " + nodep->prettyName());
+        puts(" " + nodep->verilogIdent());
         m_arrayPost = true;
         iterateConstNull(nodep->subDTypep());
         puts(";\n");
@@ -1250,7 +1250,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
 
         if (nodep->isVirtual()) puts("virtual ");
         puts(nodep->verilogKwd() + " ");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         // A specialization's name is mangled, so only the generic carries the '#()' header
         if (nodep->name() == nodep->origName()) {
             bool first = true;
@@ -1260,7 +1260,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                     puts(first ? " #(" : ", ");
                     first = false;
                     UASSERT_OBJ(ptp->childDTypep(), ptp, "Type parameter without a dtype");
-                    puts("type " + ptp->prettyName() + " = ");
+                    puts("type " + ptp->verilogIdent() + " = ");
                     emitDType(ptp->childDTypep());
                 } else if (const AstVar* const varp = VN_CAST(stmtp, Var)) {
                     if (!varp->isGParam()) continue;
@@ -1273,7 +1273,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                         emitDType(varp->childDTypep());
                         puts(" ");
                     }
-                    puts(varp->prettyName());
+                    puts(varp->verilogIdent());
                     if (varp->valuep()) {
                         puts(" = ");
                         emitInitValue(varp->valuep(), varp->subDTypep());
@@ -1306,13 +1306,13 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstEnumItemRef* nodep) override {
         if (AstNodeModule* const classOrPackagep = nodep->classOrPackagep()) {
-            putfs(nodep, classOrPackagep->prettyName());
+            putfs(nodep, classOrPackagep->verilogIdent());
             puts("::");
         }
-        putfs(nodep, nodep->name());
+        putfs(nodep, nodep->verilogIdent());
     }
     void visit(AstEnumItem* nodep) override {
-        putfs(nodep, nodep->name());
+        putfs(nodep, nodep->verilogIdent());
         iterateConstNull(nodep->rangep());
         if (nodep->valuep()) {
             puts(" = ");
@@ -1349,7 +1349,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             puts(")");
             return;
         }
-        puts(nodep->ifaceName());
+        puts(AstNode::verilogIdent(nodep->ifaceName()));
     }
     void visit(AstRefDType* nodep) override {
         if (!nodep->subDTypep()) {
@@ -1359,7 +1359,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         if (const AstTypedef* const tdefp = nodep->typedefp()) {
             // Any dimensions belong to the typedef, not to what references it
             if (m_arrayPost) return;
-            puts(tdefp->prettyName());
+            puts(tdefp->verilogIdent());
             return;
         }
         iterateConst(nodep->skipRefp());
@@ -1367,7 +1367,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstClassRefDType* nodep) override {
         if (m_arrayPost) return;
         UASSERT_OBJ(nodep->classp(), nodep, "AstClassRefDType not linked");
-        puts(nodep->classp()->prettyName());
+        puts(nodep->classp()->verilogIdent());
         if (nodep->paramsp()) {
             puts(" #(");
             iterateAndCommaConstNull(nodep->paramsp());
@@ -1378,7 +1378,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstModport* nodep) override {
         puts(nodep->verilogKwd());
         puts(" ");
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         puts(" (\n");
         if (nodep->varsp()) {
             iterateConst(nodep->varsp());
@@ -1395,7 +1395,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             m_suppressVarSemi = true;
             iterateConst(nodep->varp());
         } else {
-            puts(nodep->prettyName());
+            puts(nodep->verilogIdent());
         }
         if (nodep->nextp()) puts(", ");
     }
@@ -1416,7 +1416,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         if (m_arrayPost) return;
         iterateConst(nodep->subDTypep());
         puts(" ");
-        puts(nodep->name());
+        puts(nodep->verilogIdent());
         m_arrayPost = true;
         iterateConstNull(nodep->subDTypep());  // "[$]", "[N]" on the member
         if (AstNode* const valuep = nodep->valuep()) {
@@ -1443,11 +1443,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstNodeFTaskRef* nodep) override {
         if (nodep->dotted() != "") {
-            putfs(nodep, nodep->dotted());
+            putfs(nodep, AstNode::verilogIdent(nodep->dotted()));
             puts(".");
-            puts(nodep->prettyName());
+            puts(nodep->verilogIdent());
         } else {
-            putfs(nodep, nodep->prettyName());
+            putfs(nodep, nodep->verilogIdent());
         }
         puts("(");
         iterateAndNextConstNull(nodep->argsp());
@@ -1455,7 +1455,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateConstNull(nodep->withp());
     }
     void visit(AstSchemaRef* nodep) override {
-        putfs(nodep, nodep->prettyName());
+        putfs(nodep, nodep->verilogIdent());
         if (!VN_IS(nodep->schemap(), Property)) {
             puts("(");
             iterateAndNextConstNull(nodep->argsp());
@@ -1470,7 +1470,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstArg* nodep) override {
         if (!nodep->name().empty()) {
-            puts("." + nodep->prettyName() + "(");
+            puts("." + nodep->verilogIdent() + "(");
             iterateAndNextConstNull(nodep->exprp());
             puts(")");
             return;
@@ -1482,7 +1482,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateConstNull(nodep->exprp());
         puts(") ");
     }
-    void visit(AstLambdaArgRef* nodep) override { putfs(nodep, nodep->name()); }
+    void visit(AstLambdaArgRef* nodep) override { putfs(nodep, nodep->verilogIdent()); }
     void visit(AstPrintTimeScale* nodep) override {
         puts(nodep->verilogKwd());
         puts(";\n");
@@ -1555,21 +1555,21 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     // Terminals
     void visit(AstVarRef* nodep) override {
         if (nodep->varScopep()) {
-            putfs(nodep, nodep->varScopep()->prettyName());
+            putfs(nodep, nodep->varScopep()->verilogIdent());
             return;
         }
         const AstVar* const varp = nodep->varp();
         UASSERT_OBJ(varp, nodep, "AstVarRef not linked");
         if (!nodep->selfPointer().isEmpty()) puts("this.");
-        putfs(nodep, varp->prettyName());
+        putfs(nodep, varp->verilogIdent());
     }
     void visit(AstVarXRef* nodep) override {
-        putfs(nodep, nodep->prettyName(nodep->dotted()));
+        putfs(nodep, AstNode::verilogIdent(nodep->dotted()));
         puts(".");
         if (nodep->varp()) {
-            puts(nodep->varp()->prettyName());
+            puts(nodep->varp()->verilogIdent());
         } else {
-            puts(nodep->prettyName());
+            puts(nodep->verilogIdent());
         }
     }
     void visit(AstConst* nodep) override {
@@ -1608,7 +1608,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             m_arrayPost = false;
             iterateConstNull(nodep->subDTypep());  // Dtype part before identifier
             puts(" ");
-            puts(nodep->prettyName());
+            puts(nodep->verilogIdent());
             m_arrayPost = true;
             iterateConstNull(nodep->subDTypep());  // Dtype part after identifier
         }
@@ -1664,7 +1664,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateConst(nodep->exprp());
         puts(";\n");
     }
-    void visit(AstParseRef* nodep) override { puts(nodep->prettyName()); }
+    void visit(AstParseRef* nodep) override { puts(nodep->verilogIdent()); }
     void visit(AstVarScope*) override {}
     // The RTMD is not Verilog
     void visit(AstNodeRtmdItem*) override {}
@@ -1682,7 +1682,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
                 "Internal: Unknown node type reached emitter: " << nodep->prettyTypeNameQ());
         }
     }
-    void visit(AstParamTypeDType* nodep) override { puts(nodep->prettyName()); }
+    void visit(AstParamTypeDType* nodep) override { puts(nodep->verilogIdent()); }
     void visit(AstBracketArrayDType* nodep) override {
         if (!m_arrayPost) {
             iterateConst(nodep->childDTypep());
@@ -1698,7 +1698,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateConst(nodep->childDTypep());
     }
     void visit(AstClassOrPackageRef* nodep) override {
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         if (nodep->paramsp()) {
             puts(" #(");
             iterateAndCommaConstNull(nodep->paramsp());
@@ -1707,7 +1707,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstMethodCall* nodep) override {
         iterateConst(nodep->fromp());
-        puts("." + nodep->prettyName() + "(");
+        puts("." + nodep->verilogIdent() + "(");
         iterateAndCommaConstNull(nodep->argsp());
         puts(")");
         if (nodep->withp()) iterateConst(nodep->withp());
@@ -1729,7 +1729,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         UASSERT_OBJ(nodep->exprp(), nodep, "Pin without expression");
         // A positional pin has no name; a named one keeps the '.name(expr)' form
         const bool named = !nodep->name().empty();
-        if (named) puts("." + nodep->prettyName() + "(");
+        if (named) puts("." + nodep->verilogIdent() + "(");
         iterateConst(nodep->exprp());
         if (named) puts(")");
     }
