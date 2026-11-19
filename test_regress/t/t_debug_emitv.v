@@ -718,6 +718,30 @@ module t (/*AUTOARG*/
     vder = new;
     if (vder.randomize() != 1) $stop;
   end
+
+  // Escaped identifiers are written in escaped form
+  typedef struct packed {
+    logic \m.a ;
+    logic [2:0] \m/b ;
+  } \esc.struct_t ;
+  typedef enum logic [1:0] {
+    \E.one ,
+    \E/two
+  } esc_enum_t;
+  \esc.struct_t \esc.s ;
+  esc_enum_t \esc/e ;
+  logic \$esc ;
+  logic \9esc ;
+  task \esc/task ;
+  endtask
+  initial begin : \esc/blk
+    \esc.s .\m.a = 1'b1;
+    \esc/e = \E/two ;
+    \$esc = 1'b0;
+    \9esc = 1'b0;
+    \esc/task ;
+    if (sub.\xr.esc ) $write("");
+  end
 endmodule
 
 module param_mod #(
@@ -735,6 +759,7 @@ endmodule
 
 module sub(input logic clk);
   logic [7:0] xr_vec;
+  logic \xr.esc ;
   if (1) begin : sub_gen
     typedef enum logic [1:0] {SUB_A, SUB_B} sub_e;
   end

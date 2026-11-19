@@ -217,7 +217,8 @@ string AstNode::nameNoArray(const string& namein) {
     return namein.substr(0, namein.find("__BRA__"));
 }
 
-string AstNode::prettyName(const string& namein) VL_PURE {
+// prettyName, before removing a leading "TOP."
+static string prettyNameDecoded(const string& namein) VL_PURE {
     // This function is somewhat hot, so we short-circuit some compares
     string pretty;
     pretty.reserve(namein.length());
@@ -279,9 +280,82 @@ string AstNode::prettyName(const string& namein) VL_PURE {
         pretty += pos[0];
         ++pos;
     }
+    return pretty;
+}
+
+string AstNode::prettyName(const string& namein) VL_PURE {
+    string pretty = prettyNameDecoded(namein);
     if (pretty[0] == 'T' && pretty.substr(0, 4) == "TOP.") pretty.replace(0, 4, "");
     if (pretty[0] == 'T' && pretty.substr(0, 5) == "TOP->") pretty.replace(0, 5, "");
     return pretty;
+}
+
+// Whether 'part', one identifier of an internal name, with decoded name 'pretty', must be written
+// as an escaped identifier. encodeName encodes every character a simple identifier cannot hold,
+// and also '$' and a '_' after another '_', which one can hold, unless leading.
+static bool verilogIdentEscaped(const string& part, const string& pretty) {
+    if (pretty == "$root" || pretty == "$unit") return false;
+    if (pretty[0] == '$') return true;
+    for (size_t pos = part.find("__0"); pos != string::npos; pos = part.find("__0", pos + 1)) {
+        if (pos + 4 >= part.size() || !std::isxdigit(part[pos + 3])
+            || !std::isxdigit(part[pos + 4])) {
+            continue;
+        }
+        const char chr = static_cast<char>(std::stoi(part.substr(pos + 3, 2), nullptr, 16));
+        if (chr != '_' && chr != '$') return true;
+    }
+    return false;
+}
+
+// Length of the hierarchy, scope or select marker at 'pos' in internal name 'name', or 0. Includes
+// those Verilator encodes when it builds names ("__02E", which encodeName, writing lowercase hex,
+// never makes, and "__03A__03A").
+static size_t verilogIdentSeparatorLen(const string& name, size_t pos) {
+    for (const char* const sepp : {".", "->", "::", "__02E", "__03A__03A", "__BRA__", "__DOT__"}) {
+        if (name.compare(pos, std::strlen(sepp), sepp) == 0) return std::strlen(sepp);
+    }
+    return 0;
+}
+
+string AstNode::verilogIdent(const string& namein) {
+    // prettyName, writing each identifier in the name that is not a simple identifier as an
+    // escaped identifier (IEEE 1800-2023 5.6.1)
+    string out;
+    bool escaped = false;
+    size_t pos = 0;
+    size_t sepLen = 0;
+    do {
+        size_t sep = pos;
+        sepLen = 0;
+        for (; sep < namein.size(); ++sep) {
+            sepLen = verilogIdentSeparatorLen(namein, sep);
+            if (sepLen) break;
+        }
+        const string part = namein.substr(pos, sep - pos);
+        const string pretty = prettyNameDecoded(part);
+        if (verilogIdentEscaped(part, pretty)) {
+            out += "\\" + pretty + " ";
+            escaped = true;
+        } else {
+            out += pretty;
+        }
+        if (sepLen) {
+            const string separator = namein.substr(sep, sepLen);
+            pos = sep + sepLen;
+            if (separator == "__BRA__") {
+                // A select index, not an identifier
+                const size_t ket = std::min(namein.find("__KET__", pos), namein.size());
+                out += "[" + prettyNameDecoded(namein.substr(pos, ket - pos)) + "]";
+                pos = std::min(ket + std::strlen("__KET__"), namein.size());
+            } else {
+                out += prettyNameDecoded(separator);
+            }
+        }
+    } while (sepLen);
+    // Other names keep exactly their prettyName
+    if (!escaped) return prettyName(namein);
+    if (VString::startsWith(out, "TOP.")) out.erase(0, 4);
+    return out;
 }
 
 string AstNode::vpiName(const string& namein) {
