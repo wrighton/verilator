@@ -34,9 +34,12 @@ for instance in ['u_dense16', 'u_dense64', 'u_dense256', 'u_dense16_copy']:
     if [name for name in members if '__DOT__' + instance + '__DOT__' in name]:
         test.error('Unexpected NBA flag/value array members for ' + instance)
 
-# Dense targets use a shadow copy, or flag arrays with blocking writes or large elements
-test.file_grep(test.stats, r'NBA, variables using FlagArray scheme\s+(\d+)', 6)
-test.file_grep(test.stats, r'NBA, variables using ShadowVar scheme\s+(\d+)', 14)
+# Dense targets use a shadow copy, or flag arrays with other writes or large elements
+test.file_grep(test.stats, r'NBA, variables using FlagArray scheme\s+(\d+)', 10)
+test.file_grep(test.stats, r'NBA, variables using ShadowVar scheme\s+(\d+)', 1)
+test.file_grep(test.stats, r'NBA, variables using ShadowVarSynced scheme\s+(\d+)', 13)
+# Synced shadow copies need no 'Pre' copy, leaving those of shared flags and of 'cyc'
+test.file_grep(test.stats, r'Node count, ALWAYSPRE\s+(\d+)', 13)
 test.file_grep(test.stats, r'NBA, variables using FlagShared scheme\s+(\d+)', 6)
 test.file_grep(test.stats, r'NBA, variables using GenericGlobal scheme\s+(\d+)', 1)
 
