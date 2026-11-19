@@ -92,19 +92,32 @@
 //   DPI calls are serialized similarly (they are assumed not thread safe), unless directed by
 //   options.
 //
+//   An MTask that may control processes runs alone, ordered against every other MTask (see
+//   ProcessControlVisitor). Each such MTask is a barrier in sequence order: every other MTask is
+//   ordered after the last barrier before it and before the first barrier after it, which also
+//   orders the barriers among themselves. An MTask needs an edge only if no predecessor, or
+//   successor, between it and that barrier orders it already. A pass in sequence order, and one
+//   in reverse, find these edges, which are then added updating the critical paths only once (see
+//   OrderMTaskGraph::addEdges), all in time linear in the size of the graph.
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
 
+#include "V3CallTargets.h"
 #include "V3Control.h"
 #include "V3Global.h"
 #include "V3Graph.h"
 #include "V3OrderGraph.h"
 #include "V3OrderMTaskGraph.h"
+#include "V3Stats.h"
 
 #include <algorithm>
+#include <memory>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -147,6 +160,121 @@ class DpiImportCallVisitor final : public VNVisitorConst {
 
 public:
     static bool hasDpiHazard(AstNode* nodep) { return DpiImportCallVisitor{nodep}.m_hasDpiHazard; }
+};
+
+//######################################################################
+// ProcessControlVisitor
+
+// Find the logic that may control processes through a called function. Killing a process can
+// end a fork..join and resume the waiting process right away, and starting one runs it until it
+// first waits, in a timing scheduler. Either way the logic then makes accesses that are not its
+// own, which ordering it by its own accesses does not account for. Conservatively, a function may
+// control processes if it uses a process reference, as std::process methods such as kill() and
+// status() do, or a timing scheduler, or calls a function that may, through a virtual call any
+// it may dispatch to (see V3CallTargets). Logic using these itself is ordered by its accesses as
+// usual. A 'disable fork' does not count by itself: it only kills descendants of the process of
+// the logic, which other logic can only reach through a process reference, so that logic runs
+// alone.
+// Process control in user $c code, or by DPI exports called from C, is not seen (see
+// hasDpiHazard).
+class ProcessControlVisitor final : public VNVisitorConst {
+    // TYPES
+    // Vertex of the call graph: a function, with edges to what its calls may call, which is a
+    // function, or, for a virtual call, a dispatch vertex with edges to all it may dispatch to
+    class Vertex final : public V3GraphVertex {
+        VL_RTTI_IMPL(Vertex, V3GraphVertex)
+    public:
+        bool m_control = false;  // May control processes
+        explicit Vertex(V3Graph* graphp)
+            : V3GraphVertex{graphp} {}
+    };
+
+    // STATE
+    const std::unique_ptr<V3CallTargets> m_callTargetsp = V3CallTargets::build();
+    V3Graph m_graph;  // The call graph
+    std::unordered_map<const AstCFunc*, Vertex*> m_funcVtxps;  // Function -> Its vertex
+    std::unordered_map<const AstCFunc*, Vertex*> m_dispatchVtxps;  // Function -> Dispatch vertex
+    Vertex* m_funcVtxp = nullptr;  // Vertex of the function being visited
+    bool m_logicControl = false;  // The logic checked by mayControl may control processes
+
+    // METHODS
+    Vertex* funcVtxp(const AstCFunc* funcp) {
+        Vertex*& vtxpr = m_funcVtxps[funcp];
+        if (!vtxpr) vtxpr = new Vertex{&m_graph};
+        return vtxpr;
+    }
+    // The vertex of what 'callp' may call
+    Vertex* calleeVtxp(const AstNodeCCall* callp) {
+        const std::vector<AstCFunc*>& targetps = m_callTargetsp->getTargets(callp);
+        if (targetps.size() == 1) return funcVtxp(targetps.front());
+        // Only a virtual call has several, the same for all calls of the function
+        Vertex*& vtxpr = m_dispatchVtxps[callp->funcp()];
+        if (vtxpr) return vtxpr;
+        vtxpr = new Vertex{&m_graph};
+        for (const AstCFunc* const targetp : targetps) {
+            Vertex* const targetVtxp = funcVtxp(targetp);
+            new V3GraphEdge{&m_graph, vtxpr, targetVtxp, 1};
+            // Needed when made after propagation in the constructor
+            vtxpr->m_control |= targetVtxp->m_control;
+        }
+        return vtxpr;
+    }
+
+    // VISITORS
+    void visit(AstCFunc* nodep) override {
+        VL_RESTORER(m_funcVtxp);
+        m_funcVtxp = funcVtxp(nodep);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (!m_funcVtxp) return;
+        const AstBasicDType* const basicp = nodep->varp()->dtypep()->skipRefp()->basicp();
+        if (!basicp) return;
+        if (basicp->isProcessRef() || basicp->isDelayScheduler() || basicp->isTriggerScheduler()
+            || basicp->isDynamicTriggerScheduler()) {
+            m_funcVtxp->m_control = true;
+        }
+    }
+    void visit(AstNodeCCall* nodep) override {
+        iterateChildrenConst(nodep);
+        Vertex* const calleep = calleeVtxp(nodep);
+        if (!m_funcVtxp) {
+            m_logicControl |= calleep->m_control;
+        } else {
+            new V3GraphEdge{&m_graph, m_funcVtxp, calleep, 1};
+        }
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit ProcessControlVisitor(AstNetlist* netlistp) {
+        iterateConst(netlistp);
+        // The callers of a function that may control processes may too
+        std::vector<Vertex*> workList;
+        for (V3GraphVertex& vtx : m_graph.vertices()) {
+            Vertex* const vtxp = vtx.as<Vertex>();
+            if (vtxp->m_control) workList.push_back(vtxp);
+        }
+        while (!workList.empty()) {
+            const Vertex* const vtxp = workList.back();
+            workList.pop_back();
+            for (const V3GraphEdge& edge : vtxp->inEdges()) {
+                Vertex* const callerp = edge.fromp()->as<Vertex>();
+                if (callerp->m_control) continue;
+                callerp->m_control = true;
+                workList.push_back(callerp);
+            }
+        }
+    }
+
+    // METHODS
+    // Whether logic may control processes, through a function it calls
+    bool mayControl(AstNode* logicp) {
+        m_logicControl = false;
+        iterateConst(logicp);
+        return m_logicControl;
+    }
 };
 
 //######################################################################
@@ -289,6 +417,56 @@ class FixDataHazards final {
         for (size_t i = 1; i < mtaskps.size(); ++i) addEdgeIfNeeded(mtaskps[i - 1], mtaskps[i]);
     }
 
+    // Make each MTask in 'barrierps' run alone (see the note at the top of the file)
+    void runAlone(const std::vector<LogicMTask*>& barrierps) {
+        // The MTasks by sequence number, which are 1 to the number of MTasks
+        std::vector<LogicMTask*> seqps(m_mTaskGraph.vertices().size() + 1, nullptr);
+        for (V3GraphVertex& vtx : m_mTaskGraph.vertices()) {
+            LogicMTask* const mtaskp = static_cast<LogicMTask*>(&vtx);
+            seqps[mtaskp->user()] = mtaskp;
+        }
+        std::vector<bool> isBarrier(seqps.size(), false);
+        for (const LogicMTask* const barrierp : barrierps) isBarrier[barrierp->user()] = true;
+        std::vector<std::pair<LogicMTask*, LogicMTask*>> edges;  // The edges to add
+        // Order each MTask after the last barrier before it. This pass already ordered those in
+        // between after it, so an edge is needed only if no predecessor is one of them.
+        LogicMTask* barrierp = nullptr;
+        for (size_t seq = 1; seq < seqps.size(); ++seq) {
+            LogicMTask* const mtaskp = seqps[seq];
+            if (barrierp) {
+                bool ordered = false;
+                for (const V3GraphEdge& edge : mtaskp->inEdges()) {
+                    if (edge.fromp()->user() >= barrierp->user()) {
+                        ordered = true;
+                        break;
+                    }
+                }
+                if (!ordered) edges.emplace_back(barrierp, mtaskp);
+            }
+            if (isBarrier[seq]) barrierp = mtaskp;
+        }
+        // Likewise order each MTask other than a barrier before the first barrier after it
+        barrierp = nullptr;
+        for (size_t seq = seqps.size() - 1; seq > 0; --seq) {
+            LogicMTask* const mtaskp = seqps[seq];
+            if (isBarrier[seq]) {
+                barrierp = mtaskp;
+                continue;
+            }
+            if (!barrierp) continue;
+            bool ordered = false;
+            for (const V3GraphEdge& edge : mtaskp->outEdges()) {
+                if (edge.top()->user() <= barrierp->user()) {
+                    ordered = true;
+                    break;
+                }
+            }
+            if (!ordered) edges.emplace_back(mtaskp, barrierp);
+        }
+        V3Stats::addStatSum("Scheduling, process control ordering edges", edges.size());
+        m_mTaskGraph.addEdges(edges);
+    }
+
     bool hasDpiHazard(LogicMTask* mtaskp) {
         for (const OrderMoveVertex& mVtx : mtaskp->vertexList()) {
             OrderLogicVertex* const lvtxp = mVtx.logicp();
@@ -353,6 +531,25 @@ class FixDataHazards final {
                 m_scratch.push_back(access.m_mtaskp);
             }
             serializeMTasks(m_scratch);
+        }
+
+        // Make MTasks that may control processes run alone. Processes are only controlled with
+        // timing, as the std::process methods are otherwise empty.
+        if (v3Global.opt.timing().isSetTrue()) {
+            ProcessControlVisitor processControl{v3Global.rootp()};
+            m_scratch.clear();
+            for (V3GraphVertex& vtx : m_mTaskGraph.vertices()) {
+                LogicMTask& mtask = static_cast<LogicMTask&>(vtx);
+                for (const OrderMoveVertex& mVtx : mtask.vertexList()) {
+                    const OrderLogicVertex* const lvtxp = mVtx.logicp();
+                    if (lvtxp && processControl.mayControl(lvtxp->nodep())) {
+                        m_scratch.push_back(&mtask);
+                        break;
+                    }
+                }
+            }
+            V3Stats::addStatSum("Scheduling, MTasks with process control", m_scratch.size());
+            if (!m_scratch.empty()) runAlone(m_scratch);
         }
 
         // Serialize DPI calls unless user gave '--threads-dpi none'.

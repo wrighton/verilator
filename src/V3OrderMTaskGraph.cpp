@@ -207,8 +207,9 @@ void OrderMTaskGraph::initCriticalPaths() {
     constexpr GraphWay way{N_Way};
     constexpr GraphWay inv = way.invert();
     // Visit the MTasks in topological order of the given direction, so the critical paths of
-    // all MTasks unwayward of an MTask are final when it is visited. The edge heap keys start at
-    // least the cost of the relative, and only increase to its final inclusive critical path.
+    // all MTasks unwayward of an MTask are final when it is visited. The edge heap keys start no
+    // larger than their final value (the cost of the relative when building, or its previous
+    // critical path when adding edges), and only increase.
     GraphStreamUnordered stream{this, way};
     size_t nVisited = 0;
     while (const V3GraphVertex* const vtxp = stream.nextp()) {
@@ -227,6 +228,15 @@ void OrderMTaskGraph::initCriticalPaths() {
     }
     // An MTask on a cycle is never visited, and would keep a wrong critical path
     UASSERT(nVisited == vertices().size(), "MTask graph is cyclic");
+}
+
+void OrderMTaskGraph::addEdges(const std::vector<std::pair<LogicMTask*, LogicMTask*>>& edges) {
+    for (const std::pair<LogicMTask*, LogicMTask*>& edge : edges) {
+        addBuildEdge(edge.first, edge.second);
+    }
+    // Adding edges only lengthens critical paths, so they can be computed as after building
+    initCriticalPaths();
+    validate();
 }
 
 void OrderMTaskGraph::mergeMTasks(LogicMTask* recipientp, LogicMTask* donorp) {
