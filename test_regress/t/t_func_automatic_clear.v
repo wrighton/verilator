@@ -92,6 +92,96 @@ module t;
     return x;
   endfunction
 
+  // Calls of a function inlined in a class method, made recursively from the function
+  class ClsName;
+    function void name(int n, output string s);
+      t_describe(this, n, s);
+    endfunction
+  endclass
+
+  function automatic void t_describe(ClsName c, int n, output string s);
+    string inner;
+    s = $sformatf("n%0d", n);
+    if (n > 0) begin
+      c.name(n - 1, inner);
+      s = {s, ":", inner, ":", s};
+    end
+  endfunction
+
+  // Calls of a function inlined in a loop of a class method
+  class ClsLoop;
+    function string run();
+      string r;
+      for (int i = 0; i < 3; ++i) r = {r, t_string()};
+      return r;
+    endfunction
+  endclass
+
+  // A call of a function inlined in a class method, after all its paths have returned
+  class ClsDead;
+    int m_x = 1;
+    function int pick(int k);
+      case (k)
+        1: return 1;
+        default: return 2;
+      endcase
+      if (t_string() == "s") m_x = 5;
+      return 0;
+    endfunction
+  endclass
+
+  // A call of a function inlined in a wait condition of a class task
+  function automatic int t_twice(int n);
+    int r;
+    r = 2 * n;
+    return r;
+  endfunction
+
+  class ClsWait;
+    int m_x;
+    task wait_x();
+      wait (m_x > 0 && t_twice(m_x) == 6);
+    endtask
+  endclass
+
+  task automatic t_wait_inlined();
+    ClsWait c = new;
+    fork
+      c.wait_x();
+      begin
+        #1 c.m_x = 3;
+      end
+    join
+    `checkh(c.m_x, 3);
+  endtask
+
+  // Calls of a task inlined in a class task, running at the same time on one object
+  task automatic t_delayed_copy(string in, int n, output string out, output int m);
+    #1;
+    out = in;
+    m = n;
+  endtask
+
+  class ClsCopy;
+    task copy(string in, int n, output string out, output int m);
+      t_delayed_copy(in, n, out, m);
+    endtask
+  endclass
+
+  task automatic t_copy_concurrent();
+    ClsCopy c = new;
+    string out1, out2;
+    int m1, m2;
+    fork
+      c.copy("a", 2, out1, m1);
+      c.copy("b", 1, out2, m2);
+    join
+    `checks(out1, "a");
+    `checks(out2, "b");
+    `checkh(m1, 2);
+    `checkh(m2, 1);
+  endtask
+
   // =======================
 
   function automatic void main();
@@ -152,10 +242,29 @@ module t;
       `checkh(cnt, 1);
     end
 
+    begin
+      ClsDead c = new;
+      `checkh(c.pick(3), 2);
+      `checkh(c.m_x, 1);
+    end
+
+    begin
+      ClsLoop c = new;
+      `checks(c.run(), "sss");
+    end
+
+    begin
+      ClsName c = new;
+      string s;
+      c.name(2, s);
+      `checks(s, "n2:n1:n0:n1:n2");
+    end
   endfunction
 
   initial begin
     main();
+    t_copy_concurrent();
+    t_wait_inlined();
     $write("*-* All Finished *-*\n");
     $finish;
   end
