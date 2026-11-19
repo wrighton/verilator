@@ -21,4 +21,19 @@ module t (
     if ($rose($past(d), @($global_clock))) $stop;  // Unsup
     if ($stable_gclk($past(d))) $stop;  // Unsup
   end
+
+  sample_if i (clk, d);
+  int nested_stables;
+  always @(posedge clk iff $stable_gclk($rose_gclk(i.cb.v[0])))++nested_stables;
 endmodule
+
+interface sample_if (
+    input logic clk,
+    input logic raw_v
+);
+  logic [6:0] v;
+  assign v = {6'd0, raw_v};
+  clocking cb @(posedge clk);
+    input v;
+  endclocking
+endinterface
