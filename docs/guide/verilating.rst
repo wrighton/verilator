@@ -337,10 +337,10 @@ balancing performance versus safety. See :vlopt:`--threads-dpi`.
 
 If using :vlopt:`--timing`, logic that controls or queries processes runs
 alone, with no other logic in parallel. This includes calling a std::process
-method such as ``kill()`` or ``status()``, disabling a named block, and calling
-a class method or a task through a virtual interface that forks processes that
-wait. Process control from ``$c`` code or from DPI exports called by C code is
-not covered.
+method such as ``kill()`` or ``status()``, disabling a named block, calling a
+class method or a task through a virtual interface that forks processes that
+wait, and calling a context DPI import when a DPI export may control processes.
+Process control from ``$c`` code is not covered.
 
 If using :vlopt:`--savable`, the save/restore classes are not multithreaded
 and must be called only by the eval thread.
