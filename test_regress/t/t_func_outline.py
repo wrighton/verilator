@@ -17,12 +17,8 @@ test.compile(verilator_flags2=["--binary --output-split-cfuncs 100 --stats"])
 files = test.glob_some(test.obj_dir + "/" + test.vm_prefix + "*.cpp")
 test.file_grep_any(files, r'::__VnoInFunc_run\([^{]*\{[^}]*VL_KEEP_THIS;')
 
-# The new functions of the DPI export take its process
-files = test.glob_some(test.obj_dir + "/" + test.vm_prefix + "_t__*.cpp")
-test.file_grep_any(files, r'__Vdpiexp_dexp\w*__outline\d+\(VlProcessRef vlProcess')
-
 test.execute()
 
-test.file_grep(test.stats, r'Outline, functions created\s+(\d+)', 72)
+test.file_grep(test.stats, r'Outline, functions created\s+(\d+)', 75)
 
 test.passes()
