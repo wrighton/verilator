@@ -1552,6 +1552,7 @@ public:
     string verilogKwd() const override {
         return directive() == VAssertDirectiveType::ASSERT ? "assert" : "assume";
     }
+    static void selfTest();
 };
 class AstAssertIntrinsic final : public AstNodeCoverOrAssert {
     // A $cast or other compiler inserted assert, that must run even without --assert option

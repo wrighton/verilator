@@ -670,10 +670,55 @@ void AstAlwaysReactive::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, deferredReports);
     dumpJsonGen(str);
 }
+void AstAlwaysReactive::selfTest() {
+    // The always running observed deferred assertion reports is not the same as another
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    AstAlwaysReactive* const plainp = new AstAlwaysReactive{flp, nullptr, nullptr};
+    AstAlwaysReactive* const reportsp = new AstAlwaysReactive{flp, nullptr, nullptr};
+    reportsp->deferredReports(true);
+    AstAlwaysReactive* const clonep = reportsp->cloneTree(false);
+    UASSERT_OBJ(plainp->sameNode(plainp) && clonep->sameNode(reportsp)
+                    && clonep->deferredReports(),
+                clonep, "Reactive always identity must survive cloning");
+    UASSERT_OBJ(!plainp->sameNode(reportsp) && !reportsp->sameNode(plainp), plainp,
+                "Reactive always running deferred reports must differ");
+    VL_DO_DANGLING(plainp->deleteTree(), plainp);
+    VL_DO_DANGLING(reportsp->deleteTree(), reportsp);
+    VL_DO_DANGLING(clonep->deleteTree(), clonep);
+}
 const char* AstAnd::widthMismatch() const VL_MT_STABLE {
     BROKEN_RTN(lhsp()->widthMin() != rhsp()->widthMin());
     BROKEN_RTN(lhsp()->widthMin() != widthMin());
     return nullptr;
+}
+void AstAssert::selfTest() {
+    // Assertions differing in name, or in whether V3AssertNfa lowered them, are not the same
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    const auto newp = [&](const string& name) {
+        return new AstAssert{flp,
+                             new AstConst{flp, AstConst::BitTrue{}},
+                             nullptr,
+                             nullptr,
+                             VAssertType::CONCURRENT,
+                             VAssertDirectiveType::ASSERT,
+                             name};
+    };
+    AstAssert* const ap = newp("a");
+    AstAssert* const a2p = newp("a");
+    AstAssert* const bp = newp("b");
+    AstAssert* const loweredp = newp("a");
+    loweredp->nfaLowered(true);
+    AstAssert* const clonep = loweredp->cloneTree(false);
+    UASSERT_OBJ(ap->sameNode(ap) && ap->sameNode(a2p) && clonep->sameNode(loweredp)
+                    && clonep->nfaLowered(),
+                clonep, "Assertion identity must survive cloning");
+    UASSERT_OBJ(!ap->sameNode(bp) && !ap->sameNode(loweredp) && !loweredp->sameNode(ap), ap,
+                "Assertions with a different name or lowering must differ");
+    VL_DO_DANGLING(ap->deleteTree(), ap);
+    VL_DO_DANGLING(a2p->deleteTree(), a2p);
+    VL_DO_DANGLING(bp->deleteTree(), bp);
+    VL_DO_DANGLING(loweredp->deleteTree(), loweredp);
+    VL_DO_DANGLING(clonep->deleteTree(), clonep);
 }
 AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assertType,
                            uint32_t directiveType, AstNodeExpr* levelp, AstNodeExpr* itemsp)
