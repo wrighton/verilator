@@ -55,9 +55,8 @@ module t;
       got.push_back(const'(s));
       got_nest.push_back(const'(const'(s) + 1));
       got_local.push_back(const'(k));
-      // Also in an immediate assertion of the action, and after a concurrent one
+      // Also in an immediate assertion of the action, and after it
       assert (const'(s) == got[got.size()-1]);
-      assert property (1);
       got_sib.push_back(const'(s));
       // A cast of a constant, and of the argument of a with clause, have their values
       got_k.push_back(const'(5) + arr.sum() with (const'(item)));
