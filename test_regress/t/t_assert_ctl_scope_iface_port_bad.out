@@ -1,8 +1,16 @@
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:134:33: Assertion control target is not a scope or assertion from 't.va2.holder.l': 'holder.p.n' (IEEE 1800-2023 20.11).
+                                                    : ... note: In instance 't.va2.holder.l'
+  134 |   initial $assertoff(0, holder.p.n);
+      |                                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_ctl_scope_iface_port_bad.v:104:33: Assertion control target is not a scope or assertion from 't.va.holder.l': 'holder.p.n' (IEEE 1800-2023 20.11).
+                                                    : ... note: In instance 't.vb.holder.l'
+  104 |   initial $assertoff(0, holder.p.n);
+      |                                 ^
 %Error: t/t_assert_ctl_scope_iface_port_bad.v:76:29: Assertion control target is not a scope or assertion from 't.wb0.x.l': 'hh.p.a1' (IEEE 1800-2023 20.11).
                                                    : ... note: In instance 't.wb0.x.l'
    76 |   initial $assertoff(0, hh.p.a1);
       |                             ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_assert_ctl_scope_iface_port_bad.v:71:26: Assertion control target is not a scope or assertion from 't.spe': 'p.pk_tsk' (IEEE 1800-2023 20.11).
                                                    : ... note: In instance 't.spe'
    71 |   initial $assertoff(0, p.pk_tsk);
