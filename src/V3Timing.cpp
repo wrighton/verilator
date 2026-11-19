@@ -48,6 +48,10 @@
 // - for each event control:
 //     - if there is no corresponding trigger scheduler (see verilated_timing.{h,cpp}), create it
 //     - replace with a CAwait statement waiting on the corresponding trigger scheduler
+//     - if a trigger scheduler cannot be used (e.g. in a class), a wait only on an event variable
+//       whose storage outlives the wait, not through a handle and without 'iff', becomes a CAwait
+//       on the event's wait list in the dynamic trigger scheduler, resumed after the event fires;
+//       other waits evaluate their trigger on every trigger evaluation
 // - for each wait(cond) statement:
 //     - replace it with a loop like: while (!cond) @(<vars from cond>)
 // - for each fork:
@@ -574,6 +578,7 @@ class TimingControlVisitor final : public VNVisitor {
     size_t m_statConstDelays = 0;  // Number of statically known #const (non-zero) delays
     size_t m_statVariableDelays = 0;  // Number of delays with value unknown at compile time
     size_t m_statSuspendableProcs = 0;  // Number of suspendable processes
+    size_t m_statEventListWaits = 0;  // Number of event controls on an event's wait list
 
     // METHODS
     // Transform an assignment with an intra timing control into a timing control with the
@@ -673,6 +678,38 @@ class TimingControlVisitor final : public VNVisitor {
             }
             return !nodep->isPure();
         });
+    }
+    // Return the event variable if the sentree only waits on it, and its storage outlives the
+    // wait, so the process can wait on the event's own list (IEEE 1800-2023 15.5), else nullptr.
+    // That is static storage, a member of 'this' (kept alive by VL_KEEP_THIS), or any event when
+    // events are assignable, as the list then shares ownership. An event reached through a class
+    // or virtual interface handle is not listed, as the wait follows the handle if it changes
+    // (IEEE 1800-2023 9.4.2). Neither is an 'iff' wait, whose condition is evaluated when the
+    // event occurs (IEEE 1800-2023 9.4.2.3).
+    static AstVarRef* listedEventp(const AstSenTree* const sentreep) {
+        const AstSenItem* const itemp = sentreep->sensesp();
+        if (itemp->nextp() || itemp->condp() || itemp->edgeType() != VEdgeType::ET_EVENT) {
+            return nullptr;
+        }
+        AstVarRef* const refp = VN_CAST(itemp->sensp(), VarRef);
+        if (!refp) return nullptr;
+        const AstVar* const varp = refp->varp();
+        if (varp->lifetime().isStatic() || varp->isClassMember() || v3Global.assignsEvents()) {
+            return refp;
+        }
+        return nullptr;
+    }
+    // Create the wait of an event control on the wait list of its event. The event is only
+    // read: the wait list it links is runtime state of the scheduler, not of the design.
+    AstCAwait* createEventListWait(AstSenTree* const sentreep, AstVarRef* const eventp) {
+        FileLine* const flp = sentreep->fileline();
+        AstCMethodHard* const methodp = new AstCMethodHard{
+            flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE},
+            VCMethod::SCHED_EVENT_TRIGGER, eventp->cloneTree(false)};
+        methodp->dtypeSetVoid();
+        addProcessInfo(methodp);
+        addEventDebugInfo(methodp, sentreep);
+        return new AstCAwait{flp, methodp, getCreateDynamicTriggerSenTree()};
     }
     // Creates a trigger scheduler variable
     AstVarScope* getCreateTriggerSchedulerp(AstSenTree* const sentreep) {
@@ -1127,7 +1164,14 @@ class TimingControlVisitor final : public VNVisitor {
         }
         // Relink child statements after the event control
         if (nodep->stmtsp()) nodep->addNextHere(nodep->stmtsp()->unlinkFrBackWithNext());
-        if (needDynamicTrigger(nodep->sentreep())) {
+        const bool dynamic = needDynamicTrigger(nodep->sentreep());
+        if (AstVarRef* const eventp = dynamic ? listedEventp(nodep->sentreep()) : nullptr) {
+            ++m_statEventListWaits;
+            nodep->replaceWith(createEventListWait(nodep->sentreep(), eventp));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
+        if (dynamic) {
             // Create the trigger variable and init it with 0
             AstVarScope* const trigvscp
                 = createTemp(flp, m_dynTrigNames.get(nodep), nodep->findBitDType());
@@ -1551,6 +1595,7 @@ public:
         V3Stats::addStat("Timing, known #const delays", m_statConstDelays);
         V3Stats::addStat("Timing, unknown #variable delays", m_statVariableDelays);
         V3Stats::addStat("Timing, suspendable processes", m_statSuspendableProcs);
+        V3Stats::addStat("Timing, event controls on event wait lists", m_statEventListWaits);
     }
 };
 
