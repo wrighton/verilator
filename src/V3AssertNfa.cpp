@@ -1527,12 +1527,10 @@ class SvaNfaBuilder final {
         return BuildResult::failWithError();
     }
 
-    // New vertex of a later phase of a variable-length 'within', with the scope of fromp
+    // New vertex of a later phase of a variable-length 'within', with the scope of outer vertex
+    // fromp, which has no throughout guard (see buildVarLenWithin)
     SvaStateVertex* newPhaseVertex(const SvaStateVertex* fromp) {
         SvaStateVertex* const vtxp = m_graph.createStateVertex();
-        for (AstNodeExpr* const cp : fromp->m_throughoutConds) {
-            vtxp->m_throughoutConds.push_back(cp->cloneTreePure(false));
-        }
         vtxp->m_isUnbounded = fromp->m_isUnbounded;
         vtxp->m_strongPending = fromp->m_strongPending;
         return vtxp;
@@ -1630,13 +1628,15 @@ class SvaNfaBuilder final {
         for (V3GraphVertex& vtxr : m_graph.m_graph.vertices()) {
             SvaStateVertex* const vtxp = static_cast<SvaStateVertex*>(&vtxr);
             if (vtxps.empty() && vtxp != startp) continue;
-            // A vertex on each tick has no ring, combiner, reject sink or enclosing abort yet
+            // A vertex on each tick has no ring, throughout guard, combiner, reject sink or
+            // enclosing abort yet
             UASSERT_OBJ(!vtxp->m_isMatch && !vtxp->m_delayRingSize && !vtxp->m_isFixedDelayRing
                             && !vtxp->m_delayRingClearCondp && !vtxp->m_delayRingAdvanceCondp
                             && !vtxp->m_replayAbortReject && !vtxp->m_abortClearp
                             && !vtxp->m_abortRejectp && !vtxp->m_isAndCombiner
                             && !vtxp->m_andLhsTermp && !vtxp->m_andRhsTermp && !vtxp->m_andLhsCondp
-                            && !vtxp->m_andRhsCondp && !vtxp->m_isRejectSink,
+                            && !vtxp->m_andRhsCondp && !vtxp->m_isRejectSink
+                            && vtxp->m_throughoutConds.empty(),
                         vtxp, "Variable-length within outer vertex not built per tick");
             indexes.emplace(vtxp, vtxps.size());
             vtxps.push_back(vtxp);
