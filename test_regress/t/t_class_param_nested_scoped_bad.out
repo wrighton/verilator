@@ -1,0 +1,98 @@
+%Error: t/t_class_param_nested_scoped_bad.v:189:30: Package/class for ':: reference' not found: 'Inner'
+                                                  : ... note: In instance 't.u_missing'
+  189 |   initial $display("%0d", C::Inner#(7)::f());
+      |                              ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_class_param_nested_scoped_bad.v:196:30: Package/class for ':: reference' not found: 'Inner'
+                                                  : ... note: In instance 't.u_var'
+  196 |   initial $display("%0d", C::Inner#(7)::f());
+      |                              ^~~~~
+%Error: t/t_class_param_nested_scoped_bad.v:210:38: Instance attempts to override 'M' as a parameter, but it is a variable
+                                                  : ... note: In instance 't.u_prop'
+  210 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+%Error: t/t_class_param_nested_scoped_bad.v:203:30: Package/class for ':: reference' not found: 'Inner'
+                                                  : ... note: In instance 't.u_typedef'
+  203 |   initial $display("%0d", C::Inner#(7)::f());
+      |                              ^~~~~
+%Error-PINNOTFOUND: t/t_class_param_nested_scoped_bad.v:217:38: Parameter not found: 'M'
+                                                              : ... note: In instance 't.u_pin'
+  217 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+                    ... For error description see https://verilator.org/warn/PINNOTFOUND?v=latest
+%Error: t/t_class_param_nested_scoped_bad.v:224:38: Instance attempts to override 'M' as a parameter, but it is a function
+                                                  : ... note: In instance 't.u_func'
+  224 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+%Error: t/t_class_param_nested_scoped_bad.v:231:38: Instance attempts to override 'M' as a parameter, but it is a local parameter
+                                                  : ... note: In instance 't.u_inherited'
+  231 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+%Error-PINNOTFOUND: t/t_class_param_nested_scoped_bad.v:238:38: Parameter not found: 'M'
+                                                              : ... note: In instance 't.u_base_param'
+  238 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+%Error: t/t_class_param_nested_scoped_bad.v:245:38: Instance attempts to override 'M' as a parameter, but it is a ENUMITEM 'M'
+                                                  : ... note: In instance 't.u_enum'
+  245 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+%Error-PINNOTFOUND: t/t_class_param_nested_scoped_bad.v:252:38: Parameter not found: 'WIDHT'
+                                                              : ... note: In instance 't.u_typo'
+                                                              : ... Suggested alternative: 'WIDTH'
+  252 |   initial $display("%0d", C::Inner#(.WIDHT(7))::f());
+      |                                      ^~~~~
+%Error-PINNOTFOUND: t/t_class_param_nested_scoped_bad.v:259:38: Parameter not found: 'WIDTX'
+                                                              : ... note: In instance 't.u_typo_inherited'
+                                                              : ... Suggested alternative: 'WIDTH'
+  259 |   initial $display("%0d", C::Inner#(.WIDTX(7))::f());
+      |                                      ^~~~~
+%Error: t/t_class_param_nested_scoped_bad.v:273:17: Package/class for ':: reference' not found: 'Plain'
+                                                  : ... note: In instance 't.u_param_value'
+  273 |   child #(.P(C::Plain::Deep #(7)::K)) u_child ();
+      |                 ^~~~~
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_bad.v:273:35: dotted expressions in parameters
+                                                              : ... note: In instance 't.u_param_value'
+                                                              : ... Suggest use a typedef
+  273 |   child #(.P(C::Plain::Deep #(7)::K)) u_child ();
+      |                                   ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-PINNOTFOUND: t/t_class_param_nested_scoped_bad.v:280:38: Parameter not found: 'M'
+                                                              : ... note: In instance 't.u_base_var'
+  280 |   initial $display("%0d", C::Inner#(.M(7))::f());
+      |                                      ^
+%Error: t/t_class_param_nested_scoped_bad.v:292:14: Duplicate parameter connection: 'M'
+                                                  : ... note: In instance 't.u_dup'
+  292 |             .M(8)
+      |              ^
+        t/t_class_param_nested_scoped_bad.v:291:14: ... Location of original parameter connection
+  291 |             .M(7),
+      |              ^
+%Error-PINNOTFOUND: t/t_class_param_nested_scoped_bad.v:301:40: Parameter not found: '__paramNumber2'
+                                                              : ... note: In instance 't.u_extra'
+  301 |   initial $display("%0d", C::Inner#(7, 8)::f());
+      |                                        ^
+%Error: t/t_class_param_nested_scoped_bad.v:308:36: Instance attempts to override 'K' as a parameter, but it is a variable
+                                                  : ... note: In instance 't.u_mid_prop'
+  308 |   initial $display("%0d", C::Mid#(.K(7))::Leaf#(1)::h());
+      |                                    ^
+%Error: t/t_class_param_nested_scoped_bad.v:315:27: Class scope resolution of 'Inner' is through 'C', which is not a class (IEEE 1800-2023 8.23).
+                                                  : ... note: In instance 't.u_int'
+  315 |   initial $display("%0d", C::Inner#(7)::f());
+      |                           ^
+%Error: t/t_class_param_nested_scoped_bad.v:322:30: Package/class for ':: reference' not found: 'Plain'
+                                                  : ... note: In instance 't.u_chain'
+  322 |   initial $display("%0d", C::Plain::Deep#(7)::h());
+      |                              ^~~~~
+%Error: t/t_class_param_nested_scoped_bad.v:329:30: Package/class for ':: reference' not found: 'Mid'
+                                                  : ... note: In instance 't.u_mid'
+  329 |   initial $display("%0d", C::Mid#(4)::Leaf#(1)::h());
+      |                              ^~~
+%Error: t/t_class_param_nested_scoped_bad.v:330:30: Package/class for ':: reference' not found: 'Mid'
+                                                  : ... note: In instance 't.u_mid'
+  330 |   initial $display("%0d", C::Mid#(5)::Leaf#(2)::h());
+      |                              ^~~
+%Error: t/t_class_param_nested_scoped_bad.v:337:27: Class scope resolution of 'Inner' is through 'C', which is not a class (IEEE 1800-2023 8.23).
+                                                  : ... note: In instance 't.u_no_default'
+  337 |   initial $display("%0d", C::Inner#(7)::f());
+      |                           ^
+%Error: Exiting due to
