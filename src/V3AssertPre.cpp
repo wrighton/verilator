@@ -16,6 +16,9 @@
 //  Pre steps:
 //      Attach clocks to each assertion
 //      Transform clocking blocks into imperative logic
+//      Resolve clockvar references and lower explicitly clocked sampled functions
+//      in event expressions
+//      Collect disjoint outermost functions, then lower their children before each root
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -60,32 +63,22 @@ public:
 };
 
 //######################################################################
-// Explicit-clocked sampled-function frontier in event expressions
+// Explicit-clocked sampled functions in event expressions
 
 class AssertPreClockedSamplesVisitor final : public VNVisitorConst {
     std::vector<AstNodeExpr*>& m_nodes;  // Disjoint outermost functions carrying clocks
 
-    void visit(AstFell* const nodep) override {
-        if (nodep->sentreep()) {
+    void visitSample(AstNodeExpr* const nodep, const AstSenTree* const sentreep) {
+        if (sentreep) {
             m_nodes.emplace_back(nodep);
         } else {
+            // Unclocked functions retain their clock policy; still find clocked descendants.
             iterateChildrenConst(nodep);
         }
     }
-    void visit(AstRose* const nodep) override {
-        if (nodep->sentreep()) {
-            m_nodes.emplace_back(nodep);
-        } else {
-            iterateChildrenConst(nodep);
-        }
-    }
-    void visit(AstStable* const nodep) override {
-        if (nodep->sentreep()) {
-            m_nodes.emplace_back(nodep);
-        } else {
-            iterateChildrenConst(nodep);
-        }
-    }
+    void visit(AstFell* const nodep) override { visitSample(nodep, nodep->sentreep()); }
+    void visit(AstRose* const nodep) override { visitSample(nodep, nodep->sentreep()); }
+    void visit(AstStable* const nodep) override { visitSample(nodep, nodep->sentreep()); }
     void visit(AstNode* const nodep) override { iterateChildrenConst(nodep); }
 
     AssertPreClockedSamplesVisitor(AstNode* const nodep, std::vector<AstNodeExpr*>& nodes)
@@ -116,7 +109,12 @@ private:
     // NODE STATE
     // AstClockingItem::user1p()         // AstVar*.      Lifted variable; non-null after rename
     // AstVar::user1p()                  // AstClockingItem*. Association retained after lift
-    // AstNodeVarRef::user1()            // bool.         Clockvar path/name checked exactly once
+    // AstNodeVarRef::user1()            // bool.         Clockvar reference normalized, or
+    //                                   //               generated final reference
+    // AstNodeAssign::user1()            // bool.         Generated assignment exempt from
+    //                                   //               clockvar drive rewriting
+    // AstFalling/Fell/Future/Rising/Rose/Stable/Steady::user1()
+    //                                   // bool.         Entered the ordinary handler once
     // AstClockingItem::user2p()         // AstVar*.      Flag set by drives of output clockvar
     // AstClockingItem::user3p()         // AstClocking*. Clocking block of the item, captured
     //                                   //               by AssertPreClockingVisitor
@@ -193,6 +191,10 @@ private:
                                               new AstConst{flp, AstConst::BitTrue{}}};
         setp->user1(true);
         return setp;
+    }
+    // Final clockvar name before its declaration is renamed at the lift.
+    static string clockvarName(const AstClocking* const clockingp, const string& name) {
+        return clockingp->name() + "__DOT__" + name;
     }
     // Clocking item before its variable is lifted, or retained on the variable after lifting.
     static AstClockingItem* clockingItemOf(const AstVar* const varp) {
@@ -448,7 +450,7 @@ private:
         AstConst* const skewp = VN_AS(nodep->skewp(), Const);
         if (skewp->num().isNegative()) skewp->v3error("Skew cannot be negative");
         AstNodeExpr* const exprp = nodep->exprp();
-        varp->name(m_clockingp->name() + "__DOT__" + varp->name());
+        varp->name(clockvarName(m_clockingp, varp->name()));
         m_clockingp->addNextHere(varp->unlinkFrBack());
         nodep->user1p(varp);
         varp->user1p(nodep);
@@ -793,7 +795,7 @@ private:
                 // Finalize before any clone: the declaration is renamed only after its lift.
                 const AstVar* const varp = nodep->varp();
                 xrefp->name(itemp->user1p() ? varp->name()
-                                          : clockingOf(itemp)->name() + "__DOT__" + varp->name());
+                                          : clockvarName(clockingOf(itemp), varp->name()));
                 UINFO(8, " -clockvarxref-out: " << xrefp);
             }
 
