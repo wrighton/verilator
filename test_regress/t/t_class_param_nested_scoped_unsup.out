@@ -1,0 +1,54 @@
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:51:37: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u'
+   51 |   initial $display("%0d", C::Inner#(K)::f());
+      |                                     ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:52:42: Unsupported: Parameter value naming 'PK', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u'
+   52 |   initial $display("%0d", C::Inner#(pkg::PK)::f());
+      |                                          ^~
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:136:7: Unsupported: Parameter values on a type parameter used as a class scope: 'C'.
+                                                               : ... note: In instance 't.u3'
+  136 |   if (C#(9)::N == 3) begin : g_selected
+      |       ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:139:27: Unsupported: Parameter values on a type parameter used as a class scope: 'C'.
+                                                                : ... note: In instance 't.u3'
+  139 |   initial $display("%0d", C#(9)::Inner#(1)::f());
+      |                           ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:63:24: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u2'
+   63 |       return C::Inner#(K)::f();
+      |                        ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:118:14: Unsupported: Parameter values on a type parameter used as a class scope: 'C'.
+                                                                : ... note: In instance 't.u2'
+  118 |       return C#(1)::Inner#(2)::f();
+      |              ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:73:31: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u2'
+   73 |       return C::TInner#(type (K))::f();
+      |                               ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:79:26: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u2'
+   79 |         return C::Inner#(K)::f();
+      |                          ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:86:33: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u2'
+   86 |         return C::TInner#(type (K))::f();
+      |                                 ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:94:44: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                               : ... note: In instance 't.u2'
+   94 |       r = q.find(K) with (C::TInner#(type (K))::f() > 0);
+      |                                            ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:100:24: Unsupported: Parameter value naming 'K', other than a member of the enclosing class not hidden by a local declaration, of a class reference through a type parameter without a class default.
+                                                                : ... note: In instance 't.u2'
+  100 |       return C::Inner#(K)::f();
+      |                        ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:109:17: Unsupported: Parameter values on a type parameter used as a class scope: 'T'.
+                                                                : ... note: In instance 't.u2'
+  109 |       return C::T#(1)::f();
+      |                 ^
+%Error-UNSUPPORTED: t/t_class_param_nested_scoped_unsup.v:146:19: Unsupported: Parameterized class reference through a scope resolved after parameterization, such as an inherited type parameter: 'Inner'.
+                                                                : ... note: In instance 't'
+  146 |       return REQ::Inner#(5)::f();
+      |                   ^~~~~
+%Error: Exiting due to
