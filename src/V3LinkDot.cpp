@@ -6116,6 +6116,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
         LINKDOT_VISIT_START();
         UINFO(8, indent() << "visit " << nodep);
         UINFO(9, indent() << m_ds.ascii());
+        // After an error V3Param may leave class references parameterized, such as in the
+        // templates it keeps; compilation aborts after this pass
+        if (!m_statep->forPrimary() && nodep->paramsp() && V3Error::errorCount()) {
+            m_ds.m_dotErr = true;
+            return;
+        }
         VL_RESTORER_CLEAR(m_usedPins);
         UASSERT_OBJ(m_statep->forPrimary() || !nodep->paramsp(), nodep,
                     "class reference parameter not removed by V3Param");
@@ -8106,3 +8112,5 @@ void V3LinkDot::linkDotScope(AstNetlist* nodep) {
     linkDotGuts(nodep, LDS_SCOPED);
     V3Global::dumpCheckGlobalTree("linkdot", 0, dumpTreeEitherLevel() >= 3);
 }
+
+string V3LinkDot::nodeTextType(AstNode* nodep) { return LinkDotState::nodeTextType(nodep); }
