@@ -9,7 +9,16 @@
 `define checkp(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got=%p exp=%p (%s != %s)\n", `__FILE__,`__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
 // verilog_format: on
 
-// Unpacked arrays written element by element by NBAs at constant indices
+// Each entry is written by its own process
+interface nba_ifc;
+  logic clk;
+  int cyc;
+  logic [6:0] arr[2];
+  for (genvar i = 0; i < 2; ++i) begin : g_arr
+    always @(posedge clk) if (cyc[1:0] == 2'(i + 1)) arr[i] <= 7'(cyc);
+  end
+endinterface
+
 module t (
     input clk
 );
@@ -210,6 +219,50 @@ module t (
     adjacent[1] <= in[14:8];
   end
 
+  // Dense targets written after the static initializers, other than by their NBAs, keep flag
+  // arrays, as the synced shadow copy is taken once, in an initial block. The writer of 'initw'
+  // is in a later scope, so it runs after that copy.
+  logic [6:0] initw[2];
+  logic [6:0] initwExp[2];
+  initw_writer u_initw_writer ();
+  initial initwExp[1] = 7'h2a;
+  for (genvar i = 0; i < 2; ++i) begin : g_initw
+    always @(posedge clk) if (wr[i] && !(i == 1 && cyc < 4)) initw[i] <= in[6:0] ^ 7'(i);
+  end
+  // Written through a virtual interface handle in an initial block. That write is not checked,
+  // and the DPI export and the public case are not executed; only the scheme counts check them.
+  nba_ifc u_ifc ();
+  assign u_ifc.clk = clk;
+  assign u_ifc.cyc = cyc;
+  class Poker;
+    virtual nba_ifc vif;
+    function new(virtual nba_ifc vif);
+      this.vif = vif;
+    endfunction
+    function void poke();
+      vif.arr[1] = 7'h2a;
+    endfunction
+  endclass
+  initial begin
+    automatic Poker poker = new(u_ifc);
+    poker.poke();
+  end
+  // Written by a DPI export no other code calls
+  logic [6:0] dpiw[2];
+  logic [6:0] dpiwExp[2];
+  export "DPI-C" function dpiwPoke;
+  function void dpiwPoke();
+    dpiw[1] = 7'h2a;
+  endfunction
+  for (genvar i = 0; i < 2; ++i) begin : g_dpiw
+    always @(posedge clk) if (wr[i]) dpiw[i] <= in[20:14] ^ 7'(i);
+  end
+  logic [6:0] pub[2] /*verilator public_flat_rw*/;
+  logic [6:0] pubExp[2];
+  for (genvar i = 0; i < 2; ++i) begin : g_pub
+    always @(posedge clk) if (wr[i]) pub[i] <= in[13:7] ^ 7'(i);
+  end
+
   // Sparse and single-site writes must not allocate full shadow or flag/value arrays.
   logic [6:0] sparse[64] = '{default: 7'h55};
   logic [6:0] sparseExp[64] = '{default: 7'h55};
@@ -252,6 +305,9 @@ module t (
       `checkp(upairs, upairsExp);
       `checkp(two, twoExp);
       `checkp(mixed, mixedExp);
+      `checkp(initw, initwExp);
+      `checkp(pub, pubExp);
+      `checkp(dpiw, dpiwExp);
       `checkp(mgrid, mgridExp);
       `checkp(effect, effectExp);
       `checkp(dynamic, dynamicExp);
@@ -278,6 +334,9 @@ module t (
     twoExp[1] = in[14:8];
     if (wr[1] || wr[2]) twoExp[0] = in[22:16];
     for (int i = 0; i < 2; ++i) if (wr[i]) mixedExp[i] = in[3:0];
+    for (int i = 0; i < 2; ++i) if (wr[i] && !(i == 1 && cyc < 4)) initwExp[i] = in[6:0] ^ 7'(i);
+    for (int i = 0; i < 2; ++i) if (wr[i]) pubExp[i] = in[13:7] ^ 7'(i);
+    for (int i = 0; i < 2; ++i) if (wr[i]) dpiwExp[i] = in[20:14] ^ 7'(i);
     for (int i = 2; i <= 3; ++i)
       for (int j = -2; j <= -1; ++j)
         for (int k = 0; k <= 1; ++k)
@@ -347,5 +406,14 @@ module mixed_dense #(parameter int N = 16) (input clk, input int cyc);
       if (cyc > 0 && !cyc[2] && (cyc[0] || cyc%N == i)) expected[i] = value ^ 7'(i);
       else if (cyc[3]) expected[i] = ~value;
     end
+  end
+endmodule
+
+module initw_writer;
+  // verilator no_inline_module
+  // The second write finds the target already marked
+  initial begin
+    t.initw[1] = 7'h15;
+    t.initw[1] = 7'h2a;
   end
 endmodule
