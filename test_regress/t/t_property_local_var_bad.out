@@ -1,0 +1,74 @@
+%Error: t/t_property_local_var_bad.v:16:30: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   16 |     @(posedge clk) (valid == u[0]) ##1 (1, u = 1) |=> u == 1;
+      |                              ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_local_var_bad.v:21:28: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   21 |     @(posedge clk) (1, v = u) ##1 (1, u = 1) |=> v == 1;
+      |                            ^
+%Error: t/t_property_local_var_bad.v:26:28: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   26 |     @(posedge clk) (1, u = u + 1) |-> ##1 u > 0;
+      |                            ^
+%Error: t/t_property_local_var_bad.v:31:28: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   31 |     @(posedge clk) (valid, u++) |=> u > 0;
+      |                            ^
+%Error: t/t_property_local_var_bad.v:36:28: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   36 |     @(posedge clk) (valid, u += 2) |=> u > 0;
+      |                            ^
+%Error: t/t_property_local_var_bad.v:44:75: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   44 |     @(posedge clk) ((1'b1, x = cyc) ##1 1'b1) intersect (1'b1 ##1 (cyc == x + 1));
+      |                                                                           ^
+%Error: t/t_property_local_var_bad.v:49:38: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   49 |     @(posedge clk) (1'b1 ##1 (cyc == x + 1)) intersect ((1'b1, x = cyc) ##1 1'b1);
+      |                                      ^
+%Error: t/t_property_local_var_bad.v:54:64: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   54 |     @(posedge clk) ((valid, x = cyc) or (1'b0 ##1 valid)) |=> (x == cyc);
+      |                                                                ^
+%Error: t/t_property_local_var_bad.v:61:63: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   61 |     @(posedge clk) ((1'b1, x = cyc) and (1'b1, x = cyc)) |=> (x == cyc);
+      |                                                               ^
+%Error: t/t_property_local_var_bad.v:66:73: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   66 |     @(posedge clk) (((1'b1, x = cyc) or 1'b1) and (1'b1, x = cyc)) |=> (x == cyc);
+      |                                                                         ^
+%Error: t/t_property_local_var_bad.v:73:96: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   73 |     @(posedge clk) (1, x = cyc) ##1 ((((1, x = cyc) and (1, x = cyc)) ##1 valid) or 1'b1) ##1 (x > 0);
+      |                                                                                                ^
+%Error: t/t_property_local_var_bad.v:78:70: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   78 |     @(posedge clk) ((((1, x = cyc) ##1 valid) or 1'b1) or 1'b1) ##1 (x > 0);
+      |                                                                      ^
+%Error: t/t_property_local_var_bad.v:83:71: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   83 |     @(posedge clk) ((((1, x = cyc) ##1 valid) and 1'b1) or 1'b1) ##1 (x > 0);
+      |                                                                       ^
+%Error: t/t_property_local_var_bad.v:90:87: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   90 |                        ##1 (((1, x = cyc) and (1, x = cyc)) ##1 valid)) or 1'b1) ##1 (x > 0);
+      |                                                                                       ^
+%Error: t/t_property_local_var_bad.v:97:78: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+   97 |                        ##1 (((1, x = cyc) ##1 valid) or 1'b1)) or 1'b1) ##1 (x > 0);
+      |                                                                              ^
+%Error: t/t_property_local_var_bad.v:103:92: Local variable 'x' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                           : ... note: In instance 't'
+  103 |     (((1, x = cyc) and (1, x = cyc)) or ((1, x = cyc) ##1 valid ##1 valid ##1 valid)) ##1 (x > 0);
+      |                                                                                            ^
+%Error: t/t_property_local_var_bad.v:110:29: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                           : ... note: In instance 't'
+  110 |     @(posedge clk) ((1, a = u) ##1 1'b1, b = v) |=> (a == b);
+      |                             ^
+%Error: t/t_property_local_var_bad.v:115:38: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
+                                           : ... note: In instance 't'
+  115 |     @(posedge clk) valid ##1 (cyc != u);
+      |                                      ^
+%Error: Exiting due to
