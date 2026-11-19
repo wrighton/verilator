@@ -97,14 +97,15 @@ module t;
   int gclk_rises;
   always @(negedge clk iff $rose_gclk(i.cb.v[0]))++gclk_rises;
   // Ordinary and explicitly clocked nested functions read the same settled input sample.
-  // The first tick depends on the default sampled value (IEEE 1800-2023 16.9.3, 16.5.1),
-  // which 2-state X initialization does not model.
+  // The compiler does not yet model the first-tick default of a nested value change
+  // function, 1'b0 (IEEE 1800-2023 16.5.1, 16.9.3), so nested checks start at tick 1.
   int ordinary_rises, nested_event_stables, nested_body_stables;
   bit ordinary_rise, nested_stable;
   bit expected_rise_now, expected_stable_now, previous_expected_rise;
   int expected_stables;
-  clockvar_child_monitor child(clk);
-  always @(negedge clk iff $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk))) if (edges != 0)++nested_event_stables;
+  clockvar_child_monitor child (clk);
+  always @(negedge clk iff $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk)))
+    if (edges != 0)++nested_event_stables;
   always @(negedge clk) begin
     ordinary_rise = $rose_gclk(i.cb.v[0]);
     ordinary_rises += int'(ordinary_rise);
@@ -188,8 +189,11 @@ module t;
   end
 endmodule
 
-// A child reads the enclosing module's clockvar, not its same-named live signal.
-module clockvar_child_monitor(input logic clk);
+// A child reads its parent's clockvar by hierarchical reference after the parent lifts it.
+module clockvar_child_monitor (
+    input logic clk
+);
+  // The compiler does not yet find a parent's global clocking from this child.
   global clocking @(negedge clk);
   endclocking
   int rises;
