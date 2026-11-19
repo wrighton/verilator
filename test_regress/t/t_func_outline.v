@@ -353,6 +353,154 @@ class MemView extends Base;
   endfunction
 endclass
 
+// A call inlined into a class method resets the automatic variables of the
+// callee where it starts, and each branch uses its own. Moved into separate
+// functions, the branches declare them: the reset of a variable assigned before
+// it is read is deleted, and the reset of one read first moves with its branch.
+function automatic int lsel(int sel, int k);
+  int r;
+  int acc;
+  string t;
+  case (sel)
+    0: begin
+      string s;
+      int cnt;
+      for (int i = 0; i < k; i++) cnt += i * 1;
+      s = $sformatf("%0d", cnt * 3 + 1);
+      r = s.len() + cnt;
+      acc += k;
+      r += acc;
+    end
+    1: begin
+      string s;
+      int cnt;
+      for (int i = 0; i < k; i++) cnt += i * 2;
+      s = $sformatf("%0d", cnt * 5 + 2);
+      r = s.len() + cnt;
+      t = $sformatf("%0d", k);
+      r += t.len();
+    end
+    2: begin
+      string s;
+      int cnt;
+      for (int i = 0; i < k; i++) cnt += i * 3;
+      s = $sformatf("%0d", cnt * 7 + 3);
+      r = s.len() + cnt;
+    end
+    3: begin
+      string s;
+      int cnt;
+      for (int i = 0; i < k; i++) cnt += i * 4;
+      s = $sformatf("%0d", cnt * 9 + 4);
+      r = s.len() + cnt;
+    end
+    4: begin
+      string s;
+      int cnt;
+      for (int i = 0; i < k; i++) cnt += i * 5;
+      s = $sformatf("%0d", cnt * 11 + 5);
+      r = s.len() + cnt;
+    end
+    default: begin
+      string s;
+      int cnt;
+      for (int i = 0; i < k; i++) cnt += i * 6;
+      s = $sformatf("%0d", cnt * 13 + 6);
+      r = s.len() + cnt;
+    end
+  endcase
+  return r;
+endfunction
+
+class Locals;
+  function int run(int sel, int k);
+    return lsel(sel, k);
+  endfunction
+endclass
+
+// Variables assigned in both branches, whose reset where declared is removed
+function automatic int lboth(int n, int m);
+  int t;
+  string s;
+  if (n > m) begin
+    t = n - m;
+    s = "pos";
+  end
+  else begin
+    t = m - n;
+    s = "negative";
+  end
+  t = t * 3 + s.len();
+  t = t ^ (n << 2);
+  t = t + m * 5;
+  return t + s.len();
+endfunction
+
+class LocalsBoth;
+  function int run(int sel, int k);
+    int r;
+    case (sel)
+      0: r = lboth(k, 3) + lboth(k, 5);
+      1: r = lboth(3, k) + lboth(k, 7) * 2;
+      default: r = lboth(k, k + 1) + lboth(k, 9) * 3;
+    endcase
+    return r;
+  endfunction
+endclass
+
+// An inlined call in a branch, with an early return
+function automatic int ltwice(int n);
+  int t;
+  if (n < 0) return 0;
+  t = n * 2;
+  return t;
+endfunction
+
+// Locals also used outside the moved statements, which stay in the function
+class LocalsKept;
+  function int run(int sel, int k);
+    int z;
+    int w;
+    int acc;
+    int t2;
+    int r;
+    if (sel == 1) w = 3;
+    acc = 0;
+    if (sel > 0) begin
+      z = z * 5 + k;
+      z = z * 5 + k;
+      z = z * 5 + k;
+      z = z * 5 + k;
+      r = z + w;
+      r = r * 3 + k;
+      r = r * 3 + k;
+      r = r * 3 + k;
+      r = r * 3 + k;
+      r = r * 3 + ltwice(k);
+    end
+    t2 = 0;
+    for (int i = 0; i < k; i++) begin
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      acc = acc * 3 + i;
+      t2 = t2 * 7 + i;
+      t2 = t2 * 7 + i;
+      acc = acc + t2;
+    end
+    z = 7;
+    return r + acc + z + t2;
+  endfunction
+endclass
+
 // A coroutine, whose statements at the top level move, but not the one keeping
 // 'this' alive after the last handle to the object is gone
 class Timed;
@@ -835,6 +983,56 @@ module t;
     `checkd(dexp_calls, 2);
     `checkd(dexp_same, 1'b1);
     `checkd(pubf(seed + 2, 1), mix(seed + 3));
+    begin : inlined_locals
+      automatic Locals l = new;
+      for (int sel = 0; sel < 6; sel++) begin
+        // Twice, as each call starts with the variables reset
+        for (int rep = 0; rep < 2; rep++) begin
+          automatic int cnt = (sel + 1) * seed * (seed - 1) / 2;
+          automatic string s = $sformatf("%0d", cnt * (2 * sel + 3) + sel + 1);
+          automatic string t = $sformatf("%0d", seed);
+          automatic int exp = s.len() + cnt + (sel == 0 ? seed : 0) + (sel == 1 ? t.len() : 0);
+          `checkd(l.run(sel, seed), exp);
+        end
+      end
+    end
+    begin : inlined_locals_both
+      automatic LocalsBoth l = new;
+      automatic int ns[6] = '{seed, seed, 3, seed, seed, seed};
+      automatic int ms[6] = '{3, 5, seed, 7, seed + 1, 9};
+      for (int sel = 0; sel < 3; sel++) begin
+        automatic int v[2];
+        for (int i = 0; i < 2; i++) begin
+          automatic int n = ns[sel * 2 + i];
+          automatic int m = ms[sel * 2 + i];
+          automatic int len = n > m ? 3 : 8;
+          v[i] = ((((n > m ? n - m : m - n) * 3 + len) ^ (n << 2)) + m * 5) + len;
+        end
+        `checkd(l.run(sel, seed), v[0] + v[1] * (sel == 0 ? 1 : sel == 1 ? 2 : 3));
+      end
+    end
+    begin : inlined_locals_kept
+      automatic LocalsKept l = new;
+      for (int sel = 0; sel < 3; sel++) begin
+        automatic int z = 0;
+        automatic int w = sel == 1 ? 3 : 0;
+        automatic int acc = 0;
+        automatic int t2 = 0;
+        automatic int r = 0;
+        if (sel > 0) begin
+          for (int i = 0; i < 4; i++) z = z * 5 + seed;
+          r = z + w;
+          for (int i = 0; i < 4; i++) r = r * 3 + seed;
+          r = r * 3 + seed * 2;
+        end
+        for (int i = 0; i < seed; i++) begin
+          for (int j = 0; j < 12; j++) acc = acc * 3 + i;
+          for (int j = 0; j < 2; j++) t2 = t2 * 7 + i;
+          acc = acc + t2;
+        end
+        `checkd(l.run(sel, seed), r + acc + 7 + t2);
+      end
+    end
     begin : coroutine
       Timed::s_handle = new;
       Timed::s_handle.run(seed + 4);
