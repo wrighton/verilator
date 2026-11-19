@@ -16,11 +16,13 @@ test.compile(verilator_flags2=["--binary --output-split-cfuncs 100 --stats"])
 # VL_KEEP_THIS stays in the coroutine, not in a function made from it
 files = test.glob_some(test.obj_dir + "/" + test.vm_prefix + "*.cpp")
 test.file_grep_any(files, r'::__VnoInFunc_run\([^{]*\{[^}]*VL_KEEP_THIS;')
+# Also in the forked process
+test.file_grep_any(files, r'::__VnoInFunc_run____Vfork_\d+__\d+\([^{]*\{[^}]*VL_KEEP_THIS;')
 
 test.execute()
 
-test.file_grep(test.stats, r'Outline, functions created\s+(\d+)', 109)
+test.file_grep(test.stats, r'Outline, functions created\s+(\d+)', 123)
 test.file_grep(test.stats, r'Outline, variables declared in functions created\s+(\d+)', 43)
-test.file_grep(test.stats, r'Outline, variables passed to functions created\s+(\d+)', 180)
+test.file_grep(test.stats, r'Outline, variables passed to functions created\s+(\d+)', 194)
 
 test.passes()
