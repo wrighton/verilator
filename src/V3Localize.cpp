@@ -21,8 +21,8 @@
 //             if non-public, always written before used, make it local
 //      All functions:
 //          VAR local to the function
-//             if only referenced in one C++ scope, which writes it before any other
-//             reference, make it local to the scope
+//             if only referenced in one C++ scope or 'if' branch, which writes it before
+//             any other reference, make it local to that, with a C++ scope around a branch
 //
 //*************************************************************************
 
@@ -33,6 +33,7 @@
 #include "V3Stats.h"
 #include "V3VNUserAllocator.h"
 
+#include <deque>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -261,30 +262,48 @@ public:
 // LocalizeScopeVisitor
 
 class LocalizeScopeVisitor final : public VNVisitor {
-    // Move a local of a function into the C++ scope (AstCLocalScope, such as that of an
-    // inlined call) containing all its references, if a statement of the scope assigns the whole
-    // variable before any other reference to it. A value from before the scope is then never
-    // read, so the variable can be made each time the scope runs, rather than each time the
-    // function runs.
+    // Move a local of a function into the innermost C++ scope (AstCLocalScope, such as that of
+    // an inlined call) or branch of an 'if' containing all its references, if a statement
+    // directly there assigns the whole variable before any other reference to it. A value from
+    // before is then never read, so the variable can be made each time the scope or branch
+    // runs, rather than each time the function runs. A branch gets a C++ scope around it. For
+    // each point that may throw, the C++ compiler then destroys only the variables of the
+    // scopes around it, rather than all variables of the function. A branch is not used in a
+    // loop inside the C++ scope or function around it, where the variable would be made for
+    // each iteration rather than once.
+
+    // TYPES
+    // A C++ scope or branch of an 'if', in the current function
+    struct Region final {
+        Region* const m_abovep;  // Region it is in, nullptr for the function
+        AstCLocalScope* m_cscopep;  // The C++ scope, nullptr for a branch until it needs one
+        AstIf* const m_ifp;  // For a branch, its 'if'
+        const bool m_else;  // For a branch, the 'else' branch, else the 'then' branch
+        const bool m_inLoop;  // For a branch, in a loop inside the C++ scope around it
+        // While the visit is in it, itself, else the region it is in, so following these finds
+        // the innermost region containing it that the visit is in
+        Region* m_upp = nullptr;
+    };
 
     // NODE STATE
-    //  AstVar::user1p()    ->  AstNode*. Innermost AstCLocalScope of all references so far,
-    //                          or the AstCFunc if a reference is in no scope or another one
-    //  AstVar::user2()     ->  bool. First reference assigns the whole variable, in a
-    //                          statement directly under a scope
+    //  AstVar::user1p()    ->  Region*. Innermost region containing all references so far
+    //  AstVar::user2p()    ->  Region*. Region directly holding the first reference, if it
+    //                          assigns the whole variable, else nullptr
     const VNUser1InUse m_user1InUse;
     const VNUser2InUse m_user2InUse;
 
     // STATE - for current visit position (use VL_RESTORER)
-    AstCFunc* m_cfuncp = nullptr;  // Current function
-    AstNode* m_scopep = nullptr;  // Innermost AstCLocalScope, or m_cfuncp
+    Region* m_regionp = nullptr;  // Innermost region
+    bool m_inLoop = false;  // In a loop inside the innermost C++ scope
 
     // STATE - across all visitors
+    std::deque<Region> m_regions;  // Regions of the current function, the first one being it
     VDouble0 m_statScopeVars;  // Statistic tracking
+    VDouble0 m_statScopes;  // Statistic tracking
 
     // METHODS
-    // Visit a statement directly under a scope
-    void visitScopeStmt(AstNode* stmtp) {
+    // Visit a statement directly in the current region
+    void visitRegionStmt(AstNode* stmtp) {
         // The statements that assign a whole variable: '=' and '$sformat'. Their right hand
         // side is evaluated before the variable is written, and is visited once, as it may hold
         // nested inlined calls.
@@ -303,41 +322,90 @@ class LocalizeScopeVisitor final : public VNVisitor {
             iterate(stmtp);
             return;
         }
-        iterate(rhsp);
-        if (!refp->varp()->user1p()) refp->varp()->user2(true);
+        iterateAndNextNull(rhsp);
+        if (!refp->varp()->user1p()) refp->varp()->user2p(m_regionp);
         iterate(refp);
+    }
+    // Visit the statements 'stmtsp' of a new region
+    void visitRegion(AstCLocalScope* cscopep, AstIf* ifp, bool isElse, AstNode* stmtsp) {
+        VL_RESTORER(m_regionp);
+        m_regions.push_back(Region{m_regionp, cscopep, ifp, isElse, m_inLoop});
+        m_regionp = &m_regions.back();
+        m_regionp->m_upp = m_regionp;
+        for (AstNode *stmtp = stmtsp, *nextp; stmtp; stmtp = nextp) {
+            nextp = stmtp->nextp();
+            visitRegionStmt(stmtp);
+        }
+        m_regionp->m_upp = m_regionp->m_abovep;
+    }
+    // The innermost region containing 'regionp' and the current position, which is in the
+    // regions the visit is in. Halving the paths followed keeps them short over all calls.
+    static Region* common(Region* regionp) {
+        while (regionp->m_upp != regionp) {
+            regionp->m_upp = regionp->m_upp->m_upp;
+            regionp = regionp->m_upp;
+        }
+        return regionp;
+    }
+    // The C++ scope of 'regionp', made around its branch if needed
+    AstCLocalScope* makeCScope(Region* regionp) {
+        if (regionp->m_cscopep) return regionp->m_cscopep;
+        AstIf* const ifp = regionp->m_ifp;
+        AstNode* const stmtsp = regionp->m_else ? ifp->elsesp() : ifp->thensp();
+        regionp->m_cscopep = new AstCLocalScope{stmtsp->fileline(),
+                                                VN_AS(stmtsp->unlinkFrBackWithNext(), NodeStmt)};
+        if (regionp->m_else) {
+            ifp->addElsesp(regionp->m_cscopep);
+        } else {
+            ifp->addThensp(regionp->m_cscopep);
+        }
+        ++m_statScopes;
+        return regionp->m_cscopep;
     }
 
     // VISITORS
     void visit(AstCFunc* nodep) override {
-        VL_RESTORER(m_cfuncp);
-        VL_RESTORER(m_scopep);
-        m_cfuncp = nodep;
-        m_scopep = nodep;
+        // The regions of the previous function are gone
+        VNUser1InUse::clear();
+        VNUser2InUse::clear();
+        VL_RESTORER(m_regionp);
+        VL_RESTORER(m_inLoop);
+        m_regions.push_back(Region{nullptr, nullptr, nullptr, false, false});
+        m_regionp = &m_regions.back();
+        m_regionp->m_upp = m_regionp;
+        m_inLoop = false;
         iterateChildren(nodep);
         for (AstVar *varp = nodep->varsp(), *nextp; varp; varp = nextp) {
             nextp = VN_AS(varp->nextp(), Var);
-            AstCLocalScope* const scopep = VN_CAST(varp->user1p(), CLocalScope);
-            if (!scopep || !varp->user2()) continue;
-            scopep->addVarsp(varp->unlinkFrBack());
+            Region* const regionp = varp->user1u().to<Region*>();
+            if (!regionp || !regionp->m_abovep || regionp->m_inLoop
+                || varp->user2u().to<Region*>() != regionp) {
+                continue;
+            }
+            makeCScope(regionp)->addVarsp(varp->unlinkFrBack());
             ++m_statScopeVars;
         }
+        m_regions.clear();
     }
     void visit(AstCLocalScope* nodep) override {
-        VL_RESTORER(m_scopep);
-        m_scopep = nodep;
-        for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
-            nextp = stmtp->nextp();
-            visitScopeStmt(stmtp);
-        }
+        VL_RESTORER(m_inLoop);
+        m_inLoop = false;
+        visitRegion(nodep, nullptr, false, nodep->stmtsp());
+    }
+    void visit(AstLoop* nodep) override {
+        VL_RESTORER(m_inLoop);
+        m_inLoop = true;
+        iterateChildren(nodep);
+    }
+    void visit(AstIf* nodep) override {
+        iterateAndNextNull(nodep->condp());
+        visitRegion(nullptr, nodep, false, nodep->thensp());
+        visitRegion(nullptr, nodep, true, nodep->elsesp());
     }
     void visit(AstVarRef* nodep) override {
         AstVar* const varp = nodep->varp();
-        if (!varp->user1p()) {
-            varp->user1p(m_scopep);
-        } else if (varp->user1p() != m_scopep) {
-            varp->user1p(m_cfuncp);
-        }
+        Region* const regionp = varp->user1u().to<Region*>();
+        varp->user1p(regionp ? common(regionp) : m_regionp);
     }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
@@ -345,6 +413,7 @@ public:
     // CONSTRUCTORS
     explicit LocalizeScopeVisitor(AstNetlist* nodep) { iterate(nodep); }
     ~LocalizeScopeVisitor() override {
+        V3Stats::addStat("Optimizations, C++ scopes made for localized vars", m_statScopes);
         V3Stats::addStat("Optimizations, Vars localized to C++ scopes", m_statScopeVars);
     }
 };

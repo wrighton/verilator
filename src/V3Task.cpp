@@ -18,6 +18,7 @@
 // Each module:
 //      Look for TASKREF
 //          Insert task's statements into the referrer
+//          In a function, move the resets of its variables to the branches using them
 //          Look for getters (class methods that can be replaced
 //          with a member reference)
 //      Look for TASKs
@@ -42,6 +43,7 @@
 #include "V3SharedTmps.h"
 #include "V3Stats.h"
 
+#include <deque>
 #include <string>
 #include <tuple>
 
@@ -475,6 +477,121 @@ struct TaskDpiUtils final {
 };
 
 //######################################################################
+// Move the resets of the automatic variables of an inlined call to where they are used
+
+class TaskSinkResetsVisitor final : public VNVisitorConst {
+    // A reset, assigning a constant to a variable of the call directly in its body, of a
+    // variable only referenced elsewhere in one branch of an 'if' under a later statement of the
+    // body only through 'if's, moves to the start of that branch. The branch runs at most once
+    // after the reset, and nothing else references the variable, so it has the same value there,
+    // and V3Localize can then make it a variable of the branch, made only when the branch runs.
+    // This is done here, as only here are the variables of the call known, and before
+    // V3Outline, which could otherwise move the reset and the branch into different functions.
+
+    // TYPES
+    struct Branch final {
+        Branch* const m_abovep;  // Branch it is in, nullptr for the body
+        AstIf* const m_ifp;  // Its 'if'
+        const bool m_else;  // The 'else' branch, else the 'then' branch
+        // While the visit is in it, itself, else the branch it is in, so following these
+        // finds the innermost branch containing it that the visit is in
+        Branch* m_upp = nullptr;
+    };
+
+    // STATE
+    std::deque<Branch> m_branches;  // The branches
+    Branch* m_branchp = nullptr;  // Innermost branch, nullptr for the body
+    bool m_barred = false;  // In a statement other than an 'if', which may run repeatedly
+    size_t m_index = 0;  // Index of the statement of the body being visited
+    std::vector<AstAssign*> m_resetps;  // Resets in the body, in order
+    struct VarState final {
+        size_t m_resetIndex = 0;  // Index of the statement of the reset in the body
+        bool m_seen = false;  // Another reference was seen
+        size_t m_firstIndex = 0;  // Index of the statement in the body of the first one
+        Branch* m_branchp = nullptr;  // Innermost branch of them, nullptr for the body
+    };
+    std::unordered_map<const AstVar*, VarState> m_vars;  // The variable of each reset
+    size_t m_moved = 0;  // Number of resets moved
+
+    // VISITORS
+    void visit(AstIf* nodep) override {
+        if (m_barred) {
+            iterateChildrenConst(nodep);
+            return;
+        }
+        iterateAndNextConstNull(nodep->condp());
+        for (const bool isElse : {false, true}) {
+            AstNode* const stmtsp = isElse ? nodep->elsesp() : nodep->thensp();
+            if (!stmtsp) continue;
+            VL_RESTORER(m_branchp);
+            m_branches.push_back(Branch{m_branchp, nodep, isElse});
+            m_branchp = &m_branches.back();
+            m_branchp->m_upp = m_branchp;
+            iterateAndNextConstNull(stmtsp);
+            m_branchp->m_upp = m_branchp->m_abovep;
+        }
+    }
+    void visit(AstNodeStmt* nodep) override {
+        VL_RESTORER(m_barred);
+        m_barred = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstVarRef* nodep) override {
+        const auto it = m_vars.find(nodep->varp());
+        if (it == m_vars.end()) return;
+        VarState& state = it->second;
+        if (!state.m_seen) {
+            state.m_seen = true;
+            state.m_firstIndex = m_index;
+            state.m_branchp = m_branchp;
+            return;
+        }
+        // The innermost branch containing both, as the branches the visit is in contain this
+        // reference. Halving the paths followed makes this take near linear time overall.
+        Branch*& branchp = state.m_branchp;
+        while (branchp && branchp->m_upp != branchp) {
+            if (Branch* const upp = branchp->m_upp) branchp->m_upp = upp->m_upp;
+            branchp = branchp->m_upp;
+        }
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    // 'localps' are the variables of the call, which nothing outside its body 'bodyp' references
+    TaskSinkResetsVisitor(AstNode* bodyp, const std::unordered_set<const AstVar*>& localps) {
+        size_t index = 0;
+        for (AstNode* nodep = bodyp; nodep; nodep = nodep->nextp(), ++index) {
+            AstAssign* const assignp = VN_CAST(nodep, Assign);
+            if (!assignp || (!VN_IS(assignp->rhsp(), Const) && !VN_IS(assignp->rhsp(), CReset))) {
+                continue;
+            }
+            const AstVarRef* const refp = VN_CAST(assignp->lhsp(), VarRef);
+            if (!refp || !localps.count(refp->varp())) continue;
+            // The first reset of each variable; any other is another reference
+            if (!m_vars.emplace(refp->varp(), VarState{index}).second) continue;
+            m_resetps.push_back(assignp);
+        }
+        if (m_resetps.empty()) return;
+        const std::unordered_set<const AstNode*> resetps{m_resetps.begin(), m_resetps.end()};
+        for (AstNode* nodep = bodyp; nodep; nodep = nodep->nextp(), ++m_index) {
+            if (!resetps.count(nodep)) iterateConst(nodep);
+        }
+        for (AstAssign* const assignp : m_resetps) {
+            const VarState& state = m_vars[VN_AS(assignp->lhsp(), VarRef)->varp()];
+            Branch* const branchp = state.m_branchp;
+            // Not if another reference comes first, as for an event, not reset where declared
+            if (!branchp || state.m_firstIndex < state.m_resetIndex) continue;
+            AstIf* const ifp = branchp->m_ifp;
+            AstNode* const stmtsp = branchp->m_else ? ifp->elsesp() : ifp->thensp();
+            stmtsp->addHereThisAsNext(assignp->unlinkFrBack());
+            ++m_moved;
+        }
+    }
+    size_t moved() const { return m_moved; }
+};
+
+//######################################################################
 // Task state, as a visitor of each AstNode
 
 class TaskVisitor final : public VNVisitor {
@@ -526,7 +643,10 @@ class TaskVisitor final : public VNVisitor {
     std::map<std::string, const AstStructDType*> m_dpiStructs;  // C names of DPI structures
     std::map<const AstEnumDType*, size_t> m_enumNumbers;  // Unique numbers of enum types
     VDouble0 m_statInlines;  // Statistic tracking
+    // Variables of the call createInlinedFTask inlined last, other than its ports
+    std::unordered_set<const AstVar*> m_inlineLocalps;
     VDouble0 m_statAutoLocals;  // Statistic tracking
+    VDouble0 m_statResetsMoved;  // Statistic tracking
     VDouble0 m_statGetters;  // Statistic tracking
     VDouble0 m_statHierDpisWithCosts;  // Statistic tracking
 
@@ -891,6 +1011,7 @@ class TaskVisitor final : public VNVisitor {
     AstNodeStmt* createInlinedFTask(AstNodeFTaskRef* refp, AstVarScope* outvscp) {
         // outvscp is the variable for functions only, if nullptr, it's a task
         UASSERT_OBJ(refp->taskp(), refp, "Unlinked?");
+        m_inlineLocalps.clear();
         // Clone the declarations and statements together, so the statements refer to the clones
         AstNodeFTask* const taskClonep = refp->taskp()->cloneTree(false);
         AstVar* const fvarp = outvscp ? taskClonep->fvarp() : nullptr;
@@ -932,6 +1053,7 @@ class TaskVisitor final : public VNVisitor {
                         AstVarScope* const localVscp
                             = createVarScope(refp, portp, "__" + portp->shortName());
                         portp->user2p(localVscp);
+                        m_inlineLocalps.emplace(localVscp->varp());
                         if (portp->needsCReset() && portp->lifetime().isAutomatic()
                             && !portp->valuep()) {
                             // Reset automatic var to its default, on each invocation of function
@@ -2309,9 +2431,12 @@ class TaskVisitor final : public VNVisitor {
             beginp = createNonInlinedFTask(nodep, outvscp, cnewp /*ref*/);
         } else {
             beginp = createInlinedFTask(nodep, outvscp);
-            // In a function, put the body in a C++ scope, so V3Localize can make its variables
-            // locals of the scope, made only when the call runs
-            if (m_cfuncp) beginp = new AstCLocalScope{nodep->fileline(), beginp};
+            if (m_cfuncp) {
+                m_statResetsMoved += TaskSinkResetsVisitor{beginp, m_inlineLocalps}.moved();
+                // In a function, put the body in a C++ scope, so V3Localize can make its
+                // variables locals of the scope, made only when the call runs
+                beginp = new AstCLocalScope{nodep->fileline(), beginp};
+            }
             ++m_statInlines;
         }
 
@@ -2520,6 +2645,8 @@ public:
     ~TaskVisitor() {
         V3Stats::addStat("Optimizations, Functions inlined", m_statInlines);
         V3Stats::addStat("Tasks, Automatic variables local to functions", m_statAutoLocals);
+        V3Stats::addStat("Tasks, Automatic variable resets moved into branches",
+                         m_statResetsMoved);
         V3Stats::addStat("Optimizations, Function getters replaced with reads", m_statGetters);
         V3Stats::addStat("Optimizations, Hierarchical DPI wrappers with costs",
                          m_statHierDpisWithCosts);

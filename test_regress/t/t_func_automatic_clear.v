@@ -117,6 +117,84 @@ module t;
     endfunction
   endclass
 
+  // The variables of a call inlined in a class method, used only in one branch, are reset and
+  // made in that branch
+  function automatic int t_branchy(int sel, int n);
+    int r;
+    int cnt;
+    int acc;
+    string s;
+    if (sel == 0) begin
+      cnt += n;
+      r = cnt;
+    end else begin
+      for (int i = 0; i < n; ++i) begin
+        s = $sformatf("%0d", i);
+        if (i > 0) acc += s.len();
+      end
+      r = acc;
+    end
+    return r;
+  endfunction
+
+  // Resets that stay where they are (of an output, reset again, used in two branches, or
+  // assigned to an element), and one moved into an 'else' branch
+  function automatic void t_kept(int sel, output int o, output int p);
+    int twice = 1;
+    int arr[3];
+    string other;
+    int both;
+    twice = 2;
+    arr[2] = 1;
+    o = 0;
+    if (sel == 0) begin
+      arr[sel] = arr[sel] + 3;
+      if (twice == 2) both = 1;
+      o = twice + arr[0] + both;
+    end
+    if (sel == 1) p = arr[1] + 4 + both;
+    else p = arr[2] + 5;
+    if (sel == 2) begin
+      p = 7;
+    end else begin
+      other = $sformatf("%0d", sel);
+      p = p + other.len();
+    end
+  endfunction
+
+  class ClsBranchy;
+    function int run(int sel, int n);
+      int r = 0;
+      // Each call starts with its variables reset
+      for (int k = 0; k < 2; ++k) begin
+        string t;
+        t = $sformatf("%0d", k + n);
+        r += t_branchy(sel, n) + t.len();
+      end
+      // A variable used only in a branch in a loop stays in the function
+      for (int k = 0; k < n; ++k) begin
+        if (k == 1) begin
+          string u;
+          u = $sformatf("%0d", k);
+          r += u.len();
+        end
+      end
+      return r;
+    endfunction
+    function int kept(int sel);
+      int o;
+      int p;
+      int r = 0;
+      // Each call starts with its variables reset
+      t_kept(sel, o, p);
+      r += o * 10 + p;
+      t_kept(sel, o, p);
+      r += o * 10 + p;
+      if (sel == 0) r += t_branchy(1, 2) * 1000;
+      return r;
+    endfunction
+  endclass
+
   // A call of a function inlined in a class method, after all its paths have returned
   class ClsDead;
     int m_x = 1;
@@ -240,6 +318,14 @@ module t;
         if (z[j] != 0) cnt = cnt + 1;
       end
       `checkh(cnt, 1);
+    end
+
+    begin
+      ClsBranchy c = new;
+      `checkh(c.run(0, 5), 13);
+      `checkh(c.run(1, 12), 31);
+      `checkh(c.kept(0), 2 * (60 + 7) + 1000);
+      `checkh(c.kept(1), 2 * 5);
     end
 
     begin
