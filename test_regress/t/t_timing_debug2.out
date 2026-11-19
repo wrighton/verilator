@@ -426,16 +426,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:103
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:103
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:103
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -454,16 +448,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:103
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:103
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:103
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -490,16 +478,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:103
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:103
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:103
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -525,16 +507,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:103
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:103
 -V{t#,#}         Process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:103 awaiting resumption
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -552,17 +528,11 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_act
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
+-V{t#,#}         Suspended processes waiting on event wait lists:
+-V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -579,16 +549,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -615,16 +579,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -655,16 +613,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -681,16 +633,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -717,16 +663,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -752,16 +692,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:104
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:104
 -V{t#,#}         Process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:104 awaiting resumption
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -779,17 +713,11 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_act
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:105
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
+-V{t#,#}         Suspended processes waiting on event wait lists:
+-V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:105
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:105
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -806,16 +734,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:105
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:105
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:105
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -842,16 +764,10 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:105
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
+-V{t#,#}         Suspended processes waiting on event wait lists:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:105
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:105
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Suspending process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
@@ -878,16 +794,8 @@
 -V{t#,#}+    Vt_timing_debug2___024root___eval_triggers_vec__act
 -V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
 -V{t#,#}           - Process waiting at t/t_timing_class.v:105
--V{t#,#}         Suspended processes waiting for dynamic trigger evaluation:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
 -V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:105
 -V{t#,#}         Suspending process waiting for @(posedge t::ClkClass.clk) at t/t_timing_class.v:105
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting the post update step
--V{t#,#}         Doing post updates for processes:
--V{t#,#}           - Process waiting at t/t_timing_class.v:40
--V{t#,#}             Resuming: Process waiting at t/t_timing_class.v:40
--V{t#,#}         Process waiting for @([event] t::EventClass.e) at t/t_timing_class.v:40 awaiting resumption
 -V{t#,#}+    Vt_timing_debug2___024root___timing_ready
 -V{t#,#}+    Vt_timing_debug2___024root___trigger_orInto__act_vec_vec
 -V{t#,#}+    Vt_timing_debug2___024root___dump_triggers__act
