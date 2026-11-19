@@ -71,7 +71,10 @@
 // The possible NBA Schemes:
 // "Shadow variable" scheme. Used for target variables in ordered code
 // (clocked logic) that have no blocking writes, other than unpacked arrays
-// updated only by element:
+// updated only by element, unless those updates are dense (see "Flag array")
+// and the array has no more bytes than a quad word per NBA site, as copying
+// it then costs about as much as the per-site flag clears of the "Shared
+// flag" scheme:
 //   LHS <= RHS;
 // is converted to:
 //  - Add new "Pre-scheduled" logic:
@@ -110,10 +113,12 @@
 // Multiple consecutive NBAs of compatible form can share the same __Vdly_Set* flag
 //
 // "Flag array" scheme. Used instead of shared flags for dense, constant-index
-// whole-element updates in ordered code. One array of flags and one array of
-// captured values replace the per-NBA temporaries. Dense means at least as
-// many NBA sites as total array elements, and more than one site. The flag
-// temporaries start zeroed, and each committed element clears its flag:
+// whole-element updates in ordered code, when the target also has blocking
+// writes, which a shadow copy would overwrite, more than a quad word per NBA
+// site, or string elements. One array of flags and one array of captured
+// values replace the per-NBA temporaries. Dense means at least as many NBA
+// sites as total array elements, and more than one site.
+// The flag temporaries start zeroed, and each committed element clears its flag:
 //   LHS[1][2] <= RHS
 // becomes, at the original NBA:
 //   __Vdly_Val__LHS[1][2] = RHS;
@@ -935,6 +940,22 @@ class DelayedAnalysis final : public DelayedBase {
         return nNbas != 0;
     }
 
+    // Whether one copy of the whole array has no more than a quad word per NBA site, so the
+    // copies before and after its updates cost about as much as the per-site flag clears of
+    // the shared flag scheme. Strings have no fixed size, so their copies are not bounded.
+    // Divide the budget per dimension rather than multiplying dimensions, which can overflow.
+    static bool shadowCopyFits(const AstUnpackArrayDType* dtypep, uint32_t nNbas) {
+        static constexpr uint64_t COPY_BYTES_PER_NBA = sizeof(uint64_t);
+        if (dtypep->basicp()->isString()) return false;
+        uint64_t budget = nNbas * COPY_BYTES_PER_NBA;
+        const AstNodeDType* elemp = dtypep;
+        while (const AstUnpackArrayDType* const arrayp = VN_CAST(elemp, UnpackArrayDType)) {
+            budget /= arrayp->elementsConst();
+            elemp = arrayp->subDTypep()->skipRefp();
+        }
+        return static_cast<uint64_t>(elemp->widthTotalBytes()) <= budget;
+    }
+
     // Choose the NBA scheme used for the given variable.
     Scheme chooseScheme(const AstVarScope* vscp, const TargetInfo& targetInfo) {
         UASSERT_OBJ(targetInfo.m_scheme == Scheme::Undecided, vscp, "NBA scheme already decided");
@@ -955,11 +976,17 @@ class DelayedAnalysis final : public DelayedBase {
         if (uaDTypep && !targetInfo.m_whole) {
             // How many times a loop executes is not known, so must use a dynamic queue
             if (targetInfo.m_inLoop) return Scheme::GenericLocal;
-            // For dense constant-index whole-element updates, bound the number of model
-            // members with arrays of flags and values. Otherwise retain shared flags.
+            // Dense constant-index whole-element updates have no more array elements than
+            // NBA sites. Without blocking writes, which the post copy would overwrite, a
+            // shadow copy needs no flags, when copying the array twice per trigger is cheap.
+            // Otherwise bound the number of model members with arrays of flags and values.
+            // Sparse updates retain shared flags.
             if (uaDTypep->basicp()) {
                 if (targetInfo.m_constElems && targetInfo.m_nNbas > 1
                     && flagArraysFit(uaDTypep, targetInfo.m_nNbas)) {
+                    if (!targetInfo.m_mixed && shadowCopyFits(uaDTypep, targetInfo.m_nNbas)) {
+                        return Scheme::ShadowVar;
+                    }
                     return Scheme::FlagArray;
                 }
                 return Scheme::FlagShared;
