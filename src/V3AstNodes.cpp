@@ -2750,6 +2750,10 @@ void AstNodeCCall::dumpJson(std::ostream& str) const {
     dumpJsonGen(str);
 }
 bool AstNodeCCall::isPure() { return funcp()->dpiPure(); }
+bool AstNodeCCall::passesVlProcess() const {
+    // A coroutine called without co_await, such as a forked process, gets a new process
+    return funcp()->needsVlProcess() && funcp()->isCoroutine() == VN_IS(backp(), CAwait);
+}
 void AstNodeCons::dump(std::ostream& str) const {
     Super::dump(str);
     if (m_knownConstantTree) str << " [CONSTTREE]";
