@@ -389,6 +389,7 @@ void V3ParseImp::parseFile(
     m_bisonLastFileline = m_lexFileline;
     m_inLibrary = inLibrary;
     m_inLibMap = inLibMap;
+    m_stdPackageInput = modfilename == V3Options::getStdPackagePath();
     m_libname = libname;
 
     // Preprocess into m_ppBuffer
