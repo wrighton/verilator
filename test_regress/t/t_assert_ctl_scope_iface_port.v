@@ -332,6 +332,28 @@ module sfe (
   initial foreach (arr[i]) if (i == 0) $assertoff(0, p.a1);
 endmodule
 
+// Package code naming one of its own tasks as the scope (IEEE 1800-2023 20.11, 26.2): it has no
+// instances (pins V3LinkDot assertControlThroughPort's package fallback, and the old path's
+// "instance symbol is null: a package is not an instance" arm). An untargeted task keeps counting.
+package pkc_ctl;
+  int n = 0;
+  int m = 0;
+  task automatic chk(input bit v);
+    a1 :
+    assert (v)
+    else n++;
+  endtask
+  task automatic chk2(input bit v);
+    a2 :
+    assert (v)
+    else m++;
+  endtask
+  task automatic off();
+    // The child path is "$root.chk" in dumps; a task holds no cells, so it selects this task
+    $assertoff(0, chk);
+  endtask
+endpackage
+
 module t;
   logic clk = 0;
   int cyc = 0;
@@ -510,6 +532,18 @@ module t;
   ifc td2 (.clk(clk));
   sfe std0 (.p(td0));
   sfe std1 (.p(td2));
+
+  initial begin
+    pkc_ctl::chk(0);
+    pkc_ctl::chk2(0);
+    `checkd(pkc_ctl::n, 1);
+    `checkd(pkc_ctl::m, 1);
+    pkc_ctl::off();
+    pkc_ctl::chk(0);
+    pkc_ctl::chk2(0);
+    `checkd(pkc_ctl::n, 1);
+    `checkd(pkc_ctl::m, 2);
+  end
 
   always #5 clk = ~clk;
   always @(posedge clk) begin
