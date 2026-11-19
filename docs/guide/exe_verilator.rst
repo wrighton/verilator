@@ -1674,7 +1674,6 @@ Summary:
    and tasks and functions that are not inlined, such as class methods,
    are also split, including inside nested statements such as the items
    of a case statement, by moving parts of them into separate functions.
-   Public tasks and functions are not split.
 
    Defaults to the value of :vlopt:`--output-split`, unless explicitly
    specified.
