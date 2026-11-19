@@ -19,6 +19,10 @@
 //             if only referenced in one CFUNC, make it local
 //          VARSCOPE
 //             if non-public, always written before used, make it local
+//      All functions:
+//          VAR local to the function
+//             if only referenced in one C++ scope, which writes it before any other
+//             reference, make it local to the scope
 //
 //*************************************************************************
 
@@ -254,10 +258,103 @@ public:
 };
 
 //######################################################################
+// LocalizeScopeVisitor
+
+class LocalizeScopeVisitor final : public VNVisitor {
+    // Move a local of a function into the C++ scope (AstCLocalScope, such as that of an
+    // inlined call) containing all its references, if a statement of the scope assigns the whole
+    // variable before any other reference to it. A value from before the scope is then never
+    // read, so the variable can be made each time the scope runs, rather than each time the
+    // function runs.
+
+    // NODE STATE
+    //  AstVar::user1p()    ->  AstNode*. Innermost AstCLocalScope of all references so far,
+    //                          or the AstCFunc if a reference is in no scope or another one
+    //  AstVar::user2()     ->  bool. First reference assigns the whole variable, in a
+    //                          statement directly under a scope
+    const VNUser1InUse m_user1InUse;
+    const VNUser2InUse m_user2InUse;
+
+    // STATE - for current visit position (use VL_RESTORER)
+    AstCFunc* m_cfuncp = nullptr;  // Current function
+    AstNode* m_scopep = nullptr;  // Innermost AstCLocalScope, or m_cfuncp
+
+    // STATE - across all visitors
+    VDouble0 m_statScopeVars;  // Statistic tracking
+
+    // METHODS
+    // Visit a statement directly under a scope
+    void visitScopeStmt(AstNode* stmtp) {
+        // The statements that assign a whole variable: '=' and '$sformat'. Their right hand
+        // side is evaluated before the variable is written, and is visited once, as it may hold
+        // nested inlined calls.
+        AstNodeExpr* lhsp = nullptr;
+        AstNode* rhsp = nullptr;
+        if (AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+            UASSERT_OBJ(!assignp->timingControlp(), assignp, "Timing control after V3Timing");
+            lhsp = assignp->lhsp();
+            rhsp = assignp->rhsp();
+        } else if (AstSFormat* const sformatp = VN_CAST(stmtp, SFormat)) {
+            lhsp = sformatp->lhsp();
+            rhsp = sformatp->fmtp();
+        }
+        AstVarRef* const refp = VN_CAST(lhsp, VarRef);
+        if (!refp) {
+            iterate(stmtp);
+            return;
+        }
+        iterate(rhsp);
+        if (!refp->varp()->user1p()) refp->varp()->user2(true);
+        iterate(refp);
+    }
+
+    // VISITORS
+    void visit(AstCFunc* nodep) override {
+        VL_RESTORER(m_cfuncp);
+        VL_RESTORER(m_scopep);
+        m_cfuncp = nodep;
+        m_scopep = nodep;
+        iterateChildren(nodep);
+        for (AstVar *varp = nodep->varsp(), *nextp; varp; varp = nextp) {
+            nextp = VN_AS(varp->nextp(), Var);
+            AstCLocalScope* const scopep = VN_CAST(varp->user1p(), CLocalScope);
+            if (!scopep || !varp->user2()) continue;
+            scopep->addVarsp(varp->unlinkFrBack());
+            ++m_statScopeVars;
+        }
+    }
+    void visit(AstCLocalScope* nodep) override {
+        VL_RESTORER(m_scopep);
+        m_scopep = nodep;
+        for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
+            nextp = stmtp->nextp();
+            visitScopeStmt(stmtp);
+        }
+    }
+    void visit(AstVarRef* nodep) override {
+        AstVar* const varp = nodep->varp();
+        if (!varp->user1p()) {
+            varp->user1p(m_scopep);
+        } else if (varp->user1p() != m_scopep) {
+            varp->user1p(m_cfuncp);
+        }
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit LocalizeScopeVisitor(AstNetlist* nodep) { iterate(nodep); }
+    ~LocalizeScopeVisitor() override {
+        V3Stats::addStat("Optimizations, Vars localized to C++ scopes", m_statScopeVars);
+    }
+};
+
+//######################################################################
 // Localize class functions
 
 void V3Localize::localizeAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
     { LocalizeVisitor{nodep}; }  // Destruct before checking
+    { LocalizeScopeVisitor{nodep}; }
     V3Global::dumpCheckGlobalTree("localize", 0, dumpTreeEitherLevel() >= 6);
 }

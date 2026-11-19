@@ -11,8 +11,12 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-test.compile()
+test.compile(timing_loop=True, verilator_flags2=["--stats", "--timing"])
 
 test.execute()
+
+if test.vlt_all:
+    test.file_grep(test.stats, r'Tasks, Automatic variables local to functions\s+(\d+)', 13)
+    test.file_grep(test.stats, r'Optimizations, Vars localized to C\+\+ scopes\s+(\d+)', 8)
 
 test.passes()
