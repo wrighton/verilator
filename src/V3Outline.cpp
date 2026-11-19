@@ -36,8 +36,13 @@
 //     than the limit to move, until the function or statement is within the limit. Moved
 //     statements are within the limit, so groups never nest, and new functions need no
 //     further splitting.
-//  3. Rewrite: each group moves into a new function, called in its place, with co_await if it
-//     suspends. Local variables of the function that the group references are passed by
+//  3. Locals: a local variable of the function that only a group uses, and that the group
+//     never reads before assigning it whole, is declared in the new function instead of being
+//     passed to it: its value from before a call of the new function is never read. A local
+//     passed to a coroutine stays, as the coroutine may keep it after returning, as the
+//     processes of a fork..join do until the join.
+//  4. Rewrite: each group moves into a new function, called in its place, with co_await if it
+//     suspends. Other local variables of the function that the group references are passed by
 //     reference. This runs before V3Localize, while most variables are module variables, so
 //     only the arguments and locals of tasks that are not inlined, including the variables of
 //     calls inlined into them, need passing.
@@ -110,6 +115,7 @@ public:
         funcp->stmtsp()->foreachAndNext([this](const AstVarRef* refp) {
             if (refp->access().isWriteOrRW()) m_writtenps.emplace(refp->varp());
         });
+        iterateAndNextNull(funcp->varsp());
         iterateAndNextNull(funcp->stmtsp());
     }
     ~OutlineArgsVisitor() override = default;
@@ -123,13 +129,23 @@ public:
 class OutlineVisitor final : public VNVisitor {
     // NODE STATE
     //  AstNodeStmt::user1p()  -> StmtInfo. Analysis of statement in the current function
+    //  AstVar::user2p()       -> VarInfo. Analysis of variable in the current function
     const VNUser1InUse m_user1InUse;
+    const VNUser2InUse m_user2InUse;
 
     // TYPES
     struct StmtInfo final {
         size_t m_size = 0;  // Number of nodes in the statement
         int m_depth = 0;  // Nesting depth of the statement in the function
         bool m_movable = false;  // Can move into another function
+    };
+    struct VarInfo final {
+        bool m_local = false;  // Declared in the variables of the current function
+        bool m_passed = false;  // Passed to a coroutine, which may keep it after returning
+        size_t m_refs = 0;  // References in the current function
+        // Analysis of the group being considered
+        size_t m_groupRefs = 0;  // References in the group
+        bool m_groupReadFirst = false;  // The group may read it before assigning it whole
     };
     struct StmtRange final {
         AstNodeStmt* m_firstp;  // First statement
@@ -139,6 +155,7 @@ class OutlineVisitor final : public VNVisitor {
 
     // STATE
     VNUser1Allocator<AstNodeStmt, StmtInfo> m_info;
+    VNUser2Allocator<AstVar, VarInfo> m_vars;
     const size_t m_limit = static_cast<size_t>(v3Global.opt.outputSplitCFuncs());
     AstCFunc* m_funcp = nullptr;  // Current function
     size_t m_funcNum = 0;  // Number of functions outlined from the current function
@@ -146,7 +163,15 @@ class OutlineVisitor final : public VNVisitor {
     size_t m_count = 0;  // Number of nodes analyzed
     int m_depth = 0;  // Nesting depth of the statement being analyzed
     int m_targetDepth = 0;  // Least depth of the jump and loop test targets in the statement
+    // Variables assigned whole on every path so far in the group being considered, and the
+    // order they were added in, to undo additions in branches
+    std::unordered_set<const AstVar*> m_assignedps;
+    std::vector<const AstVar*> m_assignedOrder;
+    std::vector<AstVar*> m_groupVarps;  // Variables of the group, in order of first reference
+    std::vector<std::vector<AstVar*>> m_groupLocals;  // Locals of each group in m_groups
     VDouble0 m_statFuncs;  // Number of functions created
+    VDouble0 m_statLocals;  // Number of variables declared in functions created
+    VDouble0 m_statArgs;  // Number of variables passed to functions created
 
     // METHODS - analysis
     // Analyze 'nodep', which jumps to or tests the loop of the statement at 'targetDepth'
@@ -229,9 +254,111 @@ class OutlineVisitor final : public VNVisitor {
         return size;
     }
 
+    // METHODS - locals
+    // Count a reference in the group being considered
+    VarInfo& groupRef(const AstVarRef* refp) {
+        VarInfo& info = m_vars(refp->varp());
+        if (!info.m_groupRefs++) m_groupVarps.push_back(refp->varp());
+        return info;
+    }
+    // Count the references under 'nodep', which may read their variables
+    void groupReads(AstNode* nodep) {
+        nodep->foreach([this](const AstVarRef* refp) {
+            VarInfo& info = groupRef(refp);
+            if (!m_assignedps.count(refp->varp())) info.m_groupReadFirst = true;
+        });
+    }
+    // Undo the additions to m_assignedps since 'mark', return them
+    std::vector<const AstVar*> undoAssigned(const size_t mark) {
+        std::vector<const AstVar*> varps{m_assignedOrder.begin() + mark, m_assignedOrder.end()};
+        m_assignedOrder.resize(mark);
+        for (const AstVar* const varp : varps) m_assignedps.erase(varp);
+        return varps;
+    }
+    // Analyze 'stmtp', which assigns 'lhsp' from 'rhsp'
+    void groupAssign(AstNode* stmtp, AstNode* lhsp, AstNode* rhsp) {
+        const AstVarRef* const refp = VN_CAST(lhsp, VarRef);
+        if (!refp) {  // Not a whole variable
+            groupReads(stmtp);
+            return;
+        }
+        // The right hand side is evaluated before the variable is assigned
+        groupReads(rhsp);
+        groupRef(refp);
+        if (m_assignedps.emplace(refp->varp()).second) m_assignedOrder.push_back(refp->varp());
+    }
+    void groupStmts(AstNode* stmtsp) {
+        for (AstNode* const stmtp : VNList<AstNode>{stmtsp}) groupStmt(stmtp);
+    }
+    // Analyze 'stmtp' of the group being considered, following its paths for the variables it
+    // assigns
+    void groupStmt(AstNode* stmtp) {
+        if (AstCLocalScope* const scopep = VN_CAST(stmtp, CLocalScope)) {
+            groupStmts(scopep->stmtsp());
+        } else if (AstIf* const ifp = VN_CAST(stmtp, If)) {
+            groupReads(ifp->condp());
+            const size_t mark = m_assignedOrder.size();
+            groupStmts(ifp->thensp());
+            const std::vector<const AstVar*> thenps = undoAssigned(mark);
+            groupStmts(ifp->elsesp());
+            const std::vector<const AstVar*> elseps = undoAssigned(mark);
+            // Assigned after the 'if' if assigned in both branches. The reset where such a
+            // variable is declared is removed as unused.
+            const std::unordered_set<const AstVar*> elseSet{elseps.begin(), elseps.end()};
+            for (const AstVar* const varp : thenps) {
+                if (!elseSet.count(varp)) continue;
+                m_assignedps.emplace(varp);
+                m_assignedOrder.push_back(varp);
+            }
+        } else if (AstLoop* const loopp = VN_CAST(stmtp, Loop)) {
+            // Assignments in it may be skipped by the loop test
+            const size_t mark = m_assignedOrder.size();
+            groupStmts(loopp->stmtsp());
+            undoAssigned(mark);
+        } else if (AstJumpBlock* const blockp = VN_CAST(stmtp, JumpBlock)) {
+            // Assignments in it may be skipped by a jump
+            const size_t mark = m_assignedOrder.size();
+            groupStmts(blockp->stmtsp());
+            undoAssigned(mark);
+        } else if (AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+            groupAssign(assignp, assignp->lhsp(), assignp->rhsp());
+        } else if (AstSFormat* const sformatp = VN_CAST(stmtp, SFormat)) {
+            groupAssign(sformatp, sformatp->lhsp(), sformatp->fmtp());
+        } else {
+            groupReads(stmtp);
+        }
+    }
+    // Choose the locals that only a group uses, and that it does not read before assigning.
+    // This keeps out variables the group may read with a value from before, such as ones
+    // declared on a path the group does not always take, temporaries passed to calls, and
+    // other variables made by Verilator that are not assigned where they are declared.
+    void chooseLocals() {
+        m_groupLocals.assign(m_groups.size(), {});
+        for (size_t i = 0; i < m_groups.size(); ++i) {
+            const StmtRange& group = m_groups[i];
+            for (AstNode* nodep = group.m_firstp; nodep != group.m_lastp->nextp();
+                 nodep = nodep->nextp()) {
+                groupStmt(nodep);
+            }
+            for (AstVar* const varp : m_groupVarps) {
+                VarInfo& info = m_vars(varp);
+                if (info.m_local && !info.m_passed && info.m_refs == info.m_groupRefs
+                    && !info.m_groupReadFirst) {
+                    m_groupLocals[i].push_back(varp);
+                }
+                info.m_groupRefs = 0;
+                info.m_groupReadFirst = false;
+            }
+            m_groupVarps.clear();
+            m_assignedps.clear();
+            m_assignedOrder.clear();
+        }
+    }
+
     // METHODS - rewrite
-    // Move statements 'firstp' to 'lastp' into a new function, and call it in their place
-    void outline(AstNodeStmt* firstp, AstNodeStmt* lastp) {
+    // Move statements 'firstp' to 'lastp' into a new function, and call it in their place,
+    // declaring 'localps' in it
+    void outline(AstNodeStmt* firstp, AstNodeStmt* lastp, const std::vector<AstVar*>& localps) {
         FileLine* const flp = firstp->fileline();
         VNRelinker relinker;
         firstp->unlinkFrBackWithNext(&relinker);
@@ -261,7 +388,12 @@ class OutlineVisitor final : public VNVisitor {
             callp->argTypes("vlSymsp");
         }
 
+        for (AstVar* const varp : localps) {
+            subFuncp->addVarsp(varp->unlinkFrBack());
+            ++m_statLocals;
+        }
         const OutlineArgsVisitor argsVisitor{subFuncp, callp};
+        for (AstNode* argp = callp->argsp(); argp; argp = argp->nextp()) ++m_statArgs;
         AstNode* stmtp;
         if (argsVisitor.hasAwait()) {
             subFuncp->rtnType("VlCoroutine");
@@ -279,9 +411,13 @@ class OutlineVisitor final : public VNVisitor {
         m_funcNum = 0;
         m_count = 0;
         m_targetDepth = std::numeric_limits<int>::max();
+        for (AstVar* const varp : funcp->varspList()) m_vars(varp) = VarInfo{true};
         iterateAndNextNull(funcp->stmtsp());
         reduceLists(m_count, {funcp->stmtsp()});
-        for (const StmtRange& group : m_groups) outline(group.m_firstp, group.m_lastp);
+        chooseLocals();
+        for (size_t i = 0; i < m_groups.size(); ++i) {
+            outline(m_groups[i].m_firstp, m_groups[i].m_lastp, m_groupLocals[i]);
+        }
         m_groups.clear();
     }
 
@@ -314,6 +450,23 @@ class OutlineVisitor final : public VNVisitor {
         ++m_count;
         iterateChildren(nodep);
     }
+    void visit(AstNodeCCall* nodep) override {
+        // A coroutine may keep a variable it is passed by reference after it returns, while
+        // suspended, as the processes of a fork..join do until the join
+        if (nodep->funcp()->isCoroutine()) {
+            for (AstNode* argp = nodep->argsp(); argp; argp = argp->nextp()) {
+                if (const AstVarRef* const refp = VN_CAST(argp, VarRef)) {
+                    m_vars(refp->varp()).m_passed = true;
+                }
+            }
+        }
+        ++m_count;
+        iterateChildren(nodep);
+    }
+    void visit(AstVarRef* nodep) override {
+        ++m_count;
+        ++m_vars(nodep->varp()).m_refs;
+    }
     void visit(AstNode* nodep) override {
         ++m_count;
         iterateChildren(nodep);
@@ -339,7 +492,11 @@ class OutlineVisitor final : public VNVisitor {
         }
         for (AstCFunc* const funcp : funcps) outlineFunc(funcp);
     }
-    ~OutlineVisitor() override { V3Stats::addStat("Outline, functions created", m_statFuncs); }
+    ~OutlineVisitor() override {
+        V3Stats::addStat("Outline, functions created", m_statFuncs);
+        V3Stats::addStat("Outline, variables declared in functions created", m_statLocals);
+        V3Stats::addStat("Outline, variables passed to functions created", m_statArgs);
+    }
 
 public:
     static void apply(AstNetlist* netlistp) { OutlineVisitor{netlistp}; }
