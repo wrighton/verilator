@@ -11,7 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('vltmt')
 
-test.compile(verilator_flags2=["--binary", "--stats", "--no-threads-coarsen"], threads=2)
+test.compile(verilator_flags2=["--binary", "--stats", "--no-threads-coarsen", test.pli_filename],
+             threads=2)
 
 test.execute()
 
