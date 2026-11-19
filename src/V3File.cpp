@@ -798,11 +798,11 @@ void V3OutFormatter::putns(const AstNode* nodep, const char* strg) {
             break;
         case '/':
             if (m_lang == LA_C || m_lang == LA_VERILOG) {
-                if (cp > strg && cp[-1] == '/' && !m_inStringLiteral) {
+                if (cp > strg && cp[-1] == '/' && !m_inStringLiteral && cp[1]) {
                     // Output ignoring contents to EOL
                     ++cp;
-                    while (*cp && cp[1] && cp[1] != '\n') putcNoTracking(*cp++);
-                    if (*cp) putcNoTracking(*cp);
+                    while (cp[1] && cp[1] != '\n') putcNoTracking(*cp++);
+                    putcNoTracking(*cp);
                 }
             }
             break;
@@ -972,6 +972,14 @@ string V3OutFormatter::quoteNameControls(const string& namein,
         }
     }
     return out;
+}
+
+void V3OutFormatter::selfTest() {
+    // A string ending in a "//" comment must not be read past its terminator
+    const char strg[] = "a//\0b";
+    std::ostringstream os;
+    V3OutStream{os, LA_C}.puts(strg);
+    UASSERT_SELFTEST(os.str(), "a//");
 }
 
 //----------------------------------------------------------------------
