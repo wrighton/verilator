@@ -50,6 +50,7 @@
 #include <queue>
 #include <set>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -1393,6 +1394,7 @@ class CaptureVisitor final : public VNVisitor {
     std::map<const AstVar*, AstVar*> m_varCloneMap;  // Map original var nodes to their clones
     std::set<AstNode*> m_ignore;  // Nodes to ignore for capturing
     std::unordered_set<const AstVar*> m_constraintIterators;  // Enclosing foreach loop variables
+    std::unordered_set<const AstVar*> m_localVars;  // Declarations inside the captured expression
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     const bool m_randomizesThis;  // True for randomize() in class method
 
@@ -1449,6 +1451,7 @@ class CaptureVisitor final : public VNVisitor {
     }
 
     CaptureMode getVarRefCaptureMode(AstNodeVarRef* varRefp) {
+        if (m_localVars.count(varRefp->varp())) return CaptureMode::CAP_NO;
         AstNodeModule* const varModp = VN_AS(varRefp->varp()->user2p(), NodeModule);
         AstClass* const varClassp = VN_CAST(varModp, Class);
         AstClass* const callerClassp = VN_CAST(m_callerp, Class);
@@ -1521,6 +1524,11 @@ class CaptureVisitor final : public VNVisitor {
 
     // VISITORS
 
+    void visit(AstVar* const nodep) override {
+        // Register before its initializer and the block's later references.
+        m_localVars.insert(nodep);
+        iterateChildren(nodep);
+    }
     void visit(AstConstraintForeach* const nodep) override {
         // Loop variables are local to the foreach constraint, so are never captured
         VL_RESTORER_COPY(m_constraintIterators);
