@@ -17,8 +17,7 @@
 //      Attach clocks to each assertion
 //      Transform clocking blocks into imperative logic
 //      Resolve clockvar references and lower explicitly clocked sampled functions
-//      in event expressions
-//      Collect disjoint outermost functions, then lower their children before each root
+//      in event expressions, lowering nested clocked functions before their outermost one
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -192,7 +191,7 @@ private:
         setp->user1(true);
         return setp;
     }
-    // Final clockvar name before its declaration is renamed at the lift.
+    // Final name of a clockvar, given to its declaration at the lift.
     static string clockvarName(const AstClocking* const clockingp, const string& name) {
         return clockingp->name() + "__DOT__" + name;
     }
