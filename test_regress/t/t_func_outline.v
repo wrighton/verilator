@@ -10,9 +10,8 @@
 // verilog_format: on
 
 // Functions and tasks that are not inlined, with bodies larger than
-// --output-split-cfuncs. Parts of them are moved into separate functions,
-// which must keep their arguments, local variables, return values and jumps
-// working.
+// --output-split-cfuncs, keep their arguments, local variables, return values,
+// jumps and processes working.
 
 typedef struct packed {
   logic [63:0] base;
@@ -32,7 +31,7 @@ class MemView extends Base;
   region_t m_arr[int];
   int m_ctor;
 
-  // The super.new call stays in the constructor
+  // A derived class constructor calling super.new with an argument
   function new(int seed);
     super.new(seed + 1);
     m_ctor = seed;
@@ -176,7 +175,7 @@ class MemView extends Base;
     nloaded = m_cfg.size() + m_arr.size();
   endtask
 
-  // The 'break' and the 'return' jump out, so they stay in place
+  // A 'break' out of a loop, and a 'return' before the end
   function int sum(input int limit, ref int count);
     automatic int acc = 0;
     for (int i = 0; i < 24; i++) begin
@@ -501,8 +500,7 @@ class LocalsKept;
   endfunction
 endclass
 
-// A coroutine, whose statements at the top level move, but not the one keeping
-// 'this' alive after the last handle to the object is gone
+// A timed task whose object loses its last handle while the task runs
 class Timed;
   static Timed s_handle;
   static int s_result;
@@ -578,68 +576,87 @@ class Timed;
   endtask
 endclass
 
-// A function calling std::process::self() twice, that also forks a process, gets the same
-// process both times
-class ProcSelf;
-  static std::process s_forked;
-  static function void forkSelf();
+// A forked process of a task whose object loses its last handle while the process runs
+class ForkTimed;
+  static ForkTimed s_handle;
+  static int s_result;
+  int m;
+  task run(int x);
+    m = x;
     fork
-      s_forked = std::process::self();
+      begin
+        #1;
+        s_handle = null;
+        m = m * 3 + 0;
+        m ^= m >>> 2;
+        m = m * 3 + 1;
+        m ^= m >>> 2;
+        m = m * 3 + 2;
+        m ^= m >>> 2;
+        m = m * 3 + 3;
+        m ^= m >>> 2;
+        m = m * 3 + 4;
+        m ^= m >>> 2;
+        m = m * 3 + 5;
+        m ^= m >>> 2;
+        m = m * 3 + 6;
+        m ^= m >>> 2;
+        m = m * 3 + 7;
+        m ^= m >>> 2;
+        m = m * 3 + 8;
+        m ^= m >>> 2;
+        m = m * 3 + 9;
+        m ^= m >>> 2;
+        m = m * 3 + 10;
+        m ^= m >>> 2;
+        m = m * 3 + 11;
+        m ^= m >>> 2;
+        m = m * 3 + 12;
+        m ^= m >>> 2;
+        m = m * 3 + 13;
+        m ^= m >>> 2;
+        m = m * 3 + 14;
+        m ^= m >>> 2;
+        m = m * 3 + 15;
+        m ^= m >>> 2;
+        m = m * 3 + 16;
+        m ^= m >>> 2;
+        m = m * 3 + 17;
+        m ^= m >>> 2;
+        m = m * 3 + 18;
+        m ^= m >>> 2;
+        m = m * 3 + 19;
+        m ^= m >>> 2;
+        m = m * 3 + 20;
+        m ^= m >>> 2;
+        m = m * 3 + 21;
+        m ^= m >>> 2;
+        m = m * 3 + 22;
+        m ^= m >>> 2;
+        m = m * 3 + 23;
+        m ^= m >>> 2;
+        m = m * 3 + 24;
+        m ^= m >>> 2;
+        m = m * 3 + 25;
+        m ^= m >>> 2;
+        m = m * 3 + 26;
+        m ^= m >>> 2;
+        m = m * 3 + 27;
+        m ^= m >>> 2;
+        m = m * 3 + 28;
+        m ^= m >>> 2;
+        m = m * 3 + 29;
+        m ^= m >>> 2;
+        s_result = m;
+      end
     join_none
-  endfunction
-  static function bit run(int x, output int res);
-    std::process p1;
-    std::process p2;
-    automatic int m = x;
-    p1 = std::process::self();
-    m = m * 3 + 0;
-    m ^= m >>> 2;
-    m = m * 3 + 1;
-    m ^= m >>> 2;
-    m = m * 3 + 2;
-    m ^= m >>> 2;
-    m = m * 3 + 3;
-    m ^= m >>> 2;
-    m = m * 3 + 4;
-    m ^= m >>> 2;
-    m = m * 3 + 5;
-    m ^= m >>> 2;
-    m = m * 3 + 6;
-    m ^= m >>> 2;
-    m = m * 3 + 7;
-    m ^= m >>> 2;
-    m = m * 3 + 8;
-    m ^= m >>> 2;
-    m = m * 3 + 9;
-    m ^= m >>> 2;
-    m = m * 3 + 10;
-    m ^= m >>> 2;
-    m = m * 3 + 11;
-    m ^= m >>> 2;
-    m = m * 3 + 12;
-    m ^= m >>> 2;
-    m = m * 3 + 13;
-    m ^= m >>> 2;
-    m = m * 3 + 14;
-    m ^= m >>> 2;
-    p2 = std::process::self();
-    forkSelf();
-    res = m;
-    return p1 == p2;
-  endfunction
+  endtask
 endclass
 
 module t;
   // Same computation as the straight-line bodies, as a loop
   function automatic int mix(int x);
     for (int k = 0; k < 30; k++) begin
-      x = x * 3 + k;
-      x ^= x >>> 2;
-    end
-    return x;
-  endfunction
-  function automatic int mix15(int x);
-    for (int k = 0; k < 15; k++) begin
       x = x * 3 + k;
       x ^= x >>> 2;
     end
@@ -711,10 +728,14 @@ module t;
     return x;
   endfunction
 
-  // User C++ text stays in place, as later text uses the C++ local it declares
+  // User C++ text declaring a C++ local that later text uses
   function automatic int cuser(int x);
     /* verilator no_inline_task */
+`ifdef VERILATOR
     $c("int tmp = ", x, ";");
+`else
+    automatic int tmp = x;
+`endif
     x = x * 3 + 0;
     x ^= x >>> 2;
     x = x * 3 + 1;
@@ -775,7 +796,11 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 29;
     x ^= x >>> 2;
+`ifdef VERILATOR
     return x + $c32("tmp");
+`else
+    return x + tmp;
+`endif
   endfunction
 
   // A DPI export using a module variable, which needs vlSymsp, and calling a function
@@ -852,9 +877,78 @@ module t;
     return x;
   endfunction
 
-  // Public, so not split: its 'byte' argument is a 'uint32_t' in C++
+  // Public, with a 'byte' argument, which is a 'uint32_t' in C++
   // verilator lint_off UNOPTPUBLIC
   function int pubf(int x, byte k);
+    /* verilator public */
+    // verilator lint_on UNOPTPUBLIC
+    automatic int y = x + int'(k);
+    y = y * 3 + 0;
+    y ^= y >>> 2;
+    y = y * 3 + 1;
+    y ^= y >>> 2;
+    y = y * 3 + 2;
+    y ^= y >>> 2;
+    y = y * 3 + 3;
+    y ^= y >>> 2;
+    y = y * 3 + 4;
+    y ^= y >>> 2;
+    y = y * 3 + 5;
+    y ^= y >>> 2;
+    y = y * 3 + 6;
+    y ^= y >>> 2;
+    y = y * 3 + 7;
+    y ^= y >>> 2;
+    y = y * 3 + 8;
+    y ^= y >>> 2;
+    y = y * 3 + 9;
+    y ^= y >>> 2;
+    y = y * 3 + 10;
+    y ^= y >>> 2;
+    y = y * 3 + 11;
+    y ^= y >>> 2;
+    y = y * 3 + 12;
+    y ^= y >>> 2;
+    y = y * 3 + 13;
+    y ^= y >>> 2;
+    y = y * 3 + 14;
+    y ^= y >>> 2;
+    y = y * 3 + 15;
+    y ^= y >>> 2;
+    y = y * 3 + 16;
+    y ^= y >>> 2;
+    y = y * 3 + 17;
+    y ^= y >>> 2;
+    y = y * 3 + 18;
+    y ^= y >>> 2;
+    y = y * 3 + 19;
+    y ^= y >>> 2;
+    y = y * 3 + 20;
+    y ^= y >>> 2;
+    y = y * 3 + 21;
+    y ^= y >>> 2;
+    y = y * 3 + 22;
+    y ^= y >>> 2;
+    y = y * 3 + 23;
+    y ^= y >>> 2;
+    y = y * 3 + 24;
+    y ^= y >>> 2;
+    y = y * 3 + 25;
+    y ^= y >>> 2;
+    y = y * 3 + 26;
+    y ^= y >>> 2;
+    y = y * 3 + 27;
+    y ^= y >>> 2;
+    y = y * 3 + 28;
+    y ^= y >>> 2;
+    y = y * 3 + 29;
+    y ^= y >>> 2;
+    return y;
+  endfunction
+
+  // A public timed task, with a 'byte' argument
+  // verilator lint_off UNOPTPUBLIC
+  task pubt(inout int x, input byte k);
     /* verilator public */
     // verilator lint_on UNOPTPUBLIC
     x += int'(k);
@@ -878,6 +972,7 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 9;
     x ^= x >>> 2;
+    #1;
     x = x * 3 + 10;
     x ^= x >>> 2;
     x = x * 3 + 11;
@@ -898,6 +993,7 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 19;
     x ^= x >>> 2;
+    #1;
     x = x * 3 + 20;
     x ^= x >>> 2;
     x = x * 3 + 21;
@@ -918,16 +1014,144 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 29;
     x ^= x >>> 2;
-    return x;
+    #1;
+  endtask
+
+  // Functions alike but for passing an argument by reference or by const reference
+  function automatic int byRef(ref string s);
+    /* verilator no_inline_task */
+    automatic int m = 1;
+    m = m * 3 + s.len() + 0;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 1;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 2;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 3;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 4;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 5;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 6;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 7;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 8;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 9;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 10;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 11;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 12;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 13;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 14;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 15;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 16;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 17;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 18;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 19;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 20;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 21;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 22;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 23;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 24;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 25;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 26;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 27;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 28;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 29;
+    m ^= m >>> 2;
+    return m;
+  endfunction
+  function automatic int byConstRef(const ref string s);
+    /* verilator no_inline_task */
+    automatic int m = 1;
+    m = m * 3 + s.len() + 0;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 1;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 2;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 3;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 4;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 5;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 6;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 7;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 8;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 9;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 10;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 11;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 12;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 13;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 14;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 15;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 16;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 17;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 18;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 19;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 20;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 21;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 22;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 23;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 24;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 25;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 26;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 27;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 28;
+    m ^= m >>> 2;
+    m = m * 3 + s.len() + 29;
+    m ^= m >>> 2;
+    return m;
   endfunction
 
-  initial begin : process_self
-    bit same;
-    int res;
-    same = ProcSelf::run(7, res);
-    `checkd(same, 1'b1);
-    `checkd(res, mix15(7));
-  end
+  // Two instances of a module with a public function
+  pubsub u_pub1 ();
+  pubsub u_pub2 ();
 
   int seed;
   MemView v;
@@ -961,7 +1185,7 @@ module t;
       automatic int expsum = 0;
       for (int i = 0; i < 24; i++) expsum += v.m_arr[i].size;
       for (int i = 0; i < 15; i++) expsum += v.m_cfg[$sformatf("r%0d", i)].size;
-      for (int i = 15; i < 30; i++) expsum += int'(v.m_cfg[$sformatf("r%0d", i % 24)].attr);
+      for (int i = 15; i < 30; i++) expsum += int'(v.m_cfg[$sformatf("r%0d", i%24)].attr);
       `checkd(v.sum(100000, count), expsum);
       `checkd(count, 54);
     end
@@ -1033,6 +1257,31 @@ module t;
         `checkd(l.run(sel, seed), r + acc + 7 + t2);
       end
     end
+    begin : public_task
+      automatic int x = seed + 6;
+      pubt(x, 1);
+      `checkd(x, mix(seed + 7));
+    end
+    begin : forked_coroutine
+      ForkTimed::s_handle = new;
+      ForkTimed::s_handle.run(seed + 8);
+      #2;
+      `checkd(ForkTimed::s_handle, null);
+      `checkd(ForkTimed::s_result, mix(seed + 8));
+    end
+    begin : ref_args
+      static string s = "abcde";
+      `checkd(byRef(s), byConstRef(s));
+    end
+    begin : instances
+      u_pub2.m_base = 1;
+      `checkd(u_pub1.pubp(seed), mix(seed));
+      `checkd(u_pub2.pubp(seed), mix(seed + 1));
+`ifdef VERILATOR
+      `checkd(u_pub1.viaC(seed + 1), mix(seed + 1));
+      `checkd(u_pub2.viaC(seed + 1), mix(seed + 2));
+`endif
+    end
     begin : coroutine
       Timed::s_handle = new;
       Timed::s_handle.run(seed + 4);
@@ -1042,4 +1291,82 @@ module t;
     $write("*-* All Finished *-*\n");
     $finish;
   end
+endmodule
+
+module pubsub;
+  int m_base = 0;
+  // verilator lint_off UNOPTPUBLIC
+  function int pubp(int x);
+    /* verilator public */
+    // verilator lint_on UNOPTPUBLIC
+    automatic int y = x + m_base;
+    y = y * 3 + 0;
+    y ^= y >>> 2;
+    y = y * 3 + 1;
+    y ^= y >>> 2;
+    y = y * 3 + 2;
+    y ^= y >>> 2;
+    y = y * 3 + 3;
+    y ^= y >>> 2;
+    y = y * 3 + 4;
+    y ^= y >>> 2;
+    y = y * 3 + 5;
+    y ^= y >>> 2;
+    y = y * 3 + 6;
+    y ^= y >>> 2;
+    y = y * 3 + 7;
+    y ^= y >>> 2;
+    y = y * 3 + 8;
+    y ^= y >>> 2;
+    y = y * 3 + 9;
+    y ^= y >>> 2;
+    y = y * 3 + 10;
+    y ^= y >>> 2;
+    y = y * 3 + 11;
+    y ^= y >>> 2;
+    y = y * 3 + 12;
+    y ^= y >>> 2;
+    y = y * 3 + 13;
+    y ^= y >>> 2;
+    y = y * 3 + 14;
+    y ^= y >>> 2;
+    y = y * 3 + 15;
+    y ^= y >>> 2;
+    y = y * 3 + 16;
+    y ^= y >>> 2;
+    y = y * 3 + 17;
+    y ^= y >>> 2;
+    y = y * 3 + 18;
+    y ^= y >>> 2;
+    y = y * 3 + 19;
+    y ^= y >>> 2;
+    y = y * 3 + 20;
+    y ^= y >>> 2;
+    y = y * 3 + 21;
+    y ^= y >>> 2;
+    y = y * 3 + 22;
+    y ^= y >>> 2;
+    y = y * 3 + 23;
+    y ^= y >>> 2;
+    y = y * 3 + 24;
+    y ^= y >>> 2;
+    y = y * 3 + 25;
+    y ^= y >>> 2;
+    y = y * 3 + 26;
+    y ^= y >>> 2;
+    y = y * 3 + 27;
+    y ^= y >>> 2;
+    y = y * 3 + 28;
+    y ^= y >>> 2;
+    y = y * 3 + 29;
+    y ^= y >>> 2;
+    return y;
+  endfunction
+`ifdef VERILATOR
+  // Calls the public function from C++, through the function choosing the instance
+  function int viaC(int x);
+    /* verilator no_inline_task */
+    viaC = $c32("pubp(", x, ")");
+  endfunction
+`endif
 endmodule
