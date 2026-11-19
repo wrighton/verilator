@@ -5362,8 +5362,8 @@ class AssertNfaVisitor final : public VNVisitor {
             AstNodeExpr* const vacuousp
                 = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
             AstNodeStmt* const vacuousBodyp = V3AssertCommon::cloneAction(passsp, m_actionNames);
-            splitsp = newPassOnIf(assertp->controlVarp(), flp, vacuousp, vacuousBodyp, assertp->userType(),
-                                  assertp->directive(), /*vacuous=*/true);
+            splitsp = newPassOnIf(assertp->controlVarp(), flp, vacuousp, vacuousBodyp,
+                                  assertp->userType(), assertp->directive(), /*vacuous=*/true);
         }
 
         AstIf* const nonvacuousp = newPassOnIf(assertp->controlVarp(), flp, nonvacuousMatchp,

@@ -1,0 +1,5 @@
+%Error: t/t_assert_ctl_scope_iface_port_modport_bad.v:18:9: Modport not found under interface 'ifc': 'nosuch'
+   18 |     ifc.nosuch p
+      |         ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
