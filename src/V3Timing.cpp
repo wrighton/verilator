@@ -2540,11 +2540,10 @@ class TimingReactiveVisitor final : public VNVisitor {
             funcp->scopep()->addVarsp(wasp);
             AstAssign* const initp = new AstAssign{flp, new AstVarRef{flp, wasp, VAccess::WRITE},
                                                    new AstVarRef{flp, inReactivep, VAccess::READ}};
-            if (AstNode* const stmtsp = funcp->stmtsp()) {
-                stmtsp->addHereThisAsNext(initp);
-            } else {
-                funcp->addStmtsp(initp);
-            }
+            // The function holds the await being handled, so it has statements
+            AstNode* const stmtsp = funcp->stmtsp();
+            UASSERT_OBJ(stmtsp, funcp, "Function with an await but no statements");
+            stmtsp->addHereThisAsNext(initp);
         }
         if (resumption) {
             VNRelinker handle;

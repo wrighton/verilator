@@ -1646,11 +1646,11 @@ class AssertVisitor final : public VNVisitor {
         m_pexprBodyp->addDeclsp(varpr);
         AstAssign* const initp
             = new AstAssign{flp, new AstVarRef{flp, varpr, VAccess::WRITE}, condp};
-        if (AstNode* const stmtsp = m_pexprBodyp->stmtsp()) {
-            stmtsp->addHereThisAsNext(initp);
-        } else {
-            m_pexprBodyp->addStmtsp(initp);
-        }
+        // Every PExpr body V3AssertPre creates has statements other than clauses (see the census
+        // in the PExpr lowerings), which stay while V3Assert visits it
+        AstNode* const stmtsp = m_pexprBodyp->stmtsp();
+        UASSERT_OBJ(stmtsp, m_pexprBodyp, "Empty PExpr body");
+        stmtsp->addHereThisAsNext(initp);
         return varpr;
     }
     // The Kill count of the current assertion
@@ -2071,12 +2071,10 @@ class AssertVisitor final : public VNVisitor {
     void dropOutwardActionJumps(AstNodeCoverOrAssert* nodep) {
         const AstCover* const coverp = VN_CAST(nodep, Cover);
         if (coverp && !coverp->isSeqEvent() && !v3Global.opt.coverageUser()) return;
+        // Only for concurrent assertions; an AstAssertIntrinsic is always immediate
+        UASSERT_OBJ(!nodep->immediate(), nodep, "Immediate assertion");
         AstNode* failsp = nullptr;
-        if (AstAssert* const assertp = VN_CAST(nodep, Assert)) {
-            failsp = assertp->failsp();
-        } else if (AstAssertIntrinsic* const assertp = VN_CAST(nodep, AssertIntrinsic)) {
-            failsp = assertp->failsp();
-        }
+        if (AstAssert* const assertp = VN_CAST(nodep, Assert)) failsp = assertp->failsp();
         std::unordered_set<const AstJumpBlock*> innerps;
         std::vector<AstJumpGo*> gops;
         for (AstNode* const listp : {failsp, static_cast<AstNode*>(nodep->passsp())}) {
@@ -2211,10 +2209,10 @@ class AssertVisitor final : public VNVisitor {
                 iterateAndNextNull(assertp->failsp());
             } else if (AstAssertIntrinsic* const assertp = VN_CAST(nodep, AssertIntrinsic)) {
                 iterateAndNextNull(assertp->failsp());
-            } else if (AstCover* const coverp = VN_CAST(nodep, Cover)) {
-                iterateAndNextNull(coverp->coverincsp());
-            } else if (!VN_IS(nodep, Restrict)) {
-                nodep->v3fatalSrc("Unhandled assert type");
+            } else {
+                // Called only for an Assert, AssertIntrinsic or Cover (visit(AstRestrict) has its
+                // own iteration)
+                iterateAndNextNull(VN_AS(nodep, Cover)->coverincsp());
             }
             iterateAndNextNull(nodep->passsp());
         }
