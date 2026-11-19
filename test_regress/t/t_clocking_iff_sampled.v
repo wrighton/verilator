@@ -97,17 +97,19 @@ module t;
   int gclk_rises;
   always @(negedge clk iff $rose_gclk(i.cb.v[0]))++gclk_rises;
   // Ordinary and explicitly clocked nested functions read the same settled input sample.
+  // The first tick depends on the default sampled value (IEEE 1800-2023 16.9.3, 16.5.1),
+  // which 2-state X initialization does not model.
   int ordinary_rises, nested_event_stables, nested_body_stables;
   bit ordinary_rise, nested_stable;
   bit expected_rise_now, expected_stable_now, previous_expected_rise;
   int expected_stables;
   clockvar_child_monitor child(clk);
-  always @(negedge clk iff $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk)))++nested_event_stables;
+  always @(negedge clk iff $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk))) if (edges != 0)++nested_event_stables;
   always @(negedge clk) begin
     ordinary_rise = $rose_gclk(i.cb.v[0]);
     ordinary_rises += int'(ordinary_rise);
     nested_stable = $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk));
-    nested_body_stables += int'(nested_stable);
+    if (edges != 0) nested_body_stables += int'(nested_stable);
   end
   always @(posedge i.cb.v[0])++sensp;
   always @(i.cb iff i.cb.v[0])++gated;
@@ -143,7 +145,7 @@ module t;
     expected_rise_now = PRE[edges][0] && !(edges == 0 ? 1'b0 : PRE[edges-1][0]);
     expected_stable_now = expected_rise_now == previous_expected_rise;
     previous_expected_rise = expected_rise_now;
-    expected_stables += int'(expected_stable_now);
+    if (edges != 0) expected_stables += int'(expected_stable_now);
     expected += int'(PRE[edges][0]);
     expected_post += int'((edges == 19 ? 7'h69 : PRE[edges+1]) & 7'h01);
     if (PRE[edges][0] && !(edges == 0 ? 1'b0 : PRE[edges-1][0]))++expected_rises;
@@ -156,9 +158,11 @@ module t;
     `checkd(gclk_rises, expected_rises);
     `checkd(ordinary_rise, expected_rise_now);
     `checkd(ordinary_rises, expected_rises);
-    `checkd(nested_stable, expected_stable_now);
-    `checkd(nested_body_stables, expected_stables);
-    `checkd(nested_event_stables, expected_stables);
+    if (edges != 0) begin
+      `checkd(nested_stable, expected_stable_now);
+      `checkd(nested_body_stables, expected_stables);
+      `checkd(nested_event_stables, expected_stables);
+    end
     `checkd(child.rises, expected_rises);
     `checkd(gated, expected);
     `checkd(body, expected);
@@ -177,7 +181,7 @@ module t;
       `checkd(expected, 11);
       `checkd(expected_post, 12);
       `checkd(expected_rises, 5);
-      `checkd(expected_stables, 10);
+      `checkd(expected_stables, 9);
       $write("*-* All Finished *-*\n");
       $finish;
     end
