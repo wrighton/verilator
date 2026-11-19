@@ -93,6 +93,74 @@ module wb;
   hnone x ();
 endmodule
 
+// A variable through a port from one instance, and a scope from another, in both orders (pins
+// the mixed-instance branch rejecting the crossing instance's non-scope)
+interface ifcv (
+    input logic clk
+);
+  int n = 0;
+endinterface
+module leafv;
+  initial $assertoff(0, holder.p.n);
+endmodule
+module hportv (
+    ifcv p
+);
+  leafv l ();
+endmodule
+module hgenv (
+    input logic clk
+);
+  if (1) begin : p
+    if (1) begin : n
+      a1 :
+      assert property (@(posedge clk) 0);
+    end
+  end
+  leafv l ();
+endmodule
+module wva (
+    input logic clk
+);
+  ifcv i (.clk(clk));
+  hportv holder (.p(i));
+endmodule
+module wvb (
+    input logic clk
+);
+  hgenv holder (.clk(clk));
+endmodule
+module leafv2;
+  initial $assertoff(0, holder.p.n);
+endmodule
+module hportv2 (
+    ifcv p
+);
+  leafv2 l ();
+endmodule
+module hgenv2 (
+    input logic clk
+);
+  if (1) begin : p
+    if (1) begin : n
+      a1 :
+      assert property (@(posedge clk) 0);
+    end
+  end
+  leafv2 l ();
+endmodule
+module wva2 (
+    input logic clk
+);
+  ifcv i (.clk(clk));
+  hportv2 holder (.p(i));
+endmodule
+module wvb2 (
+    input logic clk
+);
+  hgenv2 holder (.clk(clk));
+endmodule
+
 module t;
   logic clk = 0;
   ifc i0 (.clk(clk));
@@ -104,4 +172,8 @@ module t;
   subpe spe (.p(e0));
   wa wa0 (.clk(clk));
   wb wb0 ();
+  wva va (.clk(clk));
+  wvb vb (.clk(clk));
+  wvb2 vb2 (.clk(clk));
+  wva2 va2 (.clk(clk));
 endmodule
