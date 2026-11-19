@@ -16,6 +16,9 @@
 //  Pre steps:
 //      Attach clocks to each assertion
 //      Transform clocking blocks into imperative logic
+//      Resolve clockvar references and lower explicitly clocked sampled functions
+//      in event expressions
+//      Collect disjoint outermost functions, then lower their children before each root
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -60,6 +63,37 @@ public:
 };
 
 //######################################################################
+// Explicit-clocked sampled functions in event expressions
+
+class AssertPreClockedSamplesVisitor final : public VNVisitorConst {
+    std::vector<AstNodeExpr*>& m_nodes;  // Disjoint outermost functions carrying clocks
+
+    void visitSample(AstNodeExpr* const nodep, const AstSenTree* const sentreep) {
+        if (sentreep) {
+            m_nodes.emplace_back(nodep);
+        } else {
+            // Unclocked functions retain their clock policy; still find clocked descendants.
+            iterateChildrenConst(nodep);
+        }
+    }
+    void visit(AstFell* const nodep) override { visitSample(nodep, nodep->sentreep()); }
+    void visit(AstRose* const nodep) override { visitSample(nodep, nodep->sentreep()); }
+    void visit(AstStable* const nodep) override { visitSample(nodep, nodep->sentreep()); }
+    void visit(AstNode* const nodep) override { iterateChildrenConst(nodep); }
+
+    AssertPreClockedSamplesVisitor(AstNode* const nodep, std::vector<AstNodeExpr*>& nodes)
+        : m_nodes{nodes} {
+        // Prune selected subtrees; their children are collected before the root is lowered.
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    static void apply(AstNode* const nodep, std::vector<AstNodeExpr*>& nodes) {
+        AssertPreClockedSamplesVisitor{nodep, nodes};
+    }
+};
+
+//######################################################################
 // Assert class functions
 
 class AssertPreVisitor final : public VNVisitor {
@@ -73,7 +107,14 @@ private:
     };
 
     // NODE STATE
-    // AstClockingItem::user1p()         // AstVar*.      varp() of ClockingItem after unlink
+    // AstClockingItem::user1p()         // AstVar*.      Lifted variable; non-null after rename
+    // AstVar::user1p()                  // AstClockingItem*. Association retained after lift
+    // AstNodeVarRef::user1()            // bool.         Clockvar reference normalized, or
+    //                                   //               generated final reference
+    // AstNodeAssign::user1()            // bool.         Generated assignment exempt from
+    //                                   //               clockvar drive rewriting
+    // AstFalling/Fell/Future/Rising/Rose/Stable/Steady::user1()
+    //                                   // bool.         Entered the ordinary handler once
     // AstClockingItem::user2p()         // AstVar*.      Flag set by drives of output clockvar
     // AstClockingItem::user3p()         // AstClocking*. Clocking block of the item, captured
     //                                   //               by AssertPreClockingVisitor
@@ -114,7 +155,6 @@ private:
     bool m_inConcatAssign = false;  // True if in assignment to a concatenation
     std::vector<SynchDrive> m_drives;  // Clockvars written by the synchronous drive
     bool m_hasCycleDelay = false;  // True if node has cycle delay beneath
-    std::vector<AstVarXRef*> m_xrefsp;  // list of xrefs that need name fixup
     std::vector<AstSequence*> m_seqsToCleanup;  // Sequences to clean up after traversal
 
     // METHODS
@@ -152,8 +192,16 @@ private:
         setp->user1(true);
         return setp;
     }
+    // Final clockvar name before its declaration is renamed at the lift.
+    static string clockvarName(const AstClocking* const clockingp, const string& name) {
+        return clockingp->name() + "__DOT__" + name;
+    }
+    // Clocking item before its variable is lifted, or retained on the variable after lifting.
+    static AstClockingItem* clockingItemOf(const AstVar* const varp) {
+        return VN_CAST(varp->user1p() ? varp->user1p() : varp->firstAbovep(), ClockingItem);
+    }
     // Clocking block of a clocking item
-    static AstClocking* clockingOf(const AstClockingItem* itemp) {
+    static AstClocking* clockingOf(const AstClockingItem* const itemp) {
         UASSERT_OBJ(itemp->user3p(), itemp, "Clocking item not captured in a clocking block");
         return VN_AS(itemp->user3p(), Clocking);
     }
@@ -279,22 +327,7 @@ private:
         }
         return newp;
     }
-    // Record fresh clockvar references for the final name repair before Scope relinks them.
-    AstNodeExpr* newSampledClonep(AstNodeExpr* const exprp, const bool trackClockvars) {
-        AstNodeExpr* const clonep = exprp->cloneTreePure(false);
-        if (trackClockvars) {
-            // Each scan covers only freshly allocated clone nodes, not overlapping old subtrees.
-            clonep->foreach([this](AstVarXRef* const refp) {
-                const AstVar* const varp = refp->varp();
-                if (VN_IS(varp->user1p() ? varp->user1p() : varp->firstAbovep(), ClockingItem)) {
-                    m_xrefsp.emplace_back(refp);
-                }
-            });
-        }
-        return clonep;
-    }
-
-    void lowerFell(AstFell* nodep, const bool trackClockvars = false) {
+    void lowerFell(AstFell* nodep) {
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -304,12 +337,12 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, pastp, new AstNot{fl, newSampledClonep(exprp, trackClockvars)}};
+        exprp = new AstAnd{fl, pastp, new AstNot{fl, exprp->cloneTreePure(false)}};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void lowerRose(AstRose* nodep, const bool trackClockvars = false) {
+    void lowerRose(AstRose* nodep) {
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -319,12 +352,12 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstAnd{fl, new AstNot{fl, pastp}, newSampledClonep(exprp, trackClockvars)};
+        exprp = new AstAnd{fl, new AstNot{fl, pastp}, exprp->cloneTreePure(false)};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void lowerStable(AstStable* nodep, const bool trackClockvars = false) {
+    void lowerStable(AstStable* nodep) {
         checkSamplingFuncDType(nodep, nodep->exprp());
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
@@ -333,7 +366,7 @@ private:
         AstPast* const pastp = new AstPast{fl, exprp};
         pastp->dtypeFrom(exprp);
         pastp->sentreep(newSenTree(nodep, sentreep));
-        exprp = new AstEq{fl, pastp, newSampledClonep(exprp, trackClockvars)};
+        exprp = new AstEq{fl, pastp, exprp->cloneTreePure(false)};
         exprp->dtypeSetBit();
         nodep->replaceWith(exprp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -341,53 +374,17 @@ private:
 
     // Collect disjoint outermost clocked functions, then lower outside the read-only walk.
     void lowerClockedSenFunctions(AstNode* const nodep) {
-        //######################################################################
-        // AssertPre: Collect explicit-clocked sampled functions in event expressions.
-        // Prune their subtrees so lowering starts only after the read-only walk ends.
-        class AssertPreClockedSamplesVisitor final : public VNVisitorConst {
-            std::vector<AstNodeExpr*>& m_nodes;  // Disjoint outermost functions carrying clocks
-
-            void visit(AstFell* const nodep) override {
-                if (nodep->sentreep()) {
-                    m_nodes.emplace_back(nodep);
-                } else {
-                    iterateChildrenConst(nodep);
-                }
-            }
-            void visit(AstRose* const nodep) override {
-                if (nodep->sentreep()) {
-                    m_nodes.emplace_back(nodep);
-                } else {
-                    iterateChildrenConst(nodep);
-                }
-            }
-            void visit(AstStable* const nodep) override {
-                if (nodep->sentreep()) {
-                    m_nodes.emplace_back(nodep);
-                } else {
-                    iterateChildrenConst(nodep);
-                }
-            }
-            void visit(AstNode* const nodep) override { iterateChildrenConst(nodep); }
-
-        public:
-            AssertPreClockedSamplesVisitor(AstNode* const rootp, std::vector<AstNodeExpr*>& nodes)
-                : m_nodes{nodes} {
-                iterateChildrenConst(rootp);
-            }
-        };
         std::vector<AstNodeExpr*> nodes;
-        { AssertPreClockedSamplesVisitor{nodep, nodes}; }
+        AssertPreClockedSamplesVisitor::apply(nodep, nodes);
         for (AstNodeExpr* const samplep : nodes) {
-            if (samplep->user1SetOnce()) continue;
             // Recurse selectively: unclocked functions and other handlers are not dispatched.
             lowerClockedSenFunctions(samplep);
             if (AstFell* const fellp = VN_CAST(samplep, Fell)) {
-                lowerFell(fellp, true);
+                lowerFell(fellp);
             } else if (AstRose* const rosep = VN_CAST(samplep, Rose)) {
-                lowerRose(rosep, true);
+                lowerRose(rosep);
             } else {
-                lowerStable(VN_AS(samplep, Stable), true);
+                lowerStable(VN_AS(samplep, Stable));
             }
         }
     }
@@ -453,7 +450,7 @@ private:
         AstConst* const skewp = VN_AS(nodep->skewp(), Const);
         if (skewp->num().isNegative()) skewp->v3error("Skew cannot be negative");
         AstNodeExpr* const exprp = nodep->exprp();
-        varp->name(m_clockingp->name() + "__DOT__" + varp->name());
+        varp->name(clockvarName(m_clockingp, varp->name()));
         m_clockingp->addNextHere(varp->unlinkFrBack());
         nodep->user1p(varp);
         varp->user1p(nodep);
@@ -785,9 +782,7 @@ private:
         UINFO(8, " -varref:  " << nodep);
         UINFO(8, " -varref-var-back:  " << nodep->varp()->backp());
         UINFO(8, " -varref-var-user1:  " << nodep->varp()->user1p());
-        if (AstClockingItem* const itemp = VN_CAST(
-                nodep->varp()->user1p() ? nodep->varp()->user1p() : nodep->varp()->firstAbovep(),
-                ClockingItem)) {
+        if (AstClockingItem* const itemp = clockingItemOf(nodep->varp())) {
             if (nodep->user1()) return;
 
             // ensure linking still works, this has to be done only once
@@ -797,8 +792,11 @@ private:
                 const size_t dotPos = dotted.rfind('.');
                 dotted.erase(dotPos, string::npos);
                 xrefp->dotted(dotted);
+                // Finalize before any clone: the declaration is renamed only after its lift.
+                const AstVar* const varp = nodep->varp();
+                xrefp->name(itemp->user1p() ? varp->name()
+                                            : clockvarName(clockingOf(itemp), varp->name()));
                 UINFO(8, " -clockvarxref-out: " << xrefp);
-                m_xrefsp.emplace_back(xrefp);
             }
 
             if (nodep->access().isReadOrRW() && itemp->direction() == VDirection::OUTPUT) {
@@ -822,9 +820,7 @@ private:
         }
     }
     void visit(AstMemberRef* nodep) override {
-        if (AstClockingItem* const itemp = VN_CAST(
-                nodep->varp()->user1p() ? nodep->varp()->user1p() : nodep->varp()->firstAbovep(),
-                ClockingItem)) {
+        if (AstClockingItem* const itemp = clockingItemOf(nodep->varp())) {
             if (nodep->access().isReadOrRW() && itemp->direction() == VDirection::OUTPUT) {
                 nodep->v3error("Cannot read from output clockvar (IEEE 1800-2023 14.3)");
             }
@@ -1809,8 +1805,6 @@ public:
         { AssertPreClockingVisitor{nodep}; }
         // Process
         iterate(nodep);
-        // Fix up varref names
-        for (AstVarXRef* xrefp : m_xrefsp) xrefp->name(xrefp->varp()->name());
         // Clean up sequence declarations after inlining.
         // Referenced sequences that were inlined have isReferenced cleared.
         // Remaining referenced sequences are in unsupported contexts
