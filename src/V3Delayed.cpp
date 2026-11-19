@@ -81,6 +81,26 @@
 //  - Add new "Post-scheduled" logic:
 //      LHS = __Vdly__LHS;
 //
+// "Synced shadow variable" scheme. Like the "Shadow variable" scheme, but
+// without the "Pre-scheduled" copy, for dense updates (see "Flag array") of
+// unpacked arrays that nothing else writes after the static initializers:
+// no blocking writes other than static initializers, not public, so not
+// written from C++, and no more bytes than a quad word per NBA site. The
+// shadow variable is copied from the target once in an initial block, and
+// every commit copies all of it back, so they are equal whenever no NBA is
+// pending. Each NBA writes its element of the shadow variable. A
+// "Pre-scheduled" copy is ordered after every clocked reader of the target
+// and before every NBA site, so it releases all of them at once, which can
+// make the order of the logic in different instances of a module diverge,
+// so their code is not shared. Other shadow variables keep the
+// "Pre-scheduled" copy, which V3LifePost needs to remove them.
+//  - Add new initial block:
+//      __Vdly__LHS = LHS;
+//  - In the original logic, replace the target variable 'LHS' with '__Vdly__LHS' variables:
+//      __Vdly__LHS[1][2] = RHS;
+//  - Add new "Post-scheduled" logic:
+//      LHS = __Vdly__LHS;
+//
 // "Shadow variable masked" scheme. Similar to the "Shadow variable" scheme,
 // but allows for both blocking and non-blocking updates of packed target
 // variables:
@@ -110,10 +130,11 @@
 // Multiple consecutive NBAs of compatible form can share the same __Vdly_Set* flag
 //
 // "Flag array" scheme. Used instead of shared flags for dense, constant-index
-// whole-element updates in ordered code. One array of flags and one array of
-// captured values replace the per-NBA temporaries. Dense means at least as
-// many NBA sites as total array elements, and more than one site. The flag
-// temporaries start zeroed, and each committed element clears its flag:
+// whole-element updates in ordered code that cannot use the "Synced shadow
+// variable" scheme. One array of flags and one array of captured values
+// replace the per-NBA temporaries. Dense means at least as many NBA sites as
+// total array elements, and more than one site.
+// The flag temporaries start zeroed, and each committed element clears its flag:
 //   LHS[1][2] <= RHS
 // becomes, at the original NBA:
 //   __Vdly_Val__LHS[1][2] = RHS;
@@ -211,6 +232,7 @@ protected:
         Undecided = 0,
         ShadowVar,
         ShadowVarMasked,
+        ShadowVarSynced,
         FlagArray,
         FlagShared,
         GenericLocal,
@@ -304,6 +326,8 @@ protected:
         bool m_event = false;  // Fired by a non-blocking event trigger ('->>')
         bool m_nonClocked = false;  // Used on LHS of NBA in init or unordered code, or a function
         bool m_mixed = false;  // Also written by blocking assignments outside init code
+        // Also written in init code other than static initializers, or in uncalled functions
+        bool m_initWritten = false;
         // All NBAs write whole elements at constant indices, without consecutive target sites
         bool m_constElems = true;
         uint32_t m_nNbas = 0;  // Number of NBAs to the target
@@ -318,7 +342,7 @@ protected:
 
         // Union of stuff needed for the various schemes - use accessors below!
         union {
-            struct {  // Stuff needed for Scheme::ShadowVar
+            struct {  // Stuff needed for Scheme::ShadowVar/Scheme::ShadowVarSynced
                 AstVarScope* vscp;  // The shadow variable
             } m_shadowVariableKit;
             struct {  // Stuff needed for Scheme::ShadowVarMasked
@@ -351,7 +375,8 @@ protected:
         }
         // Accessors for the above union fields
         auto& shadowVariableKit() {
-            UASSERT(m_scheme == Scheme::ShadowVar, "Inconsistent Scheme");
+            UASSERT(m_scheme == Scheme::ShadowVar || m_scheme == Scheme::ShadowVarSynced,
+                    "Inconsistent Scheme");
             return m_kitUnion.m_shadowVariableKit;
         }
         auto& shadowVarMaskedKit() {
@@ -762,6 +787,25 @@ class DelayedAnalysis final : public DelayedBase {
         }
     }
 
+    // Note the targets of NBAs written by 'vtxp', which is init code or a function not called
+    // from other code
+    static void noteInitWrites(
+        const CodeVertex* const vtxp,
+        const std::unordered_map<const AstVar*, std::vector<TargetInfo*>>& var2TargetInfops) {
+        const ProcVertex* const procVtxp = vtxp->cast<ProcVertex>();
+        if (procVtxp && procVtxp->m_senTreep->hasStatic()) return;
+        for (AstNodeExpr* const refp : vtxp->m_wrps) {
+            const AstVarRef* const vrefp = VN_CAST(refp, VarRef);
+            const AstVar* const varp = vrefp ? vrefp->varp() : VN_AS(refp, MemberRef)->varp();
+            // Mark all instances together: a MemberRef may select any of them, and for a VarRef
+            // this keeps their schemes from splitting, so their code can be shared. One marked
+            // means all are, which bounds the work by the writes plus the instances.
+            const auto it = var2TargetInfops.find(varp);
+            if (it == var2TargetInfops.end() || it->second.front()->m_initWritten) continue;
+            for (TargetInfo* const targetInfop : it->second) targetInfop->m_initWritten = true;
+        }
+    }
+
     // Note the blocking write 'refp' in 'vtxp' may update the NBA target of 'targetInfop', if any
     static void noteBlockingWrite(TargetInfo* targetInfop, const CodeVertex* vtxp,
                                   AstNodeExpr* refp) {
@@ -773,7 +817,9 @@ class DelayedAnalysis final : public DelayedBase {
 
     // Note the targets of NBAs also written by blocking assignments in combinational, clocked or
     // unordered code, which may run while the NBAs are pending. Those only in init code, which
-    // runs outside the eval loop, are safe, and are skipped.
+    // runs outside the eval loop, are safe, but are noted for Scheme::ShadowVarSynced, unless
+    // in static initializers, which run before all initial blocks. Those in functions not called
+    // from other code, e.g. DPI exports called only externally, are noted too.
     void noteBlockingWrites() {
         // Need a map from AstVar to all TargetInfos associated with the corresponding AstVarScopes
         std::unordered_map<const AstVar*, std::vector<TargetInfo*>> var2TargetInfops;
@@ -783,7 +829,10 @@ class DelayedAnalysis final : public DelayedBase {
         for (const V3GraphVertex& vtx : m_state.graph.vertices()) {
             const CodeVertex* const vtxp = vtx.cast<CodeVertex>();
             if (!vtxp) continue;
-            if (!vtxp->m_comb && !vtxp->m_clocked && !vtxp->m_unordered) continue;
+            if (!vtxp->m_comb && !vtxp->m_clocked && !vtxp->m_unordered) {
+                noteInitWrites(vtxp, var2TargetInfops);
+                continue;
+            }
             for (AstNodeExpr* const refp : vtxp->m_wrps) {
                 if (const AstVarRef* const vrefp = VN_CAST(refp, VarRef)) {
                     noteBlockingWrite(m_state.targetInfo.tryGet(vrefp->varScopep()), vtxp, refp);
@@ -935,6 +984,28 @@ class DelayedAnalysis final : public DelayedBase {
         return nNbas != 0;
     }
 
+    // Whether one copy of the whole array has no more than a quad word per NBA site, so the
+    // commit copying it after its updates costs about as much as the per-site flag clears of
+    // the shared flag scheme. Strings have no fixed size, so their copies are not bounded.
+    // Divide the budget per dimension rather than multiplying dimensions, which can overflow.
+    static bool shadowCopyFits(const AstUnpackArrayDType* dtypep, uint32_t nNbas) {
+        static constexpr uint64_t COPY_BYTES_PER_NBA = sizeof(uint64_t);
+        if (dtypep->basicp()->isString()) return false;
+        uint64_t budget = nNbas * COPY_BYTES_PER_NBA;
+        const AstNodeDType* elemp = dtypep;
+        while (const AstUnpackArrayDType* const arrayp = VN_CAST(elemp, UnpackArrayDType)) {
+            budget /= arrayp->elementsConst();
+            elemp = arrayp->subDTypep()->skipRefp();
+        }
+        return static_cast<uint64_t>(elemp->widthTotalBytes()) <= budget;
+    }
+
+    // Whether only the NBAs write 'varp' after its static initializers, so a shadow copy taken
+    // in an initial block stays equal to it whenever no NBA is pending
+    static bool onlyNbasWrite(const AstVar* const varp, const TargetInfo& targetInfo) {
+        return !targetInfo.m_mixed && !targetInfo.m_initWritten && !varp->isSigPublic();
+    }
+
     // Choose the NBA scheme used for the given variable.
     Scheme chooseScheme(const AstVarScope* vscp, const TargetInfo& targetInfo) {
         UASSERT_OBJ(targetInfo.m_scheme == Scheme::Undecided, vscp, "NBA scheme already decided");
@@ -955,11 +1026,17 @@ class DelayedAnalysis final : public DelayedBase {
         if (uaDTypep && !targetInfo.m_whole) {
             // How many times a loop executes is not known, so must use a dynamic queue
             if (targetInfo.m_inLoop) return Scheme::GenericLocal;
-            // For dense constant-index whole-element updates, bound the number of model
-            // members with arrays of flags and values. Otherwise retain shared flags.
+            // Dense constant-index whole-element updates have no more array elements than
+            // NBA sites. If nothing else writes the target, a shadow copy needs no flags, when
+            // copying the array per trigger is cheap. Otherwise bound the number of model
+            // members with arrays of flags and values. Sparse updates retain shared flags.
             if (uaDTypep->basicp()) {
                 if (targetInfo.m_constElems && targetInfo.m_nNbas > 1
                     && flagArraysFit(uaDTypep, targetInfo.m_nNbas)) {
+                    if (onlyNbasWrite(vscp->varp(), targetInfo)
+                        && shadowCopyFits(uaDTypep, targetInfo.m_nNbas)) {
+                        return Scheme::ShadowVarSynced;
+                    }
                     return Scheme::FlagArray;
                 }
                 return Scheme::FlagShared;
@@ -1046,6 +1123,7 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
     // STATE - Statistic tracking
     VDouble0 m_nSchemeShadowVar;  // Number of variables using Scheme::ShadowVar
     VDouble0 m_nSchemeShadowVarMasked;  // Number of variables using Scheme::ShadowVarMasked
+    VDouble0 m_nSchemeShadowVarSynced;  // Number of variables using Scheme::ShadowVarSynced
     VDouble0 m_nSchemeFlagArray;  // Number of variables using Scheme::FlagArray
     VDouble0 m_nSchemeFlagShared;  // Number of variables using Scheme::FlagShared
     VDouble0 m_nSchemeGenericLocal;  // Number of variables using Scheme::GenericLocal
@@ -1276,27 +1354,41 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
         V3Const::constifyExpensiveEdit(m_globalNbaCommitSenTreep);
     }
 
-    // Scheme::ShadowVar
+    // Scheme::ShadowVar and Scheme::ShadowVarSynced
     void prepareSchemeShadowVar(AstVarScope* vscp, TargetInfo& targetInfo) {
-        UASSERT_OBJ(targetInfo.m_scheme == Scheme::ShadowVar, vscp, "Inconsistent NBA scheme");
+        const bool synced = targetInfo.m_scheme == Scheme::ShadowVarSynced;
+        UASSERT_OBJ(synced || targetInfo.m_scheme == Scheme::ShadowVar, vscp,
+                    "Inconsistent NBA scheme");
         FileLine* const flp = vscp->fileline();
         AstScope* const scopep = vscp->scopep();
         // Create the shadow variable
         const std::string name = "_" + vscp->varp()->shortName();
         AstVarScope* const shadowVscp = m_dlyTmps.make(flp, scopep, vscp->dtypep(), name);
         targetInfo.shadowVariableKit().vscp = shadowVscp;
-        // Mark both for V3LifePsot
-        vscp->optimizeLifePost(true);
-        shadowVscp->optimizeLifePost(true);
-        // Create the AstActive for the Pre/Post logic
+        // Create the AstActive for the Post logic, and the Pre logic of Scheme::ShadowVar
         AstActive* const activep = new AstActive{flp, "", targetInfo.senTreep()};
         activep->senTreeStorep(targetInfo.senTreep());
         scopep->addBlocksp(activep);
-        // Add 'Pre' scheduled 'shadowVariable = originalVariable' assignment
-        AstAlwaysPre* const prep = new AstAlwaysPre{flp};
-        activep->addProcsp(prep);
-        prep->addStmtsp(new AstAssign{flp, new AstVarRef{flp, shadowVscp, VAccess::WRITE},
-                                      new AstVarRef{flp, vscp, VAccess::READ}});
+        // The 'shadowVariable = originalVariable' assignment
+        AstAssign* const copyp = new AstAssign{flp, new AstVarRef{flp, shadowVscp, VAccess::WRITE},
+                                               new AstVarRef{flp, vscp, VAccess::READ}};
+        if (synced) {
+            // Copy once, after the static initializers
+            AstActive* const initActivep
+                = new AstActive{flp, "nba-shadow-init",
+                                new AstSenTree{flp, new AstSenItem{flp, AstSenItem::Initial{}}}};
+            initActivep->senTreeStorep(initActivep->sentreep());
+            scopep->addBlocksp(initActivep);
+            initActivep->addProcsp(new AstInitial{flp, copyp});
+        } else {
+            // Mark both for V3LifePost, which needs the complete 'Pre' write synced shadows lack
+            vscp->optimizeLifePost(true);
+            shadowVscp->optimizeLifePost(true);
+            // Copy 'Pre' scheduled
+            AstAlwaysPre* const prep = new AstAlwaysPre{flp};
+            activep->addProcsp(prep);
+            prep->addStmtsp(copyp);
+        }
         // Add 'Post' scheduled 'originalVariable = shadowVariable' assignment
         AstAlwaysPost* const postp = new AstAlwaysPost{flp};
         activep->addProcsp(postp);
@@ -1306,7 +1398,9 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
     void convertSchemeShadowVar(const NBA& nba, TargetInfo& targetInfo) {
         AstAssignDly* const nodep = VN_AS(nba.nodep, AssignDly);
         AstVarScope* const vscp = VN_AS(nba.targetp, VarRef)->varScopep();
-        UASSERT_OBJ(targetInfo.m_scheme == Scheme::ShadowVar, vscp, "Inconsistent NBA scheme");
+        UASSERT_OBJ(targetInfo.m_scheme == Scheme::ShadowVar
+                        || targetInfo.m_scheme == Scheme::ShadowVarSynced,
+                    vscp, "Inconsistent NBA scheme");
         AstVarScope* const shadowVscp = targetInfo.shadowVariableKit().vscp;
 
         // Replace the write ref on the LHS with the shadow variable
@@ -1684,6 +1778,11 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
                 prepareSchemeShadowVarMasked(vscp, targetInfo);
                 break;
             }
+            case Scheme::ShadowVarSynced: {
+                ++m_nSchemeShadowVarSynced;
+                prepareSchemeShadowVar(vscp, targetInfo);
+                break;
+            }
             case Scheme::FlagArray: {
                 ++m_nSchemeFlagArray;
                 prepareSchemeFlagArray(vscp, targetInfo);
@@ -1724,7 +1823,8 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
                 UASSERT_OBJ(false, nba.targetp, "Unreachable");
                 break;
             }  // LCOV_EXCL_STOP
-            case Scheme::ShadowVar: {
+            case Scheme::ShadowVar:
+            case Scheme::ShadowVarSynced: {
                 convertSchemeShadowVar(nba, targetInfo);
                 break;
             }
@@ -1750,6 +1850,7 @@ class DelayedRewrite final : public VNDeleter, public DelayedBase {
 
         V3Stats::addStat("NBA, variables using ShadowVar scheme", m_nSchemeShadowVar);
         V3Stats::addStat("NBA, variables using ShadowVarMasked scheme", m_nSchemeShadowVarMasked);
+        V3Stats::addStat("NBA, variables using ShadowVarSynced scheme", m_nSchemeShadowVarSynced);
         V3Stats::addStat("NBA, variables using FlagArray scheme", m_nSchemeFlagArray);
         V3Stats::addStat("NBA, variables using FlagShared scheme", m_nSchemeFlagShared);
         V3Stats::addStat("NBA, variables using GenericLocal scheme", m_nSchemeGenericLocal);

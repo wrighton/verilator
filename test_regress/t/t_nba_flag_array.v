@@ -10,6 +10,16 @@
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0x exp=%0x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
+// Each entry is written by its own process
+interface nba_ifc;
+  logic clk;
+  int cyc;
+  logic [6:0] arr[2];
+  for (genvar i = 0; i < 2; ++i) begin : g_arr
+    always @(posedge clk) if (cyc[1:0] == 2'(i + 1)) arr[i] <= 7'(cyc);
+  end
+endinterface
+
 module t (
     input clk
 );
@@ -17,11 +27,14 @@ module t (
   wire [31:0] in = cyc * 32'h9e3779b9;
   wire [7:0] wr = cyc == 0 ? '1 : cyc[3] ? '0 : 8'(1) << (cyc % 7);
 
-  // Bounded sizes expose member scaling; none of these writes execute in the first cycle.
+  // Bounded sizes expose scaling with the number of elements; none of these writes execute
+  // in the first cycle.
   dense #(.N(16)) u_dense16 (.clk, .cyc);
   dense #(.N(64)) u_dense64 (.clk, .cyc);
   dense #(.N(256)) u_dense256 (.clk, .cyc);
   dense #(.N(16)) u_dense16_copy (.clk, .cyc);
+  mixed_dense #(.N(16)) u_mixed16 (.clk, .cyc);
+  mixed_dense #(.N(256)) u_mixed256 (.clk, .cyc);
 
   typedef struct packed {
     logic [3:0] a;
@@ -34,6 +47,7 @@ module t (
   } upair_t;
 
   logic [2:0] fifo[5];
+  // Arrays with more than a quad word per NBA site keep flag arrays.
   logic [94:0] wide[3];
   // Nonzero, negative, and mixed ascending/descending bounds on both axes.
   logic [6:0] grid[2:4][-2:-3];
@@ -65,7 +79,7 @@ module t (
     for (genvar j = 0; j < 3; ++j) begin : g_typed
       always @(posedge clk) if (wr[i*3+j]) typed[i][j] <= in[5:0] + 6'(j);
     end
-    // Whole rows and unpacked structs use fallback; real/string elements use array flags.
+    // Whole rows and unpacked structs use fallback; reals use a shadow copy, strings flag arrays.
     always @(posedge clk) if (wr[i]) rows[i] <= '{in[7:0], in[15:8]};
     always @(posedge clk) if (wr[i]) reals[i] <= real'(in[15:0]) / 4.0;
     always @(posedge clk) if (wr[i]) strs[i] <= $sformatf("%0d", in[15:0]);
@@ -91,7 +105,31 @@ module t (
     end
   end
 
-  // Different clocks/processes update different entries in the same flag array.
+  // Blocking writes keep flag arrays; mixed bounds and a typedef'd dimension.
+  typedef logic [94:0] mrow_t[1:0];
+  mrow_t mgrid[3:2][-2:-1] = '{default: '0};
+  mrow_t mgridExp[3:2][-2:-1] = '{default: '0};
+  for (genvar i = 2; i <= 3; ++i) begin : g_mgrid_i
+    for (genvar j = -2; j <= -1; ++j) begin : g_mgrid_j
+      for (genvar k = 0; k <= 1; ++k) begin : g_mgrid_k
+        // The blocking write below owns one element; two sites per element keep it dense.
+        if (i != 3 || j != -1 || k != 0) begin : g_nba
+          always @(posedge clk) begin
+            if (wr[(i-2)*4+(j+2)*2+k]) mgrid[i][j][k] <= {in, in, in[30:0]} ^ 95'(i*8+j*2+k);
+            else if (cyc[2]) mgrid[i][j][k] <= 95'(cyc) + 95'(k);
+          end
+        end
+      end
+    end
+  end
+  always @(negedge clk) begin
+    if (cyc[1]) begin
+      mgrid[3][-1][0] = {in, in, ~in[30:0]};
+      mgridExp[3][-1][0] = {in, in, ~in[30:0]};
+    end
+  end
+
+  // Different clocks/processes update different entries of the same dense target.
   // verilator lint_off MULTIDRIVEN
   logic [6:0] edges[2] = '{7'h31, 7'h32};
   // verilator lint_on MULTIDRIVEN
@@ -100,7 +138,7 @@ module t (
   always @(negedge clk) if (cyc > 0 && wr[1]) edges[1] <= in[14:8];
   always @(negedge clk) begin
     `checkh(edges[0], edgesExp[0]);
-    // Runtime selection keeps both entries in one array, so clocks share the flag arrays.
+    // Runtime selection keeps both entries in one array, so clocks share one shadow copy.
     `checkh(edges[cyc%2], edgesExp[cyc%2]);
     if (cyc > 0 && wr[1]) edgesExp[1] = in[14:8];
   end
@@ -152,7 +190,51 @@ module t (
     adjacent[1] <= in[14:8];
   end
 
-  // Sparse and single-site writes must not allocate full flag/value arrays.
+  // Dense targets written after the static initializers, other than by their NBAs, keep flag
+  // arrays, as the synced shadow copy is taken once, in an initial block. The writer of 'initw'
+  // is in a later scope, so it runs after that copy.
+  logic [6:0] initw[2];
+  logic [6:0] initwExp[2];
+  initw_writer u_initw_writer ();
+  initial initwExp[1] = 7'h2a;
+  for (genvar i = 0; i < 2; ++i) begin : g_initw
+    always @(posedge clk) if (wr[i] && !(i == 1 && cyc < 4)) initw[i] <= in[6:0] ^ 7'(i);
+  end
+  // Written through a virtual interface handle in an initial block. That write is not checked,
+  // and the DPI export and the public case are not executed; only the scheme counts check them.
+  nba_ifc u_ifc ();
+  assign u_ifc.clk = clk;
+  assign u_ifc.cyc = cyc;
+  class Poker;
+    virtual nba_ifc vif;
+    function new(virtual nba_ifc vif);
+      this.vif = vif;
+    endfunction
+    function void poke();
+      vif.arr[1] = 7'h2a;
+    endfunction
+  endclass
+  initial begin
+    automatic Poker poker = new(u_ifc);
+    poker.poke();
+  end
+  // Written by a DPI export no other code calls
+  logic [6:0] dpiw[2];
+  logic [6:0] dpiwExp[2];
+  export "DPI-C" function dpiwPoke;
+  function void dpiwPoke();
+    dpiw[1] = 7'h2a;
+  endfunction
+  for (genvar i = 0; i < 2; ++i) begin : g_dpiw
+    always @(posedge clk) if (wr[i]) dpiw[i] <= in[20:14] ^ 7'(i);
+  end
+  logic [6:0] pub[2] /*verilator public_flat_rw*/;
+  logic [6:0] pubExp[2];
+  for (genvar i = 0; i < 2; ++i) begin : g_pub
+    always @(posedge clk) if (wr[i]) pub[i] <= in[13:7] ^ 7'(i);
+  end
+
+  // Sparse and single-site writes must not allocate full shadow or flag/value arrays.
   logic [6:0] sparse[64] = '{default: 7'h55};
   logic [6:0] sparseExp[64] = '{default: 7'h55};
   logic [6:0] single[1] = '{7'h55};
@@ -187,6 +269,10 @@ module t (
       `checkp(upairs, upairsExp);
       `checkp(two, twoExp);
       `checkp(mixed, mixedExp);
+      `checkp(initw, initwExp);
+      `checkp(pub, pubExp);
+      `checkp(dpiw, dpiwExp);
+      `checkp(mgrid, mgridExp);
       `checkp(effect, effectExp);
       `checkp(dynamic, dynamicExp);
       `checkp(partial, partialExp);
@@ -213,6 +299,16 @@ module t (
     twoExp[1] = in[14:8];
     if (wr[1] || wr[2]) twoExp[0] = in[22:16];
     for (int i = 0; i < 2; ++i) if (wr[i]) mixedExp[i] = in[3:0];
+    for (int i = 0; i < 2; ++i) if (wr[i] && !(i == 1 && cyc < 4)) initwExp[i] = in[6:0] ^ 7'(i);
+    for (int i = 0; i < 2; ++i) if (wr[i]) pubExp[i] = in[13:7] ^ 7'(i);
+    for (int i = 0; i < 2; ++i) if (wr[i]) dpiwExp[i] = in[20:14] ^ 7'(i);
+    for (int i = 2; i <= 3; ++i)
+      for (int j = -2; j <= -1; ++j)
+        for (int k = 0; k <= 1; ++k)
+          if (i != 3 || j != -1 || k != 0) begin
+            if (wr[(i-2)*4+(j+2)*2+k]) mgridExp[i][j][k] = {in, in, in[30:0]} ^ 95'(i*8+j*2+k);
+            else if (cyc[2]) mgridExp[i][j][k] = 95'(cyc) + 95'(k);
+          end
     if (cyc > 0 && wr[0]) edgesExp[0] = in[6:0];
     if (wr[0]) begin callsExp = callsExp + 1; effectExp[0] = 7'(callsExp); end
     if (wr[1]) begin callsExp = callsExp + 1; effectExp[1] = 7'(callsExp); end
@@ -249,5 +345,40 @@ module dense #(parameter int N = 16) (input clk, input int cyc);
     `checkp(data, expected);
     for (int i = 0; i < N; ++i)
       if (cyc > 0 && !cyc[2] && (cyc[0] || cyc%N == i)) expected[i] = value ^ 7'(i);
+  end
+endmodule
+
+// Blocking writes to another element keep flag arrays, without members per element.
+module mixed_dense #(parameter int N = 16) (input clk, input int cyc);
+  logic [6:0] data[N+1] = '{default: 7'h55};
+  logic [6:0] expected[N+1] = '{default: 7'h55};
+  wire [6:0] value = 7'(cyc * 17);
+  for (genvar i = 0; i < N; ++i) begin : g_data
+    always @(posedge clk) begin
+      if (cyc > 0 && !cyc[2] && (cyc[0] || cyc%N == i)) data[i] <= value ^ 7'(i);
+      else if (cyc[3]) data[i] <= ~value;
+    end
+  end
+  always @(negedge clk) begin
+    if (cyc[1]) begin
+      data[N] = value;
+      expected[N] = value;
+    end
+  end
+  always @(posedge clk) begin
+    `checkp(data, expected);
+    for (int i = 0; i < N; ++i) begin
+      if (cyc > 0 && !cyc[2] && (cyc[0] || cyc%N == i)) expected[i] = value ^ 7'(i);
+      else if (cyc[3]) expected[i] = ~value;
+    end
+  end
+endmodule
+
+module initw_writer;
+  // verilator no_inline_module
+  // The second write finds the target already marked
+  initial begin
+    t.initw[1] = 7'h15;
+    t.initw[1] = 7'h2a;
   end
 endmodule
