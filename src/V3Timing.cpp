@@ -51,13 +51,26 @@
 //     - if a trigger scheduler cannot be used (e.g. in a class), a wait only on an event variable
 //       whose storage outlives the wait, not through a handle and without 'iff', becomes a CAwait
 //       on the event's wait list in the dynamic trigger scheduler, resumed after the event fires;
-//       other waits evaluate their trigger on every trigger evaluation
+//       a wait on a wait queue of std::mailbox becomes a CAwait for its turn on the queue's wait
+//       list; other waits evaluate their trigger on every trigger evaluation
 // - for each wait(cond) statement:
 //     - replace it with a loop like: while (!cond) @(<vars from cond>)
 // - for each fork:
 //     - if it's not a fork..join_none:
 //         - create a join sync variable
 //         - create statements that sync the main process with its children
+//
+// MailboxWaitVisitor, which runs earlier, before calls of functions become calls of C++
+// functions, chooses how std::mailbox waits: on the wait queues of the mailbox, unless the
+// condition of a wait or the expression of an event control, outside the std package, may have
+// side effects, or the design references a variable of the std package, such as a member of a
+// mailbox. Such a condition could change a mailbox while the triggers are evaluated, or kill a
+// process, which may resume another one, and a member changed directly does not wake the
+// waiters, which would then resume otherwise than if they tested their conditions, so they
+// then do (see verilated_std.sv and VlWaitQueue). Each subroutine that a condition may call is
+// scanned once, so the choice is linear in the size of the design, apart from isPure() of a
+// chain of member selects in a subroutine, which is quadratic in the length of the chain (see
+// MailboxWaitVisitor::scanCondition).
 //
 // See the internals documentation docs/internals.rst for more details.
 //
@@ -579,6 +592,7 @@ class TimingControlVisitor final : public VNVisitor {
     size_t m_statVariableDelays = 0;  // Number of delays with value unknown at compile time
     size_t m_statSuspendableProcs = 0;  // Number of suspendable processes
     size_t m_statEventListWaits = 0;  // Number of event controls on an event's wait list
+    size_t m_statQueueWaits = 0;  // Number of event controls on a wait queue
 
     // METHODS
     // Transform an assignment with an intra timing control into a timing control with the
@@ -699,13 +713,27 @@ class TimingControlVisitor final : public VNVisitor {
         }
         return nullptr;
     }
-    // Create the wait of an event control on the wait list of its event. The event is only
-    // read: the wait list it links is runtime state of the scheduler, not of the design.
-    AstCAwait* createEventListWait(AstSenTree* const sentreep, AstVarRef* const eventp) {
+    // Return the wait queue if the sentree only waits on one, else nullptr. Only std::mailbox
+    // has wait queues (see V3Param::markStdMailboxInternals).
+    static AstVarRef* waitQueuep(const AstSenTree* const sentreep) {
+        const AstSenItem* const itemp = sentreep->sensesp();
+        if (itemp->nextp() || itemp->condp()) return nullptr;
+        AstVarRef* const refp = VN_CAST(itemp->sensp(), VarRef);
+        if (!refp) return nullptr;
+        const AstBasicDType* const basicp = refp->varp()->basicp();
+        if (!basicp || !basicp->isWaitQueue()) return nullptr;
+        UASSERT_OBJ(refp->varp()->isInternal(), refp, "Wait queue outside std::mailbox");
+        return refp;
+    }
+    // Create the wait of an event control on the wait list of its event, or for its turn on a
+    // wait queue. The event or queue is only read: the wait list it links is runtime state of
+    // the scheduler, not of the design.
+    AstCAwait* createEventListWait(AstSenTree* const sentreep, AstVarRef* const eventp,
+                                   const VCMethod method) {
         FileLine* const flp = sentreep->fileline();
         AstCMethodHard* const methodp = new AstCMethodHard{
-            flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE},
-            VCMethod::SCHED_EVENT_TRIGGER, eventp->cloneTree(false)};
+            flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE}, method,
+            eventp->cloneTree(false)};
         methodp->dtypeSetVoid();
         addProcessInfo(methodp);
         addEventDebugInfo(methodp, sentreep);
@@ -1164,10 +1192,18 @@ class TimingControlVisitor final : public VNVisitor {
         }
         // Relink child statements after the event control
         if (nodep->stmtsp()) nodep->addNextHere(nodep->stmtsp()->unlinkFrBackWithNext());
+        if (AstVarRef* const queuep = waitQueuep(nodep->sentreep())) {
+            ++m_statQueueWaits;
+            nodep->replaceWith(
+                createEventListWait(nodep->sentreep(), queuep, VCMethod::SCHED_QUEUE_WAIT));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         const bool dynamic = needDynamicTrigger(nodep->sentreep());
         if (AstVarRef* const eventp = dynamic ? listedEventp(nodep->sentreep()) : nullptr) {
             ++m_statEventListWaits;
-            nodep->replaceWith(createEventListWait(nodep->sentreep(), eventp));
+            nodep->replaceWith(
+                createEventListWait(nodep->sentreep(), eventp, VCMethod::SCHED_EVENT_TRIGGER));
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
@@ -1596,7 +1632,120 @@ public:
         V3Stats::addStat("Timing, unknown #variable delays", m_statVariableDelays);
         V3Stats::addStat("Timing, suspendable processes", m_statSuspendableProcs);
         V3Stats::addStat("Timing, event controls on event wait lists", m_statEventListWaits);
+        V3Stats::addStat("Timing, event controls on wait queues", m_statQueueWaits);
     }
+};
+
+//######################################################################
+// MailboxWaitVisitor
+
+class MailboxWaitVisitor final : public VNVisitorConst {
+    // NODE STATE
+    //  AstNodeFTask::user1()  -> bool. Queued to be scanned (see hiddenEffect)
+    //  AstVar::user1()        -> bool. Declared in the std package
+    const VNUser1InUse m_user1InUse;
+
+    // STATE
+    AstPackage* const m_stdp = v3Global.rootp()->stdPackagep();  // The std package
+    bool m_inStd = false;  // Under the std package
+    // If a condition or event expression may have side effects, or the design uses a variable
+    // of the std package, such as a member of a mailbox, which its methods would not tell
+    bool m_impure = false;
+    std::vector<AstNodeFTask*> m_taskps;  // Subroutines that conditions may call, to scan
+    // The ifs in the std package choosing to poll, in order
+    std::vector<AstIf*> m_choiceps;
+    size_t m_statTasks = 0;  // Subroutines scanned
+
+    // METHODS
+    // Notes if evaluating a condition 'nodep' may have side effects. isPure() of each node tells,
+    // and of the subroutines called, as the one of a method call does not look at its receiver,
+    // nor the one of an associative array select at its index, apart from what hiddenEffect()
+    // looks for, which the subroutines are scanned for, once each. A select of a member, which
+    // has no effect of its own, is not asked, as its isPure() asks the whole chain of selects
+    // each time, so the scan is linear in the size of the design, apart from isPure() of a
+    // subroutine that a condition calls, which asks each select of a chain in its body. That is
+    // quadratic in the length of a chain written in the source, as for V3Const and the other
+    // passes asking isPure(), which cache it per subroutine, so this computes it once more, and
+    // a chain of 6400 selects takes 2 s to verilate with or without the choice.
+    void scanCondition(AstNode* const nodep) {
+        if (m_impure) return;
+        m_impure = nodep->exists([this](AstNode* np) {
+            if (VN_IS(np, MemberRef) || VN_IS(np, StructSel)) return false;
+            return !np->isPure() || hiddenEffect(np);
+        });
+    }
+    // If 'nodep' may have a side effect that isPure() does not tell: a call of a virtual method
+    // may run a method overriding it, and 'disable fork' kills processes, which may resume
+    // their parents. Queues a subroutine it calls to scan for these.
+    bool hiddenEffect(AstNode* const nodep) {
+        if (VN_IS(nodep, DisableFork)) return true;
+        if (const AstNodeFTaskRef* const refp = VN_CAST(nodep, NodeFTaskRef)) {
+            AstNodeFTask* const taskp = refp->taskp();
+            // A call that is not linked is not pure, nor is a subroutine calling one
+            UASSERT_OBJ(taskp, refp, "Unlinked call scanned");
+            if (taskp->isVirtual()) return true;
+            if (!taskp->user1()) {
+                taskp->user1(true);
+                m_taskps.push_back(taskp);
+            }
+        }
+        return false;
+    }
+
+    // VISITORS
+    void visit(AstPackage* nodep) override {
+        VL_RESTORER(m_inStd);
+        m_inStd = m_inStd || nodep == m_stdp;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstIf* nodep) override {
+        const AstCMethodHard* const methodp = VN_CAST(nodep->condp(), CMethodHard);
+        if (methodp && methodp->method() == VCMethod::WAIT_QUEUE_POLLED) {
+            m_choiceps.push_back(nodep);
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (!m_inStd && nodep->varp()->user1()) m_impure = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstMemberRef* nodep) override {
+        if (!m_inStd && nodep->varp()->user1()) m_impure = true;
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstWait* nodep) override {
+        if (!m_inStd) scanCondition(nodep->condp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstSenItem* nodep) override {
+        if (!m_inStd) {
+            if (nodep->sensp()) scanCondition(nodep->sensp());
+            if (nodep->condp()) scanCondition(nodep->condp());
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit MailboxWaitVisitor(AstNetlist* nodep) {
+        // Earlier passes may have cached the purity of nodes they changed since
+        VIsCached::clearCacheTree();
+        if (m_stdp) m_stdp->foreach([](AstVar* varp) { varp->user1(true); });
+        iterateConst(nodep);
+        while (!m_impure && !m_taskps.empty()) {
+            AstNodeFTask* const taskp = m_taskps.back();
+            m_taskps.pop_back();
+            ++m_statTasks;
+            m_impure = taskp->exists([this](AstNode* np) { return hiddenEffect(np); });
+        }
+        V3Stats::addStat("Timing, mailbox wait subroutines scanned", m_statTasks);
+    }
+    ~MailboxWaitVisitor() = default;
+
+    // ACCESSORS
+    bool impure() const { return m_impure; }
+    const std::vector<AstIf*>& choiceps() const { return m_choiceps; }
 };
 
 //######################################################################
@@ -1629,6 +1778,23 @@ AstNodeExpr* V3Timing::delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) {
         valuep = new AstMul{flp, valuep, tsfp};
     }
     return V3Const::constifyEdit(valuep);  // Simplify
+}
+
+void V3Timing::chooseMailboxWaits(AstNetlist* nodep) {
+    UINFO(2, __FUNCTION__ << ":");
+    {
+        const MailboxWaitVisitor visitor{nodep};
+        VNDeleter deleter;
+        for (AstIf* const ifp : visitor.choiceps()) {
+            AstNode* const keptp = visitor.impure() ? ifp->thensp() : ifp->elsesp();
+            UASSERT_OBJ(keptp, ifp, "Mailbox wait without both forms");
+            ifp->replaceWith(keptp->unlinkFrBackWithNext());
+            VL_DO_DANGLING(deleter.pushDeletep(ifp), ifp);
+        }
+        V3Stats::addStat("Timing, mailbox waits polled",
+                         visitor.impure() ? visitor.choiceps().size() : 0);
+    }
+    V3Global::dumpCheckGlobalTree("mailboxwait", 0, dumpTreeEitherLevel() >= 6);
 }
 
 void V3Timing::timingAll(AstNetlist* nodep) {

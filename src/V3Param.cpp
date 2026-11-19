@@ -2318,6 +2318,27 @@ class ParamProcessor final {
         const AstPackage* const stdp = v3Global.rootp()->stdPackagep();
         return stdp && m_memberMap.findMember(stdp, "mailbox") == modp;
     }
+    // The waiting queues of the mailbox class of the std package, which only its methods may use,
+    // as they keep its waiters informed, are marked internal, before the class is specialized,
+    // so its specializations keep that, and V3Width rejects other uses. %p does not show them.
+    // They are declared as chandle (see verilated_std.sv), and made wait queues of the timing
+    // scheduler, so no other class has a member of that type (see VlWaitQueue).
+    void markStdMailboxInternals() {
+        const AstPackage* const stdp = v3Global.rootp()->stdPackagep();
+        if (!stdp) return;
+        const AstClass* const classp = VN_CAST(m_memberMap.findMember(stdp, "mailbox"), Class);
+        UASSERT_OBJ(classp, stdp, "std::mailbox not found");
+        for (const char* const name : {"m_getQueue", "m_putQueue"}) {
+            AstVar* const varp = VN_CAST(m_memberMap.findMember(classp, name), Var);
+            if (!varp) continue;  // Declared only for timing
+            AstBasicDType* const chandlep = VN_CAST(varp->childDTypep(), BasicDType);
+            UASSERT_OBJ(chandlep && chandlep->isCHandle() && !varp->dtypep(), varp,
+                        "Wait queue of std::mailbox should be an unresolved chandle");
+            VL_DO_DANGLING(m_deleter.pushDeletep(chandlep->unlinkFrBack()), chandlep);
+            varp->childDTypep(new AstBasicDType{varp->fileline(), VBasicDTypeKwd::WAIT_QUEUE});
+            varp->isInternal(true);
+        }
+    }
 
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides,
@@ -3304,6 +3325,7 @@ public:
         for (AstNodeModule* const modp : nodep->modulespList()) {
             m_allModuleNames.insert(modp->name());
         }
+        markStdMailboxInternals();
     }
     ~ParamProcessor() = default;
     VL_UNCOPYABLE(ParamProcessor);

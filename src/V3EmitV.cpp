@@ -1197,9 +1197,10 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void visit(AstBasicDType* nodep) override {
         if (m_arrayPost) return;
-        // V3Width rewrites std::process::m_process from chandle to a C++ process reference
-        // Revert and emit it as in the source
-        if (nodep->keyword() == VBasicDTypeKwd::PROCESS_REFERENCE) {
+        // V3Width rewrites std::process::m_process from chandle to a C++ process reference, and
+        // V3Param the wait queues of std::mailbox to wait queues. Revert and emit them as in the
+        // source.
+        if (nodep->isProcessRef() || nodep->isWaitQueue()) {
             puts("chandle");
             return;
         }

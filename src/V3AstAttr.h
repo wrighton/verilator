@@ -534,6 +534,7 @@ public:
         RANDOM_STDGENERATOR,
         COVERGROUP_INSTHANDLE,
         MAILBOX_MESSAGE,
+        WAIT_QUEUE,
         // Unsigned and two state; fundamental types
         UINT32,
         UINT64,
@@ -575,6 +576,7 @@ public:
                                                       "VlStdRandomizer",
                                                       "VlCovInstHandle",
                                                       "VlMailboxMessage",
+                                                      "VlWaitQueue",
                                                       "IData",
                                                       "QData",
                                                       "LOGIC_IMPLICIT",
@@ -591,13 +593,14 @@ public:
     }
     const char* dpiType() const {
         static constexpr const char* const names[] = {
-            "%E-unk",      "svBit",        "char",          "void*",           "void",
-            "null",        "char",         "int",           "%E-integer",      "%E-integer",
-            "svLogic",     "svLogic",      "long long",     "double",          "short",
-            "%E-time",     "%E-time",      "const char*",   "%E-untyped",      "dpiScope",
-            "const char*", "%E-dly-sched", "%E-trig-sched", "%E-dyn-sched",    "%E-nba-queue",
-            "%E-fork",     "%E-proc-ref",  "%E-rand-gen",   "%E-stdrand-gen",  "%E-cg-insthandle",
-            "%E-mbx-msg",  "IData",        "QData",         "%E-logic-implct", " MAX"};
+            "%E-unk",      "svBit",         "char",          "void*",          "void",
+            "null",        "char",          "int",           "%E-integer",     "%E-integer",
+            "svLogic",     "svLogic",       "long long",     "double",         "short",
+            "%E-time",     "%E-time",       "const char*",   "%E-untyped",     "dpiScope",
+            "const char*", "%E-dly-sched",  "%E-trig-sched", "%E-dyn-sched",   "%E-nba-queue",
+            "%E-fork",     "%E-proc-ref",   "%E-rand-gen",   "%E-stdrand-gen", "%E-cg-insthandle",
+            "%E-mbx-msg",  "%E-wait-queue", "IData",         "QData",          "%E-logic-implct",
+            " MAX"};
         return names[m_e];
     }
     static void selfTest() {
@@ -642,6 +645,7 @@ public:
         case RANDOM_STDGENERATOR: return 0;  // opaque
         case COVERGROUP_INSTHANDLE: return 0;  // opaque
         case MAILBOX_MESSAGE: return 64;  // opaque, nonzero for width checks of queue elements
+        case WAIT_QUEUE: return 0;  // opaque
         case UINT32: return 32;
         case UINT64: return 64;
         default: return 0;
@@ -687,7 +691,7 @@ public:
                 || m_e == DYNAMIC_TRIGGER_SCHEDULER || m_e == NBA_GENERIC_QUEUE || m_e == FORK_SYNC
                 || m_e == PROCESS_REFERENCE || m_e == RANDOM_GENERATOR
                 || m_e == RANDOM_STDGENERATOR || m_e == COVERGROUP_INSTHANDLE
-                || m_e == MAILBOX_MESSAGE || m_e == DOUBLE || m_e == UNTYPED);
+                || m_e == MAILBOX_MESSAGE || m_e == WAIT_QUEUE || m_e == DOUBLE || m_e == UNTYPED);
     }
     bool isCHandle() const VL_MT_SAFE { return m_e == CHANDLE; }
     bool isDouble() const VL_MT_SAFE { return m_e == DOUBLE; }
@@ -782,6 +786,7 @@ public:
             /* RANDOM_STD_GENERATOR:      */ "",  // Not described
             /* COVERGROUP_INSTHANDLE:     */ "",  // Not described
             /* MAILBOX_MESSAGE:           */ "",  // Not described
+            /* WAIT_QUEUE:                */ "",  // Not described
             /* UINT32:                    */ "",  // Not an atom, see V3Rtmd
             /* UINT64:                    */ "",  // Not an atom, see V3Rtmd
             /* LOGIC_IMPLICIT:            */ "",  // Not described
@@ -1105,6 +1110,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_EVALUATION,                   "evaluation",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_EVENT_TRIGGER,                "eventTrigger",           false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
     macro(SCHED_POST_UPDATE,                  "postUpdate",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
+    macro(SCHED_QUEUE_WAIT,                   "queueWait",              false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
     macro(SCHED_RESUME,                       "resume",                 false,  CLEAN,  false,      "TODO", "") \
     macro(SCHED_RESUME_ZERO_DELAY,            "resumeZeroDelay",        false,  CLEAN,  false,      "", "") \
     macro(SCHED_RESUMPTION,                   "resumption",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
@@ -1112,7 +1118,12 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_WAIT_FOREVER,                 "waitForever",            false,  CLEAN,  AWAITABLE,  "rrr", "") \
     macro(UNPACKED_ASSIGN,                    "assign",                 false,  CLEAN,  false,      "r", "") \
     macro(UNPACKED_FILL,                      "fill",                   false,  CLEAN,  false,      "r", "") \
-    macro(UNPACKED_NEQ,                       "neq",                    PURE,   CLEAN,  false,      "r", "")
+    macro(UNPACKED_NEQ,                       "neq",                    PURE,   CLEAN,  false,      "r", "") \
+    macro(WAIT_QUEUE_LISTED,                  "listed",                 false,  CLEAN,  false,      "", "") \
+    macro(WAIT_QUEUE_POLLED,                  "polled",                 false,  CLEAN,  false,      "", "") \
+    macro(WAIT_QUEUE_RELEASE,                 "release",                false,  CLEAN,  false,      "r", "") \
+    macro(WAIT_QUEUE_TAKE,                    "take",                   false,  CLEAN,  false,      "r", "") \
+    macro(WAIT_QUEUE_WAKE,                    "wake",                   false,  CLEAN,  false,      "r", "")
 // clang-format on
 
 class VCMethod final {
