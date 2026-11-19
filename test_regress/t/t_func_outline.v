@@ -714,7 +714,11 @@ module t;
   // User C++ text stays in place, as later text uses the C++ local it declares
   function automatic int cuser(int x);
     /* verilator no_inline_task */
+`ifdef VERILATOR
     $c("int tmp = ", x, ";");
+`else
+    automatic int tmp = x;
+`endif
     x = x * 3 + 0;
     x ^= x >>> 2;
     x = x * 3 + 1;
@@ -775,7 +779,11 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 29;
     x ^= x >>> 2;
+`ifdef VERILATOR
     return x + $c32("tmp");
+`else
+    return x + tmp;
+`endif
   endfunction
 
   // A DPI export using a module variable, which needs vlSymsp, and calling a function
@@ -852,9 +860,78 @@ module t;
     return x;
   endfunction
 
-  // Public, so not split: its 'byte' argument is a 'uint32_t' in C++
+  // Public, with a 'byte' argument, which is a 'uint32_t' in C++
   // verilator lint_off UNOPTPUBLIC
   function int pubf(int x, byte k);
+    /* verilator public */
+    // verilator lint_on UNOPTPUBLIC
+    automatic int y = x + int'(k);
+    y = y * 3 + 0;
+    y ^= y >>> 2;
+    y = y * 3 + 1;
+    y ^= y >>> 2;
+    y = y * 3 + 2;
+    y ^= y >>> 2;
+    y = y * 3 + 3;
+    y ^= y >>> 2;
+    y = y * 3 + 4;
+    y ^= y >>> 2;
+    y = y * 3 + 5;
+    y ^= y >>> 2;
+    y = y * 3 + 6;
+    y ^= y >>> 2;
+    y = y * 3 + 7;
+    y ^= y >>> 2;
+    y = y * 3 + 8;
+    y ^= y >>> 2;
+    y = y * 3 + 9;
+    y ^= y >>> 2;
+    y = y * 3 + 10;
+    y ^= y >>> 2;
+    y = y * 3 + 11;
+    y ^= y >>> 2;
+    y = y * 3 + 12;
+    y ^= y >>> 2;
+    y = y * 3 + 13;
+    y ^= y >>> 2;
+    y = y * 3 + 14;
+    y ^= y >>> 2;
+    y = y * 3 + 15;
+    y ^= y >>> 2;
+    y = y * 3 + 16;
+    y ^= y >>> 2;
+    y = y * 3 + 17;
+    y ^= y >>> 2;
+    y = y * 3 + 18;
+    y ^= y >>> 2;
+    y = y * 3 + 19;
+    y ^= y >>> 2;
+    y = y * 3 + 20;
+    y ^= y >>> 2;
+    y = y * 3 + 21;
+    y ^= y >>> 2;
+    y = y * 3 + 22;
+    y ^= y >>> 2;
+    y = y * 3 + 23;
+    y ^= y >>> 2;
+    y = y * 3 + 24;
+    y ^= y >>> 2;
+    y = y * 3 + 25;
+    y ^= y >>> 2;
+    y = y * 3 + 26;
+    y ^= y >>> 2;
+    y = y * 3 + 27;
+    y ^= y >>> 2;
+    y = y * 3 + 28;
+    y ^= y >>> 2;
+    y = y * 3 + 29;
+    y ^= y >>> 2;
+    return y;
+  endfunction
+
+  // A public timed task, with a 'byte' argument
+  // verilator lint_off UNOPTPUBLIC
+  task pubt(inout int x, input byte k);
     /* verilator public */
     // verilator lint_on UNOPTPUBLIC
     x += int'(k);
@@ -878,6 +955,7 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 9;
     x ^= x >>> 2;
+    #1;
     x = x * 3 + 10;
     x ^= x >>> 2;
     x = x * 3 + 11;
@@ -898,6 +976,7 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 19;
     x ^= x >>> 2;
+    #1;
     x = x * 3 + 20;
     x ^= x >>> 2;
     x = x * 3 + 21;
@@ -918,8 +997,8 @@ module t;
     x ^= x >>> 2;
     x = x * 3 + 29;
     x ^= x >>> 2;
-    return x;
-  endfunction
+    #1;
+  endtask
 
   initial begin : process_self
     bit same;
@@ -928,6 +1007,10 @@ module t;
     `checkd(same, 1'b1);
     `checkd(res, mix15(7));
   end
+
+  // Two instances of a module with a public function
+  pubsub u_pub1 ();
+  pubsub u_pub2 ();
 
   int seed;
   MemView v;
@@ -1033,6 +1116,20 @@ module t;
         `checkd(l.run(sel, seed), r + acc + 7 + t2);
       end
     end
+    begin : public_task
+      automatic int x = seed + 6;
+      pubt(x, 1);
+      `checkd(x, mix(seed + 7));
+    end
+    begin : instances
+      u_pub2.m_base = 1;
+      `checkd(u_pub1.pubp(seed), mix(seed));
+      `checkd(u_pub2.pubp(seed), mix(seed + 1));
+`ifdef VERILATOR
+      `checkd(u_pub1.viaC(seed + 1), mix(seed + 1));
+      `checkd(u_pub2.viaC(seed + 1), mix(seed + 2));
+`endif
+    end
     begin : coroutine
       Timed::s_handle = new;
       Timed::s_handle.run(seed + 4);
@@ -1042,4 +1139,82 @@ module t;
     $write("*-* All Finished *-*\n");
     $finish;
   end
+endmodule
+
+module pubsub;
+  int m_base = 0;
+  // verilator lint_off UNOPTPUBLIC
+  function int pubp(int x);
+    /* verilator public */
+    // verilator lint_on UNOPTPUBLIC
+    automatic int y = x + m_base;
+    y = y * 3 + 0;
+    y ^= y >>> 2;
+    y = y * 3 + 1;
+    y ^= y >>> 2;
+    y = y * 3 + 2;
+    y ^= y >>> 2;
+    y = y * 3 + 3;
+    y ^= y >>> 2;
+    y = y * 3 + 4;
+    y ^= y >>> 2;
+    y = y * 3 + 5;
+    y ^= y >>> 2;
+    y = y * 3 + 6;
+    y ^= y >>> 2;
+    y = y * 3 + 7;
+    y ^= y >>> 2;
+    y = y * 3 + 8;
+    y ^= y >>> 2;
+    y = y * 3 + 9;
+    y ^= y >>> 2;
+    y = y * 3 + 10;
+    y ^= y >>> 2;
+    y = y * 3 + 11;
+    y ^= y >>> 2;
+    y = y * 3 + 12;
+    y ^= y >>> 2;
+    y = y * 3 + 13;
+    y ^= y >>> 2;
+    y = y * 3 + 14;
+    y ^= y >>> 2;
+    y = y * 3 + 15;
+    y ^= y >>> 2;
+    y = y * 3 + 16;
+    y ^= y >>> 2;
+    y = y * 3 + 17;
+    y ^= y >>> 2;
+    y = y * 3 + 18;
+    y ^= y >>> 2;
+    y = y * 3 + 19;
+    y ^= y >>> 2;
+    y = y * 3 + 20;
+    y ^= y >>> 2;
+    y = y * 3 + 21;
+    y ^= y >>> 2;
+    y = y * 3 + 22;
+    y ^= y >>> 2;
+    y = y * 3 + 23;
+    y ^= y >>> 2;
+    y = y * 3 + 24;
+    y ^= y >>> 2;
+    y = y * 3 + 25;
+    y ^= y >>> 2;
+    y = y * 3 + 26;
+    y ^= y >>> 2;
+    y = y * 3 + 27;
+    y ^= y >>> 2;
+    y = y * 3 + 28;
+    y ^= y >>> 2;
+    y = y * 3 + 29;
+    y ^= y >>> 2;
+    return y;
+  endfunction
+`ifdef VERILATOR
+  // Calls the public function from C++, through the function choosing the instance
+  function int viaC(int x);
+    /* verilator no_inline_task */
+    viaC = $c32("pubp(", x, ")");
+  endfunction
+`endif
 endmodule
