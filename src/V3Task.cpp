@@ -27,6 +27,10 @@
 //      Look for associative array elements V3Width made const ref actuals create
 //          Make the process write the array
 //
+// A continuous assignment that writes each variable before reading it is made initial logic by
+// V3ActiveTop, so runs once. Impure functions it calls are not inlined but called, if this
+// holds as if they were inlined, so their bodies are not copied into each such assignment.
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -133,8 +137,6 @@ class TaskStateVisitor final : public VNVisitor {
     //   AstNodeFTask::user4p   // GraphFTaskVertex* this FTask is under
     //   AstVar::user4p         // GraphFTaskVertex* this variable is declared in
     //   AstNodeFTaskRef::user4 // bool. Call in initial continuous assignment, not inlined
-    //  Temporary in isInitial:
-    //   AstVarScope::user1     // bool. Written
     const VNUser3InUse m_inuser3;
     const VNUser4InUse m_inuser4;
 
@@ -147,13 +149,20 @@ class TaskStateVisitor final : public VNVisitor {
     AstNodeFTask* m_ctorp = nullptr;  // Class constructor
     AstClass* m_classp = nullptr;  // Current class
     V3Graph m_callGraph;  // Task call graph
-    TaskBaseVertex* m_curVxp;  // Current vertex we're adding to
+    // Vertex of all code not under a task
+    TaskCodeVertex* const m_codeVxp = new TaskCodeVertex{&m_callGraph};
+    TaskBaseVertex* m_curVxp = m_codeVxp;  // Current vertex we're adding to
     std::vector<AstInitialAutomatic*> m_initialps;  // Initial blocks to move
     // Calls in continuous assignments, with the assignment
     std::vector<std::pair<AstNodeProcedure*, AstNodeFTaskRef*>> m_assignCalls;
     AstNodeProcedure* m_assignp = nullptr;  // Current continuous assignment
-    // Variables assigned by procedural continuous assignments
-    std::unordered_set<const AstVar*> m_contAssignedVarps;
+    // Whether each called function checked writes each variable before reading it
+    std::unordered_map<const AstNodeFTask*, bool> m_calleeWritesFirst;
+    // Variables referenced by procedural continuous assignments
+    std::unordered_set<const AstVar*> m_contAssignVarps;
+    // Variables in reference arguments, which a force or procedural assignment may reference
+    std::unordered_set<const AstVar*> m_refActualVarps;
+    bool m_hasForce = false;  // Any force or procedural continuous assignment
     VDouble0 m_statInitCalls;  // Statistic tracking
     bool m_underPortVar = false;  // Visiting under a port AstVar; any expression there
                                   // is a default value, evaluated at call sites only
@@ -214,7 +223,7 @@ public:
     }
     // Returns pointer to node that makes the given FTask impure
     AstNode* checkImpure(AstNodeFTask* nodep) { return getFTaskVertex(nodep)->impureNode(); }
-    static bool initCall(const AstNodeFTaskRef* nodep) { return nodep->user4(); }
+    static bool isInitCallNotInlined(const AstNodeFTaskRef* nodep) { return nodep->user4(); }
 
 private:
     TaskFTaskVertex* getFTaskVertex(AstNodeFTask* nodep) {
@@ -245,74 +254,157 @@ private:
         }
     }
 
+    // Variables written on every path so far in one assignment or called function
+    struct WrittenVars final {
+        const bool m_callee;  // Checking a called function, not the assignment
+        std::unordered_set<const AstVarScope*> m_vscps;  // Variables written
+        std::vector<const AstVarScope*> m_order;  // Variables written, in order written
+        explicit WrittenVars(bool callee)
+            : m_callee{callee} {}
+    };
+
     // Mark calls of impure functions in initial continuous assignments not to be inlined
     void decideInitCalls() {
         // Impure functions are inlined so scheduling sees what they read and write, which code
-        // run once at initialization does not need. Calls of pure functions are left as they
-        // are, so when inlined they still fold to constants.
-        const AstNodeProcedure* checkedp = nullptr;  // Assignment 'initial' is for
-        bool initial = false;
-        for (const auto& pair : m_assignCalls) {
-            TaskFTaskVertex* const ftVtxp = getFTaskVertex(pair.second->taskp());
-            if (ftVtxp->pure() || ftVtxp->noInline()) continue;
-            if (pair.first != checkedp) {
-                checkedp = pair.first;
-                initial = isInitial(checkedp);
+        // run once at initialization does not need. Pure functions are inlined, so they fold
+        // to constants; public and exported functions are inlined, as in decideInlining.
+        // The calls of one assignment are next to each other, as procedures do not nest.
+        const AstNodeProcedure* checkedp = nullptr;  // Assignment 'makesInitial' is for
+        bool makesInitial = false;
+        for (const auto& assignCall : m_assignCalls) {
+            AstNodeFTask* const taskp = assignCall.second->taskp();
+            TaskFTaskVertex* const ftVtxp = getFTaskVertex(taskp);
+            if (ftVtxp->pure() || ftVtxp->noInline() || taskp->taskPublic()
+                || taskp->dpiExport()) {
+                continue;
             }
-            if (!initial) continue;
-            pair.second->user4(true);
+            if (assignCall.first != checkedp) {
+                checkedp = assignCall.first;
+                WrittenVars written{false};
+                makesInitial = writesBeforeReads(checkedp->stmtsp(), written);
+            }
+            if (!makesInitial) continue;
+            assignCall.second->user4(true);
             ftVtxp->needsNonInlineCFunc(true);
             ++m_statInitCalls;
         }
+        m_assignCalls.clear();
+        m_calleeWritesFirst.clear();
+        m_contAssignVarps.clear();
+        m_refActualVarps.clear();
     }
 
-    // Whether the continuous assignment is initial, approximating V3ActiveTop
-    bool isInitial(const AstNodeProcedure* nodep) {
-        // V3ActiveTop makes it initial if it writes each variable before reading it. Check
-        // this as if the calls were inlined, as calls not inlined hide what the function reads.
-        const VNUser1InUse user1InUse;
-        return writesBeforeReads(nodep->stmtsp(), false);
+    // Whether the called function writes each variable before reading it, as if inlined
+    bool calleeWritesBeforeReads(const AstNodeFTask* taskp) {
+        // Checked once per function, not per call, so the work is linear in the design size.
+        // Each check has its own written variables, so the result does not depend on the caller.
+        const auto itBool = m_calleeWritesFirst.emplace(taskp, false);
+        bool& resultr = itBool.first->second;  // References stay valid when rehashing
+        if (itBool.second) {
+            WrittenVars written{true};
+            resultr = writesBeforeReads(taskp->stmtsp(), written);
+        }
+        return resultr;
     }
 
-    // Whether the statements write each variable before reading it
-    bool writesBeforeReads(const AstNode* stmtsp, bool callee) {
+    // Whether the statements write each variable before reading it, on every path
+    bool writesBeforeReads(const AstNode* stmtsp, WrittenVars& written) {
         for (const AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
-            if (!stmtp->forall([&](const AstNode* np) { return writeBeforeRead(np, callee); })) {
-                return false;
+            if (const AstJumpBlock* const blockp = VN_CAST(stmtp, JumpBlock)) {
+                const size_t nWritten = written.m_order.size();
+                if (!writesBeforeReads(blockp->stmtsp(), written)) return false;
+                // A jump out of the block may have skipped its later writes
+                while (written.m_order.size() > nWritten) {
+                    written.m_vscps.erase(written.m_order.back());
+                    written.m_order.pop_back();
+                }
+                continue;
+            }
+            if (!readsWritten(stmtp, written)) return false;
+            const AstVarRef* const vrefp = writtenVarRef(stmtp);
+            if (vrefp && written.m_vscps.emplace(vrefp->varScopep()).second) {
+                written.m_order.push_back(vrefp->varScopep());
             }
         }
         return true;
     }
 
-    // Whether the node, visited in pre-order, reads nothing not yet written
-    bool writeBeforeRead(const AstNode* np, bool callee) {
-        // Check in the called functions too, as if inlined, except those not inlined anyway,
-        // as their calls already hide what they do. The functions may write only static
-        // variables of functions besides their own, as V3ActiveTop must see writes to variables
-        // the assignment reads later. Functions with nonblocking assignments or nonblocking
-        // event triggers stay inlined, so V3Active reports them as illegal in a continuous
-        // assignment (IEEE 1800-2023 13.4.4).
-        if (const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
-            return getFTaskVertex(refp->taskp())->noInline()
-                   || writesBeforeReads(refp->taskp()->stmtsp(), true);
+    // The variable a statement always writes as a whole, if any
+    static const AstVarRef* writtenVarRef(const AstNode* stmtp) {
+        // Writes under other statements, such as an 'if', might not happen, or V3Life and
+        // V3Const might remove them before V3ActiveTop when inlined
+        if (const AstNodeAssign* const assignp = VN_CAST(stmtp, NodeAssign)) {
+            return VN_CAST(assignp->lhsp(), VarRef);
         }
-        if (VN_IS(np, AssignDly)) return false;
-        const AstFireEvent* const firep = VN_CAST(np, FireEvent);
-        if (firep && firep->isDelayed()) return false;
+        const AstStmtExpr* const exprp = VN_CAST(stmtp, StmtExpr);
+        const AstCMethodHard* const methodp
+            = exprp ? VN_CAST(exprp->exprp(), CMethodHard) : nullptr;
+        return methodp && methodp->method() == VCMethod::DYN_CLEAR
+                   ? VN_CAST(methodp->fromp(), VarRef)
+                   : nullptr;
+    }
+
+    // Whether the variable is of the called function, or already written
+    bool isWritten(const AstVarRef* vrefp, const WrittenVars& written) const {
+        // Variables of the called function become temporaries written first, except its
+        // return variable and outputs, which are not reset when inlined
+        const AstVar* const varp = vrefp->varp();
+        return (varp->user4u().toGraphVertex() != m_codeVxp && !varp->isFuncReturn()
+                && !varp->direction().isOutput())
+               || written.m_vscps.count(vrefp->varScopep());
+    }
+
+    // Whether the node reads only variables already written, and has no effects left inlined
+    bool readsWritten(const AstNode* nodep, const WrittenVars& written) {
+        return nodep->forall([&](const AstNode* np) { return readWritten(np, written); });
+    }
+
+    // Whether the node, visited in pre-order, reads only variables already written
+    bool readWritten(const AstNode* np, const WrittenVars& written) {
+        if (const AstNodeFTaskRef* const refp = VN_CAST(np, NodeFTaskRef)) {
+            // Class method calls may become member reads. Other calls not inlined anyway
+            // already hide what the function does.
+            if (refp->taskp()->classMethod()) return false;
+            return getFTaskVertex(refp->taskp())->noInline()
+                   || calleeWritesBeforeReads(refp->taskp());
+        }
+        // Effects on other processes stay inlined. IEEE 1800-2023 13.4.4 allows nonblocking
+        // assignments and triggers, and fork-join_none, only in functions called from a
+        // procedure, and event triggers wake other processes.
+        if (VN_IS(np, AssignDly) || VN_IS(np, FireEvent) || VN_IS(np, Fork)) return false;
+        // V3Timing makes a delayed continuous assignment a process, not initial logic
+        if (const AstAssignW* const assignp = VN_CAST(np, AssignW)) {
+            if (assignp->timingControlp() || assignp->getLhsNetDelay()) return false;
+        }
+        // Raw C code may access anything
+        if (VN_IS(np, CExpr) || VN_IS(np, CExprUser) || VN_IS(np, CStmt) || VN_IS(np, CStmtUser)) {
+            return false;
+        }
+        // Methods other than clearing, such as push_back, read the variable they modify. A
+        // method of a part of a variable, such as an element, is not looked into.
+        if (const AstCMethodHard* const methodp = VN_CAST(np, CMethodHard)) {
+            const AstVarRef* const vrefp = VN_CAST(methodp->fromp(), VarRef);
+            return vrefp
+                   && (methodp->method() == VCMethod::DYN_CLEAR || isWritten(vrefp, written));
+        }
         const AstVarRef* const vrefp = VN_CAST(np, VarRef);
         if (!vrefp) return true;
         const AstVar* const varp = vrefp->varp();
-        // V3Force later reads the force value instead of a forced variable, or of one assigned
-        // by a procedural continuous assignment, which it makes a force
-        if (varp->isForced() || m_contAssignedVarps.count(varp)) return false;
-        // Variables of the called function become temporaries written first
-        if (varp->user4u().toGraphVertex() != m_curVxp) return true;
-        if (vrefp->access().isWriteOrRW()) {
-            // Static variables of functions are normally accessed only by calling them
-            if (callee && !varp->isFuncLocalSticky()) return false;
-            if (vrefp->access().isWriteOnly()) vrefp->varScopep()->user1(true);
+        // V3Force later makes the called function read the force value instead of a forced
+        // variable, and adds evaluations of procedural continuous assignments after writes of
+        // variables they reference, hidden by the call. They may reference variables through
+        // reference arguments.
+        if (written.m_callee
+            && (varp->isForced() || m_contAssignVarps.count(varp)
+                || (m_hasForce && m_refActualVarps.count(varp)))) {
+            return false;
         }
-        return vrefp->varScopep()->user1();
+        // Besides their own variables, called functions may write only static variables of
+        // functions, as their writes are hidden from the logic that is ordered after them
+        if (written.m_callee && vrefp->access().isWriteOrRW() && !varp->isFuncLocalSticky()) {
+            return false;
+        }
+        return vrefp->access().isWriteOnly() || isWritten(vrefp, written);
     }
 
     void decideInlining() {
@@ -345,8 +437,12 @@ private:
 
     // VISITORS
     void visit(AstAssignCont* nodep) override {
-        nodep->lhsp()->foreach(
-            [&](const AstVarRef* refp) { m_contAssignedVarps.emplace(refp->varp()); });
+        m_hasForce = true;
+        nodep->foreach([&](const AstVarRef* refp) { m_contAssignVarps.emplace(refp->varp()); });
+        iterateChildren(nodep);
+    }
+    void visit(AstAssignForce* nodep) override {
+        m_hasForce = true;
         iterateChildren(nodep);
     }
     void visit(AstNodeProcedure* nodep) override {
@@ -388,12 +484,15 @@ private:
         new TaskEdge{&m_callGraph, m_curVxp, taskVtxp};
         // The copy of every instance may be called through a virtual interface (see below)
         if (isVirtualIfaceMethodCall(nodep)) m_vifTaskps.insert(nodep->taskp());
-        // As decideInlining, other functions must be inlined
-        if (m_assignp && nodep->taskp()->verilogFunction() && !nodep->taskp()->taskPublic()) {
-            m_assignCalls.emplace_back(m_assignp, nodep);
-        }
+        if (m_assignp) m_assignCalls.emplace_back(m_assignp, nodep);
         // Do we have to disable inlining the function?
         const V3TaskConnects tconnects = V3Task::taskConnects(nodep, nodep->taskp()->declsp());
+        for (const auto& itr : tconnects) {
+            AstNodeExpr* const actualp = itr.second->exprp();
+            if (!actualp || !(itr.first->isRef() || itr.first->isConstRef())) continue;
+            actualp->foreach(
+                [&](const AstVarRef* refp) { m_refActualVarps.emplace(refp->varp()); });
+        }
         if (!taskVtxp->noInline()) {  // Else short-circuit below
             for (const auto& itr : tconnects) {
                 const AstVar* const portp = itr.first;
@@ -494,8 +593,6 @@ private:
 public:
     // CONSTRUCTORS
     explicit TaskStateVisitor(AstNetlist* nodep) {
-        m_curVxp = new TaskCodeVertex{&m_callGraph};
-        //
         iterate(nodep);
         // A call through a virtual interface calls the copy of the task of the instance the
         // handle selects (see TaskVisitor::vifDispatchMethodp), so each copy needs a CFunc
@@ -2530,7 +2627,7 @@ class TaskVisitor final : public VNVisitor {
         AstCNew* cnewp = nullptr;
         if (m_statep->ftaskNoInline(nodep->taskp())
             || TaskStateVisitor::isVirtualIfaceMethodCall(nodep)
-            || TaskStateVisitor::initCall(nodep)) {
+            || TaskStateVisitor::isInitCallNotInlined(nodep)) {
             processArgs(nodep);
             // This may share VarScope's with a public task, if any.  Yuk.
             beginp = createNonInlinedFTask(nodep, outvscp, cnewp /*ref*/);
