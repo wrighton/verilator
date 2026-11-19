@@ -3765,6 +3765,7 @@ public:
     }
     bool deferredReports() const { return m_deferredReports; }
     void deferredReports(bool flag) { m_deferredReports = flag; }
+    static void selfTest();
 };
 class AstFinal final : public AstNodeProcedure {
 public:
