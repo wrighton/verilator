@@ -21,10 +21,11 @@
 // statement, such as the branches of an 'if' that call inlined tasks, the coroutine stays as
 // large as the whole process. A task or function that is not inlined is emitted as one C++
 // function, which V3Sched does not split at all, and C++ compilers also need super-linear time
-// for very large functions. This pass moves parts of such functions into sub-functions, until
-// each is no larger than --output-split-cfuncs.
+// for very large functions. This pass moves parts of such functions into sub-functions, to
+// bring each down to --output-split-cfuncs, as far as the statements that cannot move allow.
 //
-// For each coroutine, and each function made from a task or function:
+// For each coroutine, and each function made from a task or function, other than one that makes
+// its own process for its calls:
 //  1. Analysis: one traversal records the size of each statement in nodes, and whether it can
 //     move into another function: it cannot if it jumps out of itself, returns, tests the
 //     condition of a loop around it, contains user C++ text, which may use C++ locals or
@@ -42,11 +43,14 @@
 //     passed to it: its value from before a call of the new function is never read. A local
 //     passed to a coroutine stays, as the coroutine may keep it after returning, as the
 //     processes of a fork..join do until the join.
-//  4. Rewrite: each group moves into a new function, called in its place, with co_await if it
-//     suspends. Other local variables of the function that the group references are passed by
-//     reference. This runs before V3Localize, while most variables are module variables, so
-//     only the arguments and locals of tasks that are not inlined, including the variables of
-//     calls inlined into them, need passing.
+//  4. Rewrite: each group moves into a new function, an outline part, called in its place, with
+//     co_await if it suspends. Other local variables of the function that the group references
+//     are passed by reference, and so is the process of the function, leaving the current
+//     process unchanged. This runs before V3Localize, while most variables are module
+//     variables, so only the arguments and locals of tasks that are not inlined, including the
+//     variables of calls inlined into them, need passing. Statements using the arguments of a
+//     public function cannot move, so a public function using its arguments throughout is
+//     split only between them.
 //
 //*************************************************************************
 
@@ -93,6 +97,9 @@ class OutlineArgsVisitor final : public VNVisitor {
         const auto pair = m_argVscps.emplace(varp, nullptr);
         if (pair.second) {
             const bool constRef = varp->isConstRef();
+            // Combining does not compare argument directions, and an argument passed by const
+            // reference cannot be passed on by reference
+            if (constRef) m_funcp->dontCombine(true);
             pair.first->second
                 = V3Sched::util::newArgument(m_funcp, varp->dtypep(), varp->name(),
                                              constRef ? VDirection::CONSTREF : VDirection::REF);
@@ -362,11 +369,6 @@ class OutlineVisitor final : public VNVisitor {
     // declaring 'localps' in it
     void outline(AstNodeStmt* firstp, AstNodeStmt* lastp, const std::vector<AstVar*>& localps) {
         FileLine* const flp = firstp->fileline();
-        VNRelinker relinker;
-        firstp->unlinkFrBackWithNext(&relinker);
-        AstNode* const restp = lastp->nextp();
-        if (restp) restp->unlinkFrBackWithNext();
-
         AstScope* const scopep = m_funcp->scopep();
         const std::string name
             = m_funcp->name() + "__outline" + cvtToStr(m_funcNum++) + m_nameSuffix;
@@ -375,13 +377,16 @@ class OutlineVisitor final : public VNVisitor {
         subFuncp->isStatic(m_funcp->isStatic());
         subFuncp->isLoose(m_funcp->isLoose());
         subFuncp->slow(m_funcp->slow());
-        subFuncp->addStmtsp(firstp);
-        // Take the process of the function, which makes one if a call needs it, else each new
-        // function would make its own
-        if (m_funcp->needsVlProcess() || firstp->existsAndNext([](const AstNodeCCall* callp) {
-                return callp->passesVlProcess();
-            })) {
-            subFuncp->setNeedsVlProcess();
+        subFuncp->isOutlinePart(true);
+        if (m_funcp->needsVlProcess()) subFuncp->setNeedsVlProcess();
+        // Move the statements one by one, as unlinking with the rest of a list takes time linear
+        // in the length of the rest
+        VNRelinker relinker;
+        AstNode* const endp = lastp->nextp();
+        for (AstNode *nodep = firstp, *nextp; nodep != endp; nodep = nextp) {
+            nextp = nodep->nextp();
+            nodep->unlinkFrBack(nodep == firstp ? &relinker : nullptr);
+            subFuncp->addStmtsp(VN_AS(nodep, NodeStmt));
         }
         AstCCall* const callp = new AstCCall{flp, subFuncp};
         callp->dtypeSetVoid();
@@ -404,7 +409,6 @@ class OutlineVisitor final : public VNVisitor {
         } else {
             stmtp = callp->makeStmt();
         }
-        if (restp) stmtp->addNext(restp);
         relinker.relink(stmtp);
         ++m_statFuncs;
     }
