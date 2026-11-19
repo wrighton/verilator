@@ -758,6 +758,7 @@ static bool verilate(const string& argString) {
         V3Graph::selfTest();
         V3ExecGraph::selfTest();
         V3PreShell::selfTest();
+        V3OutFormatter::selfTest();
         V3Broken::selfTest();
         V3Control::selfTest();
         V3HashTableInternals::selfTest();
