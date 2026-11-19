@@ -10,8 +10,9 @@
 // verilog_format: on
 
 // Clocked blocks, which may be in different parallel MTasks, start processes and delay
-// assignments themselves, and call module tasks and class functions, but none of them controls
-// processes, so all of them still run in parallel
+// assignments themselves, and call module tasks, class functions and a context DPI import whose
+// DPI export does not control processes, but none of them controls processes, so all of them
+// still run in parallel
 module t;
   timeunit 1ns; timeprecision 1ps;
 
@@ -73,6 +74,15 @@ module t;
   always_ff @(posedge clk) if (cyc < CYCLES) acc_a.add(cyc);
   always_ff @(posedge clk) if (cyc < CYCLES) acc_b.add(cyc);
 
+  // A context DPI import whose DPI export only computes
+  export "DPI-C" function dpix_twice;
+  function int dpix_twice(int value);
+    return 2 * value;
+  endfunction
+  import "DPI-C" context function int dpii_twice(int value);
+  int twice = 0;
+  always_ff @(posedge clk) if (cyc < CYCLES) twice <= dpii_twice(cyc);
+
   initial begin
     #100ns;
     `checkd(forked_a, CYCLES);
@@ -83,6 +93,7 @@ module t;
     `checkd(delayed_b, cyc - 1);
     `checkd(acc_a.sum, CYCLES * (CYCLES - 1) / 2);
     `checkd(acc_b.sum, CYCLES * (CYCLES - 1) / 2);
+    `checkd(twice, 2 * (CYCLES - 1));
     $write("*-* All Finished *-*\n");
     $finish;
   end

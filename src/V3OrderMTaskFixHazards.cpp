@@ -174,13 +174,14 @@ public:
 // it may dispatch to (see V3CallTargets). Logic using these itself is ordered by its accesses as
 // usual. A 'disable fork' does not count by itself: it only kills descendants of the process of
 // the logic, which other logic can only reach through a process reference, so that logic runs
-// alone.
-// Process control in user $c code, or by DPI exports called from C, is not seen (see
-// hasDpiHazard).
+// alone. A context DPI import counts as calling every DPI export, as its C code may call any
+// (IEEE 1800-2023 35.5.3). Process control in user $c code is not seen.
 class ProcessControlVisitor final : public VNVisitorConst {
     // TYPES
     // Vertex of the call graph: a function, with edges to what its calls may call, which is a
-    // function, or, for a virtual call, a dispatch vertex with edges to all it may dispatch to
+    // function, or, for a virtual call, a dispatch vertex with edges to all it may dispatch to.
+    // A context DPI import has an edge to one more dispatch vertex, with edges to all DPI
+    // exports.
     class Vertex final : public V3GraphVertex {
         VL_RTTI_IMPL(Vertex, V3GraphVertex)
     public:
@@ -194,6 +195,8 @@ class ProcessControlVisitor final : public VNVisitorConst {
     V3Graph m_graph;  // The call graph
     std::unordered_map<const AstCFunc*, Vertex*> m_funcVtxps;  // Function -> Its vertex
     std::unordered_map<const AstCFunc*, Vertex*> m_dispatchVtxps;  // Function -> Dispatch vertex
+    // Dispatch vertex of the calls of context DPI imports to DPI exports
+    Vertex* const m_dpiExportsVtxp = new Vertex{&m_graph};
     Vertex* m_funcVtxp = nullptr;  // Vertex of the function being visited
     bool m_logicControl = false;  // The logic checked by mayControl may control processes
 
@@ -224,6 +227,10 @@ class ProcessControlVisitor final : public VNVisitorConst {
     void visit(AstCFunc* nodep) override {
         VL_RESTORER(m_funcVtxp);
         m_funcVtxp = funcVtxp(nodep);
+        if (nodep->dpiImportWrapper() && nodep->dpiContext()) {
+            new V3GraphEdge{&m_graph, m_funcVtxp, m_dpiExportsVtxp, 1};
+        }
+        if (nodep->dpiExportImpl()) new V3GraphEdge{&m_graph, m_dpiExportsVtxp, m_funcVtxp, 1};
         iterateChildrenConst(nodep);
     }
     void visit(AstNodeVarRef* nodep) override {
@@ -471,7 +478,8 @@ class FixDataHazards final {
         for (const OrderMoveVertex& mVtx : mtaskp->vertexList()) {
             OrderLogicVertex* const lvtxp = mVtx.logicp();
             if (!lvtxp) continue;
-            // NOTE: We don't handle DPI exports. If testbench code calls a DPI-exported function
+            // NOTE: We don't handle the variables DPI exports access, only their process control
+            // (see ProcessControlVisitor). If testbench code calls a DPI-exported function
             // at any time during eval() we may have a data hazard. (Likewise in non-threaded mode
             // if an export messes with an ordered variable we're broken.)
 
