@@ -677,6 +677,127 @@ triggered events, which firing also updates, nor process control from user
 object still gives the copy an event of its own, rather than sharing the
 event of the original (IEEE 1800-2023 8.12, 15.5.5).
 
+The waiting queues of ``std::mailbox``, ``m_getQueue`` and ``m_putQueue``
+in ``verilated_std.sv``, are declared as ``chandle``, and ``V3Param`` makes
+them ``VlWaitQueue`` before the class is specialized, so no other class has
+a member of that type. ``V3Param`` does so only in the std package that
+Verilator reads from its own input file, not in a package that a line
+directive (IEEE 1800-2023 22.12) names as that file. It also marks them
+internal, so ``%p`` does not show them. They are ``local``, and only the
+methods of the mailbox use them, as those keep the waiting processes
+informed: ``V3Width`` reports any other use where the reference resolves,
+before folding a type query or a method call removes it, even if
+``ENCAPSULATED`` is disabled, finding the class declaring the member, and
+the one of the method using it, by their place in the tree. A wait queue is
+such a ``VlWaitQueue``, which a waiting queue of IEEE 1800-2023 15.4.5
+waits on. ``@`` on a wait queue awaits ``queueWait(queue)``, which adds the
+coroutine to the wait list of the queue. Its methods, for internal use
+only, are ``__Vlisted()`` (``WAIT_QUEUE_LISTED``), which tells if the queue
+has a wait list, ``__Vpolled()`` (``WAIT_QUEUE_POLLED``), which only the
+condition of an ``if`` uses, which ``V3Timing`` replaces by one of its
+branches (see below), ``__Vwake(available)`` (``WAIT_QUEUE_WAKE``), which
+wakes the first waiter for a message or room added, ``__Vtake(available)``
+(``WAIT_QUEUE_TAKE``), for one taken without waiting, and
+``__Vrelease(remaining)`` (``WAIT_QUEUE_RELEASE``), which ends the turn of
+the selected waiter, and passes it on to the next one if ``remaining``
+messages or room are left; only the selected waiter, a process that waited,
+calls it. Other processes tell the wait list what they took or added, with
+``__Vtake()`` or ``__Vwake()``, only if ``__Vlisted()``, so a mailbox
+without waiters only tests that; a wait list is created when nothing is
+available. At most one waiter of a queue is selected at a time: it takes
+back its slot if it waits again, which its frame identifies, and stays
+linked to the list until it resumes, so killing it before then passes its
+turn on where it would have resumed, before its frame is destroyed. A
+killed waiting process stops counting as a waiter at once, and its frame is
+destroyed at the next trigger evaluation. The slots of the waiters that
+took their turn are compacted once half the slots are empty, so after each
+compaction a list has at most about twice as many slots as waiters, though
+killed and selected waiters keep their slots until the next trigger
+evaluation, or until they would resume, and a freed list drops its storage
+if it has room for more than ``MAX_FREE_CAPACITY`` slots. A process waits
+only if the mailbox is empty, or full for a ``put()`` (IEEE 1800-2023
+15.4.3, 15.4.5), and then behind those already waiting, as the waiting
+queue of a mailbox is first-in first-out (IEEE 1800-2023 15.4.5), and one
+message lets the waiting ``peek()`` calls proceed in turn (IEEE 1800-2023
+15.4.7). A process that does not wait may thus take what a waiter was woken
+for, which then waits again, still first. A shallow copy of a mailbox has
+its own waiting queues, while a handle refers to the same ones.
+
+A mailbox waits on its wait queues only if no condition of a ``wait``, and
+no expression of an event control, outside the std package, may have side
+effects, and no variable of the std package, such as the messages
+``m_queue`` and the bound ``m_bound`` of a mailbox, which are
+``protected``, is referenced outside it, as its methods would then not tell
+what changes. The choice is for the whole design, and the ``Timing, mailbox
+waits polled`` statistic counts the waits it makes poll. ``V3Timing``
+decides this before ``V3Task`` turns calls into calls of C++ functions, by
+``isPure()`` of each node of a condition, as the one of a method call does
+not look at its receiver, nor the one of an associative array select at its
+index, except for a select of a member, whose ``isPure()`` asks the whole
+chain of selects each time. A call of a virtual method counts too, as
+``isPure()`` does not look at the methods overriding it, and so does
+``disable fork`` in a subroutine a condition may call, as killing a process
+may resume its parent, which each such subroutine is scanned for once, so
+this is linear in the size of the design, apart from ``isPure()`` of a
+chain of member selects in a subroutine, which asks the rest of the chain
+at each select. A ``pure`` DPI import, and ``$cpure``, are trusted to have
+no side effect (IEEE 1800-2023 35.5.2). What matters is that a condition
+does not change a mailbox, nor kill a process, which may resume another
+one, while the triggers are evaluated, after which the waiters of a wait
+queue would resume otherwise; other side effects, such as firing an event,
+do neither, as its waiters resume after a later trigger evaluation. The std
+package's own waits, of ``process`` and ``semaphore``, change no mailbox. A
+user condition calling a method of ``process``, which uses ``$c``, counts.
+Else ``V3Timing`` makes every mailbox wait as before, with the same code as
+before, as a ``wait`` whose condition its waiters test at each trigger
+evaluation. The waiters of a woken wait queue resume as when they tested
+their conditions, as nothing changes a mailbox while the triggers are
+evaluated: its trigger evaluation selects the first waiter, if the mailbox
+has a message or room. A selected waiter proceeds if its mailbox has a
+message or room when it resumes, else it waits again. While the processes
+whose triggers were set resume, a waiter that takes its turn and leaves
+messages or room, or a process that adds some, passes the turn on to the
+first waiter, which resumes in that ``resume()``, before the next of those
+processes, after the waiters passed the turn before it, if it would resume
+then if it tested its condition: if it waited at the trigger evaluation,
+and its mailbox had a message or room then, which the first change since
+notes. A waiter that started waiting since did so as nothing was available,
+and is selected at the next trigger evaluation, as it would test its
+condition then, so each waiter is passed the turn at most once in a
+``resume()``, and a trigger changed before, such as an edge, is evaluated
+before it resumes. Processes that pass messages on forever in zero time
+thus reach the :vlopt:`--converge-limit`, unless one keeps taking back what
+it puts, which never ends the time step, as a process looping in zero time
+forever does. A trigger evaluation sorts the lists it drains, so ``D``
+lists take ``O(D log D)``.
+
+What is kept is the first-in first-out order of the waiters of a wait
+queue, and that each waiter resumes in the same time step as it would if it
+tested its condition. A waiter passed the turn resumes before the next of
+the processes whose triggers were set, after the waiters passed the turn
+before it, and the waiters a trigger evaluation selects resume in the order
+their wait lists became live, of named events and wait queues together,
+before the processes whose triggers it evaluated. Processes may thus resume
+in another order than if each waiter tested its condition at each trigger
+evaluation, which can change which process gets a message, as the order of
+active processes is not defined (IEEE 1800-2023 4.7). Rarely, as when a
+waiter passed the turn takes what another one woken with it would have
+taken, which then waits for a later message in that time step, this needs
+more iterations of the active region than polling, so a design may reach
+the :vlopt:`--converge-limit` sooner. Killing or disabling a selected
+waiter before it resumes passes the turn on, to resume in place of it if
+the next waiter would resume then had it tested its condition, else at the
+next trigger evaluation. Once ``$finish`` is pending, the trigger
+evaluation drains no pending list, of a named event or a wait queue, and no
+turn is passed on. A waiter selected on a wait queue before is not resumed
+after a ``$finish`` in the same resumption either, unlike a waiter of a
+named event already moved to the resumption step, as long as the model is
+not evaluated from an MTask of another model. Parallel MTasks may wake the
+waiters of different mailboxes, but accesses to the messages of one
+mailbox, through handles in parallel MTasks, are not made safe by this. The
+semaphore still evaluates the condition of each waiter at each trigger
+evaluation, with its admission rule unchanged.
+
 ``VlForkSync``
 ~~~~~~~~~~~~~~
 
