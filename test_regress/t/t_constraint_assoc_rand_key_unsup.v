@@ -17,12 +17,10 @@ class Cls;
   rand int idx;
   Item state[int];
   rand s_t sa[int];
-  rand Item items[int];
   rand Item objs[int];
 
   constraint c_state {state[idx] != null;}
   constraint c_struct {sa[idx].a == 7;}
-  constraint c_handle {items[idx].x == 7;}
   constraint c_object {objs[idx] != null;}
 endclass
 
