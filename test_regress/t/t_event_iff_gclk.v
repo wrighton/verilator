@@ -23,10 +23,12 @@ module t;
   int falls = 0;
   int stables = 0;
   int pasts = 0;
-  always @(posedge clk iff $rose_gclk(cnt[1])) ++rises;
-  always @(posedge clk iff $fell_gclk(cnt[1])) ++falls;
-  always @(posedge clk iff $stable_gclk(cnt[1])) ++stables;
-  always @(posedge clk iff $past_gclk(cnt[1])) ++pasts;
+  int changes = 0;
+  always @(posedge clk iff $rose_gclk(cnt[1]))++rises;
+  always @(posedge clk iff $fell_gclk(cnt[1]))++falls;
+  always @(posedge clk iff $stable_gclk(cnt[1]))++stables;
+  always @(posedge clk iff $past_gclk(cnt[1]))++pasts;
+  always @(posedge clk iff $changed_gclk(cnt[1]))++changes;
 
   // Reference from the value each tick reads before the counter's NBA; 0 is the default
   // sampled value of cnt[1] (16.5.1)
@@ -34,12 +36,14 @@ module t;
   int exp_falls = 0;
   int exp_stables = 0;
   int exp_pasts = 0;
+  int exp_changes = 0;
   bit prev = 0;
   always @(posedge clk) begin
     if (cnt[1] && !prev) ++exp_rises;
     if (!cnt[1] && prev) ++exp_falls;
     if (cnt[1] == prev) ++exp_stables;
     if (prev) ++exp_pasts;
+    if (cnt[1] != prev) ++exp_changes;
     prev <= cnt[1];
   end
 
@@ -52,10 +56,12 @@ module t;
     `checkd(exp_falls, 4);
     `checkd(exp_stables, 11);
     `checkd(exp_pasts, 9);
+    `checkd(exp_changes, 9);
     `checkd(rises, exp_rises);
     `checkd(falls, exp_falls);
     `checkd(stables, exp_stables);
     `checkd(pasts, exp_pasts);
+    `checkd(changes, exp_changes);
     $write("*-* All Finished *-*\n");
     $finish;
   end

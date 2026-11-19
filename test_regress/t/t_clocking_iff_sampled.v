@@ -93,9 +93,22 @@ module t;
   clockvar_monitor mon;
   // The event expression itself must use the sampled clockvar (14.13).
   int sensp, expected_rises;
-  // The clockvar settled at the preceding posedge; its cloned references retain that sample.
+  // At each negedge, the clockvar holds the sample from the preceding posedge.
   int gclk_rises;
   always @(negedge clk iff $rose_gclk(i.cb.v[0]))++gclk_rises;
+  // Ordinary and explicitly clocked nested functions read the same settled input sample.
+  int ordinary_rises, nested_event_stables, nested_body_stables;
+  bit ordinary_rise, nested_stable;
+  bit expected_rise_now, expected_stable_now, previous_expected_rise;
+  int expected_stables;
+  clockvar_child_monitor child(clk);
+  always @(negedge clk iff $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk)))++nested_event_stables;
+  always @(negedge clk) begin
+    ordinary_rise = $rose_gclk(i.cb.v[0]);
+    ordinary_rises += int'(ordinary_rise);
+    nested_stable = $stable($rose(i.cb.v[0], @(negedge clk)), @(negedge clk));
+    nested_body_stables += int'(nested_stable);
+  end
   always @(posedge i.cb.v[0])++sensp;
   always @(i.cb iff i.cb.v[0])++gated;
   always @(i.cb) if (i.cb.v[0])++body;
@@ -127,6 +140,10 @@ module t;
 
   always @(negedge clk) begin
     #CHECK;
+    expected_rise_now = PRE[edges][0] && !(edges == 0 ? 1'b0 : PRE[edges-1][0]);
+    expected_stable_now = expected_rise_now == previous_expected_rise;
+    previous_expected_rise = expected_rise_now;
+    expected_stables += int'(expected_stable_now);
     expected += int'(PRE[edges][0]);
     expected_post += int'((edges == 19 ? 7'h69 : PRE[edges+1]) & 7'h01);
     if (PRE[edges][0] && !(edges == 0 ? 1'b0 : PRE[edges-1][0]))++expected_rises;
@@ -137,6 +154,12 @@ module t;
     `checkd(i.cbn.v, edges == 19 ? 7'h69 : PRE[edges+1]);
     `checkd(sensp, expected_rises);
     `checkd(gclk_rises, expected_rises);
+    `checkd(ordinary_rise, expected_rise_now);
+    `checkd(ordinary_rises, expected_rises);
+    `checkd(nested_stable, expected_stable_now);
+    `checkd(nested_body_stables, expected_stables);
+    `checkd(nested_event_stables, expected_stables);
+    `checkd(child.rises, expected_rises);
     `checkd(gated, expected);
     `checkd(body, expected);
     `checkd(inverted, edges + 1 - expected);
@@ -154,8 +177,17 @@ module t;
       `checkd(expected, 11);
       `checkd(expected_post, 12);
       `checkd(expected_rises, 5);
+      `checkd(expected_stables, 10);
       $write("*-* All Finished *-*\n");
       $finish;
     end
   end
+endmodule
+
+// A child reads the enclosing module's clockvar, not its same-named live signal.
+module clockvar_child_monitor(input logic clk);
+  global clocking @(negedge clk);
+  endclocking
+  int rises;
+  always @(negedge clk) if ($rose_gclk($root.t.local_cb.lfsr[0]))++rises;
 endmodule
