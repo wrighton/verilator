@@ -11,6 +11,9 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-test.lint(expect_filename=test.golden_filename, fails=True)
+test.lint(verilator_flags2=['--stats'])
+
+test.file_grep(test.stats, r'Assertions, local variable lowering work\s+(\d+)', 4436)
+test.file_grep(test.stats, r'Assertions, local variable flow entries\s+(\d+)', 8250)
 
 test.passes()
