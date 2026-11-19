@@ -278,6 +278,11 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         iterateChildrenConst(nodep);
         puts("end\n");
     }
+    void visit(AstCLocalScope* nodep) override {
+        putbs("begin\n");
+        iterateChildrenConst(nodep);
+        puts("end\n");
+    }
     void visit(AstFork* nodep) override {
         if (nodep->name() == "") {
             putbs("fork\n");

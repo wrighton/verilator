@@ -589,6 +589,7 @@ class TaskVisitor final : public VNVisitor {
     // STATE
     TaskStateVisitor* const m_statep;  // Common state between visitors
     AstNodeModule* m_modp = nullptr;  // Current module
+    AstCFunc* m_cfuncp = nullptr;  // Current function made from a task or function
     AstTopScope* const m_topScopep = v3Global.rootp()->topScopep();  // The AstTopScope
     AstScope* m_scopep = nullptr;  // Current scope
     AstNode* m_insStmtp = nullptr;  // Where to insert statement
@@ -599,6 +600,7 @@ class TaskVisitor final : public VNVisitor {
     V3SharedTmps m_consArrayTmps{"__VconsArrayTemp", VVarType::BLOCKTEMP};  // For ConsArray args
     V3SharedTmps m_forceTmps{"__Vforcefuncout", VVarType::VAR};  // For calls in force statements
     int m_unconVarNum = 0;  // Unique bad connection variable
+    size_t m_autoVarNum = 0;  // Unique automatic variable local to m_cfuncp
     std::map<const AstIface*, VifDispatcher> m_vifDispatchers;  // Dispatchers of each interface
 
     // STATE - across all visitors
@@ -606,6 +608,7 @@ class TaskVisitor final : public VNVisitor {
     std::map<std::string, const AstStructDType*> m_dpiStructs;  // C names of DPI structures
     std::map<const AstEnumDType*, size_t> m_enumNumbers;  // Unique numbers of enum types
     VDouble0 m_statInlines;  // Statistic tracking
+    VDouble0 m_statAutoLocals;  // Statistic tracking
     VDouble0 m_statGetters;  // Statistic tracking
     VDouble0 m_statHierDpisWithCosts;  // Statistic tracking
 
@@ -635,17 +638,27 @@ class TaskVisitor final : public VNVisitor {
     // Create variable for 'invarp' of the call 'refp', named after the called task and 'suffix'
     AstVarScope* createVarScope(const AstNodeFTaskRef* refp, AstVar* invarp,
                                 const std::string& suffix) {
-        // We could create under either the ref's scope or the ftask's scope.
-        // It shouldn't matter, as they are only local variables.
-        // We choose to do it under whichever called this function, which results
-        // in more cache locality.
-        // Share the variable with the other scopes of the module, so the same calls in
-        // instances use the same variables
-        V3SharedTmps& tmps = VN_IS(refp, FuncRef) ? m_funcTmps : m_taskTmps;
-        AstVarScope* const newvscp = tmps.make(invarp->fileline(), m_scopep, invarp->dtypep(),
-                                               refp->taskp()->shortName() + suffix);
+        const std::string name = refp->taskp()->shortName() + suffix;
+        AstVarScope* newvscp = nullptr;
+        if (m_cfuncp) {
+            // Each call has its own automatic variables (IEEE 1800-2023 6.21), and the variables
+            // left in a task are automatic, as V3Begin moved the static ones out of it. So in a
+            // function make them locals. A module or class variable would be shared by calls
+            // running at the same time, or recursively, and one in a class would be in every
+            // object.
+            newvscp
+                = createFuncVar(m_cfuncp, "__Vauto_" + name + "_" + std::to_string(m_autoVarNum++),
+                                invarp->dtypep());
+            ++m_statAutoLocals;
+        } else {
+            // Create under the scope of the caller, rather than that of the task, for cache
+            // locality. Share the variable with the other scopes of the module, so the same calls
+            // in instances use the same variables
+            V3SharedTmps& tmps = VN_IS(refp, FuncRef) ? m_funcTmps : m_taskTmps;
+            newvscp = tmps.make(invarp->fileline(), m_scopep, invarp->dtypep(), name);
+            newvscp->varp()->funcLocal(false);
+        }
         AstVar* const newvarp = newvscp->varp();
-        newvarp->funcLocal(false);
         newvarp->propagateAttrFrom(invarp);
         newvarp->lifetime(invarp->lifetime());
         newvarp->isInternal(true);
@@ -2208,8 +2221,10 @@ class TaskVisitor final : public VNVisitor {
         VL_RESTORER(m_scopep);
         VL_RESTORER(m_modp);
         VL_RESTORER(m_insStmtp);
+        VL_RESTORER(m_cfuncp);
         m_scopep = m_statep->getScope(nodep);
         m_modp = m_scopep->modp();
+        m_cfuncp = nullptr;
         iterate(nodep);
     }
     void insertBeforeStmt(AstNode* nodep, AstNode* newp) {
@@ -2389,6 +2404,9 @@ class TaskVisitor final : public VNVisitor {
             beginp = createNonInlinedFTask(nodep, outvscp, cnewp /*ref*/);
         } else {
             beginp = createInlinedFTask(nodep, outvscp);
+            // In a function, put the body in a C++ scope, so V3Localize can make its variables
+            // locals of the scope, made only when the call runs
+            if (m_cfuncp) beginp = new AstCLocalScope{nodep->fileline(), beginp};
             ++m_statInlines;
         }
 
@@ -2425,6 +2443,13 @@ class TaskVisitor final : public VNVisitor {
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         }
         UINFO(4, "  FTask REF Done.");
+    }
+    void visit(AstCFunc* const nodep) override {
+        VL_RESTORER(m_cfuncp);
+        VL_RESTORER(m_autoVarNum);
+        m_cfuncp = nodep;
+        m_autoVarNum = 0;
+        iterateChildren(nodep);
     }
     void visit(AstNodeFTask* const nodep) override {
         UINFO(4, " visitFTask   " << nodep);
@@ -2588,6 +2613,7 @@ public:
     }
     ~TaskVisitor() {
         V3Stats::addStat("Optimizations, Functions inlined", m_statInlines);
+        V3Stats::addStat("Tasks, Automatic variables local to functions", m_statAutoLocals);
         V3Stats::addStat("Optimizations, Function getters replaced with reads", m_statGetters);
         V3Stats::addStat("Optimizations, Hierarchical DPI wrappers with costs",
                          m_statHierDpisWithCosts);
