@@ -604,6 +604,7 @@ class AstCFunc final : public AstNode {
     bool m_slow : 1;  // Slow routine, called once or just at init time
     bool m_funcPublic : 1;  // From user public task/function
     bool m_fromFTask : 1;  // From user task/function, other than a DPI import
+    bool m_isOutlinePart : 1;  // Outline part: statements of another function, moved by V3Outline
     bool m_isConstructor : 1;  // Is C class constructor
     bool m_isDestructor : 1;  // Is C class destructor
     bool m_isMethod : 1;  // Is inside a class definition
@@ -641,6 +642,7 @@ public:
         m_slow = false;
         m_funcPublic = false;
         m_fromFTask = false;
+        m_isOutlinePart = false;
         m_isConstructor = false;
         m_isDestructor = false;
         m_isMethod = true;
@@ -671,6 +673,7 @@ public:
         return ((rtnTypeVoid() == asamep->rtnTypeVoid()) && (argTypes() == asamep->argTypes())
                 && isLoose() == asamep->isLoose() && voidSelf() == asamep->voidSelf()
                 && needsVlProcess() == asamep->needsVlProcess()
+                && isOutlinePart() == asamep->isOutlinePart()
                 && (!(dpiImportPrototype() || dpiExportImpl()) || name() == asamep->name()));
     }
     //
@@ -699,6 +702,8 @@ public:
     void funcPublic(bool flag) { m_funcPublic = flag; }
     bool fromFTask() const { return m_fromFTask; }
     void fromFTask(bool flag) { m_fromFTask = flag; }
+    bool isOutlinePart() const { return m_isOutlinePart; }
+    void isOutlinePart(bool flag) { m_isOutlinePart = flag; }
     void argTypes(const string& str) { m_argTypes = str; }
     string argTypes() const { return m_argTypes; }
     void ifdef(const string& str) { m_ifdef = str; }
