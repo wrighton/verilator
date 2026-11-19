@@ -379,9 +379,9 @@ class VlDynamicTriggerScheduler final {
     std::vector<VlEventWaitList*> m_drainedLists;  // Pending lists being drained (wakePending)
     uint64_t m_nextSeq = 0;  // Order of the next wait list to become live
     // Events whose wait lists fired at the last evaluate(), their fired state to retire at the
-    // post update step (see doPostUpdates), and the assignable ones among them, kept alive
+    // post update step (see doPostUpdates)
     std::vector<VlEvent*> m_firedEventps;
-    std::vector<std::shared_ptr<VlEvent>> m_firedKeepps;
+    std::vector<std::shared_ptr<VlEvent>> m_firedKeepps;  // Keeps the assignable ones alive
 
     // CONSTANTS
     // Largest storage a free wait list keeps for its waiters, so a list reused for another
