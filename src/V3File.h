@@ -175,6 +175,7 @@ public:
     static bool tokenNotStart(const char* cp);  // Import/export meaning no endfunction
     static bool tokenStart(const char* cp);
     static bool tokenEnd(const char* cp);
+    static void selfTest();
 
     // CALLBACKS - MUST OVERRIDE
     virtual void putcOutput(char chr) = 0;
