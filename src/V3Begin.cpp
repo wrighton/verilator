@@ -100,7 +100,7 @@ class BeginVisitor final : public VNVisitor {
             }
             m_unnamedScope = dot(m_unnamedScope, ident);
             // Create CellInline for dotted var resolution
-            // Cloned assertion actions repeat their blocks, so the same name can recur
+            // Cloned assertion actions repeat their blocks, so the same name can recur.
             if (!m_ftaskp && m_inlineNames.emplace(m_unnamedScope).second) {
                 AstCellInline* const inlinep = new AstCellInline{flp, m_unnamedScope, blockName};
                 m_inlinesp = AstNode::addNextNull(m_inlinesp, inlinep);
