@@ -187,16 +187,20 @@ module t;
   // A hierarchical reference through another instance keeps selecting that instance
   int xmr_seen_a;
   int xmr_seen_b;
+  int xmr_seen_up_a;
+  int xmr_seen_up_b;
 
   t_xmr_worker xmr_a (
       .clk(clk),
       .value(37),
-      .seen(xmr_seen_a)
+      .seen(xmr_seen_a),
+      .seen_up(xmr_seen_up_a)
   );
   t_xmr_worker xmr_b (
       .clk(clk),
       .value(91),
-      .seen(xmr_seen_b)
+      .seen(xmr_seen_b),
+      .seen_up(xmr_seen_up_b)
   );
 
   initial begin
@@ -225,6 +229,8 @@ module t;
     `checkd(cover_runs, 0);
     `checkd(xmr_seen_a, 37);
     `checkd(xmr_seen_b, 37);
+    `checkd(xmr_seen_up_a, 37);
+    `checkd(xmr_seen_up_b, 37);
     `checkd(payload_seen, 37);
     `checkd(payload_calls, fails);
     done = 1;
@@ -285,7 +291,8 @@ endmodule
 module t_xmr_worker (
     input bit clk,
     input int value,
-    output int seen
+    output int seen,
+    output int seen_up
 );
 
   if (1) begin : g
@@ -294,6 +301,13 @@ module t_xmr_worker (
       static int slot = 0;
       slot = value;
       seen = $root.t.xmr_a.g.act.slot;
+      // Upward through instance xmr_a, not through the block of that name below
+      seen_up = xmr_a.g.act.slot;
+      begin : decoy
+        begin : xmr_a
+          seen_up += 0;
+        end
+      end
     end
   end
 
