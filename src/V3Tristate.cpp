@@ -561,6 +561,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     int m_unique = 0;
     bool m_alhs = false;  // On LHS of assignment
     bool m_inAlias = false;  // Inside alias statement
+    bool m_inForceLhs = false;  // On LHS of force or release
     bool m_processedIfaces = false;  // Interface modules already processed (interfaces-first pass)
     VStrength m_currentStrength = VStrength::STRONG;  // Current strength of assignment,
                                                       // Used only on LHS of assignment
@@ -1561,6 +1562,12 @@ class TristateVisitor final : public TristateBaseVisitor {
         return false;
     }
 
+    // In an interface, a net whose drivers keep their strength groups until rank resolution
+    static bool isStrengthGroupNet(const AstVar* varp) {
+        return varp->isNet() && !varp->isWiredNet() && !varp->isIO()
+               && varp->hasStrengthAssignment();
+    }
+
     bool isIfaceNetLhs(AstNodeExpr* lhsp) {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef);
@@ -2211,6 +2218,18 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstAssign* nodep) override { visitAssign(nodep); }
     void visit(AstAssignDly* nodep) override { visitAssign(nodep); }
 
+    void visitForceLhs(AstNode* nodep, AstNodeExpr* lhsp) {
+        VL_RESTORER(m_inForceLhs);
+        m_inForceLhs = true;
+        iterateAndNextNull(lhsp);
+        checkUnhandled(nodep);
+    }
+    void visit(AstAssignForce* nodep) override {
+        iterateAndNextNull(nodep->rhsp());
+        visitForceLhs(nodep, nodep->lhsp());
+    }
+    void visit(AstRelease* nodep) override { visitForceLhs(nodep, nodep->lhsp()); }
+
     void visit(AstNodeProcedure* nodep) override {
         VL_RESTORER(m_procedurep);
         const AstAlways* const alwaysp = VN_CAST(nodep, Always);
@@ -2655,6 +2674,12 @@ class TristateVisitor final : public TristateBaseVisitor {
     void handleNodeVarRef(AstNodeVarRef* nodep) {
         UINFO(9, dbgState() << nodep);
         UASSERT_OBJ(nodep->varp(), nodep, "Unlinked");
+        // Force and release override all drivers of a resolved interface strength net rather
+        // than adding a driver (IEEE 1800-2023 10.6.2); V3Force lowers them later.
+        if (m_inForceLhs && m_varAux(nodep->varp()).ifaceTristate
+            && isStrengthGroupNet(nodep->varp())) {
+            return;
+        }
         if (m_graphing) {
             if (nodep->access().isWriteOrRW()) associateLogic(nodep, nodep->varp());
             if (nodep->access().isReadOrRW()) associateLogic(nodep->varp(), nodep);
@@ -2749,8 +2774,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 nodep->addNextHere(newp);
                 // We'll iterate on the new AstPull later
             }
-            if (VN_IS(m_modp, Iface) && nodep->isNet() && !nodep->isWiredNet() && !nodep->isIO()
-                && nodep->hasStrengthAssignment()) {
+            if (VN_IS(m_modp, Iface) && isStrengthGroupNet(nodep)) {
                 // Parent modules must see this net before any plain strong driver is visited.
                 m_varAux(nodep).ifaceTristate = true;
                 m_tgraph.setTristate(nodep);
