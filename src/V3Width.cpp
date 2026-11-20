@@ -1377,7 +1377,7 @@ class WidthVisitor final : public VNVisitor {
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, PRELIM}.p());
             checkCvtUS(nodep->fromp(), false);
             iterateCheckSizedSelf(nodep, "Select LHS", nodep->fromp(), SELF, BOTH);
-            int width = nodep->widthConst();
+            const int width = nodep->widthConst();
             if (width <= 0) {
                 nodep->v3error("Width of bit extract must be positive (IEEE 1800-2023 11.5.1)");
                 nodep->dtypeSetBit();
@@ -1391,18 +1391,11 @@ class WidthVisitor final : public VNVisitor {
             const bool inParameterizedTemplate
                 = m_modep && (m_modep->dead() || m_modep->parameterizedTemplate());
 
-            if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() < nodep->lsbConst()) {
-                // Likely impossible given above width check
-                nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported: left < right of bit extract: "  // LCOV_EXCL_LINE
-                                  << nodep->msbConst() << "<" << nodep->lsbConst());
-                width = (nodep->lsbConst() - nodep->msbConst() + 1);
-                nodep->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED,
-                                               nodep->fromp()->isFourstateOrNoDtype());
-                nodep->widthConst(width);
-                pushDeletep(nodep->lsbp());
-                nodep->lsbp()->replaceWith(new AstConst{nodep->lsbp()->fileline(), 0});
-            }
+            // Bounds of a constant select, read before any warning, as reading a too wide index
+            // reports an error, and wider than int, as the index may be near its maximum
+            const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
+            const int64_t lsb = lsbConstp ? lsbConstp->toSInt() : 0;
+            const int64_t msb = lsb + width - 1;
             // We're extracting, so just make sure the expression is at least wide enough.
             if (nodep->fromp()->width() < width && !inParameterizedTemplate) {
                 // If it is not a lvalue, extend it
@@ -1457,7 +1450,7 @@ class WidthVisitor final : public VNVisitor {
                     UINFO(1, "    Related node: " << nodep);
                 }
             }
-            if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() > frommsb) {
+            if (lsbConstp && msb > frommsb) {
                 // See also warning in V3Const
                 // We need to check here, because the widthCheckSized may silently
                 // add another SEL which will lose the out-of-range check
@@ -1469,9 +1462,6 @@ class WidthVisitor final : public VNVisitor {
                 if (m_doGenerate) {
                     UINFO(5, "Selection index out of range inside generate");
                 } else if (!inParameterizedTemplate) {
-                    // Before the warning, as a too wide index reports an error
-                    const int msb = nodep->msbConst();
-                    const int lsb = nodep->lsbConst();
                     if (nodep->declRange().ranged()) {
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
                                                     << msb << ":" << lsb << " outside " << frommsb
@@ -1486,9 +1476,9 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // Extend unless it's a lvalue,
                 // because extending lvalue would lose write access.
-                if (!isWriteSelect) {
+                if (!isWriteSelect && msb < std::numeric_limits<int>::max()) {
                     // Extend it
-                    const int extendTo = nodep->msbConst() + 1;
+                    const int extendTo = static_cast<int>(msb + 1);
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
                         extendTo, extendTo, nodep->fromp()->dtypep()->numeric(),
                         nodep->fromp()->dtypep()->isFourstate());
@@ -8359,6 +8349,7 @@ class WidthVisitor final : public VNVisitor {
         // leftmost element to the leftmost (most significant) slice
         if (conwidth == modwidth * elements * subElems) {
             if (rangep->ascending()) {
+                // V3Param already stopped on a bound too wide to read here
                 nodep->exprp()->v3warn(ASCRANGE, "Ascending instance range connecting to "
                                                  "vector: left < right of instance range: ["
                                                      << rangep->leftConst() << ":"
