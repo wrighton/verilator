@@ -79,6 +79,43 @@ module t (
     @(posedge clk) s_capture(prev) |=> (cyc[0] != prev);
   endproperty
   assert property (p_capture);
+  // A property formal forwarded to the sequence instance stands for the local variable
+  property p_capture_inner(lv);
+    s_capture(lv) |=> (cyc[0] != lv);
+  endproperty
+  property p_capture_outer;
+    bit prev;
+    @(posedge clk) p_capture_inner(prev);
+  endproperty
+  assert property (p_capture_outer);
+  // A typed formal passed on to the sequence instance also stands for the local variable
+  sequence s_capture_typed(bit lv);
+    s_capture(lv);
+  endsequence
+  property p_capture_typed;
+    bit prev;
+    @(posedge clk) s_capture_typed(prev) |=> (cyc[0] != prev);
+  endproperty
+  assert property (p_capture_typed);
+  property p_capture_typed_inner(bit lv);
+    s_capture(lv) |=> (cyc[0] != lv);
+  endproperty
+  property p_capture_typed_outer;
+    bit prev;
+    @(posedge clk) p_capture_typed_inner(prev);
+  endproperty
+  assert property (p_capture_typed_outer);
+  // A sequence declaring a formal and a local variable of inline types
+  sequence s_inline_types(struct packed {bit b;} v);
+    enum bit {OFF, ON} unused_state;
+    v.b == cyc[0];
+  endsequence
+  assert property (@(posedge clk) s_inline_types(cyc[0]));
+  // A property declaring a local variable of an inline type, not instantiated
+  property p_inline_type_unused;
+    struct packed {bit b;} unused_pair;
+    cyc >= 0;
+  endproperty
 
   // --- Scenario: sequence-local variable (IEEE 1800-2023 16.8, 16.10) ---
   // Captured by a match item, referenced after a cycle delay in the same
