@@ -397,6 +397,7 @@ class WidthVisitor final : public VNVisitor {
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     const AstNodeExpr* m_randomizeFromp = nullptr;  // Current randomize method call fromp
+    bool m_solverExpr = false;  // Under a constraint or randomize 'with', solved not executed
     const bool m_paramsOnly;  // Computing parameter value; limit operation
     const bool m_doGenerate;  // Do errors later inside generate statement
     bool m_streamConcat = false;  // True if visiting arguments of stream concatenation
@@ -4811,7 +4812,7 @@ class WidthVisitor final : public VNVisitor {
                 nodep->dtypep(varp->dtypep());
                 nodep->varp(varp);
                 if (nodep->access().isWriteOrRW()) {
-                    V3LinkLValue::linkLValueSet(nodep, nodep->access());
+                    V3LinkLValue::linkLValueSet(nodep, nodep->access(), &m_memberMap);
                 }
                 if (AstIfaceRefDType* const adtypep
                     = VN_CAST(nodep->fromp()->dtypep()->skipRefp(), IfaceRefDType)) {
@@ -4988,7 +4989,7 @@ class WidthVisitor final : public VNVisitor {
                     nodep->varp(varp);
                     nodep->didWidth(true);
                     if (nodep->fromp()->sameTree(m_randomizeFromp) && varp->isRand())  // null-safe
-                        V3LinkLValue::linkLValueSet(nodep);
+                        V3LinkLValue::linkLValueSet(nodep, VAccess::WRITE, &m_memberMap);
                     return true;
                 }
                 if (AstConstraint* constrp = VN_CAST(foundp, Constraint)) {
@@ -5307,6 +5308,8 @@ class WidthVisitor final : public VNVisitor {
         if (AstWith* const withp = nodep->withp()) {
             withp->indexArgRefp()->dtypep(indexDtp);
             withp->valueArgRefp()->dtypep(valueDtp);
+            VL_RESTORER(m_solverExpr);
+            m_solverExpr = m_solverExpr || nodep->name() == "randomize";
             userIterate(withp, WidthVP{returnDtp, BOTH}.p());
             withp->unlinkFrBack();
             return withp;
@@ -8648,7 +8651,9 @@ class WidthVisitor final : public VNVisitor {
         nodep->doingWidth(true);
         VL_RESTORER(m_funcp);
         VL_RESTORER(m_ftaskp);
+        VL_RESTORER(m_solverExpr);
         m_ftaskp = nodep;
+        m_solverExpr = false;  // Its body is executed, also when first reached from a constraint
         // First width the function variable, as if is a recursive function we need data type
         if (nodep->fvarp()) userIterate(nodep->fvarp(), nullptr);
         if (nodep->isConstructor()) {
@@ -8739,7 +8744,9 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstConstraint* nodep) override {
         if (nodep->didWidth()) return;
         VL_RESTORER(m_constraintp);
+        VL_RESTORER(m_solverExpr);
         m_constraintp = nodep;
+        m_solverExpr = true;
         userIterateChildren(nodep, nullptr);
         nodep->didWidth(true);
     }
@@ -8939,7 +8946,8 @@ class WidthVisitor final : public VNVisitor {
                     pinp = newp;
                 }
                 if (portp->isWritable()) {
-                    V3LinkLValue::linkLValueSet(pinp, portp->direction().pinAccess());
+                    V3LinkLValue::linkLValueSet(pinp, portp->direction().pinAccess(),
+                                                &m_memberMap);
                 }
                 // AstPattern requires assignments to pass datatype on PRELIM
                 VL_DO_DANGLING(userIterate(pinp, WidthVP{portp->dtypep(), PRELIM}.p()), pinp);
@@ -9056,8 +9064,80 @@ class WidthVisitor final : public VNVisitor {
                     iterateCheckAssign(nodep, "Function Argument", pinp, FINAL, portDTypep,
                                        portp->direction().pinAccess());
                 }
+                // Not in constraints, which V3Randomize solves rather than executes
+                if (portp->isConstRef() && !m_solverExpr) {
+                    assocElemAtWriteRecurse(argp->exprp(), false, false);
+                }
             }
         }
+    }
+    // Make a const ref actual create its associative array element if missing
+    bool assocElemAtWriteRecurse(AstNodeExpr* exprp, bool underAssocSel, bool underSel) {
+        // A missing element is allocated also for a const ref argument (IEEE 1800-2023
+        // 7.8.7), as it is for a ref argument, which is already an lvalue. Here only the
+        // selects change to atWrite, which is marked pure until V3Task, so V3LiftExpr does not
+        // copy an array or struct select of it (underSel). V3Task makes the process write the
+        // array, after V3Undriven, as creating an element is not a write that conflicts with
+        // other processes. Returns false if no associative array is selected, or the array is
+        // read-only.
+        if (AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+            const bool assocSel = VN_IS(selp, AssocSel) || VN_IS(selp, WildcardSel);
+            if (!assocElemAtWriteRecurse(selp->fromp(), underAssocSel || assocSel,
+                                         underSel || !assocSel)) {
+                return false;
+            }
+            if (assocSel) {
+                AstCMethodHard* const newp
+                    = new AstCMethodHard{selp->fileline(), selp->fromp()->unlinkFrBack(),
+                                         VCMethod::ARRAY_AT_WRITE, selp->bitp()->unlinkFrBack()};
+                newp->dtypeFrom(selp);
+                selp->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(selp), selp);
+            }
+            return true;
+        } else if (AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+            return assocElemAtWriteRecurse(selp->fromp(), underAssocSel, true);
+        } else if (AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+            // Queue or dynamic array element
+            const bool atBack = methodp->method() == VCMethod::ARRAY_AT_BACK;
+            if ((!atBack && methodp->method() != VCMethod::ARRAY_AT)
+                || !assocElemAtWriteRecurse(methodp->fromp(), underAssocSel, underSel)) {
+                return false;
+            }
+            if (atBack && underSel) {
+                // The writable form of '$' may append, so is impure, and would be copied
+                methodp->v3warn(E_UNSUPPORTED, "Unsupported: Further select of an associative"
+                                               " array element in a queue's '$' element passed"
+                                               " to a const ref argument.");
+                return false;
+            }
+            methodp->method(atBack ? VCMethod::DYN_AT_WRITE_APPEND_BACK
+                                   : VCMethod::ARRAY_AT_WRITE);
+            return true;
+        }
+        const AstVar* varp = nullptr;
+        bool readOnlyModport = false;
+        if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
+            varp = refp->varp();
+            const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef);
+            readOnlyModport = xrefp && xrefp->readOnlyModport();
+        } else if (const AstMemberRef* const selp = VN_CAST(exprp, MemberRef)) {
+            varp = selp->varp();
+            readOnlyModport = memberRefReadOnlyModport(selp);
+        }
+        return underAssocSel && varp && !varp->isConst() && !varp->isConstRef()
+               && !(varp->isInput() && !varp->isFuncLocal()) && !readOnlyModport;
+    }
+    // Whether an interface member select is through a modport with the member as input
+    static bool memberRefReadOnlyModport(const AstMemberRef* selp) {
+        const AstIfaceRefDType* const dtypep
+            = VN_CAST(selp->fromp()->dtypep()->skipRefp(), IfaceRefDType);
+        if (!dtypep || !dtypep->modportp()) return false;
+        for (const AstNode* itemp : dtypep->modportp()->varspList()) {
+            const AstModportVarRef* const mvarp = VN_CAST(itemp, ModportVarRef);
+            if (mvarp && mvarp->name() == selp->name()) return mvarp->direction().isReadOnly();
+        }
+        selp->v3fatalSrc("Member of a modport view is not in the modport");  // See memberRefIface
     }
 
     void handleStdRandomizeArgs(AstNodeFTaskRef* const nodep) {
