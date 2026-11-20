@@ -2913,6 +2913,7 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
             if (width > 32) return nullptr;
             term = "(select " + term + " #x" + indices[i].substr(8 - width / 4) + ")";
         }
+        m_solveBeforeArrays[name] = arrIt->second.get();
         return (m_solveBeforeElems[name]
                 = std::make_shared<const VlRandomVar>(term, arrIt->second->width(), nullptr, 0,
                                                       std::numeric_limits<std::uint32_t>::max()))
@@ -2921,15 +2922,17 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
 }
 
 bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layersr) {
-    // The pairs order bits of variables, which overlap when of the same variable. The bits of
-    // each variable are split at the bounds of its operands into segments, each ordered,
-    // solved and pinned as a variable, so a variable is pinned only after the predecessors of
-    // each of its parts. The graph nodes are the segments, a start node before and an end node
-    // after the segments of each variable, which an operand of all its bits uses, and a node
-    // per pair, after its first operand and before its second. So the edges are bounded by the
-    // segments and the widths of the operands of parts.
+    // The pairs order bits of variables and array elements, which overlap when of the same
+    // variable or element, or of an array and its element. The bits of each variable or
+    // element are split at the bounds of its operands into segments, each ordered, solved and
+    // pinned as a variable, so a variable is pinned only after the predecessors of each of
+    // its parts. The graph nodes are the segments, a start node before and an end node after
+    // the segments of each variable or element, which an operand of all its bits uses, and a
+    // node per pair, after its first operand and before its second. So the edges are bounded
+    // by the segments and the widths of the operands of parts.
     struct Root final {
-        std::string name;  // Name of the variable
+        std::string name;  // Name of the variable or array element
+        const VlRandomVar* arrayp = nullptr;  // Array of an array element, else nullptr
         std::vector<IData> bounds;  // Sorted bounds of its segments
         size_t firstNode = 0;  // Node of its first segment, then of its start and end
         bool whole = false;  // Operand of all its segments, so all are ordered
@@ -2938,14 +2941,18 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
     std::map<const VlRandomVar*, Root> roots;
     m_solveBeforeParts.clear();
     m_solveBeforeElems.clear();
+    m_solveBeforeArrays.clear();
     for (const auto& pair : m_solveBefore) {
         SolveBeforeBits bits[2];
-        // Only consider registered variables, in range
-        if (!solveBeforeBits(pair.first, bits[0]) || !solveBeforeBits(pair.second, bits[1]))
-            continue;
+        const SolveBeforeRef* const refps[2] = {&pair.first, &pair.second};
+        bool ok = true;
+        for (int i = 0; i < 2 && ok; ++i) ok = solveBeforeBits(*refps[i], bits[i]);
+        // Only consider registered variables and elements of array variables, in range
+        if (!ok) continue;
         for (int i = 0; i < 2; ++i) {
             Root& root = roots[bits[i].rootp];
-            root.name = bits[i].rootp->name();
+            root.name = refps[i]->name;
+            root.arrayp = bits[i].arrayp;
             root.bounds.push_back(bits[i].lo);
             root.bounds.push_back(bits[i].hi);
         }
@@ -2976,6 +2983,15 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
             addEdge(start, node, 0);
             addEdge(node, start + 1, 0);
         }
+        // An element is part of its array, which is pinned only after it
+        if (!root.arrayp) continue;
+        const auto arrayIt = roots.find(root.arrayp);
+        if (arrayIt == roots.end()) continue;
+        const Root& array = arrayIt->second;
+        const size_t arrayStart = array.firstNode + array.bounds.size() - 1;
+        addEdge(arrayStart, start, 0);
+        addEdge(start + 1, arrayStart + 1, 0);
+        for (size_t node = array.firstNode; node < arrayStart; ++node) addEdge(start + 1, node, 0);
     }
     for (size_t i = 0; i < pairs.size(); ++i) {
         for (int side = 0; side < 2; ++side) {
@@ -3029,8 +3045,8 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
             std::string name = root.name;
             if (lo || hi != static_cast<IData>(it.first->width())) {
                 name = "((_ extract " + std::to_string(hi - 1) + " " + std::to_string(lo) + ") "
-                       + root.name + ")";
-                m_solveBeforeParts[name] = std::make_shared<const VlRandomVar>(
+                       + it.first->name() + ")";
+                m_solveBeforeElems[name] = std::make_shared<const VlRandomVar>(
                     name, static_cast<int>(hi - lo), nullptr, 0,
                     std::numeric_limits<std::uint32_t>::max());
             }
@@ -3045,6 +3061,8 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
 bool VlRandomizer::solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr) {
     bitsr.rootp = solveBeforeVarp(ref.name);
     if (!bitsr.rootp) return false;
+    const auto arrayIt = m_solveBeforeArrays.find(ref.name);
+    bitsr.arrayp = arrayIt == m_solveBeforeArrays.end() ? nullptr : arrayIt->second;
     const IData varWidth = bitsr.rootp->width();
     if (!ref.width) {
         bitsr.lo = 0;
