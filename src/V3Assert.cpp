@@ -613,6 +613,34 @@ void V3AssertCommon::lowerSvaLocalVarInits(
     }
 }
 
+// All executions of an action share its static variables, initialized once, and each has its
+// own automatic variables (IEEE 1800-2023 6.21). So the clone refers to the original static
+// declarations, and renames its automatic ones, which V3Begin may lift to the same scope.
+AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* actionp, V3UniqueNames& names) {
+    AstNodeStmt* const clonep = actionp->cloneTree(true);
+    std::unordered_map<const AstVar*, AstVar*> origVarps;  // Cloned to original static variable
+    actionp->foreachAndNext([&](AstVar* const varp) {
+        if (varp->lifetime().isStatic()) origVarps.emplace(varp->clonep(), varp);
+    });
+    std::vector<AstNode*> declps;  // Static declarations of the clone
+    clonep->foreachAndNext([&](AstNode* const nodep) {
+        if (AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            const auto it = origVarps.find(refp->varp());
+            if (it != origVarps.end()) refp->varp(it->second);
+        } else if (AstVar* const varp = VN_CAST(nodep, Var)) {
+            if (origVarps.count(varp)) {
+                declps.push_back(varp);
+            } else {
+                varp->name(names.get(varp->name()));
+            }
+        } else if (VN_IS(nodep, Typedef) || VN_IS(nodep, InitialStaticStmt)) {
+            declps.push_back(nodep);
+        }
+    });
+    for (AstNode* const nodep : declps) nodep->unlinkFrBack()->deleteTree();
+    return clonep;
+}
+
 //######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
@@ -916,6 +944,7 @@ class AssertVisitor final : public VNVisitor {
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
     V3UniqueNames m_matchCountNames{"__VnfaRemainingMatchCount"};  // Match replay counter names
     V3UniqueNames m_obsNames{"__VassertObs"};  // Observed deferred assertion temp names
+    V3UniqueNames m_actionNames{"__VassertAction"};  // Automatics of cloned actions
     // Key equality for the delayed value maps. AstNode::sameTree is not enough, as
     // AstVar::sameNode compares only names, and before V3Begin distinct variables in
     // different scopes (e.g. generate blocks) can have the same name.
@@ -2063,12 +2092,15 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstPExprClause* nodep) override {
         AstNodeStmt* stmtsp = nullptr;
         if (nodep->pass() && m_passsp) {
-            // Cover adds COVERINC by AstNode::addNext, thus need to clone next too.
-            stmtsp = m_passsp->cloneTree(true);
+            // Cover adds COVERINC by AstNode::addNext, so the action is a list.
+            // The first clause takes the action, later ones a clone.
+            stmtsp = m_passsp->backp() ? V3AssertCommon::cloneAction(m_passsp, m_actionNames)
+                                       : m_passsp;
             stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
                                        nodep->vacuous());
         } else if (!nodep->pass() && m_failsp) {
-            stmtsp = m_failsp->cloneTree(true);
+            stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
+                                       : m_failsp;
             stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
         }
         if (stmtsp) {
