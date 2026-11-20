@@ -1580,6 +1580,8 @@ class RandomizeVisitor final : public VNVisitor {
 
     // STATE
     V3UniqueNames m_inlineUniqueNames;  // For generating unique function names
+    std::map<const AstClass*, std::vector<AstClass*>>
+        m_classFamilies;  // Base-most class -> classes derived from it, and itself
     V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Random array loop indices
     V3UniqueNames m_modeUniqueNames{"__Vmode"};  // For generating unique rand/constraint
                                                  // mode state var names
@@ -2442,11 +2444,26 @@ class RandomizeVisitor final : public VNVisitor {
             if (!stmtsp) return;
 
             // Wrap in null check
-            AstIf* const nullCheckp = new AstIf{
-                fl,
-                new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
-                           new AstConst{fl, AstConst::Null{}}},
-                stmtsp};
+            AstNodeExpr* condp
+                = new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
+                             new AstConst{fl, AstConst::Null{}}};
+            // Each object of a cycle is reached once, while flagged as being randomized
+            if (inRandHandleCycle(memberVarp, classp)) {
+                condp
+                    = new AstLogAnd{fl, condp,
+                                    new AstNot{fl, newRandomizingSelp(fl, ownerClassp, memberVarp,
+                                                                      VAccess::READ)}};
+                AstNodeStmt* const setp = new AstAssign{
+                    fl, newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
+                    new AstConst{fl, AstConst::BitTrue{}}};
+                stmtsp = AstNode::addNext(setp, stmtsp);
+                stmtsp = AstNode::addNext(
+                    stmtsp,
+                    new AstAssign{fl,
+                                  newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
+                                  new AstConst{fl, AstConst::BitFalse{}}});
+            }
+            AstIf* const nullCheckp = new AstIf{fl, condp, stmtsp};
 
             // Wrap in rand_mode check
             callbackTaskp->addStmtsp(wrapIfRandMode(classp, memberVarp, nullCheckp));

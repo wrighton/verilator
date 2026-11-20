@@ -28,11 +28,13 @@ class Node;
   rand int m_arr[];
   constraint c {m_arr.size() < 4;}
   rand struct {rand Element h;} m_s;
+  rand Element m_q_handles[$];
+endclass
 
-  task check_elements;
-    m_handles[0].rand_mode(0);
-    m_dyn_handles[0].rand_mode(0);
-  endtask
+class Node;
+  rand Node m_next;
+  rand int m_arr[];
+  constraint c {m_arr.size() < 4;}
 endclass
 
 module t;
@@ -55,6 +57,7 @@ module t;
     p.m_dyn_handles[0].rand_mode(0);
     p.m_s.h.rand_mode(0);
     p.m_q_handles[$].rand_mode(0);
-    p.check_elements();
+    n.m_arr[0].rand_mode(0);
+    void'(n.randomize());
   end
 endmodule
