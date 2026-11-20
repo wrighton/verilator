@@ -28,13 +28,13 @@
 %Error: t/t_randomize_rand_mode_bad.v:13:12: Cannot call 'rand_mode()' as a function on non-random variable
    38 |     p.m_val = p.m_handles[0].rand_mode();
       |                              ^~~~~~~~~
-%Error: t/t_randomize_rand_mode_bad.v:39:31: Cannot call 'rand_mode()' as a function on non-random variable
+%Error: t/t_randomize_rand_mode_bad.v:40:31: Cannot call 'rand_mode()' as a function on non-random variable
                                            : ... note: In instance 't'
-   39 |     p.m_val = p.get_element().rand_mode();
+   40 |     p.m_val = p.get_element().rand_mode();
       |                               ^~~~~~~~~
-%Error: t/t_randomize_rand_mode_bad.v:40:30: 'rand_mode()' with arguments cannot be called as a function
+%Error: t/t_randomize_rand_mode_bad.v:41:30: 'rand_mode()' with arguments cannot be called as a function
                                            : ... note: In instance 't'
-   40 |     p.m_val = p.m_handles[0].rand_mode(0);
+   41 |     p.m_val = p.m_handles[0].rand_mode(0);
       |                              ^~~~~~~~~
 %Error: t/t_randomize_rand_mode_bad.v:14:11: Cannot call 'rand_mode()' on non-random, non-class variable
                                            : ... note: In instance 't'
