@@ -1605,6 +1605,10 @@ module t;
             end
         end
     end
+    wire logic dump_net;
+    assign dump_net = (clk ? in : 1'bz);
+    assign __Vcellinp__dump_value__p = in;
+    logic __Vcellinp__dump_value__p;
     Iface bound_iface ();
     enum logic [2:0] {
         ZERO = 3'h0,
@@ -1916,6 +1920,10 @@ package p;
         end
     endfunction
 endpackage
+module dump_value_input;
+    input logic p;
+    input logic value;
+endmodule
 module defparam_gen__pie9c2606d;
     /* generate */ begin : dpg
     end : dpg
@@ -2171,6 +2179,11 @@ package Pkg;
 endpackage
 module defparam_leaf;
     parameter bit signed [31:0]  P = 32'sh1;
+endmodule
+module dump_value_driver;
+    output logic p;
+    input logic value;
+    assign p = value;
 endmodule
 module defparam_leaf__P2;
     parameter bit signed [31:0]  P = 32'sh2;

@@ -5279,15 +5279,15 @@ expr<nodeExprp>:                // IEEE: part of expression/constant_expression/
         //
         //                      // IEEE: multiple_concatenation/constant_multiple_concatenation
         |       '{' constExpr '{' cateList '}' '}'
-                        { $$ = new AstReplicate{$3, $4, $2}; }
+                        { $$ = new AstReplicate{$3, $4, $2, true}; }
         |       '{' constExpr '{' cateList '}' '}' '[' expr ']'
-                        { $$ = new AstSelBit{$7, new AstReplicate{$3, $4, $2}, $8}; }
+                        { $$ = new AstSelBit{$7, new AstReplicate{$3, $4, $2, true}, $8}; }
         |       '{' constExpr '{' cateList '}' '}' '[' constExpr ':' constExpr ']'
-                        { $$ = new AstSelExtract{$7, new AstReplicate{$3, $4, $2}, $8, $10}; }
+                        { $$ = new AstSelExtract{$7, new AstReplicate{$3, $4, $2, true}, $8, $10}; }
         |       '{' constExpr '{' cateList '}' '}' '[' expr yP_PLUSCOLON constExpr ']'
-                        { $$ = new AstSelPlus{$7, new AstReplicate{$3, $4, $2}, $8, $10}; }
+                        { $$ = new AstSelPlus{$7, new AstReplicate{$3, $4, $2, true}, $8, $10}; }
         |       '{' constExpr '{' cateList '}' '}' '[' expr yP_MINUSCOLON constExpr ']'
-                        { $$ = new AstSelMinus{$7, new AstReplicate{$3, $4, $2}, $8, $10}; }
+                        { $$ = new AstSelMinus{$7, new AstReplicate{$3, $4, $2, true}, $8, $10}; }
         //                      // UNSUP some other rules above
         //
         //                      // IEEE grammar error: function_subroutine_call [ range_expression ]

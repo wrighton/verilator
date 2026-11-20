@@ -732,6 +732,12 @@ module t (/*AUTOARG*/
     \esc/task ;
     if (sub.\xr.esc ) $write("");
   end
+
+  // Exercise source replication and the different return routes on a written input.
+  wire dump_net = clk ? in : 1'bz;
+  dump_value_input dump_return (.p({dump_net}), .value(in));
+  dump_value_input dump_value (.p({1{in}}), .value(in));
+
 endmodule
 
 module param_mod #(
@@ -807,6 +813,14 @@ endclass
 function int rand_reduce(Cls obj);
   return obj.randomize() with { rarray.sum() with (item + rmember1) > 0; };
 endfunction
+
+module dump_value_input(input wire p, input wire value);
+endmodule
+
+module dump_value_driver(output wire p, input wire value);
+  assign p = value;
+endmodule
+bind dump_value_input dump_value_driver dump_driver (.p(p), .value(value));
 
 `verilator_config
 threads_group -module "sub"

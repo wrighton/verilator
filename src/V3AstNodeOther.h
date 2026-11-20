@@ -1817,6 +1817,7 @@ class AstPin final : public AstNode {
     bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
+    bool m_returnWrittenInput = false;  // Width-proved original net destination for Tristate
 public:
     AstPin(FileLine* fl, int pinNum, const string& name, AstNode* exprp)
         : ASTGEN_SUPER_Pin(fl)
@@ -1848,6 +1849,8 @@ public:
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
     void svImplicit(bool flag) { m_svImplicit = flag; }
+    void setReturnWrittenInput() { m_returnWrittenInput = true; }
+    bool returnWrittenInput() const { return m_returnWrittenInput; }
 };
 class AstPort final : public AstNode {
     // A port (in/out/inout) on a module
@@ -2463,6 +2466,7 @@ class AstVar final : public AstNode {
     bool m_attrFileDescr : 1;  // File descriptor
     bool m_gotNansiType : 1;  // Linker saw Non-ANSI type declaration
     bool m_icoMaybeWritten : 1;  // Design might write this input signal - for ico change detect
+    bool m_resolveWrittenInput : 1;  // Resolve internal and one-way value drivers on this input
     bool m_isConst : 1;  // Table contains constant data
     bool m_isContinuously : 1;  // Ever assigned continuously (for force/release)
     bool m_hasStrengthAssignment : 1;  // Is on LHS of assignment with strength specifier
@@ -2532,6 +2536,7 @@ class AstVar final : public AstNode {
         m_attrFileDescr = false;
         m_gotNansiType = false;
         m_icoMaybeWritten = false;
+        m_resolveWrittenInput = false;
         m_isConst = false;
         m_isContinuously = false;
         m_hasStrengthAssignment = false;
@@ -2731,6 +2736,8 @@ public:
     void hasUserInit(bool flag) { m_hasUserInit = flag; }
     void icoMaybeWritten(bool flag) { m_icoMaybeWritten = flag; }
     bool icoMaybeWritten() const { return m_icoMaybeWritten; }
+    void setResolveWrittenInput() { m_resolveWrittenInput = true; }
+    bool resolveWrittenInput() const { return m_resolveWrittenInput; }
     bool isDpiOpenArray() const VL_MT_SAFE { return m_isDpiOpenArray; }
     void isDpiOpenArray(bool flag) { m_isDpiOpenArray = flag; }
     bool isHideLocal() const { return m_isHideLocal; }

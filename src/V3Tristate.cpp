@@ -2783,6 +2783,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                                            // tristates to inputs, which do not want
                                            // to have this.
                                            && !nodep->modVarp()->declDirection().isWritable());
+            const bool resolveWritten = nodep->modVarp()->resolveWrittenInput();
+            const bool bufferInput = inDeclProcessing && !nodep->returnWrittenInput();
             AstVar* inVarp = nullptr;  // Tristate variable connected to an input port
             if (!nodep->exprp()) {  // No-connect; covert to empty connection
                 UINFO(5, "Unconnected pin terminate " << nodep);
@@ -2794,7 +2796,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 m_tgraph.setTristate(ucVarp);
                 // We don't need a driver on the wire; the lack of one will default to tristate
                 if (isInput) inVarp = ucVarp;
-            } else if (inDeclProcessing) {  // Not an input that was a converted tristate
+            } else if (bufferInput) {  // Not an input that was a converted tristate
                 // Input only may have driver in underneath module which would stomp
                 // the input value.  So make a temporary connection.
                 const AstAssignW* const reAssignp
@@ -2817,7 +2819,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                                        : new AstVar{nodep->fileline(), VVarType::MODULETEMP,
                                                     nodep->name() + "__en" + cvtToStr(m_unique++),
                                                     VFlagBitPacked{}, enModVarp->width()};
-            const bool enIsInput = inDeclProcessing || inOnly;
+            // One shared enable direction, regardless of how this instance routes feedback.
+            const bool enIsInput = resolveWritten || inDeclProcessing || inOnly;
             if (enIsInput) {  // __en(from-resolver-const) or __en(from-resolver-wire)
                 enModVarp->varType2In();
             } else {
@@ -2861,7 +2864,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 outpinp->user2Or(U2_BOTH);  // don't iterate the pin later
                 nodep->addNextHere(outpinp);
                 // Simplify
-                if (inDeclProcessing) {  // Not an input that was a converted tristate
+                if (bufferInput) {  // Not an input that was a converted tristate
                     // The pin is an input, but we need an output
                     // The if() above is needed because the Visitor is
                     // simple, it will flip ArraySel's and such, but if the
@@ -3048,13 +3051,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                 m_varAux(nodep).ifaceTristate = true;
                 m_tgraph.setTristate(nodep);
             }
-            if (nodep->isInout()) {
-                //|| varp->isOutput()
-                // Note unconnected output only changes behavior vs. previous
-                // versions and causes outputs that don't come from anywhere to
-                // possibly create connection errors.
-                // One example of problems is this:  "output z;  task t; z <= {something}; endtask"
-                UINFO(9, "  setTristate-inout " << nodep);
+            if (nodep->isInout() || nodep->resolveWrittenInput()) {
+                // Resolve local drivers of an input without making its value actual writable.
+                UINFO(9, "  setTristate-port " << nodep);
                 m_tgraph.setTristate(nodep);
             }
         } else {  // !graphing

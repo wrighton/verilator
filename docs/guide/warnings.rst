@@ -213,10 +213,10 @@ List Of Warnings
    either through a hierarchical reference or from an instance inserted by
    ``bind``.
 
-   Ignoring this warning will only suppress the lint check; it will
-   simulate correctly, except for an input port of net kind written inside
-   its module that is neither coerced to inout nor drives the net connected
-   to it, see Tri/Inout in :ref:`Language Limitations`.
+   Ignoring this warning suppresses the lint check. See Tri/Inout in
+   :ref:`Language Limitations` for the conditions under which a written net
+   input is coerced, drives a connected net, or resolves its incoming value
+   and local drivers without driving the expression in reverse.
 
 
 .. option:: BADSTDPRAGMA
