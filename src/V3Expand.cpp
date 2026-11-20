@@ -868,6 +868,8 @@ class ExpandVisitor final : public VNVisitor {
             maskset.setMask(msb + 1 - lsb, lsb);
             V3Number maskold{nodep, destp->widthMin()};
             maskold.opNot(maskset);
+            // Creating, setting and inverting the masks make four sweeps over all their words
+            V3Global::opCountInc(4 * VL_WORDS_I(destp->widthMin()));
             if (destwide) {
                 didPattern(VExpandPattern::ASSIGN_TO_SEL_CONST_WIDE, nodep);
                 for (int w = 0; w < destp->widthWords(); ++w) {
