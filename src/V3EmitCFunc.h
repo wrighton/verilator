@@ -1190,13 +1190,13 @@ public:
         puts("N(");
         puts(nodep->isHex() ? "true" : "false");
         putbs(", ");
+        // The memory may be an element or member, not only a variable
+        const AstNodeDType* const dtypep = nodep->memp()->dtypep()->skipRefp();
         // Need real storage width
-        puts(cvtToStr(nodep->memp()->dtypep()->skipRefp()->subDTypep()->widthMin()));
+        puts(cvtToStr(dtypep->subDTypep()->widthMin()));
         uint32_t array_lo = 0;
         bool memUsePtr = true;
         {
-            // The memory may be any unpacked array lvalue, e.g. an element of an array of arrays
-            const AstNodeDType* const dtypep = nodep->memp()->dtypep()->skipRefp();
             if (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, DynArrayDType)
                 || VN_IS(dtypep, QueueDType)) {
                 // nodep->memp() below will when verilated code is compiled create a C++ template
@@ -1209,9 +1209,7 @@ public:
                 putbs(", ");
                 puts(cvtToStr(array_lo));
             } else {
-                nodep->v3error(
-                    nodep->verilogKwd()
-                    << " loading other than unpacked/dynamic/associative-array variable");
+                nodep->v3fatalSrc("Unexpected memory data type (V3Width rejects it)");
             }
         }
         putbs(", ");
