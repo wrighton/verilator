@@ -516,6 +516,18 @@ module t (/*AUTOARG*/
 
   assert_chain: assert property (p_chain);
 
+  property p_local;
+    int captured;
+    @(posedge clk) (in, captured = sum) |-> ##1 (sum != captured);
+  endproperty
+  assert property (p_local);
+
+  property p_local_random;
+    int drawn;
+    @(posedge clk) (in, drawn = $urandom) |-> ##1 (sum != drawn);
+  endproperty
+  assert property (p_local_random);
+
   assert property (@(clk) not ##1 in);
 
   initial begin
