@@ -1502,7 +1502,11 @@ class WidthVisitor final : public VNVisitor {
             const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
             const int64_t lsb = lsbConstp ? lsbConstp->toSInt() : 0;
             const int64_t msb = lsb + width - 1;
-            if (lsbConstp && msb > frommsb) {
+            if (lsbConstp && msb >= std::numeric_limits<int>::max()) {
+                nodep->v3warn(
+                    E_UNSUPPORTED,
+                    "Unsupported: Selection beyond the 32-bit index range: " << msb << ":" << lsb);
+            } else if (lsbConstp && msb > frommsb) {
                 // See also warning in V3Const
                 // We need to check here, because the widthCheckSized may silently
                 // add another SEL which will lose the out-of-range check
@@ -1530,15 +1534,7 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // Extend unless it's a lvalue,
                 // because extending lvalue would lose write access.
-                if (!isWriteSelect && msb >= std::numeric_limits<int>::max()) {
-                    // Too far out to extend to, so read the zero extension bits directly
-                    AstConst* const newp
-                        = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, width, 0};
-                    newp->dtypeFrom(nodep);
-                    nodep->replaceWith(newp);
-                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
-                    return;
-                } else if (!isWriteSelect) {
+                if (!isWriteSelect) {
                     // Extend it
                     const int extendTo = static_cast<int>(msb + 1);
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(

@@ -119,11 +119,20 @@
                                                   : ... note: In instance 't'
    39 |     sel1to0 = ranged[40'h01_7fff_ffff+:2];
       |                     ^
-%Warning-SELRANGE: t/t_select_bad_range4.v:39:21: Selection index out of range: 2147483648:2147483647 outside 3:0
+%Error-UNSUPPORTED: t/t_select_bad_range4.v:39:21: Unsupported: Selection beyond the 32-bit index range: 2147483648:2147483647
+                                                 : ... note: In instance 't'
+   39 |     sel1to0 = ranged[40'h01_7fff_ffff+:2];
+      |                     ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Warning-SELRANGE: t/t_select_bad_range4.v:39:21: Selection index out of range: 4:3 outside 3:0
                                                 : ... note: In instance 't'
    39 |     sel1to0 = ranged[40'h01_7fff_ffff+:2];
       |                     ^
-%Warning-SELRANGE: t/t_select_bad_range4.v:40:21: Selection index out of range: 2147483648:2147483647 outside 3:0
+%Error-UNSUPPORTED: t/t_select_bad_range4.v:40:21: Unsupported: Selection beyond the 32-bit index range: 2147483648:2147483647
+                                                 : ... note: In instance 't'
+   40 |     sel1to0 = ranged[32'h7fff_ffff+:2];
+      |                     ^
+%Warning-SELRANGE: t/t_select_bad_range4.v:40:21: Selection index out of range: 4:3 outside 3:0
                                                 : ... note: In instance 't'
    40 |     sel1to0 = ranged[32'h7fff_ffff+:2];
       |                     ^
