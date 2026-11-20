@@ -159,16 +159,18 @@ std::unique_ptr<Graph> buildGraph(const LogicByScope& lbs) {
                 SchedAcyclicVarVertex* const vvtxp = getVarVertex(vscp);
                 // We want to cut the narrowest signals
                 const int weight = vscp->width() / 8 + 1;
+                // A VlForceVec has no value to compare, so it cannot be a cut variable
+                const bool cuttable = !V3Sched::util::isVlForceVec(vscp);
                 // If written, add logic -> var edge
                 if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()
                     && !vscp->user2SetOnce())
-                    addEdge(lvtxp, vvtxp, weight, true);
+                    addEdge(lvtxp, vvtxp, weight, cuttable);
                 // If read, add var -> logic edge
                 // Note: Use same heuristic as ordering does to ignore written variables
                 // TODO: Use live variable analysis.
                 if (refp->access().isReadOrRW() && !vscp->user3SetOnce() && !vscp->user2()
                     && !forceReadEdgeIgnores.count(vscp))
-                    addEdge(vvtxp, lvtxp, weight, true);
+                    addEdge(vvtxp, lvtxp, weight, cuttable);
             });
         }
     }
@@ -501,6 +503,14 @@ LogicByScope breakCycles(AstNetlist* netlistp, const LogicByScope& combinational
 
     // Dump for debug
     if (dumpGraphLevel() >= 6) graphp->dumpDotFilePrefixed("sched-comb-cycles");
+
+    // Allow cutting cycles of VlForceVec edges only, as nothing else can break them. These
+    // still report the unsupported change detection, rather than a non-cutable edge loop.
+    graphp->stronglyConnected(&V3GraphEdge::followNotCutable);
+    for (V3GraphVertex& vtx : graphp->vertices()) {
+        if (!vtx.color()) continue;
+        for (V3GraphEdge& edge : vtx.outEdges()) edge.cutable(true);
+    }
 
     // Make graph acyclic by cutting some edges. Note: This also colors strongly connected
     // components which reportCycles uses to print each SCCs separately.
