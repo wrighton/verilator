@@ -820,33 +820,36 @@ public:
             puts(");\n");
         }
     }
-    void visit(AstAssocSel* nodep) override {
-        iterateAndNextConstNull(nodep->fromp());
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
-        putns(nodep, atFunc);
-        iterateAndNextConstNull(nodep->bitp());
-        puts(")");
-    }
+    void visit(AstAssocSel* nodep) override { emitAssocSel(nodep); }
     void visit(AstDynArraySel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
         // Out of range writes go to a temporary (IEEE 1800-2023 7.4.6)
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
+        const std::string atFunc = nodep->writesAccessor() ? ".atWrite(" : ".at(";
         putns(nodep, atFunc);
         iterateAndNextConstNull(nodep->bitp());
         puts(")");
     }
     void visit(AstQueueSel* nodep) override {
         iterateAndNextConstNull(nodep->fromp());
-        // Writing one past the last element appends (IEEE 1800-2023 7.10.1)
-        std::string atFunc = nodep->isLValue() ? ".atWriteAppend" : ".at";
+        std::string atFunc = ".at";
+        if (nodep->writer()) {
+            // Made writable for a select from it, so does not append, except as the writable
+            // form of '$'
+            atFunc = nodep->fromBack() ? ".atWriteAppend" : ".atWrite";
+        } else if (nodep->isLValue()) {
+            // Writing one past the last element appends (IEEE 1800-2023 7.10.1)
+            atFunc = ".atWriteAppend";
+        }
         if (nodep->fromBack()) atFunc += "Back";
         putns(nodep, atFunc + "(");
         iterateAndNextConstNull(nodep->bitp());
         puts(")");
     }
-    void visit(AstWildcardSel* nodep) override {
+    void visit(AstWildcardSel* nodep) override { emitAssocSel(nodep); }
+    // Associative or wildcard array element
+    void emitAssocSel(AstNodeSel* nodep) {
         iterateAndNextConstNull(nodep->fromp());
-        const std::string atFunc = nodep->isLValue() ? ".atWrite(" : ".at(";
+        const std::string atFunc = nodep->writesAccessor() ? ".atWrite(" : ".at(";
         putns(nodep, atFunc);
         iterateAndNextConstNull(nodep->bitp());
         puts(")");

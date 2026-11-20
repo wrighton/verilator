@@ -3479,6 +3479,15 @@ int AstNodeSel::bitConst() const {
     const AstConst* const constp = VN_AS(bitp(), Const);
     return (constp ? constp->toSInt() : 0);
 }
+void AstNodeSel::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (writer()) str << (writerPure() ? " [WRITERPURE]" : " [WRITER]");
+}
+void AstNodeSel::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, writer);
+    dumpJsonBoolFuncIf(str, writerPure);
+    dumpJsonGen(str);
+}
 void AstNodeStmt::dump(std::ostream& str) const { Super::dump(str); }
 void AstNodeStmt::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
 const char* AstNodeTriop::broken() const {

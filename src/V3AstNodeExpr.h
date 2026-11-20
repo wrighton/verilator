@@ -182,13 +182,34 @@ class AstNodeSel VL_NOT_FINAL : public AstNodeBiop {
     // Single bit range extraction, perhaps with non-constant selection or array selection
     // @astgen alias op1 := fromp // Expression we are indexing into
     // @astgen alias op2 := bitp // The index // TODO: rename to idxp
+    // Accessor choice of an element of a dynamically sized array (AssocSel, DynArraySel,
+    // QueueSel, WildcardSel), otherwise by the access of the reference only
+    bool m_writer = false;  // Writable accessor although only read, e.g. creating an element
+    bool m_writerPure = false;  // m_writer cannot insert, or only V3Task makes it impure
+
 protected:
     AstNodeSel(VNType t, FileLine* fl, AstNodeExpr* fromp, AstNodeExpr* bitp)
         : AstNodeBiop{t, fl, fromp, bitp} {}
+    bool sameAccessor(const AstNodeSel* samep) const {
+        return m_writer == samep->m_writer && m_writerPure == samep->m_writerPure;
+    }
+    // Whether the accessor may insert an element, so is impure
+    bool impureAccessor() const { return m_writer && !m_writerPure; }
 
 public:
     ASTGEN_MEMBERS_AstNodeSel;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     int bitConst() const;
+    bool writer() const { return m_writer; }
+    bool writerPure() const { return m_writerPure; }
+    // Use the writable accessor, pure if 'pure'
+    void writer(bool flag, bool pure) {
+        m_writer = flag;
+        m_writerPure = flag && pure;
+    }
+    // Whether the writable accessor is used
+    bool writesAccessor() const { return m_writer || isLValue(); }
 };
 class AstNodeStream VL_NOT_FINAL : public AstNodeBiop {
     // Verilog {rhs{lhs}} - Note rhsp() is the slice size, not the lhsp()
@@ -5032,11 +5053,14 @@ public:
     bool cleanRhs() const override { return true; }
     bool sizeMattersLhs() const override { return false; }
     bool sizeMattersRhs() const override { return false; }
-    bool isGateOptimizable() const override { return !isLValue(); }  // Writes can insert
+    // Writes can insert
+    bool isGateOptimizable() const override { return !isLValue() && !impureAccessor(); }
     bool isPredictOptimizable() const override { return false; }
     // Writing a missing element creates it
-    bool isPure() override { return AstNodeSel::isPure() && !isLValue(); }
-    bool sameNode(const AstNode* /*samep*/) const override { return true; }
+    bool isPure() override { return AstNodeSel::isPure() && !isLValue() && !impureAccessor(); }
+    bool sameNode(const AstNode* samep) const override {
+        return sameAccessor(VN_DBG_AS(samep, AssocSel));
+    }
     int instrCount() const override { return widthInstrs(); }
 };
 class AstDynArraySel final : public AstNodeSel {
@@ -5056,8 +5080,12 @@ public:
     bool cleanRhs() const override { return true; }
     bool sizeMattersLhs() const override { return false; }
     bool sizeMattersRhs() const override { return false; }
-    bool isGateOptimizable() const override { return true; }
+    bool isGateOptimizable() const override { return !impureAccessor(); }
     bool isPredictOptimizable() const override { return false; }
+    bool isPure() override { return AstNodeSel::isPure() && !impureAccessor(); }
+    bool sameNode(const AstNode* samep) const override {
+        return sameAccessor(VN_DBG_AS(samep, DynArraySel));
+    }
     int instrCount() const override { return widthInstrs(); }
 };
 class AstQueueSel final : public AstNodeSel {
@@ -5082,12 +5110,14 @@ public:
     bool cleanRhs() const override { return true; }
     bool sizeMattersLhs() const override { return false; }
     bool sizeMattersRhs() const override { return false; }
-    bool isGateOptimizable() const override { return !isLValue(); }  // Writes can insert
+    // Writes can insert
+    bool isGateOptimizable() const override { return !isLValue() && !impureAccessor(); }
     bool isPredictOptimizable() const override { return false; }
     // Writing one past the end appends
-    bool isPure() override { return AstNodeSel::isPure() && !isLValue(); }
+    bool isPure() override { return AstNodeSel::isPure() && !isLValue() && !impureAccessor(); }
     bool sameNode(const AstNode* samep) const override {
-        return m_fromBack == VN_DBG_AS(samep, QueueSel)->m_fromBack;
+        return m_fromBack == VN_DBG_AS(samep, QueueSel)->m_fromBack
+               && sameAccessor(VN_DBG_AS(samep, QueueSel));
     }
     int instrCount() const override { return widthInstrs(); }
     bool fromBack() const { return m_fromBack; }
@@ -5108,11 +5138,14 @@ public:
     bool cleanRhs() const override { return true; }
     bool sizeMattersLhs() const override { return false; }
     bool sizeMattersRhs() const override { return false; }
-    bool isGateOptimizable() const override { return !isLValue(); }  // Writes can insert
+    // Writes can insert
+    bool isGateOptimizable() const override { return !isLValue() && !impureAccessor(); }
     bool isPredictOptimizable() const override { return false; }
     // Writing a missing element creates it
-    bool isPure() override { return AstNodeSel::isPure() && !isLValue(); }
-    bool sameNode(const AstNode* /*samep*/) const override { return true; }
+    bool isPure() override { return AstNodeSel::isPure() && !isLValue() && !impureAccessor(); }
+    bool sameNode(const AstNode* samep) const override {
+        return sameAccessor(VN_DBG_AS(samep, WildcardSel));
+    }
     int instrCount() const override { return widthInstrs(); }
 };
 class AstWordSel final : public AstNodeSel {
@@ -6709,7 +6742,7 @@ class AstVarXRef final : public AstNodeVarRef {
     string m_dotted;  // Dotted part of scope the name()'ed reference is under or ""
     string m_inlinedDots;  // Dotted hierarchy flattened out
     bool m_containsGenBlock = false;  // Contains gen block reference
-    bool m_readOnlyModport = false;  // Linked via an input-only modport, until V3LinkLValue
+    bool m_readOnlyModport = false;  // Linked via an input-only modport
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)
