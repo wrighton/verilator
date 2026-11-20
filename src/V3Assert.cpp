@@ -168,6 +168,156 @@ void V3AssertCommon::checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) {
     }
 }
 
+void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) {
+    // The counts must be valid elaboration-time constants.
+    V3Const::constifyParamsEdit(nodep->countp());
+    const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
+    if (!minConstp) {
+        errp->v3error("Consecutive repetition count must be constant expression"
+                      " (IEEE 1800-2023 16.9.2)");
+    } else if (minConstp->toSInt() < 0) {
+        errp->v3error("Consecutive repetition count must be non-negative"
+                      " (IEEE 1800-2023 16.9.2)");
+    } else if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1) {
+        errp->v3warn(E_UNSUPPORTED, "Unsupported: [*0] consecutive repetition");
+    }
+    if (!nodep->maxCountp()) return;
+    V3Const::constifyParamsEdit(nodep->maxCountp());
+    const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
+    if (!maxConstp) {
+        errp->v3error("Consecutive repetition max count must be constant"
+                      " expression (IEEE 1800-2023 16.9.2)");
+    } else if (minConstp && maxConstp->toSInt() < minConstp->toSInt()) {
+        errp->v3error("Consecutive repetition max count must be >= min count"
+                      " (IEEE 1800-2023 16.9.2)");
+    } else if (maxConstp->toSInt() < 1) {
+        errp->v3warn(E_UNSUPPORTED, "Unsupported: [*N:0] consecutive repetition"
+                                    " with zero max count");
+    }
+}
+
+// Replace a non-constant repetition count, so later steps do not fail after the error
+static void replaceSvaRepCount(AstNodeExpr* countp) {
+    countp->replaceWith(new AstConst{countp->fileline(), 1});
+    VL_DO_DANGLING(countp->deleteTree(), countp);
+}
+
+// Goto repetition [->N] or nonconsecutive repetition [=N], with the kind named in messages
+template <typename T_Rep>
+static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* errp) {
+    // Replace a non-constant count after reporting it, so later steps do not fail.
+    if (!nodep->maxCountp()) {
+        V3Const::constifyParamsNoWarnEdit(nodep->countp());
+        const AstConst* const constp = VN_CAST(nodep->countp(), Const);
+        if (!constp) {
+            errp->v3error("Repetition count is not an elaboration-time constant"
+                          " (IEEE 1800-2023 16.9.2)");
+            replaceSvaRepCount(nodep->countp());
+        } else if (constp->dtypep()->isSigned() && constp->num().isNegative()) {
+            errp->v3error("Repetition count must be non-negative"
+                          " (IEEE 1800-2023 16.9.2)");
+        } else if (constp->num().mostSetBitP1() > 31) {
+            errp->v3warn(
+                E_UNSUPPORTED,
+                "Unsupported: SVA repetition count exceeds implementation limit of 2147483647");
+        } else if (constp->isZero()) {
+            errp->v3warn(E_UNSUPPORTED, "Unsupported: zero repetition count"
+                                        " (IEEE 1800-2023 16.9.2)");
+        }
+        return;
+    }
+    // Accessors are re-fetched after constifyParamsEdit, as it can replace the node in-tree
+    V3Const::constifyParamsEdit(nodep->countp());
+    V3Const::constifyParamsEdit(nodep->maxCountp());
+    const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
+    const AstConst* const maxConstp = VN_CAST(nodep->maxCountp(), Const);
+    if (!minConstp || !maxConstp) {
+        errp->v3error(std::string{kind}
+                      + " repetition range bounds must be constant expressions"
+                        " (IEEE 1800-2023 16.9.2)");
+        if (!minConstp) replaceSvaRepCount(nodep->countp());
+        if (!maxConstp) replaceSvaRepCount(nodep->maxCountp());
+    } else if (minConstp->toSInt() < 0) {
+        errp->v3error(std::string{kind}
+                      + " repetition range min count must be non-negative"
+                        " (IEEE 1800-2023 16.9.2)");
+    } else if (maxConstp->toSInt() < minConstp->toSInt()) {
+        errp->v3error(std::string{kind}
+                      + " repetition range max count must be >= min count"
+                        " (IEEE 1800-2023 16.9.2)");
+    } else if (minConstp->isZero()) {
+        errp->v3warn(E_UNSUPPORTED, "Unsupported: zero min count in "s + kind
+                                        + " repetition range (IEEE 1800-2023 16.9.2)");
+    }
+}
+void V3AssertCommon::checkSvaRepetition(AstSGotoRep* nodep, AstNode* errp) {
+    checkSvaGotoOrNonConsRep(nodep, "Goto", errp);
+}
+void V3AssertCommon::checkSvaRepetition(AstSNonConsRep* nodep, AstNode* errp) {
+    checkSvaGotoOrNonConsRep(nodep, "Nonconsecutive", errp);
+}
+
+void V3AssertCommon::checkSvaPastTicks(AstPast* nodep, AstNode* errp) {
+    // The tick count must be a positive elaboration-time constant, else it is removed after
+    // reporting it.
+    V3Const::constifyParamsEdit(nodep->ticksp());  // ticksp may change
+    const AstConst* const constp = VN_CAST(nodep->ticksp(), Const);
+    if (!constp) {
+        errp->v3error("$past tick value must be constant (IEEE 1800-2023 16.9.3)");
+        nodep->ticksp()->unlinkFrBack()->deleteTree();
+    } else if (constp->toSInt() < 1) {
+        constp->v3error("$past tick value must be >= 1 (IEEE 1800-2023 16.9.3)");
+        nodep->ticksp()->unlinkFrBack()->deleteTree();
+    } else if (checkSvaValueLimit(nodep, constp, "$past tick value")) {
+        if (constp->toSInt() > 10) {
+            constp->v3warn(TICKCOUNT, "$past tick value of "
+                                          << constp->toSInt()
+                                          << " may have a large performance cost");
+        }
+    }
+}
+
+void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
+    // Errors are reported on instp if given, else on the bound. After an error the bounds are
+    // replaced with constants, so later steps do not fail.
+    V3Const::constifyParamsEdit(nodep->loBoundp());  // loBoundp may change
+    const bool hiUnbounded = VN_IS(nodep->hiBoundp(), Unbounded);
+    if (!hiUnbounded) V3Const::constifyParamsEdit(nodep->hiBoundp());  // hiBoundp may change
+    AstNode* const loErrp = instp ? instp : nodep->loBoundp();
+    AstNode* const hiErrp = instp ? instp : nodep->hiBoundp();
+    const AstConst* const loConstp = VN_CAST(nodep->loBoundp(), Const);
+    const AstConst* const hiConstp = VN_CAST(nodep->hiBoundp(), Const);
+    bool valid = false;
+    if (!loConstp) {
+        loErrp->v3error("always range low bound must be a constant expression"
+                        " (IEEE 1800-2023 16.12.11)");
+    } else if (loConstp->toSInt() < 0) {
+        loErrp->v3error("always range low bound must be non-negative"
+                        " (IEEE 1800-2023 16.12.11)");
+    } else {
+        valid = checkSvaValueLimit(loErrp, loConstp, "always range bound");
+    }
+    if (hiUnbounded) {
+        // Weak always [m:$]
+    } else if (!hiConstp) {
+        hiErrp->v3error("always range high bound must be a constant expression"
+                        " (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    } else if (!checkSvaValueLimit(hiErrp, hiConstp, "always range bound")) {
+        valid = false;
+    } else if (loConstp && hiConstp->toSInt() < loConstp->toSInt()) {
+        hiErrp->v3error("always range high bound must be >= low bound"
+                        " (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    }
+    if (valid) return;
+    for (AstNodeExpr* const boundp : {nodep->loBoundp(), nodep->hiBoundp()}) {
+        if (VN_IS(boundp, Unbounded)) continue;
+        boundp->replaceWith(new AstConst{boundp->fileline(), AstConst::BitFalseErroring{}});
+        VL_DO_DANGLING(boundp->deleteTree(), boundp);
+    }
+}
+
 bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     return nodep->exists([](const AstNodeVarRef* refp) {
         const AstVar* const varp = refp->varp();
