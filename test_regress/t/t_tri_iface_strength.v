@@ -173,6 +173,22 @@ interface float_defaults;
   modport drive(inout value);
 endinterface
 
+interface zforce_defaults;
+  bit drive_on = 1'b0;
+  wire [3:0] value;
+  wire [3:0] src;
+  assign (weak0, weak1) value = 4'b1111;
+  assign (weak0, weak1) src = drive_on ? 4'b0110 : 4'bz;
+endinterface
+
+interface overlap_defaults;
+  bit drive_on = 1'b0;
+  // verilator lint_off ASCRANGE
+  wire [1:4] value;
+  // verilator lint_on ASCRANGE
+  assign (weak0, weak1) value = drive_on ? 4'b0000 : 4'bz;
+endinterface
+
 module float_forcer (
     float_defaults.drive p,
     input bit force_on
@@ -337,6 +353,60 @@ module t;
     release {floating_cat.value[6:5], float_other};
     #1;
     `checkh(floating_cat.value, 7'bz);
+  end
+
+  // A forced z bit is not driven, and a forced net follows the enable of its value.
+  zforce_defaults zforced ();
+  bit zforce_local_on = 1'b0;
+  wire [3:0] zforce_local = zforce_local_on ? 4'b1001 : 4'bz;
+  bit [3:0] zforce_data = 4'b0101;
+  initial begin
+    #1;
+    force zforced.value = 4'b1z0z;
+    #1;
+    `checkh(zforced.value, 4'b1z0z);
+    force zforced.value = zforced.src;
+    #1;
+    `checkh(zforced.value, 4'bz);
+    zforced.drive_on = 1'b1;
+    #1;
+    `checkh(zforced.value, 4'b0110);
+    force zforced.value = zforce_local;
+    #1;
+    `checkh(zforced.value, 4'bz);
+    zforce_local_on = 1'b1;
+    #1;
+    `checkh(zforced.value, 4'b1001);
+    force zforced.value[1:0] = zforced.src[2:1];
+    #1;
+    `checkh(zforced.value, 4'b1011);
+    force zforced.value = zforce_data;
+    #1;
+    `checkh(zforced.value, 4'b0101);
+    release zforced.value;
+    #1;
+    `checkh(zforced.value, 4'b1111);
+  end
+
+  // Overlapping forces and a partial release keep value and enable consistent.
+  overlap_defaults overlapped ();
+  initial begin
+    #1;
+    force overlapped.value[1:3] = 3'b101;
+    #1;
+    `checkh(overlapped.value, 4'b101z);
+    force overlapped.value[2:4] = 3'b011;
+    #1;
+    `checkh(overlapped.value, 4'b1011);
+    release overlapped.value[2:3];
+    #1;
+    `checkh(overlapped.value, 4'b1zz1);
+    overlapped.drive_on = 1'b1;
+    #1;
+    `checkh(overlapped.value, 4'b1001);
+    release overlapped.value;
+    #1;
+    `checkh(overlapped.value, 4'b0000);
   end
 
   initial begin
