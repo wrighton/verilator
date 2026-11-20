@@ -57,6 +57,15 @@ module t (
 `endif
   end
 
+  initial begin
+    logic [7:0] b;
+    b = 8'hc0;
+    // Selection entirely out of range, beyond the widest extendable value
+    // verilator lint_off SELRANGE
+    if (b[32'h7fff_fffe+:2] !== 2'bxx && b[32'h7fff_fffe+:2] !== 2'b00) $stop;
+    // verilator lint_on SELRANGE
+  end
+
   integer cyc;
   initial cyc = 1;
   always @(posedge clk) begin

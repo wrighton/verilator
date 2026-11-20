@@ -38,6 +38,8 @@ module t (  /*AUTOARG*/
     sel1 = ranged[40'h10_0000_0005];
     sel1to0 = ranged[40'h01_7fff_ffff+:2];
     sel1to0 = ranged[32'h7fff_ffff+:2];
+    sel1 = ranged[32'(32'd8)];
+    sel1 = ranged[40'(40'h10_0000_0001)];
     sel1 = unranged["abcde"];
     unranged["abcde"] = 1'b1;
   end

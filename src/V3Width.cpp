@@ -1391,11 +1391,6 @@ class WidthVisitor final : public VNVisitor {
             const bool inParameterizedTemplate
                 = m_modep && (m_modep->dead() || m_modep->parameterizedTemplate());
 
-            // Bounds of a constant select, read before any warning, as reading a too wide index
-            // reports an error, and wider than int, as the index may be near its maximum
-            const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
-            const int64_t lsb = lsbConstp ? lsbConstp->toSInt() : 0;
-            const int64_t msb = lsb + width - 1;
             // We're extracting, so just make sure the expression is at least wide enough.
             if (nodep->fromp()->width() < width && !inParameterizedTemplate) {
                 // If it is not a lvalue, extend it
@@ -1435,6 +1430,11 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->dtypep()->isFourstate());
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, FINAL}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, FINAL}.p());
+            // Bounds of a constant select, read before any warning, as reading a too wide index
+            // reports an error, and wider than int, as the index may be near its maximum
+            const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
+            const int64_t lsb = lsbConstp ? lsbConstp->toSInt() : 0;
+            const int64_t msb = lsb + width - 1;
             if (widthBad(nodep->lsbp(), selwidthDTypep) && nodep->lsbp()->width() != 32) {
                 if (!nodep->fileline()->warnIsOff(V3ErrorCode::WIDTH)) {
                     nodep->v3widthWarn(
@@ -1476,7 +1476,15 @@ class WidthVisitor final : public VNVisitor {
                 }
                 // Extend unless it's a lvalue,
                 // because extending lvalue would lose write access.
-                if (!isWriteSelect && msb < std::numeric_limits<int>::max()) {
+                if (!isWriteSelect && msb >= std::numeric_limits<int>::max()) {
+                    // Too far out to extend to, so read the zero extension bits directly
+                    AstConst* const newp
+                        = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, width, 0};
+                    newp->dtypeFrom(nodep);
+                    nodep->replaceWith(newp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    return;
+                } else if (!isWriteSelect) {
                     // Extend it
                     const int extendTo = static_cast<int>(msb + 1);
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
