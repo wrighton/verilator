@@ -491,7 +491,7 @@ class VlRandomizer VL_NOT_FINAL {
                           const std::vector<std::string>& layerVars,
                           std::map<std::string, std::string>& solvedValuesr);
     // Whether any of the variables is an array
-    bool layerHasArray(const std::vector<std::string>& layerVars) const;
+    bool layerHasArray(const std::vector<std::string>& layerVars);
     // Whether to sample a phase, from how often its trials have been satisfiable; counts the
     // calls that skip sampling and restarts the counts when sampling is tried again
     bool sampleWorthwhile(const std::vector<std::string>& phaseVars);
