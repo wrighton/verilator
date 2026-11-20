@@ -4888,7 +4888,10 @@ class ParamVisitor final : public VNVisitor {
                                                   // NOT recurse the body.
         V3Const::constifyGenerateParamsEdit(nodep->condp());  // condp may change
         if (const AstConst* const constp = VN_CAST(nodep->condp(), Const)) {
-            if (AstNode* const keepp = (constp->isZero() ? nodep->elsesp() : nodep->thensp())) {
+            // A condition without a known one bit, such as x or z, is false, as for a
+            // procedural if (IEEE 1800-2023 12.4); 27.5 does not say how one selects.
+            if (AstNode* const keepp
+                = (constp->num().isNeqZero() ? nodep->thensp() : nodep->elsesp())) {
                 keepp->unlinkFrBackWithNext();
                 nodep->replaceWith(keepp);
             } else {
