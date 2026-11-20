@@ -889,8 +889,8 @@ void createEval(AstNetlist* netlistp,  //
                                                                  ~wordMask.second}}});
             }
             std::set<uint32_t> logicTriggers = reactTriggers.m_logic;
-            logicTriggers.insert(timingKit.m_reactTriggers.begin(),
-                                 timingKit.m_reactTriggers.end());
+            const std::set<uint32_t>& timingTriggers = timingKit.m_reactTriggers;
+            logicTriggers.insert(timingTriggers.begin(), timingTriggers.end());
             workp = AstNode::addNext(workp, newLatchp(logicTriggers));
             // The Re-NBA region runs once the Reactive and Re-Inactive regions are empty
             // (IEEE 1800-2023 4.4.2.8, 4.5)
