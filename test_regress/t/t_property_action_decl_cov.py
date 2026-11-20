@@ -9,7 +9,7 @@
 
 import vltest_bootstrap
 
-test.scenarios('simulator')
+test.scenarios('vlt')
 test.top_filename = "t/t_property_action_decl.v"
 
 test.compile(verilator_flags2=['--binary', '--coverage-user', '+define+T_COVER_COLLECTED'])
