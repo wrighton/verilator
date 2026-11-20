@@ -316,26 +316,6 @@ static AstNodeStmt* newIfAssertFailOn(AstNodeStmt* bodyp, VAssertDirectiveType d
     return ifp;
 }
 
-// Clone an action block for one more execution site. All executions of an
-// action share its static variables, initialized once (IEEE 1800-2023 6.21),
-// so the clone uses the original declarations instead of copying them.
-static AstNodeStmt* cloneAction(AstNodeStmt* const actionp) {
-    AstNodeStmt* const clonep = actionp->cloneTree(true);
-    std::unordered_map<const AstVar*, AstVar*> origVarps;  // Cloned to original variable
-    actionp->foreachAndNext([&](AstVar* const varp) { origVarps.emplace(varp->clonep(), varp); });
-    std::vector<AstNode*> declps;
-    clonep->foreachAndNext([&](AstNode* const nodep) {
-        if (AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
-            const auto it = origVarps.find(refp->varp());
-            if (it != origVarps.end()) refp->varp(it->second);
-        } else if (VN_IS(nodep, Var) || VN_IS(nodep, Typedef) || VN_IS(nodep, InitialStaticStmt)) {
-            declps.push_back(nodep);
-        }
-    });
-    for (AstNode* const nodep : declps) nodep->unlinkFrBack()->deleteTree();
-    return clonep;
-}
-
 static AstAlways* newAssertAlways(FileLine* flp, VAlwaysKwd kwd, AstSenTree* sentreep,
                                   AstNodeStmt* bodyp) {
     AstAlways* const alwaysp = new AstAlways{flp, kwd, sentreep, bodyp};
@@ -3760,7 +3740,7 @@ public:
         });
         AstNodeStmt* stmtsp;
         if (failsp && !hasTimingControl) {
-            stmtsp = cloneAction(failsp);
+            stmtsp = V3AssertCommon::cloneAction(failsp, m_names);
             // An NBA, legal in an action block, executes as a blocking assignment in a final
             // block, so FINALDLY does not apply
             stmtsp->foreachAndNext([](AstAssignDly* const dlyp) {
@@ -4719,6 +4699,7 @@ class AssertNfaVisitor final : public VNVisitor {
     V3UniqueNames m_propTempNames{"__VnfaSampled"};  // Hoisted $sampled(propp) temps
     V3UniqueNames m_localValueNames{"__VnfaLocalValue"};  // Local variable value temps
     V3UniqueNames m_failCountNames{"__VnfaRemainingFailCount"};  // Fail replay counter names
+    V3UniqueNames m_actionNames{"__VnfaAction"};  // Automatics of cloned actions
 
     template <typename T_Node>
     void visitSampledValue(T_Node* const nodep) {
@@ -4825,8 +4806,8 @@ class AssertNfaVisitor final : public VNVisitor {
         return !hasMultiCycleExpr(parts.triggerExprp);
     }
 
-    static void splitImplicationPassActions(AstAssert* assertp, const PropertyParts& parts,
-                                            AstNodeExpr* nonvacuousMatchp) {
+    void splitImplicationPassActions(AstAssert* assertp, const PropertyParts& parts,
+                                     AstNodeExpr* nonvacuousMatchp) {
         FileLine* const flp = assertp->fileline();
 
         AstNodeStmt* const passsp = assertp->passsp()->unlinkFrBackWithNext();
@@ -4835,7 +4816,7 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!parts.isFollowedBy) {
             AstNodeExpr* const vacuousp
                 = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
-            AstNodeStmt* const vacuousBodyp = cloneAction(passsp);
+            AstNodeStmt* const vacuousBodyp = V3AssertCommon::cloneAction(passsp, m_actionNames);
             splitsp = newPassOnIf(flp, vacuousp, vacuousBodyp, assertp->userType(),
                                   assertp->directive(), /*vacuous=*/true);
         }
@@ -4845,7 +4826,7 @@ class AssertNfaVisitor final : public VNVisitor {
                           /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
         // Another attempt failing on the same tick runs the fail action instead
-        assertp->prependFailsp(cloneAction(splitsp));
+        assertp->prependFailsp(V3AssertCommon::cloneAction(splitsp, m_actionNames));
         assertp->addPasssp(splitsp);
     }
 
@@ -4966,16 +4947,18 @@ class AssertNfaVisitor final : public VNVisitor {
         // thread. AstAssert handles the first, so replay the rest, before the fail action
         // below gets the pass action prefix.
         if (failCountp) {
-            addActionReplay(senTreep, failCountp,
-                            newIfAssertFailOn(cloneAction(assertp->failsp()), assertp->directive(),
-                                              assertp->userType()));
+            addActionReplay(
+                senTreep, failCountp,
+                newIfAssertFailOn(V3AssertCommon::cloneAction(assertp->failsp(), m_actionNames),
+                                  assertp->directive(), assertp->userType()));
         }
         if (passCountp) {
             FileLine* const flp = assertp->fileline();
-            addActionReplay(senTreep, passCountp,
-                            newPassOnIf(flp, new AstConst{flp, AstConst::BitTrue{}},
-                                        cloneAction(assertp->passsp()), assertp->userType(),
-                                        assertp->directive(), /*vacuous=*/false));
+            addActionReplay(
+                senTreep, passCountp,
+                newPassOnIf(flp, new AstConst{flp, AstConst::BitTrue{}},
+                            V3AssertCommon::cloneAction(assertp->passsp(), m_actionNames),
+                            assertp->userType(), assertp->directive(), /*vacuous=*/false));
         }
         // Gate pass handler on match to prevent vacuous-pass firings.
         if (matchExprp) {
@@ -4990,7 +4973,7 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            assertp->prependFailsp(cloneAction(ifp));
+            assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
     }
 
