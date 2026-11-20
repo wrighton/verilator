@@ -20,7 +20,7 @@
 //          Keep track of scope and concrete interface along the way
 //          Find all interface references
 //              Add INTFREF to concrete interface's list of references, named
-//              relative to the block declaring the interface instance
+//              relative to the module declaring the interface instance
 //
 //*************************************************************************
 
@@ -41,9 +41,8 @@ class InlineIntfRefVisitor final : public VNVisitor {
     const VNUser1InUse m_inuser1;
 
     string m_scope;  // Scope name
-    // Prefix of m_scope naming the block declaring each interface instance, in the first
-    // instance of its module. References are named relative to it, as all instances of that
-    // module share them.
+    // Prefix of m_scope naming the first instance of the module declaring each interface
+    // instance. References are named relative to it, so all instances share them.
     std::unordered_map<const AstCell*, string> m_declPrefixes;
 
     // VISITORS
@@ -57,6 +56,8 @@ class InlineIntfRefVisitor final : public VNVisitor {
         // Pass Cell pointers down to the next module
         for (AstPin* const pinp : nodep->pinspList()) {
             AstVar* const varp = pinp->modVarp();
+            // TODO: An interface can also propagate upwards and sideways when passed to a port
+            //       via a downward hierarchical reference, which is missed here.
             const AstVarRef* const varrefp = VN_CAST(pinp->exprp(), VarRef);
             if (!varrefp) continue;
 
@@ -68,14 +69,8 @@ class InlineIntfRefVisitor final : public VNVisitor {
             if (!cellp) {
                 cellp = irdtp->cellp();
                 if (!cellp) continue;
-                // The interface instance is declared in the module containing this instance,
-                // inside the named blocks its name starts with
-                const string& cellName = cellp->name();
-                const string& origName = cellp->origName();
-                UASSERT_OBJ(VString::endsWith(cellName, origName), cellp,
-                            "Instance name should end with its original name");
-                m_declPrefixes.emplace(
-                    cellp, prefix + cellName.substr(0, cellName.size() - origName.size()));
+                // The interface instance is declared in the module containing this instance
+                m_declPrefixes.emplace(cellp, prefix);
             }
             varp->user1p(cellp);
             // Record each reference once, under the first instance of the declaring module
