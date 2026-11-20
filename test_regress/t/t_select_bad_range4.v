@@ -33,8 +33,11 @@ module t (  /*AUTOARG*/
   reg [3:0] ranged;
   bit unranged;
   reg sel1;
+  reg [1:0] sel1to0;
   always @(posedge clk) begin
     sel1 = ranged[40'h10_0000_0005];
+    sel1to0 = ranged[40'h01_7fff_ffff+:2];
+    sel1to0 = ranged[32'h7fff_ffff+:2];
     sel1 = unranged["abcde"];
     unranged["abcde"] = 1'b1;
   end
