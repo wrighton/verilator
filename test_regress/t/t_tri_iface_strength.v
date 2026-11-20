@@ -175,6 +175,7 @@ endinterface
 
 interface zforce_defaults;
   bit drive_on = 1'b0;
+  bit [3:0] bits = 4'b1100;
   wire [3:0] value;
   wire [3:0] src;
   assign (weak0, weak1) value = 4'b1111;
@@ -359,7 +360,7 @@ module t;
   zforce_defaults zforced ();
   bit zforce_local_on = 1'b0;
   wire [3:0] zforce_local = zforce_local_on ? 4'b1001 : 4'bz;
-  bit [3:0] zforce_data = 4'b0101;
+  logic [3:0] zforce_data = 4'b0101;
   initial begin
     #1;
     force zforced.value = 4'b1z0z;
@@ -383,6 +384,12 @@ module t;
     force zforced.value = zforce_data;
     #1;
     `checkh(zforced.value, 4'b0101);
+    force zforced.value = zforced.bits;
+    #1;
+    `checkh(zforced.value, 4'b1100);
+    zforced.bits = 4'b0011;
+    #1;
+    `checkh(zforced.value, 4'b0011);
     release zforced.value;
     #1;
     `checkh(zforced.value, 4'b1111);
