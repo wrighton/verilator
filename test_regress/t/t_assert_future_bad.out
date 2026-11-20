@@ -19,4 +19,8 @@
                                      : ... note: In instance 't'
    28 |   else $display("Future=%0d", $changing_gclk(a));
       |                               ^~~~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:31:33: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   31 |   always @(posedge clk) assert ($future_gclk(a));
+      |                                 ^~~~~~~~~~~~
 %Error: Exiting due to

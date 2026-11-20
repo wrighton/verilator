@@ -187,8 +187,10 @@ class AssertDeFutureVisitor final : public VNVisitor {
     const AstFuture* m_futurep;  // First AstFuture found
     const unsigned m_pastNum;  // Prefix unique number for this module
     std::map<AstVar*, AstVar*> m_delayedVars;  // Old to delayed variable mapping
+    std::map<AstVar*, AstVar*> m_delayedDisableVars;  // Same, in the disable condition
     // STATE - for current visit position (use VL_RESTORER)
     bool m_inFuture = false;  // Inside a future
+    bool m_inDisable = false;  // Inside the disable condition, not a sampled value function
     bool m_unsupported = false;  // Printed unsupported
 
     // METHODS
@@ -200,6 +202,20 @@ class AssertDeFutureVisitor final : public VNVisitor {
                           << nodep->prettyOperatorName());
     }
     // VISITORS
+    void visit(AstPropSpec* nodep) override {
+        {
+            VL_RESTORER(m_inDisable);
+            m_inDisable = true;
+            iterateAndNextNull(nodep->disablep());
+        }
+        iterateAndNextNull(nodep->propp());
+        iterateAndNextNull(nodep->matchCountp());
+    }
+    void visit(AstSampled* nodep) override {
+        VL_RESTORER(m_inDisable);
+        m_inDisable = false;
+        iterateChildren(nodep);
+    }
     void visit(AstFuture* nodep) override {
         VL_RESTORER(m_inFuture);
         m_inFuture = true;
@@ -216,25 +232,33 @@ class AssertDeFutureVisitor final : public VNVisitor {
             unsupported(nodep);
             return;
         }
-        auto it = m_delayedVars.find(nodep->varp());
+        // In the disable condition, other than in a sampled value function, the current value
+        // (IEEE 1800-2023 16.12)
+        const bool current = m_inDisable;
+        std::map<AstVar*, AstVar*>& delayedVars = current ? m_delayedDisableVars : m_delayedVars;
+        auto it = delayedVars.find(nodep->varp());
         AstVar* outvarp;
-        if (it == m_delayedVars.end()) {
+        if (it == delayedVars.end()) {
             AstSenTree* const sentreep = m_futurep->sentreep();
             AstAlways* const alwaysp = new AstAlways{nodep->fileline(), VAlwaysKwd::ALWAYS,
                                                      sentreep->cloneTree(false), nullptr};
             m_modp->addStmtsp(alwaysp);
             outvarp = new AstVar{nodep->fileline(), VVarType::MODULETEMP,
-                                 "__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
+                                 (current ? "__VnotfutureDisable" : "__Vnotfuture")
+                                     + cvtToStr(m_pastNum) + "_" + nodep->name(),
                                  nodep->dtypep()};
             m_modp->addStmtsp(outvarp);
             AstVarRef* varRefAWritep = new AstVarRef{nodep->fileline(), outvarp, VAccess::WRITE};
             varRefAWritep->user1(true);
             AstNodeVarRef* varRefAReadp = nodep->cloneTree(false);
             varRefAReadp->user1(true);
-            AstNodeStmt* const assp
-                = new AstAssignDly{nodep->fileline(), varRefAWritep, varRefAReadp};
-            alwaysp->addStmtsp(assp);
-            m_delayedVars.emplace(nodep->varp(), outvarp);
+            // Sampled, as a derived clock may tick after an update (IEEE 1800-2023 16.9.4)
+            AstNodeExpr* valuep = varRefAReadp;
+            if (!current) {
+                valuep = new AstSampled{nodep->fileline(), valuep, nodep->dtypep(), true};
+            }
+            alwaysp->addStmtsp(new AstAssignDly{nodep->fileline(), varRefAWritep, valuep});
+            delayedVars.emplace(nodep->varp(), outvarp);
         } else {
             outvarp = it->second;
         }
@@ -263,7 +287,11 @@ public:
             }))
             return;
         // UINFOTREE(9, nodep, "", "defuture-in");
-        visit(nodep);  // Nodep may get deleted
+        if (AstPropSpec* const specp = VN_CAST(nodep, PropSpec)) {
+            visit(specp);
+        } else {
+            visit(nodep);  // Nodep may get deleted
+        }
         // UINFOTREE(9, nodep, "", "defuture-ou");
     }
     ~AssertDeFutureVisitor() override = default;

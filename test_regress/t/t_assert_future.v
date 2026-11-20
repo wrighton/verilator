@@ -43,6 +43,8 @@ module t (
   assert property (@(posedge clk) $steady_gclk(a))
   else count_not_steady_gclk = count_not_steady_gclk + 1;
 
+  sub_derived sub_derived (.clk);
+
   int cyc = 0;
 
   always @(posedge clk) begin
@@ -76,9 +78,56 @@ module t (
       `checkd(count_future_gclk, 2);
       `checkd(count_rising_gclk, 1);
       `checkd(count_not_steady_gclk, 2);
+      `checkd(sub_derived.count_changes, 2);
+      `checkd(sub_derived.count_disabled_fail, 1);
+      `checkd(sub_derived.count_sampled_disabled_fail, 2);
+      `checkd(sub_derived.count_both_fail, 1);
       $write("*-* All Finished *-*\n");
       $finish;
     end
   end
 
+endmodule
+
+module sub_derived (
+    input clk
+);
+  // The global clock ticks after the variable is updated in the same time step, which does not
+  // change its sampled value
+  logic dclk = 0;
+  int dcyc = 0;
+  logic d = 0;
+  logic drst = 0;
+  logic dflag = 1;
+  always @(posedge clk) begin
+    dclk <= ~dclk;
+    if (!dclk) begin
+      dcyc <= dcyc + 1;
+      if (dcyc == 1 || dcyc == 2) d <= ~d;
+      drst <= dcyc == 2;
+      dflag <= dcyc == 0;
+    end
+  end
+
+  global clocking @(posedge dclk);
+  endclocking
+
+  int count_changes = 0;
+  assert property (@(posedge dclk) $future_gclk(d) == d)
+  else count_changes = count_changes + 1;
+
+  // The disable condition uses current values
+  int count_disabled_fail = 0;
+  assert property (@(posedge dclk) disable iff (drst) $future_gclk(d) == d)
+  else count_disabled_fail = count_disabled_fail + 1;
+
+  // A sampled value function in the disable condition is sampled
+  int count_sampled_disabled_fail = 0;
+  assert property (@(posedge dclk) disable iff ($sampled(drst)) $future_gclk(d) == d)
+  else count_sampled_disabled_fail = count_sampled_disabled_fail + 1;
+
+  // A variable in the disable condition and in the property has the current and sampled values
+  int count_both_fail = 0;
+  assert property (@(posedge dclk) disable iff (dflag) $future_gclk(d) == d || dflag)
+  else count_both_fail = count_both_fail + 1;
 endmodule
