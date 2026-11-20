@@ -67,7 +67,9 @@ module PubSink (
 endmodule
 
 module Keep;
-  /* verilator no_inline_module */
+  // verilator lint_off UNOPTPUBLIC
+  /* verilator public_module */
+  // verilator lint_on UNOPTPUBLIC
 
   // verilator lint_off SYMRSVDWORD
   PubIntf friend ();
@@ -89,6 +91,9 @@ module t;
   Pair p0 ();
   Pair p1 ();
   Keep k ();
+  // verilator lint_off SYMRSVDWORD
+  Keep register ();
+  // verilator lint_on SYMRSVDWORD
 
   initial begin
 `ifdef VERILATOR
