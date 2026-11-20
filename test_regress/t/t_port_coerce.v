@@ -20,6 +20,14 @@ interface net_if;
   wire [1:0] x;
 endinterface
 
+// The index is read to select a variable, not driven by the clocking output.
+interface index_if(input logic clk, input wire [2:0] sel_index);
+  logic [6:0] local_data = 0;
+  clocking cb @(posedge clk);
+    output o = local_data[sel_index];
+  endclocking
+endinterface
+
 // Driven by a clocking block output
 interface drv_if (
     input logic clk,
@@ -272,6 +280,16 @@ module t (
   cat2_drv u_cat2 (.a({ncw2, 1'b0}));
   rep_drv u_rep (.a({2{ncw3}}));
   unpacked_drv u_unpacked (.a(uw), .v(cv));
+
+  // The driver also checks the width tree: sel_index must remain an INPUT.
+  wire [2:0] index_net = 3'd2;
+  index_if u_index (.clk(clk), .sel_index(index_net));
+  initial begin
+    @(posedge clk);
+    u_index.cb.o <= 1'b1;
+    repeat (2) @(posedge clk);
+    `checkh(u_index.local_data, 7'h04);
+  end
 
   initial begin
     static driver drv = new(di);
