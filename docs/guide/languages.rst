@@ -339,15 +339,23 @@ class object, is stored as a two-state value, the same as an x.
 An input port of net kind that is driven inside its module, by a continuous
 assignment, an output port connection, or a clocking block output, is
 coerced to inout (IEEE 1800-2023 23.3.3.1), so its drivers also reach the
-connected net, and are resolved with the other drivers of that net. An input
-net port of the parent that such a port is connected to is coerced as well.
-The :option:`ASSIGNIN` warning is still reported on the driver. A port is
-not coerced if it is a port of the top-level module, has an unpacked type,
-is also written procedurally, or if any instance connects it to something
-other than nets, constant bit or part selects of them, and concatenations of
-those (e.g. to a variable, a constant, a narrower net, an unpacked array
+connected net, and are resolved with the other drivers of that net. An
+input net port of the parent that such a port is connected to is coerced as
+well. The :option:`ASSIGNIN` warning is still reported on the driver. A
+port is not coerced if it is a port of the top-level module, has an
+unpacked type, is also written procedurally, or if any instance connects it
+to something other than nets, constant bit or part selects of them,
+concatenations of those, and supported typed positional net assignment
+patterns (e.g. to a variable, a constant, a narrower net, an unpacked array
 element, or a net of a module other than an interface by a hierarchical
-reference), or to an input port that is not coerced.
+reference), or to an input port that is not coerced. A supported pattern is
+positional, describes a packed structure whose members have basic integral
+types, and maps each member to constant bits of a local net declared with a
+basic integral type, disjoint from the other members, without changing
+their width or state type (IEEE 1800-2023 10.9 and A.8.5). Members backed
+by a packed array or packed structure net, or by a nested member, are not
+supported. Member-keyed, type-keyed, default and untyped patterns are input
+values, not coercion destinations.
 
 An input port of net kind that is written but not coerced, including one
 written procedurally inside its module, through a virtual interface, or by
@@ -367,13 +375,13 @@ such as a variable, a hierarchical reference to a variable, a select by a
 runtime position, or a value expression, can also return a drive through
 another instance's eligible local net connection, including to an
 already-driven net or an instance array element of one. This route requires
-a bit-preserving connection, such as a local net, constant selection, or
-concatenation. It does not apply to input assignment conversions or to
-wired, delayed, or aliased nets. Where neither return route applies, the
-connection drives the port only. A value and the local drivers are resolved
-on the formal, without driving the value in reverse. :option:`ASSIGNIN`
-remains applicable to writes inside the module, subject to its documented
-exceptions.
+a bit-preserving connection, such as a local net, constant selection,
+concatenation, or supported typed positional net assignment pattern. It
+does not apply to input assignment conversions or to wired, delayed, or
+aliased nets. Where neither return route applies, the connection drives the
+port only. A value and the local drivers are resolved on the formal,
+without driving the value in reverse. :option:`ASSIGNIN` remains applicable
+to writes inside the module, subject to its documented exceptions.
 
 
 Gate Primitives
