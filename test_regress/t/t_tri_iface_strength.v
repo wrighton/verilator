@@ -361,6 +361,7 @@ module t;
   bit zforce_local_on = 1'b0;
   wire [3:0] zforce_local = zforce_local_on ? 4'b1001 : 4'bz;
   logic [3:0] zforce_data = 4'b0101;
+  wire [3:0] zforce_net = ~zforce_data;
   initial begin
     #1;
     force zforced.value = 4'b1z0z;
@@ -384,6 +385,12 @@ module t;
     force zforced.value = zforce_data;
     #1;
     `checkh(zforced.value, 4'b0101);
+    force zforced.value = zforce_net;
+    #1;
+    `checkh(zforced.value, 4'b1010);
+    force zforced.value = zforce_data ^ 4'b0011;
+    #1;
+    `checkh(zforced.value, 4'b0110);
     force zforced.value = zforced.bits;
     #1;
     `checkh(zforced.value, 4'b1100);
@@ -393,6 +400,32 @@ module t;
     release zforced.value;
     #1;
     `checkh(zforced.value, 4'b1111);
+  end
+
+  // A task forces a strength net and its enable.
+  default_zero task_forced ();
+  float_defaults task_floating ();
+  task task_force;
+    force task_forced.value = 1'b1;
+    force task_floating.value = 7'h00;
+  endtask
+  task task_release;
+    release task_forced.value;
+    release task_floating.value;
+  endtask
+  initial begin
+    #1;
+    `checkh(task_forced.value, 1'b0);
+    `checkh(task_floating.value, 7'bz);
+    task_force();
+    #1;
+    `checkh(task_forced.value, 1'b1);
+    `checkh(task_floating.value, 7'h00);
+    `checkh(task_floating.value === 7'bz, 1'b0);
+    task_release();
+    #1;
+    `checkh(task_forced.value, 1'b0);
+    `checkh(task_floating.value, 7'bz);
   end
 
   // Overlapping forces and a partial release keep value and enable consistent.
