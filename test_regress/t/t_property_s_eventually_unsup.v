@@ -36,6 +36,9 @@ module t;
     ++n;
     wait (n == 0);
   end
+  // The wait of a nested property expression also trips the end-of-simulation check
+  assert property (@(posedge clk) s_eventually (a [= 2] |-> b)) ++n;
+  else --n;
 
   always @(posedge clk) begin
     ++cyc;
