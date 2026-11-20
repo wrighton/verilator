@@ -13,7 +13,9 @@ interface gen_if;
   logic [6:0] a;
   int unsigned d;
   task automatic pick();
-    if (std::randomize(d) with {d inside {[1:100]};} != 1) `stop;
+    int ok;
+    ok = std::randomize(d);
+    `checkd(ok, 1);
   endtask
 endinterface
 
