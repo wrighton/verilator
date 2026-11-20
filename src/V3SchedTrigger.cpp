@@ -851,8 +851,11 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     // Populates `m_senExprToSenItem` with every group of SenItems that share the same prevValue
     // variable. Groups that contain only one type of an edge are omitted.
     void fillSenExprToSenItem() {
+        // Equal SenItems of different SenTrees have the same trigger, group only one of them
+        std::unordered_set<size_t> trigIdxs;
         for (const BeforeTrig& beforeTrig : m_beforeTrigs) {
             for (AstSenItem* const senItemp : beforeTrig.m_senTreep->sensespList()) {
+                if (!trigIdxs.emplace(m_trigKit.senItem2TrigIdx(senItemp)).second) continue;
                 const VEdgeType edge = senItemp->edgeType();
                 if (edge.anEdge() || edge == VEdgeType::ET_CHANGED
                     || edge == VEdgeType::ET_HYBRID) {
