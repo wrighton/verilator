@@ -89,6 +89,7 @@ class GateVarVertex final : public GateEitherVertex {
     AstVarScope* const m_varScp;  // Variable scope this vertex represents
     bool m_isTop = false;  // Variable is a top-level signal
     bool m_isClock = false;  // Variable is used as a clock
+    bool m_clockedBlockingWrite = false;  // Written by a blocking assignment in clocked logic
     AstNode* m_rstSyncNodep = nullptr;  // Used as reset and not in SenItem, in clocked always
     AstNode* m_rstAsyncNodep = nullptr;  // Used as reset and in SenItem, in clocked always
 public:
@@ -103,6 +104,8 @@ public:
     void setIsTop() { m_isTop = true; }
     bool isClock() const { return m_isClock; }
     void setIsClock() { m_isClock = true; }
+    bool clockedBlockingWrite() const { return m_clockedBlockingWrite; }
+    void setClockedBlockingWrite() { m_clockedBlockingWrite = true; }
     AstNode* rstSyncNodep() const { return m_rstSyncNodep; }
     void rstSyncNodep(AstNode* nodep) { m_rstSyncNodep = nodep; }
     AstNode* rstAsyncNodep() const { return m_rstAsyncNodep; }
@@ -197,6 +200,17 @@ public:
 };
 
 //######################################################################
+// Whether the given logic, under the given active, runs as or within clocked logic: a clocked
+// process, a timed 'always' (under the initial active until V3Timing), or a function, which
+// clocked logic may call after writing what the function reads
+
+static bool isClockedLogic(const AstNode* logicp, const AstActive* activep) {
+    if (VN_IS(logicp, CFunc)) return true;
+    if (!activep) return false;
+    return activep->hasClocked() || (activep->hasInitial() && VN_IS(logicp, Always));
+}
+
+//######################################################################
 // GateGraph builder
 
 class GateBuildVisitor final : public VNVisitorConst {
@@ -212,6 +226,7 @@ class GateBuildVisitor final : public VNVisitorConst {
     bool m_inInitialActive = false;  // Underneath initial active
     bool m_inSenItem = false;  // Underneath AstSenItem; any varrefs are clocks
     bool m_inLoop = false;  // Underneath AstLoop
+    bool m_inAssignDlyLhs = false;  // Underneath the LHS of an AstAssignDly
 
     // METHODS
     void checkNode(AstNode* nodep) {
@@ -322,7 +337,12 @@ class GateBuildVisitor final : public VNVisitorConst {
 
         // We use weight of one, or GATE_LOOP_READ_WEIGHT for a read in a loop; if we ref
         // the var more than once, when we simplify, the weights are added
-        if (nodep->access().isWriteOrRW()) m_graphp->addEdge(m_logicVertexp, vVtxp, 1);
+        if (nodep->access().isWriteOrRW()) {
+            m_graphp->addEdge(m_logicVertexp, vVtxp, 1);
+            if (isClockedLogic(m_logicVertexp->nodep(), m_activep) && !m_inAssignDlyLhs) {
+                vVtxp->setClockedBlockingWrite();
+            }
+        }
         if (nodep->access().isReadOrRW()) {
             m_graphp->addEdge(vVtxp, m_logicVertexp, m_inLoop ? GATE_LOOP_READ_WEIGHT : 1);
         }
@@ -331,6 +351,20 @@ class GateBuildVisitor final : public VNVisitorConst {
         VL_RESTORER(m_inLoop);
         m_inLoop = true;
         iterateChildrenConst(nodep);
+    }
+    // Writes other than the target of a non-blocking assignment are blocking, as in V3Split
+    void visit(AstAssignDly* nodep) override {
+        checkNode(nodep);
+        iterateAndNextConstNull(nodep->timingControlp());
+        iterateAndNextConstNull(nodep->rhsp());
+        VL_RESTORER(m_inAssignDlyLhs);
+        m_inAssignDlyLhs = true;
+        iterateAndNextConstNull(nodep->lhsp());
+    }
+    void visit(AstExprStmt* nodep) override {
+        VL_RESTORER(m_inAssignDlyLhs);
+        m_inAssignDlyLhs = false;
+        visit(static_cast<AstNode*>(nodep));
     }
     void visit(AstConcat* nodep) override {
         UASSERT_OBJ(!(VN_IS(nodep->backp(), NodeAssign)
@@ -756,6 +790,14 @@ class GateInline final {
             const auto& readVscpsVec = okVisitor.readVscps();
             const std::unordered_set<AstVarScope*> readVscps{readVscpsVec.begin(),
                                                              readVscpsVec.end()};
+            // Clocked logic reads 'vscp' as computed before any clocked logic ran. If the
+            // substitution reads a variable written by a blocking assignment in clocked
+            // logic, it could see that write, as V3Split may have separated it from the
+            // consumer, leaving the two unordered.
+            const bool readsClockedWrite = std::any_of(
+                readVscpsVec.begin(), readVscpsVec.end(), [](const AstVarScope* const rdVscp) {
+                    return rdVscp->user1u().to<GateVarVertex*>()->clockedBlockingWrite();
+                });
 
             for (V3GraphEdge* const edgep : vVtxp->outEdges().unlinkable()) {
                 GateLogicVertex* const dstVtxp = edgep->top()->as<GateLogicVertex>();
@@ -781,6 +823,12 @@ class GateInline final {
                 }
 
                 if (!canInline) continue;  // Cannot optimize this replacement
+
+                // A sensitivity list triggers on the same changes either way
+                if (readsClockedWrite && isClockedLogic(dstVtxp->nodep(), dstVtxp->activep())
+                    && !VN_IS(dstVtxp->nodep(), SenItem)) {
+                    continue;
+                }
 
                 // A descriptor can only read another variable whole
                 if (VN_IS(dstVtxp->nodep(), RtmdVar) && !VN_IS(substp, VarRef)) continue;
