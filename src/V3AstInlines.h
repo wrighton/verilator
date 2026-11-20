@@ -171,6 +171,7 @@ AstElabDisplay::AstElabDisplay(FileLine* fl, VDisplayType dispType, AstNodeExpr*
 
 bool AstVar::sameNode(const AstNode* samep) const {
     const AstVar* const asamep = VN_DBG_AS(samep, Var);
+    if (isAssertLocal() != asamep->isAssertLocal()) return false;
     return m_name == asamep->m_name && varType() == asamep->varType()
            && covergroupRefMember() == asamep->covergroupRefMember()
            && libInoutId() == asamep->libInoutId() && libInoutEnable() == asamep->libInoutEnable();

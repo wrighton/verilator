@@ -22,8 +22,9 @@
 //    a synthesized event (IEEE 1800-2023 9.4.2.4), so its instance is
 //    inlined like the others.
 //  - Replace a property instance forming a whole property spec with the
-//    property body (IEEE 1800-2023 16.12.1). Property-local variables
-//    become module temporaries (IEEE 1800-2023 16.10).
+//    property body (IEEE 1800-2023 16.12.1). The local variables of each
+//    property or sequence instance become module temporaries
+//    (IEEE 1800-2023 16.10).
 //  - Replace a property instance nested in an expression with the expression
 //    of the property body. A body with a disable condition, a clocking event
 //    or a multi-cycle operator is reported instead.
@@ -187,27 +188,33 @@ class AssertElabVisitor final : public VNVisitor {
         // Cycle delays with a formal argument are checked once it is substituted
         checkInstanceDelays(bodyp, schemaRefp);
     }
+    // Promote the local variables of an instance of a property or sequence to module-level
+    // temps, returning each declared variable's temp (IEEE 1800-2023 16.10)
+    std::unordered_map<const AstVar*, AstVar*>
+    promoteLocalVars(const AstNodeSchema* const schemap) {
+        std::unordered_map<const AstVar*, AstVar*> localVarMap;
+        for (const AstNode* const declp : schemap->declspList()) {
+            const AstVar* const varp = VN_AS(declp, Var);
+            if (varp->isIO()) continue;
+            // V3Undriven checks the declared variable, not its per-instance copies
+            FileLine* const flp = new FileLine{noCoverFileLine(varp->fileline())};
+            flp->modifyWarnOff(V3ErrorCode::UNDRIVEN, true);
+            flp->modifyWarnOff(V3ErrorCode::UNUSEDSIGNAL, true);
+            AstVar* const newVarp
+                = new AstVar{flp, VVarType::MODULETEMP, m_propVarNames.get(varp), varp->dtypep()};
+            newVarp->origName(varp->origName());  // For diagnostics
+            newVarp->isAssertLocal(!varp->isTemp());
+            newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
+            m_modp->addStmtsp(newVarp);
+            localVarMap[varp] = newVarp;
+        }
+        return localVarMap;
+    }
     // Clone the body of a property instance, with the actual arguments substituted
     AstPropSpec* cloneProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
         AstPropSpec* const specp = propp->specp()->cloneTree(false);
         coverageOff(specp);
-        // Promote property-local variables to module-level temps (IEEE 1800-2023 16.10)
-        std::unordered_map<const AstVar*, AstVar*> localVarMap;
-        for (AstNode* const declp : propp->declspList()) {
-            AstVar* const varp = VN_AS(declp, Var);
-            if (!varp->isIO()) {
-                // V3Undriven checks the declared variable, not its per-instance copies
-                FileLine* const flp = new FileLine{noCoverFileLine(varp->fileline())};
-                flp->modifyWarnOff(V3ErrorCode::UNDRIVEN, true);
-                flp->modifyWarnOff(V3ErrorCode::UNUSEDSIGNAL, true);
-                AstVar* const newVarp = new AstVar{flp, VVarType::MODULETEMP,
-                                                   m_propVarNames.get(varp), varp->dtypep()};
-                newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
-                m_modp->addStmtsp(newVarp);
-                localVarMap[varp] = newVarp;
-            }
-        }
-        substituteArgs(specp, schemaRefp, localVarMap);
+        substituteArgs(specp, schemaRefp, promoteLocalVars(propp));
         ++m_statPropInlined;
         return specp;
     }
@@ -263,7 +270,7 @@ class AssertElabVisitor final : public VNVisitor {
         // Clone the body expression since the sequence may be referenced multiple times
         AstNodeExpr* const clonedp = seqp->exprp()->cloneTree(false);
         coverageOff(clonedp);
-        substituteArgs(clonedp, schemaRefp, {});
+        substituteArgs(clonedp, schemaRefp, promoteLocalVars(seqp));
         schemaRefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
         // V3AssertPre reports sequences still referenced after inlining as unsupported

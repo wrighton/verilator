@@ -2078,12 +2078,17 @@ class AstPast final : public AstNodeExpr {
     // NFA local-variable capture). Source $past and AstPast nodes lowering IEEE sampled-value
     // functions such as $rose/$fell must remain false so they receive default initialization.
     bool m_propertyTiming : 1;
+    // True only for a compiler-created history that draws its own values, never shared with the
+    // history of an identical expression (for example, a random function call in an NFA local
+    // variable value)
+    bool m_ownHistory : 1;
 
 public:
     AstPast(FileLine* fl, AstNodeExpr* exprp, AstNodeExpr* ticksp = nullptr,
             AstSenTree* sentreep = nullptr, bool propertyTiming = false)
         : ASTGEN_SUPER_Past(fl)
-        , m_propertyTiming{propertyTiming} {
+        , m_propertyTiming{propertyTiming}
+        , m_ownHistory{false} {
         this->exprp(exprp);
         this->ticksp(ticksp);
         this->sentreep(sentreep);
@@ -2097,9 +2102,13 @@ public:
     bool cleanOut() const override { V3ERROR_NA_RETURN(""); }
     int instrCount() const override { return widthInstrs(); }
     bool sameNode(const AstNode* samep) const override {
-        return m_propertyTiming == VN_DBG_AS(samep, Past)->m_propertyTiming;
+        const AstPast* const asamep = VN_DBG_AS(samep, Past);
+        return m_propertyTiming == asamep->m_propertyTiming
+               && m_ownHistory == asamep->m_ownHistory;
     }
     bool propertyTiming() const { return m_propertyTiming; }
+    bool ownHistory() const { return m_ownHistory; }
+    void ownHistory(bool flag) { m_ownHistory = flag; }
     bool isSystemFunc() const override { return true; }
 };
 class AstPattern final : public AstNodeExpr {

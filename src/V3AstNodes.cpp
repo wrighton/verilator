@@ -3642,9 +3642,11 @@ void AstParseTypeDType::dumpJson(std::ostream& str) const {
 void AstPast::dump(std::ostream& str) const {
     Super::dump(str);
     if (propertyTiming()) str << " [PROPERTY_TIMING]";
+    if (ownHistory()) str << " [OWN_HISTORY]";
 }
 void AstPast::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, propertyTiming);
+    dumpJsonBoolFuncIf(str, ownHistory);
     dumpJsonGen(str);
 }
 void AstPatternItem::dump(std::ostream& str) const {
@@ -4761,6 +4763,7 @@ void AstVar::dump(std::ostream& str) const {
     if (noReset()) str << " [!RST]";
     if (processQueue()) str << " [PROCQ]";
     if (sampled()) str << " [SAMPLED]";
+    if (isAssertLocal()) str << " [ASSERTLOCAL]";
     if (attrFsmState()) str << " [aFSMSTATE]";
     if (attrFsmArcInclCond()) str << " [aFSMARCCOND]";
     if (attrFsmState() || attrFsmArcInclCond()) str << " [" << attrFsmStateExpand() << "]";
@@ -4806,6 +4809,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, noReset);
     dumpJsonBoolFuncIf(str, processQueue);
     dumpJsonBoolFuncIf(str, sampled);
+    dumpJsonBoolFuncIf(str, isAssertLocal);
     dumpJsonBoolFuncIf(str, attrFsmState);
     dumpJsonBoolFuncIf(str, attrFsmArcInclCond);
     if (attrFsmState() || attrFsmArcInclCond()) {
