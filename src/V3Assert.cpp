@@ -721,12 +721,15 @@ AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
 // declarations, and renames its automatic ones, which V3Begin may lift to the same scope.
 AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* const actionp, V3UniqueNames& names) {
     // V3LinkDot finds hierarchical references again by name, which fails for a clone in
-    // another scope, so refer to the variables of the action directly
-    std::unordered_set<const AstVar*> declVarps;  // Variables declared in the action
-    actionp->foreachAndNext([&](const AstVar* const varp) { declVarps.emplace(varp); });
-    std::vector<AstVarXRef*> xrefps;  // Hierarchical references to them
+    // another scope. So a reference relative to a block of the action refers to its variable
+    // directly. Other references stay by name, as their path may select another instance.
+    std::unordered_set<std::string> blockNames;  // Names of the blocks of the action
+    actionp->foreachAndNext(
+        [&](const AstNodeBlock* const blockp) { blockNames.emplace(blockp->name()); });
+    std::vector<AstVarXRef*> xrefps;  // References relative to them
     actionp->foreachAndNext([&](AstVarXRef* const xrefp) {
-        if (declVarps.count(xrefp->varp())) xrefps.push_back(xrefp);
+        const std::string dotted = xrefp->dotted();
+        if (blockNames.count(dotted.substr(0, dotted.find('.')))) xrefps.push_back(xrefp);
     });
     for (AstVarXRef* const xrefp : xrefps) {
         xrefp->replaceWithKeepDType(
@@ -1782,7 +1785,7 @@ class AssertVisitor final : public VNVisitor {
             replaysp->addNext(loopp);
             passsp = replaysp;
         }
-        // A discarded cover runs no action, so also not at the end of simulation
+        // A discarded cover runs no action, so also not at the end of simulation.
         if (selfDestruct) {
             if (AstPExpr* const pexprp = VN_CAST(propExprp, PExpr)) {
                 if (pexprp->finalp()) pushDeletep(pexprp->finalp()->unlinkFrBack());
