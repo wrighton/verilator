@@ -232,7 +232,7 @@ module t;
       rc = ph.randomize();
       if (rc != 0) begin
         npass++;
-        `checkd(ph.y > ph.x, 1'b1);
+        `checkd(ph.y > ph.x[3:0], 1'b1);
       end
       rc = pa.randomize();
       if (rc != 0) begin
