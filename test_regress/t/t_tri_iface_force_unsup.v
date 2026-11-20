@@ -160,6 +160,31 @@ module u_and_z_literal;
   end
 endmodule
 
+module u_concat_z_literal;
+  tgt_if tgt (1'b0);
+  bit d = 1'b1;
+  task force_value;
+    force tgt.value = {d, 1'bz};
+  endtask
+  initial begin
+    force tgt.value = {d, 1'bz};
+  end
+endmodule
+
+module u_func_driven;
+  tgt_if tgt (1'b0);
+  bit d = 1'b0;
+  function automatic logic [1:0] fd(input bit x);
+    return x ? 2'b01 : 2'b10;
+  endfunction
+  task force_value;
+    force tgt.value = fd(d);
+  endtask
+  initial begin
+    force tgt.value = fd(d);
+  end
+endmodule
+
 module u_class_queue;
   tgt_if tgt (1'b0);
   class holder;
@@ -207,6 +232,8 @@ module t;
   u_cell_const_net cell_const_net ();
   u_forced_pulled_src forced_pulled_src ();
   u_and_z_literal and_z_literal ();
+  u_concat_z_literal concat_z_literal ();
+  u_func_driven func_driven ();
   u_class_queue class_queue ();
   u_forced_tristate_src forced_tristate_src ();
   tgt_if port_tgt (1'b0);
