@@ -125,7 +125,7 @@ solver_log = test.obj_dir + '/solver_bsat_narrow.log'
 test.execute(logfile=logfile,
              all_run_flags=['+verilator+solver+file+' + solver_log],
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=value_narrow TAMPER_AT=16')
+             'TAMPER=value_narrow TAMPER_AT=13')
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(
     solver_log, r'^  \(push 1\)\n  \(check-sat\)\n< sat\n  \(get-value \( a b\)\)\n'
@@ -275,8 +275,9 @@ test.file_grep_not(test.obj_dir + '/solver_phased_phase_junk_2.log', r'\(= x jun
 test.file_grep_not(test.obj_dir + '/solver_phased_phase_var_1.log', r'\(= y #x5\)')
 test.file_grep(test.obj_dir + '/sim_phased_phase_var_1.log',
                r"Unable to parse solver's response: unknown variable")
-test.file_grep(test.obj_dir + '/sim_phased_phase_elem_dup_1.log',
-               r"Unable to parse solver's response: repeated variable")
+for mode in ['phase_dup', 'phase_elem_dup']:
+    test.file_grep(test.obj_dir + '/sim_phased_' + mode + '_1.log',
+                   r"Unable to parse solver's response: repeated variable")
 test.file_grep(test.obj_dir + '/sim_phased_phase_bare_1.log',
                r"Unable to parse solver's response: invalid S-expression")
 test.file_grep(test.obj_dir + '/sim_phased_phase_short_1.log',

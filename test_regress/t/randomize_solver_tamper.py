@@ -210,7 +210,7 @@ E5 = "(Array (_ BitVec 32) (_ BitVec 5))"
 EW = " ((select w #x00000000) #b00011) ((select w #x00000001) #b00101))"
 PHASE_VALUE_MODES = {
     "phase_bare": ("((x", "(y ", "(x #x1)"),
-    "phase_dup": ("((x", "(y ", "((x #x1) (x #b0001))"),
+    "phase_dup": ("((x", "(y ", "((x #x0000001) (x (_ bv1 28)))"),
     "phase_elem_bin": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
                        " ((select w #b" + "0" * 32 + ") #b00011)"
                        " ((select w #b" + "0" * 31 + "1) #b00101))"),
@@ -221,7 +221,7 @@ PHASE_VALUE_MODES = {
                      " ((select w #h00000000) #b00011) ((select w #h00000001) #b00101))"),
     "phase_elem_other": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
                          " ((select w #x00000000) #b00011) ((select w #x00000002) #b00101))"),
-    "phase_hex_h": ("((x", "(y ", "((x #h3))"),
+    "phase_hex_h": ("((x", "(y ", "((x #h0000003))"),
     "phase_junk": ("((x", "(y ", "((x junk))"),
     "phase_narrow": ("((x", "(y ", "((x #b1))"),
     "phase_partial": ("((e ", "(k ", "((e ((as const " + E5 + ") #b00000))"
