@@ -126,8 +126,9 @@ private:
                     << m_ftaskp->warnContextSecondary());
         // Forks V3LinkJump made for disable by name do not block
         const AstFork* const forkp = VN_CAST(nodep, Fork);
+        const bool disableFork = forkp && forkp->forksp()->disableWrapper();
         if (m_alwaysCombp && m_taskRefWarn && nodep->isTimingControl() && !VN_IS(nodep, AssignDly)
-            && !(forkp && forkp->disableWrap())) {
+            && !disableFork) {
             nodep->v3error("Blocking timing controls and fork-join are not legal under "
                            << m_alwaysCombp->keyword().ascii() << " (IEEE 1800-2023 9.2.2.2.2)\n"
                            << nodep->warnMore() << "... Suggest use a normal 'always'");
