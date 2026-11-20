@@ -61,6 +61,10 @@ class VIfaceCaptureTag;
 
 //######################################################################
 
+// The widest packed range that may be declared, and the widest packed select result supported. A
+// packed type composed of several such ranges may be wider.
+static constexpr uint32_t VL_PACKED_WIDTH_MAX = 1U << 28;
+
 // For broken() function, return error string if have a match
 #define BROKEN_RTN(test) \
     do { \

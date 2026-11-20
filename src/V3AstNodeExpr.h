@@ -4301,11 +4301,7 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     void numberOperate(V3Number& out, const V3Number& from, const V3Number& bit) override {
-        if (bit.isFourState()) {
-            out.setAllBitsX();
-        } else {
-            out.opSel(from, bit.toUInt() + widthConst() - 1, bit.toUInt());
-        }
+        out.opPackedSel(from, bit, positionSigned(bit), widthConst(), fromp()->width());
         out.opCleanTwoStateNumber(dtypep());
     }
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
@@ -4328,8 +4324,19 @@ public:
     }
     int widthConst() const { return m_widthConst; }
     void widthConst(int value) { m_widthConst = value; }
-    int lsbConst() const { return VN_AS(lsbp(), Const)->toSInt(); }
+    // How a select position is read: a position narrower than 32 bits is an unsigned storage
+    // offset, one of exactly 32 bits a signed integer, and a wider one follows its signedness
+    static bool positionSigned(const V3Number& lsb) {
+        return lsb.width() == 32 || (lsb.width() > 32 && lsb.isSigned());
+    }
+    // True and set lsb if the start is a known constant representable as int
+    bool constLsb(int& lsb) const;
+    // The constant start. V3Width replaces a constant select outside its storage, and V3Unknown
+    // guards one created later, so after V3Unknown a constant start is within its operand.
+    int lsbConst() const;
     int msbConst() const { return lsbConst() + widthConst() - 1; }
+    // True and set lsb if the start is constant and the whole selection is within fromp()
+    bool constLsbInRange(int& lsb) const;
     VNumRange& declRange() VL_MT_STABLE { return m_declRange; }
     const VNumRange& declRange() const VL_MT_STABLE { return m_declRange; }
     void declRange(const VNumRange& flag) { m_declRange = flag; }

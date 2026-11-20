@@ -168,12 +168,12 @@ class AstToDfgConverter final : public VNVisitor {
 
         if (const AstSel* selp = VN_CAST(nodep, Sel)) {
             // Only handle constant selects
-            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
-            if (!lsbp) {
+            int selLsb = 0;
+            if (!selp->constLsb(selLsb) || selLsb < 0) {
                 ++m_ctx.m_conv.nonRepLValue;
                 return {nullptr, 0};
             }
-            uint32_t lsb = lsbp->toUInt();
+            uint32_t lsb = static_cast<uint32_t>(selLsb);
 
             // Convert the 'fromp' sub-expression
             const auto pair = convertLValue(selp->fromp());

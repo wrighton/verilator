@@ -1227,9 +1227,11 @@ private:
     }
 
     AstNodeExpr* findAssignedElement(const AstNodeAssign* nodep, AstNodeExpr* lhsp,
-                                     AstNode*& vscpr, AstNodeExpr*& rootpr) {
+                                     AstNode*& vscpr, AstNodeExpr*& rootpr,
+                                     bool addressOnly = false) {
         // Find the value of an element or member, maybe nested, of a variable assigned by lhsp,
-        // making a defaulted array element explicit. Null if not simulating, or out of bounds.
+        // making a defaulted array element explicit. In address-only mode, stop after evaluating
+        // the address without making an element explicit.
         // Selects, from the element inwards:
         std::vector<AstNodeExpr*> selps;
         AstNodeExpr* fromp = lhsp;
@@ -1252,7 +1254,7 @@ private:
             clearOptimizable(fromp, "Array select LHS isn't simple variable");
             return nullptr;
         }
-        if (m_checkOnly || !optimizable()) return nullptr;
+        if (addressOnly || m_checkOnly || !optimizable()) return nullptr;
         vscpr = varOrScope(varrefp);
         // Only a delayed assignment builds on the pending value. Others edit the current value,
         // which a call or initialization may have replaced without updating the pending one.
@@ -1308,13 +1310,22 @@ private:
     }
     void handleAssignSel(AstNodeAssign* nodep, AstSel* selp, AstNodeExpr* valueFromp) {
         AstNodeExpr* basep = nullptr;
-        V3Number lsb{nodep};
-        handleAssignSelRecurse(nodep, selp, basep /*ref*/, lsb /*ref*/, 0);
+        const V3Number::PackedOverlap overlap = handleAssignSelRecurse(selp, basep);
         if (m_checkOnly || !optimizable()) return;
         UASSERT_OBJ(basep, nodep, "Indicated optimizable, but no variable found on RHS of select");
         V3Number value{fetchConst(valueFromp)->num()};
         value.opCleanTwoStateNumber(selp->dtypep());
         AstVarRef* const varrefp = VN_CAST(basep, VarRef);
+        if (!overlap.width) {
+            if (!varrefp) {
+                AstNode* vscp = nullptr;
+                AstNodeExpr* rootp = nullptr;
+                findAssignedElement(nodep, basep, vscp, rootp, /* addressOnly */ true);
+            }
+            return;
+        }
+        V3Number aligned{nodep, overlap.width};
+        aligned.opSel(value, overlap.selectLsb + overlap.width - 1, overlap.selectLsb);
         if (!varrefp) {  // Select of an element or member of an unpacked aggregate
             AstNode* vscp = nullptr;
             AstNodeExpr* rootp = nullptr;
@@ -1322,7 +1333,7 @@ private:
                 = findAssignedElement(nodep, basep, vscp /*ref*/, rootp /*ref*/);
             if (!itemp) return;
             AstConst* const newp = VN_AS(newTrackedClone(itemp), Const);
-            newp->num().opSelInto(value, lsb, selp->widthConst());
+            newp->num().opSelInto(aligned, overlap.storageLsb, overlap.width);
             assignElement(nodep, vscp, rootp, itemp, newp);
             return;
         }
@@ -1342,31 +1353,35 @@ private:
             }
             m_reclaimValuesp.emplace_back(outconstp);
         }
-        outconstp->num().opSelInto(value, lsb, selp->widthConst());
+        outconstp->num().opSelInto(aligned, overlap.storageLsb, overlap.width);
         assignOutValue(nodep, vscp, outconstp);
     }
-    void handleAssignSelRecurse(AstNodeAssign* nodep, AstSel* selp, AstNodeExpr*& outBasepRef,
-                                V3Number& lsbRef, int depth) {
-        // Recurse down to find final variable, or element or member of a variable, being set
-        // (outBasepRef), with lsb to be eventually set on lsbRef
+    V3Number::PackedOverlap handleAssignSelRecurse(AstSel* const selp, AstNodeExpr*& basep) {
         checkNodeInfo(selp);
-        iterateAndNextConstNull(selp->lsbp());  // Bit index
+        iterateAndNextConstNull(selp->lsbp());
         AstNodeExpr* const fromp = selp->fromp();
+        V3Number::PackedOverlap current;
+        if (!m_checkOnly && optimizable()) {
+            const V3Number& lsb = fetchConst(selp->lsbp())->num();
+            current = lsb.packedOverlap(AstSel::positionSigned(lsb), selp->widthConst(),
+                                        fromp->width());
+        }
         if (VN_IS(fromp, VarRef) || VN_IS(fromp, ArraySel) || VN_IS(fromp, StructSel)) {
-            outBasepRef = fromp;
-            lsbRef = fetchConst(selp->lsbp())->num();
-            return;  // And presumably still optimizable()
+            basep = fromp;
+            return current;
         }
-        if (AstSel* const subselp = VN_CAST(fromp, Sel)) {
-            V3Number sublsb{nodep};
-            handleAssignSelRecurse(nodep, subselp, outBasepRef, sublsb /*ref*/, depth + 1);
-            if (optimizable()) {
-                lsbRef = sublsb;
-                lsbRef.opAdd(sublsb, fetchConst(selp->lsbp())->num());
-            }
-        } else {
-            clearOptimizable(fromp, "Select LHS isn't simple variable");
+        if (AstSel* const innerp = VN_CAST(fromp, Sel)) {
+            const V3Number::PackedOverlap inner = handleAssignSelRecurse(innerp, basep);
+            // Both overlaps are expressed in the inner result's coordinates at this join.
+            const int first = std::max(current.storageLsb, inner.selectLsb);
+            const int pastLast
+                = std::min(current.storageLsb + current.width, inner.selectLsb + inner.width);
+            if (first >= pastLast) return {};
+            return {inner.storageLsb + (first - inner.selectLsb),
+                    current.selectLsb + (first - current.storageLsb), pastLast - first};
         }
+        clearOptimizable(selp->fromp(), "Select LHS isn't simple variable");
+        return {};
     }
     void handleAssignRecurse(AstNodeAssign* nodep, AstNodeExpr* lhsp, AstNodeExpr* valueFromp) {
         if (!optimizable()) return;

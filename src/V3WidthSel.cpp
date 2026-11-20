@@ -37,12 +37,25 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // Width state, as a visitor of each AstNode
 
 class WidthSelVisitor final : public VNVisitor {
+
     // IMPORTANT
     //**** This is not a normal visitor, in that all iteration is instead
     //  done by the caller (V3Width).  This avoids duplicating much of the
     //  complicated GenCase/GenFor/Cell/Function call logic that all depends
     //  on if widthing top-down or just for parameters.
 #define iterateChildren DO_NOT_iterateChildern_IN_V3WidthSel
+
+    // STATE
+    V3Width::SelOrigin* const m_originp;  // Type of a written position, for its width check
+
+    // Record the type of a constant position, as written, when its storage offset differs
+    void recordOrigin(const AstConst* constp) {
+        if (!m_originp) return;
+        m_originp->valid = true;
+        m_originp->width = constp->width();
+        m_originp->widthMin = constp->widthMin();
+        m_originp->sized = constp->dtypep()->widthSized();
+    }
 
     // METHODS
 
@@ -165,6 +178,75 @@ class WidthSelVisitor final : public VNVisitor {
         return newp;
     }
 
+    // A constant position selects storage at its exact value, never at a truncated or wrapped
+    // value that could address a different element. A count is read by its own signedness.
+    static V3Number exactIndex(AstConst* const constp, const int bits,
+                               const bool position = true) {
+        V3Number index{constp, bits};
+        if (position ? V3Width::selectPositionSigned(constp) : constp->isSigned()) {
+            index.opExtendS(constp->num(), constp->width());
+        } else {
+            index.opAssign(constp->num());
+        }
+        index.isSigned(true);
+        return index;
+    }
+    static int compactInt(const V3Number& signedNum) {
+        V3Number lowWord{&signedNum, 32};
+        lowWord.opAssign(signedNum);
+        return lowWord.toSInt();
+    }
+    static V3Number exactPackedOffset(AstConst* const constp, const int64_t bound,
+                                      const bool ascending, const int stride) {
+        const int bits
+            = std::max(constp->width(), 32) + 2 + (stride == 1 ? 0 : V3Number::log2b(stride) + 1);
+        const V3Number index = exactIndex(constp, bits);
+        V3Number boundNum{constp, bits};
+        V3Number bound64{constp, 64};
+        bound64.setQuad(static_cast<uint64_t>(bound));
+        boundNum.opExtendS(bound64, 64);
+        V3Number offset{constp, bits};
+        if (ascending) {
+            offset.opSub(boundNum, index);
+        } else {
+            offset.opSub(index, boundNum);
+        }
+        offset.isSigned(true);
+        if (stride == 1) return offset;
+        V3Number storageOffset{constp, bits};
+        storageOffset.opMulS(offset, V3Number{constp, bits, static_cast<uint32_t>(stride)});
+        storageOffset.isSigned(true);
+        return storageOffset;
+    }
+    // Storage positions are unsigned when nonnegative
+    static AstConst* packedOffsetConstp(FileLine* const flp, const V3Number& offset) {
+        if (!offset.fitsInInt32(true)) return new AstConst{flp, offset};
+        const int position = compactInt(offset);
+        return position < 0 ? new AstConst{flp, AstConst::Signed32{}, position}
+                            : new AstConst{flp, static_cast<uint32_t>(position)};
+    }
+    // Whether a packed part-select of a number of elements of a width would exceed the supported
+    // width. Computed without overflow or division, so a receiver with an invalid element width
+    // continues as before. More elements than the limit always exceed it, as each element of a
+    // representable type has at least one bit.
+    static bool exceedsPackedLimit(AstNode* nodep, const V3Number& count, int elementWidth) {
+        if (V3Number{nodep, 1}
+                .opGt(count, V3Number{nodep, count.width(), VL_PACKED_WIDTH_MAX})
+                .isEqOne()) {
+            return true;
+        }
+        return int64_t{count.toUInt()} * elementWidth > int64_t{VL_PACKED_WIDTH_MAX};
+    }
+    // The storage offset of a known constant position, or nullptr
+    AstConst* packedOffsetp(AstNodeExpr* const indexp, const int64_t bound, const bool ascending,
+                            const int stride) {
+        AstConst* const constp = VN_CAST(indexp, Const);
+        if (!constp || constp->num().isOpaque() || constp->num().isFourState()) return nullptr;
+        recordOrigin(constp);
+        return packedOffsetConstp(constp->fileline(),
+                                  exactPackedOffset(constp, bound, ascending, stride));
+    }
+
     AstNodeExpr* newSubLsbOf(AstNodeExpr* underp, const VNumRange& fromRange) {
         // Account for a variable's LSB in bit selections
         // Will likely become SUB(underp, lsb_of_signal).
@@ -183,6 +265,18 @@ class WidthSelVisitor final : public VNVisitor {
                 return newSubNeg(underp, fromRange.lo());
             }
         }
+    }
+    // A constant bit position in an offset range is resolved exactly; an index that is
+    // itself the bit offset, and a dynamic index, are lowered as before
+    AstNodeExpr* bitOffsetp(AstNodeExpr* indexp, const VNumRange& fromRange) {
+        const bool ascending = fromRange.ascending();
+        const bool offsetIsIndex = !fromRange.ranged() || (!ascending && fromRange.lo() == 0);
+        AstConst* const offsetp
+            = offsetIsIndex ? nullptr
+                            : packedOffsetp(indexp, ascending ? fromRange.hi() : fromRange.lo(),
+                                            ascending, 1);
+        // An unused index is deleted by the caller
+        return offsetp ? offsetp : newSubLsbOf(indexp, fromRange);
     }
     AstNodeExpr* newMulConst(FileLine* fl, uint32_t elwidth, AstNodeExpr* indexp) {
         AstNodeExpr* extendp;
@@ -274,20 +368,21 @@ class WidthSelVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else if (const AstPackArrayDType* const adtypep = VN_CAST(ddtypep, PackArrayDType)) {
             // SELBIT(array, index) -> SEL(array, index*width-of-subindex, width-of-subindex)
-            AstNodeExpr* subp = rhsp;
-            if (fromRange.ascending()) {
-                subp = newSubNeg(fromRange.hi(), subp);
-            } else {
-                subp = newSubNeg(subp, fromRange.lo());
-            }
             UASSERT_OBJ(!(!fromRange.elements() || (adtypep->width() % fromRange.elements()) != 0),
                         adtypep,
                         "Array extraction with width miscomputed " << adtypep->width() << "/"
                                                                    << fromRange.elements());
             // cppcheck-suppress zerodivcond
             const int elwidth = adtypep->width() / fromRange.elements();
-            AstSel* const newp = new AstSel{
-                nodep->fileline(), fromp, newMulConst(nodep->fileline(), elwidth, subp), elwidth};
+            const bool ascending = fromRange.ascending();
+            AstNodeExpr* lsbp = packedOffsetp(rhsp, ascending ? fromRange.hi() : fromRange.lo(),
+                                              ascending, elwidth);
+            if (!lsbp) {
+                AstNodeExpr* const subp = ascending ? newSubNeg(fromRange.hi(), rhsp)
+                                                    : newSubNeg(rhsp, fromRange.lo());
+                lsbp = newMulConst(nodep->fileline(), elwidth, subp);
+            }
+            AstSel* const newp = new AstSel{nodep->fileline(), fromp, lsbp, elwidth};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);
             newp->dtypeFrom(adtypep->subDTypep());  // Need to strip off array reference
@@ -357,7 +452,7 @@ class WidthSelVisitor final : public VNVisitor {
         } else if (VN_IS(ddtypep, BasicDType)) {
             // SELBIT(range, index) -> SEL(array, index, 1)
             AstSel* const newp
-                = new AstSel{nodep->fileline(), fromp, newSubLsbOf(rhsp, fromRange), 1};
+                = new AstSel{nodep->fileline(), fromp, bitOffsetp(rhsp, fromRange), 1};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             UINFOTREE(9, newp, "", "SELBTn");
@@ -366,7 +461,7 @@ class WidthSelVisitor final : public VNVisitor {
         } else if (VN_IS(ddtypep, NodeUOrStructDType)) {  // A bit from the packed struct
             // SELBIT(range, index) -> SEL(array, index, 1)
             AstSel* const newp
-                = new AstSel{nodep->fileline(), fromp, newSubLsbOf(rhsp, fromRange), 1};
+                = new AstSel{nodep->fileline(), fromp, bitOffsetp(rhsp, fromRange), 1};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             UINFOTREE(9, newp, "", "SELBTn");
@@ -436,6 +531,8 @@ class WidthSelVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
+        const bool constantEndpoints
+            = VN_IS(nodep->leftp(), Const) && VN_IS(nodep->rightp(), Const);
         // Non-queue
         checkConstantOrReplace(nodep->leftp(),
                                "First value of [a:b] isn't a constant, maybe you want +: or -:");
@@ -443,88 +540,103 @@ class WidthSelVisitor final : public VNVisitor {
                                "Second value of [a:b] isn't a constant, maybe you want +: or -:");
         AstNodeExpr* msbp = nodep->leftp()->unlinkFrBack();
         AstNodeExpr* lsbp = nodep->rightp()->unlinkFrBack();
-        int32_t msb = VN_AS(msbp, Const)->toSInt();
-        int32_t lsb = VN_AS(lsbp, Const)->toSInt();
-        const int32_t elem = (msb > lsb) ? (msb - lsb + 1) : (lsb - msb + 1);
-        if (VN_IS(ddtypep, UnpackArrayDType)) {
-            // Slice extraction
-            if (fromRange.elements() == elem
-                && fromRange.lo() == lsb) {  // Extracting whole of original array
-                nodep->replaceWith(fromp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else {  // Slice
-                AstSliceSel* const newp
-                    = new AstSliceSel{nodep->fileline(), fromp,
-                                      VNumRange{msb - fromRange.lo(), lsb - fromRange.lo()}};
+        AstPackArrayDType* const packedp = VN_CAST(ddtypep, PackArrayDType);
+        const bool packedRange
+            = packedp || VN_IS(ddtypep, BasicDType) || VN_IS(ddtypep, NodeUOrStructDType);
+        const bool unknownEndpoint = constantEndpoints
+                                     && (VN_AS(msbp, Const)->num().isFourState()
+                                         || VN_AS(lsbp, Const)->num().isFourState());
+        if (packedRange && unknownEndpoint) {
+            nodep->v3error("Range select index is constantly unknown or tristated: ["
+                           << VN_AS(msbp, Const)->num().displayed(nodep, "%0d") << ":"
+                           << VN_AS(lsbp, Const)->num().displayed(nodep, "%0d") << "]");
+        }
+        if (packedRange && (!constantEndpoints || unknownEndpoint)) {
+            // The endpoints were already diagnosed; leave a small select for type recovery.
+            nodep->replaceWith(new AstSel{nodep->fileline(), fromp, 0,
+                                          packedp ? packedp->subDTypep()->width() : 1});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        } else if (packedRange && !VN_AS(msbp, Const)->num().isOpaque()
+                   && !VN_AS(lsbp, Const)->num().isOpaque()) {
+            FileLine* const flp = nodep->fileline();
+            AstConst* highp = VN_AS(msbp, Const);
+            AstConst* lowp = VN_AS(lsbp, Const);
+            if (fromRange.ascending()) std::swap(highp, lowp);
+            const int boundWidth = std::max({highp->width(), lowp->width(), 32}) + 2;
+            V3Number high = exactIndex(highp, boundWidth);
+            V3Number low = exactIndex(lowp, boundWidth);
+            if (V3Number{nodep, 1}.opGtS(low, high).isEqOne()) {
+                const string highStr = high.displayed(nodep, "%0d");
+                const string lowStr = low.displayed(nodep, "%0d");
+                nodep->v3warn(
+                    SELRANGE,
+                    "[" << highStr << ":" << lowStr
+                        << "] Slice range has ascending bit ordering, perhaps you wanted ["
+                        << lowStr << ":" << highStr << "]");
+                std::swap(high, low);
+                std::swap(highp, lowp);
+            }
+            if (packedp) {
+                UASSERT_OBJ(
+                    !(!fromRange.elements() || (packedp->width() % fromRange.elements()) != 0),
+                    packedp,
+                    "Array extraction with width miscomputed " << packedp->width() << "/"
+                                                               << fromRange.elements());
+            }
+            const int stride = packedp ? packedp->width() / fromRange.elements() : 1;
+            V3Number span{nodep, boundWidth};
+            span.opSub(high, low);
+            V3Number count{nodep, boundWidth};
+            count.opAdd(span, V3Number{nodep, boundWidth, 1});
+            if (exceedsPackedLimit(nodep, count, stride)) {
+                nodep->v3warn(
+                    E_UNSUPPORTED,
+                    "Unsupported: Packed range select width exceeds the supported limit.");
+                nodep->replaceWith(new AstConst{flp, AstConst::BitFalseErroring{}});
+            } else {
+                const int elements = span.toSInt() + 1;
+                const bool ascending = fromRange.ascending();
+                const int bound = ascending ? fromRange.hi() : fromRange.lo();
+                AstConst* const lsbSourcep = ascending ? highp : lowp;
+                recordOrigin(lsbSourcep);
+                // A low endpoint that is itself the bit offset is used as authored
+                const bool offsetIsIndex
+                    = stride == 1 && (!fromRange.ranged() || (!ascending && bound == 0));
+                AstConst* const indexp
+                    = offsetIsIndex
+                          ? lsbSourcep
+                          : packedOffsetConstp(
+                                flp, exactPackedOffset(lsbSourcep, bound, ascending, stride));
+                AstSel* const newp = new AstSel{flp, fromp, indexp, elements * stride};
+                newp->declRange(fromRange);
+                newp->declElWidth(stride);
+                if (packedp) {
+                    if (high.fitsInInt32(true) && low.fitsInInt32(true)) {
+                        newp->dtypeFrom(sliceDType(packedp, compactInt(high), compactInt(low)));
+                    } else {
+                        // Only the shape is needed when the declared endpoints exceed VNumRange.
+                        AstPackArrayDType* const typep = new AstPackArrayDType{
+                            flp, packedp->subDTypep(),
+                            new AstRange{flp, VNumRange{elements - 1, 0, ascending}}};
+                        v3Global.rootp()->typeTablep()->addTypesp(typep);
+                        newp->dtypep(typep);
+                    }
+                    UASSERT_OBJ(newp->widthMin() == newp->widthConst(), nodep, "Width mismatch");
+                }
                 nodep->replaceWith(newp);
-                VL_DO_DANGLING(pushDeletep(nodep), nodep);
             }
-        } else if (AstPackArrayDType* const adtypep = VN_CAST(ddtypep, PackArrayDType)) {
-            // SELEXTRACT(array, msb, lsb) -> SEL(array,
-            //             lsb*width-of-subindex, width-of-subindex*(msb-lsb))
-            UASSERT_OBJ(!(!fromRange.elements() || (adtypep->width() % fromRange.elements()) != 0),
-                        adtypep,
-                        "Array extraction with width miscomputed " << adtypep->width() << "/"
-                                                                   << fromRange.elements());
-            // Below code assumes descending bit range; just works out if we swap
-            if (fromRange.ascending()) std::swap(msb, lsb);
-            if (lsb > msb) {
-                nodep->v3warn(
-                    SELRANGE,
-                    "[" << msb << ":" << lsb
-                        << "] Slice range has ascending bit ordering, perhaps you wanted [" << lsb
-                        << ":" << msb << "]");
-                std::swap(msb, lsb);
-                std::swap(msbp, lsbp);  // Select starts at the new lsb
-            }
-            const int elwidth = adtypep->width() / fromRange.elements();
-            AstSel* const newp
-                = new AstSel{nodep->fileline(), fromp,
-                             newMulConst(nodep->fileline(), elwidth, newSubLsbOf(lsbp, fromRange)),
-                             (msb - lsb + 1) * elwidth};
-            newp->declRange(fromRange);
-            newp->declElWidth(elwidth);
-            newp->dtypeFrom(sliceDType(adtypep, msb, lsb));
-            // UINFOTREE(9, newp, "", "EXTBTn");
-            UASSERT_OBJ(newp->widthMin() == newp->widthConst(), nodep, "Width mismatch");
-            nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
-        } else if (VN_IS(ddtypep, BasicDType)) {
-            // Below code assumes descending bit range; just works out if we swap
-            if (fromRange.ascending()) std::swap(msb, lsb);
-            if (lsb > msb) {
-                nodep->v3warn(
-                    SELRANGE,
-                    "[" << msb << ":" << lsb
-                        << "] Slice range has ascending bit ordering, perhaps you wanted [" << lsb
-                        << ":" << msb << "]");
-                std::swap(msb, lsb);
-                std::swap(msbp, lsbp);  // Select starts at the new lsb
+        } else if (VN_IS(ddtypep, UnpackArrayDType)) {
+            const int32_t msb = VN_AS(msbp, Const)->toSInt();
+            const int32_t lsb = VN_AS(lsbp, Const)->toSInt();
+            const int32_t elem = (msb > lsb) ? (msb - lsb + 1) : (lsb - msb + 1);
+            if (fromRange.elements() == elem && fromRange.lo() == lsb) {
+                nodep->replaceWith(fromp);
+            } else {
+                nodep->replaceWith(
+                    new AstSliceSel{nodep->fileline(), fromp,
+                                    VNumRange{msb - fromRange.lo(), lsb - fromRange.lo()}});
             }
-            AstSel* const newp = new AstSel{nodep->fileline(), fromp, newSubLsbOf(lsbp, fromRange),
-                                            msb + 1 - lsb};
-            newp->declRange(fromRange);
-            UINFO(6, "   new " << newp);
-            // UINFOTREE(9, newp, "", "SELEXnew");
-            nodep->replaceWith(newp);
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-        } else if (VN_IS(ddtypep, NodeUOrStructDType)) {
-            // Classes don't have an ascending range
-            if (lsb > msb) {
-                nodep->v3warn(
-                    SELRANGE,
-                    "[" << msb << ":" << lsb
-                        << "] Slice range has ascending bit ordering, perhaps you wanted [" << lsb
-                        << ":" << msb << "]");
-                std::swap(msb, lsb);
-                std::swap(msbp, lsbp);  // Select starts at the new lsb
-            }
-            AstSel* const newp = new AstSel{nodep->fileline(), fromp, newSubLsbOf(lsbp, fromRange),
-                                            msb + 1 - lsb};
-            newp->declRange(fromRange);
-            UINFO(6, "   new " << newp);
-            // UINFOTREE(9, newp, "", "SELEXnew");
-            nodep->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else {  // nullptr=bad extract, or unknown node type
             nodep->v3error("Illegal range select; type already selected, or bad dimension: "
@@ -557,15 +669,60 @@ class WidthSelVisitor final : public VNVisitor {
         AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
         AstNodeExpr* const widthp = nodep->thsp()->unlinkFrBack();
         warnTri(rhsp);
-        const int width = VN_AS(widthp, Const)->toSInt();
-        if (width > (1 << 28)) {
-            nodep->v3error("Width of :+ or :- is huge; vector of over 1 billion bits: "
-                           << widthp->prettyName());
-        }
-        if (width < 0) nodep->v3error("Width of :+ or :- is < 0: " << widthp->prettyName());
         const FromData fromdata = fromDataForArray(nodep, fromp);
         const AstNodeDType* const ddtypep = fromdata.m_dtypep;
         const VNumRange fromRange = fromdata.m_fromRange;
+        const bool packedSelect = VN_IS(ddtypep, BasicDType) || VN_IS(ddtypep, PackArrayDType)
+                                  || (VN_IS(ddtypep, NodeUOrStructDType)
+                                      && VN_AS(ddtypep, NodeUOrStructDType)->packedUnsup());
+        const AstPackArrayDType* const packArrayp = VN_CAST(ddtypep, PackArrayDType);
+        const int elementWidth = packArrayp ? packArrayp->width() / fromRange.elements() : 1;
+        AstConst* const countp = VN_AS(widthp, Const);
+        int width = 0;
+        if (packedSelect && !countp->num().isOpaque() && !countp->num().isFourState()) {
+            const int countBits = std::max(countp->width(), 32) + 1;
+            const V3Number count = exactIndex(countp, countBits, false);
+            const auto exceeds = [&](uint32_t limit) {
+                return V3Number{nodep, 1}.opGt(count, V3Number{nodep, countBits, limit}).isEqOne();
+            };
+            const bool huge = exceeds(VL_PACKED_WIDTH_MAX);
+            if (count.isNegative()) {
+                nodep->v3error("Width of :+ or :- is < 0: " << widthp->prettyName());
+            } else if (huge || exceedsPackedLimit(nodep, count, elementWidth)) {
+                if (huge) {
+                    nodep->v3error("Width of :+ or :- is huge; vector of over 2**28 bits: "
+                                   << widthp->prettyName());
+                } else {
+                    nodep->v3warn(
+                        E_UNSUPPORTED,
+                        "Unsupported: Indexed packed select result exceeds the supported width.");
+                }
+                // Stop, as no selection of that size can be represented
+                AstConst* const recoveryp
+                    = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
+                nodep->replaceWith(recoveryp);
+                VL_DO_DANGLING(pushDeletep(fromp), fromp);
+                VL_DO_DANGLING(pushDeletep(rhsp), rhsp);
+                VL_DO_DANGLING(pushDeletep(widthp), widthp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                return;
+            } else {
+                width = count.toUInt();
+            }
+        } else if (countp->num().isFourState()) {
+            nodep->v3error(
+                "Width of :+ or :- is constantly unknown or tristated: " << widthp->prettyName());
+            width = 1;  // Recover
+        } else {
+            width = countp->toSInt();
+            if (width > static_cast<int>(VL_PACKED_WIDTH_MAX)) {
+                nodep->v3error("Width of :+ or :- is huge; vector of over 2**28 bits: "
+                               << widthp->prettyName());
+            }
+            if (width < 0) {
+                nodep->v3error("Width of :+ or :- is < 0: " << widthp->prettyName());
+            }
+        }
         if (VN_IS(ddtypep, UnpackArrayDType)) {
             // Slice +: and -: extraction
             if (fromRange.elements() == width && VN_IS(rhsp, Const)
@@ -605,27 +762,21 @@ class WidthSelVisitor final : public VNVisitor {
                 elwidth = adtypep->width() / fromRange.elements();
                 newwidth = width * elwidth;
             }
-            AstNodeExpr* newlsbp = nullptr;
-            if (VN_IS(nodep, SelPlus)) {
-                if (fromRange.ascending()) {
-                    // SELPLUS(from,lsb,width) -> SEL(from, (vector_msb-width+1)-sel, width)
-                    newlsbp = newSubNeg((fromRange.hi() - width + 1), rhsp);
-                } else {
-                    // SELPLUS(from,lsb,width) -> SEL(from, lsb-vector_lsb, width)
-                    newlsbp = newSubNeg(rhsp, fromRange.lo());
-                }
-            } else if (VN_IS(nodep, SelMinus)) {
-                if (fromRange.ascending()) {
-                    // SELMINUS(from,msb,width) -> SEL(from, msb-[bit])
-                    newlsbp = newSubNeg(fromRange.hi(), rhsp);
-                } else {
-                    // SELMINUS(from,msb,width) -> SEL(from, msb-(width-1)-lsb#)
-                    newlsbp = newSubNeg(rhsp, fromRange.lo() + (width - 1));
-                }
-            } else {
-                nodep->v3fatalSrc("Bad Case");
+            const bool ascending = fromRange.ascending();
+            const bool plus = VN_IS(nodep, SelPlus);
+            // Compute the origin without overflowing the declared (32-bit) bounds.
+            const int64_t bound = ascending ? int64_t{fromRange.hi()} - (plus ? width - 1 : 0)
+                                            : int64_t{fromRange.lo()} + (plus ? 0 : width - 1);
+            // An index that is itself the bit offset is used as authored
+            const bool offsetIsIndex = elwidth == 1 && !ascending && bound == 0;
+            AstNodeExpr* newlsbp = offsetIsIndex || width <= 0
+                                       ? nullptr
+                                       : packedOffsetp(rhsp, bound, ascending, elwidth);
+            if (!newlsbp) {
+                newlsbp = ascending ? newSubNeg(static_cast<int32_t>(bound), rhsp)
+                                    : newSubNeg(rhsp, static_cast<int32_t>(bound));
+                if (elwidth != 1) newlsbp = newMulConst(nodep->fileline(), elwidth, newlsbp);
             }
-            if (elwidth != 1) newlsbp = newMulConst(nodep->fileline(), elwidth, newlsbp);
             AstSel* const newp = new AstSel{nodep->fileline(), fromp, newlsbp, newwidth};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);
@@ -680,7 +831,8 @@ class WidthSelVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    WidthSelVisitor() = default;
+    explicit WidthSelVisitor(V3Width::SelOrigin* originp)
+        : m_originp{originp} {}
     ~WidthSelVisitor() override = default;
     AstNode* mainAcceptEdit(AstNode* nodep) { return iterateSubtreeReturnEdits(nodep); }
 };
@@ -688,9 +840,9 @@ public:
 //######################################################################
 // Width class functions
 
-AstNode* V3Width::widthSelNoIterEdit(AstNode* nodep) {
+AstNode* V3Width::widthSelNoIterEdit(AstNode* nodep, SelOrigin* originp) {
     UINFO(4, __FUNCTION__ << ": " << nodep);
-    WidthSelVisitor visitor;
+    WidthSelVisitor visitor{originp};
     nodep = visitor.mainAcceptEdit(nodep);
     return nodep;
 }

@@ -708,7 +708,7 @@ public:
     bool isEqZero() const VL_MT_SAFE;
     bool isNeqZero() const;
     bool isTrue() const;
-    bool isBitsZero(int msb, int lsb) const;
+    bool isBitsZero(int msb, int lsb) const VL_MT_SAFE;
     bool isBroken(int vwidth) const;
     bool isEqOne() const;
     bool isEqAllOnes(int optwidth = 0) const;
@@ -723,6 +723,7 @@ public:
         return bitIsXZ(width() - 1);
     }
     bool fitsInUInt() const VL_MT_SAFE;
+    bool fitsInInt32(bool signedValue) const VL_MT_SAFE;
     uint32_t toUInt() const VL_MT_SAFE;
     int32_t toSInt() const VL_MT_SAFE;
     uint64_t toUQuad() const VL_MT_SAFE;
@@ -782,7 +783,16 @@ public:
     V3Number& opStreamL(const V3Number& lhs, const V3Number& rhs);
     V3Number& opSel(const V3Number& lhs, const V3Number& msb, const V3Number& lsb);
     V3Number& opSel(const V3Number& lhs, uint32_t msbval, uint32_t lsbval);
-    V3Number& opSelInto(const V3Number& lhs, const V3Number& lsb, int width);
+    // A packed selection intersects storage in these respective bit coordinates.
+    struct PackedOverlap final {
+        int storageLsb = 0;
+        int selectLsb = 0;
+        int width = 0;
+    };
+    PackedOverlap packedOverlap(bool signedLsb, int selectWidth, int storageWidth) const;
+    bool toPackedIndex(bool signedLsb, int& value) const;
+    V3Number& opPackedSel(const V3Number& lhs, const V3Number& lsb, bool signedLsb,
+                          int selectWidth, int storageWidth);
     V3Number& opSelInto(const V3Number& lhs, int lsbval, int width);
     V3Number& opCvtPackString(const V3Number& lhs);
     V3Number& opCvtWildcardKey(const V3Number& lhs);

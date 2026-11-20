@@ -166,6 +166,8 @@ public:
     }
     // Connect an output assignment to its parent control block
     void addAssignment(AstVarRef* nodep) {
+        // A compiler temporary is not a user signal to report
+        if (nodep->varp()->isInternal()) return;
         LatchDetectGraphVertex* outVertexp;
         if (!nodep->varp()->user1p()) {  // Not seen this output before
             outVertexp = addOutputVertex(nodep);

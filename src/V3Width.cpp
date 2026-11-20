@@ -370,6 +370,44 @@ class WidthVisitor final : public VNVisitor {
     V3UniqueNames m_insideTempNames;  // For generating unique temporary variable names for
                                       // `inside` expressions
     V3UniqueNames m_bitstreamTempNames;  // Impure values in bit-stream casts
+    V3UniqueNames m_selExtraNames;  // Discarded parts of partially out-of-range writes
+    // A select just lowered, and the type of its constant position as written
+    const AstSel* m_originSelp = nullptr;  // Select just lowered from a written position
+    V3Width::SelOrigin m_selOrigin;  // Type of the position of m_originSelp, as written
+    struct PartialWrite final {
+        AstSel* selp;  // Destination select partly outside its storage
+        int low;  // First storage bit written
+        int count;  // Storage bits written
+        int lowExtra;  // Value bits below the storage
+    };
+    // Partial write destinations of assignments, completed once the value is converted
+    std::unordered_map<const AstNodeAssign*, PartialWrite> m_partialWrites;
+    // Destinations of forces and releases without storage bits, removed once widthed
+    std::unordered_set<const AstNode*> m_discardedLeafps;
+    // Address computations of destinations of assignments wholly outside their storage
+    std::unordered_map<const AstNodeAssign*, AstNodeStmt*> m_outsideEffects;
+    // Compiler temporaries receiving the discarded parts of destinations
+    std::unordered_set<const AstVar*> m_sinkVarps;
+    // Checks that an assignment attaches the address computations recorded for it. They are
+    // recorded only for a select on the path of its destination, see pathWriterp, so for a
+    // destination of packed type; the only early return, for a destination of interface
+    // reference type, asserts that it has none.
+    class OutsideEffectsCheck final {
+        const std::unordered_map<const AstNodeAssign*, AstNodeStmt*>& m_effects;  // Recorded
+        const AstNodeAssign* const m_assignp;  // Assignment whose effects are checked
+
+    public:
+        OutsideEffectsCheck(const std::unordered_map<const AstNodeAssign*, AstNodeStmt*>& effects,
+                            const AstNodeAssign* assignp)
+            : m_effects{effects}
+            , m_assignp{assignp} {}
+        ~OutsideEffectsCheck() {
+            UASSERT_OBJ(!m_effects.count(m_assignp), m_assignp,
+                        "Address computations of a destination not attached");
+        }
+        VL_UNCOPYABLE(OutsideEffectsCheck);
+        VL_UNMOVABLE(OutsideEffectsCheck);
+    };
     VMemberMap m_memberMap;  // Member names cached for fast lookup
     std::unordered_map<const AstModport*, std::unordered_map<string, const AstNode*>>
         m_modportItems;  // Items listed by each modport, by name
@@ -1430,8 +1468,8 @@ class WidthVisitor final : public VNVisitor {
                 nodep->v3error("Size of range is '["
                                << (-width + 2)
                                << "]', must be positive integer (IEEE 1800-2023 7.4.2)");
-            } else if (width > (1 << 28)) {
-                nodep->v3error("Width of bit range is huge; vector of over 1 billion bits: 0x"
+            } else if (width > static_cast<int>(VL_PACKED_WIDTH_MAX)) {
+                nodep->v3error("Width of bit range is huge; vector of over 2**28 bits: 0x"
                                << std::hex << width << std::dec);
             }
             // Note width() not set on range; use elementsConst()
@@ -1467,6 +1505,7 @@ class WidthVisitor final : public VNVisitor {
             UINFOTREE(9, nodep, "", "selWidth");
             userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, PRELIM}.p());
+            const int originalFromWidth = nodep->fromp()->width();
             checkCvtUS(nodep->fromp(), false);
             iterateCheckSizedSelf(nodep, "Select LHS", nodep->fromp(), SELF, BOTH);
             int width = nodep->widthConst();
@@ -1477,37 +1516,45 @@ class WidthVisitor final : public VNVisitor {
             }
             UASSERT_OBJ(nodep->dtypep(), nodep, "dtype wasn't set");  // by V3WidthSel
 
-            const bool isWriteSelect = nodep->fromp()->isLValue();
+            // A pull target is a destination too, although its reference is not written
+            const AstPull* const pullp = VN_CAST(nodep->backp(), Pull);
+            const bool isWriteSelect
+                = nodep->fromp()->isLValue() || (pullp && pullp->lhsp() == nodep);
             // Suppress SELRANGE in parameterized template modules where
             // parameter-dependent widths haven't been resolved yet.
             const bool inParameterizedTemplate
                 = m_modep && (m_modep->dead() || m_modep->parameterizedTemplate());
 
-            if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() < nodep->lsbConst()) {
-                // Likely impossible given above width check
-                nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported: left < right of bit extract: "  // LCOV_EXCL_LINE
-                                  << nodep->msbConst() << "<" << nodep->lsbConst());
-                width = (nodep->lsbConst() - nodep->msbConst() + 1);
-                nodep->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED,
-                                               nodep->fromp()->isFourstateOrNoDtype());
-                nodep->widthConst(width);
-                pushDeletep(nodep->lsbp());
-                nodep->lsbp()->replaceWith(new AstConst{nodep->lsbp()->fileline(), 0});
-            }
-            // We're extracting, so just make sure the expression is at least wide enough.
+            // A constant position is used at its exact value, so it never addresses a different
+            // element than authored (IEEE 1800-2023 11.5.1)
+            const AstConst* const indexp = VN_CAST(nodep->lsbp(), Const);
+            const bool knownIndex
+                = indexp && !indexp->num().isOpaque() && !indexp->num().isFourState();
+            int compactIndex = 0;
+            const bool wideIndex = knownIndex
+                                   && !indexp->num().toPackedIndex(
+                                       V3Width::selectPositionSigned(indexp), compactIndex);
+            const int64_t selectEnd = int64_t{compactIndex} + width;
+            const bool whollyOutside
+                = wideIndex
+                  || (knownIndex && (compactIndex >= originalFromWidth || selectEnd <= 0));
+            const bool partlyOutside = knownIndex && !whollyOutside
+                                       && (compactIndex < 0 || selectEnd > originalFromWidth);
             if (nodep->fromp()->width() < width && !inParameterizedTemplate) {
-                // If it is not a lvalue, extend it
+                // If it is not a lvalue, extend it; a constant select gets its bits beyond the
+                // storage below
                 if (!isWriteSelect) {
                     nodep->v3warn(SELRANGE, "Extracting " << width << " bits from only "
                                                           << nodep->fromp()->width()
                                                           << " bit number");
+                }
+                if (!isWriteSelect && !knownIndex) {
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
                         width, width, nodep->fromp()->dtypep()->numeric(),
                         nodep->fromp()->dtypep()->isFourstate());
                     widthCheckSized(nodep, "errorless...", nodep->fromp(), subDTypep, EXTEND_EXP,
                                     false /*noerror*/);
-                } else {
+                } else if (isWriteSelect) {
                     // Partial assignment
                     nodep->v3warn(SELRANGE, "Assigning " << width << " bits to only "
                                                          << nodep->fromp()->width()
@@ -1534,73 +1581,571 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->dtypep()->isFourstate());
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, FINAL}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, FINAL}.p());
-            if (widthBad(nodep->lsbp(), selwidthDTypep) && nodep->lsbp()->width() != 32) {
+            // A constant position whose storage offset was computed is checked at its type as
+            // written. As before, one offset from the declared range is checked only if wider
+            // than 32 bits, and the position of a packed array element is not checked.
+            const bool fromOrigin = m_originSelp == nodep;
+            const bool offsetRange
+                = nodep->declRange().ranged()
+                  && (nodep->declRange().ascending() || nodep->declRange().lo() != 0);
+            int indexWidth = nodep->lsbp()->width();
+            int indexWidthMin = nodep->lsbp()->widthMin();
+            bool indexBad = widthBad(nodep->lsbp(), selwidthDTypep);
+            if (fromOrigin) {
+                indexWidth = m_selOrigin.width;
+                indexWidthMin = m_selOrigin.widthMin;
+                indexBad = elw == 1 && (!offsetRange || indexWidth > 32) && indexWidth != selwidth
+                           && (m_selOrigin.sized || indexWidthMin > selwidth);
+            }
+            if (indexBad && indexWidth != 32) {
                 if (!nodep->fileline()->warnIsOff(V3ErrorCode::WIDTH)) {
-                    nodep->v3widthWarn(
-                        (selwidth / elw), (nodep->lsbp()->width() / elw),
-                        "Bit extraction of var["
-                            << (frommsb / elw) << ":" << (fromlsb / elw) << "] requires "
-                            << (selwidth / elw) << " bit index, not "
-                            << (nodep->lsbp()->width() / elw)
-                            << (nodep->lsbp()->width() != nodep->lsbp()->widthMin()
-                                    ? " or " + cvtToStr(nodep->lsbp()->widthMin() / elw)
-                                    : "")
-                            << " bits.");
+                    nodep->v3widthWarn((selwidth / elw), (indexWidth / elw),
+                                       "Bit extraction of var["
+                                           << (frommsb / elw) << ":" << (fromlsb / elw)
+                                           << "] requires " << (selwidth / elw)
+                                           << " bit index, not " << (indexWidth / elw)
+                                           << (indexWidth != indexWidthMin
+                                                   ? " or " + cvtToStr(indexWidthMin / elw)
+                                                   : "")
+                                           << " bits.");
                     UINFO(1, "    Related node: " << nodep);
                 }
             }
-            if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() > frommsb) {
-                // See also warning in V3Const
-                // We need to check here, because the widthCheckSized may silently
-                // add another SEL which will lose the out-of-range check
-                //
-                // We don't want to trigger an error here if we are just
-                // evaluating type sizes for a generate block condition. We
-                // should only trigger the error if the out-of-range access is
-                // actually generated.
+            // We don't want to trigger an error here if we are just evaluating type sizes for
+            // a generate block condition. We should only trigger the error if the
+            // out-of-range access is actually generated.
+            if (whollyOutside || partlyOutside) {
                 if (m_doGenerate) {
                     UINFO(5, "Selection index out of range inside generate");
                 } else if (!inParameterizedTemplate) {
-                    if (nodep->declRange().ranged()) {
-                        nodep->v3warn(SELRANGE, "Selection index out of range: "
-                                                    << nodep->msbConst() << ":"
-                                                    << nodep->lsbConst() << " outside " << frommsb
-                                                    << ":" << fromlsb);
-                    } else {
-                        nodep->v3warn(SELRANGE,
-                                      "Selection "
-                                          << nodep->msbConst() << ":" << nodep->lsbConst()
-                                          << " performed on an object without declared range");
+                    if (!nodep->declRange().ranged() && !wideIndex) {
+                        nodep->v3warn(SELRANGE, "Selection " << (selectEnd - 1) << ":"
+                                                             << compactIndex
+                                                             << " performed on an object "
+                                                                "without declared range");
+                    } else if (!isWriteSelect || originalFromWidth >= width) {
+                        // A write wider than its destination was diagnosed above
+                        V3Width::warnSelectRange(nodep, false);
                     }
                     UINFO(1, "    Related node: " << nodep);
                 }
-                // Extend unless it's a lvalue,
-                // because extending lvalue would lose write access.
-                if (!isWriteSelect) {
-                    // Extend it
-                    const int extendTo = nodep->msbConst() + 1;
-                    AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
-                        extendTo, extendTo, nodep->fromp()->dtypep()->numeric(),
-                        nodep->fromp()->dtypep()->isFourstate());
-                    widthCheckSized(nodep, "errorless...", nodep->fromp(), subDTypep, EXTEND_EXP,
-                                    false /*noerror*/);
+            }
+            // Parameter and generate evaluation keep a wholly outside selection, so constant
+            // evaluation diagnoses only those it evaluates.
+            if (whollyOutside && !m_paramsOnly && (wideIndex || nodep->declRange().ranged())) {
+                if (isWriteSelect) {
+                    replaceWriteOutside(nodep, originalFromWidth);
+                } else {
+                    replaceSelectOutside(nodep);
                 }
+                return;
+            }
+            if (partlyOutside) {
+                if (isWriteSelect) {
+                    replacePartialWrite(nodep, compactIndex, originalFromWidth);
+                } else {
+                    padPartialRead(nodep, compactIndex, originalFromWidth);
+                }
+                return;
             }
             // iterate FINAL is two blocks above
             //
             // If we have a width problem with GENERATE etc, this will reduce
             // it down and mask it, so we have no chance of finding a real
             // error in the future. So don't do this for them.
-            if (!m_doGenerate) {
+            // A constant position outside the storage keeps its exact value.
+            if (!m_doGenerate && !whollyOutside) {
                 // lsbp() must be self-determined, however for performance
                 // we want the select to be truncated to fit within the
                 // maximum select range, e.g. turn Xs outside of the select
                 // into something fast which pulls from within the array.
-                widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep, EXTEND_EXP,
-                                false /*NOWARN*/);
+                if (knownIndex) {
+                    // As an unsigned bit address, so a later visit reads the same position
+                    AstNodeExpr* const oldp = nodep->lsbp();
+                    oldp->replaceWith(new AstConst{oldp->fileline(), AstConst::WidthedValue{},
+                                                   selwidth, static_cast<uint32_t>(compactIndex)});
+                    VL_DO_DANGLING(pushDeletep(oldp), oldp);
+                } else {
+                    widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                }
+            } else if (knownIndex && !wideIndex && compactIndex < 0
+                       && nodep->lsbp()->width() < 32) {
+                // A kept narrow negative position becomes a 32-bit integer, so by the Verilator
+                // convention for 32-bit positions it is not read as an unsigned storage offset
+                AstNodeExpr* const oldp = nodep->lsbp();
+                oldp->replaceWith(
+                    new AstConst{oldp->fileline(), AstConst::Signed32{}, compactIndex});
+                VL_DO_DANGLING(pushDeletep(oldp), oldp);
             }
             // UINFOTREE(9, nodep, "", "seldone");
         }
+    }
+
+    // A constant select of the storage bits [low, low + count), from an operand already widthed
+    static AstSel* newStorageSel(AstSel* likep, AstNodeExpr* fromp, int low, int count) {
+        FileLine* const flp = likep->fileline();
+        const int storageWidth = std::max(fromp->width(), 1);
+        const int bits = V3Number::log2b(static_cast<uint32_t>(storageWidth - 1)) + 1;
+        AstConst* const lsbp
+            = new AstConst{flp, AstConst::WidthedValue{}, bits, static_cast<uint32_t>(low)};
+        AstSel* const selp = new AstSel{flp, fromp, lsbp, count};
+        if (likep->declRange().ranged()) {
+            selp->declRange(likep->declRange());
+            selp->declElWidth(likep->declElWidth());
+        }
+        selp->didWidth(true);
+        return selp;
+    }
+    // Bits of unknown value (zero for a 2-state value), as a tree whose size is independent of
+    // their number; constant folding may still expand them, within the select width limit
+    static AstNodeExpr* newUnknownBitsp(AstNode* likep, int count, bool fourstate) {
+        FileLine* const flp = likep->fileline();
+        V3Number value{likep, 1};
+        if (fourstate) value.setAllBitsX();
+        AstConst* const bitp = new AstConst{flp, value};
+        if (!fourstate) bitp->dtypeSetBit();
+        if (count == 1) return bitp;
+        // Not an authored replication, so not subject to the replication limit warning
+        FileLine* const repFlp = new FileLine{flp};
+        repFlp->warnOff(V3ErrorCode::WIDTHCONCAT, true);
+        AstReplicate* const repp = new AstReplicate{repFlp, bitp, static_cast<uint32_t>(count)};
+        repp->didWidth(true);
+        return repp;
+    }
+    // Replace a wholly out-of-range constant read by its value, keeping receiver side effects
+    void replaceSelectOutside(AstSel* nodep) {
+        AstNodeExpr* const valuep
+            = newUnknownBitsp(nodep, nodep->widthConst(), nodep->dtypep()->isFourstate());
+        valuep->dtypeFrom(nodep);
+        AstNodeExpr* const receiverp = nodep->fromp();
+        if (receiverp->isRepeatable() && !receiverp->exists([](AstNode* const childp) {
+                return !childp->isPure() || childp->isTimingControl();
+            })) {
+            nodep->replaceWith(valuep);
+        } else {
+            FileLine* const stmtFlp = new FileLine{nodep->fileline()};
+            stmtFlp->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+            AstStmtExpr* const stmtp = new AstStmtExpr{stmtFlp, receiverp->unlinkFrBack()};
+            nodep->replaceWithKeepDType(new AstExprStmt{nodep->fileline(), stmtp, valuep});
+        }
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // Whether an expression has side effects
+    static bool hasEffects(AstNode* nodep) {
+        return nodep->exists(
+            [](AstNode* const childp) { return !childp->isPure() || childp->isTimingControl(); });
+    }
+    // The receiver and position of a part of a destination, or false if not such a part
+    static bool destinationPart(AstNode* destp, AstNodeExpr*& fromp, AstNodeExpr*& indexp) {
+        fromp = nullptr;
+        indexp = nullptr;
+        if (AstSel* const selp = VN_CAST(destp, Sel)) {
+            fromp = selp->fromp();
+            indexp = selp->lsbp();
+        } else if (AstNodeSel* const selp = VN_CAST(destp, NodeSel)) {
+            fromp = selp->fromp();
+            indexp = selp->bitp();
+        } else if (AstMemberRef* const refp = VN_CAST(destp, MemberRef)) {
+            fromp = refp->fromp();
+        } else if (AstStructSel* const selp = VN_CAST(destp, StructSel)) {
+            fromp = selp->fromp();
+        } else if (AstCMethodHard* const methodp = VN_CAST(destp, CMethodHard)) {
+            if (methodp->method().isDynElementAccess()
+                || methodp->method() == VCMethod::ASSOC_AT_WRITE) {
+                fromp = methodp->fromp();
+                indexp = methodp->pinsp();
+            }
+        }
+        return fromp;
+    }
+    // Whether the address computations of a destination have side effects, apart from its
+    // writable lookup itself, which is dropped; those in positions of its parts are separable
+    static void addressEffects(AstNode* destp, bool& positionEffects, bool& otherEffects) {
+        AstNodeExpr* fromp;
+        AstNodeExpr* indexp;
+        if (!destinationPart(destp, fromp, indexp)) {
+            otherEffects = otherEffects || hasEffects(destp);
+            return;
+        }
+        positionEffects = positionEffects || (indexp && hasEffects(indexp));
+        addressEffects(fromp, positionEffects, otherEffects);
+    }
+    // Unlink the address computations of a destination, without its writable lookup, which
+    // could append to a queue or insert into an associative array
+    static AstNodeStmt* unlinkAddressEffects(AstNode* destp) {
+        AstNodeExpr* fromp;
+        AstNodeExpr* indexp;
+        if (!destinationPart(destp, fromp, indexp)) return nullptr;
+        AstNodeStmt* const earlierp = unlinkAddressEffects(fromp);
+        if (!indexp || !hasEffects(indexp)) return earlierp;
+        FileLine* const flp = new FileLine{indexp->fileline()};
+        flp->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+        return AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+            earlierp, new AstStmtExpr{flp, indexp->unlinkFrBack()});
+    }
+    // The parent of a node, also of one later in a list, whose back link is the previous node
+    // of the list rather than the parent
+    static const AstNode* parentOf(const AstNode* nodep) {
+        while (nodep->backp() && nodep->backp()->nextp() == nodep) nodep = nodep->backp();
+        return nodep->backp();
+    }
+    // Whether a node is the part of its parent written when the parent is written, for the
+    // parents a packed select can have in a destination: a concatenation, braces around one
+    // (parsed as a replication of one), a streaming concatenation of it (IEEE 1800-2023
+    // 11.4.14.3), a select of it, or a member of it
+    static bool writtenPart(const AstNode* parentp, const AstNode* nodep) {
+        if (VN_IS(parentp, Concat)) return true;
+        if (const AstReplicate* const repp = VN_CAST(parentp, Replicate)) {
+            return repp->srcp() == nodep;
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(parentp, NodeStream)) {
+            return streamp->lhsp() == nodep;
+        }
+        if (const AstSel* const selp = VN_CAST(parentp, Sel)) return selp->fromp() == nodep;
+        if (const AstNodePreSel* const selp = VN_CAST(parentp, NodePreSel)) {
+            return selp->fromp() == nodep;
+        }
+        const AstMemberRef* const selp = VN_CAST(parentp, MemberRef);
+        return selp && selp->fromp() == nodep;
+    }
+    // The writer of the iterated lvalue if a select is a part of its destination, or nullptr
+    // if the select is within a position, argument or other operand used to compute it, such
+    // as an output argument of a function called in an index, which the writer does not write
+    const AstNode* pathWriterp(const AstNode* nodep) const {
+        if (!m_writerp) return nullptr;
+        while (true) {
+            const AstNode* const parentp = parentOf(nodep);
+            if (parentp == m_writerp) return m_writerp;
+            if (!parentp || !writtenPart(parentp, nodep)) return nullptr;
+            nodep = parentp;
+        }
+    }
+    // A wholly out-of-range constant write changes nothing (IEEE 1800-2023 11.5.1). It is
+    // removed from a force or release, see finishDiscardedLeaves. In an assignment its value
+    // goes to a temporary, keeping the address computations of its destination, see
+    // finishOutsideWrite. Other writes use the first address beyond the storage, which
+    // V3Unknown discards keeping the side effects of the statement.
+    void replaceWriteOutside(AstSel* nodep, int storageWidth) {
+        const AstNode* const writerp = pathWriterp(nodep);
+        const AstNodeAssign* const assignp = VN_CAST(writerp, NodeAssign);
+        if (VN_IS(writerp, AssignForce) || VN_IS(writerp, Release)) {
+            m_discardedLeafps.emplace(nodep);
+        } else if (assignp
+                   && (VN_IS(assignp, Assign) || VN_IS(assignp, AssignDly)
+                       || VN_IS(assignp, AssignW))) {
+            bool positionEffects = false;
+            bool otherEffects = false;
+            addressEffects(nodep->fromp(), positionEffects, otherEffects);
+            if (otherEffects || (positionEffects && VN_IS(assignp, AssignW))) {
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Side effects in this destination "
+                                             "of a write outside its storage");
+            } else {
+                if (positionEffects) {
+                    AstNodeStmt* const effectsp = unlinkAddressEffects(nodep->fromp());
+                    UASSERT_OBJ(effectsp, nodep, "Position side effects without a statement");
+                    AstNodeStmt*& listp = m_outsideEffects[assignp];
+                    listp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(listp, effectsp);
+                }
+                nodep->replaceWith(newSinkRefp(nodep, nodep->dtypep(), writerp));
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                return;
+            }
+        } else if (!writerp && VN_IS(m_writerp, Assign)
+                   && VN_AS(m_writerp, Assign)->timingControlp() && hasEffects(nodep->fromp())) {
+            // Written within a position of a destination, such as by an output argument of a
+            // function called in its index, the address would not be kept after the delay
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: Side effects in the address of a write "
+                                         "outside its storage, within a position of a "
+                                         "destination with an intra-assignment delay");
+        }
+        AstNodeExpr* const oldp = nodep->lsbp();
+        oldp->replaceWith(new AstConst{oldp->fileline(), static_cast<uint32_t>(storageWidth)});
+        VL_DO_DANGLING(pushDeletep(oldp), oldp);
+        // Diagnosed above, not again at its replacement address
+        FileLine* const flp = new FileLine{nodep->fileline()};
+        flp->warnOff(V3ErrorCode::SELRANGE, true);
+        nodep->fileline(flp);
+        nodep->didWidth(true);
+    }
+    // A constant read partly outside its storage reads unknown, or for a 2-state value zero,
+    // bits beyond the storage (IEEE 1800-2023 11.5.1). It remains a selection, of its bits
+    // within the storage extended by the bits beyond it, so no node is wider than the result.
+    void padPartialRead(AstSel* nodep, int start, int storageWidth) {
+        FileLine* const flp = nodep->fileline();
+        const int width = nodep->widthConst();
+        const int low = std::max(start, 0);
+        const int count
+            = static_cast<int>(std::min<int64_t>(int64_t{start} + width, storageWidth)) - low;
+        const int lowExtra = low - start;
+        const int highExtra = width - lowExtra - count;
+        const bool fourstate = nodep->dtypep()->isFourstate();
+        AstNodeExpr* fromp = newStorageSel(nodep, nodep->fromp()->unlinkFrBack(), low, count);
+        if (highExtra) {
+            fromp = new AstConcat{flp, newUnknownBitsp(nodep, highExtra, fourstate), fromp};
+            fromp->didWidth(true);
+        }
+        if (lowExtra) {
+            fromp = new AstConcat{flp, fromp, newUnknownBitsp(nodep, lowExtra, fourstate)};
+            fromp->didWidth(true);
+        }
+        nodep->fromp(fromp);
+        const int bits = V3Number::log2b(static_cast<uint32_t>(width - 1)) + 1;
+        AstNodeExpr* const oldp = nodep->lsbp();
+        oldp->replaceWith(new AstConst{flp, AstConst::WidthedValue{}, bits, 0});
+        VL_DO_DANGLING(pushDeletep(oldp), oldp);
+        // The extended operand has no declared range
+        nodep->declRange(VNumRange{});
+        nodep->declElWidth(1);
+    }
+    // A constant write partly outside its storage changes only its bits within the storage, from
+    // the corresponding bits of its value (IEEE 1800-2023 11.5.1)
+    void replacePartialWrite(AstSel* nodep, int start, int storageWidth) {
+        const AstNode* const writerp = pathWriterp(nodep);
+        FileLine* const flp = nodep->fileline();
+        const int width = nodep->widthConst();
+        const int low = std::max(start, 0);
+        const int count
+            = static_cast<int>(std::min<int64_t>(int64_t{start} + width, storageWidth)) - low;
+        const int lowExtra = low - start;
+        const int highExtra = width - lowExtra - count;
+        const AstNodeAssign* const assignp = VN_CAST(writerp, NodeAssign);
+        if (assignp && assignp->lhsp() == nodep) {
+            // The value is converted for the whole destination by the assignment, then its
+            // bits beyond the storage are dropped, see finishPartialWrite
+            m_partialWrites.emplace(assignp, PartialWrite{nodep, low, count, lowExtra});
+            nodep->didWidth(true);
+            return;
+        }
+        const AstPin* const pinp = VN_CAST(writerp, Pin);
+        if (VN_IS(writerp, Alias) || VN_IS(writerp, ClockingItem)
+            || (pinp && pinp->modVarp()->isInout())) {
+            // An alias of a select is diagnosed as such. Otherwise, the select is kept at its
+            // width, so the connection is not diagnosed again.
+            if (!VN_IS(writerp, Alias)) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: Partially out-of-range constant select in this "
+                              "context");
+            }
+            nodep->didWidth(true);
+            return;
+        }
+        const AstPull* const pullp = VN_CAST(nodep->backp(), Pull);
+        AstSel* const innerp = newStorageSel(nodep, nodep->fromp()->unlinkFrBack(), low, count);
+        AstNodeExpr* newp = innerp;
+        if (VN_IS(writerp, Release) || (pullp && pullp->lhsp() == nodep)) {
+            // Releases, or pulls, only the bits within the storage
+        } else if (VN_IS(writerp, AssignForce)) {
+            // A part of a forced concatenation: its parts beyond the storage are removed with
+            // their values, see finishDiscardedLeaves
+            const auto extrap = [&](int bits) -> AstNodeExpr* {
+                AstNodeExpr* const placep = newUnknownBitsp(nodep, bits, false);
+                m_discardedLeafps.emplace(placep);
+                return placep;
+            };
+            if (lowExtra) newp = new AstConcat{flp, newp, extrap(lowExtra)};
+            if (highExtra) newp = new AstConcat{flp, extrap(highExtra), newp};
+            if (newp != innerp) newp->didWidth(true);
+        } else {
+            // A concatenation of an output argument or port, or of an assignment: a
+            // temporary receives each part beyond the storage
+            const bool fourstate = nodep->dtypep()->isFourstate();
+            const auto extrap = [&](int bits) -> AstNodeExpr* {
+                return newSinkRefp(
+                    nodep, nodep->findBitOrLogicDType(bits, bits, VSigning::UNSIGNED, fourstate),
+                    writerp);
+            };
+            if (lowExtra) newp = new AstConcat{flp, newp, extrap(lowExtra)};
+            if (highExtra) newp = new AstConcat{flp, extrap(highExtra), newp};
+            if (newp != innerp) newp->didWidth(true);
+        }
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // A reference writing a compiler temporary that receives a discarded value of a writer
+    AstVarRef* newSinkRefp(AstNode* nodep, AstNodeDType* dtypep, const AstNode* writerp) {
+        FileLine* const flp = nodep->fileline();
+        AstVar* varp = nullptr;
+        if (m_ftaskp && VN_IS(writerp, AssignDly)) {
+            // Static, as a nonblocking assignment may not write an automatic variable
+            // (IEEE 1800-2023 6.21, 10.4.2). Declared in the task, which may belong to a package
+            // or class rather than the module being widthed.
+            varp = new AstVar{flp, VVarType::XTEMP, m_selExtraNames.get(nodep), dtypep};
+            varp->funcLocal(true);
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
+            m_ftaskp->prependDeclsp(varp);
+            iterate(varp);
+        } else {
+            varp = makeTempVarp(m_selExtraNames.get(nodep), VN_AS(nodep, NodeExpr), dtypep);
+        }
+        // Written and never read; a compiler temporary, not a user signal
+        FileLine* const varFlp = new FileLine{flp};
+        varFlp->warnOff(V3ErrorCode::UNUSEDSIGNAL, true);
+        varFlp->warnOff(V3ErrorCode::UNDRIVEN, true);
+        varFlp->warnOff(V3ErrorCode::MULTIDRIVEN, true);
+        varp->fileline(varFlp);
+        varp->trace(false);
+        varp->isInternal(true);
+        m_sinkVarps.emplace(varp);
+        return new AstVarRef{flp, varp, VAccess::WRITE};
+    }
+    // Whether every part a destination writes is a compiler temporary for a discarded part
+    bool onlySinks(const AstNode* nodep) const {
+        if (const AstConcat* const catp = VN_CAST(nodep, Concat)) {
+            return onlySinks(catp->lhsp()) && onlySinks(catp->rhsp());
+        }
+        if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            return onlySinks(repp->srcp());
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            return onlySinks(streamp->lhsp());
+        }
+        // A select or member writes within what it selects from
+        if (const AstSel* const selp = VN_CAST(nodep, Sel)) return onlySinks(selp->fromp());
+        if (const AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) {
+            return onlySinks(refp->fromp());
+        }
+        const AstVarRef* const refp = VN_CAST(nodep, VarRef);
+        return refp && m_sinkVarps.count(refp->varp());
+    }
+    // An assignment wholly outside its storage still evaluates its value and the address
+    // computations of its destination, when the destination would be evaluated: after an
+    // intra-assignment delay of a blocking assignment (IEEE 1800-2023 9.4.5), else before the
+    // assignment
+    void finishOutsideWrite(AstNodeAssign* nodep) {
+        const auto it = m_outsideEffects.find(nodep);
+        if (it == m_outsideEffects.end()) return;
+        AstNodeStmt* const effectsp = it->second;
+        m_outsideEffects.erase(it);
+        UASSERT_OBJ(effectsp, nodep, "Empty address side effects recorded");
+        if (VN_IS(nodep, Assign) && nodep->timingControlp()) {
+            // Placed after the assignment, so only where the assignment writes nothing else
+            if (!onlySinks(nodep->lhsp())) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: Side effects in the address of a part outside its "
+                              "storage of a destination with other parts, with an "
+                              "intra-assignment delay");
+            }
+            nodep->addNextHere(effectsp);
+        } else {
+            nodep->addHereThisAsNext(effectsp);
+        }
+    }
+    // Complete a partial write recorded for an assignment, once its value is converted for the
+    // whole destination
+    void finishPartialWrite(AstNodeAssign* nodep) {
+        const auto it = m_partialWrites.find(nodep);
+        if (it == m_partialWrites.end()) return;
+        const PartialWrite write = it->second;
+        m_partialWrites.erase(it);
+        FileLine* const flp = write.selp->fileline();
+        AstSel* const innerp = newStorageSel(write.selp, write.selp->fromp()->unlinkFrBack(),
+                                             write.low, write.count);
+        write.selp->replaceWith(innerp);
+        VL_DO_DANGLING(pushDeletep(write.selp), write.selp);
+        AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+        AstSel* const lanesp = new AstSel{flp, rhsp, write.lowExtra, write.count};
+        lanesp->didWidth(true);
+        nodep->rhsp(lanesp);
+        nodep->dtypeFrom(innerp);
+    }
+    // A part of a forced or released destination, with its lowest value bit
+    struct DestLeaf final {
+        AstNodeExpr* nodep;
+        int lsb;
+        bool discarded;  // It, or a select within it, has no storage bits
+    };
+    // Collect the parts of a destination, most significant first
+    void collectDestLeaves(AstNodeExpr* partp, int lsb, std::vector<DestLeaf>& leaves) {
+        if (AstConcat* const catp = VN_CAST(partp, Concat)) {
+            collectDestLeaves(catp->lhsp(), lsb + catp->rhsp()->width(), leaves);
+            collectDestLeaves(catp->rhsp(), lsb, leaves);
+            return;
+        }
+        bool discarded = false;
+        partp->foreach([&](AstNode* const childp) {
+            if (m_discardedLeafps.erase(childp)) discarded = true;
+        });
+        leaves.push_back(DestLeaf{partp, lsb, discarded});
+    }
+    // Remove the destinations without storage bits from a force or release, with the bits of
+    // the value for them. Returns whether the whole statement, of no storage bits, was removed.
+    bool finishDiscardedLeaves(AstNode* nodep, AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+        if (m_discardedLeafps.empty()) return false;
+        std::vector<DestLeaf> leaves;
+        collectDestLeaves(lhsp, 0, leaves);
+        // Every select recorded was within this destination, unless error recovery has since
+        // replaced the part of the destination holding it
+        m_discardedLeafps.clear();
+        if (std::none_of(leaves.begin(), leaves.end(),
+                         [](const DestLeaf& leaf) { return leaf.discarded; })) {
+            return false;
+        }
+        FileLine* const flp = lhsp->fileline();
+        if (std::all_of(leaves.begin(), leaves.end(),
+                        [](const DestLeaf& leaf) { return leaf.discarded; })) {
+            AstNode* newp = nullptr;
+            if (rhsp && !rhsp->isPure()) {
+                FileLine* const stmtFlp = new FileLine{rhsp->fileline()};
+                stmtFlp->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+                newp = new AstStmtExpr{stmtFlp, rhsp->unlinkFrBack()};
+            }
+            if (newp) {
+                nodep->replaceWith(newp);
+            } else {
+                nodep->unlinkFrBack();
+            }
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return true;
+        }
+        // The runs of remaining parts, each as its lowest value bit and width
+        std::vector<std::pair<int, int>> runs;
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            const DestLeaf& leaf = leaves[i];
+            if (leaf.discarded) continue;
+            const int width = leaf.nodep->width();
+            if (i > 0 && !leaves[i - 1].discarded) {
+                runs.back() = {leaf.lsb, runs.back().second + width};
+            } else {
+                runs.emplace_back(leaf.lsb, width);
+            }
+        }
+        if (rhsp && runs.size() > 1 && !rhsp->isPure()) {
+            rhsp->v3warn(E_UNSUPPORTED, "Unsupported: Impure value forced on separate parts of "
+                                        "a concatenation");
+            return false;
+        }
+        // Concatenate the remaining parts, and for a force the value bits of each run of them
+        AstNodeExpr* newLhsp = nullptr;
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            const DestLeaf& leaf = leaves[i];
+            if (leaf.discarded) continue;
+            AstNodeExpr* const partp = leaf.nodep->unlinkFrBack();
+            newLhsp = newLhsp ? new AstConcat{flp, newLhsp, partp} : partp;
+            if (newLhsp != partp) newLhsp->didWidth(true);
+        }
+        AstNodeExpr* newRhsp = nullptr;
+        if (rhsp) {
+            for (size_t i = 0; i < runs.size(); ++i) {
+                const std::pair<int, int>& run = runs[i];
+                // The value as it is for one run, else a copy of the pure value for each
+                AstNodeExpr* const valuep
+                    = runs.size() == 1 ? rhsp->unlinkFrBack() : rhsp->cloneTreePure(false);
+                AstSel* const selp = new AstSel{flp, valuep, run.first, run.second};
+                selp->didWidth(true);
+                newRhsp = newRhsp ? static_cast<AstNodeExpr*>(new AstConcat{flp, newRhsp, selp})
+                                  : selp;
+                if (newRhsp != selp) newRhsp->didWidth(true);
+            }
+            if (runs.size() > 1) VL_DO_DANGLING(pushDeletep(rhsp->unlinkFrBack()), rhsp);
+        }
+        lhsp->replaceWith(newLhsp);
+        VL_DO_DANGLING(pushDeletep(lhsp), lhsp);
+        if (AstNodeAssign* const assignp = VN_CAST(nodep, NodeAssign)) {
+            assignp->rhsp(newRhsp);
+            assignp->dtypeFrom(newLhsp);
+        }
+        return false;
     }
 
     void visit(AstArraySel* nodep) override {
@@ -1892,28 +2437,87 @@ class WidthVisitor final : public VNVisitor {
         }
     }
 
+    // A constant index expression outside the declared range selects by its exact value
+    // (IEEE 1800-2023 11.5.1), so fold it before lowering, whose arithmetic and truncation are
+    // for runtime indices. A valid one is lowered as written. Where a constant is required, a
+    // constant function call is evaluated too.
+    // Lower a select, then width it, checking a constant position at its written type
+    void widthLowerSelect(AstNodePreSel* nodep, AstNodeExpr* fromp) {
+        V3Width::SelOrigin origin;
+        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep, &origin);
+        UASSERT_OBJ(selp != nodep, selp, "Select should disappear after widthSel");
+        if (AstCMethodHard* const methodp = VN_CAST(selp, CMethodHard)) {
+            if (fromp && methodp != fromp) {
+                // visit(AstCMethodHard) does not revisit the newly lowered index.
+                iterateCheckSizedSelf(methodp, "index", methodp->pinsp(), SELF, FINAL,
+                                      /* deferUntyped */ true);
+            }
+        }
+        VL_RESTORER(m_originSelp);
+        VL_RESTORER(m_selOrigin);
+        m_originSelp = origin.valid ? VN_CAST(selp, Sel) : nullptr;
+        m_selOrigin = origin;
+        userIterate(selp, m_vup);
+    }
+    void constifySelectIndex(AstNodePreSel* nodep) {
+        if (VN_IS(nodep->rhsp(), Const)) return;
+        const AstNodeDType* const dtypep = nodep->fromp()->dtypep()->skipRefp();
+        if (!dtypep->isIntegralOrPacked()) return;
+        const bool params = m_paramsOnly;
+        if (nodep->rhsp()->exists([params](AstNode* const childp) {
+                if (const AstNodeVarRef* const refp = VN_CAST(childp, NodeVarRef)) {
+                    return !refp->varp()->isParam();
+                }
+                if (VN_IS(childp, FuncRef)) return !params;
+                return VN_IS(childp, NodeFTaskRef) || !childp->isPure();
+            })) {
+            return;
+        }
+        int width = 1;
+        if (!VN_IS(nodep, SelBit)) {
+            // The count is a constant expression; fold it first
+            if (!VN_IS(nodep->thsp(), Const)) V3Const::constifyParamsEdit(nodep->thsp());
+            const AstConst* const widthp = VN_CAST(nodep->thsp(), Const);
+            if (!widthp || !widthp->num().fitsInInt32(widthp->isSigned())) return;
+            width = widthp->toSInt();
+            if (width < 1) return;
+        }
+        VNumRange range;
+        if (const AstNodeArrayDType* const adtypep = VN_CAST(dtypep, NodeArrayDType)) {
+            range = adtypep->declRange();
+        } else if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
+            range = bdtypep->declRange();
+        }
+        if (!range.ranged()) range = VNumRange{dtypep->width() - 1, 0};
+        userIterateAndNext(nodep->rhsp(), WidthVP{SELF, FINAL}.p());
+        AstNodeExpr* const clonep = nodep->rhsp()->cloneTree(false);
+        AstNodeExpr* const foldedp
+            = params ? V3Const::constifyWidthedParamsEdit(clonep) : V3Const::constifyEdit(clonep);
+        const AstConst* const constp = VN_CAST(foldedp, Const);
+        bool valid = !constp;
+        int position = 0;
+        if (constp && !constp->num().isFourState()
+            && constp->num().toPackedIndex(V3Width::selectPositionSigned(constp), position)) {
+            const int64_t low = VN_IS(nodep, SelMinus) ? int64_t{position} - width + 1 : position;
+            valid = low >= range.lo() && low + width - 1 <= range.hi();
+        }
+        if (valid) {
+            VL_DO_DANGLING(foldedp->deleteTree(), foldedp);
+        } else {
+            AstNodeExpr* const oldp = nodep->rhsp();
+            oldp->replaceWith(foldedp);
+            VL_DO_DANGLING(pushDeletep(oldp), oldp);
+        }
+    }
     void visit(AstSelBit* nodep) override {
         if (replaceSplitIfaceArraySel(nodep)) return;
         // Just a quick check as after V3Param these nodes instead are AstSel's
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->thsp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
+        constifySelectIndex(nodep);
         // Error recovery returns this existing receiver rather than a new selection.
-        AstNodeExpr* const fromp = nodep->fromp();
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
-        if (selp != nodep) {
-            VL_DANGLING(nodep);
-            if (AstCMethodHard* const methodp = VN_CAST(selp, CMethodHard)) {
-                if (methodp != fromp) {
-                    // visit(AstCMethodHard) does not revisit the newly lowered index.
-                    iterateCheckSizedSelf(methodp, "index", methodp->pinsp(), SELF, FINAL,
-                                          /* deferUntyped */ true);
-                }
-            }
-            userIterate(selp, m_vup);
-            return;
-        }
-        nodep->v3fatalSrc("AstSelBit should disappear after widthSel");
+        widthLowerSelect(nodep, nodep->fromp());
     }
     void visit(AstSelExtract* nodep) override {
         if (replaceSplitIfaceArraySel(nodep)) return;
@@ -1921,39 +2525,23 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->leftp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->rightp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
-        if (selp != nodep) {
-            nodep = nullptr;
-            userIterate(selp, m_vup);
-            return;
-        }
-        nodep->v3fatalSrc("AstSelExtract should disappear after widthSel");
+        widthLowerSelect(nodep, nullptr);
     }
     void visit(AstSelPlus* nodep) override {
         if (replaceSplitIfaceArraySel(nodep)) return;
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->widthp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
-        if (selp != nodep) {
-            nodep = nullptr;
-            userIterate(selp, m_vup);
-            return;
-        }
-        nodep->v3fatalSrc("AstSelPlus should disappear after widthSel");
+        constifySelectIndex(nodep);
+        widthLowerSelect(nodep, nullptr);
     }
     void visit(AstSelMinus* nodep) override {
         if (replaceSplitIfaceArraySel(nodep)) return;
         userIterateAndNext(nodep->fromp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->bitp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
         userIterateAndNext(nodep->widthp(), WidthVP{CONTEXT_DET, PRELIM}.p());  // FINAL in AstSel
-        AstNode* const selp = V3Width::widthSelNoIterEdit(nodep);
-        if (selp != nodep) {
-            nodep = nullptr;
-            userIterate(selp, m_vup);
-            return;
-        }
-        nodep->v3fatalSrc("AstSelMinus should disappear after widthSel");
+        constifySelectIndex(nodep);
+        widthLowerSelect(nodep, nullptr);
     }
 
     void visit(AstExtend* nodep) override {
@@ -8496,6 +9084,9 @@ class WidthVisitor final : public VNVisitor {
         //       handled in each visitor.
         //    Then LHS sign-extends only if *RHS* is signed
         assertAtStatement(nodep);
+        // Destinations without storage bits are recorded for this statement only
+        VL_RESTORER_CLEAR(m_discardedLeafps);
+        const OutsideEffectsCheck effectsCheck{m_outsideEffects, nodep};
         {
             // UINFOTREE(1, nodep, "", "assin:");
             {
@@ -8511,6 +9102,8 @@ class WidthVisitor final : public VNVisitor {
                 if (!irefp->isVirtual()) {
                     nodep->v3error(
                         "Illegal assignment to an interface instance (IEEE 1800-2023 10.4)");
+                    UASSERT_OBJ(!m_outsideEffects.count(nodep), nodep,
+                                "Address computations for a destination not of packed type");
                     VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
                     return;
                 }
@@ -8559,6 +9152,12 @@ class WidthVisitor final : public VNVisitor {
 
             iterateCheckAssign(nodep, "Assign RHS", nodep->rhsp(), FINAL, lhsDTypep);
             // UINFOTREE(1, nodep, "", "AssignOut");
+            finishPartialWrite(nodep);
+            finishOutsideWrite(nodep);
+            if (VN_IS(nodep, AssignForce)
+                && finishDiscardedLeaves(nodep, nodep->lhsp(), nodep->rhsp())) {
+                return;
+            }
         }
         if (VN_IS(m_procedurep, InitialStatic)) {
             // An initializer of an input port is its default value, which IEEE 1800-2023
@@ -8680,11 +9279,13 @@ class WidthVisitor final : public VNVisitor {
     }
 
     void visit(AstRelease* nodep) override {
+        VL_RESTORER_CLEAR(m_discardedLeafps);
         {
             VL_RESTORER(m_writerp);
             m_writerp = nodep;
             userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
         }
+        if (finishDiscardedLeaves(nodep, nodep->lhsp(), nullptr)) return;
         UASSERT_OBJ(nodep->lhsp()->dtypep(), nodep, "How can LValue be untyped?");
         UASSERT_OBJ(nodep->lhsp()->dtypep()->widthSized(), nodep, "How can LValue be unsized?");
         checkForceReleaseLhs(nodep, nodep->lhsp());
@@ -13954,9 +14555,12 @@ class WidthVisitor final : public VNVisitor {
         // The selected index ranges are appended from the net outwards
         AstVar* netp = nullptr;
         if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
-            const AstConst* const lsbp = foldedConstp(selp->lsbp());
-            netp = lsbp ? selectedNetp(selp->fromp(), ranges) : nullptr;
-            if (netp) ranges.emplace_back(lsbp->toSInt(), lsbp->toSInt() + selp->width() - 1);
+            // A position not representable as an int selects no bits of the net
+            int lsb = 0;
+            netp = foldedConstp(selp->lsbp()) && selp->constLsb(lsb)
+                       ? selectedNetp(selp->fromp(), ranges)
+                       : nullptr;
+            if (netp) ranges.emplace_back(lsb, lsb + selp->width() - 1);
             return netp;
         }
         if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
@@ -14173,6 +14777,7 @@ public:
         : m_enumTempNames{"__Venum"}
         , m_insideTempNames{"__VInside"}
         , m_bitstreamTempNames{"__Vbitstream"}
+        , m_selExtraNames{"__VselExtra"}
         , m_paramsOnly{paramsOnly}
         , m_doGenerate{doGenerate} {}
     AstNode* mainAcceptEdit(AstNode* nodep) {
@@ -14590,6 +15195,71 @@ void V3Width::width(AstNetlist* nodep) {
 }
 //! Single node parameter propagation
 //! Smaller step... Only do a single node for parameter propagation
+void V3Width::warnSelectRange(AstSel* nodep, bool afterWidth) {
+    // Report in the declared coordinates the bits a constant select covers, from its storage
+    // offset, which may be wider than an int
+    const AstConst* const offsetp = VN_AS(nodep->lsbp(), Const);
+    const VNumRange range = nodep->declRange().ranged()
+                                ? nodep->declRange()
+                                : VNumRange{nodep->fromp()->width() - 1, 0};
+    const int elw = std::max(1, nodep->declElWidth());
+    const int bits = std::max(offsetp->width(), 32) + 2;
+    V3Number offset{nodep, bits};
+    // A select already widthed has its own reading of a constant position
+    if (afterWidth ? AstSel::positionSigned(offsetp->num()) : selectPositionSigned(offsetp)) {
+        offset.opExtendS(offsetp->num(), offsetp->width());
+    } else {
+        offset.opAssign(offsetp->num());
+    }
+    offset.isSigned(true);
+    V3Number element{nodep, bits};
+    element.opDivS(offset, V3Number{nodep, bits, static_cast<uint32_t>(elw)});
+    element.isSigned(true);
+    V3Number edge64{nodep, 64};
+    edge64.setQuad(static_cast<uint64_t>(int64_t{range.ascending() ? range.hi() : range.lo()}));
+    V3Number edge{nodep, bits};
+    edge.opExtendS(edge64, 64);
+    // The lowest storage element is the right index of the declaration
+    V3Number right{nodep, bits};
+    if (range.ascending()) {
+        right.opSub(edge, element);
+    } else {
+        right.opAdd(edge, element);
+    }
+    right.isSigned(true);
+    const V3Number span{nodep, bits, static_cast<uint32_t>(nodep->widthConst() / elw - 1)};
+    V3Number left{nodep, bits};
+    if (range.ascending()) {
+        left.opSub(right, span);
+    } else {
+        left.opAdd(right, span);
+    }
+    left.isSigned(true);
+    const auto text = [nodep](const V3Number& num) -> string {
+        if (num.fitsInInt32(true)) {
+            V3Number word{&num, 32};
+            word.opAssign(num);
+            return cvtToStr(word.toSInt());
+        }
+        // The decimal display of a number wider than an int is unsigned
+        if (!num.isNegative()) return num.displayed(nodep, "%0d");
+        V3Number magnitude{&num, num.width()};
+        magnitude.opNegate(num);
+        return "-" + magnitude.displayed(nodep, "%0d");
+    };
+    nodep->v3warn(SELRANGE, "Selection index out of range: " << text(left) << ":" << text(right)
+                                                             << " outside " << range.left() << ":"
+                                                             << range.right());
+}
+
+bool V3Width::selectPositionSigned(const AstConst* constp) {
+    // A select position is self-determined (IEEE 1800-2023 11.5.1). As a Verilator convention,
+    // consistent with runtime positions, a position of exactly 32 bits is read as a signed
+    // integer, so 32'hffff_fff0 selects bit -16 of a [15:-16] vector. A narrower position keeps
+    // its own signedness and a wider one its full value.
+    return constp->isSigned() || constp->width() == 32;
+}
+
 AstNode* V3Width::widthParamsEdit(AstNode* nodep) {
     UINFO(4, __FUNCTION__ << ": " << nodep);
     // We should do it in bottom-up module order, but it works in any order.

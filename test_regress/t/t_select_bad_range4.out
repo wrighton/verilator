@@ -1,4 +1,4 @@
-%Error: t/t_select_bad_range4.v:20:7: Width of bit range is huge; vector of over 1 billion bits: 0x20000001
+%Error: t/t_select_bad_range4.v:20:7: Width of bit range is huge; vector of over 2**28 bits: 0x20000001
                                     : ... note: In instance 't'
    20 |   reg [1<<29 : 0] hugerange;
       |       ^
@@ -17,26 +17,10 @@
       |          ^
                       ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
                       ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
-%Error: t/t_select_bad_range4.v:24:14: Width of :+ or :- is huge; vector of over 1 billion bits: 32'h20000000
+%Error: t/t_select_bad_range4.v:24:14: Width of :+ or :- is huge; vector of over 2**28 bits: 32'h20000000
                                      : ... note: In instance 't'
    24 |     sel2 = mi[44+:1<<29];
       |              ^
-%Warning-SELRANGE: t/t_select_bad_range4.v:24:14: Extracting 536870912 bits from only 6 bit number
-                                                : ... note: In instance 't'
-   24 |     sel2 = mi[44+:1<<29];
-      |              ^
-                   ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
-                   ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
-%Warning-SELRANGE: t/t_select_bad_range4.v:24:14: Selection index out of range: 536870915:4 outside 45:40
-                                                : ... note: In instance 't'
-   24 |     sel2 = mi[44+:1<<29];
-      |              ^
-%Warning-WIDTHTRUNC: t/t_select_bad_range4.v:24:10: Operator ASSIGN expects 4 bits on the Assign RHS, but Assign RHS's SEL generates 536870912 bits.
-                                                  : ... note: In instance 't'
-   24 |     sel2 = mi[44+:1<<29];
-      |          ^
-                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
-                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
 %Error: t/t_select_bad_range4.v:25:19: Expecting expression to be constant, but variable isn't const: 'nonconst'
                                      : ... note: In instance 't'
    25 |     sel2 = mi[44+:nonconst];
@@ -69,20 +53,9 @@
                                                    : ... note: In instance 't'
    27 |     sel2 = mi[nonconst : nonconst];
       |          ^
-%Warning-SELRANGE: t/t_select_bad_range4.v:28:14: Extracting 536870913 bits from only 6 bit number
-                                                : ... note: In instance 't'
+%Error-UNSUPPORTED: t/t_select_bad_range4.v:28:14: Unsupported: Packed range select width exceeds the supported limit.
+                                                 : ... note: In instance 't'
    28 |     sel2 = mi[1<<29 : 0];
       |              ^
-%Warning-SELRANGE: t/t_select_bad_range4.v:28:14: Selection index out of range: 536870872:-40 outside 45:40
-                                                : ... note: In instance 't'
-   28 |     sel2 = mi[1<<29 : 0];
-      |              ^
-%Warning-SELRANGE: t/t_select_bad_range4.v:28:14: Extracting 536870913 bits from only 536870873 bit number
-                                                : ... note: In instance 't'
-   28 |     sel2 = mi[1<<29 : 0];
-      |              ^
-%Warning-WIDTHTRUNC: t/t_select_bad_range4.v:28:10: Operator ASSIGN expects 4 bits on the Assign RHS, but Assign RHS's SEL generates 536870913 bits.
-                                                  : ... note: In instance 't'
-   28 |     sel2 = mi[1<<29 : 0];
-      |          ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: Exiting due to

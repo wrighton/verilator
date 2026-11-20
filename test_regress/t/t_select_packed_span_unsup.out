@@ -1,0 +1,30 @@
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:22:25: Unsupported: Packed range select width exceeds the supported limit.
+                                                        : ... note: In instance 't'
+   22 |   assign nonzero = |data[64'h2_0000_0002:0];
+      |                         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:23:34: Unsupported: Indexed packed select result exceeds the supported width.
+                                                        : ... note: In instance 't'
+   23 |   assign indexed_plus = |elements[0 +: 65536];
+      |                                  ^
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:24:35: Unsupported: Indexed packed select result exceeds the supported width.
+                                                        : ... note: In instance 't'
+   24 |   assign indexed_minus = |elements[1 -: 65536];
+      |                                   ^
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:30:26: Unsupported: Packed range select width exceeds the supported limit.
+                                                        : ... note: In instance 't'
+   30 |   assign too_wide = |data[268435456:0];
+      |                          ^
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:32:36: Unsupported: Packed range select width exceeds the supported limit.
+                                                        : ... note: In instance 't'
+   32 |   assign composed_range = |composed[1:0];
+      |                                    ^
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:33:38: Unsupported: Indexed packed select result exceeds the supported width.
+                                                        : ... note: In instance 't'
+   33 |   assign composed_indexed = |composed[0+:2];
+      |                                      ^
+%Error-UNSUPPORTED: t/t_select_packed_span_unsup.v:34:39: Unsupported: Packed range select width exceeds the supported limit.
+                                                        : ... note: In instance 't'
+   34 |   assign composed_overflow = |composed[3:0];
+      |                                       ^
+%Error: Exiting due to

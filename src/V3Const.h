@@ -31,6 +31,9 @@ public:
     static void constifyParamsEdit(AstNode* nodep) VL_MT_DISABLED;
     static void constifyParamsNoWarnEdit(AstNode* nodep) VL_MT_DISABLED;
     static void constifyGenerateParamsEdit(AstNode* nodep) VL_MT_DISABLED;
+    // Fold an already widthed expression as a constant expression, including constant function
+    // calls. Return the node that may have replaced exprp.
+    static AstNodeExpr* constifyWidthedParamsEdit(AstNodeExpr* exprp) VL_MT_DISABLED;
     // Only do constant pushing, without removing dead logic
     static void constifyAllLive(AstNetlist* nodep) VL_MT_DISABLED;
     // Everything that's possible

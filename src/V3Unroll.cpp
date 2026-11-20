@@ -135,8 +135,9 @@ static AstVarRef* unwrapToVarRef(AstNodeExpr* nodep, int minWidth) {
         } else if (AstExtendS* const ep = VN_CAST(nodep, ExtendS)) {
             nodep = ep->lhsp();
         } else if (AstSel* const sp = VN_CAST(nodep, Sel)) {
-            const AstConst* const lsbp = VN_CAST(sp->lsbp(), Const);
-            if (!lsbp || lsbp->toUInt() != 0 || sp->width() < minWidth) return nullptr;
+            if (!VN_IS(sp->lsbp(), Const) || !sp->lsbp()->isZero() || sp->width() < minWidth) {
+                return nullptr;
+            }
             nodep = sp->fromp();
         } else {
             return nullptr;

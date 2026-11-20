@@ -273,9 +273,10 @@ class FuncOptVisitor final : public VNVisitor {
         // Check for a Sel on the LHS if present, and skip over it
         uint32_t lsb = 0;
         if (AstSel* const selp = VN_CAST(lhsp, Sel)) {
-            if (AstConst* const lsbp = VN_CAST(selp->lsbp(), Const)) {
+            if (VN_IS(selp->lsbp(), Const)) {
+                // After V3Unknown, so within the variable, see AstSel::lsbConst
                 lhsp = selp->fromp();
-                lsb = lsbp->toUInt();
+                lsb = selp->lsbConst();
             } else {
                 // Don't optimize if it's a variable select
                 return false;

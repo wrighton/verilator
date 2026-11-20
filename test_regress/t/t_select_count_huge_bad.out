@@ -1,0 +1,43 @@
+%Error: t/t_select_count_huge_bad.v:13:28: Width of :+ or :- is huge; vector of over 2**28 bits: 32'h10000001
+                                         : ... note: In instance 't'
+   13 |   always_comb huge = source[0+:32'h1000_0001];
+      |                            ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_select_count_huge_bad.v:13:28: Slice selection index '[268435456:0]' outside data type's '[3:0]'
+                                         : ... note: In instance 't'
+   13 |   always_comb huge = source[0+:32'h1000_0001];
+      |                            ^
+%Error: t/t_select_count_huge_bad.v:13:20: Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)
+                                         : ... note: In instance 't'
+                                         : ... Left-hand data type: 'logic$[0:0]'
+                                         : ... Right-hand data type: 'logic$[268435456:0]'
+   13 |   always_comb huge = source[0+:32'h1000_0001];
+      |                    ^
+%Error: t/t_select_count_huge_bad.v:14:32: Width of :+ or :- is < 0: 32'hffffffff
+                                         : ... note: In instance 't'
+   14 |   always_comb negative = source[0+:-1];
+      |                                ^
+%Error: t/t_select_count_huge_bad.v:14:32: Slice selection index '[0:-2]' outside data type's '[3:0]'
+                                         : ... note: In instance 't'
+   14 |   always_comb negative = source[0+:-1];
+      |                                ^
+%Error: t/t_select_count_huge_bad.v:14:24: Illegal assignment: Unmatched array sizes (IEEE 1800-2023 7.6)
+                                         : ... note: In instance 't'
+                                         : ... Left-hand data type: 'logic$[0:0]'
+                                         : ... Right-hand data type: 'logic$[0:-2]'
+   14 |   always_comb negative = source[0+:-1];
+      |                        ^
+%Warning-SELRANGE: t/t_select_count_huge_bad.v:17:23: Selection index out of range: 9:9 outside 1:0
+                                                    : ... note: In instance 't'
+   17 |   initial force forced[9][0+:268435457] = '0;
+      |                       ^
+                   ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
+                   ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
+%Error: t/t_select_count_huge_bad.v:17:26: Width of :+ or :- is huge; vector of over 2**28 bits: ?32?sh10000001
+                                         : ... note: In instance 't'
+   17 |   initial force forced[9][0+:268435457] = '0;
+      |                          ^
+%Error: t/t_select_count_huge_bad.v:13:28: Width of bit range is huge; vector of over 2**28 bits: 0x10000001
+   13 |   always_comb huge = source[0+:32'h1000_0001];
+      |                            ^
+%Error: Exiting due to

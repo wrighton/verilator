@@ -4325,6 +4325,14 @@ std::string AstScopeName::scopePrettyNameFormatter(const std::string& text) {
     if (out.substr(0, 1) == ".") out.replace(0, 1, "");
     return AstNode::prettyName(out);
 }
+bool AstSel::constLsb(int& lsb) const {
+    const AstConst* const constp = VN_CAST(lsbp(), Const);
+    return constp && !constp->num().isFourState()
+           && constp->num().toPackedIndex(positionSigned(constp->num()), lsb);
+}
+bool AstSel::constLsbInRange(int& lsb) const {
+    return constLsb(lsb) && lsb >= 0 && lsb <= fromp()->width() - widthConst();
+}
 void AstSel::dump(std::ostream& str) const {
     Super::dump(str);
     str << " widthConst=" << this->widthConst();
@@ -4340,6 +4348,11 @@ void AstSel::dumpJson(std::ostream& str) const {
         dumpJsonNumFunc(str, declElWidth);
     }
     dumpJsonGen(str);
+}
+int AstSel::lsbConst() const {
+    int lsb = 0;
+    UASSERT_OBJ(constLsb(lsb), this, "Select position is not a representable constant");
+    return lsb;
 }
 void AstSelBit::dump(std::ostream& str) const {
     Super::dump(str);

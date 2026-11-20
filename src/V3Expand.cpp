@@ -743,8 +743,9 @@ class ExpandVisitor final : public VNVisitor {
         V3Const::constifyEditCpp(rhsp->lsbp());
 
         // If it's a constant select and aligned, we can just copy the words
-        if (const AstConst* const lsbConstp = VN_CAST(rhsp->lsbp(), Const)) {
-            const uint32_t lsb = lsbConstp->toUInt();
+        if (VN_IS(rhsp->lsbp(), Const)) {
+            // After V3Unknown, so within the operand, see AstSel::lsbConst
+            const uint32_t lsb = rhsp->lsbConst();
             if (VL_BITBIT_E(lsb) == 0) {
                 didPattern(VExpandPattern::ASSIGN_SEL_ALIGNED, nodep);
                 const uint32_t word = VL_BITWORD_E(lsb);
@@ -775,8 +776,8 @@ class ExpandVisitor final : public VNVisitor {
         AstNodeExpr* loShftp = nullptr;
         AstNodeExpr* hiShftp = nullptr;
         AstNodeExpr* hiMaskp = nullptr;
-        if (const AstConst* const lsbConstp = VN_CAST(rhsp->lsbp(), Const)) {
-            const uint32_t bitOffset = VL_BITBIT_E(lsbConstp->toUInt());
+        if (VN_IS(rhsp->lsbp(), Const)) {
+            const uint32_t bitOffset = VL_BITBIT_E(rhsp->lsbConst());
             // Must be unaligned, otherwise we would have handled it above
             UASSERT_OBJ(bitOffset, nodep, "Missed aligned wide select");
             loShftp = new AstConst{flp, bitOffset};

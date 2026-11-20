@@ -1,0 +1,261 @@
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:15:29: Bit extraction of var[3:-1] requires 2 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   15 |   assign result[1] = bits_in[64'hffff_ffff +: 1];
+      |                             ^
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:15:29: Selection index out of range: 4294967295:4294967295 outside 2:-1
+                                                     : ... note: In instance 't'
+   15 |   assign result[1] = bits_in[64'hffff_ffff +: 1];
+      |                             ^
+                   ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
+                   ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:16:29: Bit extraction of var[3:-1] requires 2 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   16 |   assign result[0] = bits_in[64'hffff_ffff -: 1];
+      |                             ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:16:29: Selection index out of range: 4294967295:4294967295 outside 2:-1
+                                                     : ... note: In instance 't'
+   16 |   assign result[0] = bits_in[64'hffff_ffff -: 1];
+      |                             ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:17:29: Selection index out of range: 2147483648:2147483647 outside 2:-1
+                                                     : ... note: In instance 't'
+   17 |   assign far_slice = bits_in[32'sh7fff_ffff +: 2];
+      |                             ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:25:34: Bit extraction of var[3:-1] requires 2 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   25 |   assign wide_result[0] = bits_in[wide_index];
+      |                                  ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:26:34: Bit extraction of var[3:-1] requires 2 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   26 |   assign wide_result[1] = bits_in[wide_index+:1];
+      |                                  ^
+%Warning-WIDTHEXPAND: t/t_select_packed_wide_bad.v:27:39: Bit extraction of var[4:0] requires 3 bit index, not 2 bits.
+                                                        : ... note: In instance 't'
+   27 |   assign narrow_result = narrow_source[narrow_index-:1];
+      |                                       ^
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:37:35: Bit extraction of var[7:0] requires 3 bit index, not 4 bits.
+                                                       : ... note: In instance 't'
+   37 |   assign constant_result[0] = down[4'd3];
+      |                                   ^
+%Warning-WIDTHEXPAND: t/t_select_packed_wide_bad.v:38:35: Bit extraction of var[7:0] requires 3 bit index, not 2 bits.
+                                                        : ... note: In instance 't'
+   38 |   assign constant_result[1] = down[2'd3];
+      |                                   ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:39:37: Bit extraction of var[7:0] requires 3 bit index, not 4 bits.
+                                                       : ... note: In instance 't'
+   39 |   assign constant_result[3:2] = down[4'd3+:2];
+      |                                     ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:40:35: Bit extraction of var[7:0] requires 3 bit index, not 4 bits.
+                                                       : ... note: In instance 't'
+   40 |   assign constant_result[4] = down[4'd3-:1];
+      |                                   ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:41:37: Bit extraction of var[7:0] requires 3 bit index, not 4 bits.
+                                                       : ... note: In instance 't'
+   41 |   assign constant_result[6:5] = down[4'd3:4'd2];
+      |                                     ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:50:33: Bit extraction of var[7:0] requires 3 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   50 |   assign wide_constant[0] = down[64'd9];
+      |                                 ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:50:33: Selection index out of range: 9:9 outside 7:0
+                                                     : ... note: In instance 't'
+   50 |   assign wide_constant[0] = down[64'd9];
+      |                                 ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:51:33: Bit extraction of var[15:8] requires 4 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   51 |   assign wide_constant[1] = high[64'd9];
+      |                                 ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:56:35: Selection index out of range: 9:9 outside 8:1
+                                                     : ... note: In instance 't'
+   56 |   assign declared[0] = offset_down[9];
+      |                                   ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:57:38: Selection index out of range: -7:-7 outside -3:-6
+                                                     : ... note: In instance 't'
+   57 |   assign declared[1] = negative_range[-7];
+      |                                      ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:58:30: Selection index out of range: 0:-1 outside 7:0
+                                                     : ... note: In instance 't'
+   58 |   assign declared[3:2] = down[0-:2];
+      |                              ^
+%Error: t/t_select_packed_wide_bad.v:63:30: Width of :+ or :- is constantly unknown or tristated: 4'bx
+                                          : ... note: In instance 't'
+   63 |   assign unknown_count = down[0+:4'bx];
+      |                              ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Warning-WIDTHEXPAND: t/t_select_packed_wide_bad.v:63:24: Operator ASSIGNW expects 4 bits on the Assign RHS, but Assign RHS's SEL generates 1 bits.
+                                                        : ... note: In instance 't'
+   63 |   assign unknown_count = down[0+:4'bx];
+      |                        ^
+%Error: t/t_select_packed_wide_bad.v:64:33: Range select index is constantly unknown or tristated: [3:x]
+                                          : ... note: In instance 't'
+   64 |   assign unknown_endpoint = down[3:2'bxx];
+      |                                 ^
+%Warning-WIDTHEXPAND: t/t_select_packed_wide_bad.v:64:27: Operator ASSIGNW expects 2 bits on the Assign RHS, but Assign RHS's SEL generates 1 bits.
+                                                        : ... note: In instance 't'
+   64 |   assign unknown_endpoint = down[3:2'bxx];
+      |                           ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:69:34: Selection index out of range: 47:44 outside 45:40
+                                                     : ... note: In instance 't'
+   69 |   assign beyond[3:0] = offset_six[44+:4];
+      |                                  ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:70:35: Selection index out of range: 10:8 outside 8:1
+                                                     : ... note: In instance 't'
+   70 |   assign beyond[6:4] = offset_down[10:8];
+      |                                   ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:76:12: Selection index out of range: 2:-1 outside 7:0
+                                                     : ... note: In instance 't'
+   76 |     written[-1+:4] = 8'hff;
+      |            ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:76:20: Operator ASSIGN expects 4 bits on the Assign RHS, but Assign RHS's CONST '8'hff' generates 8 bits.
+                                                       : ... note: In instance 't'
+   76 |     written[-1+:4] = 8'hff;
+      |                    ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:85:35: Selection index out of range: 0:-1 outside 7:0
+                                                     : ... note: In instance 't'
+   85 |     if (narrow_index[0]) {combined[-1+:2], combined_low} = 3'b111;
+      |                                   ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:99:37: Bit extraction of var[15:8] requires 4 bit index, not 64 bits.
+                                                       : ... note: In instance 't'
+   99 |   assign width_direct = width_offset[64'd9+:2];
+      |                                     ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:100:39: Bit extraction of var[15:8] requires 4 bit index, not 64 bits.
+                                                        : ... note: In instance 't'
+  100 |   assign width_computed = width_offset[(64'd8+64'd1)+:2];
+      |                                       ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:101:39: Bit extraction of var[15:8] requires 4 bit index, not 64 bits.
+                                                        : ... note: In instance 't'
+  101 |   assign width_function = width_offset[wide_nine()+:2];
+      |                                       ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:103:34: Bit extraction of var[7:0] requires 3 bit index, not 64 bits.
+                                                        : ... note: In instance 't'
+  103 |   assign width_up_both = width_up[64'd2:64'd3];
+      |                                  ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:105:35: Bit extraction of var[7:0] requires 3 bit index, not 64 bits.
+                                                        : ... note: In instance 't'
+  105 |   assign width_up_right = width_up[2:64'd3];
+      |                                   ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:106:38: Bit extraction of var[7:0] requires 3 bit index, not 64 bits.
+                                                        : ... note: In instance 't'
+  106 |   assign width_up_computed = width_up[2:(64'd2+64'd1)];
+      |                                      ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:111:16: Selection index out of range: 0:-1 outside 7:0
+                                                      : ... note: In instance 't'
+  111 |   alias aliased[0-:2] = alias_other;
+      |                ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:111:16: Unsupported: Operand of alias statement is not a variable reference
+                                                       : ... note: In instance 't'
+  111 |   alias aliased[0-:2] = alias_other;
+      |                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:115:33: Selection index out of range: 0:-1 outside 7:0
+                                                      : ... note: In instance 't'
+  115 |     output clocked_out = clocked[0-:2];
+      |                                 ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:115:33: Unsupported: Partially out-of-range constant select in this context
+                                                       : ... note: In instance 't'
+  115 |     output clocked_out = clocked[0-:2];
+      |                                 ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:125:47: Selection index out of range: 9:9 outside 7:0
+                                                      : ... note: In instance 't'
+  125 |   initial force {forced_parts[1], forced_parts[9], forced_parts[0]} = force_value();
+      |                                               ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:125:71: Unsupported: Impure value forced on separate parts of a concatenation
+                                                       : ... note: In instance 't'
+  125 |   initial force {forced_parts[1], forced_parts[9], forced_parts[0]} = force_value();
+      |                                                                       ^~~~~~~~~~~
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:138:26: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  138 |   initial side_get().bits[9] = 1'b1;
+      |                          ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:138:26: Unsupported: Side effects in this destination of a write outside its storage
+                                                       : ... note: In instance 't'
+  138 |   initial side_get().bits[9] = 1'b1;
+      |                          ^
+%Warning-WIDTHTRUNC: t/t_select_packed_wide_bad.v:144:29: Bit extraction of var[7:0] requires 3 bit index, not 64 bits.
+                                                        : ... note: In instance 't'
+  144 |   assign far_negative = down[-64'sd2147483649];
+      |                             ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:144:29: Selection index out of range: -2147483649:-2147483649 outside 7:0
+                                                      : ... note: In instance 't'
+  144 |   assign far_negative = down[-64'sd2147483649];
+      |                             ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:145:32: Selection index out of range: 2147483648:2147483648 outside 3:0
+                                                      : ... note: In instance 't'
+  145 |   assign far_element = elements[64'sh8000_0000:64'sh8000_0000];
+      |                                ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:159:68: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  159 |   initial delayed_dest[delayed_slot(delayed_rows[delayed_address()][9])] = #1 1'b1;
+      |                                                                    ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:159:68: Unsupported: Side effects in the address of a write outside its storage, within a position of a destination with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  159 |   initial delayed_dest[delayed_slot(delayed_rows[delayed_address()][9])] = #1 1'b1;
+      |                                                                    ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:167:37: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  167 |     {delayed_rows[delayed_address()][9], delayed_live} = #1 2'b01;
+      |                                     ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:167:56: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  167 |     {delayed_rows[delayed_address()][9], delayed_live} = #1 2'b01;
+      |                                                        ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:168:40: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  168 |     {>>{delayed_rows[delayed_address()][9], delayed_live}} = #1 2'b01;
+      |                                        ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:168:60: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  168 |     {>>{delayed_rows[delayed_address()][9], delayed_live}} = #1 2'b01;
+      |                                                            ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:169:41: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  169 |     {>>{{delayed_rows[delayed_address()][9]}, delayed_live}} = #1 2'b01;
+      |                                         ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:169:62: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  169 |     {>>{{delayed_rows[delayed_address()][9]}, delayed_live}} = #1 2'b01;
+      |                                                              ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:170:38: Selection index out of range: 5:5 outside 3:0
+                                                      : ... note: In instance 't'
+  170 |     {delayed_pairs[delayed_address()][5][0], delayed_live} = #1 2'b01;
+      |                                      ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:170:60: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  170 |     {delayed_pairs[delayed_address()][5][0], delayed_live} = #1 2'b01;
+      |                                                            ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:172:37: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  172 |     {delayed_rows[delayed_address()][9], delayed_inst.live} = #1 2'b01;
+      |                                     ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:172:61: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  172 |     {delayed_rows[delayed_address()][9], delayed_inst.live} = #1 2'b01;
+      |                                                             ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:183:23: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  183 |       {rows[address()][9], this.live} = #1 2'b01;
+      |                       ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:183:39: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  183 |       {rows[address()][9], this.live} = #1 2'b01;
+      |                                       ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:187:43: Selection index out of range: 9:9 outside 3:0
+                                                      : ... note: In instance 't'
+  187 |   initial {delayed_rows[delayed_address()][9], delayed_object.live} = #1 2'b01;
+      |                                           ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:187:69: Unsupported: Side effects in the address of a part outside its storage of a destination with other parts, with an intra-assignment delay
+                                                       : ... note: In instance 't'
+  187 |   initial {delayed_rows[delayed_address()][9], delayed_object.live} = #1 2'b01;
+      |                                                                     ^
+%Warning-SELRANGE: t/t_select_packed_wide_bad.v:191:30: Selection index out of range: 0:-1 outside 7:0
+                                                      : ... note: In instance 't'
+  191 |   sub_inout u_inout (.p(bidir[0-:2]));
+      |                              ^
+%Error-UNSUPPORTED: t/t_select_packed_wide_bad.v:191:30: Unsupported: Partially out-of-range constant select in this context
+                                                       : ... note: In instance 't'
+  191 |   sub_inout u_inout (.p(bidir[0-:2]));
+      |                              ^
+%Error: Exiting due to

@@ -889,9 +889,11 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
-    void setBitPullDirection(AstVar* varp, int bitIndex, int direction) {
+    void setBitPullDirection(AstVar* varp, int64_t bitIndex, int direction) {
         // Set pull direction for a specific bit of a bus.
         // direction: 1 = pullup, 0 = pulldown
+        // A selection partly outside the bus has no bits there to pull
+        if (bitIndex < 0 || bitIndex >= varp->width()) return;
         auto& bitPulls = m_varAux(varp).bitPulls;
         auto it = bitPulls.find(bitIndex);
         if (it != bitPulls.end() && it->second != direction) {
@@ -931,12 +933,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             return;
         }
         AstNodeExpr* basep = targetp;
-        int offset = 0;
+        int64_t offset = 0;
         while (const AstSel* const selp = VN_CAST(basep, Sel)) {
             // V3Width normalizes packed indices to zero-based bit offsets and requires
-            // constant selection indices on output/inout connections.
-            const AstConst* const indexp = VN_AS(selp->lsbp(), Const);
-            offset += indexp->toSInt();
+            // constant selection indices on output/inout connections. An offset too wide
+            // for an int is wholly outside the variable, so connects no bits to pull.
+            int lsb = 0;
+            if (!selp->constLsb(lsb)) return;
+            offset += lsb;
             basep = selp->fromp();
         }
         if (VN_IS(basep, ArraySel) || VN_IS(basep, Replicate) || VN_IS(basep, SliceSel)
@@ -1103,11 +1107,11 @@ class TristateVisitor final : public TristateBaseVisitor {
     };
     static AstSel* sharedSelp(const RefStrength* refStrengthp) {
         // Constant part select a continuous driver assigns, with its enable, or nullptr
+        // V3Unknown has not yet handled a partially or wholly out-of-range constant select
         AstSel* const selp = VN_CAST(refStrengthp->m_varrefp->backp(), Sel);
+        int lsb = 0;
         if (!selp || refStrengthp->m_delayp || !VN_IS(refStrengthp->m_varrefp, VarRef)
-            || selp != refStrengthp->m_assignp->lhsp() || !VN_IS(selp->lsbp(), Const)
-            || VN_AS(selp->lsbp(), Const)->toSInt() + selp->widthConst()
-                   > selp->fromp()->width()) {
+            || selp != refStrengthp->m_assignp->lhsp() || !selp->constLsbInRange(lsb)) {
             return nullptr;
         }
         const AstShiftL* const depositp = VN_CAST(refStrengthp->m_varrefp->user1p(), ShiftL);
@@ -1117,7 +1121,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         // Index of a bin none of the select's bits are in yet: past the last bin using any of
         // them. nextBins holds, per bit, one past the last bin using it, so the cost is linear
         // in the selected bits.
-        const int lsb = VN_AS(selp->lsbp(), Const)->toSInt();
+        int lsb = 0;
+        UASSERT_OBJ(selp->constLsbInRange(lsb), selp, "Shared select not within its variable");
         const auto beginIt = nextBins.begin() + lsb;
         const auto endIt = beginIt + selp->widthConst();
         const size_t bin = *std::max_element(beginIt, endIt);
@@ -1261,7 +1266,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                     // The deposit of the select's enable into the whole variable
                     const AstShiftL* const depositp = VN_AS(refp->user1p(), ShiftL);
                     binp->m_enps.emplace(
-                        VN_AS(selp->lsbp(), Const)->toSInt(),
+                        selp->lsbConst(),
                         VN_AS(depositp->lhsp(), Extend)->lhsp()->cloneTreePure(false));
                 } else {
                     AstAssignW* const enLhspAssignp = new AstAssignW{
@@ -1748,9 +1753,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         width = 0;
         AstNode* nodep = lhsp;
         while (const AstSel* const selp = VN_CAST(nodep, Sel)) {
-            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
-            if (!lsbp) return nullptr;
-            lsb += lsbp->toSInt();
+            // V3Unknown has not yet handled a partially or wholly out-of-range constant select
+            int selLsb = 0;
+            if (!selp->constLsbInRange(selLsb)) return nullptr;
+            lsb += selLsb;
             if (!width) width = selp->widthConst();
             nodep = selp->fromp();
         }
@@ -2698,11 +2704,14 @@ class TristateVisitor final : public TristateBaseVisitor {
                 m_tgraph.didProcess(nodep);
                 m_tgraph.didProcess(varrefp->varp());
                 const AstSel* const selp = VN_CAST(nodep->lhsp(), Sel);
-                const AstConst* const lsbp = selp ? VN_CAST(selp->lsbp(), Const) : nullptr;
-                if (lsbp) {
-                    const int lsb = lsbp->toSInt();
-                    for (int i = 0; i < selp->widthConst(); ++i) {
-                        setBitPullDirection(varrefp->varp(), lsb + i, nodep->direction());
+                int lsb = 0;
+                if (selp && VN_IS(selp->lsbp(), Const)) {
+                    // An offset too wide for an int is wholly outside the variable
+                    if (selp->constLsb(lsb)) {
+                        for (int i = 0; i < selp->widthConst(); ++i) {
+                            setBitPullDirection(varrefp->varp(), int64_t{lsb} + i,
+                                                nodep->direction());
+                        }
                     }
                 } else {
                     setPullDirection(varrefp->varp(), nodep);
