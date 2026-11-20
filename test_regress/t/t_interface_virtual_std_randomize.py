@@ -11,9 +11,6 @@ import vltest_bootstrap
 
 test.scenarios('simulator')
 
-if not test.have_solver:
-    test.skip("No constraint solver installed")
-
 test.compile(verilator_flags2=["--binary"])
 
 test.execute()
