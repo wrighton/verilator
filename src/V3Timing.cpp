@@ -2439,6 +2439,72 @@ class TimingReactiveVisitor final : public VNVisitor {
         methodp->addPinsp(linep);
         return new AstCAwait{flp, methodp};
     }
+    // A function can run in either region. Save the caller's region in its coroutine frame.
+    AstVarScope* entryReactivep(FileLine* const flp, AstCFunc* const funcp) {
+        AstVarScope*& vscp = m_wasReactiveps[funcp];
+        if (vscp) return vscp;
+        AstVar* const varp
+            = new AstVar{flp, VVarType::BLOCKTEMP, "__VwasReactive", m_netlistp->findBitDType()};
+        varp->funcLocal(true);
+        varp->noReset(true);
+        funcp->addVarsp(varp);
+        vscp = new AstVarScope{flp, funcp->scopep(), varp};
+        funcp->scopep()->addVarsp(vscp);
+        AstAssign* const initp
+            = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE},
+                            new AstVarRef{flp, getCreateInReactivep(), VAccess::READ}};
+        AstNodeStmt* const stmtsp = funcp->stmtsp();
+        UASSERT_OBJ(stmtsp, funcp, "Function with a continuation but no statements");
+        stmtsp->addHereThisAsNext(initp);
+        return vscp;
+    }
+    AstIf* newRestoreReactivep(FileLine* const flp, AstCFunc* const funcp,
+                               const AstNode* const ownerp) {
+        return new AstIf{
+            flp,
+            new AstLogAnd{
+                flp, new AstVarRef{flp, entryReactivep(flp, funcp), VAccess::READ},
+                new AstLogNot{flp, new AstVarRef{flp, getCreateInReactivep(), VAccess::READ}}},
+            newResumeAwaitp(flp, false, ownerp)};
+    }
+    // Mailbox get/peek must release the queue turn in the dynamic scheduler, but must not
+    // assign through the user's ref there. Keep the message in the coroutine frame until all
+    // queue bookkeeping has finished, then restore the region and publish it to the ref.
+    void deferMailboxResult(AstCFunc* const funcp) {
+        if (!funcp->exists([](const AstCMethodHard* const methodp) {
+                return methodp->method() == VCMethod::WAIT_QUEUE_RELEASE;
+            })) {
+            return;
+        }
+        AstVar* resultp = nullptr;
+        for (AstVar* const argp : funcp->argspList()) {
+            if (!argp->isRef()) continue;
+            UASSERT_OBJ(!resultp, funcp, "Mailbox method has more than one ref result");
+            resultp = argp;
+        }
+        if (!resultp) return;  // put has no ref result
+        std::vector<AstVarRef*> resultRefps;
+        funcp->foreach([&](AstVarRef* const refp) {
+            if (refp->varp() == resultp) resultRefps.push_back(refp);
+        });
+        UASSERT_OBJ(!resultRefps.empty(), funcp, "Mailbox method does not write its result");
+        FileLine* const flp = funcp->fileline();
+        AstVar* const varp
+            = new AstVar{flp, VVarType::BLOCKTEMP, "__VmailboxMessage", resultp->dtypep()};
+        varp->funcLocal(true);
+        varp->noReset(true);
+        funcp->addVarsp(varp);
+        AstVarScope* const vscp = new AstVarScope{flp, funcp->scopep(), varp};
+        funcp->scopep()->addVarsp(vscp);
+        AstVarRef* const outp = resultRefps.front()->cloneTree(false);
+        for (AstVarRef* refp : resultRefps) {
+            UASSERT_OBJ(refp->access().isWriteOnly(), refp, "Mailbox method reads its result");
+            refp->replaceWith(new AstVarRef{refp->fileline(), vscp, VAccess::WRITE});
+            VL_DO_DANGLING(pushDeletep(refp), refp);
+        }
+        funcp->addStmtsp(newRestoreReactivep(flp, funcp, funcp));
+        funcp->addStmtsp(new AstAssign{flp, outp, new AstVarRef{flp, vscp, VAccess::READ}});
+    }
     // Make the continuation of 'awaitp' in 'funcp', or in reactive logic if null, stay in the
     // reactive region set
     void keepReactive(AstCAwait* awaitp, AstCFunc* funcp, const AstNode* ownerp,
@@ -2527,36 +2593,15 @@ class TimingReactiveVisitor final : public VNVisitor {
                           newResumeAwaitp(flp, false, ownerp)});
             return;
         }
-        // A function may run in both, so note where its call started, in its frame. A process
-        // keeps its region set, so that is where it continues.
-        AstVarScope*& wasp = m_wasReactiveps[funcp];
-        if (!wasp) {
-            AstVar* const varp = new AstVar{flp, VVarType::BLOCKTEMP, "__VwasReactive",
-                                            m_netlistp->findBitDType()};
-            varp->funcLocal(true);
-            varp->noReset(true);
-            funcp->addVarsp(varp);
-            wasp = new AstVarScope{flp, funcp->scopep(), varp};
-            funcp->scopep()->addVarsp(wasp);
-            AstAssign* const initp = new AstAssign{flp, new AstVarRef{flp, wasp, VAccess::WRITE},
-                                                   new AstVarRef{flp, inReactivep, VAccess::READ}};
-            // The function holds the await being handled, so it has statements
-            AstNode* const stmtsp = funcp->stmtsp();
-            UASSERT_OBJ(stmtsp, funcp, "Function with an await but no statements");
-            stmtsp->addHereThisAsNext(initp);
-        }
         if (resumption) {
+            AstVarScope* const wasp = entryReactivep(flp, funcp);
             VNRelinker handle;
             awaitp->unlinkFrBack(&handle);
             handle.relink(new AstIf{flp, new AstVarRef{flp, wasp, VAccess::READ},
                                     newResumeAwaitp(flp, false, ownerp), awaitp});
             return;
         }
-        awaitp->addNextHere(new AstIf{
-            flp,
-            new AstLogAnd{flp, new AstVarRef{flp, wasp, VAccess::READ},
-                          new AstLogNot{flp, new AstVarRef{flp, inReactivep, VAccess::READ}}},
-            newResumeAwaitp(flp, false, ownerp)});
+        awaitp->addNextHere(newRestoreReactivep(flp, funcp, ownerp));
     }
 
     // VISITORS
@@ -2567,6 +2612,7 @@ class TimingReactiveVisitor final : public VNVisitor {
         m_ownerp = nodep;
         m_funcp = nodep;
         iterateChildren(nodep);
+        deferMailboxResult(nodep);
     }
     void visit(AstScope* nodep) override {
         VL_RESTORER(m_scopep);
@@ -2589,11 +2635,12 @@ class TimingReactiveVisitor final : public VNVisitor {
         if (!m_funcp && !m_inReactiveProc) return;
         if (const AstCMethodHard* const methodp = VN_CAST(nodep->exprp(), CMethodHard)) {
             // Restore the region only at a continuation. Internal evaluation and post-updates
-            // must stay in the dynamic scheduler's own steps.
+            // must stay in the dynamic scheduler's own steps. Queue waits stay there through
+            // release of the selected turn; get/peek restore the region before writing the ref.
             const VCMethod method = methodp->method();
             if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_TRIGGER
                 && method != VCMethod::SCHED_RESUMPTION && method != VCMethod::SCHED_EVENT_TRIGGER
-                && method != VCMethod::SCHED_QUEUE_WAIT && method != VCMethod::FORK_JOIN) {
+                && method != VCMethod::FORK_JOIN) {
                 return;
             }
         }
