@@ -302,6 +302,19 @@ module t;
       `checkh(asc_offset_out.data[3], v[7:0]);
     end
 
+    repeat (4) begin
+      // Streaming seven-bit members into a 70-bit vector, and writing a select of it
+      typedef struct {logic [6:0] m[10];} sel7_struct_t;
+      sel7_struct_t sel7;
+      logic [69:0] sel7_bits, sel7_old;
+      foreach (sel7.m[i]) sel7.m[i] = 7'($urandom);
+      sel7_bits = {>>{sel7}};
+      foreach (sel7.m[i]) `checkh(sel7_bits[69-7*i-:7], sel7.m[i]);
+      sel7_old = sel7_bits;
+      sel7_bits[66:30] = 37'h0_5a5a_5a5a;
+      `checkh(sel7_bits, {sel7_old[69:67], 37'h0_5a5a_5a5a, sel7_old[29:0]});
+    end
+
     matrix_array.matrix[0][0] = 8'h11;
     matrix_array.matrix[0][1] = 8'h22;
     matrix_array.matrix[0][2] = 8'h33;

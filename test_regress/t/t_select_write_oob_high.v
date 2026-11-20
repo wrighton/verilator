@@ -29,6 +29,23 @@ module t;
     x[9:3] = 7'b1011010;
     `checkh(x, 6'b010000);  // Const, select width > declared width, OOB high
 
+    begin
+      bit [69:0] y;
+      bit [35:0] v;
+`ifdef VERILATOR
+      v = 36'($c32("0xa5a5a5a4"));
+`else
+      v = 36'h0_a5a5_a5a4;
+`endif
+      y = '1;
+      y[100:65] = v;
+      `checkh(y, {5'b00100, {65{1'b1}}});  // Const, wide, partially OOB high, bits below kept
+
+      y = '0;
+      y[127:66] = '1;
+      `checkh(y, {4'hf, 66'h0});  // Const ones, wide, partially OOB high
+    end
+
     i = 4;
     x = 'h0;
     x[i+:5] = 5'b10001;
