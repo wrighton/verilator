@@ -2548,13 +2548,19 @@ class TristateVisitor final : public TristateBaseVisitor {
             rhsp->user1p(nullptr);
             return enp;
         }
+        // A two-state value is never z
+        if (!rhsp->dtypep()->skipRefp()->isFourstate()) return newAllZerosOrOnes(lhsp, true);
         AstNodeExpr* basep = rhsp;
         while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
         if (refp && isTristateVar(refp->varp())) return newEnSelp(rhsp, refp, VAccess::READ);
-        // Another module may make its net tristate only later
-        const bool mayBeZ = rhsp->exists([this](const AstNodeVarRef* readp) {
-            return VN_IS(readp, VarXRef) || isTristateVar(readp->varp());
+        // Calls, class members and another module's variables (which may become tristate only
+        // later) are of unknown z-ness
+        const bool mayBeZ = rhsp->exists([this](const AstNode* np) {
+            if (const AstNodeVarRef* const readp = VN_CAST(np, NodeVarRef)) {
+                return VN_IS(readp, VarXRef) || isTristateVar(readp->varp());
+            }
+            return VN_IS(np, NodeFTaskRef) || VN_IS(np, CMethodHard) || VN_IS(np, MemberRef);
         });
         return mayBeZ ? nullptr : newAllZerosOrOnes(lhsp, true);
     }
