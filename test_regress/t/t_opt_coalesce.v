@@ -54,6 +54,47 @@ module t;
     acb3 = src;
   end
 
+  // In the block writing the signal it copies, a copy holds the value from before the
+  // block, so the block runs again once the copy follows
+  logic [31:0] lsrc;
+  logic [31:0] lcp;
+  logic [31:0] lout;
+  assign lcp = lsrc;
+  always @(*) begin
+    for (int i = 0; i < 2; ++i) begin
+      lout = lcp;
+      lsrc = src + i;
+    end
+  end
+
+  // The same, with the signal written by a task
+  logic [31:0] tsrc;
+  logic [31:0] tcp;
+  logic [31:0] tout;
+  assign tcp = tsrc;
+  task automatic set_tsrc(input logic [31:0] value);
+    tsrc = value;
+  endtask
+  always @(*) begin
+    set_tsrc(0);
+    tout = tcp;
+    set_tsrc(src);
+  end
+
+  // The same, with the copy read by a function
+  logic [31:0] fsrc;
+  logic [31:0] fcp;
+  logic [31:0] fout;
+  assign fcp = fsrc;
+  function automatic logic [31:0] get_fcp();
+    return fcp;
+  endfunction
+  always_comb begin
+    fsrc = 0;
+    fout = get_fcp();
+    fsrc = src;
+  end
+
   // Not coalesced: a clocked block holds the value of the previous cycle
   logic [31:0] aff;
   always @(posedge clk) aff = src;
@@ -116,6 +157,12 @@ module t;
     `checkh(acb3, src);
     `checkh(pub, src);
     `checkh(netdly, src);
+    `checkh(lcp, src + 1);
+    `checkh(lout, src + 1);
+    `checkh(tcp, src);
+    `checkh(tout, src);
+    `checkh(fcp, src);
+    `checkh(fout, src);
 
     // A forced copy holds the forced value, the signal it copies is untouched
     if (cyc == 3) force frc = 32'hdead_beef;
