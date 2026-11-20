@@ -165,11 +165,17 @@ std::string VlThreadPool::numaAssign(VerilatedContext* contextp) {
     if (numa_strategy != "default" && numa_strategy != "")
         return "%Warning: unknown VERILATOR_NUMA_STRATEGY value '" + numa_strategy + "'";
 
-    // Get number of processor available to the current process
-    const unsigned num_proc = VlOs::getProcessAvailableParallelism();
-    if (!num_proc) return "Can't determine number of available threads";
-    // If fewer than hardware threads in the host, user presumably set affinity
-    if (num_proc < std::thread::hardware_concurrency()) return "processor affinity already set";
+    // Get processors available to the current thread, which the workers inherit
+    cpu_set_t available;
+    CPU_ZERO(&available);
+#ifdef __TERMUX__
+    // As VlOs::getProcessAvailableParallelism()
+    const int getrc = sched_getaffinity(pthread_self(), sizeof(cpu_set_t), &available);
+#else
+    const int getrc = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &available);
+#endif
+    if (getrc != 0) return "Can't determine number of available threads";
+    const unsigned num_proc = static_cast<unsigned>(CPU_COUNT(&available));
 
     // Make a reasonable processor affinity selection
     const int num_threads = static_cast<int>(m_workers.size());
@@ -220,6 +226,11 @@ std::string VlThreadPool::numaAssign(VerilatedContext* contextp) {
             }
         }
         finishEntry();
+    }
+
+    // If any processor is not in the inherited mask, user presumably set affinity
+    for (const int processor : unassigned_processors) {
+        if (!CPU_ISSET(processor, &available)) return "processor affinity already set";
     }
 
     // Start scheduling on the current CPU + 1.
