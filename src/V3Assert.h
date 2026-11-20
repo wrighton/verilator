@@ -21,6 +21,7 @@
 #include "verilatedos.h"
 
 #include "V3Ast.h"
+#include "V3UniqueNames.h"
 
 //============================================================================
 
@@ -56,6 +57,8 @@ public:
     static void checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
+    // Clone an action block for one more execution site, naming its automatics from names
+    static AstNodeStmt* cloneAction(AstNodeStmt* actionp, V3UniqueNames& names) VL_MT_DISABLED;
     // Reduce a whole property 'always p' to p
     static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
     // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
