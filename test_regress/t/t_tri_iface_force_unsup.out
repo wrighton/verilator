@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:21:15: Unsupported: Force or release of interface strength net in task or function: 'value'
+                                                     : ... note: In instance 't'
+   21 |     force bus.value = 1'b1;
+      |               ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:24:17: Unsupported: Force or release of interface strength net in task or function: 'value'
+                                                     : ... note: In instance 't'
+   24 |     release bus.value;
+      |                 ^~~~~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:29:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't'
+   29 |     force bus.value = ~bus.src;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:30:27: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't'
+   30 |     force bus.value = bus.plain;
+      |                           ^~~~~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:31:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't'
+   31 |     force bus.value = ~local_src;
+      |                       ^
+%Error: Exiting due to
