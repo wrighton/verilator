@@ -140,15 +140,40 @@ module t;
     end
   end
 
-  // Discarded covers
+  // Covers, not collected here, so their actions have no effect
+  int cover_inits = 0;
+  int cover_runs = 0;
+
+  function int cover_first_count();
+    ++cover_inits;
+    return 10;
+  endfunction
+
   cover property (@(posedge clk) s_eventually b) begin
-    int count;
-    count = 1;
+    static int count = cover_first_count();
+    ++count;
+    cover_runs++;
   end
   cover property (@(posedge clk) b until c) begin
     int count;
     count = 1;
+    cover_runs += count;
   end
+
+  // A hierarchical reference through another instance keeps selecting that instance
+  int xmr_seen_a;
+  int xmr_seen_b;
+
+  t_xmr_worker xmr_a (
+      .clk(clk),
+      .value(37),
+      .seen(xmr_seen_a)
+  );
+  t_xmr_worker xmr_b (
+      .clk(clk),
+      .value(91),
+      .seen(xmr_seen_b)
+  );
 
   initial begin
     repeat (60) @(negedge clk);
@@ -167,10 +192,15 @@ module t;
     `checkd(imp_passes > 0, 1'b1);
     `checkd(imp_decl_passes, imp_passes);
     `checkd(imp_decl_pass_count, imp_passes);
+    `checkd(fork_starts, imp_passes);
     `checkd(fork_ends > 0, 1'b1);
     `checkd($countones(fork_seen), fork_ends);
     `checkd(gen_decl_count, 2 * fails);
     `checkd(gen_fails, fails);
+    `checkd(cover_inits, 0);
+    `checkd(cover_runs, 0);
+    `checkd(xmr_seen_a, 37);
+    `checkd(xmr_seen_b, 37);
     done = 1;
     $finish;
   end
@@ -186,6 +216,7 @@ module t;
 
   // A strong property still pending
   int always_fails = 0;
+  int always_eos_fails = 0;
 
   assert property (@(posedge clk) s_always [1:3] b)
   else if (!done) always_fails++;
@@ -195,9 +226,10 @@ module t;
     static int count = 0;
     ++count;
     if (done) begin
+      ++always_eos_fails;
       `checkd(always_fails > 0, 1'b1);
-      `checkd(count, always_fails + 1);
-      eos_finish(0);
+      `checkd(count, always_fails + always_eos_fails);
+      if (always_eos_fails == 1) eos_finish(0);
     end
   end
 
@@ -219,6 +251,23 @@ module t;
       `checkd(until_fails > 0, 1'b1);
       `checkd(count, until_fails + until_eos_fails);
       if (until_eos_fails == 1) eos_finish(1);
+    end
+  end
+
+endmodule
+
+module t_xmr_worker (
+    input bit clk,
+    input int value,
+    output int seen
+);
+
+  if (1) begin : g
+    assert property (@(posedge clk) 1'b1 ##[1:2] 1'b0)
+    else begin : act
+      static int slot = 0;
+      slot = value;
+      seen = $root.t.xmr_a.g.act.slot;
     end
   end
 
