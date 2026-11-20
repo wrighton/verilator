@@ -1090,8 +1090,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             // value-equivalent truncation instead
             // Force $unsigned, as to conform with IEEE 1800-2023 11.8.1
             puts("$unsigned(" + cvtToStr(nodep->widthConst()) + "'(");
-            const AstConst* const lsbp = VN_CAST(nodep->lsbp(), Const);
-            if (lsbp && lsbp->toSInt() == 0) {
+            if (nodep->lsbp()->isZero()) {
                 iterateAndNextConstNull(nodep->fromp());
             } else {
                 puts("(");
@@ -1112,14 +1111,38 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             offset = basicDtypep->lo();
         }
         puts("[");
-        if (VN_IS(nodep->lsbp(), Const)) {
-            if (nodep->widthConst() == 1) {
-                puts(cvtToStr(VN_AS(nodep->lsbp(), Const)->toSInt() + offset));
+        // A constant offset of whole elements is shown in the declared coordinates
+        VNumRange range;
+        int elWidth = 1;
+        const AstNodeDType* const skipDTypep = dtypep ? dtypep->skipRefp() : nullptr;
+        if (const AstBasicDType* const basicp = VN_CAST(skipDTypep, BasicDType)) {
+            range = basicp->declRange();
+        } else if (const AstPackArrayDType* const arrayp = VN_CAST(skipDTypep, PackArrayDType)) {
+            range = arrayp->declRange();
+            elWidth = arrayp->subDTypep()->width();
+        }
+        int lsb = 0;
+        if (nodep->constLsb(lsb) && range.ranged() && elWidth > 0 && lsb % elWidth == 0
+            && nodep->widthConst() % elWidth == 0) {
+            const int64_t element = lsb / elWidth;
+            const int64_t elements = nodep->widthConst() / elWidth;
+            // The lowest storage element is the right index of the declaration
+            const int64_t right = range.ascending() ? range.hi() - element : range.lo() + element;
+            const int64_t left = range.ascending() ? right - elements + 1 : right + elements - 1;
+            if (elements == 1) {
+                puts(cvtToStr(right));
             } else {
-                puts(cvtToStr(VN_AS(nodep->lsbp(), Const)->toSInt() + nodep->widthConst() + offset
-                              - 1));
+                puts(cvtToStr(left));
                 puts(":");
-                puts(cvtToStr(VN_AS(nodep->lsbp(), Const)->toSInt() + offset));
+                puts(cvtToStr(right));
+            }
+        } else if (nodep->constLsb(lsb)) {
+            if (nodep->widthConst() == 1) {
+                puts(cvtToStr(int64_t{lsb} + offset));
+            } else {
+                puts(cvtToStr(int64_t{lsb} + nodep->widthConst() + offset - 1));
+                puts(":");
+                puts(cvtToStr(int64_t{lsb} + offset));
             }
         } else {
             iterateAndNextConstNull(nodep->lsbp());

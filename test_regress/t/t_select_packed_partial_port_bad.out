@@ -1,0 +1,17 @@
+%Warning-MULTIDRIVEN: t/t_select_packed_partial_port_bad.v:10:23: Bits [1:0] of signal 't.u.d.p' have multiple combinational drivers. This can cause performance degradation.
+                      t/t_select_packed_partial_port_bad.v:32:14: ... Location of offending driver
+   32 |   wire [3:0] source;
+      |              ^~~~~~
+                      t/t_select_packed_partial_port_bad.v:13:12: ... Location of offending driver
+   13 |   assign p = value;
+      |            ^
+                      ... For warning description see https://verilator.org/warn/MULTIDRIVEN?v=latest
+                      ... Use "/* verilator lint_off MULTIDRIVEN */" and lint_on around source to disable this message.
+%Warning-MULTIDRIVEN: t/t_select_packed_partial_port_bad.v:10:23: Bit [2] of signal 't.u.d.p' have multiple combinational drivers. This can cause performance degradation.
+                      t/t_select_packed_partial_port_bad.v:13:12: ... Location of offending driver
+   13 |   assign p = value;
+      |            ^
+                      t/t_select_packed_partial_port_bad.v:35:16: ... Location of offending driver
+   35 |       .p(source[2+:3]),
+      |                ^
+%Error: Exiting due to

@@ -9,10 +9,8 @@
 
 import vltest_bootstrap
 
-test.scenarios('linter')
+test.scenarios('vlt')
 
-test.lint(
-    # Should fail, but doesn't)
-    fails=not test.vlt_all)
+test.lint(fails=True, expect_filename=test.golden_filename)
 
 test.passes()

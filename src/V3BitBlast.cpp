@@ -416,14 +416,15 @@ class BitBlastVisitor final : public VNVisitorConst, public VNDeleter {
         }
         // Must be constant and in range. V3Unknown only guards the LSB, so a select with
         // the LSB in range, but the MSB beyond the variable can reach here.
-        const AstConst* const lsbp = VN_CAST(nodep->lsbp(), Const);
-        if (!lsbp || lsbp->toSInt() + nodep->widthConst() > refp->varp()->width()) {
+        int lsb = 0;
+        if (!nodep->constLsb(lsb) || lsb < 0
+            || int64_t{lsb} + nodep->widthConst() > refp->varp()->width()) {
             block(refp->varp(), vscpInfoOf(refp->varScopep()), refp);
             iterateConst(nodep->lsbp());
             return;
         }
         // Record partial access
-        record(nodep, refp, lsbp->toSInt(), lsbp->toSInt() + nodep->widthConst() - 1);
+        record(nodep, refp, lsb, lsb + nodep->widthConst() - 1);
     }
     void visit(AstVarRef* nodep) override {
         // Record whole access

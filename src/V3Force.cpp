@@ -1497,8 +1497,9 @@ class ForceReplaceVisitor final : public VNVisitor {
             return;
         }
 
-        if (const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const)) {
-            const int selLsb = lsbConstp->toSInt();
+        if (VN_IS(nodep->lsbp(), Const)) {
+            // After V3Unknown, so within the variable, see AstSel::lsbConst
+            const int selLsb = nodep->lsbConst();
             const int selMsb = selLsb + nodep->width() - 1;
             if (!varp->isSigPublic()
                 && !ForceState::selOverlapsAnyForce(*varInfop, selLsb, selMsb)) {

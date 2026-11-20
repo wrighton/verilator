@@ -392,6 +392,38 @@ give a width warning and wrap around the power-of-2 size. For
 non-power-of-2 sizes, it will return an unspecified constant of the
 appropriate width.
 
+A constant packed select position is used at its exact value. A constant
+select wholly outside its object reads as X (0 for a 2-state object) and is
+not written. A constant select partly outside its object reads X (0 for a
+2-state object) for its bits outside the object, and a write changes only its
+bits within the object, from the corresponding bits of the value (IEEE
+1800-2023 11.5.1). A wholly outside part of a forced or released concatenation
+is ignored, while a partly outside part forces or releases its bits within the
+object. The following are unsupported: a partly outside select connected to an
+inout port or used as the expression of an output clocking item; a wholly
+outside write whose destination has side effects other than in its positions,
+such as a function call returning a class handle, or, in a continuous
+assignment, in its positions; a wholly outside write with side effects in its
+address within a position of a destination with an intra-assignment delay,
+such as an output argument of a function called in an index of a delayed
+blocking assignment, or that is a part of a delayed blocking assignment
+destination with other parts; and a force of a concatenation whose value has
+side effects, when wholly outside parts separate the remaining parts. Selects
+with a runtime position behave as described above.
+
+As a Verilator convention, consistent with existing behavior, a packed select
+position whose self-determined width is exactly 32 bits is evaluated as a
+signed 32-bit integer, for constant and runtime positions alike. For example,
+with ``logic [15:-16] v``, ``v[32'hffff_fff0]`` selects ``v[-16]``. A
+narrower constant position keeps its own signedness, and a wider constant
+position keeps its full value, so ``v[64'hffff_ffff]`` is out of range.
+
+A packed part-select result is limited to 268,435,456 (2**28) bits, as for a
+declared packed range. A constant part-select whose result would be wider is
+unsupported, even if the object is small. An indexed part-select (``+:`` or
+``-:``) whose count exceeds 2**28 is an error, and one of a packed array whose
+count times the element width exceeds 2**28 bits is unsupported.
+
 
 Assertions
 ----------

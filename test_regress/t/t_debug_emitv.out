@@ -467,9 +467,7 @@ module t;
             if (after_struct_packed) begin
                 $write("");
             end
-            if (ascending_packed[$unsigned(2'((32'h3 
-                                               - 32'sh2))) + 2
-                +:1]) begin
+            if (ascending_packed[2]) begin
                 $write("");
             end
             if ((uns_int > 32'sh0)) begin
@@ -478,12 +476,7 @@ module t;
             if (((usarr.marr[32'sh0]) != 32'sh0)) begin
                 $write("");
             end
-            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[$unsigned(5'(
-                                                                      (32'h4 
-                                                                       * 
-                                                                       32'sh1)))
-                +:4][$unsigned(4'((32'h2 * 32'sh1)))
-                +:2][2]) begin
+            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[6][4][2]) begin
                 $write("");
             end
             if ((var_part != 32'sh0)) begin

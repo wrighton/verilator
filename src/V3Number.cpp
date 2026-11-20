@@ -1159,6 +1159,15 @@ bool V3Number::fitsInUInt() const VL_MT_SAFE {
     }
     return true;
 }
+bool V3Number::fitsInInt32(bool signedValue) const VL_MT_SAFE {
+    if (isOpaque() || isFourState()) return false;
+    if (width() < 32) return true;
+    if (!signedValue || !bitIs1(width() - 1)) return isBitsZero(width() - 1, 31);
+    for (int bit = 31; bit < width(); ++bit) {
+        if (!bitIs1(bit)) return false;
+    }
+    return true;
+}
 uint32_t V3Number::toUInt() const VL_MT_SAFE {
     UASSERT(!isFourState(), "toUInt with 4-state " << *this);
     // We allow wide numbers that represent values <= 32 bits
@@ -1286,7 +1295,7 @@ bool V3Number::isTrue() const {
     }
     return result != 0;
 }
-bool V3Number::isBitsZero(int msb, int lsb) const {
+bool V3Number::isBitsZero(int msb, int lsb) const VL_MT_SAFE {
     for (int i = lsb; i <= msb; ++i) {
         if (VL_UNLIKELY(!bitIs0(i))) return false;
     }
@@ -2732,9 +2741,44 @@ V3Number& V3Number::opSel(const V3Number& lhs, uint32_t msbval, uint32_t lsbval)
     return *this;
 }
 
-V3Number& V3Number::opSelInto(const V3Number& lhs, const V3Number& lsb, int width) {
-    if (lsb.isFourState()) return *this;
-    return opSelInto(lhs, lsb.toSInt(), width);
+bool V3Number::toPackedIndex(bool signedLsb, int& value) const {
+    if (!fitsInInt32(signedLsb)) return false;
+    V3Number lowWord{this, 32};
+    if (signedLsb) {
+        lowWord.opExtendS(*this, width());
+    } else {
+        lowWord.opAssign(*this);
+    }
+    value = lowWord.toSInt();
+    return true;
+}
+
+V3Number::PackedOverlap V3Number::packedOverlap(bool signedLsb, int selectWidth,
+                                                int storageWidth) const {
+    int index = 0;
+    if (!toPackedIndex(signedLsb, index)) return {};
+    const int64_t lsb = index;
+    const int64_t first = std::max<int64_t>(0, lsb);
+    const int64_t pastLast = std::min<int64_t>(storageWidth, lsb + selectWidth);
+    if (first >= pastLast) return {};
+    return {static_cast<int>(first), static_cast<int>(first - lsb),
+            static_cast<int>(pastLast - first)};
+}
+
+V3Number& V3Number::opPackedSel(const V3Number& lhs, const V3Number& lsb, bool signedLsb,
+                                int selectWidth, int storageWidth) {
+    NUM_ASSERT_OP_ARGS2(lhs, lsb);
+    NUM_ASSERT_LOGIC_ARGS2(lhs, lsb);
+    const int logicalWidth = std::min(selectWidth, width());
+    const PackedOverlap overlap
+        = lsb.packedOverlap(signedLsb, logicalWidth, std::min(storageWidth, lhs.width()));
+    setZero();
+    const char fill = lsb.isFourState() || !v3Global.constRemoveXs() ? 'x' : 0;
+    fillBits(0, overlap.selectLsb, fill);
+    fillBits(overlap.selectLsb + overlap.width, logicalWidth - overlap.selectLsb - overlap.width,
+             fill);
+    copyBits(overlap.selectLsb, lhs, overlap.storageLsb, overlap.width);
+    return *this;
 }
 
 V3Number& V3Number::opSelInto(const V3Number& lhs, int lsbval, int width) {

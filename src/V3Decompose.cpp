@@ -509,14 +509,14 @@ class DecomposeRecord final : public VNVisitorConst, public DecomposeBase {
                 return nullptr;
             }
             // Not followed with a variable LSB, or if out of range, so the Place is used whole
-            const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
-            if (!lsbp || lsbp->toSInt() + selp->widthConst() > placep->dtypep->width()) {
+            int lsb = 0;
+            if (!selp->constLsb(lsb) || lsb < 0
+                || int64_t{lsb} + selp->widthConst() > placep->dtypep->width()) {
                 block(placep, selp->fromp());
                 iterateConst(selp->lsbp());
                 return nullptr;
             }
             // Descend into the Place containing the bits, until exact
-            int lsb = lsbp->toSInt();
             int msb = lsb + selp->widthConst() - 1;
             while (lsb != 0 || msb != placep->dtypep->width() - 1) {
                 // Within a component of a type not split
@@ -1002,10 +1002,11 @@ class DecomposeRewrite final : public VNDeleter, public DecomposeBase {
             num.opSel(constp->num(), lsb + width - 1, lsb);
             return new AstConst{flp, num};
         }
-        // A constant bit select, from the bits of what it selects from
+        // A constant bit select within its operand, from the bits of what it selects from
         if (AstSel* const selp = VN_CAST(nodep, Sel)) {
-            if (const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const)) {
-                return newSlice(selp->fromp(), lsbp->toSInt() + lsb, width);
+            int selLsb = 0;
+            if (selp->constLsbInRange(selLsb)) {
+                return newSlice(selp->fromp(), selLsb + lsb, width);
             }
         }
         // A concatenation, from the RHS for the low bits, and the LHS for the high bits

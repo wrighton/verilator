@@ -1,0 +1,8 @@
+%Error: t/t_select_packed_const_eval_bad.v:15:22: Expecting expression to be constant, but can't determine constant for FUNCREF 'assoc_write'
+                                                : ... note: In instance 't'
+        t/t_select_packed_const_eval_bad.v:12:10: ... Location of non-constant ASSOCSEL: Select LHS isn't simple variable
+        t/t_select_packed_const_eval_bad.v:15:22: ... Called from 'assoc_write()' with parameters:
+   15 |   localparam int P = assoc_write();
+      |                      ^~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

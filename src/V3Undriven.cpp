@@ -128,8 +128,9 @@ public:
 
 private:
     // METHODS
-    bool bitNumOk(int bit) const {
-        return bit >= 0 && (bit * FLAGS_PER_BIT < static_cast<int>(m_bitFlags.size()));
+    // One past the last bit of [bit, bit + width) in the variable; a select may extend past it
+    int bitEnd(int bit, int width) const {
+        return static_cast<int>(std::min<int64_t>(int64_t{bit} + width, bitCount()));
     }
     bool usedFlag(int bit) const {
         return m_wholeFlags[FLAG_USED] || m_bitFlags[bit * FLAGS_PER_BIT + FLAG_USED];
@@ -274,26 +275,20 @@ public:
     const AstClocking* getClockingp() const { return m_clockingp; }
     void usedBit(int bit, int width, const AstNode* nodep) {
         UINFO(9, "set u[" << (bit + width - 1) << ":" << bit << "] " << m_varp->name());
-        for (int i = 0; i < width; i++) {
-            if (bitNumOk(bit + i)) {
-                if (!drivenFlag(bit + i)) recordUsedNotDriven(nodep);
-                m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_USED] = true;
-            }
+        for (int i = std::max(bit, 0); i < bitEnd(bit, width); ++i) {
+            if (!drivenFlag(i)) recordUsedNotDriven(nodep);
+            m_bitFlags[i * FLAGS_PER_BIT + FLAG_USED] = true;
         }
     }
     void drivenBit(int bit, int width) {
         UINFO(9, "set d[" << (bit + width - 1) << ":" << bit << "] " << m_varp->name());
-        for (int i = 0; i < width; i++) {
-            if (bitNumOk(bit + i)) m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_DRIVEN] = true;
+        for (int i = std::max(bit, 0); i < bitEnd(bit, width); ++i) {
+            m_bitFlags[i * FLAGS_PER_BIT + FLAG_DRIVEN] = true;
         }
     }
     bool isUsedNotDrivenBit(int bit, int width) const {
-        for (int i = 0; i < width; i++) {
-            if (bitNumOk(bit + i)
-                && (m_wholeFlags[FLAG_USED] || m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_USED])
-                && !(m_wholeFlags[FLAG_DRIVEN]
-                     || m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_DRIVEN]))
-                return true;
+        for (int i = std::max(bit, 0); i < bitEnd(bit, width); ++i) {
+            if (usedFlag(i) && !drivenFlag(i)) return true;
         }
         return false;
     }
@@ -932,11 +927,13 @@ class UndrivenVisitor final : public VNVisitorConst {
     void visit(AstSel* nodep) override {
         AstNodeVarRef* const varrefp = VN_CAST(nodep->fromp(), NodeVarRef);
         AstConst* const constp = VN_CAST(nodep->lsbp(), Const);
+        // A constant position too wide for an int is wholly outside the variable
+        int lsb = 0;
+        const bool constLsb = nodep->constLsb(lsb);
         if (varrefp && constp && !constp->num().isFourState()) {
             warnWriteKind(varrefp);
-            for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
+            for (int usr = 1; constLsb && usr < (m_alwaysCombp ? 3 : 2); ++usr) {
                 UndrivenVarEntry* const entryp = getEntryp(varrefp->varp(), usr);
-                const int lsb = constp->toUInt();
                 if (m_inBBox || varrefp->access().isWriteOrRW()) {
                     // Don't warn if already driven earlier as "a=0; if(a) a=1;" is fine.
                     if (usr == 2 && m_alwaysCombp
@@ -960,11 +957,12 @@ class UndrivenVisitor final : public VNVisitorConst {
             }
             VL_RESTORER(m_memberSelLsb);
             VL_RESTORER(m_memberSelWidth);
-            // The width is known, but an X/Z LSB has no definite offset for toUInt().
-            // Track it like a dynamic index rather than claiming a specific bit range.
-            if (constp && !constp->num().isFourState()
+            // The width is known, but an X/Z or unrepresentable position has no definite
+            // offset. Track it like a dynamic index rather than claiming a specific bit range.
+            const int64_t memberLsb = int64_t{lsb} + (m_memberSelWidth ? m_memberSelLsb : 0);
+            if (constLsb && memberLsb >= 0 && memberLsb <= std::numeric_limits<int>::max()
                 && (VN_IS(nodep->fromp(), Sel) || VN_IS(nodep->fromp(), MemberRef))) {
-                m_memberSelLsb = constp->toUInt() + (m_memberSelWidth ? m_memberSelLsb : 0);
+                m_memberSelLsb = static_cast<int>(memberLsb);
                 if (!m_memberSelWidth) m_memberSelWidth = nodep->width();
             } else {
                 // A dynamic select may access any bit of its constant prefix.
