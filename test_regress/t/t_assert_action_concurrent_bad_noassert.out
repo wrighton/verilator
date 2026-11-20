@@ -1,0 +1,30 @@
+%Error: t/t_assert_action_concurrent_bad.v:16:5: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                               : ... note: In instance 't'
+   16 |     assert property (@(posedge clk) q);   
+      |     ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_action_concurrent_bad.v:19:5: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                               : ... note: In instance 't'
+   19 |     assume property (@(posedge clk) q);   
+      |     ^~~~~~
+%Error: t/t_assert_action_concurrent_bad.v:25:7: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                               : ... note: In instance 't'
+   25 |       cover property (@(posedge clk) q);   
+      |       ^~~~~
+%Error: t/t_assert_action_concurrent_bad.v:30:5: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                               : ... note: In instance 't'
+   30 |     assert property (@(posedge clk) q);   
+      |     ^~~~~~
+%Error: t/t_assert_action_concurrent_bad.v:34:15: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                                : ... note: In instance 't'
+   34 |     if (1'b0) assert property (@(posedge clk) q);   
+      |               ^~~~~~
+%Error: t/t_assert_action_concurrent_bad.v:39:5: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                               : ... note: In instance 't'
+   39 |     assert property (@(posedge clk) q);   
+      |     ^~~~~~
+%Error: t/t_assert_action_concurrent_bad.v:43:5: Concurrent assertion in an action block of a concurrent assertion (IEEE 1800-2023 16.14.1, 16.14.3)
+                                               : ... note: In instance 't'
+   43 |     assert property (@(posedge clk) q);   
+      |     ^~~~~~
+%Error: Exiting due to

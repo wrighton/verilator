@@ -378,6 +378,7 @@ class WidthVisitor final : public VNVisitor {
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
     bool m_underSExpr = false;  // Visiting under a sequence expression
+    bool m_inConcurrentAction = false;  // In the action of a concurrent assertion
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
     bool m_underMemberRef = false;  // Viting under a MemberRef
     AstNodeExpr* m_fromParentp = nullptr;  // Method call or member select iterating its fromp()
@@ -8352,9 +8353,22 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
     }
+    // A concurrent assertion cannot contain another concurrent assertion in its action.
+    // Diagnose the lexical statement before action blocks are copied by later passes.
+    bool replaceConcurrentInAction(AstNodeCoverOrAssert* const nodep) {
+        if (nodep->immediate() || !m_inConcurrentAction) return false;
+        nodep->v3error("Concurrent assertion in an action block of a concurrent assertion"
+                       " (IEEE 1800-2023 16.14.1, 16.14.3)");
+        nodep->replaceWith(new AstBegin{nodep->fileline(), "", nullptr, true});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
     void visit(AstAssert* nodep) override {
         assertAtStatement(nodep);
+        if (replaceConcurrentInAction(nodep)) return;
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
+        VL_RESTORER(m_inConcurrentAction);
+        m_inConcurrentAction |= !nodep->immediate();
         userIterateAndNext(nodep->passsp(), nullptr);
         userIterateAndNext(nodep->failsp(), nullptr);
     }
@@ -8370,7 +8384,10 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstCover* nodep) override {
         assertAtStatement(nodep);
+        if (replaceConcurrentInAction(nodep)) return;
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
+        VL_RESTORER(m_inConcurrentAction);
+        m_inConcurrentAction |= !nodep->immediate();
         userIterateAndNext(nodep->passsp(), nullptr);
     }
     void visit(AstRestrict* nodep) override {
@@ -8700,6 +8717,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_underCast);
         m_underCast = false;  // A called function's body is outside the cast expression.
+        VL_RESTORER(m_inConcurrentAction);
+        m_inConcurrentAction = false;  // The body is not lexically inside the caller's action.
         // Grab width from the output variable (if it's a function)
         if (nodep->didWidth()) return;
         if (nodep->doingWidth()) {
