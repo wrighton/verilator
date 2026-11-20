@@ -9151,19 +9151,28 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
     }
-    // Whether memory operand 'nodep' is stored through a slice, which yields a copy
-    static bool isThroughSlice(const AstNodeExpr* nodep) {
+    // Return why $readmem cannot load memory operand 'nodep' in place, or nullptr if it can. It
+    // must be a variable, or an unpacked array reached from one through fixed-size array elements
+    // and struct or class members, as other selections yield copies or other layouts.
+    static const char* readMemUnsupported(const AstNodeExpr* nodep) {
+        const AstNodeDType* const dtypep = nodep->dtypep()->skipRefp();
+        const bool isWhole = VN_IS(nodep, NodeVarRef);
         while (true) {
-            if (const AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) {
+            if (const AstArraySel* const selp = VN_CAST(nodep, ArraySel)) {
                 nodep = selp->fromp();
             } else if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) {
                 nodep = selp->fromp();
-            } else if (const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
-                // Other than an element access, this is a queue slice
-                if (!methodp->method().isDynElementAccess()) return true;
-                nodep = methodp->fromp();
+            } else if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) {
+                if (!isWhole && !VN_IS(dtypep, UnpackArrayDType)) {
+                    return "into a selected dynamic or associative array";
+                }
+                return nullptr;
+            } else if (VN_IS(nodep, SliceSel)) {
+                return "into a slice of an unpacked array";
+            } else if (VN_IS(nodep, CMethodHard)) {
+                return "through an element of a dynamic array or queue";
             } else {
-                return VN_IS(nodep, SliceSel);
+                return "through an element of an associative array";
             }
         }
     }
@@ -9171,10 +9180,11 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         iterateCheckString(nodep, "filename", nodep->filenamep(), BOTH);
         userIterateAndNext(nodep->memp(), WidthVP{SELF, BOTH}.p());
-        if (VN_IS(nodep, ReadMem) && isThroughSlice(nodep->memp())) {
-            nodep->memp()->v3warn(E_UNSUPPORTED,
-                                  "Unsupported: " << nodep->verilogKwd()
-                                                  << " into a slice of an unpacked array");
+        if (VN_IS(nodep, ReadMem)) {
+            if (const char* const reasonp = readMemUnsupported(nodep->memp())) {
+                nodep->memp()->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: " << nodep->verilogKwd() << " " << reasonp);
+            }
         }
         const AstNodeDType* subp = nullptr;
         if (const AstAssocArrayDType* adtypep
