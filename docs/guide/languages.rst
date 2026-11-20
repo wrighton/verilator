@@ -578,7 +578,8 @@ $readmemb, $readmemh
    Read memory commands are supported, including into an element of a
    multi-dimensional unpacked array, e.g. `mem[i]`. A multi-dimensional
    memory is loaded in row-major order. Reading into a slice of an unpacked
-   array, e.g. `mem[3:2]`, is not supported.
+   array, e.g. `mem[3:2]`, or into an element of a dynamic array, queue, or
+   associative array, is not supported.
 
 $stacktrace
    The `$stacktrace` system call will show the C++ stack, not the Verilog
