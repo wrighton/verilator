@@ -494,7 +494,13 @@ public:
         if (m_instantiatesOwnProcess) {
             AstCStmt* const vlprocp = new AstCStmt{nodep->fileline()};
             vlprocp->add("VlProcessRef vlProcess = std::make_shared<VlProcess>();\n");
-            vlprocp->add("VlProcess::currentp(vlProcess.get());");
+            if (nodep->isCoroutine()) {
+                // The returned VlCoroutine makes the caller's process current again.
+                vlprocp->add("VlProcess::currentp(vlProcess.get());");
+            } else {
+                vlprocp->add(
+                    "const VlProcessCurrentGuard __VprocessCurrentGuard{vlProcess.get()};");
+            }
             nodep->prependStmtsp(vlprocp);
         } else if (nodep->needsVlProcess() && nodep->stmtsp()) {
             // Set current process so VlRNG() constructors in this function seed from it

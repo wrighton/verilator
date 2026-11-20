@@ -363,7 +363,7 @@ public:
 
     ~VlProcess() {
         if (m_parentp) m_parentp->detach(this);
-        if (t_currentp == this) t_currentp = m_parentp.get();
+        if (t_currentp == this) currentp(m_parentp.get());
     }
 
     void attach(VlProcess* childp) { m_children.insert(childp); }
@@ -418,9 +418,17 @@ public:
     std::string randstate() const VL_MT_UNSAFE;
     void randstate(const std::string& state) VL_MT_UNSAFE;
 
-    // Current process tracking for hierarchical object seeding
+    // Current process tracking for hierarchical object seeding. Code that saves the current
+    // process makes it current again before it returns or suspends, while the code further up
+    // the stack that made it current still holds it, so it does not own the saved process.
     static VlProcess* currentp() VL_MT_UNSAFE { return t_currentp; }
-    static void currentp(VlProcess* processp) VL_MT_UNSAFE { t_currentp = processp; }
+    // Set the current process. A killed process is never made current, as it should run no code
+    // that draws from it (IEEE 1800-2023 9.7). A finished process may be: procedures without
+    // timing that run in one function share one process, which the first of them to end
+    // finishes.
+    static void currentp(VlProcess* processp) VL_MT_UNSAFE {
+        t_currentp = processp && processp->state() == KILLED ? nullptr : processp;
+    }
     // Return process RNG if in a process, else thread RNG
     static VlRNG& currentRng() VL_MT_SAFE;
 };
@@ -429,6 +437,20 @@ inline std::string VL_TO_STRING(const VlProcessRef&) { return std::string("proce
 
 // Use process RNG if in a process, else thread RNG (IEEE 1800-2023 18.14)
 inline uint64_t vl_rand64() VL_MT_SAFE { return VlRNG::vl_current_rng_rand64(); }
+
+/// Makes a process current until destroyed, then makes the previous current process current
+/// again, around code that runs in a process of its own (IEEE 1800-2023 18.14.1)
+class VlProcessCurrentGuard final {
+    // Previous current process. Not owned, see VlProcess::currentp()
+    VlProcess* const m_prevp = VlProcess::currentp();
+
+public:
+    explicit VlProcessCurrentGuard(VlProcess* processp) VL_MT_UNSAFE {
+        VlProcess::currentp(processp);
+    }
+    ~VlProcessCurrentGuard() VL_MT_UNSAFE { VlProcess::currentp(m_prevp); }
+    VL_UNCOPYABLE(VlProcessCurrentGuard);
+};
 
 //===================================================================
 // SystemVerilog event type
