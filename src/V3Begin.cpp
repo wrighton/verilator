@@ -69,6 +69,7 @@ class BeginVisitor final : public VNVisitor {
     // STATE - for current visit position (use VL_RESTORER)
     AstNodeModule* m_modp = nullptr;  // Current module
     AstCellInline* m_inlinesp = nullptr;  // AstCellInlines to add to m_modp
+    std::unordered_set<std::string> m_inlineNames;  // Names in m_inlinesp
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     AstNodeProcedure* m_procedurep = nullptr;  // Current procedure
     AstNode* m_liftedp = nullptr;  // Local nodes we are lifting into m_ftaskp
@@ -99,7 +100,8 @@ class BeginVisitor final : public VNVisitor {
             }
             m_unnamedScope = dot(m_unnamedScope, ident);
             // Create CellInline for dotted var resolution
-            if (!m_ftaskp) {
+            // Cloned assertion actions repeat their blocks, so the same name can recur
+            if (!m_ftaskp && m_inlineNames.emplace(m_unnamedScope).second) {
                 AstCellInline* const inlinep = new AstCellInline{flp, m_unnamedScope, blockName};
                 m_inlinesp = AstNode::addNextNull(m_inlinesp, inlinep);
             }
@@ -157,6 +159,7 @@ class BeginVisitor final : public VNVisitor {
         VL_RESTORER_CLEAR(m_unnamedScope);
         VL_RESTORER(m_inlinesp);
         m_inlinesp = nullptr;
+        VL_RESTORER_CLEAR(m_inlineNames);
         iterateChildren(nodep);
         // Must be parsed before any AstCells, so put them first
         nodep->prependStmtsp(m_inlinesp);
