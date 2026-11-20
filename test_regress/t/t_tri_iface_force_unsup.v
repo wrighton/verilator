@@ -4,8 +4,9 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-// Force values that may be z in a way not tracked, from the force value matrix of
-// t_tri_iface_force_matrix, plus values of unknown z-ness.
+// Force values of interface strength nets that may be z in a way not tracked: the
+// unsupported cells of the t_tri_iface_force_matrix value kinds, plus values of unknown
+// z-ness.
 
 // An always driven (weak plus a strong driver) or floating interface strength net
 interface tgt_if #(
@@ -22,12 +23,6 @@ interface tgt_if #(
   end
 endinterface
 
-module const_drv (
-    output wire [1:0] o
-);
-  assign o = 2'b10;
-endmodule
-
 interface src_if;
   logic [1:0] l4 = 2'b11;
   bit [1:0] b2 = 2'b11;
@@ -35,7 +30,17 @@ interface src_if;
   bit ten = 1'b0;
   wire [1:0] wt;
   assign (weak0, weak1) wt = ten ? 2'b10 : 2'bzz;
+  tri0 [1:0] ps;
+  assign (weak0, weak1) ps = 2'b00;
+  wire [1:0] fs;
+  assign (weak0, weak1) fs = 2'b10;
 endinterface
+
+module const_drv (
+    output wire [1:0] o
+);
+  assign o = 2'b10;
+endmodule
 
 module u_partial_net;
   tgt_if tgt (1'b0);
@@ -85,7 +90,7 @@ module u_func_call;
   tgt_if tgt (1'b0);
   bit d = 1'b0;
   function automatic logic [1:0] fz(input bit x);
-  return x ? 2'b01 : 2'bz1;
+    return x ? 2'b01 : 2'bz1;
   endfunction
   task force_value;
     force tgt.value = fz(d);
@@ -135,14 +140,23 @@ module u_cell_const_net;
   end
 endmodule
 
-module u_ports (
-    tgt_if p,
-    inout wire [1:0] io,
-    input wire [1:0] in
-);
+module u_forced_pulled_src;
+  tgt_if tgt (1'b0);
+  src_if s ();
+  initial force s.ps = 2'bzz;
+  task force_value;
+    force tgt.value = s.ps;
+  endtask
   initial begin
-    force p.value = io;
-    force p.value = in;
+    force tgt.value = s.ps;
+  end
+endmodule
+
+module u_and_z_literal;
+  tgt_if tgt (1'b0);
+  bit [1:0] m = 2'b11;
+  initial begin
+    force tgt.value = m & 2'bz1;
   end
 endmodule
 
@@ -159,6 +173,29 @@ module u_class_queue;
   end
 endmodule
 
+// A forced tristate net may be z unless it is an interface strength net
+module u_forced_tristate_src;
+  tgt_if tgt (1'b0);
+  bit ten = 1'b0;
+  wire [1:0] r;
+  assign r = ten ? 2'b11 : 2'bzz;
+  initial begin
+    force r = 2'b01;
+    force tgt.value = r;
+  end
+endmodule
+
+module u_ports (
+    tgt_if p,
+    inout wire [1:0] io,
+    input wire [1:0] in
+);
+  initial begin
+    force p.value = io;
+    force p.value = in;
+  end
+endmodule
+
 module t;
   u_partial_net partial_net ();
   u_undriven_net undriven_net ();
@@ -168,7 +205,10 @@ module t;
   u_tristate_cond tristate_cond ();
   u_bitpull_net bitpull_net ();
   u_cell_const_net cell_const_net ();
+  u_forced_pulled_src forced_pulled_src ();
+  u_and_z_literal and_z_literal ();
   u_class_queue class_queue ();
+  u_forced_tristate_src forced_tristate_src ();
   tgt_if port_tgt (1'b0);
   wire [1:0] port_io;
   assign port_io = 2'bzz;
