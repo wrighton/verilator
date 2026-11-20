@@ -259,7 +259,6 @@ class LinkJumpVisitor final : public VNVisitor {
         }
 
         AstFork* const forkp = new AstFork{fl, VJoinType::JOIN};
-        forkp->disableWrap(true);
         forkp->addForksp(taskBodyp);
         taskp->addStmtsp(forkp);
 
@@ -317,7 +316,6 @@ class LinkJumpVisitor final : public VNVisitor {
         if (beginp->stmtsp()) beginBodyp->addStmtsp(beginp->stmtsp()->unlinkFrBackWithNext());
 
         AstFork* const forkp = new AstFork{fl, VJoinType::JOIN};
-        forkp->disableWrap(true);
         forkp->addForksp(beginBodyp);
         beginp->addStmtsp(forkp);
 
