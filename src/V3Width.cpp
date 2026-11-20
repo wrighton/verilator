@@ -3065,24 +3065,6 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_SIZE: {
             AstNodeDType* const dtypep = fromDTypep(nodep->fromp());
             UASSERT_OBJ(dtypep, nodep, "Unsized expression");
-            // Only worth asking while V3Param still copies templates, and of a type not
-            // written in the query, so in its module.
-            if (m_paramsOnly && v3Global.parameterizing() && dtypep != nodep->fromp()) {
-                // A type reached from another module, on a template still being copied, is
-                // sized once the reference is retargeted to the specialization.  A type in
-                // the query's own module is never retargeted: that module is either used
-                // as is, so final, or dead.
-                const AstNodeModule* const ownModp = v3Global.rootp()->containingModule(dtypep);
-                if (ownModp && ownModp->parameterizedTemplate() && !ownModp->dead()
-                    && ownModp != v3Global.rootp()->containingModule(nodep)) {
-                    UINFO(9, "size deferred, type still on template " << ownModp->name());
-                    // These queries always give an int, so set that now and let the
-                    // value be worked out once the copy exists.
-                    nodep->dtypeSetInt();
-                    return;
-                }
-            }
-
             if (VN_IS(dtypep->skipRefp(), QueueDType)
                 || VN_IS(dtypep->skipRefp(), DynArrayDType)) {
                 switch (nodep->attrType()) {

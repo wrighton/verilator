@@ -1669,23 +1669,12 @@ class AstNetlist final : public AstNode {
     // AstConst itself, as AstConst is a very common node and only a small fraction carry this
     // name.
     std::unordered_map<const AstConst*, string> m_constOrigParamNames;
-    // Module each node is in, see containingModule; empty after V3Param
-    std::unordered_map<const AstNode*, const AstNodeModule*> m_containingModules;
-    // Modules containingModule found in modulesp; empty after V3Param
-    std::unordered_set<const AstNodeModule*> m_linkedModules;
     // The model's evaluation entry point functions
     std::array<AstCFunc*, VEval::_ENUM_END> m_evalFuncps{};
     // The trigger dump function of each region if exists, otherwise nullptr
     std::array<AstCFunc*, VEval::_ENUM_END> m_dumpTriggersFuncps{};
     // Activity flag sets of the design, built by V3Trace for the RTMD.
     std::vector<std::vector<uint32_t>> m_actSets;
-
-    // Walk up from nodep, see containingModule
-    const AstNodeModule* recordContainingModule(const AstNode* nodep);
-    // Whether modp is in the netlist, so the modules of nodes in it may be remembered
-    bool moduleLinked(const AstNodeModule* modp);
-    void forgetContainingModulesSlow(const AstNode* nodep, bool withNext);
-    void linkContainingModulesSlow(const AstNode* newp, const AstNode* nextp);
 
 public:
     AstNetlist();
@@ -1706,25 +1695,6 @@ public:
     string astConstOrigParamName(const AstConst* nodep) const;
     void astConstOrigParamName(const AstConst* nodep, const string& name);
     void astConstOrigParamNameErase(const AstConst* nodep);
-    // Find the module a node is in, remembering what it passed on the way.
-    const AstNodeModule* containingModule(const AstNode* nodep);
-    // nodep, and with withNext the nodes after it, are being unlinked, so may move or be deleted
-    void forgetContainingModules(const AstNode* nodep, bool withNext) {
-        if (VL_LIKELY(m_containingModules.empty() && m_linkedModules.empty())) return;
-        forgetContainingModulesSlow(nodep, withNext);
-    }
-    // The list newp, not linked, is being linked just before nextp
-    void linkContainingModules(const AstNode* newp, const AstNode* nextp) {
-        if (VL_LIKELY(m_containingModules.empty())) return;
-        linkContainingModulesSlow(newp, nextp);
-    }
-    // Forget remembered modules, freeing them
-    void clearContainingModules() {
-        decltype(m_containingModules){}.swap(m_containingModules);
-        decltype(m_linkedModules){}.swap(m_linkedModules);
-    }
-    // Check containingModule, for --debug-self-test
-    static void selfTest();
     AstPackage* constPoolPkgp() const { return m_constPoolPkgp; }
     AstPackage* dollarUnitPkgp() const { return m_dollarUnitPkgp; }
     void dollarUnitPkgp(AstPackage* const packagep) { m_dollarUnitPkgp = packagep; }
