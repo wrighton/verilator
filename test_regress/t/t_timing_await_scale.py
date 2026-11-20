@@ -11,7 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-# Each process awaits the edge of its own bit, so verilation must scale linearly with their number.
+# Each process awaits the edge of its own bit, or its own event sharing an edge with half of the
+# others, so verilation must scale linearly with their number.
 SIZE_RATIO = 4
 SIZE_SMALL = 100
 SIZE_LARGE = SIZE_SMALL * SIZE_RATIO
