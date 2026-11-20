@@ -273,12 +273,12 @@ module t;
   end
 
   // End of simulation failures share the static variables of the earlier ones
-  bit [1:0] eos_ran = 0;
+  bit [2:0] eos_ran = 0;
 
   task eos_finish(int bit_index);
     `checkd(eos_ran[bit_index], 1'b0);
     eos_ran[bit_index] = 1'b1;
-    if (eos_ran == 2'b11) $write("*-* All Finished *-*\n");
+    if (eos_ran == 3'b111) $write("*-* All Finished *-*\n");
   endtask
 
   // A strong property still pending
@@ -297,6 +297,22 @@ module t;
       `checkd(always_fails > 0, 1'b1);
       `checkd(count, always_fails + always_eos_fails);
       if (always_eos_fails == 1) eos_finish(0);
+    end
+  end
+
+  // The same from an unnamed action, through a nested block declared after the reference
+  int always_child_eos_fails = 0;
+
+  assert property (@(posedge clk) s_always [1:3] b)
+  else begin
+    if (done) begin
+      ++always_child_eos_fails;
+      `checkd(child.slot, always_fails + always_child_eos_fails - 1);
+      if (always_child_eos_fails == 1) eos_finish(2);
+    end
+    begin : child
+      static int slot = 0;
+      ++slot;
     end
   end
 
