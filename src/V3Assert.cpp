@@ -727,9 +727,11 @@ class AssertDeFutureVisitor final : public VNVisitor {
     const AstFuture* m_futurep;  // First AstFuture found
     const unsigned m_pastNum;  // Prefix unique number for this module
     std::map<AstVar*, AstVar*> m_delayedVars;  // Old to delayed variable mapping
+    std::map<AstVar*, AstVar*> m_delayedDisableVars;  // Same, in the disable condition
     // STATE - for current visit position (use VL_RESTORER)
     bool m_inFuture = false;  // Inside a future
     bool m_inDisable = false;  // Inside a disable condition
+    bool m_inSampled = false;  // Inside a sampled value function
     bool m_unsupported = false;  // Printed unsupported
 
     // METHODS
@@ -764,6 +766,11 @@ class AssertDeFutureVisitor final : public VNVisitor {
         iterateAndNextNull(nodep->propp());
         iterateAndNextNull(nodep->matchCountp());
     }
+    void visit(AstSampled* nodep) override {
+        VL_RESTORER(m_inSampled);
+        m_inSampled = true;
+        iterateChildren(nodep);
+    }
     void visit(AstFuture* nodep) override {
         // A disable condition is not a property or sequence expression, so leave a future value
         // function there for AssertVisitor to reject (IEEE 1800-2023 16.9.4)
@@ -783,14 +790,24 @@ class AssertDeFutureVisitor final : public VNVisitor {
             unsupported(nodep);
             return;
         }
-        auto it = m_delayedVars.find(nodep->varp());
+        // In the disable condition, other than in a sampled value function, the current value
+        // (IEEE 1800-2023 16.12)
+        const bool current = m_inDisable && !m_inSampled;
+        std::map<AstVar*, AstVar*>& delayedVars = current ? m_delayedDisableVars : m_delayedVars;
+        auto it = delayedVars.find(nodep->varp());
         AstVar* outvarp;
-        if (it == m_delayedVars.end()) {
-            AstNodeVarRef* const valuep = nodep->cloneTree(false);
-            valuep->user1(true);
-            outvarp = newDelayedVar("__Vnotfuture" + cvtToStr(m_pastNum) + "_" + nodep->name(),
+        if (it == delayedVars.end()) {
+            AstNodeVarRef* const refp = nodep->cloneTree(false);
+            refp->user1(true);
+            // Sampled, as a derived clock may tick after an update (IEEE 1800-2023 16.9.4)
+            AstNodeExpr* valuep = refp;
+            if (!current) {
+                valuep = new AstSampled{nodep->fileline(), refp, nodep->dtypep(), true};
+            }
+            outvarp = newDelayedVar((current ? "__VnotfutureDisable" : "__Vnotfuture")
+                                        + cvtToStr(m_pastNum) + "_" + nodep->name(),
                                     valuep);
-            m_delayedVars.emplace(nodep->varp(), outvarp);
+            delayedVars.emplace(nodep->varp(), outvarp);
         } else {
             outvarp = it->second;
         }
