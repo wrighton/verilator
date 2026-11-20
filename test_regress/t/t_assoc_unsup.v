@@ -44,7 +44,22 @@ module t;
     qw = '{1: 100, 2: 200, 3: 300};
     qwv = qw.map(el) with (el / 100);
 
+    begin
+      typedef struct {
+        int x;
+        int y;
+      } xy_t;
+      xy_t qxy[$][int];
+      int i;
+      // Further select of an element in a queue's '$' element passed to a const ref
+      i = get_val(qxy[$][1].y);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
+
+  function automatic int get_val(const ref int v);
+    return v;
+  endfunction
 endmodule
