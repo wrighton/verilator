@@ -2570,6 +2570,7 @@ class SvaNfaLowering final {
     AstNodeModule* const m_modp;  // Module to add state vars and always blocks to
     AstNodeDType* const m_u32DTypep;  // Shared unsigned counter dtype
     V3UniqueNames m_names{"__Vnfa"};  // Unique names for generated variables
+    V3UniqueNames& m_actionNames;  // Automatics of cloned actions
     size_t m_statDelayRingEdgeVisits = 0;  // Delay-ring incoming edges visited
     size_t m_statLinkEdgeVisits = 0;  // Incoming edges visited while resolving Links
 
@@ -3721,9 +3722,10 @@ public:
         return resultExprp;
     }
 
-    explicit SvaNfaLowering(AstNodeModule* modp)
+    SvaNfaLowering(AstNodeModule* modp, V3UniqueNames& actionNames)
         : m_modp{modp}
-        , m_u32DTypep{modp->findBasicDType(VBasicDTypeKwd::UINT32)} {}
+        , m_u32DTypep{modp->findBasicDType(VBasicDTypeKwd::UINT32)}
+        , m_actionNames{actionNames} {}
     ~SvaNfaLowering() {
         V3Stats::addStatSum("Assertions, NFA delay ring edge visits", m_statDelayRingEdgeVisits);
         V3Stats::addStatSum("Assertions, NFA link edge visits", m_statLinkEdgeVisits);
@@ -3740,7 +3742,7 @@ public:
         });
         AstNodeStmt* stmtsp;
         if (failsp && !hasTimingControl) {
-            stmtsp = V3AssertCommon::cloneAction(failsp, m_names);
+            stmtsp = V3AssertCommon::cloneAction(failsp, m_actionNames);
             // An NBA, legal in an action block, executes as a blocking assignment in a final
             // block, so FINALDLY does not apply
             stmtsp->foreachAndNext([](AstAssignDly* const dlyp) {
@@ -5403,7 +5405,7 @@ class AssertNfaVisitor final : public VNVisitor {
             m_defaultClockingp = V3AssertCommon::moduleDefaultClockingp(nodep);
         }
         m_defaultDisablep = nodep->defaultDisablep();
-        SvaNfaLowering lowering{nodep};
+        SvaNfaLowering lowering{nodep, m_actionNames};
         m_loweringp = &lowering;
         iterateChildren(nodep);
     }
