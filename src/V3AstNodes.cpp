@@ -3949,12 +3949,14 @@ void AstPin::dump(std::ostream& str) const {
     if (defparamGenAlt()) str << " [GENALT]";
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
+    if (returnWrittenInput()) str << " [RETURNWRITTENINPUT]";
 }
 void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
     dumpJsonBoolFuncIf(str, defparamGenAlt);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
+    dumpJsonBoolFuncIf(str, returnWrittenInput);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
     dumpJsonGen(str);
 }
@@ -4093,6 +4095,14 @@ void AstRefDType::dumpSmall(std::ostream& str) const {
 AstNodeDType* AstRefDType::subDTypep() const VL_MT_STABLE {
     if (typedefp()) return typedefp()->subDTypep();
     return refDTypep();  // Maybe nullptr
+}
+void AstReplicate::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (sourceReplication()) str << " [SRCREPL]";
+}
+void AstReplicate::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, sourceReplication);
+    dumpJsonGen(str);
 }
 void AstRtmdDTAtom::dump(std::ostream& str) const {
     Super::dump(str);
@@ -5060,6 +5070,7 @@ void AstVar::dump(std::ostream& str) const {
     }
     if (hasUserInit()) str << " [UINIT]";
     if (icoMaybeWritten()) str << " [ICOMAYBEWRITTEN]";
+    if (resolveWrittenInput()) str << " [RESOLVEWRITTENINPUT]";
     if (isDpiOpenArray()) str << " [DPIOPENA]";
     if (ignorePostWrite()) str << " [IGNPWR]";
     if (ignoreSchedWrite()) str << " [IGNWR]";
@@ -5102,6 +5113,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     }
     dumpJsonBoolFuncIf(str, attrFileDescr);
     dumpJsonBoolFuncIf(str, icoMaybeWritten);
+    dumpJsonBoolFuncIf(str, resolveWrittenInput);
     dumpJsonBoolFuncIf(str, isDpiOpenArray);
     dumpJsonBoolFuncIf(str, isFuncReturn);
     dumpJsonBoolFuncIf(str, isFuncLocal);

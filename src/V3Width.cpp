@@ -79,6 +79,7 @@
 #include "V3ConstPool.h"
 #include "V3Error.h"
 #include "V3Global.h"
+#include "V3Inst.h"
 #include "V3LinkLValue.h"
 #include "V3MemberMap.h"
 #include "V3Number.h"
@@ -451,6 +452,25 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_set<const AstVar*> m_foreachVars;  // Loop variables of enclosing foreaches
     std::unordered_set<const AstVar*>
         m_valueConnectedPortps;  // Ports connected to value expressions
+    std::unordered_set<const AstPin*>
+        m_valueSyntaxPinps;  // Pins originally connected to value expressions
+    struct NetInterval final {
+        AstVar* varp;  // Declared storage
+        std::string scope;  // Hierarchical path, empty for local references
+        std::vector<std::pair<int, int>> selects;  // Normalized ranges, outermost first
+        int width;  // Selected bits
+        bool fourstate;  // Type of the selected expression
+        bool crossesUnpacked;  // One or more array element selections
+        bool operator==(const NetInterval& other) const {
+            return std::tie(varp, scope, selects, width, fourstate, crossesUnpacked)
+                   == std::tie(other.varp, other.scope, other.selects, other.width,
+                               other.fourstate, other.crossesUnpacked);
+        }
+    };
+    std::unordered_map<const AstPin*, std::vector<NetInterval>>
+        m_sourceNetPins;  // Original local storage intervals, before input assignment sizing
+    std::unordered_map<const AstPin*, int>
+        m_pinProjections;  // Selections of an instance array element, one per dimension
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -9400,6 +9420,7 @@ class WidthVisitor final : public VNVisitor {
                 AstArraySel* const selp = new AstArraySel{fromp->fileline(), fromp, bit};
                 selp->didWidth(true);
                 nodep->exprp(selp);
+                ++m_pinProjections[nodep];
             }
             return pinInstArrayElement(nodep, subRangep, idx % subElems);
         }
@@ -9433,6 +9454,7 @@ class WidthVisitor final : public VNVisitor {
                                             selwidth * (elements - 1 - fromLeft), selwidth};
             selp->didWidth(true);
             nodep->exprp(selp);
+            ++m_pinProjections[nodep];
             return pinInstArrayElement(nodep, subRangep, idx % subElems);
         }
 
@@ -9481,12 +9503,13 @@ class WidthVisitor final : public VNVisitor {
                 if (nodep->modVarp()->isIfaceArraySplit()) expandIfaceArrayPin(nodep);
                 return;
             }
-            // Widthing can erase value-only syntax, e.g. lowering a pattern to a concat.
-            // Remember it before typing so it cannot become an inout destination later.
+            // Remember value-only syntax before typing, which can lower it to a net reference.
             if (pinDirection.isInput() && nodep->modVarp()->isNetOrNetPort()
-                && nodep->modVarp()->dtypep()->skipRefp()->isIntegralOrPacked()
                 && !isNetLValueSyntax(nodep->exprp())) {
-                m_valueConnectedPortps.emplace(nodep->modVarp());
+                m_valueSyntaxPinps.emplace(nodep);
+                if (nodep->modVarp()->dtypep()->skipRefp()->isIntegralOrPacked()) {
+                    m_valueConnectedPortps.emplace(nodep->modVarp());
+                }
             }
             if (VN_IS(nodep->exprp(), NodeStream) && pinDirection.isInoutOrRef()) {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
@@ -9571,6 +9594,15 @@ class WidthVisitor final : public VNVisitor {
             UASSERT_OBJ(conDTypep, nodep, "Unlinked pin data type");
             modDTypep = modDTypep->skipRefp();
             conDTypep = conDTypep->skipRefp();
+            if (pinDirection.isInput() && nodep->modVarp()->isNetOrNetPort()
+                && !m_valueSyntaxPinps.count(nodep)
+                && (modDTypep->isIntegralOrPacked() || similarDTypeRecurse(conDTypep, modDTypep))
+                && conDTypep->isFourstate() == modDTypep->isFourstate()) {
+                std::vector<NetInterval> intervals;
+                if (sourceNetIntervals(VN_AS(nodep->exprp(), NodeExpr), intervals)) {
+                    m_sourceNetPins.emplace(nodep, std::move(intervals));
+                }
+            }
             // An interface port, or an array of them, needs interface instances, not virtual
             // interfaces
             if (const AstIfaceRefDType* const modIrefp
@@ -14382,7 +14414,7 @@ class WidthVisitor final : public VNVisitor {
         }
         // A concatenation '{a, b}' is a replication of one
         if (AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
-            return VN_AS(repp->countp(), Const)->toUInt() == 1
+            return !repp->sourceReplication() && VN_AS(repp->countp(), Const)->toUInt() == 1
                    && coercibleConn(repp->srcp(), netps);
         }
         AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
@@ -14398,7 +14430,12 @@ class WidthVisitor final : public VNVisitor {
     // later lowers it to references to nets.
     static bool isNetLValueSyntax(const AstNode* exprp) {
         if (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
-            return isNetLValueSyntax(selp->fromp());
+            // A select by a runtime position is not a fixed destination. Only the position of a
+            // bit select or the base of an indexed part-select may vary at runtime; the width of
+            // an indexed part-select and the indices of a range are constant expressions,
+            // evaluated during elaboration even if they call a function (IEEE 1800-2023 11.5.1).
+            const bool runtimePosition = !VN_IS(selp, SelExtract) && isRuntimeIndex(selp->rhsp());
+            return !runtimePosition && isNetLValueSyntax(selp->fromp());
         }
         if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
             return isNetLValueSyntax(selp->fromp());
@@ -14410,9 +14447,147 @@ class WidthVisitor final : public VNVisitor {
             return isNetLValueSyntax(catp->lhsp()) && isNetLValueSyntax(catp->rhsp());
         }
         if (const AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
-            return isNetLValueSyntax(repp->srcp());
+            return !repp->sourceReplication() && isNetLValueSyntax(repp->srcp());
         }
-        return VN_IS(exprp, NodeVarRef);
+        // A variable is a value, not a net destination, also by a hierarchical reference
+        if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
+            return !refp->varp() || refp->varp()->isNetOrNetPort();
+        }
+        return false;
+    }
+    // Whether an index may vary at runtime
+    static bool isRuntimeIndex(const AstNode* indexp) {
+        return indexp && indexp->exists([](const AstNode* const nodep) {
+            if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+                return !refp->varp() || (!refp->varp()->isParam() && !refp->varp()->isGenVar());
+            }
+            return VN_IS(nodep, NodeFTaskRef);
+        });
+    }
+
+    // These intervals describe typed local net destinations, not assignment conversions.
+    static bool sourceNetIntervals(AstNodeExpr* exprp, std::vector<NetInterval>& intervals) {
+        if (const AstConcat* const catp = VN_CAST(exprp, Concat)) {
+            return sourceNetIntervals(catp->lhsp(), intervals)
+                   && sourceNetIntervals(catp->rhsp(), intervals);
+        }
+        if (const AstReplicate* const repp = VN_CAST(exprp, Replicate)) {
+            return !repp->sourceReplication() && repp->countp()->isOne()
+                   && sourceNetIntervals(repp->srcp(), intervals);
+        }
+        NetInterval interval;
+        if (!sourceNetLeaf(exprp, interval)) return false;
+        intervals.push_back(std::move(interval));
+        return true;
+    }
+    // Whether the position of a select of a net is a known constant that fits in 32 bits,
+    // returning it as the index
+    static bool sourceNetIndex(AstNodeExpr* indexp, uint32_t& index) {
+        const AstConst* const constp = foldedConstp(indexp);
+        const bool known = constp && !constp->num().isOpaque() && !constp->num().isFourState()
+                           && constp->num().fitsInUInt();
+        if (known) index = constp->num().toUInt();
+        return known;
+    }
+    static bool sourceNetLeaf(AstNodeExpr* exprp, NetInterval& interval) {
+        const int width = exprp->width();
+        const bool fourstate = exprp->dtypep()->isFourstate();
+        std::vector<std::pair<int, int>> ranges;
+        bool crossesUnpacked = false;
+        while (true) {
+            // Each select is of bits within the net, or of an element of an unpacked array of
+            // nets, as its position, count and the size of what it selects from
+            AstNodeExpr* fromp = nullptr;
+            AstNodeExpr* indexp = nullptr;
+            int count = 1;
+            int64_t size = 0;
+            if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+                fromp = selp->fromp();
+                indexp = selp->lsbp();
+                count = selp->widthConst();
+                size = fromp->width();
+            } else if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                const AstUnpackArrayDType* const arrayp
+                    = VN_CAST(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
+                if (!arrayp) return false;
+                fromp = selp->fromp();
+                indexp = selp->bitp();
+                size = arrayp->elementsConst();
+                crossesUnpacked = true;
+            } else {
+                break;
+            }
+            uint32_t index = 0;
+            if (!sourceNetIndex(indexp, index) || count <= 0 || int64_t{index} + count > size)
+                return false;
+            ranges.emplace_back(static_cast<int>(index), static_cast<int>(index) + count - 1);
+            exprp = fromp;
+        }
+        const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
+        if (!refp || !refp->varp()->isNetOrNetPort() || width <= 0) return false;
+        const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef);
+        interval = NetInterval{refp->varp(),      xrefp ? xrefp->dotted() : "",
+                               std::move(ranges), width,
+                               fourstate,         crossesUnpacked};
+        return true;
+    }
+    // How a connection may differ from its original net destination
+    enum class NetProjection : uint8_t {
+        NONE,  // Exactly the original destination
+        INSTANCE,  // Or an instance array element of it
+        ANY  // Or also the low bits of originally wider storage
+    };
+    // The operand of a constant select generated for an instance array element, or nullptr
+    static AstNodeExpr* projectionFromp(AstNodeExpr* exprp) {
+        if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            return VN_IS(selp->lsbp(), Const) ? selp->fromp() : nullptr;
+        }
+        const AstArraySel* const selp = VN_CAST(exprp, ArraySel);
+        return selp && VN_IS(selp->bitp(), Const) ? selp->fromp() : nullptr;
+    }
+    // Whether a net interval is the low bits of another, from one more select
+    static bool lowBitsOf(const NetInterval& target, const NetInterval& source) {
+        return target.width < source.width && target.selects.size() == source.selects.size() + 1
+               && target.selects.front() == std::make_pair(0, target.width - 1);
+    }
+    bool sourceNetPinMatches(const AstPin* const pinp,
+                             NetProjection projection = NetProjection::NONE) const {
+        const auto proof = m_sourceNetPins.find(pinp);
+        AstNodeExpr* const actualp = VN_CAST(pinp->exprp(), NodeExpr);
+        if (proof == m_sourceNetPins.end() || !actualp
+            || actualp->width() != pinp->modVarp()->width()
+            || actualp->dtypep()->isFourstate() != pinp->modVarp()->dtypep()->isFourstate()) {
+            return false;
+        }
+        std::vector<NetInterval> current;
+        const bool mapped = sourceNetIntervals(actualp, current);
+        if (mapped && current == proof->second) return true;
+        if (projection == NetProjection::NONE) return false;
+        // The selections of an instance array element (IEEE 1800-2023 23.3.3.5), one per
+        // dimension, may cross multiple source leaves
+        const auto projections = m_pinProjections.find(pinp);
+        if (projections != m_pinProjections.end()) {
+            // Each projection is a constant select, of a packed connection, or of an element of
+            // an unpacked one, generated after the proof was recorded
+            AstNodeExpr* sourcep = actualp;
+            for (int i = 0; sourcep && i < projections->second; ++i) {
+                sourcep = projectionFromp(sourcep);
+            }
+            std::vector<NetInterval> source;
+            if (sourcep && sourceNetIntervals(sourcep, source) && source == proof->second) {
+                return true;
+            }
+        }
+        // The established collapse routes also allow a low-bit projection of
+        // originally wider storage, but not one that starts from a value expression.
+        if (projection != NetProjection::ANY || !mapped || current.size() != 1
+            || proof->second.size() != 1 || !lowBitsOf(current.front(), proof->second.front()))
+            return false;
+        const NetInterval& source = proof->second.front();
+        NetInterval& target = current.front();
+        target.width = source.width;
+        target.selects.erase(target.selects.begin());
+        return target == source;
     }
 
 public:
@@ -14510,7 +14685,11 @@ public:
                       && varp->dtypep()->skipRefp()->isIntegralOrPacked();
             for (AstPin* const pinp : pinps[varp]) {
                 std::vector<AstVar*> netps;
-                if (pinp->exprp() && !coercibleConn(pinp->exprp(), netps)) ok = false;
+                if (pinp->exprp()
+                    && (!sourceNetPinMatches(pinp, NetProjection::ANY)
+                        || !coercibleConn(pinp->exprp(), netps))) {
+                    ok = false;
+                }
                 for (AstVar* const netp : netps) {
                     if (!netp->isInput()) continue;
                     pair.first->second.push_back(netp);
@@ -14574,6 +14753,16 @@ public:
         for (const auto& cellPin : cellPinps) {
             AstPin* const pinp = cellPin.second;
             if (pinp->modVarp()->direction() != VDirection::INPUT) continue;  // Coerced
+            if (m_valueSyntaxPinps.count(pinp)) {
+                AstVar* const varp = pinp->modVarp();
+                if (m_coercedPortps.count(varp) && !m_procWrittenps.count(varp)
+                    && varp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+                    // The local driver and the incoming value share the formal, not the actual.
+                    varp->setResolveWrittenInput();
+                }
+                continue;
+            }
+            if (!sourceNetPinMatches(pinp, NetProjection::ANY)) continue;
             Conn conn{cellPin.first, pinp, nullptr, {}, false};
             AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
             conn.netp = exprp ? selectedNetp(exprp, conn.ranges) : nullptr;
@@ -14599,6 +14788,36 @@ public:
                 = new AstVarXRef{flp, conn.pinp->modVarp(), conn.cellp->name(), VAccess::READ};
             conn.cellp->addNextHere(new AstAlways{new AstAssignW{flp, exprp, rhsp}});
         }  // LCOV_EXCL_LINE
+        // All written formals have now been classified. A true net connection may
+        // carry the local continuous drive back even if a different pin is value-only.
+        for (const auto& cellPin : cellPinps) {
+            AstPin* const pinp = cellPin.second;
+            AstVar* const formalp = pinp->modVarp();
+            if (!formalp->resolveWrittenInput() || formalp->isWiredNet() || formalp->delayp()) {
+                continue;
+            }
+            // An instance array element of a net is a net destination too, but not an input
+            // assignment conversion
+            if (!sourceNetPinMatches(pinp, NetProjection::INSTANCE)) continue;
+            AstNodeExpr* const actualp = VN_AS(pinp->exprp(), NodeExpr);
+            std::vector<AstVar*> netps;
+            if (actualp->exists([](const AstVarXRef*) { return true; })
+                || !coercibleConn(actualp, netps)
+                || std::any_of(netps.begin(), netps.end(), [&](AstVar* const netp) {
+                       return netp->isWiredNet() || netp->delayp() || netp->isIO()
+                              || m_aliasedVars.count(netp);
+                   }))
+                continue;
+            pinp->setReturnWrittenInput();
+            linkCollapsedWrite(actualp);
+        }
+        for (size_t i = 0; i < cellPinps.size(); ++i) {
+            AstPin* const pinp = cellPinps[i].second;
+            if (m_valueSyntaxPinps.count(pinp) && pinp->exprp() && !VN_IS(pinp->exprp(), Const)) {
+                // Keep the one-way assignment even if the expression later folds to a VarRef.
+                V3Inst::pinReconnectSimple(pinp, cellPinps[i].first, false, true);
+            }
+        }
     }
     // Whether constant selects of a net, as from selectedNetp, may share bits
     static bool rangesOverlap(const std::vector<std::pair<int, int>>& ap,
