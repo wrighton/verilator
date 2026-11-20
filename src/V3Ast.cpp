@@ -438,6 +438,10 @@ void AstNode::addNextHere(AstNode* newp) {
     debugTreeChange(this, "-addHereThs: ", __LINE__, false);
     debugTreeChange(newp, "-addHereNew: ", __LINE__, true);
     newp->editCountInc();
+    if (m_nextp) {
+        if (AstNetlist* const netlistp = v3Global.rootp())
+            netlistp->linkContainingModules(newp, m_nextp);
+    }
 
     AstNode* const addlastp = newp->m_headtailp;  // Last node in list to be added
     UASSERT_OBJ(!addlastp->m_nextp, addlastp, "Headtailp tail isn't at the tail");
@@ -637,6 +641,8 @@ AstNode* AstNode::unlinkFrBackWithNext(VNRelinker* linkerp) {
     AstNode* const oldp = this;
     UASSERT_OBJ(oldp->m_backp, oldp, "Node has no back, already unlinked?");
     oldp->editCountInc();
+    if (AstNetlist* const netlistp = v3Global.rootp())
+        netlistp->forgetContainingModules(oldp, true);
     // cppcheck-suppress shadowFunction
     AstNode* const backp = oldp->m_backp;
     if (linkerp) {
@@ -703,6 +709,8 @@ AstNode* AstNode::unlinkFrBack(VNRelinker* linkerp) {
     AstNode* const oldp = this;
     UASSERT_OBJ(oldp->m_backp, oldp, "Node has no back, already unlinked?");
     oldp->editCountInc();
+    if (AstNetlist* const netlistp = v3Global.rootp())
+        netlistp->forgetContainingModules(oldp, false);
     // cppcheck-suppress shadowFunction
     AstNode* const backp = oldp->m_backp;
     if (linkerp) {
@@ -819,6 +827,8 @@ void AstNode::relink(VNRelinker* linkerp) {
 void AstNode::relinkOneLink(AstNode*& pointpr,  // Ref to pointer that gets set to newp
                             AstNode* newp) {
     if (pointpr) {
+        if (AstNetlist* const netlistp = v3Global.rootp())
+            netlistp->linkContainingModules(newp, pointpr);
         // We know there will be at least two elements when we are done,
         //    (newp & the old list).
         // We *ALLOW* the new node to have its own next list.
@@ -848,6 +858,7 @@ void AstNode::addHereThisAsNext(AstNode* newp) {
     UASSERT_OBJ(!newp->backp(), newp, "New node already linked?");
     UASSERT_OBJ(this->m_backp, this, "'this' node has no back, already unlinked?");
     UASSERT_OBJ(newp->m_headtailp, newp, "m_headtailp not set on new node");
+    if (AstNetlist* const netlistp = v3Global.rootp()) netlistp->linkContainingModules(newp, this);
     //
     // cppcheck-suppress shadowFunction
     AstNode* const backp = this->m_backp;

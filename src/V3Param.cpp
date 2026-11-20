@@ -3413,8 +3413,6 @@ class ParamVisitor final : public VNVisitor {
             AstNodeModule* const modp = itm->second;
             workQueue.erase(itm);
             m_processor.visitModp(modp);
-            // Starting a new module, so what was learned about the last one no longer holds.
-            v3Global.rootp()->clearContainingModules();
 
             // Process once; note user2 will be cleared on specialization, so we will do the
             // specialized module if needed
@@ -4612,8 +4610,10 @@ void V3Param::param(AstNetlist* rootp) {
     rootp->clearDeferredParamVarps();  // Defensive: drop any stragglers from a prior invocation
 
     if (dumpTreeEitherLevel() >= 9) V3LinkDotIfaceCapture::dumpEntries("before V3Param");
+    v3Global.parameterizing(true);
     { ParamTop{rootp}; }
-    // The memo is only good while parameterizing, and the tree moves after.
+    v3Global.parameterizing(false);
+    // The memo is used only while parameterizing
     rootp->clearContainingModules();
     if (dumpTreeEitherLevel() >= 9) V3LinkDotIfaceCapture::dumpEntries("after V3Param");
 
