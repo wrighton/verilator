@@ -488,6 +488,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         std::map<int, int> bitPulls;  // Per-bit pull: bit_index -> direction (1=up, 0=down)
         bool assigned = false;  // Written as a whole other than by a cell's port connection
         std::vector<bool> selBits;  // Bits written by constant selects
+        int selBitCount = 0;  // Number of bits set in selBits
         bool cellOutput = false;  // Written by a cell's port connection, so may carry a z the
                                   // cell's module did not recognise as tristate
     };
@@ -2835,9 +2836,13 @@ class TristateVisitor final : public TristateBaseVisitor {
                         aux.selBits.resize(nodep->width());
                         const int msb = std::min(lsbp->toSInt() + selp->widthConst(),
                                                  nodep->width());  // Out of range bits ignored
-                        for (int i = lsbp->toSInt(); i < msb; ++i) aux.selBits[i] = true;
-                        aux.assigned |= std::find(aux.selBits.begin(), aux.selBits.end(), false)
-                                        == aux.selBits.end();
+                        for (int i = lsbp->toSInt(); i < msb; ++i) {
+                            if (!aux.selBits[i]) {
+                                aux.selBits[i] = true;
+                                ++aux.selBitCount;
+                            }
+                        }
+                        aux.assigned |= aux.selBitCount == nodep->width();
                     }
                 } else if (!VN_IS(nodep->backp(), NodeSel)) {
                     aux.assigned = true;
