@@ -1162,10 +1162,7 @@ bool V3Number::fitsInUInt() const VL_MT_SAFE {
 uint32_t V3Number::toUInt() const VL_MT_SAFE {
     UASSERT(!isFourState(), "toUInt with 4-state " << *this);
     // We allow wide numbers that represent values <= 32 bits
-    if (VL_UNCOVERABLE(!fitsInUInt())) {
-        v3error("Value too wide for 32-bits expected in this context "  // LCOV_EXCL_LINE
-                << *this);
-    }
+    if (!fitsInUInt()) v3error("Value too wide for 32-bits expected in this context " << *this);
     return m_data.num()[0].m_value;
 }
 
