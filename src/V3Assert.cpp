@@ -719,7 +719,20 @@ AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
 // All executions of an action share its static variables, initialized once, and each has its
 // own automatic variables (IEEE 1800-2023 6.21). So the clone refers to the original static
 // declarations, and renames its automatic ones, which V3Begin may lift to the same scope.
-AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* actionp, V3UniqueNames& names) {
+AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* const actionp, V3UniqueNames& names) {
+    // V3LinkDot finds hierarchical references again by name, which fails for a clone in
+    // another scope, so refer to the variables of the action directly
+    std::unordered_set<const AstVar*> declVarps;  // Variables declared in the action
+    actionp->foreachAndNext([&](const AstVar* const varp) { declVarps.emplace(varp); });
+    std::vector<AstVarXRef*> xrefps;  // Hierarchical references to them
+    actionp->foreachAndNext([&](AstVarXRef* const xrefp) {
+        if (declVarps.count(xrefp->varp())) xrefps.push_back(xrefp);
+    });
+    for (AstVarXRef* const xrefp : xrefps) {
+        xrefp->replaceWithKeepDType(
+            new AstVarRef{xrefp->fileline(), xrefp->varp(), xrefp->access()});
+        VL_DO_DANGLING(xrefp->deleteTree(), xrefp);
+    }
     AstNodeStmt* const clonep = actionp->cloneTree(true);
     std::unordered_map<const AstVar*, AstVar*> origVarps;  // Cloned to original static variable
     actionp->foreachAndNext([&](AstVar* const varp) {
@@ -1768,6 +1781,12 @@ class AssertVisitor final : public VNVisitor {
                                                       remainingp->dtypep()->width(), 1}}});
             replaysp->addNext(loopp);
             passsp = replaysp;
+        }
+        // A discarded cover runs no action, so also not at the end of simulation
+        if (selfDestruct) {
+            if (AstPExpr* const pexprp = VN_CAST(propExprp, PExpr)) {
+                if (pexprp->finalp()) pushDeletep(pexprp->finalp()->unlinkFrBack());
+            }
         }
         AstNodeStmt* bodysp = assertBody(nodep, propExprp, passsp, failsp);
         if (disablep) bodysp = new AstIf{flp, new AstLogNot{flp, disablep}, bodysp};
