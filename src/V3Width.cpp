@@ -493,6 +493,11 @@ class WidthVisitor final : public VNVisitor {
         int width;  // Selected bits
         bool fourstate;  // Type of the selected expression
         bool crossesUnpacked;  // One or more array element selections
+        int packedOffset() const {
+            int64_t total = 0;
+            for (const std::pair<int, int>& range : selects) total += range.first;
+            return static_cast<int>(total);
+        }
         bool operator==(const NetInterval& other) const {
             return std::tie(varp, scope, selects, width, fourstate, crossesUnpacked)
                    == std::tie(other.varp, other.scope, other.selects, other.width,
@@ -503,6 +508,15 @@ class WidthVisitor final : public VNVisitor {
         m_sourceNetPins;  // Original local storage intervals, before input assignment sizing
     std::unordered_map<const AstPin*, int>
         m_pinProjections;  // Selections of an instance array element, one per dimension
+    AstPin* m_connectionPinp = nullptr;  // Pin whose connection is being iterated
+    bool m_provingPatternSelects = false;  // Observe geometry before ordinary index resizing
+    bool m_originalPatternSelectsValid = true;  // Original select geometry is valid
+    struct PatternNetLeaf final {
+        NetInterval storage;  // Source net bits, in normalized coordinates
+        int memberLsb;  // Field's resolved bit position in the typed constructor
+    };
+    // Owned typed provenance; no Pattern or PatternItem pointers survive their lowering.
+    std::unordered_map<const AstPin*, std::vector<PatternNetLeaf>> m_patternNetPinProofs;
 
     static constexpr int ENUM_LOOKUP_BITS = 16;  // Maximum # bits to make enum lookup table
 
@@ -1499,7 +1513,10 @@ class WidthVisitor final : public VNVisitor {
         // Signed: always unsigned; Real: Not allowed
         // LSB is self-determined (IEEE 2012 11.5.1)
         // We also use SELs to shorten a signed constant etc, in this case they are signed.
-        if (nodep->didWidth()) return;
+        if (nodep->didWidth()) {
+            if (m_provingPatternSelects) m_originalPatternSelectsValid = false;
+            return;
+        }
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
             UINFOTREE(9, nodep, "", "selWidth");
@@ -1581,6 +1598,11 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->dtypep()->isFourstate());
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, FINAL}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, FINAL}.p());
+            if (m_provingPatternSelects) {
+                m_originalPatternSelectsValid = m_originalPatternSelectsValid
+                                                && originalFromWidth == nodep->fromp()->width()
+                                                && patternSelectInRange(nodep);
+            }
             // A constant position whose storage offset was computed is checked at its type as
             // written. As before, one offset from the declared range is checked only if wider
             // than 32 bits, and the position of a packed array element is not checked.
@@ -7759,6 +7781,21 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_inParamOverride);
         m_inParamOverride = false;
         if (nodep->didWidthAndSet()) return;
+        AstPin* const patternPinp = !m_paramsOnly && m_connectionPinp ? m_connectionPinp : nullptr;
+        // IEEE 1800-2023 10.9: only positional assignment patterns can be destinations.
+        // An input value can use named/default/type keys, but those never identify an inverse.
+        bool netPatternSyntax
+            = patternPinp && patternPinp->exprp() == nodep && patternPinp->modVarp()->isInput()
+              && patternPinp->modVarp()->isNetOrNetPort() && nodep->childDTypep();
+        if (netPatternSyntax) {
+            for (const AstPatternItem* const itemp : nodep->itemspList()) {
+                if (itemp->isDefault() || itemp->keyp() || itemp->repp() || itemp->lhssp()->nextp()
+                    || !isNetLValueSyntax(itemp->lhssp())) {
+                    netPatternSyntax = false;
+                    break;
+                }
+            }
+        }
         UINFO(9, "PATTERN " << nodep);
         if (nodep->childDTypep()) {  // data_type '{ pattern }
             nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
@@ -7834,7 +7871,7 @@ class WidthVisitor final : public VNVisitor {
             userIterate(dtypep, WidthVP{SELF, BOTH}.p());
 
             if (auto* const vdtypep = VN_CAST(dtypep, StructDType)) {
-                patternStruct(nodep, vdtypep, defaultp);
+                patternStruct(nodep, vdtypep, defaultp, netPatternSyntax ? patternPinp : nullptr);
             } else if (auto* const vdtypep = VN_CAST(dtypep, NodeArrayDType)) {
                 patternArray(nodep, vdtypep, defaultp);
             } else if (VN_IS(dtypep, AssocArrayDType)) {
@@ -7860,7 +7897,8 @@ class WidthVisitor final : public VNVisitor {
             if (defaultp) VL_DO_DANGLING(pushDeletep(defaultp), defaultp);
         }
     }
-    void patternStruct(AstPattern* nodep, AstStructDType* vdtypep, AstPatternItem* defaultp) {
+    void patternStruct(AstPattern* nodep, AstStructDType* vdtypep, AstPatternItem* defaultp,
+                       AstPin* const netPatternPinp) {
         // Due to "default" and tagged patterns, we need to determine
         // which member each AstPatternItem corresponds to before we can
         // determine the dtypep for that PatternItem's value, and then
@@ -7929,6 +7967,42 @@ class WidthVisitor final : public VNVisitor {
                 if (patp) patp = VN_AS(patp->nextp(), PatternItem);
             }
         }
+        std::vector<PatternNetLeaf> netProof;
+        bool proveNetPattern
+            = netPatternPinp && vdtypep->packed() && !defaultp && dtypemap.empty()
+              && netPatternPinp->modVarp()->width() == vdtypep->width()
+              && netPatternPinp->modVarp()->dtypep()->isFourstate() == vdtypep->isFourstate();
+        if (proveNetPattern) {
+            VL_RESTORER(m_provingPatternSelects);
+            VL_RESTORER(m_originalPatternSelectsValid);
+            m_provingPatternSelects = true;
+            for (AstMemberDType* const memp : vdtypep->memberspList()) {
+                const auto it = patmap.find(memp);
+                const AstBasicDType* const basicp
+                    = VN_CAST(memp->subDTypep()->skipRefToEnump(), BasicDType);
+                if (it == patmap.end() || !basicp || !basicp->isIntegralOrPacked()
+                    || basicp->isOpaque()
+                    || memp->subDTypep()->isFourstate() != vdtypep->isFourstate()) {
+                    proveNetPattern = false;
+                    break;
+                }
+                // Net references and selects are self-determined. Observe the original
+                // leaf before member conversion; normal assignment sizing still follows.
+                AstPatternItem* const itemp = it->second;
+                m_originalPatternSelectsValid = true;
+                userIterate(itemp->lhssp(), WidthVP{SELF, BOTH}.p());
+                PatternNetLeaf leaf;
+                if (!m_originalPatternSelectsValid || !patternNetLeaf(itemp->lhssp(), leaf)
+                    || leaf.storage.width != memp->width()
+                    || leaf.storage.fourstate != basicp->isFourstate()) {
+                    proveNetPattern = false;
+                    break;
+                }
+                leaf.memberLsb = memp->lsb();
+                netProof.push_back(std::move(leaf));
+            }
+            proveNetPattern = proveNetPattern && patternNetLeavesDisjoint(netProof);
+        }
         AstNodeExpr* newp = nullptr;
         if (vdtypep->packed()) {
             for (AstMemberDType* const memp : vdtypep->memberspList()) {
@@ -7973,6 +8047,9 @@ class WidthVisitor final : public VNVisitor {
             newp = consp;
         }
         if (newp) {
+            if (proveNetPattern && patternNetExprMatches(newp, netProof)) {
+                m_patternNetPinProofs.emplace(netPatternPinp, std::move(netProof));
+            }
             nodep->replaceWith(newp);
         } else {
             nodep->v3error("Assignment pattern with no members");
@@ -9797,6 +9874,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstPin* nodep) override {
         // UINFOTREE(1, nodep, "", "PinPre");
         // TOP LEVEL NODE
+        VL_RESTORER(m_connectionPinp);
+        m_connectionPinp = nodep;
         if (nodep->modVarp() && nodep->modVarp()->isGParam()) {
             // An unpacked array concatenation is a pattern of its items (IEEE 1800-2023 10.10)
             AstReplicate* const concatp = VN_CAST(nodep->exprp(), Replicate);
@@ -14644,6 +14723,21 @@ class WidthVisitor final : public VNVisitor {
         });
     }
 
+    // Whether a pattern member's select is a known selection within its operand, at the exact
+    // position the select resolves to
+    static bool patternSelectInRange(AstSel* const selp) {
+        // Fold a copy as an ordinary expression. An index need not be a parameter expression.
+        AstNodeExpr* const foldedp = V3Const::constifyEdit(selp->lsbp()->cloneTree(false));
+        const AstConst* const indexp = VN_CAST(foldedp, Const);
+        int lsb = 0;
+        const bool valid
+            = indexp && !indexp->num().isOpaque() && !indexp->num().isFourState()
+              && indexp->num().toPackedIndex(V3Width::selectPositionSigned(indexp), lsb)
+              && lsb >= 0 && selp->widthConst() > 0
+              && int64_t{lsb} + selp->widthConst() <= selp->fromp()->width();
+        VL_DO_DANGLING(foldedp->deleteTree(), foldedp);
+        return valid;
+    }
     // These intervals describe typed local net destinations, not assignment conversions.
     static bool sourceNetIntervals(AstNodeExpr* exprp, std::vector<NetInterval>& intervals) {
         if (const AstConcat* const catp = VN_CAST(exprp, Concat)) {
@@ -14768,6 +14862,84 @@ class WidthVisitor final : public VNVisitor {
         target.selects.erase(target.selects.begin());
         return target == source;
     }
+    // A typed local scalar net leaf; constant geometry identifies its storage interval.
+    static bool patternNetLeaf(AstNodeExpr* exprp, PatternNetLeaf& leaf) {
+        if (!sourceNetLeaf(exprp, leaf.storage) || leaf.storage.crossesUnpacked
+            || !leaf.storage.scope.empty() || leaf.storage.varp->isWiredNet())
+            return false;
+        const AstNodeDType* const dtypep = leaf.storage.varp->dtypep()->skipRefToEnump();
+        const AstBasicDType* const basicp = VN_CAST(dtypep, BasicDType);
+        if (!basicp || !basicp->isIntegralOrPacked() || basicp->isOpaque()
+            || leaf.storage.fourstate != basicp->isFourstate())
+            return false;
+        const int offset = leaf.storage.packedOffset();
+        return offset >= 0 && int64_t{offset} + leaf.storage.width <= basicp->width();
+    }
+    static bool patternNetLeavesDisjoint(const std::vector<PatternNetLeaf>& leaves) {
+        // The bits of each leaf as its net, lowest bit and highest bit, ordered by net then bit
+        using Range = std::tuple<const AstVar*, int, int>;
+        std::vector<Range> ranges;
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            const NetInterval& storage = leaves[i].storage;
+            const int offset = storage.packedOffset();
+            ranges.emplace_back(storage.varp, offset, offset + storage.width - 1);
+        }
+        std::sort(ranges.begin(), ranges.end(), [](const Range& ap, const Range& bp) {
+            if (std::get<0>(ap) != std::get<0>(bp)) {
+                return std::less<const AstVar*>{}(std::get<0>(ap), std::get<0>(bp));
+            }
+            return std::make_pair(std::get<1>(ap), std::get<2>(ap))
+                   < std::make_pair(std::get<1>(bp), std::get<2>(bp));
+        });
+        for (size_t i = 1; i < ranges.size(); ++i) {
+            if (std::get<0>(ranges[i]) == std::get<0>(ranges[i - 1])
+                && std::get<1>(ranges[i]) <= std::get<2>(ranges[i - 1]))
+                return false;
+        }
+        return true;
+    }
+    static bool collectPatternNetLeaves(AstNodeExpr* exprp, std::vector<PatternNetLeaf>& leaves) {
+        if (AstConcat* const catp = VN_CAST(exprp, Concat)) {
+            return collectPatternNetLeaves(catp->lhsp(), leaves)
+                   && collectPatternNetLeaves(catp->rhsp(), leaves);
+        }
+        PatternNetLeaf leaf;
+        if (!patternNetLeaf(exprp, leaf)) return false;
+        leaves.push_back(std::move(leaf));
+        return true;
+    }
+    static bool patternNetExprMatches(AstNodeExpr* exprp,
+                                      const std::vector<PatternNetLeaf>& proof) {
+        std::vector<PatternNetLeaf> leaves;
+        if (!collectPatternNetLeaves(exprp, leaves) || leaves.size() != proof.size()) return false;
+        int lsb = exprp->width();
+        for (size_t i = 0; i < leaves.size(); ++i) {
+            const PatternNetLeaf& leaf = leaves[i];
+            const PatternNetLeaf& original = proof[i];
+            lsb -= leaf.storage.width;
+            if (!(leaf.storage == original.storage) || lsb != original.memberLsb) { return false; }
+        }
+        return lsb == 0;
+    }
+    // Whether a value-syntax pin is a proven typed pattern of local net bits
+    bool valuePinCoercible(const AstPin* pinp) const {
+        const auto it = m_patternNetPinProofs.find(pinp);
+        AstNodeExpr* const exprp = VN_CAST(pinp->exprp(), NodeExpr);
+        if (it == m_patternNetPinProofs.end() || !exprp
+            || !patternNetExprMatches(exprp, it->second)
+            || exprp->width() != pinp->modVarp()->width()
+            || exprp->dtypep()->isFourstate() != pinp->modVarp()->dtypep()->isFourstate()) {
+            return false;
+        }
+        return std::none_of(
+            it->second.begin(), it->second.end(),
+            [this](const PatternNetLeaf& leaf) { return m_aliasedVars.count(leaf.storage.varp); });
+    }
+    bool allValuePinsCoercible(const std::vector<AstPin*>& pinps) const {
+        return std::all_of(pinps.begin(), pinps.end(), [this](const AstPin* const pinp) {
+            return !m_valueSyntaxPinps.count(pinp) || valuePinCoercible(pinp);
+        });
+    }
 
 public:
     // CONSTRUCTORS
@@ -14860,13 +15032,15 @@ public:
             const auto pair = parentps.emplace(varp, std::vector<AstVar*>{});
             if (!pair.second) continue;
             // V3Tristate cannot resolve a procedural driver
-            bool ok = !topPortps.count(varp) && !m_procWrittenps.count(varp)
-                      && !m_valueConnectedPortps.count(varp)
-                      && varp->dtypep()->skipRefp()->isIntegralOrPacked();
+            bool ok
+                = !topPortps.count(varp) && !m_procWrittenps.count(varp)
+                  && (!m_valueConnectedPortps.count(varp) || allValuePinsCoercible(pinps[varp]))
+                  && varp->dtypep()->skipRefp()->isIntegralOrPacked();
             for (AstPin* const pinp : pinps[varp]) {
                 std::vector<AstVar*> netps;
                 if (pinp->exprp()
-                    && (!sourceNetPinMatches(pinp, NetProjection::ANY)
+                    && ((!m_valueSyntaxPinps.count(pinp)
+                         && !sourceNetPinMatches(pinp, NetProjection::ANY))
                         || !coercibleConn(pinp->exprp(), netps))) {
                     ok = false;
                 }
@@ -14978,7 +15152,11 @@ public:
             }
             // An instance array element of a net is a net destination too, but not an input
             // assignment conversion
-            if (!sourceNetPinMatches(pinp, NetProjection::INSTANCE)) continue;
+            if (m_valueSyntaxPinps.count(pinp)) {
+                if (!valuePinCoercible(pinp)) continue;
+            } else if (!sourceNetPinMatches(pinp, NetProjection::INSTANCE)) {
+                continue;
+            }
             AstNodeExpr* const actualp = VN_AS(pinp->exprp(), NodeExpr);
             std::vector<AstVar*> netps;
             if (actualp->exists([](const AstVarXRef*) { return true; })
@@ -14993,7 +15171,8 @@ public:
         }
         for (size_t i = 0; i < cellPinps.size(); ++i) {
             AstPin* const pinp = cellPinps[i].second;
-            if (m_valueSyntaxPinps.count(pinp) && pinp->exprp() && !VN_IS(pinp->exprp(), Const)) {
+            if (pinp->modVarp()->isInput() && m_valueSyntaxPinps.count(pinp)
+                && !pinp->returnWrittenInput() && pinp->exprp() && !VN_IS(pinp->exprp(), Const)) {
                 // Keep the one-way assignment even if the expression later folds to a VarRef.
                 V3Inst::pinReconnectSimple(pinp, cellPinps[i].first, false, true);
             }

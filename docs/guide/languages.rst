@@ -338,14 +338,21 @@ a port is connected to is coerced as well. The :option:`ASSIGNIN` warning is
 still reported on the driver; it is an error by default, so must be waived
 for coercion to proceed. Coercion changes both the effective and the
 declared direction, including the direction shown in traces and JSON dumps.
-A port is not coerced if it is a port of the top-level module, has a type
-that is not integral or packed, is also written procedurally, or if any
-instance connects it to something other than writable nets, constant bit or
-part selects of them, and concatenations of those (e.g. to a variable, a
-constant, a narrower net, an assignment pattern, a cast, an unpacked array
-element, a net through an input-only modport, or a net of a module other
-than an interface by a hierarchical reference), or to an input port that is
-not coerced.
+A port is not coerced if it is a port of the top-level module, has a type that
+is not integral or packed, is also written procedurally, or if any instance
+connects it to something other than writable nets, constant bit or part
+selects of them, concatenations of those, or supported typed positional net
+assignment patterns. A supported pattern is positional, describes a packed
+structure whose members have basic integral types, and maps each member to
+constant bits of a local net declared with a basic integral type, disjoint
+from the other members, without changing their width or state type (IEEE
+1800-2023 10.9 and A.8.5). Members backed by a packed array or packed
+structure net, or by a nested member, are not supported. Member-keyed,
+type-keyed, default and untyped patterns are input values, not coercion
+destinations. Other connections that can prevent coercion include variables,
+constants, narrower nets, casts, unpacked array elements, and unsupported
+hierarchical references. A connection to a parent input port that is not
+coerced also prevents coercion.
 
 An input port of net kind that is written but not coerced, including one
 written procedurally inside its module, through a virtual interface, or by a
@@ -365,12 +372,13 @@ as a variable, a hierarchical reference to a variable, a select by a runtime
 position, or a value expression, can also return a drive through another
 instance's eligible local net connection, including to an already-driven net
 or an instance array element of one. This route requires a bit-preserving
-connection, such as a local net, constant selection, or concatenation. It does
-not apply to input assignment conversions or to wired, delayed, or aliased
-nets. Where neither return route applies, the connection drives the port only.
-A value and the local drivers are resolved on the formal, without driving the
-value in reverse. :option:`ASSIGNIN` remains applicable to writes inside the
-module, subject to its documented exceptions.
+connection, such as a local net, constant selection, concatenation, or
+supported typed positional net assignment pattern. It does not apply to input
+assignment conversions or to wired, delayed, or aliased nets. Where neither
+return route applies, the connection drives the port only. A value and the
+local drivers are resolved on the formal, without driving the value in
+reverse. :option:`ASSIGNIN` remains applicable to writes inside the module,
+subject to its documented exceptions.
 
 
 Gate Primitives
