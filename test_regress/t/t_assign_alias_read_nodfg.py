@@ -12,8 +12,7 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 test.top_filename = "t/t_assign_alias_read.v"
 
-# V3Coalesce would otherwise redirect the reads of the copies before V3Split
-test.compile(verilator_flags2=['--binary', '-fno-coalesce', '-fno-dfg'])
+test.compile(verilator_flags2=['--binary', '-fno-dfg'])
 
 test.execute()
 
