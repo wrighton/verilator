@@ -432,6 +432,18 @@ class ParamProcessor final {
         return VN_IS(nodep, ConsArray) || VN_IS(nodep, ConsStruct);
     }
 
+    // 'name' of 'declp' qualified by the names of the nodes declaring it, up to its design unit,
+    // as same-named declarations may be in different packages, classes, modules or generate
+    // blocks. Design units are not nested and have unique names. Prepending copies the name once
+    // per enclosing node, which is quadratic only in the nesting depth.
+    string scopedName(const AstNode* declp, string name) {
+        for (const AstNode* outerp = declp;
+             (outerp = VDTypeNameScopes::declaringScopep(outerp, &m_scopeCache));) {
+            name = outerp->name() + "::" + name;
+            if (VN_IS(outerp, NodeModule) && !VN_IS(outerp, Class)) break;
+        }
+        return name;
+    }
     string paramValueString(const AstNode* nodep) {
         if (const AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
             nodep = refp->skipRefToNonRefp();
@@ -447,6 +459,7 @@ class ParamProcessor final {
             }
         } else if (const AstNodeUOrStructDType* const dtypep
                    = VN_CAST(nodep, NodeUOrStructDType)) {
+            if (!key.empty()) key = scopedName(dtypep, key);  // As for classes
             key += " ";
             key += dtypep->verilogKwd();
             key += " {";
@@ -511,9 +524,7 @@ class ParamProcessor final {
             UASSERT_OBJ(classRefp->classp(), classRefp,
                         "ClassRefDType has null classp in paramValueString");
             // By the name of the class, which for a specialization holds its parameter values,
-            // qualified by the names of the nodes declaring it, as classes of the same name may
-            // be declared in different packages, classes, or modules. Prepending copies the key
-            // once per enclosing node, which is quadratic only in the nesting depth.
+            // qualified by its scopes
             key = classRefp->classp()->name();
             if (classRefp == m_selfClassRefp) {
                 m_selfNamed = true;
@@ -526,14 +537,7 @@ class ParamProcessor final {
                 }
                 key += ")";
             }
-            // A class is declared in a design unit, maybe $unit, and those are not nested and
-            // have unique names
-            const AstNode* outerp = classRefp->classp();
-            do {
-                outerp = VDTypeNameScopes::declaringScopep(outerp, &m_scopeCache);
-                UASSERT_OBJ(outerp, classRefp, "Class not declared in a design unit");
-                key = outerp->name() + "::" + key;
-            } while (!VN_IS(outerp, NodeModule) || VN_IS(outerp, Class));
+            key = scopedName(classRefp->classp(), key);
         } else if (const AstUnpackArrayDType* const dtypep = VN_CAST(nodep, UnpackArrayDType)) {
             // Name containers by their elements as above, not by prettyDTypeName(), which names
             // classes without the nodes declaring them
@@ -553,6 +557,7 @@ class ParamProcessor final {
         } else if (const AstEnumDType* const dtypep = VN_CAST(nodep, EnumDType)) {
             // With the items, as prettyDTypeName() omits them, yet a specialization of a class
             // may declare an enumeration of the same name with other values
+            if (!key.empty()) key = scopedName(dtypep, key);  // As for classes
             key += " enum {";
             for (const AstEnumItem* const itemp : dtypep->itemspList()) {
                 const AstConst* const constp = VN_CAST(itemp->valuep(), Const);
