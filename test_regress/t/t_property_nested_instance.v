@@ -114,6 +114,99 @@ module t (
   assert property (@(posedge clk) disable iff (cyc < 2) (a ##1 c) |-> b)
   else count_fail15 <= count_fail15 + 1;
 
+  // Test 16-30: multi-cycle bodies of nested instances, each vs its inline body
+  int count_fail16 = 0;
+  int count_fail17 = 0;
+  int count_fail18 = 0;
+  int count_fail19 = 0;
+  int count_fail20 = 0;
+  int count_fail21 = 0;
+  int count_fail22 = 0;
+  int count_fail23 = 0;
+  int count_fail24 = 0;
+  int count_fail25 = 0;
+  int count_fail26 = 0;
+  int count_fail27 = 0;
+  int count_fail28 = 0;
+  int count_fail29 = 0;
+  int count_fail30 = 0;
+
+  property p_seq;
+    b ##1 c;
+  endproperty
+
+  sequence s_bc;
+    b ##1 c;
+  endsequence
+
+  // Body is only a named sequence instance
+  property p_sref;
+    s_bc;
+  endproperty
+
+  property p_ovl(logic x, logic y);
+    x |=> y;
+  endproperty
+
+  property p_rep;
+    b [* 2];
+  endproperty
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> p_seq)
+  else count_fail16 <= count_fail16 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> p_sref)
+  else count_fail17 <= count_fail17 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> (b ##1 c))
+  else count_fail18 <= count_fail18 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) not p_seq)
+  else count_fail19 <= count_fail19 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) not (b ##1 c))
+  else count_fail20 <= count_fail20 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> p_ovl(b, c))
+  else count_fail21 <= count_fail21 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> (b |=> c))
+  else count_fail22 <= count_fail22 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) c |-> p_rep)
+  else count_fail23 <= count_fail23 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) c |-> b [* 2])
+  else count_fail24 <= count_fail24 + 1;
+
+  // Under property if and if/else
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) p_seq)
+  else count_fail25 <= count_fail25 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) (b ##1 c))
+  else count_fail26 <= count_fail26 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) p_seq else p_b)
+  else count_fail27 <= count_fail27 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) if (a) (b ##1 c) else b)
+  else count_fail28 <= count_fail28 + 1;
+
+  // Body is only an instance whose multi-cycle body uses a formal as a range bound
+  property p_rng(r);
+    a |-> ##[1:r] b;
+  endproperty
+
+  property p_rng_outer(r);
+    p_rng(r);
+  endproperty
+
+  assert property (@(posedge clk) disable iff (cyc < 2) p_rng_outer(2))
+  else count_fail29 <= count_fail29 + 1;
+
+  assert property (@(posedge clk) disable iff (cyc < 2) a |-> ##[1:2] b)
+  else count_fail30 <= count_fail30 + 1;
+
   // Cover: nested instance vs inline body, counted only with --coverage
   cover property (@(posedge clk) disable iff (cyc < 2) a |-> p_b)
     count_cover_nested <= count_cover_nested + 1;
@@ -148,6 +241,21 @@ module t (
       `checkd(count_fail13, 8);
       `checkd(count_fail14, 10);
       `checkd(count_fail15, 10);
+      `checkd(count_fail16, 27);
+      `checkd(count_fail17, 27);
+      `checkd(count_fail18, 27);
+      `checkd(count_fail19, 26);
+      `checkd(count_fail20, 26);
+      `checkd(count_fail21, 11);
+      `checkd(count_fail22, 11);
+      `checkd(count_fail23, 30);
+      `checkd(count_fail24, 30);
+      `checkd(count_fail25, 27);
+      `checkd(count_fail26, 27);
+      `checkd(count_fail27, 52);
+      `checkd(count_fail28, 52);
+      `checkd(count_fail29, 9);
+      `checkd(count_fail30, 9);
 `ifdef TEST_COVERAGE
       `checkd(count_cover_nested, 28);
       `checkd(count_cover_inline, 28);
