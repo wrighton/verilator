@@ -290,7 +290,8 @@ class VlRandomizer VL_NOT_FINAL {
     // (exclusion-based cycling)
     std::map<std::string, std::set<uint64_t>> m_randcUsedValues;
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
-    // A solve-before operand: bits [lsb, lsb + width) of a variable, all if width is 0
+    // A solve-before operand: bits [lsb, lsb + width) of a variable or array element, all if
+    // width is 0
     struct SolveBeforeRef final {
         std::string name;
         IData lsb;
@@ -298,9 +299,10 @@ class VlRandomizer VL_NOT_FINAL {
     };
     std::vector<std::pair<SolveBeforeRef, SolveBeforeRef>>
         m_solveBefore;  // Solve-before ordering pairs (before, after)
-    // Bits [lo, hi) of a variable that a solve-before operand orders
+    // Bits [lo, hi) of a variable or array element that a solve-before operand orders
     struct SolveBeforeBits final {
-        const VlRandomVar* rootp;  // Variable
+        const VlRandomVar* rootp;  // Variable or array element
+        const VlRandomVar* arrayp;  // Array of an array element, else nullptr
         IData lo;  // First bit
         IData hi;  // Bit after the last
     };
@@ -308,6 +310,8 @@ class VlRandomizer VL_NOT_FINAL {
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeParts;
     // Array elements that solve-before pairs name, as variables of their solver terms
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeElems;
+    // Arrays of the array elements that solve-before pairs name
+    std::map<std::string, const VlRandomVar*> m_solveBeforeArrays;
     bool m_checkOnly = false;  // Set for randomize(null)
     bool m_sizeSolve = false;  // Set for the solve of array sizes before the final solve
     bool m_sizeSolved = false;  // The sizes are solved, so the final solve is next
