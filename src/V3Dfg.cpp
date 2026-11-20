@@ -285,6 +285,7 @@ static void dumpDotVertex(std::ostream& os, const DfgVertex& vtx) {
         os << " / ";
         os << "_S"[astRdVtxp->inSenItem()];
         os << "_L"[astRdVtxp->inLoop()];
+        os << "_C"[astRdVtxp->inClocked()];
         os << "\"\n";
         os << ", shape=box, style=\"rounded,filled\", nojustify=true";
         os << ", fillcolor=\"" << colorp << "\"";
