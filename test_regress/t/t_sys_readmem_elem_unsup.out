@@ -1,0 +1,46 @@
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:22:43: Unsupported: $readmemh into a slice of an unpacked array
+                                                      : ... note: In instance 't'
+   22 |     $readmemh("t/t_sys_readmem_h.mem", mem[3:2]);
+      |                                           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:23:47: Unsupported: $readmemb into a slice of an unpacked array
+                                                      : ... note: In instance 't'
+   23 |     $readmemb("t/t_sys_readmem_b.mem", mem2[i][1+:2]);
+      |                                               ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:24:49: Unsupported: $readmemh into a slice of an unpacked array
+                                                      : ... note: In instance 't'
+   24 |     $readmemh("t/t_sys_readmem_h.mem", mem3[1:0][1]);
+      |                                                 ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:25:59: Unsupported: $readmemh through an element of a dynamic array or queue
+                                                      : ... note: In instance 't'
+   25 |     $readmemh("t/t_sys_readmem_h.mem", queue_of_fixed[0:1][1]);
+      |                                                           ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:26:54: Unsupported: $readmemh through an element of a dynamic array or queue
+                                                      : ... note: In instance 't'
+   26 |     $readmemh("t/t_sys_readmem_h.mem", queue_of_fixed[i]);
+      |                                                      ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:27:52: Unsupported: $readmemh through an element of a dynamic array or queue
+                                                      : ... note: In instance 't'
+   27 |     $readmemh("t/t_sys_readmem_h.mem", dyn_of_fixed[i]);
+      |                                                    ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:28:51: Unsupported: $readmemh through an element of a dynamic array or queue
+                                                      : ... note: In instance 't'
+   28 |     $readmemh("t/t_sys_readmem_h.mem", dyn_of_wide[i]);
+      |                                                   ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:29:54: Unsupported: $readmemh through an element of an associative array
+                                                      : ... note: In instance 't'
+   29 |     $readmemh("t/t_sys_readmem_h.mem", assoc_of_fixed[i]);
+      |                                                      ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:30:47: Unsupported: $readmemh into a selected dynamic or associative array
+                                                      : ... note: In instance 't'
+   30 |     $readmemh("t/t_sys_readmem_h.mem", dyn_row[i]);
+      |                                               ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:31:49: Unsupported: $readmemh into a selected dynamic or associative array
+                                                      : ... note: In instance 't'
+   31 |     $readmemh("t/t_sys_readmem_h.mem", assoc_row[i]);
+      |                                                 ^
+%Error-UNSUPPORTED: t/t_sys_readmem_elem_unsup.v:32:44: Unsupported: $readmemh into a selected dynamic or associative array
+                                                      : ... note: In instance 't'
+   32 |     $readmemh("t/t_sys_readmem_h.mem", bank[0]);
+      |                                            ^
+%Error: Exiting due to
