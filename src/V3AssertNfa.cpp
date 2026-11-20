@@ -316,6 +316,26 @@ static AstNodeStmt* newIfAssertFailOn(AstNodeStmt* bodyp, VAssertDirectiveType d
     return ifp;
 }
 
+// Clone an action block for one more execution site. All executions of an
+// action share its static variables, initialized once (IEEE 1800-2023 6.21),
+// so the clone uses the original declarations instead of copying them.
+static AstNodeStmt* cloneAction(AstNodeStmt* const actionp) {
+    AstNodeStmt* const clonep = actionp->cloneTree(true);
+    std::unordered_map<const AstVar*, AstVar*> origVarps;  // Cloned to original variable
+    actionp->foreachAndNext([&](AstVar* const varp) { origVarps.emplace(varp->clonep(), varp); });
+    std::vector<AstNode*> declps;
+    clonep->foreachAndNext([&](AstNode* const nodep) {
+        if (AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            const auto it = origVarps.find(refp->varp());
+            if (it != origVarps.end()) refp->varp(it->second);
+        } else if (VN_IS(nodep, Var) || VN_IS(nodep, Typedef) || VN_IS(nodep, InitialStaticStmt)) {
+            declps.push_back(nodep);
+        }
+    });
+    for (AstNode* const nodep : declps) nodep->unlinkFrBack()->deleteTree();
+    return clonep;
+}
+
 static AstAlways* newAssertAlways(FileLine* flp, VAlwaysKwd kwd, AstSenTree* sentreep,
                                   AstNodeStmt* bodyp) {
     AstAlways* const alwaysp = new AstAlways{flp, kwd, sentreep, bodyp};
@@ -3768,7 +3788,7 @@ public:
         });
         AstNodeStmt* stmtsp;
         if (failsp && !hasTimingControl) {
-            stmtsp = failsp->cloneTree(true);
+            stmtsp = cloneAction(failsp);
             // An NBA, legal in an action block, executes as a blocking assignment in a final
             // block, so FINALDLY does not apply
             stmtsp->foreachAndNext([](AstAssignDly* const dlyp) {
@@ -4843,7 +4863,7 @@ class AssertNfaVisitor final : public VNVisitor {
         if (!parts.isFollowedBy) {
             AstNodeExpr* const vacuousp
                 = new AstLogNot{flp, sampled(parts.triggerExprp->cloneTreePure(false))};
-            AstNodeStmt* const vacuousBodyp = passsp->cloneTree(false);
+            AstNodeStmt* const vacuousBodyp = cloneAction(passsp);
             splitsp = newPassOnIf(flp, vacuousp, vacuousBodyp, assertp->userType(),
                                   assertp->directive(), /*vacuous=*/true);
         }
@@ -4853,7 +4873,7 @@ class AssertNfaVisitor final : public VNVisitor {
                           /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
         // Another attempt failing on the same tick runs the fail action instead
-        assertp->prependFailsp(splitsp->cloneTree(true));
+        assertp->prependFailsp(cloneAction(splitsp));
         assertp->addPasssp(splitsp);
     }
 
@@ -4975,14 +4995,14 @@ class AssertNfaVisitor final : public VNVisitor {
         // below gets the pass action prefix.
         if (failCountp) {
             addActionReplay(senTreep, failCountp,
-                            newIfAssertFailOn(assertp->failsp()->cloneTree(true),
-                                              assertp->directive(), assertp->userType()));
+                            newIfAssertFailOn(cloneAction(assertp->failsp()), assertp->directive(),
+                                              assertp->userType()));
         }
         if (passCountp) {
             FileLine* const flp = assertp->fileline();
             addActionReplay(senTreep, passCountp,
                             newPassOnIf(flp, new AstConst{flp, AstConst::BitTrue{}},
-                                        assertp->passsp()->cloneTree(true), assertp->userType(),
+                                        cloneAction(assertp->passsp()), assertp->userType(),
                                         assertp->directive(), /*vacuous=*/false));
         }
         // Gate pass handler on match to prevent vacuous-pass firings.
@@ -4998,7 +5018,7 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            assertp->prependFailsp(ifp->cloneTree(false));
+            assertp->prependFailsp(cloneAction(ifp));
         }
     }
 
