@@ -2588,10 +2588,12 @@ class TimingReactiveVisitor final : public VNVisitor {
     void visit(AstCAwait* nodep) override {
         if (!m_funcp && !m_inReactiveProc) return;
         if (const AstCMethodHard* const methodp = VN_CAST(nodep->exprp(), CMethodHard)) {
-            // Internal protocol of dynamic triggers, and waiting forever
-            if (methodp->method() == VCMethod::SCHED_EVALUATION
-                || methodp->method() == VCMethod::SCHED_POST_UPDATE
-                || methodp->method() == VCMethod::SCHED_WAIT_FOREVER) {
+            // Restore the region only at a continuation. Internal evaluation and post-updates
+            // must stay in the dynamic scheduler's own steps.
+            const VCMethod method = methodp->method();
+            if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_TRIGGER
+                && method != VCMethod::SCHED_RESUMPTION && method != VCMethod::SCHED_EVENT_TRIGGER
+                && method != VCMethod::SCHED_QUEUE_WAIT && method != VCMethod::FORK_JOIN) {
                 return;
             }
         }
