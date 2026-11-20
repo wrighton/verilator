@@ -85,4 +85,70 @@
                                                   : ... note: In instance 't'
    28 |     sel2 = mi[1<<29 : 0];
       |          ^
+%Error: t/t_select_bad_range4.v:32:8: Value too wide for 32-bits expected in this context 40'h1000000005
+                                    : ... note: In instance 't'
+   32 |   reg [40'h10_0000_0005 : 40'h10_0000_0007] widerange;
+      |        ^~~~~~~~~~~~~~~~
+%Error: t/t_select_bad_range4.v:32:27: Value too wide for 32-bits expected in this context 40'h1000000007
+                                     : ... note: In instance 't'
+   32 |   reg [40'h10_0000_0005 : 40'h10_0000_0007] widerange;
+      |                           ^~~~~~~~~~~~~~~~
+%Warning-ASCRANGE: t/t_select_bad_range4.v:32:7: Ascending bit range vector: left < right of bit range: [5:7]
+                                               : ... note: In instance 't'
+   32 |   reg [40'h10_0000_0005 : 40'h10_0000_0007] widerange;
+      |       ^
+                   ... For warning description see https://verilator.org/warn/ASCRANGE?v=latest
+                   ... Use "/* verilator lint_off ASCRANGE */" and lint_on around source to disable this message.
+%Error: t/t_select_bad_range4.v:37:19: Value too wide for 32-bits expected in this context 40'h1000000005
+                                     : ... note: In instance 't'
+   37 |     sel1 = ranged[40'h10_0000_0005];
+      |                   ^~~~~~~~~~~~~~~~
+%Warning-WIDTHTRUNC: t/t_select_bad_range4.v:37:18: Bit extraction of var[3:0] requires 2 bit index, not 40 bits.
+                                                  : ... note: In instance 't'
+   37 |     sel1 = ranged[40'h10_0000_0005];
+      |                  ^
+%Warning-SELRANGE: t/t_select_bad_range4.v:37:18: Selection index out of range: 5:5 outside 3:0
+                                                : ... note: In instance 't'
+   37 |     sel1 = ranged[40'h10_0000_0005];
+      |                  ^
+%Error: t/t_select_bad_range4.v:38:20: Illegal bit or array select; type does not have a bit range, or bad dimension: data type is 'bit'
+                                     : ... note: In instance 't'
+   38 |     sel1 = unranged["abcde"];
+      |                    ^
+%Error: t/t_select_bad_range4.v:38:21: Value too wide for 32-bits expected in this context 40'h6162636465
+                                     : ... note: In instance 't'
+   38 |     sel1 = unranged["abcde"];
+      |                     ^~~~~~~
+%Warning-WIDTHTRUNC: t/t_select_bad_range4.v:38:20: Bit extraction of var[0:0] requires 1 bit index, not 40 bits.
+                                                  : ... note: In instance 't'
+   38 |     sel1 = unranged["abcde"];
+      |                    ^
+%Warning-SELRANGE: t/t_select_bad_range4.v:38:20: Selection 1650680933:1650680933 performed on an object without declared range
+                                                : ... note: In instance 't'
+   38 |     sel1 = unranged["abcde"];
+      |                    ^
+%Warning-WIDTHEXPAND: t/t_select_bad_range4.v:38:20: Bit extraction of var[1650680933:0] requires 31 bit index, not 1 bits.
+                                                   : ... note: In instance 't'
+   38 |     sel1 = unranged["abcde"];
+      |                    ^
+%Error: t/t_select_bad_range4.v:39:13: Illegal bit or array select; type does not have a bit range, or bad dimension: data type is 'bit'
+                                     : ... note: In instance 't'
+   39 |     unranged["abcde"] = 1'b1;
+      |             ^
+%Error: t/t_select_bad_range4.v:39:14: Value too wide for 32-bits expected in this context 40'h6162636465
+                                     : ... note: In instance 't'
+   39 |     unranged["abcde"] = 1'b1;
+      |              ^~~~~~~
+%Warning-WIDTHTRUNC: t/t_select_bad_range4.v:39:13: Bit extraction of var[0:0] requires 1 bit index, not 40 bits.
+                                                  : ... note: In instance 't'
+   39 |     unranged["abcde"] = 1'b1;
+      |             ^
+%Warning-SELRANGE: t/t_select_bad_range4.v:39:13: Selection 1650680933:1650680933 performed on an object without declared range
+                                                : ... note: In instance 't'
+   39 |     unranged["abcde"] = 1'b1;
+      |             ^
+%Warning-SELRANGE: t/t_select_bad_range4.v:39:13: Selection 1:1 performed on an object without declared range
+                                                : ... note: In instance 't'
+   39 |     unranged["abcde"] = 1'b1;
+      |             ^
 %Error: Exiting due to
