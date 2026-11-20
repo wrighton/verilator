@@ -618,15 +618,24 @@ void V3AssertCommon::lowerSvaLocalVarInits(
 // declarations, and renames its automatic ones, which V3Begin may lift to the same scope.
 AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* const actionp, V3UniqueNames& names) {
     // V3LinkDot finds hierarchical references again by name, which fails for a clone in
-    // another scope. So a reference relative to a block of the action refers to its variable
-    // directly. Other references stay by name, as their path may select another instance.
+    // another scope. So a reference to a variable of the action, relative to a block of the
+    // action, refers to it directly. Other paths stay by name: they may select another instance.
     std::unordered_set<std::string> blockNames;  // Names of the blocks of the action
-    actionp->foreachAndNext(
-        [&](const AstNodeBlock* const blockp) { blockNames.emplace(blockp->name()); });
-    std::vector<AstVarXRef*> xrefps;  // References relative to them
+    std::unordered_set<const AstVar*> declVarps;  // Variables declared in the action
+    actionp->foreachAndNext([&](const AstNode* const nodep) {
+        if (const AstNodeBlock* const blockp = VN_CAST(nodep, NodeBlock)) {
+            blockNames.emplace(blockp->name());
+        } else if (const AstVar* const varp = VN_CAST(nodep, Var)) {
+            declVarps.emplace(varp);
+        }
+    });
+    std::vector<AstVarXRef*> xrefps;  // References to replace
     actionp->foreachAndNext([&](AstVarXRef* const xrefp) {
         const std::string dotted = xrefp->dotted();
-        if (blockNames.count(dotted.substr(0, dotted.find('.')))) xrefps.push_back(xrefp);
+        if (declVarps.count(xrefp->varp())
+            && blockNames.count(dotted.substr(0, dotted.find('.')))) {
+            xrefps.push_back(xrefp);
+        }
     });
     for (AstVarXRef* const xrefp : xrefps) {
         xrefp->replaceWithKeepDType(
