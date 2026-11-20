@@ -151,6 +151,20 @@ module t;
     end
   end
 
+  // A downward reference from an unnamed action
+  int unnamed_seen = 0;
+
+  if (1) begin : unnamed_gen
+    assert property (@(posedge clk) a ##[1:3] b ##1 c)
+    else begin
+      begin : child
+        static int slot = 0;
+        ++slot;
+      end
+      unnamed_seen = child.slot;
+    end
+  end
+
   // Covers, without --coverage-user not collected, so their actions have no effect
   int cover_inits = 0;
   int cover_runs = 0;
@@ -240,6 +254,7 @@ module t;
     `checkd(gen_fails, fails);
     `checkd(gen_child_seen, fails);
     `checkd(gen_sibling_seen, fails);
+    `checkd(unnamed_seen, fails);
 `ifdef T_COVER_COLLECTED
     `checkd(cover_inits, 1);
     `checkd(cover_runs > 0, 1'b1);
