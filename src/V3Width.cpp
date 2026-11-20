@@ -8198,6 +8198,11 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         iterateCheckString(nodep, "filename", nodep->filenamep(), BOTH);
         userIterateAndNext(nodep->memp(), WidthVP{SELF, BOTH}.p());
+        if (VN_IS(nodep, ReadMem) && VN_IS(nodep->memp(), SliceSel)) {
+            nodep->memp()->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: " << nodep->verilogKwd()
+                                                  << " into a slice of an unpacked array");
+        }
         const AstNodeDType* subp = nullptr;
         if (const AstAssocArrayDType* adtypep
             = VN_CAST(nodep->memp()->dtypep()->skipRefp(), AssocArrayDType)) {

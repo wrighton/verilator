@@ -10,10 +10,15 @@
 `define STRINGIFY(x) `"x`"
 // verilog_format: on
 
+class Cls;
+  logic [6:0] mem[2][4];
+endclass
+
 module t;
-  // Index variables, so the selects below use non-constant indices
-  int one = 1;
-  int two = 2;
+  // Index values known only at run time
+  int one;
+  int two;
+  int three;
 
   function automatic string path(string name);
     return {`STRINGIFY(`TEST_OBJ_DIR), "/", name};
@@ -27,6 +32,9 @@ module t;
   endtask
 
   initial begin
+    if (!$value$plusargs("one=%d", one)) one = 1;
+    if (!$value$plusargs("two=%d", two)) two = 2;
+    if (!$value$plusargs("three=%d", three)) three = 3;
     write_file("elem_a.hex", "11\n12\n13\n14\n");
     write_file("elem_b.hex", "21\n22\n23\n24\n25\n26\n");
     write_file("elem_d.hex", "21\n22\n23\n24\n");
@@ -58,6 +66,35 @@ module t;
       `checkh(mem[1][3], 7'h24);
       `checkh(mem[2][0], 7'h7f);
       `checkh(mem[2][3], 7'h7f);
+    end
+
+    begin
+      // Test: index out of range leaves the array unchanged
+      logic [6:0] mem[0:2][4];
+      foreach (mem[i, j]) mem[i][j] = 7'h7f;
+      $readmemh(path("elem_a.hex"), mem[three]);
+      foreach (mem[i, j]) `checkh(mem[i][j], 7'h7f);
+    end
+
+    begin
+      // Test: element of a class member and of a struct member
+      typedef struct {
+        int pad;
+        logic [6:0] mem[2][4];
+      } st_t;
+      Cls obj;
+      st_t st;
+      obj = new;
+      foreach (obj.mem[i, j]) obj.mem[i][j] = 7'h7f;
+      foreach (st.mem[i, j]) st.mem[i][j] = 7'h7f;
+      $readmemh(path("elem_a.hex"), obj.mem[one]);
+      $readmemh(path("elem_d.hex"), st.mem[one]);
+      `checkh(obj.mem[1][0], 7'h11);
+      `checkh(obj.mem[1][3], 7'h14);
+      `checkh(obj.mem[0][0], 7'h7f);
+      `checkh(st.mem[1][0], 7'h21);
+      `checkh(st.mem[1][3], 7'h24);
+      `checkh(st.mem[0][3], 7'h7f);
     end
 
     begin
@@ -122,9 +159,10 @@ module t;
       `checkh(assoc_row[1][2], 8'h13);
       `checkh(assoc_row[0].num(), 0);
       dyn_of_fixed = new[2];
+      foreach (dyn_of_fixed[i, j]) dyn_of_fixed[i][j] = 8'hff;
       $readmemh(path("elem_d.hex"), dyn_of_fixed[one]);
       `checkh(dyn_of_fixed[1][3], 8'h24);
-      `checkh(dyn_of_fixed[0][3], 8'h00);
+      `checkh(dyn_of_fixed[0][3], 8'hff);
       queue_of_fixed.push_back('{default: 8'h00});
       queue_of_fixed.push_back('{default: 8'h00});
       $readmemh(path("elem_a.hex"), queue_of_fixed[one]);
@@ -142,10 +180,11 @@ module t;
       foreach (back[j]) `checkh(back[j], 7'(32 + j));
       $writememh(path("elem_p.hex"), mem[one], 1, 2);
       back = '{default: 7'h7f};
-      $readmemh(path("elem_p.hex"), back);
-      `checkh(back[0], 7'h11);
-      `checkh(back[1], 7'h12);
-      `checkh(back[2], 7'h7f);
+      $readmemh(path("elem_p.hex"), back, 1, 2);
+      `checkh(back[0], 7'h7f);
+      `checkh(back[1], 7'h11);
+      `checkh(back[2], 7'h12);
+      `checkh(back[3], 7'h7f);
     end
 
     $write("*-* All Finished *-*\n");
