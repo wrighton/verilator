@@ -1195,18 +1195,16 @@ public:
         uint32_t array_lo = 0;
         bool memUsePtr = true;
         {
-            const AstVarRef* const varrefp = VN_CAST(nodep->memp(), VarRef);
-            if (!varrefp) {
-                nodep->v3error(nodep->verilogKwd() << " loading non-variable");
-            } else if (VN_IS(varrefp->varp()->dtypeSkipRefp(), AssocArrayDType)
-                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), DynArrayDType)
-                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), QueueDType)) {
+            // The memory may be any unpacked array lvalue, e.g. an element of an array of arrays
+            const AstNodeDType* const dtypep = nodep->memp()->dtypep()->skipRefp();
+            if (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, DynArrayDType)
+                || VN_IS(dtypep, QueueDType)) {
                 // nodep->memp() below will when verilated code is compiled create a C++ template
                 memUsePtr = false;
             } else if (const AstUnpackArrayDType* const adtypep
-                       = VN_CAST(varrefp->varp()->dtypeSkipRefp(), UnpackArrayDType)) {
+                       = VN_CAST(dtypep, UnpackArrayDType)) {
                 putbs(", ");
-                puts(cvtToStr(varrefp->varp()->dtypep()->arrayUnpackedElements()));
+                puts(cvtToStr(adtypep->arrayUnpackedElements()));
                 array_lo = adtypep->lo();
                 putbs(", ");
                 puts(cvtToStr(array_lo));
