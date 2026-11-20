@@ -404,6 +404,17 @@ class ParamProcessor final {
     // updated by ParamVisitor for the module it visits, as visiting changes it. The nodes are not
     // deleted before the end of V3Param.
     std::unordered_map<const AstNode*, std::unordered_map<string, AstNode*>> m_scopeItems;
+    // Defparams of each module, also in unnamed generate blocks, see defParams. A module is not
+    // deleted before the end of V3Param, except a duplicate specialization, which never is a key.
+    std::unordered_map<const AstNodeModule*, std::vector<AstDefParam*>> m_defParams;
+    // Enum of each enum item passed, see enumOf, and items found final, also only for searches in
+    // a container, see TemplateSearch::recordFinal. Kept while the module ParamVisitor visits
+    // does not change, as it deletes and moves nodes only in the module it visits, and an item's
+    // module and finality, for a container, depend only on modules not visited in between.
+    std::unordered_map<const AstNode*, AstNode*> m_enumps;
+    std::unordered_set<const AstNode*> m_finalps;
+    std::unordered_map<const AstNodeModule*, std::unordered_set<const AstNode*>>
+        m_containerFinalps;
     // Generate block of each item recorded for the module ParamVisitor visits
     std::unordered_map<const AstNode*, const AstGenBlock*> m_visitItemBlocks;
 
@@ -2899,10 +2910,19 @@ public:
     void visitModp(const AstNodeModule* modp) {
         m_visitModp = modp;
         m_visitBaseQueued = false;
+        clearSearched();
+    }
+    // Forget what searches found, as the module visited changes
+    void clearSearched() {
+        m_enumps.clear();
+        m_finalps.clear();
+        m_containerFinalps.clear();
     }
     // ParamVisitor starts visiting m_visitModp's body, which may change it
     void visitModpBody() {
         m_scopeItems.erase(m_visitModp);
+        m_defParams.erase(m_visitModp);
+        clearSearched();
         m_visitItemBlocks.clear();
         m_bodyCopyModps.clear();
         m_visitCells = false;
@@ -3095,28 +3115,41 @@ public:
     void copyDefparams(const AstNodeModule* containerp, const string& instanceName) {
         if (containerp == m_visitModp) return;  // Registered when visited
         if (!m_copyDefparamScopes[containerp].emplace(instanceName).second) return;
-        copyDefparams(containerp, containerp->stmtsp(), instanceName);
+        for (const AstDefParam* const defParamp : defParams(containerp)) {
+            const AstVarXRef* const targetp = VN_AS(defParamp->targetp(), VarXRef);
+            const string path
+                = defparamPath(instanceName + "." + targetp->dotted()) + "." + targetp->name();
+            ParamDeps deps;
+            if (!refersToTemplate({defParamp->rhsp()}, containerp, deps)) {
+                evaluateParams(deps);
+                // As when visited, replacing a value an enclosing module gives
+                defparamValue(path, defParamp->rhsp()->cloneTree(false));
+            } else {
+                // Replacing it too, so copies do not use that value
+                m_copyDefparamsUnknown.emplace(path);
+            }
+        }
     }
-    void copyDefparams(const AstNodeModule* containerp, AstNode* stmtsp,
-                       const string& instanceName) {
+    // Return the defparams of modp, found once until it is visited
+    const std::vector<AstDefParam*>& defParams(const AstNodeModule* modp) {
+        const auto pair = m_defParams.emplace(modp, std::vector<AstDefParam*>{});
+        if (pair.second) {
+            uint64_t scanned = 0;
+            collectDefParams(modp->stmtsp(), pair.first->second, scanned);
+            V3Stats::addStatSum("Param, Defparam statements scanned", scanned);
+        }
+        return pair.first->second;
+    }
+    static void collectDefParams(AstNode* stmtsp, std::vector<AstDefParam*>& defParamsr,
+                                 uint64_t& scannedr) {
         for (AstNode* const nodep : VNList<AstNode>{stmtsp}) {
-            if (const AstDefParam* const defParamp = VN_CAST(nodep, DefParam)) {
-                const AstVarXRef* const targetp = VN_AS(defParamp->targetp(), VarXRef);
-                const string path
-                    = defparamPath(instanceName + "." + targetp->dotted()) + "." + targetp->name();
-                ParamDeps deps;
-                if (!refersToTemplate({defParamp->rhsp()}, containerp, deps)) {
-                    evaluateParams(deps);
-                    // As when visited, replacing a value an enclosing module gives
-                    defparamValue(path, defParamp->rhsp()->cloneTree(false));
-                } else {
-                    // Replacing it too, so copies do not use that value
-                    m_copyDefparamsUnknown.emplace(path);
-                }
+            ++scannedr;
+            if (AstDefParam* const defParamp = VN_CAST(nodep, DefParam)) {
+                defParamsr.push_back(defParamp);
             } else if (const AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
                 // Unnamed, so in this scope, as in ParamVisitor::iterateDefParams
                 if (blockp->name().empty()) {
-                    copyDefparams(containerp, blockp->itemsp(), instanceName);
+                    collectDefParams(blockp->itemsp(), defParamsr, scannedr);
                 }
             }
         }
@@ -3127,105 +3160,261 @@ public:
     bool paramsReferToTemplate(AstCell* cellp, const AstNodeModule* containerp, ParamDeps& depsr) {
         std::vector<AstNode*> work;
         for (AstPin* const pinp : cellp->paramspList()) work.push_back(pinp);
-        return refersToTemplate(std::move(work), containerp, depsr);
+        return refersToTemplate(work, containerp, depsr);
     }
     // The same for evaluating the nodes in work in containerp. Record in depsr what they refer
     // to, also through each other, to evaluate the parameters among them in turn.
-    bool refersToTemplate(std::vector<AstNode*> work, const AstNodeModule* containerp,
+    bool refersToTemplate(const std::vector<AstNode*>& roots, const AstNodeModule* containerp,
                           ParamDeps& depsr) {
-        depsr.m_roots.insert(depsr.m_roots.end(), work.begin(), work.end());
-        std::unordered_set<const AstNode*> visited;
-        std::unordered_map<const AstNode*, AstNode*> enumps;  // Enum of each item passed
-        // Modules not specialized yet whose items found are final, see defaultIfacePort
-        std::unordered_set<const AstNodeModule*> finalps;
-        while (!work.empty()) {
-            AstNode* const nodep = work.back();
-            work.pop_back();
-            std::vector<AstNode*>& targetsr = depsr.m_targets[nodep];
-            // A value not linked yet referred to, e.g. of a class, is evaluated later by
-            // ParamVisitor, so left to the instance's turn
-            const bool referred = visited.count(nodep);
-            const bool found = nodep->exists([&](AstNode* itemp) {
-                AstNode* targetp;
-                if (const AstVarXRef* const refp = VN_CAST(itemp, VarXRef)) {
-                    // Into a generate block, so possibly not resolved
-                    if (!refp->varp() || refp->containsGenBlock()) return true;
-                    const AstNodeModule* const varModp
-                        = v3Global.rootp()->containingModule(refp->varp());
-                    UASSERT_OBJ(varModp, refp, "Variable outside a module");
-                    if (varModp->hasGParam() && !finalps.count(varModp)) {
-                        if (!defaultIfacePort(refp, containerp, varModp)) return true;
-                        finalps.emplace(varModp);
-                    }
-                    // Evaluated where possibly referring back, e.g. circularly
-                    if (refp->varp()->isParam() && !VN_IS(refp->varp()->valuep(), Const)) {
+        depsr.m_roots.insert(depsr.m_roots.end(), roots.begin(), roots.end());
+        TemplateSearch search{*this, containerp, depsr};
+        for (AstNode* const rootp : roots) search.m_work.push_back({rootp, containerp, false});
+        const bool found = search.run();
+        V3Stats::addStatSum("Param, Template references searched", search.m_searched);
+        if (!found) search.recordFinal();
+        return found;
+    }
+    // Search of the items parameter values refer to, see refersToTemplate
+    struct TemplateSearch final {
+        // An item to search
+        struct Item final {
+            AstNode* m_nodep;  // The item
+            const AstNodeModule* m_modp;  // Module it is in
+            bool m_final;  // Whether m_modp's items are final for it, see defaultIfacePort
+        };
+        // An enum item referred to, its enum found once nothing else is left to search
+        struct EnumRef final {
+            Item m_item;  // Item referring to it
+            const AstEnumItemRef* m_refp;  // The reference
+        };
+        ParamProcessor& m_proc;  // The processor
+        const AstNodeModule* const m_containerp;  // Module the values are evaluated in
+        ParamDeps& m_deps;  // What the values refer to
+        std::vector<Item> m_work;  // Items left to search
+        std::vector<EnumRef> m_enumRefs;  // Enum items left to find the enums of
+        std::unordered_set<const AstNode*> m_visited;  // Items searched or to search
+        // Items with a reference into a module not specialized yet, allowed only in this search
+        std::unordered_set<const AstNode*> m_contextualps;
+        uint64_t m_searched = 0;  // Nodes searched and enum items passed, for statistics
+        TemplateSearch(ParamProcessor& proc, const AstNodeModule* containerp, ParamDeps& deps)
+            : m_proc{proc}
+            , m_containerp{containerp}
+            , m_deps{deps} {}
+        // Return whether something found refers into a module not specialized yet
+        bool run() {
+            while (!m_work.empty() || !m_enumRefs.empty()) {
+                if (m_work.empty()) {
+                    // Last, as finding the enum of an item walks its earlier items, and a
+                    // search left to its turn need not find it
+                    const EnumRef enumRef = m_enumRefs.back();
+                    m_enumRefs.pop_back();
+                    if (addEnum(enumRef.m_item, enumRef.m_refp)) return true;
+                    continue;
+                }
+                const Item item = m_work.back();
+                m_work.pop_back();
+                m_deps.m_targets[item.m_nodep];  // Even if referring to nothing
+                // A value not linked yet referred to, e.g. of a class, is evaluated later by
+                // ParamVisitor, so left to the instance's turn
+                const bool referred = m_visited.count(item.m_nodep);
+                const bool found = item.m_nodep->exists([&](AstNode* itemp) {
+                    ++m_searched;
+                    return searchRef(item, itemp, referred);
+                });
+                if (found) return true;
+            }
+            return false;
+        }
+        // Return whether the reference itemp, in item, refers into a module not specialized yet
+        bool searchRef(const Item& item, AstNode* itemp, bool referred) {
+            AstNode* targetp = nullptr;
+            const AstNodeModule* ownerp = item.m_modp;  // Module targetp is in
+            if (const AstVarXRef* const refp = VN_CAST(itemp, VarXRef)) {
+                // Into a generate block, so possibly not resolved
+                if (!refp->varp() || refp->containsGenBlock()) return true;
+                ownerp = m_proc.pathModp(item.m_modp, refp->dotted(), refp->varp());
+                if (!ownerp) return true;  // E.g. upwards
+                // Final for this reference only, as another may be through an instance of the
+                // same module with parameters
+                const bool finalItems = ownerp->hasGParam();
+                if (finalItems) {
+                    if (!m_proc.defaultIfacePort(refp, item.m_modp, m_containerp, ownerp)) {
                         return true;
                     }
-                    targetsr.push_back(refp->varp());
-                    if (visited.emplace(refp->varp()).second) work.push_back(refp->varp());
-                    return false;
+                    m_contextualps.emplace(item.m_nodep);
                 }
-                if (const AstVarRef* const refp = VN_CAST(itemp, VarRef)) {
-                    targetp = refp->varp();
-                } else if (const AstRefDType* const refp = VN_CAST(itemp, RefDType)) {
-                    if (refp->typeofp()) return false;  // The type of an expression, below
-                    // A typedef, else e.g. a type parameter
-                    targetp = refp->typedefp();
-                    if (!targetp) targetp = refp->refDTypep();
-                } else if (const AstEnumItemRef* const refp = VN_CAST(itemp, EnumItemRef)) {
-                    // Its enum, as its base type gives the item's value its type
-                    targetp = enumOf(refp->itemp(), enumps);
-                } else if (const AstNodeFTaskRef* const refp = VN_CAST(itemp, NodeFTaskRef)) {
-                    // Also through its body; a built-in method, e.g. of a string, has none
-                    targetp = refp->taskp();
-                    if (!targetp) return false;
-                } else {
-                    return referred && VN_IS(itemp, Dot);
-                }
-                if (!targetp) return true;  // Not linked yet, e.g. a type of a class
-                // E.g. of an interface port, not specialized yet
-                const AstNodeModule* const ownerp = v3Global.rootp()->containingModule(targetp);
-                // Not in a module, e.g. in the type table, so sized already, e.g. of a type
-                // parameter
-                if (!ownerp) return false;
-                if (ownerp != m_visitModp && ownerp != containerp && ownerp->hasGParam()
-                    && !finalps.count(ownerp)) {
+                // Evaluated where possibly referring back, e.g. circularly
+                if (refp->varp()->isParam() && !VN_IS(refp->varp()->valuep(), Const)) {
                     return true;
                 }
-                targetsr.push_back(targetp);
-                if (visited.emplace(targetp).second) work.push_back(targetp);
+                m_deps.m_targets[item.m_nodep].push_back(refp->varp());
+                if (m_visited.emplace(refp->varp()).second) {
+                    m_work.push_back({refp->varp(), ownerp, finalItems});
+                }
                 return false;
-            });
-            if (found) return true;
+            }
+            if (const AstVarRef* const refp = VN_CAST(itemp, VarRef)) {
+                targetp = refp->varp();
+                if (refp->classOrPackagep()) ownerp = refp->classOrPackagep();
+            } else if (AstRefDType* const refp = VN_CAST(itemp, RefDType)) {
+                if (refp->typeofp()) return false;  // The type of an expression, below
+                // A typedef, else e.g. a type parameter
+                targetp = refp->typedefp();
+                if (!targetp) targetp = refp->refDTypep();
+                if (refp->classOrPackagep()) {
+                    ownerp = refp->classOrPackagep();
+                } else if (const VIfaceCaptureTag* const tagp
+                           = V3LinkDotIfaceCapture::captureTag(refp)) {
+                    // Of an interface port or instance, e.g. not specialized yet
+                    ownerp = m_proc.pathModp(item.m_modp, tagp->m_cellPath, targetp);
+                    if (!ownerp) return true;
+                }
+            } else if (const AstEnumItemRef* const refp = VN_CAST(itemp, EnumItemRef)) {
+                // Its enum, as its base type gives the item's value its type; that of a sized
+                // item is its type
+                if (!refp->itemp()->didWidth()) {
+                    m_enumRefs.push_back({item, refp});
+                    return false;
+                }
+                return addEnum(item, refp);
+            } else if (const AstNodeFTaskRef* const refp = VN_CAST(itemp, NodeFTaskRef)) {
+                // Also through its body; a built-in method, e.g. of a string, has none
+                targetp = refp->taskp();
+                if (!targetp) return false;
+                if (refp->classOrPackagep()) ownerp = refp->classOrPackagep();
+            } else {
+                return referred && VN_IS(itemp, Dot);
+            }
+            if (!targetp) return true;  // Not linked yet, e.g. a type of a class
+            return addTarget(item, targetp, ownerp);
         }
-        return false;
+        // Return whether the enum of refp, in item, is in a module not specialized yet
+        bool addEnum(const Item& item, const AstEnumItemRef* refp) {
+            AstEnumItem* const enumItemp = refp->itemp();
+            AstNode* const enump = enumItemp->didWidth() ? enumItemp->dtypep()
+                                                         : m_proc.enumOf(enumItemp, m_searched);
+            const AstNodeModule* ownerp = item.m_modp;
+            if (refp->classOrPackagep()) {
+                ownerp = refp->classOrPackagep();
+            } else if (!refp->dotted().empty()) {
+                // Declared by a typedef, as reached through a scope
+                ownerp = m_proc.pathModp(item.m_modp, refp->dotted(), enump->backp());
+                if (!ownerp) return true;
+            }
+            return addTarget(item, enump, ownerp);
+        }
+        // Return whether targetp, referred to from item, is in ownerp, a module not specialized
+        // yet, else add it to search
+        bool addTarget(const Item& item, AstNode* targetp, const AstNodeModule* ownerp) {
+            const bool finalItems = item.m_final && ownerp == item.m_modp;
+            if (ownerp->hasGParam()) {
+                if (ownerp != m_proc.m_visitModp && ownerp != m_containerp && !finalItems) {
+                    return true;
+                }
+                m_contextualps.emplace(item.m_nodep);
+            }
+            // A sized type, e.g. an enum sized when another copy was evaluated, is final, as
+            // is an item found final by an earlier search
+            if (VN_IS(targetp, NodeDType) && targetp->didWidth()) return false;
+            if (m_proc.isFinal(targetp, m_containerp)) return false;
+            m_deps.m_targets[item.m_nodep].push_back(targetp);
+            if (m_visited.emplace(targetp).second) m_work.push_back({targetp, ownerp, finalItems});
+            return false;
+        }
+        // Record the items found final, as they refer only to final items and to no parameter
+        // to evaluate, for later searches, e.g. a function referred to from many paths: those
+        // referring into a module not specialized yet only for later searches in m_containerp
+        void recordFinal() {
+            // Items each searched item is referred to from, to propagate in linear time
+            std::unordered_map<const AstNode*, std::vector<const AstNode*>> referrers;
+            for (const AstNode* const nodep : m_visited) {
+                for (const AstNode* const targetp : m_deps.m_targets[nodep]) {
+                    referrers[targetp].push_back(nodep);
+                }
+            }
+            // Propagate from each seed to all items referring to it, transitively
+            const auto propagate = [&](std::unordered_set<const AstNode*>& setr) {
+                std::vector<const AstNode*> todo{setr.begin(), setr.end()};
+                while (!todo.empty()) {
+                    const AstNode* const nodep = todo.back();
+                    todo.pop_back();
+                    for (const AstNode* const referrerp : referrers[nodep]) {
+                        if (setr.emplace(referrerp).second) todo.push_back(referrerp);
+                    }
+                }
+            };
+            std::unordered_set<const AstNode*>
+                unknownps;  // Items referring to a value to evaluate
+            for (const AstNode* const nodep : m_visited) {
+                const AstVar* const varp = VN_CAST(nodep, Var);
+                if (varp && varp->isParam() && !VN_IS(varp->valuep(), Const)) {
+                    unknownps.emplace(nodep);
+                }
+            }
+            propagate(unknownps);
+            propagate(m_contextualps);
+            for (const AstNode* const nodep : m_visited) {
+                if (unknownps.count(nodep)) continue;
+                if (m_contextualps.count(nodep)) {
+                    m_proc.m_containerFinalps[m_containerp].emplace(nodep);
+                } else {
+                    m_proc.m_finalps.emplace(nodep);
+                }
+            }
+        }
+    };
+    // Return whether nodep was found final, see TemplateSearch::recordFinal
+    bool isFinal(const AstNode* nodep, const AstNodeModule* containerp) const {
+        if (m_finalps.count(nodep)) return true;
+        const auto it = m_containerFinalps.find(containerp);
+        return it != m_containerFinalps.end() && it->second.count(nodep);
     }
-    // Return whether refp refers through an interface port of containerp connected to an instance
-    // of ifacep with its defaults, or through such an instance, visited already, so referring to
-    // items final for it
-    bool defaultIfacePort(const AstVarXRef* refp, const AstNodeModule* containerp,
-                          const AstNodeModule* ifacep) {
+    // Return the module the instances and interface ports on dotted lead to from modp, if declp
+    // is an item of it, else nullptr, e.g. as a reference not retargeted yet is to an item of
+    // the module an instance was specialized from
+    const AstNodeModule* pathModp(const AstNodeModule* modp, const string& dotted,
+                                  const AstNode* declp) {
+        for (const string& name : VString::split(dotted, '.')) {
+            const AstNode* const itemp = findItem(modp, name);
+            if (const AstCell* const cellp = VN_CAST(itemp, Cell)) {
+                modp = cellp->modp();
+            } else if (const AstVar* const varp = VN_CAST(itemp, Var)) {
+                // An interface port
+                const AstIfaceRefDType* const irefp = VN_CAST(varp->subDTypep(), IfaceRefDType);
+                modp = irefp ? irefp->ifaceViaCellp() : nullptr;
+            } else {
+                modp = nullptr;
+            }
+            if (!modp) return nullptr;
+        }
+        return findItem(modp, declp->name()) == declp ? modp : nullptr;
+    }
+    // Return whether refp, in modp, refers through an interface port of containerp connected to
+    // an instance of ifacep with its defaults, or through such an instance in modp, visited
+    // already, so referring to items final for it. A port of another module, e.g. of an instance
+    // not specialized yet, may still have the interface it was declared with.
+    bool defaultIfacePort(const AstVarXRef* refp, const AstNodeModule* modp,
+                          const AstNodeModule* containerp, const AstNodeModule* ifacep) {
         if (!ifacep->user2()) return false;
-        // A port, of ifacep as the variable is in it, so not through an instance in it, or an
-        // instance of it with its defaults
-        const AstNode* const itemp = findItem(containerp, refp->dotted());
-        const AstCell* const cellp = VN_CAST(itemp, Cell);
-        return cellp ? !cellp->paramsp() : VN_IS(itemp, Var);
+        const AstNode* const itemp = findItem(modp, refp->dotted());
+        if (const AstCell* const cellp = VN_CAST(itemp, Cell)) return !cellp->paramsp();
+        return VN_IS(itemp, Var) && modp == containerp;
     }
-    // Return the enum of itemp, recording that of the items passed in enumpsr, so finding the enum
-    // of every item takes linear time
-    static AstNode* enumOf(AstNode* itemp, std::unordered_map<const AstNode*, AstNode*>& enumpsr) {
+    // Return the enum of itemp, recording that of the items passed, so finding the enum of every
+    // item takes linear time, adding the items passed to passedr
+    AstNode* enumOf(AstNode* itemp, uint64_t& passedr) {
         std::vector<AstNode*> passed;
         AstNode* curp = itemp;
         // The first item's back is its enum
-        while (!enumpsr.count(curp) && curp->backp()->nextp() == curp) {
+        while (!m_enumps.count(curp) && curp->backp()->nextp() == curp) {
             passed.push_back(curp);
             curp = curp->backp();
         }
-        const auto it = enumpsr.find(curp);
-        AstNode* const enump = it != enumpsr.end() ? it->second : curp->backp();
+        const auto it = m_enumps.find(curp);
+        AstNode* const enump = it != m_enumps.end() ? it->second : curp->backp();
         passed.push_back(curp);
-        for (AstNode* const passedp : passed) enumpsr.emplace(passedp, enump);
+        passedr += passed.size();
+        for (AstNode* const passedp : passed) m_enumps.emplace(passedp, enump);
         return enump;
     }
     // Evaluate the parameters deps refers to as ParamVisitor would: each after those it refers
@@ -5252,11 +5441,7 @@ void V3Param::param(AstNetlist* rootp) {
     rootp->clearDeferredParamVarps();  // Defensive: drop any stragglers from a prior invocation
 
     if (dumpTreeEitherLevel() >= 9) V3LinkDotIfaceCapture::dumpEntries("before V3Param");
-    v3Global.parameterizing(true);
     { ParamTop{rootp}; }
-    v3Global.parameterizing(false);
-    // The memo is used only while parameterizing
-    rootp->clearContainingModules();
     if (dumpTreeEitherLevel() >= 9) V3LinkDotIfaceCapture::dumpEntries("after V3Param");
 
     V3Global::dumpCheckGlobalTree("param", 0, dumpTreeEitherLevel() >= 3);

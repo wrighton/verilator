@@ -2555,17 +2555,6 @@ const char* AstNetlist::broken() const {
     }
     return nullptr;
 }
-const AstNodeModule* AstNetlist::containingModule(const AstNode* nodep) {
-    // A node is remembered with the module a walk up from a node below or after it found, so
-    // with every node between it and that module, or the netlist for one in miscsp, also
-    // remembered: its walk passed them. Only an unlink, of one of those, can change the module,
-    // and it forgets them all; a node linked before a remembered one is remembered too, so a
-    // remembered node in a list unlinked with its next nodes means its first node is remembered.
-    // So each node is passed by a walk once between forgets, and they happen only as V3Param
-    // unlinks a node on such a walk.
-    if (const AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) return modp;
-    return recordContainingModule(nodep);
-}
 void AstNetlist::createTopScope(AstScope* scopep) {
     UASSERT(scopep, "Must not be nullptr");
     UASSERT_OBJ(!m_topScopep, scopep, "TopScope already exits");
@@ -2582,7 +2571,6 @@ void AstNetlist::deleteContents() {
     m_delaySchedulerp = nullptr;
     m_nbaQueuep = nullptr;
     m_topScopep = nullptr;
-    clearContainingModules();
     m_evalFuncps.fill(nullptr);
     m_dumpTriggersFuncps.fill(nullptr);
     if (op1p()) op1p()->unlinkFrBackWithNext()->deleteTree();
@@ -2642,132 +2630,6 @@ AstCFunc* AstNetlist::evalFuncp(VEval eval) {
         }
     }
     return m_evalFuncps[eval];
-}
-void AstNetlist::forgetContainingModulesSlow(const AstNode* nodep, bool withNext) {
-    // A module in modulesp has no remembered module; the modules of nodes in it may be freed
-    const AstNodeModule* const modp = VN_CAST(nodep, NodeModule);
-    if (modp && (withNext || m_linkedModules.count(modp))) {
-        clearContainingModules();
-    } else if (m_containingModules.count(nodep)) {
-        decltype(m_containingModules){}.swap(m_containingModules);
-    }
-}
-void AstNetlist::linkContainingModulesSlow(const AstNode* newp, const AstNode* nextp) {
-    const auto it = m_containingModules.find(nextp);
-    if (it == m_containingModules.end()) return;
-    const AstNodeModule* const modp = it->second;
-    for (const AstNode* curp = newp; curp; curp = curp->nextp()) {
-        m_containingModules.emplace(curp, modp);
-    }
-}
-bool AstNetlist::moduleLinked(const AstNodeModule* modp) {
-    if (m_linkedModules.count(modp) || m_containingModules.count(modp)) return true;
-    // In modulesp, after a module found there, or first
-    std::vector<const AstNodeModule*> passed{modp};
-    for (const AstNode* curp = modp; curp->backp(); curp = curp->backp()) {
-        const AstNode* const backp = curp->backp();
-        const AstNodeModule* const prevModp = VN_CAST(backp, NodeModule);
-        const bool listed = backp == this ? curp == modulesp()
-                                          : backp->nextp() == curp && prevModp
-                                                && m_linkedModules.count(prevModp);
-        if (listed) {
-            m_linkedModules.insert(passed.begin(), passed.end());
-            return true;
-        }
-        if (backp->nextp() != curp || !prevModp) break;
-        passed.push_back(prevModp);
-    }
-    // Else in another module, or not linked
-    recordContainingModule(modp);
-    return m_containingModules.count(modp);
-}
-const AstNodeModule* AstNetlist::recordContainingModule(const AstNode* nodep) {
-    std::vector<const AstNode*> passed;
-    const AstNodeModule* modp = nullptr;
-    const AstNode* curp = nodep;
-    for (; curp->backp(); curp = curp->backp()) {
-        const auto it = m_containingModules.find(curp);
-        if (it != m_containingModules.end()) {
-            modp = it->second;
-            break;
-        }
-        passed.push_back(curp);
-        // Only true parents are modules containing it, not a module before it, e.g. a class
-        const AstNode* const backp = curp->backp();
-        if (backp->nextp() == curp) continue;
-        if (const AstNodeModule* const parentModp = VN_CAST(backp, NodeModule)) {
-            modp = parentModp;
-            // Not remembered in a module not linked, as it may be deleted without an unlink
-            if (!moduleLinked(modp)) return modp;
-            break;
-        }
-    }
-    // Not remembered unless linked, as linking into an empty list is not seen
-    if (!curp->backp() && curp != this) return nullptr;
-    for (const AstNode* const passedp : passed) m_containingModules.emplace(passedp, modp);
-    return modp;
-}
-void AstNetlist::selfTest() {
-    // A node recorded, then moved to another module
-    AstNetlist* const netlistp = v3Global.rootp();
-    FileLine* const fl = new FileLine{FileLine::commandLineFilename()};
-    AstModule* const fromp = new AstModule{fl, "__VselfTestFrom", "work"};
-    AstModule* const toModp = new AstModule{fl, "__VselfTestTo", "work"};
-    netlistp->addModulesp(fromp);
-    netlistp->addModulesp(toModp);
-    AstVar* const varp = new AstVar{fl, VVarType::VAR, "__VselfTestVar", VFlagChildDType{},
-                                    new AstBasicDType{fl, VBasicDTypeKwd::LOGIC}};
-    fromp->addStmtsp(varp);
-    UASSERT_OBJ(netlistp->containingModule(varp->childDTypep()) == fromp, varp,
-                "Wrong containing module");
-    toModp->addStmtsp(varp->unlinkFrBack());
-    UASSERT_OBJ(netlistp->containingModule(varp->childDTypep()) == toModp, varp,
-                "Wrong containing module after a move");
-    // A node asked about before it is linked, into an empty list
-    AstVar* const newVarp = new AstVar{fl, VVarType::VAR, "__VselfTestNew", VFlagChildDType{},
-                                       new AstBasicDType{fl, VBasicDTypeKwd::LOGIC}};
-    AstModule* const newModp = new AstModule{fl, "__VselfTestNew", "work"};
-    netlistp->addModulesp(newModp);
-    UASSERT_OBJ(!netlistp->containingModule(newVarp), newVarp, "Wrong containing module");
-    newModp->addStmtsp(newVarp);
-    UASSERT_OBJ(netlistp->containingModule(newVarp) == newModp, newVarp,
-                "Wrong containing module after linking");
-    // A node in a module not linked yet, so not remembered either
-    AstModule* const looseModp = new AstModule{fl, "__VselfTestLoose", "work"};
-    AstVar* const looseVarp = new AstVar{fl, VVarType::VAR, "__VselfTestLoose", VFlagChildDType{},
-                                         new AstBasicDType{fl, VBasicDTypeKwd::LOGIC}};
-    looseModp->addStmtsp(looseVarp);
-    UASSERT_OBJ(netlistp->containingModule(looseVarp) == looseModp, looseVarp,
-                "Wrong containing module");
-    UASSERT_OBJ(!netlistp->m_containingModules.count(looseVarp), looseVarp,
-                "Remembered a node not linked");
-    VL_DO_DANGLING(looseModp->deleteTree(), looseModp);
-    // A node linked before a remembered node, then unlinked with it
-    AstVar* const headVarp = new AstVar{fl, VVarType::VAR, "__VselfTestHead", VFlagChildDType{},
-                                        new AstBasicDType{fl, VBasicDTypeKwd::LOGIC}};
-    varp->addHereThisAsNext(headVarp);
-    fromp->addStmtsp(headVarp->unlinkFrBackWithNext());
-    UASSERT_OBJ(netlistp->containingModule(varp->childDTypep()) == fromp, varp,
-                "Wrong containing module after a move with the node before");
-    // A node in a class in a package, then the class moved
-    AstPackage* const pkgp = new AstPackage{fl, "__VselfTestPkg", "work"};
-    netlistp->addModulesp(pkgp);
-    AstClass* const classp = new AstClass{fl, "__VselfTestClass", "work"};
-    pkgp->addStmtsp(classp);
-    AstVar* const memberp = new AstVar{fl, VVarType::VAR, "__VselfTestMember", VFlagChildDType{},
-                                       new AstBasicDType{fl, VBasicDTypeKwd::LOGIC}};
-    classp->addMembersp(memberp);
-    UASSERT_OBJ(netlistp->containingModule(memberp) == classp, memberp, "Wrong containing module");
-    fromp->addStmtsp(classp->unlinkFrBack());
-    UASSERT_OBJ(netlistp->containingModule(memberp) == classp, memberp,
-                "Wrong containing module after a move");
-    const auto classIt = netlistp->m_containingModules.find(classp);
-    UASSERT_OBJ(classIt != netlistp->m_containingModules.end() && classIt->second == fromp, classp,
-                "Wrong containing module of a moved class");
-    // The modules unlinked together
-    VL_DO_DANGLING(fromp->unlinkFrBackWithNext()->deleteTree(), fromp);
-    UASSERT_OBJ(netlistp->m_containingModules.empty() && netlistp->m_linkedModules.empty(),
-                netlistp, "Remembered modules not forgotten");
 }
 AstFuncRef* AstNetlist::stdPackageProcessSelfp(FileLine* flp) const {
     UASSERT(v3Global.rootp()->stdPackageProcessp(), "'std' should be imported");
