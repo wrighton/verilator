@@ -165,6 +165,23 @@ module force_driver (
   assign p.value = enable ? data : 7'bz;
 endmodule
 
+interface float_defaults;
+  bit drive_on = 1'b0;
+  bit [6:0] data = 7'h0;
+  wire [6:0] value;
+  assign (weak0, weak1) value = drive_on ? data : 7'bz;
+  modport drive(inout value);
+endinterface
+
+module float_forcer (
+    float_defaults.drive p,
+    input bit force_on
+);
+  always @(force_on)
+    if (force_on) force p.value[4:2] = 3'b011;
+    else release p.value[4:2];
+endmodule
+
 module t;
   default_zero high_override ();
   default_zero idle_zero ();
@@ -276,6 +293,50 @@ module t;
     forced.local_force = 1'b0;
     #1;
     `checkh(forced.value, 7'h0c);
+  end
+
+  // Forced bits of a floating net are driven until release.
+  float_defaults floating ();
+  bit float_force = 1'b0;
+  float_forcer float_force_drive (
+      floating,
+      float_force
+  );
+  initial begin
+    #1;
+    `checkh(floating.value, 7'bz);
+    force floating.value = 7'h00;
+    #1;
+    `checkh(floating.value, 7'h00);
+    `checkh(floating.value === 7'bz, 1'b0);
+    release floating.value;
+    #1;
+    `checkh(floating.value, 7'bz);
+    float_force = 1'b1;
+    #1;
+    `checkh(floating.value, 7'bzz011zz);
+    floating.data = 7'h55;
+    floating.drive_on = 1'b1;
+    #1;
+    `checkh(floating.value, 7'h4d);
+    float_force = 1'b0;
+    #1;
+    `checkh(floating.value, 7'h55);
+    floating.drive_on = 1'b0;
+    #1;
+    `checkh(floating.value, 7'bz);
+  end
+  float_defaults floating_cat ();
+  bit float_other = 1'b0;
+  initial begin
+    #1;
+    force {floating_cat.value[6:5], float_other} = 3'b101;
+    #1;
+    `checkh(floating_cat.value, 7'b10zzzzz);
+    `checkh(float_other, 1'b1);
+    release {floating_cat.value[6:5], float_other};
+    #1;
+    `checkh(floating_cat.value, 7'bz);
   end
 
   initial begin

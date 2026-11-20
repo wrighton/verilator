@@ -1568,6 +1568,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                && varp->hasStrengthAssignment();
     }
 
+    // Strength-group net of an interface; ifaceTristate limits isStrengthGroupNet to interfaces
+    bool isIfaceStrengthNet(AstVar* varp) {
+        return m_varAux(varp).ifaceTristate && isStrengthGroupNet(varp);
+    }
+
     bool isIfaceNetLhs(AstNodeExpr* lhsp) {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef);
@@ -2218,7 +2223,41 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstAssign* nodep) override { visitAssign(nodep); }
     void visit(AstAssignDly* nodep) override { visitAssign(nodep); }
 
-    void visitForceLhs(AstNode* nodep, AstNodeExpr* lhsp) {
+    // A forced net bit is driven, so a force of an interface strength net also forces those bits
+    // of its enable, and a release releases them (IEEE 1800-2023 10.6.2).
+    // V3Const already split concatenated targets.
+    void addForceEnable(AstNodeStmt* stmtp, AstNodeExpr* lhsp) {
+        AstNodeExpr* basep = lhsp;
+        while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
+        AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        if (!refp || !isIfaceStrengthNet(refp->varp())) return;
+        FileLine* const fl = stmtp->fileline();
+        AstVar* const enVarp = getCreateEnVarp(refp->varp(), false);
+        // The enable has a continuous driver, so its release restores the driven value
+        enVarp->isContinuously(true);
+        AstNodeVarRef* enRefp;
+        if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+            enRefp = newVarXRef(fl, enVarp, xrefp->dotted(), refp->access(), xrefp->inlinedDots());
+        } else {
+            enRefp = new AstVarRef{fl, enVarp, refp->access()};
+        }
+        // Keep the constant selects of the net target
+        AstNodeExpr* enLhsp = enRefp;
+        if (lhsp != refp) {
+            enLhsp = lhsp->cloneTree(false);
+            AstNodeExpr* enBasep = enLhsp;
+            while (AstSel* const selp = VN_CAST(enBasep, Sel)) enBasep = selp->fromp();
+            enBasep->replaceWith(enRefp);
+            VL_DO_DANGLING(enBasep->deleteTree(), enBasep);
+        }
+        if (VN_IS(stmtp, Release)) {
+            stmtp->addNextHere(new AstRelease{fl, enLhsp});
+        } else {
+            stmtp->addNextHere(new AstAssignForce{fl, enLhsp, newAllZerosOrOnes(enLhsp, true)});
+        }
+    }
+    void visitForceLhs(AstNodeStmt* nodep, AstNodeExpr* lhsp) {
+        if (!m_graphing) addForceEnable(nodep, lhsp);
         VL_RESTORER(m_inForceLhs);
         m_inForceLhs = true;
         iterateAndNextNull(lhsp);
@@ -2676,10 +2715,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         UASSERT_OBJ(nodep->varp(), nodep, "Unlinked");
         // Force and release override all drivers of a resolved interface strength net rather
         // than adding a driver (IEEE 1800-2023 10.6.2); V3Force lowers them later.
-        if (m_inForceLhs && m_varAux(nodep->varp()).ifaceTristate
-            && isStrengthGroupNet(nodep->varp())) {
-            return;
-        }
+        if (m_inForceLhs && isIfaceStrengthNet(nodep->varp())) return;
         if (m_graphing) {
             if (nodep->access().isWriteOrRW()) associateLogic(nodep, nodep->varp());
             if (nodep->access().isReadOrRW()) associateLogic(nodep->varp(), nodep);
