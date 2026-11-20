@@ -22,12 +22,16 @@
 
 #include "V3Ast.h"
 
+class VMemberMap;
+
 //============================================================================
 
 class V3LinkLValue final {
 public:
     static void linkLValue(AstNetlist* nodep) VL_MT_DISABLED;
-    static void linkLValueSet(AstNode* nodep, VAccess access = VAccess::WRITE) VL_MT_DISABLED;
+    // The caller's member map is needed while the tree may not yet be typed by V3Width
+    static void linkLValueSet(AstNode* nodep, VAccess access = VAccess::WRITE,
+                              VMemberMap* memberMapp = nullptr) VL_MT_DISABLED;
 };
 
 #endif  // Guard
