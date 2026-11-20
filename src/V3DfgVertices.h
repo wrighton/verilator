@@ -123,6 +123,14 @@ public:
     bool hasExtWrRefs() const { return hasExtWrRefs(m_vscp); }
     bool hasExtRefs() const { return hasExtRdRefs() || hasExtWrRefs(); }
 
+    // Variable written by a blocking assignment in clocked logic
+    static bool hasClockedBlockingWrRefs(const AstVarScope* nodep) {
+        return nodep->user1() & 0x04;
+    }
+    static void setHasClockedBlockingWrRefs(AstVarScope* nodep) {
+        nodep->user1(nodep->user1() | 0x04);
+    }
+
     // Variable referenced via READWRITE references
     static bool hasRWRefs(const AstVarScope* nodep) { return nodep->user1() & 0x10; }
     static void setHasRWRefs(AstVarScope* nodep) { nodep->user1(nodep->user1() | 0x10); }
@@ -237,12 +245,14 @@ class DfgAstRd final : public DfgVertexAst {
     DfgInlineEdgeStorage<1> m_inputs{this};  // Input edges
     const bool m_inSenItem;  // Reference is in a sensitivity list
     const bool m_inLoop;  // Reference is in a loop
+    const bool m_inClocked;  // Reference is in clocked logic
 
 public:
-    DfgAstRd(DfgGraph& dfg, AstNodeExpr* exprp, bool inSenItem, bool inLoop)
+    DfgAstRd(DfgGraph& dfg, AstNodeExpr* exprp, bool inSenItem, bool inLoop, bool inClocked)
         : DfgVertexAst{dfg, dfgType(), exprp, m_inputs.m_edges, 1}
         , m_inSenItem{inSenItem}
-        , m_inLoop{inLoop} {}
+        , m_inLoop{inLoop}
+        , m_inClocked{inClocked} {}
     ASTGEN_MEMBERS_DfgAstRd;
 
     DfgVertex* srcp() const { return inputp(0); }
@@ -250,6 +260,7 @@ public:
     std::string srcName(size_t) const override final { return ""; }
     bool inSenItem() const { return m_inSenItem; }
     bool inLoop() const { return m_inLoop; }
+    bool inClocked() const { return m_inClocked; }
 };
 
 //------------------------------------------------------------------------------
