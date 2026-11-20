@@ -12,7 +12,7 @@
 module t;
   parameter int Size = 100;
 
-  // Each bit has its own trigger
+  // Each process awaits the edge of its own bit
   logic [Size-1:0] c = '0;
   int rises[Size];
   int ownRises[Size];
@@ -29,9 +29,33 @@ module t;
     end
   end
 
-  // Shares its previous value with the awaited posedge of the same bit
+  // Sensitive to the other edge of a bit awaited above
   int falls = 0;
   always @(negedge c[0]) ++falls;
+
+  // Each process awaits its own event, which shares an edge with half of the others
+  logic tick = 0;
+  int wakes[Size];
+  for (genvar i = 0; i < Size; ++i) begin : s
+    if (i % 2 == 0) begin : rise
+      initial forever begin
+        @(posedge tick or negedge c[i]);
+        ++wakes[i];
+      end
+    end
+    else begin : fall
+      initial forever begin
+        @(negedge tick or negedge c[i]);
+        ++wakes[i];
+      end
+    end
+  end
+  // The shared edge made just before awaiting wakes all the processes awaiting it
+  initial begin
+    #5 tick = 1;
+    @(posedge tick);
+    `stop;
+  end
 
   initial begin
     #2 c = '0;
@@ -40,8 +64,14 @@ module t;
     for (int i = 0; i < Size; ++i) begin
       `checkd(rises[i], i % 3 == 0 ? 2 : 1);
       `checkd(ownRises[i], i % 3 == 0 ? 1 : 0);
+      `checkd(wakes[i], 1);
     end
     `checkd(falls, 1);
+    #2;
+    for (int i = 0; i < Size; ++i) `checkd(wakes[i], i % 2 == 0 ? 2 : 1);
+    tick = 0;
+    #1;
+    for (int i = 0; i < Size; ++i) `checkd(wakes[i], 2);
     $write("*-* All Finished *-*\n");
     $finish;
   end
