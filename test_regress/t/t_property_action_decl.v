@@ -159,6 +159,30 @@ module t;
     count = 1;
     cover_runs += count;
   end
+  // Every attempt is still pending at the end of simulation, where cover_late holds
+  wire cover_late = cyc == 60;
+  cover property (@(posedge clk) s_eventually cover_late) begin
+    int count;
+    count = 1;
+    `checkd(count, 0);
+  end
+
+  // A reference through an instance named like a block of the action
+  t_payload u ();
+  int payload_seen = 0;
+  int payload_calls = 0;
+
+  if (1) begin : payload_gen
+    assert property (@(posedge clk) a ##[1:3] b ##1 c)
+    else begin : payload_action
+      payload_seen = u.payload;
+      begin : decoy
+        begin : u
+          payload_calls++;
+        end
+      end
+    end
+  end
 
   // A hierarchical reference through another instance keeps selecting that instance
   int xmr_seen_a;
@@ -201,6 +225,8 @@ module t;
     `checkd(cover_runs, 0);
     `checkd(xmr_seen_a, 37);
     `checkd(xmr_seen_b, 37);
+    `checkd(payload_seen, 37);
+    `checkd(payload_calls, fails);
     done = 1;
     $finish;
   end
@@ -271,4 +297,8 @@ module t_xmr_worker (
     end
   end
 
+endmodule
+
+module t_payload;
+  int payload = 37;
 endmodule
