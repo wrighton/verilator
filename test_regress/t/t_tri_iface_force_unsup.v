@@ -25,15 +25,14 @@ module t;
   endclass
   holder held = new;
   logic queued[$];
+  wire undriven_src;
   task automatic force_value;
-    force bus.value = 1'b1;
-  endtask
-  task automatic release_value;
-    release bus.value;
+    force bus.value = maybe_z(local_on);
+    force bus.value = 1'bz;
   endtask
   initial begin
     force_value();
-    release_value();
+    force bus.value = undriven_src;
     force bus.value = ~bus.src;
     force bus.value = bus.plain;
     force bus.value = ~local_src;
