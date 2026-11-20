@@ -327,8 +327,8 @@ class ParamProcessor final {
             return (V3Hash{key.first} + key.second).value();
         }
     };
-    // Created module flavors. A class in a key stays valid, as classes are deleted only after
-    // V3Param, and a failed clone is deleted before it is added.
+    // Created module flavors. A class in a key stays valid, as V3Param deletes classes only at
+    // its end, and a failed clone before it is added.
     std::unordered_map<ModKey, ModInfo, ModKeyHash> m_modNameMap;
 
     std::map<const std::string, std::string>
@@ -342,6 +342,14 @@ class ParamProcessor final {
     // at its end, adds class specializations next to their classes, and moves or deletes
     // generate blocks only to expand them, before anything they declare is named.
     VDTypeNameScopes::SearchCache m_scopeCache;
+    // Each class reference being specialized, and struct and union deparamTypeClasses() is in,
+    // to the number of class references being specialized when it was entered
+    std::unordered_map<const AstNodeDType*, int> m_deparamTypesInProgress;
+    int m_deparamClassDepth = 0;  // Number of class references being specialized
+    // The class reference whose specialization is being made, so whose parameters are named
+    const AstClassRefDType* m_selfClassRefp = nullptr;
+    bool m_selfNamed = false;  // A parameter value named m_selfClassRefp, see paramValueString()
+    string m_selfName;  // Name of m_selfClassRefp's specialization, once known
 
     CloneMap m_originalParams;  // Map between parameters of copied parameteized classes and their
                                 // original nodes
@@ -499,58 +507,49 @@ class ParamProcessor final {
             }
             key += "}";
         } else if (const AstClassRefDType* const classRefp = VN_CAST(nodep, ClassRefDType)) {
-            if (classRefp->classp()) {
-                const string& className = classRefp->classp()->name();
-                const string& origName = classRefp->classp()->origName();
-                const bool isSpecialized = (className != origName);
-                UINFO(9, "paramValueString ClassRefDType: name="
-                             << className << " origName=" << origName
-                             << " isSpecialized=" << isSpecialized
-                             << " hasParams=" << (classRefp->paramsp() ? "Y" : "N")
-                             << " classHasGParam=" << classRefp->classp()->hasGParam());
-
-                if (classRefp->paramsp()) {
-                    // ClassRefDType should have been deparameterized (paramsp
-                    // consumed) before cellPinCleanup calls paramValueString.
-                    classRefp->v3fatalSrc(  // LCOV_EXCL_LINE
-                        "ClassRefDType still has paramsp in paramValueString");
+            // classp() is set, as unresolved class references would have errored in LinkDot
+            UASSERT_OBJ(classRefp->classp(), classRefp,
+                        "ClassRefDType has null classp in paramValueString");
+            // By the name of the class, which for a specialization holds its parameter values,
+            // qualified by the names of the nodes declaring it, as classes of the same name may
+            // be declared in different packages, classes, or modules. Prepending copies the key
+            // once per enclosing node, which is quadratic only in the nesting depth.
+            key = classRefp->classp()->name();
+            if (classRefp == m_selfClassRefp) {
+                m_selfNamed = true;
+                key = m_selfName.empty() ? key + "#(^)" : m_selfName;
+            } else if (classRefp->paramsp()) {
+                // Left unspecialized in a template, see deparamTypeClasses()
+                key += "#(";
+                for (const AstPin* const pinp : VNList<AstPin>{classRefp->paramsp()}) {
+                    key += pinp->name() + "=" + paramValueString(pinp->exprp()) + ",";
                 }
-                // By the name of the class, which for a specialization holds its parameter
-                // values, qualified by the names of the nodes declaring it, as classes of the
-                // same name may be declared in different packages, classes, or modules.
-                // Prepending copies the key once per enclosing node, which is quadratic only in
-                // the nesting depth.
-                key = className;
-                // A class is declared in a design unit, maybe $unit, and those are not nested
-                // and have unique names
-                const AstNode* outerp = classRefp->classp();
-                do {
-                    outerp = VDTypeNameScopes::declaringScopep(outerp, &m_scopeCache);
-                    UASSERT_OBJ(outerp, classRefp, "Class not declared in a design unit");
-                    key = outerp->name() + "::" + key;
-                } while (!VN_IS(outerp, NodeModule) || VN_IS(outerp, Class));
-            } else {
-                // classp() should always be set; unresolved class refs
-                // would have errored in LinkDot.
-                classRefp->v3fatalSrc(  // LCOV_EXCL_LINE
-                    "ClassRefDType has null classp in paramValueString");
+                key += ")";
             }
+            // A class is declared in a design unit, maybe $unit, and those are not nested and
+            // have unique names
+            const AstNode* outerp = classRefp->classp();
+            do {
+                outerp = VDTypeNameScopes::declaringScopep(outerp, &m_scopeCache);
+                UASSERT_OBJ(outerp, classRefp, "Class not declared in a design unit");
+                key = outerp->name() + "::" + key;
+            } while (!VN_IS(outerp, NodeModule) || VN_IS(outerp, Class));
         } else if (const AstUnpackArrayDType* const dtypep = VN_CAST(nodep, UnpackArrayDType)) {
             // Name containers by their elements as above, not by prettyDTypeName(), which names
-            // classes by parameter values that may be yet to be resolved
-            key = paramElemString(dtypep->subDTypep()) + "$" + cvtToStr(dtypep->declRange());
+            // classes without the nodes declaring them
+            key = paramValueString(dtypep->subDTypep()) + "$" + cvtToStr(dtypep->declRange());
         } else if (const AstQueueDType* const dtypep = VN_CAST(nodep, QueueDType)) {
-            key = paramElemString(dtypep->subDTypep()) + "$[$";
+            key = paramValueString(dtypep->subDTypep()) + "$[$";
             if (dtypep->boundConst()) key += ":" + cvtToStr(dtypep->boundConst());
             key += "]";
         } else if (const AstDynArrayDType* const dtypep = VN_CAST(nodep, DynArrayDType)) {
-            key = paramElemString(dtypep->subDTypep()) + "$[]";
+            key = paramValueString(dtypep->subDTypep()) + "$[]";
         } else if (const AstAssocArrayDType* const dtypep = VN_CAST(nodep, AssocArrayDType)) {
-            key = paramElemString(dtypep->subDTypep()) + "$["
-                  + paramElemString(dtypep->keyDTypep()) + "]";
+            key = paramValueString(dtypep->subDTypep()) + "$["
+                  + paramValueString(dtypep->keyDTypep()) + "]";
         } else if (const AstWildcardArrayDType* const dtypep
                    = VN_CAST(nodep, WildcardArrayDType)) {
-            key = paramElemString(dtypep->subDTypep()) + "$[*]";
+            key = paramValueString(dtypep->subDTypep()) + "$[*]";
         } else if (const AstEnumDType* const dtypep = VN_CAST(nodep, EnumDType)) {
             // With the items, as prettyDTypeName() omits them, yet a specialization of a class
             // may declare an enumeration of the same name with other values
@@ -565,14 +564,6 @@ class ParamProcessor final {
         }
         UASSERT_OBJ(!key.empty(), nodep, "Parameter yielded no value string");
         return key;
-    }
-    // As paramValueString(), for the element or key type of a container
-    string paramElemString(const AstNodeDType* dtypep) {
-        // Unlike at the top of a value, a class may be yet to be specialized, so just name it
-        const AstClassRefDType* const classRefp
-            = VN_CAST(dtypep->skipRefToNonRefp(), ClassRefDType);
-        if (classRefp && classRefp->paramsp()) return classRefp->prettyDTypeName(true);
-        return paramValueString(dtypep);
     }
 
     // Return a name suffix for 'text' from its SHA-512 digest. Hierarchical blocks are
@@ -1524,10 +1515,11 @@ class ParamProcessor final {
 
     // Name the specialization by a value pin, or prepare a type pin, noting in
     // overridingTypePinsr whether it differs from the default
-    void cellPinCleanup(AstNode* nodep, AstPin* pinp, AstPin* paramsp, AstNodeModule* srcModp,
+    // Return false if a type parameter value failed, already reported
+    bool cellPinCleanup(AstNode* nodep, AstPin* pinp, AstPin* paramsp, AstNodeModule* srcModp,
                         string& longnamer, bool& any_overridesr,
                         std::unordered_set<const AstPin*>& overridingTypePinsr) {
-        if (!pinp->exprp()) return;  // No-connect
+        if (!pinp->exprp()) return true;  // No-connect
         if (AstVar* const modvarp = pinp->modVarp()) {
             resolveDeferredDotsReachableFrom(modvarp->subDTypep(), m_modp);
             if (!modvarp->isGParam()) {
@@ -1543,7 +1535,7 @@ class ParamProcessor final {
                 V3Const::constifyParamsEdit(pinp->exprp());
                 if (isAggregateParamValue(pinp->exprp())) {
                     nameByPinValue(pinp, srcModp, modvarp, longnamer, any_overridesr);
-                    return;
+                    return true;
                 }
                 // Cast/CastSize default values are not yet folded by V3Width.
                 // Constify here so the comparison below sees a Const node.
@@ -1743,6 +1735,8 @@ class ParamProcessor final {
             // outer_if containing inner_if with struct typedefs) when the
             // inner interface hasn't been specialized yet.
             bool skipWidthForTemplateStruct = false;
+            // Of a template other than the one being elaborated, and not yet copied for clones
+            bool otherTemplateStruct = false;
             {
                 // Use non-asserting skip: before widthParamsEdit, type(expr)
                 // constructs may contain unlinked REFDTYPEs (e.g. type(x-y))
@@ -1755,6 +1749,7 @@ class ParamProcessor final {
                     // been cloned yet (parameterizedTemplate() not set).
                     if (ownerModp && VN_IS(ownerModp, Iface) && ownerModp->hasGParam()) {
                         skipWidthForTemplateStruct = true;
+                        otherTemplateStruct = ownerModp != m_modp && !ownerModp->user3p();
                         V3Stats::addStatSum("Param, Template struct width skips", 1);
                         UINFO(9, "SKIP-WIDTH-TEMPLATE: struct="
                                      << resolvedp->prettyTypeNameQ() << " templateOwner="
@@ -1803,13 +1798,8 @@ class ParamProcessor final {
                         rawTypep = VN_CAST(pinp->exprp(), NodeDType);
                         exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
                     }
-                    // Deparameterize ClassRefDType before name generation (#7000)
-                    if (AstClassRefDType* const classRefDTypep = VN_CAST(exprp, ClassRefDType)) {
-                        if (classRefDTypep->paramsp() && classRefDTypep->classp()
-                            && classRefDTypep->classp()->hasGParam()) {
-                            classRefDeparam(classRefDTypep, classRefDTypep->classp());
-                        }
-                    }
+                    UASSERT_OBJ(exprp, pinp, "Type parameter value not a type after constify");
+                    if (!deparamTypeClasses(exprp, rawTypep, otherTemplateStruct)) return false;
                     overridingTypePinsr.emplace(pinp);  // Named once every pin is prepared
                 }
             }
@@ -1817,8 +1807,59 @@ class ParamProcessor final {
             pinp->v3fatalSrc("Parameter not found in sub-module: Param "
                              << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
         }
+        return true;
     }
 
+    // Deparameterize the parameterized classes type 'dtypep' is made of, through typedefs,
+    // containers and members, before type parameter value 'valuep' is named (#7000), unless
+    // 'inTemplate', declared by a template not yet copied for its clones, which must stay
+    // unchanged, so are named by their parameters. Return false on an error.
+    bool deparamTypeClasses(AstNodeDType* dtypep, const AstNodeDType* valuep, bool inTemplate) {
+        dtypep = dtypep->skipRefToNonRefp();
+        if (!dtypep) return false;  // A bad type chain was reported
+        AstClassRefDType* const classRefp = VN_CAST(dtypep, ClassRefDType);
+        const AstNodeUOrStructDType* const structp = VN_CAST(dtypep, NodeUOrStructDType);
+        if (classRefp && (!classRefp->paramsp() || inTemplate)) return true;
+        UASSERT_OBJ(!classRefp || (classRefp->classp() && classRefp->classp()->hasGParam()),
+                    classRefp, "Parameters of a class without parameters");
+        const auto it = m_deparamTypesInProgress.find(dtypep);
+        if (it != m_deparamTypesInProgress.end() && it->second == m_deparamClassDepth) {
+            // A struct containing itself directly, reported as circular by V3Width
+            return false;
+        }
+        if (classRefp && it != m_deparamTypesInProgress.end()) {
+            // Reached through its own parameter values, so through a class handle: named as the
+            // specialization being made, see paramValueString(), if the one being specialized
+            if (classRefp == m_selfClassRefp) return true;
+            classRefp->v3warn(E_UNSUPPORTED, "Unsupported: Type parameter value "
+                                                 << valuep->prettyNameQ()
+                                                 << " referring to itself through more than one"
+                                                    " class reference.");
+            return false;
+        }
+        if (classRefp) return classRefDeparam(classRefp, classRefp->classp()) != nullptr;
+        bool ok = true;
+        if (structp) {
+            // A struct reached again through a class handle is walked again, as its classes may
+            // refer to the specialization being made
+            const int prevDepth = it != m_deparamTypesInProgress.end() ? it->second : -1;
+            m_deparamTypesInProgress[structp] = m_deparamClassDepth;
+            for (AstMemberDType* const memberp : structp->memberspList()) {
+                ok = deparamTypeClasses(memberp->subDTypep(), valuep, inTemplate);
+                if (!ok) break;
+            }
+            if (prevDepth < 0) {
+                m_deparamTypesInProgress.erase(structp);
+            } else {
+                m_deparamTypesInProgress[structp] = prevDepth;
+            }
+        } else if (AstNodeDType* const subDTypep = dtypep->subDTypep()) {
+            ok = deparamTypeClasses(subDTypep, valuep, inTemplate);
+            const AstAssocArrayDType* const assocp = VN_CAST(dtypep, AssocArrayDType);
+            if (ok && assocp) ok = deparamTypeClasses(assocp->keyDTypep(), valuep, inTemplate);
+        }
+        return ok;
+    }
     void cellInterfaceCleanup(AstPin* pinsp, AstNodeModule* srcModp, string& longnamer,
                               bool& any_overridesr, IfaceRefRefs& ifaceRefRefs) {
         for (AstPin* const pinp : VNList<AstPin>{pinsp}) {
@@ -2081,14 +2122,39 @@ class ParamProcessor final {
         }
     }
 
+    // Part of a specialization's long name naming a type parameter value
+    string typePinName(AstNodeModule* srcModp, AstPin* pinp) {
+        AstNodeDType* const typep = VN_AS(pinp->exprp(), NodeDType);
+        return "_" + paramSmallName(srcModp, pinp->modPTypep())
+               + paramValueNumber(typep->skipRefToNonRefp());
+    }
+    struct SelfPart final {  // Part of a long name naming the specialization being made
+        size_t m_start;  // Offset in the long name
+        size_t m_length;  // Length in the long name
+        AstPin* m_pinp;  // The type parameter value named
+    };
+    // Name of the specialization 'newname' of 'srcModp', made for 'longname', with the parts
+    // naming it, 'selfParts', naming it by 'newname' instead
+    string unfoldedModuleName(AstNodeModule* srcModp, string longname, const string& newname,
+                              const std::vector<SelfPart>& selfParts) {
+        VL_RESTORER_COPY(m_selfName);
+        m_selfName = newname;
+        for (auto it = selfParts.rbegin(); it != selfParts.rend(); ++it) {
+            longname.replace(it->m_start, it->m_length, typePinName(srcModp, it->m_pinp));
+        }
+        return moduleCalcName(srcModp, longname);
+    }
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides) {
         // Returns new or reused module
+        VL_RESTORER(m_selfClassRefp);
+        m_selfClassRefp = VN_CAST(nodep, ClassRefDType);
         // Make sure constification worked
         // Must be a separate loop, as constant conversion may have changed some pointers.
         string longname = srcModp->name() + "_";
         if (debug() >= 9 && paramsp) paramsp->dumpTreeAndNext(cout, "-  cellparams: ");
 
+        std::vector<SelfPart> selfParts;  // Parts of longname naming m_selfClassRefp
         if (srcModp->hierBlock()) {
             longname = parameterizedHierBlockName(srcModp, paramsp);
             any_overrides = longname != srcModp->name();
@@ -2096,11 +2162,14 @@ class ParamProcessor final {
             // Prepare every pin before naming any, as naming a value can depend on the others:
             // fold each value pin, as a class reference's may not be yet, and resolve each type
             std::unordered_set<const AstPin*> overridingTypePins;
+            bool typesOk = true;
             for (AstPin* const pinp : VNList<AstPin>{paramsp}) {
                 if (!pinp->exprp()) continue;  // An empty override keeps the default
                 if (pinp->modPTypep()) {
-                    cellPinCleanup(nodep, pinp, paramsp, srcModp, longname /*ref*/,
-                                   any_overrides /*ref*/, overridingTypePins /*ref*/);
+                    if (!cellPinCleanup(nodep, pinp, paramsp, srcModp, longname /*ref*/,
+                                        any_overrides /*ref*/, overridingTypePins /*ref*/)) {
+                        typesOk = false;
+                    }
                     continue;
                 }
                 AstVar* const modvarp = pinp->modVarp();
@@ -2114,12 +2183,22 @@ class ParamProcessor final {
                     V3Const::constifyParamsEdit(pinp);
                 }
             }
+            if (!typesOk) {
+                // Already reported. Drop the parameters of a class or interface reference, as no
+                // specialization has them.
+                if (!VN_IS(nodep, Cell)) {
+                    VL_DO_DANGLING(m_deleter.pushDeletep(paramsp->unlinkFrBackWithNext()),
+                                   paramsp);
+                }
+                return nullptr;
+            }
             for (AstPin* const pinp : VNList<AstPin>{paramsp}) {
-                if (AstParamTypeDType* const modptp = pinp->modPTypep()) {
+                if (pinp->modPTypep()) {
                     if (!overridingTypePins.count(pinp)) continue;
-                    AstNodeDType* const typep = VN_AS(pinp->exprp(), NodeDType);
-                    longname += "_" + paramSmallName(srcModp, modptp)
-                                + paramValueNumber(typep->skipRefToNonRefp());
+                    const size_t start = longname.size();
+                    m_selfNamed = false;
+                    longname += typePinName(srcModp, pinp);
+                    if (m_selfNamed) selfParts.push_back({start, longname.size() - start, pinp});
                     any_overrides = true;
                     continue;
                 }
@@ -2184,9 +2263,17 @@ class ParamProcessor final {
         } else {
             const string newname
                 = srcModp->hierBlock() ? longname : moduleCalcName(srcModp, longname);
+            const string unfoldedName
+                = selfParts.empty() ? ""
+                                    : unfoldedModuleName(srcModp, longname, newname, selfParts);
             const ModInfo* const modInfop
                 = moduleFindOrClone(srcModp, nodep, paramsp, newname, ifaceRefRefs);
             if (!modInfop) return nullptr;
+            // A specialization whose parameter values refer to it is also the one for those
+            // values naming it instead, as they are equal, unfolded once
+            if (!unfoldedName.empty()) {
+                m_modNameMap.emplace(modKey(srcModp, unfoldedName), ModInfo{modInfop->m_modp});
+            }
             // We need to relink the pins to the new module
             relinkPinsByName(pinsp, modInfop->m_modp);
             UINFO(8, "     Done with " << modInfop->m_modp);
@@ -2318,8 +2405,19 @@ class ParamProcessor final {
     }
     AstNodeModule* classRefDeparam(AstClassRefDType* nodep, AstNodeModule* srcModp) {
         resolveDefaultParams(nodep);
-        AstNodeModule* const newModp
-            = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
+        // Being specialized, see deparamTypeClasses()
+        if (!m_deparamTypesInProgress.emplace(nodep, m_deparamClassDepth).second) {
+            // Through a class-scoped name in its own parameter values, so with no value
+            nodep->v3fatal("Class parameter value refers to the specialization it makes: "
+                           << nodep->prettyNameQ());
+        }
+        AstNodeModule* newModp;
+        {
+            VL_RESTORER(m_deparamClassDepth);
+            ++m_deparamClassDepth;
+            newModp = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
+        }
+        m_deparamTypesInProgress.erase(nodep);
         if (!newModp) return nullptr;
         AstClass* const newClassp = VN_AS(newModp, Class);
         nodep->classp(newClassp);  // Might be unchanged if not cloned (newModp == srcModp)

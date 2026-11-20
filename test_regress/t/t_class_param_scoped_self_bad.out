@@ -1,0 +1,5 @@
+%Error: t/t_class_param_scoped_self_bad.v:15:9: Class parameter value refers to the specialization it makes: 'C'
+                                              : ... note: In instance 't'
+   15 | typedef C#(my_c::W) my_c;
+      |         ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.

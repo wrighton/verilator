@@ -1,0 +1,8 @@
+%Error-UNSUPPORTED: t/t_class_param_type_cycle_unsup.v:22:9: Unsupported: Type parameter value 'X' referring to itself through more than one class reference.
+   22 | typedef C#(Y) X[$];
+      |         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_class_param_type_cycle_unsup.v:26:3: Unsupported: Type parameter value 'S' referring to itself through more than one class reference.
+   26 |   C #(S) left;
+      |   ^
+%Error: Exiting due to

@@ -129,6 +129,20 @@ class Cfg;
   endfunction
 endclass
 
+class WidthHolder #(
+    int W = 1
+);
+  function int width();
+    return W;
+  endfunction
+endclass
+
+interface Sink #(
+    type T = int
+);
+  T v;
+endinterface
+
 // Each instance declares its own Cfg
 interface Ifc #(
     int W = 1
@@ -141,6 +155,58 @@ interface Ifc #(
   function automatic int width();
     Cfg h = PkgReg::Registry#(Cfg)::create();
     return h.width();
+  endfunction
+endinterface
+
+// Each instance's struct holds a class specialized by that instance's parameter
+interface WidthIfc #(
+    int W = 1
+);
+  typedef struct {WidthHolder #(W) h;} s_t;
+endinterface
+
+module width_sub #(
+    int W = 1
+);
+  WidthIfc #(W) ifc ();
+  typedef ifc.s_t s_t;
+  Sink #(.T(s_t)) snk ();
+  function automatic int width();
+    snk.v.h = new;
+    return snk.v.h.width();
+  endfunction
+endmodule
+
+// As width_sub, naming the struct before the default instance of the interface declaring it
+module width_fwd #(
+    int W = 1
+);
+  typedef ifc.s_t s_t;
+  Sink #(.T(s_t)) snk ();
+  WidthIfc #(W) ifc ();
+  function automatic int width();
+    snk.v.h = new;
+    return snk.v.h.width();
+  endfunction
+endmodule
+
+// As above, with the struct passed to an interface inside the interface
+interface OwnIfc #(
+    int W = 1
+);
+  typedef struct {
+    WidthHolder #(W) h;
+    WidthHolder #(W) q[$];
+  } s_t;
+  Sink #(.T(s_t)) snk ();
+  function automatic int width();
+    snk.v.h = new;
+    return snk.v.h.width();
+  endfunction
+  function automatic int qwidth();
+    automatic WidthHolder #(W) h = new;
+    snk.v.q.push_back(h);
+    return snk.v.q[0].width();
   endfunction
 endinterface
 
@@ -200,9 +266,33 @@ module t;
     end
   end
 
-  // Classes declared in instances of an interface
+  // Containers and structs of same-named classes, as type parameter values of an interface
+  typedef PkgA::Pc#(int) pc_a_t;
+  typedef PkgB::Pc#(int) pc_b_t;
+  typedef pc_a_t pc_a_q_t[$];
+  typedef pc_b_t pc_b_q_t[$];
+  typedef struct {pc_a_t h;} pc_a_s_t;
+  typedef struct {pc_b_t h;} pc_b_s_t;
+  typedef int pc_a_k_t[pc_a_t];
+  typedef int pc_b_k_t[pc_b_t];
+  Sink #(.T(pc_a_q_t)) sqa ();
+  Sink #(.T(pc_b_q_t)) sqb ();
+  Sink #(.T(pc_a_s_t)) ssa ();
+  Sink #(.T(pc_b_s_t)) ssb ();
+  Sink #(.T(pc_a_k_t)) ska ();
+  Sink #(.T(pc_b_k_t)) skb ();
+
+  // Classes declared in, or specialized by the parameters of, instances of an interface
   Ifc #(.W(3)) i3 ();
   Ifc #(.W(7)) i7 ();
+  width_sub w1 ();
+  width_sub #(3) w3 ();
+  width_fwd f1 ();
+  WidthIfc wd ();
+  typedef wd.s_t wd_s_t;
+  Sink #(.T(wd_s_t)) swd ();
+  OwnIfc o1 ();
+  OwnIfc #(5) o5 ();
 
   initial begin
     // Same-named classes in different packages, and in $unit
@@ -255,6 +345,24 @@ module t;
     `checks(g[0].who(), "g[0]");
     `checks(g[1].who(), "g[1]");
 
+    // Containers and structs of same-named classes, as type parameter values of an interface
+    begin
+      automatic pc_a_t pa = new;
+      automatic pc_b_t pb = new;
+      sqa.v.push_back(pa);
+      sqb.v.push_back(pb);
+      ssa.v.h = pa;
+      ssb.v.h = pb;
+      ska.v[pa] = 3;
+      skb.v[pb] = 7;
+      `checks(sqa.v[0].who(), "PkgA::Pc");
+      `checks(sqb.v[0].who(), "PkgB::Pc");
+      `checks(ssa.v.h.who(), "PkgA::Pc");
+      `checks(ssb.v.h.who(), "PkgB::Pc");
+      `checkd(ska.v[pa], 3);
+      `checkd(skb.v[pb], 7);
+    end
+
     // Containers of same-named classes, as type parameter values of a class
     begin
       typedef PkgA::Data a_da_t[];
@@ -281,9 +389,18 @@ module t;
       `checks(PkgReg::Db#(b_u_t)::m_v[2].who(), "PkgB::Data");
     end
 
-    // Classes declared in instances of an interface
+    // Classes declared in, or specialized by the parameters of, instances of an interface
     `checkd(i3.width(), 3);
     `checkd(i7.width(), 7);
+    `checkd(w1.width(), 1);
+    `checkd(w3.width(), 3);
+    `checkd(f1.width(), 1);
+    swd.v.h = new;
+    `checkd(swd.v.h.width(), 1);
+    `checkd(o1.width(), 1);
+    `checkd(o1.qwidth(), 1);
+    `checkd(o5.width(), 5);
+    `checkd(o5.qwidth(), 5);
 
     $write("*-* All Finished *-*\n");
     $finish;

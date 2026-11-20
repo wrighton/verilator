@@ -425,7 +425,12 @@ VDTypeNameScopes::VDTypeNameScopes(AstNetlist* nodep)
 VDTypeNameScopes::~VDTypeNameScopes() { s_currentp = m_prevp; }
 AstNode* VDTypeNameScopes::declaringScopep(const AstNode* nodep, SearchCache* cachep) {
     AstNode* scopep = nullptr;
-    if (s_currentp && s_currentp->outerp(nodep, scopep)) return scopep;
+    if (s_currentp) {
+        // Passes using an index add no declarations, so it holds all
+        const bool indexed = s_currentp->outerp(nodep, scopep);
+        UASSERT_OBJ(indexed, nodep, "Declaration not indexed");
+        return scopep;
+    }
     // As AstNode::aboveLoopp(), searching back over the earlier statements in each list, but
     // stopping at a declaration a cached search passed
     std::vector<const AstNode*> passedps;

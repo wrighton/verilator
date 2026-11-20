@@ -1,0 +1,53 @@
+%Error: t/t_param_type_recursive_bad.v:17:3: Recursive type definition
+        t/t_param_type_recursive_bad.v:17:3: ... Type chain: REFDTYPE 'a_t'
+   17 |   a_t m;
+      |   ^~~
+        t/t_param_type_recursive_bad.v:15:9: ... Type chain: REFDTYPE 'b_t'
+   15 | typedef b_t a_t;
+      |         ^~~
+        t/t_param_type_recursive_bad.v:14:9: ... Type chain: REFDTYPE 'a_t'
+   14 | typedef a_t b_t;
+      |         ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_param_type_recursive_bad.v:20:9: Recursive type definition
+        t/t_param_type_recursive_bad.v:20:9: ... Type chain: REFDTYPE 'a_t'
+   20 | typedef a_t q_t[$];
+      |         ^~~
+        t/t_param_type_recursive_bad.v:15:9: ... Type chain: REFDTYPE 'b_t'
+   15 | typedef b_t a_t;
+      |         ^~~
+        t/t_param_type_recursive_bad.v:14:9: ... Type chain: REFDTYPE 'a_t'
+   14 | typedef a_t b_t;
+      |         ^~~
+%Error: t/t_param_type_recursive_bad.v:21:18: Recursive type definition
+        t/t_param_type_recursive_bad.v:21:18: ... Type chain: REFDTYPE 'a_t'
+   21 | typedef int aa_t[a_t];
+      |                  ^~~
+        t/t_param_type_recursive_bad.v:15:9: ... Type chain: REFDTYPE 'b_t'
+   15 | typedef b_t a_t;
+      |         ^~~
+        t/t_param_type_recursive_bad.v:14:9: ... Type chain: REFDTYPE 'a_t'
+   14 | typedef a_t b_t;
+      |         ^~~
+%Error: t/t_param_type_recursive_bad.v:23:9: Struct's type is circular: $unit::c_t
+                                           : ... note: In instance 't'
+   23 | typedef struct {c_t c;} c_t;
+      |         ^~~~~~
+%Error: t/t_param_type_recursive_bad.v:14:9: Typedef's type is circular: a_t
+                                           : ... note: In instance 't'
+   14 | typedef a_t b_t;
+      |         ^~~
+%Error: t/t_param_type_recursive_bad.v:15:9: Typedef's type is circular: b_t
+                                           : ... note: In instance 't'
+   15 | typedef b_t a_t;
+      |         ^~~
+%Error: t/t_param_type_recursive_bad.v:17:3: Typedef's type is circular: a_t
+   17 |   a_t m;
+      |   ^~~
+%Error: t/t_param_type_recursive_bad.v:20:9: Typedef's type is circular: a_t
+   20 | typedef a_t q_t[$];
+      |         ^~~
+%Error: t/t_param_type_recursive_bad.v:21:18: Typedef's type is circular: a_t
+   21 | typedef int aa_t[a_t];
+      |                  ^~~
+%Error: Exiting due to

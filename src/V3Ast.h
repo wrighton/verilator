@@ -1745,10 +1745,9 @@ class VDTypeNameScopes final {
     VL_UNMOVABLE(VDTypeNameScopes);
 
 public:
-    // Maps each declaration an earlier declaringScopep() search passed to its declaring scope,
-    // so later searches stop there and each statement list is searched about once. Keyed by
-    // node, so valid only while no declaration searched for or passed, nor any scope it maps
-    // to, is deleted or moved to another scope, as a freed node's address may be reused.
+    // The scope declaring each declaration a search up the tree by declaringScopep() passed, so
+    // later searches stop there and each statement list is searched about once. Valid while no
+    // declaration searched for or passed is deleted or moved to another scope.
     class SearchCache final {
         friend class VDTypeNameScopes;
         std::unordered_map<const AstNode*, AstNode*> m_outerps;  // As in VDTypeNameScopes
