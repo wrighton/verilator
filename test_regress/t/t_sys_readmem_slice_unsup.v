@@ -1,0 +1,17 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+module t;
+  logic [7:0] mem[5:0];
+  logic [7:0] mem2[2][6];
+  logic [7:0] q[$];
+  int i = 1;
+  initial begin
+    $readmemh("t/t_sys_readmem_h.mem", mem[3:2]);
+    $readmemb("t/t_sys_readmem_b.mem", mem2[i][1+:2]);
+    $readmemh("t/t_sys_readmem_h.mem", q[1:2]);
+  end
+endmodule

@@ -9031,6 +9031,17 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         iterateCheckString(nodep, "filename", nodep->filenamep(), BOTH);
         userIterateAndNext(nodep->memp(), WidthVP{SELF, BOTH}.p());
+        const AstCMethodHard* const methodp = VN_CAST(nodep->memp(), CMethodHard);
+        const bool isQueueSlice = methodp
+                                  && (methodp->method() == VCMethod::DYN_SLICE
+                                      || methodp->method() == VCMethod::DYN_SLICE_BACK_BACK
+                                      || methodp->method() == VCMethod::DYN_SLICE_FRONT_BACK
+                                      || methodp->method() == VCMethod::DYN_SLICE_PLUS);
+        if (VN_IS(nodep, ReadMem) && (VN_IS(nodep->memp(), SliceSel) || isQueueSlice)) {
+            nodep->memp()->v3warn(E_UNSUPPORTED,
+                                  "Unsupported: " << nodep->verilogKwd()
+                                                  << " into a slice of an unpacked array");
+        }
         const AstNodeDType* subp = nullptr;
         if (const AstAssocArrayDType* adtypep
             = VN_CAST(nodep->memp()->dtypep()->skipRefp(), AssocArrayDType)) {

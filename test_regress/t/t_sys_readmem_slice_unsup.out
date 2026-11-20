@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_sys_readmem_slice_unsup.v:13:43: Unsupported: $readmemh into a slice of an unpacked array
+                                                       : ... note: In instance 't'
+   13 |     $readmemh("t/t_sys_readmem_h.mem", mem[3:2]);
+      |                                           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_sys_readmem_slice_unsup.v:14:47: Unsupported: $readmemb into a slice of an unpacked array
+                                                       : ... note: In instance 't'
+   14 |     $readmemb("t/t_sys_readmem_b.mem", mem2[i][1+:2]);
+      |                                               ^
+%Error-UNSUPPORTED: t/t_sys_readmem_slice_unsup.v:15:41: Unsupported: $readmemh into a slice of an unpacked array
+                                                       : ... note: In instance 't'
+   15 |     $readmemh("t/t_sys_readmem_h.mem", q[1:2]);
+      |                                         ^
+%Error: Exiting due to
