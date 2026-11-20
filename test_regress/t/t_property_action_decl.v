@@ -128,6 +128,8 @@ module t;
   // A hierarchical reference from an action of an assertion in a generate block
   int gen_fails = 0;
   int gen_decl_count = 0;
+  int gen_child_seen = 0;
+  int gen_sibling_seen = 0;
 
   if (1) begin : gen
     assert property (@(posedge clk) a ##[1:3] b ##1 c)
@@ -137,10 +139,19 @@ module t;
       gen_action.count++;
       gen_decl_count = gen_action.count;
       t.gen_fails++;
+      begin : child
+        static int slot = 0;
+        ++slot;
+      end
+      // Downward, and from a sibling block
+      gen_child_seen = child.slot;
+      begin : sibling
+        gen_sibling_seen = child.slot;
+      end
     end
   end
 
-  // Covers, not collected here, so their actions have no effect
+  // Covers, without --coverage-user not collected, so their actions have no effect
   int cover_inits = 0;
   int cover_runs = 0;
 
@@ -159,6 +170,7 @@ module t;
     count = 1;
     cover_runs += count;
   end
+`ifndef T_COVER_COLLECTED
   // Every attempt is still pending at the end of simulation, where cover_late holds
   wire cover_late = cyc == 60;
   cover property (@(posedge clk) s_eventually cover_late) begin
@@ -166,6 +178,7 @@ module t;
     count = 1;
     `checkd(count, 0);
   end
+`endif
 
   // A reference through an instance named like a block of the action
   t_payload u ();
@@ -225,8 +238,15 @@ module t;
     `checkd($countones(fork_seen), fork_ends);
     `checkd(gen_decl_count, 2 * fails);
     `checkd(gen_fails, fails);
+    `checkd(gen_child_seen, fails);
+    `checkd(gen_sibling_seen, fails);
+`ifdef T_COVER_COLLECTED
+    `checkd(cover_inits, 1);
+    `checkd(cover_runs > 0, 1'b1);
+`else
     `checkd(cover_inits, 0);
     `checkd(cover_runs, 0);
+`endif
     `checkd(xmr_seen_a, 37);
     `checkd(xmr_seen_b, 37);
     `checkd(xmr_seen_up_a, 37);
