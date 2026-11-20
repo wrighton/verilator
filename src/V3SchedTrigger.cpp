@@ -836,6 +836,8 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     std::vector<BeforeTrig> m_beforeTrigs;
     // Map from trigger index to schedulers of the awaited SenTrees sensitive to it
     std::unordered_map<size_t, std::vector<AstNodeExpr*>> m_trigIdxToScheds;
+    // Map from trigger index to the function readying its schedulers, if it has several
+    std::unordered_map<size_t, AstCFunc*> m_trigIdxToReadyFunc;
     // Map containing vectors of SenItems that share the same prevValue variable
     std::unordered_map<VNRef<AstNode>, std::vector<AstSenItem*>> m_senExprToSenItem;
 
@@ -873,30 +875,54 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
         for (const VNRef<AstNode> it : toRemove) m_senExprToSenItem.erase(it);
     }
 
-    // For set of bits indexes (of sensitivity vector) return map from those indexes to set
-    // of schedulers sensitive to these indexes. Indices are split into word index and bit
-    // masking this index within given word
-    std::map<size_t, std::map<size_t, std::vector<AstNodeExpr*>>>
-    getUsedTriggersToTrees(const std::set<size_t>& usedTriggers) {
-        std::map<size_t, std::map<size_t, std::vector<AstNodeExpr*>>> usedTrigsToUsingTrees;
+    // For set of bits indexes (of sensitivity vector) return those that schedulers are sensitive
+    // to, by word index
+    std::map<size_t, std::vector<size_t>>
+    getUsedTriggersByWord(const std::set<size_t>& usedTriggers) const {
+        std::map<size_t, std::vector<size_t>> usedTrigsByWord;
         for (const size_t idx : usedTriggers) {
-            const auto it = m_trigIdxToScheds.find(idx);
-            if (it == m_trigIdxToScheds.end()) continue;
-            usedTrigsToUsingTrees[idx / TriggerKit::WORD_SIZE]
-                                 [size_t{1} << (idx % TriggerKit::WORD_SIZE)]
-                = it->second;
-        }
-        if (VL_UNLIKELY(v3Global.opt.debugCheck())) {
-            for (const auto& triggersToTrees : usedTrigsToUsingTrees) {
-                for (const auto& bitsToTrees : triggersToTrees.second) {
-                    const std::set<const AstNodeExpr*> exprps{bitsToTrees.second.begin(),
-                                                              bitsToTrees.second.end()};
-                    UASSERT(bitsToTrees.second.size() == exprps.size(),
-                            "There is a SenTree with two SenItems indicating to the same bit");
-                }
+            if (m_trigIdxToScheds.count(idx)) {
+                usedTrigsByWord[idx / TriggerKit::WORD_SIZE].push_back(idx);
             }
         }
-        return usedTrigsToUsingTrees;
+        return usedTrigsByWord;
+    }
+
+    // Returns statements calling ready() on each of 'schedps', with event description 'descVscp'
+    static AstNodeStmt* newReadyCalls(FileLine* const flp,
+                                      const std::vector<AstNodeExpr*>& schedps,
+                                      AstVarScope* const descVscp) {
+        AstNodeStmt* stmtsp = nullptr;
+        for (AstNodeExpr* const schedp : schedps) {
+            AstCMethodHard* const callp
+                = new AstCMethodHard{flp, schedp->cloneTree(false), VCMethod::SCHED_READY};
+            callp->dtypeSetVoid();
+            callp->addPinsp(new AstVarRef{flp, descVscp, VAccess::READ});
+            stmtsp = AstNode::addNext(stmtsp, callp->makeStmt());
+        }
+        return stmtsp;
+    }
+
+    // Returns statements readying the schedulers sensitive to trigger 'idx'. Several schedulers
+    // are readied by a function shared by all before-trigger functions reading the trigger, so
+    // the code does not grow with the product of their numbers.
+    AstNodeStmt* makeReadyStmts(FileLine* const flp, const size_t idx,
+                                AstVarScope* const descVscp) {
+        const std::vector<AstNodeExpr*>& schedps = m_trigIdxToScheds.at(idx);
+        if (schedps.size() == 1) return newReadyCalls(flp, schedps, descVscp);
+        AstCFunc*& readyFuncp = m_trigIdxToReadyFunc[idx];
+        if (!readyFuncp) {
+            readyFuncp = util::makeSubFunction(m_netlistp, "__VreadyTrig_" + cvtToStr(idx), false);
+            // Analyzed on its own, not again at each of its many call sites
+            readyFuncp->entryPoint(true);
+            AstVarScope* const argVscp = util::newArgument(
+                readyFuncp, descVscp->dtypep(), "__VeventDescription", VDirection::INPUT);
+            readyFuncp->addStmtsp(newReadyCalls(readyFuncp->fileline(), schedps, argVscp));
+        }
+        AstCCall* const callp = new AstCCall{flp, readyFuncp};
+        callp->dtypeSetVoid();
+        callp->addArgsp(new AstVarRef{flp, descVscp, VAccess::READ});
+        return callp->makeStmt();
     }
 
     // Returns a CCall to a before-trigger function for a given SenTree, awaited via scheduler
@@ -967,8 +993,11 @@ public:
         // Index schedulers by trigger, so each function looks up only the triggers it uses
         for (const BeforeTrig& beforeTrig : m_beforeTrigs) {
             for (const AstSenItem* const senItemp : beforeTrig.m_senTreep->sensespList()) {
-                m_trigIdxToScheds[m_trigKit.senItem2TrigIdx(senItemp)].push_back(
-                    beforeTrig.m_schedp);
+                std::vector<AstNodeExpr*>& schedps
+                    = m_trigIdxToScheds[m_trigKit.senItem2TrigIdx(senItemp)];
+                UASSERT_OBJ(schedps.empty() || schedps.back() != beforeTrig.m_schedp, senItemp,
+                            "There is a SenTree with two SenItems indicating to the same bit");
+                schedps.push_back(beforeTrig.m_schedp);
             }
         }
 
@@ -1029,8 +1058,8 @@ public:
                 for (AstNodeStmt* const stmtsp : results.m_postUpdates) funcp->addStmtsp(stmtsp);
             }
 
-            const std::map<size_t, std::map<size_t, std::vector<AstNodeExpr*>>>
-                usedTrigsToUsingTrees = getUsedTriggersToTrees(usedTriggers);
+            const std::map<size_t, std::vector<size_t>> usedTrigsByWord
+                = getUsedTriggersByWord(usedTriggers);
             usedTriggers.clear();
 
             // Helper returning expression getting array index `idx` from `scocep` with access
@@ -1045,37 +1074,27 @@ public:
             funcp->scopep()->addVarsp(argpVscp);
 
             // Mark as ready triggered schedulers
-            for (const auto& triggersToTrees : usedTrigsToUsingTrees) {
-                const size_t word = triggersToTrees.first;
+            for (const auto& wordAndTrigs : usedTrigsByWord) {
+                const size_t word = wordAndTrigs.first;
 
-                for (const auto& bitsToTrees : triggersToTrees.second) {
-                    const size_t bit = bitsToTrees.first;
-                    const auto& schedulers = bitsToTrees.second;
-
+                for (const size_t idx : wordAndTrigs.second) {
                     // Check if given bit is fired - single bits are checked since
                     // usually there is only a few of them (only one most of the times as we await
                     // only for one event)
-                    AstConst* const maskConstp = new AstConst{flp, AstConst::Unsized64{}, bit};
+                    AstConst* const maskConstp = new AstConst{
+                        flp, AstConst::Unsized64{}, size_t{1} << (idx % TriggerKit::WORD_SIZE)};
                     AstAnd* const condp
                         = new AstAnd{flp, getIdx(vscp, VAccess::READ, word), maskConstp};
                     AstIf* const ifp = new AstIf{flp, condp};
-
-                    // Call ready() on each scheduler sensitive to `condp`
-                    for (AstNodeExpr* const schedp : schedulers) {
-                        AstCMethodHard* const callp = new AstCMethodHard{
-                            flp, schedp->cloneTree(false), VCMethod::SCHED_READY};
-                        callp->dtypeSetVoid();
-                        callp->addPinsp(new AstVarRef{flp, argpVscp, VAccess::READ});
-                        ifp->addThensp(callp->makeStmt());
-                    }
+                    ifp->addThensp(makeReadyStmts(flp, idx, argpVscp));
                     funcp->addStmtsp(ifp);
                 }
             }
 
             AstVarScope* const vscAccp = m_trigKit.vscAccp();
             // Add touched values to accumulator
-            for (const auto& triggersToTrees : usedTrigsToUsingTrees) {
-                const size_t word = triggersToTrees.first;
+            for (const auto& wordAndTrigs : usedTrigsByWord) {
+                const size_t word = wordAndTrigs.first;
                 funcp->addStmtsp(new AstAssign{flp, getIdx(vscAccp, VAccess::WRITE, word),
                                                new AstOr{flp, getIdx(vscAccp, VAccess::READ, word),
                                                          getIdx(vscp, VAccess::READ, word)}});
