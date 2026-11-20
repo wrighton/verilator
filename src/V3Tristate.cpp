@@ -567,6 +567,8 @@ class TristateVisitor final : public TristateBaseVisitor {
     bool m_alhs = false;  // On LHS of assignment
     bool m_inAlias = false;  // Inside alias statement
     bool m_inForceLhs = false;  // On LHS of force or release
+    // Force or release of an interface strength net, and the enable of a constant force value
+    std::vector<std::pair<AstNodeStmt*, AstNodeExpr*>> m_forceEnables;
     bool m_processedIfaces = false;  // Interface modules already processed (interfaces-first pass)
     VStrength m_currentStrength = VStrength::STRONG;  // Current strength of assignment,
                                                       // Used only on LHS of assignment
@@ -1713,8 +1715,13 @@ class TristateVisitor final : public TristateBaseVisitor {
         return m_varAux(varp).ifaceTristate && isStrengthGroupNet(varp);
     }
     // Variable known to have an enable
-    bool isTristateVar(AstVar* varp) {
-        return varp->user1p() || m_varAux(varp).ifaceTristate || m_tgraph.isTristate(varp);
+    bool isTristateVar(AstVar* varp) { return varp->user1p() || m_varAux(varp).ifaceTristate; }
+    // Variable never z: not tristate, not a port or a net connected to a cell's port that may
+    // carry a z from another module, and not a net with bits no driver writes
+    bool isNeverZVar(AstVar* varp) {
+        const AuxAstVar& aux = m_varAux(varp);
+        return !isTristateVar(varp) && !varp->isIO() && !aux.cellOutput
+               && (aux.assigned || !varp->isNet());
     }
     // Reference under the constant selects of a force/release target that is an interface
     // strength net, else nullptr. V3Const already split concatenated targets.
@@ -2538,36 +2545,46 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstAssign* nodep) override { visitAssign(nodep); }
     void visit(AstAssignDly* nodep) override { visitAssign(nodep); }
 
+    // Whether a force value may be z. A two-state value, and the result of an operator that
+    // turns z into x, never is. Z bits not lowered here (in functions), calls and class members
+    // may be; any other node passes on the z of its operands.
+    bool mayBeZ(const AstNode* nodep) {
+        if (const AstNodeExpr* const exprp = VN_CAST(nodep, NodeExpr)) {
+            if (!exprp->dtypep()->skipRefp()->isFourstate()) return false;
+        }
+        if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            return !isNeverZVar(refp->varp());
+        }
+        if (const AstConst* const constp = VN_CAST(nodep, Const)) return constp->num().hasZ();
+        if (VN_IS(nodep, NodeFTaskRef) || VN_IS(nodep, CMethodHard) || VN_IS(nodep, MemberRef)) {
+            return true;
+        }
+        if (VN_IS(nodep, NodeBiCom) || VN_IS(nodep, Not)) return false;
+        for (const AstNode* const opp :
+             {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+            for (const AstNode* itemp = opp; itemp; itemp = itemp->nextp()) {
+                if (mayBeZ(itemp)) return true;
+            }
+        }
+        return false;
+    }
     // A forced net bit has the forced value, so it is driven unless that value is z (IEEE
     // 1800-2023 10.6.2). A force of an interface strength net therefore also forces those bits
     // of its enable to the enable of the value, and a release releases both. Returns the enable
     // of the value, or nullptr when the value may be z in a way not tracked here.
     AstNodeExpr* newForceValueEnp(AstNodeExpr* rhsp, AstNodeExpr* lhsp) {
-        // Z bits of a constant
-        if (AstNodeExpr* const enp = VN_AS(rhsp->user1p(), NodeExpr)) {
-            rhsp->user1p(nullptr);
-            return enp;
-        }
-        // A two-state value is never z
-        if (!rhsp->dtypep()->skipRefp()->isFourstate()) return newAllZerosOrOnes(lhsp, true);
         AstNodeExpr* basep = rhsp;
         while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
-        if (refp && isTristateVar(refp->varp())) return newEnSelp(rhsp, refp, VAccess::READ);
-        // Z bits not lowered here (in functions), calls, class members, undriven nets and
-        // another module's variables (which may become tristate only later) may be z
-        const bool mayBeZ = rhsp->exists([this](const AstNode* np) {
-            if (const AstNodeVarRef* const readp = VN_CAST(np, NodeVarRef)) {
-                AstVar* const varp = readp->varp();
-                // An undriven net is z
-                return VN_IS(readp, VarXRef) || isTristateVar(varp)
-                       || (varp->isNet() && !m_tgraph.isDriven(varp));
+        if (refp && isTristateVar(refp->varp()) && !refp->varp()->isIO()) {
+            const AuxAstVar& aux = m_varAux(refp->varp());
+            // The enable of a net excludes its pull
+            if (aux.bitPulls.empty()) {
+                return aux.pullp ? newAllZerosOrOnes(lhsp, true)
+                                 : newEnSelp(rhsp, refp, VAccess::READ);
             }
-            const AstConst* const constp = VN_CAST(np, Const);
-            return (constp && constp->num().hasZ()) || VN_IS(np, NodeFTaskRef)
-                   || VN_IS(np, CMethodHard) || VN_IS(np, MemberRef);
-        });
-        return mayBeZ ? nullptr : newAllZerosOrOnes(lhsp, true);
+        }
+        return mayBeZ(rhsp) ? nullptr : newAllZerosOrOnes(lhsp, true);
     }
     void addForceEnable(AstNodeStmt* stmtp, AstNodeExpr* lhsp, AstNodeVarRef* refp,
                         AstNodeExpr* enValuep) {
@@ -2589,29 +2606,50 @@ class TristateVisitor final : public TristateBaseVisitor {
         iterateAndNextNull(lhsp);
         checkUnhandled(nodep);
     }
-    // Pair a force or release of an interface strength net with one of its enable
-    void pairForceEnable(AstNodeStmt* stmtp) {
+    // Queue a force or release of an interface strength net for pairForceEnables, with the
+    // enable of a constant force value, which this pass lowers in place
+    void queueForceEnable(AstNodeStmt* stmtp) {
         AstAssignForce* const forcep = VN_CAST(stmtp, AssignForce);
         AstNodeExpr* const lhsp = forcep ? forcep->lhsp() : VN_AS(stmtp, Release)->lhsp();
-        AstNodeVarRef* const refp = forcedStrengthNetRefp(lhsp);
-        if (!refp) return;
-        AstNodeExpr* const enp = forcep ? newForceValueEnp(forcep->rhsp(), lhsp) : nullptr;
-        if (forcep && !enp) {
-            forcep->rhsp()->v3warn(E_UNSUPPORTED,
-                                   "Unsupported: Force of interface strength net with a value "
-                                   "that may be high impedance: "
-                                       << refp->prettyNameQ());
-            return;
+        if (!forcedStrengthNetRefp(lhsp)) return;
+        AstNodeExpr* const enp = forcep ? VN_AS(forcep->rhsp()->user1p(), NodeExpr) : nullptr;
+        if (enp) forcep->rhsp()->user1p(nullptr);
+        m_forceEnables.emplace_back(stmtp, enp);
+        // A tristate variable of this module read by the value needs its enable variable
+        // before insertTristates
+        if (forcep) {
+            forcep->rhsp()->foreach([this](const AstVarRef* refp) {
+                if (m_tgraph.isTristate(refp->varp())) getCreateEnVarp(refp->varp(), false);
+            });
         }
-        addForceEnable(stmtp, lhsp, refp, enp);
+    }
+    // Pair each queued force or release with one of the enable; the z-ness of a value is
+    // known only once every module is processed
+    void pairForceEnables() {
+        for (const auto& pair : m_forceEnables) {
+            AstNodeStmt* const stmtp = pair.first;
+            AstAssignForce* const forcep = VN_CAST(stmtp, AssignForce);
+            AstNodeExpr* const lhsp = forcep ? forcep->lhsp() : VN_AS(stmtp, Release)->lhsp();
+            AstNodeVarRef* const refp = forcedStrengthNetRefp(lhsp);
+            AstNodeExpr* enp = pair.second;
+            if (forcep && !enp) enp = newForceValueEnp(forcep->rhsp(), lhsp);
+            if (forcep && !enp) {
+                forcep->rhsp()->v3warn(E_UNSUPPORTED,
+                                       "Unsupported: Force of interface strength net with a "
+                                       "value that may be high impedance: "
+                                           << refp->prettyNameQ());
+                continue;
+            }
+            addForceEnable(stmtp, lhsp, refp, enp);
+        }
     }
     void visit(AstAssignForce* nodep) override {
         iterateAndNextNull(nodep->rhsp());
-        if (!m_graphing) pairForceEnable(nodep);
+        if (!m_graphing) queueForceEnable(nodep);
         visitForceLhs(nodep, nodep->lhsp());
     }
     void visit(AstRelease* nodep) override {
-        if (!m_graphing) pairForceEnable(nodep);
+        if (!m_graphing) queueForceEnable(nodep);
         visitForceLhs(nodep, nodep->lhsp());
     }
 
@@ -3244,10 +3282,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         // Functions are not otherwise processed, but a force of a strength net there still
         // needs its enable
         if (m_graphing) return;
-        std::vector<AstNodeStmt*> stmtps;
-        nodep->foreach([&](AstAssignForce* forcep) { stmtps.push_back(forcep); });
-        nodep->foreach([&](AstRelease* relp) { stmtps.push_back(relp); });
-        for (AstNodeStmt* const stmtp : stmtps) pairForceEnable(stmtp);
+        nodep->foreach([this](AstAssignForce* forcep) { queueForceEnable(forcep); });
+        nodep->foreach([this](AstRelease* relp) { queueForceEnable(relp); });
     }
 
     void visit(AstCaseItem* nodep) override {
@@ -3360,6 +3396,7 @@ public:
         // Then the rest in the historical order; interfaces are skipped (already done).
         iterateChildrenBackwardsConst(netlistp);
 
+        pairForceEnables();
         // Combine interface tristate contributions after all modules processed
         combineIfaceContribs();
 
