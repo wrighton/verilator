@@ -2334,9 +2334,12 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstNodeExpr* const lhsp = forcep ? forcep->lhsp() : VN_AS(stmtp, Release)->lhsp();
         if (!forcedStrengthNetRefp(lhsp)) return;
         // Of a value lowered here, only a constant's enable is exactly its z bits
-        AstNodeExpr* const enp = forcep ? VN_AS(forcep->rhsp()->user1p(), NodeExpr) : nullptr;
-        if (enp) forcep->rhsp()->user1p(nullptr);
-        m_forceEnables.emplace_back(stmtp, forcep && VN_IS(forcep->rhsp(), Const) ? enp : nullptr);
+        AstNodeExpr* enp = forcep ? VN_AS(forcep->rhsp()->user1p(), NodeExpr) : nullptr;
+        if (enp) {
+            forcep->rhsp()->user1p(nullptr);
+            if (!VN_IS(forcep->rhsp(), Const)) VL_DO_CLEAR(enp->deleteTree(), enp = nullptr);
+        }
+        m_forceEnables.emplace_back(stmtp, enp);
         // A tristate variable of this module read by the value needs its enable variable
         // before insertTristates
         if (forcep) {
