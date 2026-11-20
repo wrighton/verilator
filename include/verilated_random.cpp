@@ -3315,6 +3315,17 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     std::ostringstream terms;  // The terms each (get-value) asks for
+    // A phase can hold an array, whose elements are all asked, and some of its elements by
+    // name; each term is asked once, as first written, since a reply answers each term once
+    std::unordered_set<std::string> asked;  // Keys of the terms asked
+    const auto ask = [&](const std::string& text, const char* separator) {
+        std::istringstream tis{text};
+        for (std::string term; !(term = readSMTTerm(tis)).empty();) {
+            std::string key;
+            (void)phaseTermKey(term, key);  // Built from the registered variables, so found
+            if (asked.emplace(key).second) terms << term << separator;
+        }
+    };
     for (const auto& varName : layerVars) {
         const VlRandomVar* const varp = solveBeforeVarp(varName);
         if (varp->dimension() > 0) {
@@ -3366,6 +3377,29 @@ bool VlRandomizer::readPhaseValues(VlSolverSession& sess, const std::string& ter
     return parsePhaseValues(is, terms, solvedValuesr);
 }
 
+// The variable or element a phase term names, by its key; the key is what parseModel names
+// it, so a term the solver writes in another notation still matches
+const VlRandomVar* VlRandomizer::phaseTermKey(const std::string& term, std::string& keyr) const {
+    // A part of a variable solved before another is named by its own term
+    if (term.compare(0, 11, "((_ extract") == 0) {
+        const auto it = m_solveBeforeElems.find(term);
+        keyr = term;
+        return it == m_solveBeforeElems.end() ? nullptr : it->second.get();
+    }
+    std::vector<std::string> indices;
+    const std::string name = parseSelect(term, indices);
+    const auto it = m_vars.find(name);
+    if (it == m_vars.end()) return nullptr;
+    std::string key = name;  // A scalar, or an array pinned whole
+    // Pins go back to the solver, so their indices are portable literals too
+    for (const std::string& index : indices) {
+        if (index.compare(0, 2, "#h") == 0 || index.compare(0, 2, "#o") == 0) return nullptr;
+    }
+    if (!indices.empty() && !elementName(*it->second, indices, key)) return nullptr;
+    keyr = key;
+    return it->second.get();
+}
+
 // Reads ((term value) ...) answering the (get-value) of terms into solvedValuesr, the
 // value of each term to pin in the later phases. The values go back to the solver, so the
 // reply is applied only if it answers each term once with a value of the term's sort.
@@ -3376,27 +3410,11 @@ bool VlRandomizer::parsePhaseValues(std::istream& is, const std::string& terms,
         VL_WARN_MT(__FILE__, __LINE__, "randomize", msg.c_str());
         return false;
     };
-    // The variable or element a term names, by its key; the key is what parseModel names
-    // it, so a term the solver writes in another notation still matches
-    const auto keyOf = [this](const std::string& term, std::string& keyr) -> const VlRandomVar* {
-        std::vector<std::string> indices;
-        const std::string name = parseSelect(term, indices);
-        const auto it = m_vars.find(name);
-        if (it == m_vars.end()) return nullptr;
-        std::string key = name;  // A scalar, or an array pinned whole
-        // Pins go back to the solver, so their indices are portable literals too
-        for (const std::string& index : indices) {
-            if (index.compare(0, 2, "#h") == 0 || index.compare(0, 2, "#o") == 0) return nullptr;
-        }
-        if (!indices.empty() && !elementName(*it->second, indices, key)) return nullptr;
-        keyr = key;
-        return it->second.get();
-    };
     std::map<std::string, std::string> requested;  // Key -> term as asked
     std::istringstream tis{terms};
     for (std::string term; !(term = readSMTTerm(tis)).empty();) {
         std::string key;
-        (void)keyOf(term, key);  // Built from the registered variables, so always found
+        (void)phaseTermKey(term, key);  // Built from the registered variables, so always found
         requested.emplace(key, term);
     }
     std::map<std::string, std::string> staged;  // Term as asked -> value
@@ -3408,7 +3426,7 @@ bool VlRandomizer::parsePhaseValues(std::istream& is, const std::string& terms,
         if (c == ')') break;
         if (c != '(') return fail("invalid S-expression");
         std::string key;
-        const VlRandomVar* const varp = keyOf(readSMTTerm(is), key);
+        const VlRandomVar* const varp = phaseTermKey(readSMTTerm(is), key);
         const auto reqIt = requested.find(key);
         if (reqIt == requested.end()) return fail("unknown variable");  // So varp is set
         std::string value = readSMTLastTerm(is);
