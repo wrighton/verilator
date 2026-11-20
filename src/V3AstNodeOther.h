@@ -1514,7 +1514,7 @@ public:
 };
 class AstIntfRef final : public AstNode {
     // An interface reference
-    string m_name;  // Path of the reference, relative to the block declaring the interface
+    string m_name;  // Path of the reference, relative to the module with the interface
     string m_parentName;  // Path of the instance with the reference port, relative likewise
     string m_baseName;  // Final component of m_name, i.e. the reference port name
     string m_modportName;  // "" = no modport, else name of the modport referenced
@@ -1530,7 +1530,9 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     string name() const override VL_MT_STABLE { return m_name; }
+    void name(const string& name) override { m_name = name; }
     string parentName() const { return m_parentName; }
+    void parentName(const string& name) { m_parentName = name; }
     string baseName() const { return m_baseName; }
     string modportName() const { return m_modportName; }
 };
