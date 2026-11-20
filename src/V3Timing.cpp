@@ -52,6 +52,18 @@
 //       whose storage outlives the wait, not through a handle and without 'iff', becomes a CAwait
 //       on the event's wait list in the dynamic trigger scheduler, resumed after the event fires;
 //       other waits evaluate their trigger on every trigger evaluation
+//     - a wait only on a clocking block event of a virtual interface never assigned another
+//       event, through a chain of up to 16 class and virtual interface handle variables whose
+//       every write is a blocking assignment ("tracked handles", see TimingHandleVisitor), with
+//       an 'iff' without effects if any, still evaluates its trigger, but only at the trigger
+//       evaluations after the event fires or a tracked handle is written: while the handles are
+//       set, it awaits the event's wait list instead of every trigger evaluation, and each write
+//       of a tracked handle notifies the dynamic trigger scheduler (an assignment of a variable
+//       as a whole with a pure value only if it changed it). No wait is listed this way if
+//       evaluating a trigger may start or end a process, fire an event, or call a DPI import not
+//       declared pure, or if the design has user C++ code ('$c' not declared pure, '`systemc_*')
+//       or DPI export tasks that may suspend. In a model with a wait listed this way, the waits
+//       awaiting trigger evaluation are ordered among the listed ones (evaluationKeyed).
 // - for each wait(cond) statement:
 //     - replace it with a loop like: while (!cond) @(<vars from cond>)
 // - for each fork:
@@ -113,6 +125,10 @@ enum PropagationType : uint8_t {
 static void addFlags(AstNode* const nodep, uint8_t flags) { nodep->user2Or(flags); }
 // Check if a node has ALL of the expected flags set
 static bool hasFlags(AstNode* const nodep, uint8_t flags) { return !(~nodep->user2() & flags); }
+// Whether calling the function may suspend the caller: the functions TimingControlVisitor makes
+// coroutines. Shared by the analysis of handle writes and the notifications after them, which
+// must agree, as a write the analysis takes as complete when the call returns is notified then.
+static bool callSuspends(AstCFunc* const funcp) { return hasFlags(funcp, T_SUSPENDEE); }
 
 static AstDeferredAssertFlush* takeDeferredAssertFlush(AstNode* nodep) {
     AstDeferredAssertFlush* const flushp = VN_CAST(nodep, DeferredAssertFlush);
@@ -512,6 +528,369 @@ public:
 };
 
 // ######################################################################
+//  Find the class and virtual interface handle variables whose writes can be tracked
+
+class TimingHandleVisitor final : public VNVisitorConst {
+    // A wait through class and virtual interface handles follows the handles when they change
+    // (IEEE 1800-2023 9.4.2). A handle variable is a tracked handle if each of its writes is a
+    // blocking assignment to the whole variable, after which the scheduler is notified (V3Task
+    // already turned the output arguments of calls into such assignments), and it cannot be
+    // written from outside the model. The objects and interfaces themselves stay in place while
+    // referenced, so the handles reach another event only after a tracked handle is written. An
+    // event waited on this way must never be assigned another event, so it stays the event
+    // waited on. User '$c' code not declared pure, and '`systemc_*' code, may write any variable,
+    // assign any event, or fire it, by name or through others, so no wait is listed in a design
+    // with such code, other than the std package's (see isStdModule). No wait is listed either in
+    // a design with DPI export tasks that may suspend: killing a process suspended in one runs
+    // the C++ code that called it, which may fire an event, while the killed waiter is dropped
+    // from its wait list at a trigger evaluation.
+    // A wait woken on a wait list evaluates its trigger at its place among the triggers
+    // evaluated at every trigger evaluation (see VlDynamicTriggerScheduler::startWait). This
+    // needs the handles not to change, no wait to start, and no event to fire while triggers are
+    // evaluated: a handle written by evaluating a trigger, through any function it calls, is not
+    // a tracked handle, and no wait is listed if evaluating a trigger may start or end a process,
+    // fire an event, or call a DPI import not declared pure, whose C++ code may call back into
+    // the model, through DPI exports or the public functions of the model, and do either.
+
+    // TYPES
+    struct Writer final {  // A function, or all trigger expressions
+        std::vector<const AstVar*> m_handleps;  // Handle variables it writes
+        std::vector<const AstCFunc*> m_calleeps;  // Functions it calls
+        bool m_procControl = false;  // Starts or ends processes
+        bool m_fires = false;  // Fires events
+    };
+
+    // STATE
+    // Handle variables written in another way, with why
+    std::unordered_map<const AstVar*, std::string> m_untracked;
+    std::unordered_set<const AstVar*> m_assignedEvents;  // Events assigned another event
+    std::unordered_map<const AstCFunc*, Writer> m_funcWriters;  // Writes of each function
+    std::unordered_map<std::string, std::vector<const AstCFunc*>> m_virtualps;  // By name
+    Writer m_triggerWriter;  // Writes of the trigger expressions
+    Writer* m_writerp = nullptr;  // The writer of the code being visited, if any
+    const AstClass* m_classp = nullptr;  // The class being visited, if any
+    bool m_inFire = false;  // Under firing an event, which does not assign it
+    bool m_inStd = false;  // In the std package, or a class declared in it
+    std::string m_userCReason;  // Why no wait may be listed, if the design has user '$c' code
+                                // not declared pure, else empty
+    std::unordered_set<const AstNodeExpr*> m_trackedRefps;  // References written trackably
+    std::string m_orderReason;  // Why no wait may be listed, if evaluating a trigger may change
+                                // the order of evaluation, else empty
+
+    // METHODS
+    static bool isHandle(const AstVar* const varp) {
+        const AstNodeDType* const dtypep = varp->dtypep()->skipRefp();
+        const AstIfaceRefDType* const ifacep = VN_CAST(dtypep, IfaceRefDType);
+        return VN_IS(dtypep, ClassRefDType) || (ifacep && ifacep->isVirtual());
+    }
+    static bool isEvent(const AstVar* const varp) {
+        const AstBasicDType* const basicp = varp->dtypep()->skipRefp()->basicp();
+        return basicp && basicp->isEvent();
+    }
+    void noteWrite(const AstNodeExpr* const refp, const AstVar* const varp) {
+        if (isHandle(varp)) {
+            // The reason is kept as text, as the write may be deleted before it is used
+            const auto pair = m_untracked.emplace(varp, "");
+            if (pair.second) {
+                pair.first->second = "written other than as a whole by a blocking assignment at "
+                                     + refp->fileline()->ascii();
+            }
+            if (m_writerp) m_writerp->m_handleps.push_back(varp);
+        }
+        if (!m_inFire && isEvent(varp)) m_assignedEvents.emplace(varp);
+    }
+    // Whether the module is the std package, a class declared in it, or the package of such a
+    // class. V3Class moved the classes out of the packages declaring them, but the scope of a
+    // class, and of its package, stays under the scope of the package declaring it.
+    // Only the built-in std package counts: without it, a package named std is the user's.
+    static bool isStdModule(const AstNodeModule* const modp) {
+        const AstPackage* const stdp = v3Global.rootp()->stdPackagep();
+        if (!stdp || !v3Global.opt.stdPackage()) return false;
+        if (modp == stdp) return true;
+        const AstClass* const classp = VN_CAST(modp, Class);
+        if (!classp && !VN_IS(modp, ClassPackage)) return false;
+        const AstScope* scopep = nullptr;
+        for (const AstNode* itemp = classp ? classp->membersp() : modp->stmtsp(); itemp && !scopep;
+             itemp = itemp->nextp()) {
+            scopep = VN_CAST(itemp, Scope);
+        }
+        // Without a scope it is not known to be std, so its C++ code counts as the user's
+        return scopep && scopep->aboveScopep() && scopep->aboveScopep()->modp() == stdp;
+    }
+    void noteProcControl() {
+        if (m_writerp) m_writerp->m_procControl = true;
+    }
+    // Iterate a trigger expression
+    void iterateTrigger(AstNode* const nodep) {
+        VL_RESTORER(m_writerp);
+        m_writerp = &m_triggerWriter;
+        iterateAndNextConstNull(nodep);
+    }
+    // Untrack the handles that functions called while evaluating triggers write, and note if
+    // they may start or end processes, or fire events
+    void untrackTriggerWrites() {
+        std::unordered_set<const AstCFunc*> visited;
+        std::unordered_set<std::string> expandedNames;  // Of virtual methods
+        std::vector<const AstCFunc*> pending;
+        const auto addCallee = [&](const AstCFunc* const funcp) {
+            if (visited.emplace(funcp).second) pending.push_back(funcp);
+        };
+        const auto addWriter = [&](const Writer& writer) {
+            for (const AstVar* const varp : writer.m_handleps) {
+                m_untracked[varp] = "written while evaluating a trigger";
+            }
+            if (m_orderReason.empty() && writer.m_procControl) {
+                m_orderReason = "evaluating a trigger may start or end a process";
+            }
+            if (m_orderReason.empty() && writer.m_fires) {
+                m_orderReason = "evaluating a trigger may fire an event";
+            }
+            for (const AstCFunc* const calleep : writer.m_calleeps) {
+                addCallee(calleep);
+                // A virtual method may be overridden by any method of the same name, each
+                // name expanded once
+                if (calleep->isVirtual() && expandedNames.emplace(calleep->name()).second) {
+                    for (const AstCFunc* const overp : m_virtualps[calleep->name()]) {
+                        addCallee(overp);
+                    }
+                }
+                // The C++ code of a DPI import may call back into the model, not only through
+                // DPI exports, unless it is declared pure (IEEE 1800-2023 35.5.2)
+                if (m_orderReason.empty() && calleep->dpiImportWrapper() && !calleep->dpiPure()) {
+                    m_orderReason = "evaluating a trigger may call a DPI import";
+                }
+            }
+        };
+        addWriter(m_triggerWriter);
+        while (!pending.empty()) {
+            const AstCFunc* const funcp = pending.back();
+            pending.pop_back();
+            const auto it = m_funcWriters.find(funcp);
+            if (it != m_funcWriters.end()) addWriter(it->second);
+        }
+    }
+    // Iterate the handles selecting a written member, which are marked as written, but are only
+    // read
+    void iterateMemberBase(AstNodeExpr* const fromp) {
+        if (VN_IS(fromp, NodeVarRef)) return;
+        if (AstMemberRef* const memberp = VN_CAST(fromp, MemberRef)) {
+            iterateMemberBase(memberp->fromp());
+            return;
+        }
+        iterateAndNextConstNull(fromp);
+    }
+    // Iterate the value of an assignment. A variable as a whole is only read, even if it is
+    // marked as also written: V3Task copies an inout argument in by such an assignment, and back
+    // by another.
+    void iterateAssignedValue(AstNodeExpr* const rhsp) {
+        if (VN_IS(rhsp, NodeVarRef)) return;
+        if (AstMemberRef* const memberp = VN_CAST(rhsp, MemberRef)) {
+            iterateMemberBase(memberp->fromp());
+            return;
+        }
+        iterateAndNextConstNull(rhsp);
+    }
+
+    // Note the writes of handles by the statement that can be tracked, which are then iterated
+    // as reads, returning the references writing them
+    std::vector<const AstNodeExpr*> noteTrackedWrites(AstNode* const nodep) {
+        std::vector<const AstNodeExpr*> refps;
+        foreachTrackedWrite(
+            nodep, [](AstCFunc* const funcp) { return callSuspends(funcp); },
+            [&](const AstNodeExpr* refp, const AstVar* varp) {
+                if (!isHandle(varp)) return;
+                if (m_writerp) m_writerp->m_handleps.push_back(varp);
+                if (m_trackedRefps.emplace(refp).second) refps.push_back(refp);
+            });
+        return refps;
+    }
+    void forgetTrackedWrites(const std::vector<const AstNodeExpr*>& refps) {
+        for (const AstNodeExpr* const refp : refps) m_trackedRefps.erase(refp);
+    }
+
+    // VISITORS
+    void visit(AstNodeAssign* const nodep) override {
+        const std::vector<const AstNodeExpr*> refps = noteTrackedWrites(nodep);
+        iterateAndNextConstNull(nodep->lhsp());
+        iterateAssignedValue(nodep->rhsp());
+        iterateAndNextConstNull(nodep->timingControlp());
+        forgetTrackedWrites(refps);
+    }
+    void visit(AstStmtExpr* const nodep) override {
+        const std::vector<const AstNodeExpr*> refps = noteTrackedWrites(nodep);
+        iterateChildrenConst(nodep);
+        forgetTrackedWrites(refps);
+    }
+    void visit(AstNodeVarRef* const nodep) override {
+        if (m_trackedRefps.count(nodep)) return;
+        if (nodep->access().isWriteOrRW()) noteWrite(nodep, nodep->varp());
+    }
+    void visit(AstMemberRef* const nodep) override {
+        if (m_trackedRefps.count(nodep)) {
+            iterateMemberBase(nodep->fromp());
+            return;
+        }
+        if (nodep->access().isWriteOrRW()) {
+            noteWrite(nodep, nodep->varp());
+            iterateMemberBase(nodep->fromp());
+            return;
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstFireEvent* const nodep) override {
+        // A delayed fire only fires in the NBA region, not while triggers are evaluated
+        if (m_writerp && !nodep->isDelayed()) m_writerp->m_fires = true;
+        VL_RESTORER(m_inFire);
+        m_inFire = true;
+        iterateChildrenConst(nodep);
+    }
+    // Note user '$c' code not declared pure ('$cpure'), or '`systemc_*' code. The std package's
+    // writes only the state of processes (std::process self(), set_status(), kill(),
+    // set_randstate()) and reads mailbox messages: it writes no handle of a class or virtual
+    // interface, and fires no event. Its methods that end processes or let them run again are
+    // taken as process control (see visit(AstCFunc*)).
+    void noteUserC(const AstNode* const nodep, const bool pure) {
+        if (pure || m_inStd || !m_userCReason.empty()) return;
+        m_userCReason = "the design has user C++ code at " + nodep->fileline()->ascii();
+    }
+    void visit(AstCStmtUser* const nodep) override {
+        noteUserC(nodep, false);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstCExprUser* const nodep) override {
+        noteUserC(nodep, nodep->isPure());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstSystemCSection* const nodep) override { noteUserC(nodep, false); }
+    void visit(AstNodeModule* const nodep) override {
+        VL_RESTORER(m_inStd);
+        m_inStd = isStdModule(nodep);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstClass* const nodep) override {
+        VL_RESTORER(m_classp);
+        VL_RESTORER(m_inStd);
+        m_classp = nodep;
+        m_inStd = isStdModule(nodep);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstCFunc* const nodep) override {
+        VL_RESTORER(m_writerp);
+        Writer& writer = m_funcWriters[nodep];
+        m_writerp = &writer;
+        if (nodep->isVirtual()) m_virtualps[nodep->name()].push_back(nodep);
+        // The methods of the std::process class that end processes or let them run again, in
+        // their '$c' code: kill() and set_status(). The others reach these through calls
+        // (killQueue(), resume()), or only read the state of a process (status(), self()), and a
+        // pure status() is often called in a wait condition (as in UVM), so not every method of
+        // the class referencing a process is taken as a control.
+        if (m_classp && m_classp == v3Global.rootp()->stdPackageProcessp()) {
+            // The name of the method, as V3Task names the function of a method not inlined
+            const std::string& name = nodep->name();
+            static const std::string prefix = "__VnoInFunc_";  // See V3Task
+            const std::string methodName
+                = VString::startsWith(name, prefix) ? name.substr(prefix.size()) : name;
+            if (methodName == "kill" || methodName == "set_status") writer.m_procControl = true;
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeCCall* const nodep) override {
+        if (m_writerp) m_writerp->m_calleeps.push_back(nodep->funcp());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstFork* const nodep) override {
+        noteProcControl();
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstDisableFork* const nodep) override {
+        noteProcControl();
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstSenItem* const nodep) override {
+        iterateTrigger(nodep->sensp());
+        iterateTrigger(nodep->condp());
+    }
+    void visit(AstWait* const nodep) override {
+        // Its condition may become a trigger (see TimingControlVisitor::visit(AstWait))
+        iterateTrigger(nodep->condp());
+        iterateAndNextConstNull(nodep->stmtsp());
+    }
+    void visit(AstNode* const nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit TimingHandleVisitor(AstNetlist* const nodep) {
+        iterateConst(nodep);
+        untrackTriggerWrites();
+    }
+    ~TimingHandleVisitor() override = default;
+
+    // METHODS
+    // The variable a reference writes as a whole, else nullptr
+    static const AstVar* wholeWriteVarp(const AstNodeExpr* const exprp) {
+        if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
+            if (refp->access().isWriteOrRW()) return refp->varp();
+        } else if (const AstMemberRef* const memberp = VN_CAST(exprp, MemberRef)) {
+            if (memberp->access().isWriteOrRW()) return memberp->varp();
+        }
+        return nullptr;
+    }
+    // Call 'f' with each reference, and its variable, that the statement writes as a whole in a
+    // way that may be tracked, after which a notification can follow it: a blocking assignment
+    // to it, a '$cast' to it whose result is assigned or ignored, or an argument written by
+    // reference by a function call statement, if the function cannot suspend (see 'suspends')
+    template <typename T_Suspends, typename T_Func>
+    static void foreachTrackedWrite(AstNode* const stmtp, T_Suspends suspends, T_Func f) {
+        if (const AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+            if (assignp->timingControlp()) return;
+            if (const AstVar* const varp = wholeWriteVarp(assignp->lhsp()))
+                f(assignp->lhsp(), varp);
+            if (const AstCastDynamic* const castp = VN_CAST(assignp->rhsp(), CastDynamic)) {
+                if (const AstVar* const varp = wholeWriteVarp(castp->top())) f(castp->top(), varp);
+            }
+        } else if (const AstStmtExpr* const stmtExprp = VN_CAST(stmtp, StmtExpr)) {
+            if (const AstCastDynamic* const castp = VN_CAST(stmtExprp->exprp(), CastDynamic)) {
+                if (const AstVar* const varp = wholeWriteVarp(castp->top())) f(castp->top(), varp);
+                return;
+            }
+            const AstNodeCCall* const callp = VN_CAST(stmtExprp->exprp(), NodeCCall);
+            if (!callp || suspends(callp->funcp())) return;
+            for (const AstNodeExpr* argp = callp->argsp(); argp;
+                 argp = VN_AS(argp->nextp(), NodeExpr)) {
+                if (const AstVar* const varp = wholeWriteVarp(argp)) f(argp, varp);
+            }
+        }
+    }
+    // Whether all writes of the variable are seen, so it is a tracked handle. Not a port
+    // other than an input, which a reference argument would alias, nor visible from outside the
+    // model (a forceable handle is not supported).
+    bool isTracked(const AstVar* const varp) const {
+        return isHandle(varp) && !m_untracked.count(varp) && (!varp->isIO() || varp->isInput())
+               && !varp->isSigPublic();
+    }
+    // Why the variable is not a tracked handle, for debug
+    string untrackedReason(const AstVar* const varp) const {
+        const auto it = m_untracked.find(varp);
+        if (it != m_untracked.end()) return it->second;
+        if (varp->isSigPublic()) return "public";
+        return "a port";
+    }
+    // Whether the event may be assigned another event
+    bool isAssignedEvent(const AstVar* const varp) const { return m_assignedEvents.count(varp); }
+    // Why no wait may be listed, as evaluating a trigger may change the order of evaluation, or
+    // empty if none
+    const std::string& orderReason() const { return m_orderReason; }
+    // Why no wait may be listed, as the design has user C++ code, or empty if none
+    const std::string& userCReason() const { return m_userCReason; }
+    // Why no wait may be listed, as the design has DPI export tasks that may suspend, or empty
+    static std::string exportReason() {
+        return v3Global.usesSuspendableExports()
+                   ? "the design has DPI export tasks that may suspend"
+                   : "";
+    }
+};
+
+// ######################################################################
 //  Transform nodes affected by timing
 
 class TimingControlVisitor final : public VNVisitor {
@@ -555,6 +934,7 @@ class TimingControlVisitor final : public VNVisitor {
     V3UniqueNames m_trigSchedNames{"__VtrigSched"};  // Trigger scheduler name generator
     V3UniqueNames m_dynTrigNames{"__VdynTrigger"};  // Dynamic trigger name generator
     V3UniqueNames m_eventCountNames{"__VeventCount"};  // Event control count var names
+    V3UniqueNames m_handlePrevNames{"__VhandlePrev"};  // Handle values before writes
     // Module level temporary variables, shared by instances
     V3SharedTmps m_assignWTmps{"__VassignWtmp", VVarType::MODULETEMP};  // Delayed AssignW values
     V3SharedTmps m_assignWGens{"__VassignWgen", VVarType::MODULETEMP};  // AssignW generations
@@ -562,6 +942,12 @@ class TimingControlVisitor final : public VNVisitor {
     // DTypes
     AstBasicDType* m_forkDtp = nullptr;  // Fork variable type
     AstBasicDType* m_trigSchedDtp = nullptr;  // Trigger scheduler type
+
+    // CONSTANTS
+    // Most handles in a chain of a listed wait (see notListedReason)
+    static constexpr int MAX_HANDLE_LINKS = 16;
+    // Why a wait whose 'iff' has effects is not listed (see notListedReason)
+    static constexpr const char* IFF_EFFECTS_REASON = "'iff' with effects";
 
     // Timing-related globals
     AstVarScope* m_delaySchedp = nullptr;  // Global delay scheduler
@@ -571,6 +957,9 @@ class TimingControlVisitor final : public VNVisitor {
 
     // Other
     SenTreeFinder m_finder{m_netlistp};  // Sentree finder and uniquifier
+    // Tracked class and interface handles, if any wait on a clocking block event through handles
+    const std::unique_ptr<const TimingHandleVisitor> m_handlesp;
+    std::unordered_set<const AstVar*> m_waitedHandles;  // Tracked handles waited through
     SenExprBuilder* m_senExprBuilderp = nullptr;  // Sens expression builder for current m_scope
 
     // Stats
@@ -579,6 +968,11 @@ class TimingControlVisitor final : public VNVisitor {
     size_t m_statVariableDelays = 0;  // Number of delays with value unknown at compile time
     size_t m_statSuspendableProcs = 0;  // Number of suspendable processes
     size_t m_statEventListWaits = 0;  // Number of event controls on an event's wait list
+    size_t m_statHandleEventWaits = 0;  // Number of event controls on an interface event's list
+    size_t m_statHandleWrites = 0;  // Number of writes of tracked handles notifying the scheduler
+    size_t m_statHandleChangedWrites = 0;  // Number of those notifying only if the value changed
+    size_t m_statHandleEffectWaits = 0;  // Number of those event controls whose 'iff' has effects
+    size_t m_statHandlePolledWaits = 0;  // Number of event controls on clocking events polled
 
     // METHODS
     // Transform an assignment with an intra timing control into a timing control with the
@@ -711,6 +1105,180 @@ class TimingControlVisitor final : public VNVisitor {
         addEventDebugInfo(methodp, sentreep);
         return new AstCAwait{flp, methodp, getCreateDynamicTriggerSenTree()};
     }
+    // Why a wait on the sentree, which waits on a clocking block event, does not wait on the wait
+    // list of the event, or "" if it does
+    string notListedReason(const AstSenTree* const sentreep) const {
+        if (!m_handlesp->userCReason().empty()) return m_handlesp->userCReason();
+        if (v3Global.usesSuspendableExports()) return TimingHandleVisitor::exportReason();
+        if (!m_handlesp->orderReason().empty()) return m_handlesp->orderReason();
+        const AstSenItem* const itemp = sentreep->sensesp();
+        const AstMemberRef* const eventp = VN_CAST(itemp->sensp(), MemberRef);
+        if (itemp->nextp() || itemp->edgeType() != VEdgeType::ET_EVENT || !eventp
+            || !isClockingEvent(eventp)) {
+            return "not only on a clocking block event";
+        }
+        // The event of a clocking block lives as long as its interface. It stays the event waited
+        // on unless it is assigned another event.
+        if (m_handlesp->isAssignedEvent(eventp->varp())) {
+            return "the clocking block event is assigned another event";
+        }
+        const AstNodeExpr* linkp = eventp->fromp();
+        int links = 0;
+        while (const AstMemberRef* const memberp = VN_CAST(linkp, MemberRef)) {
+            // The null check of a chain clones each prefix of it (see createHandleEventWait), as
+            // when the trigger is evaluated, so only short chains are listed
+            if (++links >= MAX_HANDLE_LINKS) {
+                return "a chain of more than " + std::to_string(MAX_HANDLE_LINKS) + " handles";
+            }
+            if (!m_handlesp->isTracked(memberp->varp())) {
+                return memberp->prettyNameQ() + " " + m_handlesp->untrackedReason(memberp->varp());
+            }
+            linkp = memberp->fromp();
+        }
+        const AstVarRef* const rootp = VN_CAST(linkp, VarRef);
+        if (!rootp) return "not through variables";
+        if (!m_handlesp->isTracked(rootp->varp())) {
+            return rootp->prettyNameQ() + " " + m_handlesp->untrackedReason(rootp->varp());
+        }
+        // Its trigger is evaluated less often, which must not be observable: impure nodes, and
+        // drawing a random number, which advances the random generator, are effects
+        if (itemp->condp() && itemp->condp()->exists([](AstNode* const np) {
+                return !np->isPure() || VN_IS(np, Rand);
+            })) {
+            return IFF_EFFECTS_REASON;
+        }
+        return "";
+    }
+    // Whether the event is the event of a clocking block, which the compiler creates, of a
+    // virtual interface
+    static bool isClockingEvent(const AstMemberRef* const refp) {
+        return refp->varp()->isTemp() && VN_IS(refp->fromp()->dtypep()->skipRefp(), IfaceRefDType);
+    }
+    // Whether any event control waits on a clocking block event through handles
+    static bool hasHandleClockingWaits(AstNetlist* const netlistp) {
+        return netlistp->exists([](const AstSenItem* const itemp) {
+            const AstMemberRef* const refp = VN_CAST(itemp->sensp(), MemberRef);
+            return refp && isClockingEvent(refp);
+        });
+    }
+    // Return the event if the sentree only waits on a clocking block event of a virtual
+    // interface, through a chain of tracked handles (see TimingHandleVisitor), with an 'iff'
+    // without effects if any, else nullptr. Then the trigger can only be set at a trigger
+    // evaluation after the event fired or a tracked handle was written, so only these evaluate
+    // it, in the same order as all triggers (see VlDynamicTriggerScheduler::evaluate).
+    AstMemberRef* handleEventp(const AstSenTree* const sentreep) {
+        if (!m_handlesp) return nullptr;
+        bool onClocking = false;
+        for (const AstSenItem* itemp = sentreep->sensesp(); itemp;
+             itemp = VN_AS(itemp->nextp(), SenItem)) {
+            const AstMemberRef* const refp = VN_CAST(itemp->sensp(), MemberRef);
+            onClocking = onClocking || (refp && isClockingEvent(refp));
+        }
+        if (!onClocking) return nullptr;
+        const string reason = notListedReason(sentreep);
+        if (!reason.empty()) {
+            UINFO(4, "Polled, " << reason << ", wait at " << sentreep->fileline());
+            if (reason == IFF_EFFECTS_REASON) ++m_statHandleEffectWaits;
+            ++m_statHandlePolledWaits;
+            return nullptr;
+        }
+        return VN_AS(sentreep->sensesp()->sensp(), MemberRef);
+    }
+    // Create the await of the trigger evaluation of an event control on an event of a virtual
+    // interface: while the handles are set, await the wait list of the event, else the evaluation
+    // step. Either way the trigger is then evaluated as usual.
+    AstIf* createHandleEventWait(AstSenTree* const sentreep, AstMemberRef* const eventp,
+                                 AstCAwait* const evalAwaitp) {
+        FileLine* const flp = sentreep->fileline();
+        ++m_statHandleEventWaits;
+        // The handles are set if each is not null, as when the trigger is evaluated
+        AstNodeExpr* const setp = SenExprBuilder::newNullGuard(eventp);
+        UASSERT_OBJ(setp, eventp, "No handle to check");
+        for (AstNodeExpr* linkp = eventp->fromp(); linkp;) {
+            AstMemberRef* const memberp = VN_CAST(linkp, MemberRef);
+            const AstVar* const varp = memberp ? memberp->varp() : VN_AS(linkp, VarRef)->varp();
+            m_waitedHandles.emplace(varp);
+            linkp = memberp ? memberp->fromp() : nullptr;
+        }
+        AstCMethodHard* const methodp = new AstCMethodHard{
+            flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE},
+            VCMethod::SCHED_EVENT_EVALUATION, eventp->cloneTree(false)};
+        methodp->dtypeSetVoid();
+        addProcessInfo(methodp);
+        addEventDebugInfo(methodp, sentreep);
+        return new AstIf{flp, setp, new AstCAwait{flp, methodp, getCreateDynamicTriggerSenTree()},
+                         evalAwaitp};
+    }
+    // Notify the dynamic trigger scheduler after each write of a tracked handle waited through.
+    // Done after the transformation, which may delete or copy writes. The notification only sets
+    // an atomic flag, so logic writing such a handle may still run in parallel MTasks (see
+    // V3OrderMTaskFixHazards).
+    void notifyHandleWrites() {
+        if (m_waitedHandles.empty()) return;
+        std::vector<std::pair<AstNodeStmt*, AstScope*>> writeps;
+        std::unordered_set<const AstNodeStmt*> collected;
+        const auto collect = [&](AstNodeStmt* const stmtp, AstScope* const scopep) {
+            if (!collected.emplace(stmtp).second) return;
+            bool notify = false;
+            TimingHandleVisitor::foreachTrackedWrite(
+                stmtp,
+                [](AstCFunc* const funcp) {
+                    UDEBUGONLY(UASSERT_OBJ(callSuspends(funcp) == funcp->isCoroutine(), funcp,
+                                           "Suspending call not a coroutine, or the reverse"););
+                    return callSuspends(funcp);
+                },
+                [&](const AstNodeExpr*, const AstVar* varp) {
+                    // Also for an automatic variable of a task, which the branches of a fork
+                    // within it may share, so another process may wait through it
+                    notify = notify || m_waitedHandles.count(varp);
+                });
+            if (notify) writeps.emplace_back(stmtp, scopep);
+        };
+        m_netlistp->foreach([&](AstScope* const scopep) {
+            scopep->foreach([&](AstAssign* const assignp) { collect(assignp, scopep); });
+            scopep->foreach([&](AstStmtExpr* const stmtp) { collect(stmtp, scopep); });
+        });
+        m_netlistp->foreach([&](AstAssign* const assignp) { collect(assignp, nullptr); });
+        m_netlistp->foreach([&](AstStmtExpr* const stmtp) { collect(stmtp, nullptr); });
+        for (const auto& pair : writeps) {
+            AstNodeStmt* const stmtp = pair.first;
+            FileLine* const flp = stmtp->fileline();
+            // Only a read, as the notification is safe in parallel MTasks
+            AstCMethodHard* const methodp = new AstCMethodHard{
+                flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::READ},
+                VCMethod::SCHED_HANDLES_WRITTEN};
+            methodp->dtypeSetVoid();
+            if (AstNodeExpr* const changedp = makeHandleChanged(stmtp, pair.second)) {
+                ++m_statHandleChangedWrites;
+                stmtp->addNextHere(new AstIf{flp, changedp, methodp->makeStmt()});
+            } else {
+                stmtp->addNextHere(methodp->makeStmt());
+            }
+        }
+        m_statHandleWrites += writeps.size();
+    }
+    // For a blocking assignment of a waited handle variable as a whole, not of a member, which
+    // the write may move, with a pure value, save the variable before the assignment, and return
+    // whether the assignment changed it, else nullptr. A handle written its own value reaches no
+    // other event, so the waits through it need not evaluate their triggers, as in a loop like
+    // 'forever begin vif = m_cfg.vif; @(vif.cb); ... end'.
+    AstNodeExpr* makeHandleChanged(AstNodeStmt* const stmtp, AstScope* const scopep) {
+        AstAssign* const assignp = VN_CAST(stmtp, Assign);
+        if (!assignp || !scopep) return nullptr;
+        AstVarRef* const lhsp = VN_CAST(assignp->lhsp(), VarRef);
+        if (!lhsp || !lhsp->access().isWriteOrRW()) return nullptr;
+        if (assignp->rhsp()->exists([](AstNode* const np) { return !np->isPure(); })) {
+            return nullptr;
+        }
+        FileLine* const flp = assignp->fileline();
+        AstVarScope* const prevVscp = createTemp(flp, m_handlePrevNames.get(lhsp), lhsp->dtypep(),
+                                                 addCLocalScope(flp, assignp), scopep);
+        assignp->addHereThisAsNext(
+            new AstAssign{flp, new AstVarRef{flp, prevVscp, VAccess::WRITE},
+                          new AstVarRef{flp, lhsp->varScopep(), VAccess::READ}});
+        return new AstNeq{flp, new AstVarRef{flp, lhsp->varScopep(), VAccess::READ},
+                          new AstVarRef{flp, prevVscp, VAccess::READ}};
+    }
     // Creates a trigger scheduler variable
     AstVarScope* getCreateTriggerSchedulerp(AstSenTree* const sentreep) {
         if (!sentreep->user1p()) {
@@ -795,7 +1363,9 @@ class TimingControlVisitor final : public VNVisitor {
     }
     // Create a temp variable and optionally put it in the specified local scope (mark local if so)
     AstVarScope* createTemp(FileLine* const flp, const std::string& name,
-                            AstNodeDType* const dtypep, AstCLocalScope* const cscopep = nullptr) {
+                            AstNodeDType* const dtypep, AstCLocalScope* const cscopep = nullptr,
+                            AstScope* scopep = nullptr) {
+        if (!scopep) scopep = m_scopep;
         AstVar* varp;
         if (cscopep) {
             varp = new AstVar{flp, VVarType::BLOCKTEMP, name, dtypep};
@@ -803,10 +1373,10 @@ class TimingControlVisitor final : public VNVisitor {
             cscopep->addVarsp(varp);
         } else {
             varp = new AstVar{flp, VVarType::MODULETEMP, name, dtypep};
-            m_scopep->modp()->addStmtsp(varp);
+            scopep->modp()->addStmtsp(varp);
         }
-        AstVarScope* const vscp = new AstVarScope{flp, m_scopep, varp};
-        m_scopep->addVarsp(vscp);
+        AstVarScope* const vscp = new AstVarScope{flp, scopep, varp};
+        scopep->addVarsp(vscp);
         return vscp;
     }
     // Add a done() call on the fork sync
@@ -1207,7 +1777,10 @@ class TimingControlVisitor final : public VNVisitor {
                 = new AstLogNot{flp, new AstVarRef{flp, trigvscp, VAccess::READ}};
             AstLoop* const loopp = new AstLoop{flp};
             loopp->addStmtsp(new AstLoopTest{flp, loopp, condp});
-            loopp->addStmtsp(awaitEvalp);
+            AstMemberRef* const handleEventRefp = handleEventp(sentreep);
+            loopp->addStmtsp(handleEventRefp
+                                 ? createHandleEventWait(sentreep, handleEventRefp, awaitEvalp)
+                                 : static_cast<AstNodeStmt*>(awaitEvalp));
             // Put pre updates before the trigger check and assignment
             for (AstNodeStmt* const stmtp : senResults.m_preUpdates) loopp->addStmtsp(stmtp);
             // Then the trigger check and assignment
@@ -1571,8 +2144,19 @@ class TimingControlVisitor final : public VNVisitor {
 public:
     // CONSTRUCTORS
     explicit TimingControlVisitor(AstNetlist* nodep)
-        : m_netlistp{nodep} {
+        : m_netlistp{nodep}
+        , m_handlesp{hasHandleClockingWaits(nodep) ? new TimingHandleVisitor{nodep} : nullptr} {
         iterate(nodep);
+        notifyHandleWrites();
+        // Order the waits awaiting trigger evaluation among the waits woken on wait lists only if
+        // any wait is listed, so a design listing none pays nothing for it
+        if (m_statHandleEventWaits) {
+            nodep->foreach([](AstCMethodHard* const methodp) {
+                if (methodp->method() == VCMethod::SCHED_EVALUATION) {
+                    methodp->method(VCMethod::SCHED_EVALUATION_KEYED);
+                }
+            });
+        }
 
         // If there is no static #0 in the design, but an unknown delay was found,
         // and the user did not specify preference, then warn on all unknown delays
@@ -1596,6 +2180,21 @@ public:
         V3Stats::addStat("Timing, unknown #variable delays", m_statVariableDelays);
         V3Stats::addStat("Timing, suspendable processes", m_statSuspendableProcs);
         V3Stats::addStat("Timing, event controls on event wait lists", m_statEventListWaits);
+        V3Stats::addStat("Timing, event controls on interface events through handles",
+                         m_statHandleEventWaits);
+        V3Stats::addStat("Timing, writes of handles notifying event controls", m_statHandleWrites);
+        V3Stats::addStat("Timing, writes of handles notifying event controls if changed",
+                         m_statHandleChangedWrites);
+        V3Stats::addStat("Timing, event controls through handles with 'iff' effects",
+                         m_statHandleEffectWaits);
+        V3Stats::addStat("Timing, event controls on clocking block events evaluated always",
+                         m_statHandlePolledWaits);
+        V3Stats::addStat("Timing, triggers changing the order of evaluation, keeping all polling",
+                         m_handlesp && !m_handlesp->orderReason().empty() ? 1 : 0);
+        V3Stats::addStat("Timing, user C++ code, keeping all polling",
+                         m_handlesp && !m_handlesp->userCReason().empty() ? 1 : 0);
+        V3Stats::addStat("Timing, DPI export tasks that may suspend, keeping all polling",
+                         m_handlesp && v3Global.usesSuspendableExports() ? 1 : 0);
     }
 };
 

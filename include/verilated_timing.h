@@ -80,6 +80,12 @@ struct VlPromise final {
         m_continuation;  // Coroutine to resume after this one finishes
     VlCoroutine* m_corop = nullptr;  // Pointer to the coroutine return object
     bool m_forever = false;  // Coroutine suspended forever
+    // Waits on an event wait list to evaluate its trigger when resumed, rather than to resume
+    // (see VlDynamicTriggerScheduler::eventEvaluation)
+    bool m_listEvaluates = false;
+    // Orders the coroutine among those awaiting trigger evaluation (see
+    // VlDynamicTriggerScheduler::startWait)
+    uint64_t m_waitKey = 0;
 
     ~VlPromise();
 
@@ -157,6 +163,10 @@ public:
     void waitIndex(const size_t index) {
         if (m_process) m_process->waitIndex(index);
     }
+    /// Whether the coroutine waits on an event wait list to evaluate its trigger
+    bool listEvaluates() const { return m_coro.promise().m_listEvaluates; }
+    /// Order of the coroutine among those awaiting trigger evaluation
+    uint64_t waitKey() const { return m_coro.promise().m_waitKey; }
 #ifdef VL_DEBUG
     void dump() const;
 #endif
@@ -349,6 +359,13 @@ public:
 // co_await __VdynSched.eventTrigger(event) (IEEE 1800-2023 15.5). It is not resumed before the
 // event fires; the next evaluate() after that moves the waiters to the resumption step, in the
 // order they started waiting.
+// A coroutine waiting only on a clocking block event of a virtual interface, through tracked
+// handles (see V3Timing), awaits co_await __VdynSched.eventEvaluation(event) instead of
+// evaluation() while the handles are set. Its trigger can only be set after the event fires, or
+// after a tracked handle is written, which calls handlesWritten(). So only the next evaluate()
+// after either resumes it to evaluate its trigger as usual, among the coroutines awaiting
+// evaluation() in the order it would have been resumed in had it awaited evaluation() (see
+// startWait), so all triggers are evaluated, and all coroutines resumed, in the same order.
 
 /// Processes waiting on one named event. A wait list is live while 'm_eventp' is set. Only
 /// notify() is used in parallel MTasks (see VlEventWaitLink).
@@ -356,7 +373,11 @@ struct VlEventWaitList final : public VlEventWaitLink {
     std::shared_ptr<VlEvent> m_keepp;  // Keeps an assignable event's storage alive
     std::vector<VlCoroutineHandle> m_waiters;  // Waiting coroutines in order, or empty slots
     size_t m_emptySlots = 0;  // Slots left empty by dropped killed waiters
-    uint64_t m_seq = 0;  // Order in which the list became live (see wakePending)
+    uint64_t m_seq = 0;  // Order in which the list got its first waiter to resume (see addWaiter)
+    size_t m_resumers = 0;  // Waiters in its slots to resume, not to evaluate, when it fires
+    bool m_evaluatorsListed = false;  // In the scheduler's 'm_evaluatorLists'
+    // Slots of the waiters to evaluate, which may have been left empty since, in order
+    std::vector<size_t> m_evaluatorSlots;
 };
 
 class VlDynamicTriggerScheduler final {
@@ -374,14 +395,27 @@ class VlDynamicTriggerScheduler final {
     // is pushed onto in parallel (see VlEventWaitLink)
     std::deque<VlEventWaitList> m_waitLists;  // All event wait lists, live or free (stable)
     std::vector<VlEventWaitList*> m_freeWaitLists;  // Event wait lists that are not live
+    // Wait lists that have had waiters to evaluate since the last takeHandleWaiters(), so only
+    // these are scanned after a handle write
+    std::vector<VlEventWaitList*> m_evaluatorLists;
     // Wait lists fired, or with waiters killed, since evaluate()
     std::atomic<VlEventWaitLink*> m_pendingHeadp{nullptr};
     std::vector<VlEventWaitList*> m_drainedLists;  // Pending lists being drained (wakePending)
-    uint64_t m_nextSeq = 0;  // Order of the next wait list to become live
+    uint64_t m_nextSeq = 0;  // Order of the next wait list to get its first waiter to resume
     // Events whose wait lists fired at the last evaluate(), their fired state to retire at the
     // post update step (see doPostUpdates)
     std::vector<VlEvent*> m_firedEventps;
     std::vector<std::shared_ptr<VlEvent>> m_firedKeepps;  // Keeps the assignable ones alive
+    VlCoroutineVec m_listWoken;  // Coroutines woken on wait lists to evaluate their triggers
+    std::vector<std::pair<uint64_t, size_t>> m_listOrder;  // Their wait keys and slots, sorted
+    uint64_t m_lastWaitSeq = 0;  // Order of the last dynamic trigger wait that started
+    uint64_t m_seqAtEvaluate = 0;  // 'm_lastWaitSeq' at the end of the last evaluate()
+    // Steps resuming coroutines that may await trigger evaluation again (see startWait)
+    enum class Step : uint8_t { OTHER, EVALUATE, POST_UPDATE };
+    Step m_step = Step::OTHER;  // Step resuming coroutines now
+    // A tracked handle was written, or the process of a waiter to evaluate changed state, since
+    // the last evaluate(). Written by logic in any MTask.
+    mutable std::atomic<bool> m_handlesWritten{false};
 
     // CONSTANTS
     // Largest storage a free wait list keeps for its waiters, so a list reused for another
@@ -413,32 +447,68 @@ class VlDynamicTriggerScheduler final {
     void compact(VlEventWaitList& list);
     // Detaches a wait list from its event, while the event's storage is still alive
     static void detach(VlEventWaitList& list);
+    // Clear the slots of the waiters to evaluate of a list, releasing most of their storage
+    static void releaseEvaluatorSlots(VlEventWaitList& list);
+    // Release most of the storage of a vector left with few elements
+    template <typename T>
+    static void shrinkStorage(std::vector<T>& vec);
     // Frees a detached wait list without waiters
     void recycle(VlEventWaitList& list);
     // Moves the waiters of the fired wait lists to the resumption step, and the killed waiters
     // of the others to 'killed', freeing lists left without waiters. Returns if any list fired.
     bool wakePending(VlCoroutineVec& killed);
+    // Moves the waiters to evaluate of all wait lists to 'm_listWoken' (see handlesWritten)
+    void takeHandleWaiters();
+    // Resumes the coroutines awaiting trigger evaluation, with those woken on wait lists in the
+    // order they would have been resumed in had they awaited trigger evaluation instead
+    void evaluateWithListWoken();
+    // The wait key of a coroutine woken on a wait list, as if it had awaited trigger evaluation
+    // since its wait started
+    uint64_t listWokenKey(const VlCoroutineHandle& coro) const;
+    // Keys of coroutines awaiting trigger evaluation, which evaluate() resumes in the order
+    // they await it in: first those that awaited it again when resumed by the last evaluate(),
+    // then those that did when resumed for their post updates, then those whose waits started
+    // since, each in the order their waits started (see startWait)
+    static constexpr uint64_t WAIT_KEY_EVALUATED = 0;
+    static constexpr uint64_t WAIT_KEY_POST_UPDATED = 1ULL << 62;
+    static constexpr uint64_t WAIT_KEY_STARTED = 2ULL << 62;
+    static constexpr uint64_t WAIT_KEY_SEQ = WAIT_KEY_POST_UPDATED - 1;
+    // Keys a coroutine awaiting trigger evaluation, or a wait list to evaluate its trigger. Waits
+    // only start while no MTask runs in parallel, as for the wait lists.
+    void startWait(std::coroutine_handle<VlPromise> coro) {
+        VlPromise& promise = coro.promise();
+        if (m_step == Step::OTHER) {
+            promise.m_waitKey = WAIT_KEY_STARTED | ++m_lastWaitSeq;
+            return;
+        }
+        promise.m_waitKey
+            = (promise.m_waitKey & WAIT_KEY_SEQ)
+              | (m_step == Step::EVALUATE ? WAIT_KEY_EVALUATED : WAIT_KEY_POST_UPDATED);
+    }
     // Releases all wait lists, unlinking their events and processes before destroying the
     // coroutines waiting on them. Called once the model finished, and again when the scheduler
     // is destroyed, which may happen without any evaluation after finishing.
     void shutdown();
-    auto eventAwaitable(VlEvent& event, std::shared_ptr<VlEvent>&& keepp, VlProcessRef process,
-                        const char* filename, int lineno) {
+    auto eventAwaitable(VlEvent& event, std::shared_ptr<VlEvent>&& keepp, bool evaluates,
+                        VlProcessRef process, const char* filename, int lineno) {
         struct Awaitable final {
             VlDynamicTriggerScheduler& sched;
             VlEvent& event;
             std::shared_ptr<VlEvent> keepp;  // Keeps an assignable event's storage alive
+            bool evaluates;  // Evaluates its trigger when woken, rather than resuming
             VlProcessRef process;  // Data of the suspended process, null if not needed
             VlFileLineDebug fileline;
 
             bool await_ready() const { return false; }  // Always suspend
             void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                if (evaluates) sched.startWait(coro);
+                coro.promise().m_listEvaluates = evaluates;
                 sched.addWaiter(event, std::move(keepp), coro, process, fileline);
             }
             void await_resume() const {}
         };
-        return Awaitable{*this, event, std::move(keepp), process,
-                         VlFileLineDebug{filename, lineno}};
+        return Awaitable{*this,     event,   std::move(keepp),
+                         evaluates, process, VlFileLineDebug{filename, lineno}};
     }
 
 public:
@@ -466,6 +536,26 @@ public:
                                 eventDescription, filename, lineno););
         return awaitable(process, m_suspended, filename, lineno);
     }
+    /// Used by coroutines for co_awaiting trigger evaluation in a model with coroutines awaiting
+    /// event wait lists to evaluate their triggers, which are ordered among them (see startWait)
+    auto evaluationKeyed(VlProcessRef process, const char* eventDescription, const char* filename,
+                         int lineno) {
+        VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
+                                eventDescription, filename, lineno););
+        struct Awaitable final {
+            VlDynamicTriggerScheduler& sched;
+            VlProcessRef process;  // Data of the suspended process, null if not needed
+            VlFileLineDebug fileline;
+
+            bool await_ready() const { return false; }  // Always suspend
+            void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                sched.startWait(coro);
+                sched.m_suspended.emplace_back(coro, process, fileline);
+            }
+            void await_resume() const {}
+        };
+        return Awaitable{*this, process, VlFileLineDebug{filename, lineno}};
+    }
     // Used by coroutines for co_awaiting the trigger post update step
     auto postUpdate(VlProcessRef process, const char* eventDescription, const char* filename,
                     int lineno) {
@@ -486,13 +576,37 @@ public:
                       const char* filename, int lineno) {
         VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
                                 eventDescription, filename, lineno););
-        return eventAwaitable(event, nullptr, process, filename, lineno);
+        return eventAwaitable(event, nullptr, false, process, filename, lineno);
     }
     auto eventTrigger(VlAssignableEvent& event, VlProcessRef process, const char* eventDescription,
                       const char* filename, int lineno) {
         VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
                                 eventDescription, filename, lineno););
-        return eventAwaitable(*event, std::shared_ptr<VlEvent>{event}, process, filename, lineno);
+        return eventAwaitable(*event, std::shared_ptr<VlEvent>{event}, false, process, filename,
+                              lineno);
+    }
+    /// Used by coroutines for co_awaiting trigger evaluation after a clocking block event of a
+    /// virtual interface fires, while the handles reaching the interface are set. Only called
+    /// while no MTask runs in parallel, as waits start.
+    auto eventEvaluation(VlEvent& event, VlProcessRef process, const char* eventDescription,
+                         const char* filename, int lineno) {
+        VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
+                                eventDescription, filename, lineno););
+        return eventAwaitable(event, nullptr, true, process, filename, lineno);
+    }
+    /// The same, with all events assignable
+    auto eventEvaluation(VlAssignableEvent& event, VlProcessRef process,
+                         const char* eventDescription, const char* filename, int lineno) {
+        VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
+                                eventDescription, filename, lineno););
+        return eventAwaitable(*event, std::shared_ptr<VlEvent>{event}, true, process, filename,
+                              lineno);
+    }
+    /// Notes that a tracked handle (see V3Timing) was written, so the next evaluate() resumes the
+    /// coroutines waiting through any of them to evaluate their triggers. Called by logic in any
+    /// MTask.
+    void handlesWritten() const VL_MT_SAFE {
+        m_handlesWritten.store(true, std::memory_order_relaxed);
     }
 };
 
