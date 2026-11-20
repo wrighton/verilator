@@ -3575,15 +3575,21 @@ inline void VL_ASSIGNSEL_QQ(int rbits, int obits, int lsb, QData& lhsr, QData rh
 }
 // inline void VL_ASSIGNSEL_IIIW(int obits, int lsb, IData& lhsr, WDataInP const rwp)
 // VL_MT_SAFE { Illegal, as lhs width >= rhs width
+// Number of selected bits within a wide destination of rbits bits. The caller guarantees
+// 0 <= lsb < rbits; a part-select write partially above the destination writes only its bits
+// within the destination (IEEE 1800-2023 11.5.1).
+inline int _vl_assignsel_bits(int rbits, int obits, int lsb) VL_PURE {
+    return VL_UNLIKELY(obits > rbits - lsb) ? rbits - lsb : obits;
+}
 inline void VL_ASSIGNSEL_WI(int rbits, int obits, int lsb, WDataOutP iowp, IData rhs) VL_MT_SAFE {
-    _vl_insert_WI(iowp, rhs, lsb + obits - 1, lsb, rbits);
+    _vl_insert_WI(iowp, rhs, lsb + _vl_assignsel_bits(rbits, obits, lsb) - 1, lsb, rbits);
 }
 inline void VL_ASSIGNSEL_WQ(int rbits, int obits, int lsb, WDataOutP iowp, QData rhs) VL_MT_SAFE {
-    _vl_insert_WQ(iowp, rhs, lsb + obits - 1, lsb, rbits);
+    _vl_insert_WQ(iowp, rhs, lsb + _vl_assignsel_bits(rbits, obits, lsb) - 1, lsb, rbits);
 }
 inline void VL_ASSIGNSEL_WW(int rbits, int obits, int lsb, WDataOutP iowp,
                             WDataInP const rwp) VL_MT_SAFE {
-    _vl_insert_WW(iowp, rwp, lsb + obits - 1, lsb, rbits);
+    _vl_insert_WW(iowp, rwp, lsb + _vl_assignsel_bits(rbits, obits, lsb) - 1, lsb, rbits);
 }
 
 //====================================================
