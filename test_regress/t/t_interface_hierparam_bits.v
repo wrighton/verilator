@@ -914,6 +914,169 @@ endmodule
 
 bind bind_target harness #(.ADDR_W(20)) h ();
 
+// A type parameter of an instance on a path, whose value is a typedef of the module holding
+// it, used with its defaults or specialized
+interface tpt_if #(
+    parameter int W = 3
+);
+  logic [W-1:0] a;
+endinterface
+
+module tpt_sink (
+    tpt_if bus
+);
+endmodule
+
+module tpt_holder #(
+    parameter type T = logic
+);
+  tpt_if #(.W($bits(T))) b ();
+endmodule
+
+module tpt_middle #(
+    parameter int K = 2
+);
+  localparam int KK = K + 1;
+  typedef logic [KK-1:0] k_t;
+  tpt_holder #(.T(k_t)) h ();
+endmodule
+
+// The same with a package's enum item
+package tpt_pkg;
+  typedef enum int {TPT_E = 4} e_t;
+endpackage
+
+module tpt_enum;
+  tpt_if #(.W(tpt_pkg::TPT_E + 1)) b ();
+endmodule
+
+// A typedef of an interface instance in an interface port, not retargeted yet
+interface tpt_niif #(
+    parameter int W = 3
+);
+  typedef logic [W-1:0] y_t;
+endinterface
+
+interface tpt_nif #(
+    parameter int K = 2
+);
+  tpt_niif #(.W(K)) in ();
+endinterface
+
+module tpt_nholder (
+    tpt_nif s
+);
+  typedef s.in.y_t y_t;
+  tpt_if #(.W($bits(y_t))) b ();
+endmodule
+
+module tpt_nmiddle (
+    tpt_nif s
+);
+  tpt_sink c (.bus(h.b));
+  tpt_nholder h (.s(s));
+endmodule
+
+// A reference in an item of another module, through an instance with parameters there, of
+// an interface also connected by default to a same-named port of the module searched: not
+// approved by that port, so the payload keeps 5 bits, not the default 7, and the sink gets
+// 5 + 4, not the default 7
+interface nst_in_if #(
+    parameter int W = 7,
+    parameter logic [W-1:0] DATA = '0
+);
+endinterface
+
+interface nst_payload_if;
+  nst_in_if #(.W(5)) x ();
+  localparam int WIDTH = $bits(x.DATA);
+  logic [WIDTH-1:0] a;
+endinterface
+
+interface nst_out_if #(
+    parameter int W = 7
+);
+  logic [W-1:0] a;
+endinterface
+
+module nst_sink (
+    nst_out_if bus
+);
+endmodule
+
+module nst_relay #(
+    parameter int K = 1
+);
+  nst_out_if #(.W(K)) o ();
+endmodule
+
+module nst_bridge (
+    nst_payload_if p,
+    nst_in_if x
+);
+  nst_relay #(.K($bits(p.a) + 4)) r ();
+endmodule
+
+module nst_holder (
+    nst_in_if d
+);
+  nst_payload_if h ();
+  nst_bridge b (
+      .p(h),
+      .x(d)
+  );
+endmodule
+
+module nst_wrapper (
+    nst_in_if d
+);
+  nst_sink s (.bus(c.b.r.o));
+  nst_holder c (.d(d));
+endmodule
+
+// A reference through a port of a module of an instance not specialized yet, so still declared
+// with the interface's defaults: not approved, so the leaf's localparam is not evaluated in the
+// module it was specialized from, and keeps 5 bits, not the default 7
+interface hq_in_if #(
+    parameter int W = 7
+);
+endinterface
+
+interface hq_out_if #(
+    parameter int W = 7
+);
+  logic [W-1:0] a;
+endinterface
+
+module hq_sink (
+    hq_out_if bus
+);
+endmodule
+
+module hq_relay #(
+    parameter int K = 1
+);
+  hq_out_if #(.W(K)) o ();
+endmodule
+
+module hq_leaf (
+    hq_in_if x
+);
+  localparam int LW = x.W;
+  logic [LW-1:0] a;
+endmodule
+
+module hq_bridge;
+  hq_in_if #(.W(5)) i5 ();
+  hq_leaf l (.x(i5));
+  hq_relay #(.K($bits(l.a) + 2)) r ();
+endmodule
+
+module hq_wrapper;
+  hq_sink s (.bus(b.r.o));
+  hq_bridge b ();
+endmodule
+
 module t;
   axi_if #(
       .ID_W(12),
@@ -1226,7 +1389,26 @@ module t;
     `checkh($bits(tq4.p.out.a), 6);
     `checkh($bits(tp.loc.a), 40);
     `checkh($bits(sh.p.mirror), 40);
+    `checkh($bits(tpts0.bus.a), 3);
+    `checkh($bits(tpts6.bus.a), 7);
+    `checkh($bits(tptse.bus.a), 5);
+    `checkh($bits(tptnm.c.bus.a), 9);
+    `checkh($bits(nstw.c.h.a), 5);
+    `checkh($bits(nstw.s.bus.a), 9);
+    `checkh($bits(hqw.b.l.a), 5);
   end
+  hq_in_if hqd ();
+  hq_wrapper hqw ();
+  nst_in_if nstd ();
+  nst_wrapper nstw (.d(nstd));
+  tpt_sink tptse (.bus(tpte.b));
+  tpt_enum tpte ();
+  tpt_nif #(.K(9)) tptn ();
+  tpt_nmiddle tptnm (.s(tptn));
+  tpt_sink tpts0 (.bus(tptm0.h.b));
+  tpt_middle tptm0 ();
+  tpt_sink tpts6 (.bus(tptm6.h.b));
+  tpt_middle #(.K(6)) tptm6 ();
   // Instances connected to each other, left to be specialized in their turn
   cycle_holder y0 (.src(y1.axi));
   cycle_holder y1 (.src(y0.axi));
