@@ -1,0 +1,18 @@
+%Error: t/t_port_coerce_unsup.v:24:9: Attempt to drive input-only modport: 'h'
+                                    : ... note: In instance 't.u'
+   24 |     bus.h = new;
+      |         ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_port_coerce_unsup.v:25:9: Attempt to drive input-only modport: 'scalar'
+                                    : ... note: In instance 't.u'
+   25 |     bus.scalar = 1'b1;
+      |         ^~~~~~
+%Error: t/t_port_coerce_unsup.v:26:9: Attempt to drive input-only modport: 'words'
+                                    : ... note: In instance 't.u'
+   26 |     bus.words[0] = 2'b10;
+      |         ^~~~~
+%Error: t/t_port_coerce_unsup.v:27:9: Attempt to drive input-only modport: 'vif'
+                                    : ... note: In instance 't.u'
+   27 |     bus.vif = replacement;
+      |         ^~~
+%Error: Exiting due to
