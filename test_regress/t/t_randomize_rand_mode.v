@@ -83,6 +83,7 @@ endclass
 class ModeElement;
   rand bit [6:0] v;
   rand bit [14:0] w;
+  rand bit [6:0] values[2];
   ModeElement peers[2];
   int bare_calls;
   int wide_calls;
@@ -181,6 +182,9 @@ class ModeCfg;
   mode_element_t assoc[string];
   mode_element_t wild[*];
   mode_element_t bounds[1:2][4:3];
+  rand mode_element_t random_handles[2];
+  rand mode_element_t random_dyn[];
+  rand mode_element_t random_q[$];
   ModeConstraint constraints[];
   ModeConstraint queue_constraints[$];
   rand bit control;
@@ -199,6 +203,13 @@ class ModeCfg;
     assoc["first"] = new;
     assoc["second"] = new;
     wild[1] = new;
+    foreach (random_handles[i]) random_handles[i] = new;
+    random_dyn = new[2];
+    foreach (random_dyn[i]) random_dyn[i] = new;
+    repeat (2) begin
+      automatic mode_element_t r = new;
+      random_q.push_back(r);
+    end
     constraints = new[2];
     foreach (constraints[i]) constraints[i] = new;
     repeat (2) begin
@@ -359,6 +370,35 @@ class ModeCfg;
     end
     control.rand_mode(0);
     `checkh(control.rand_mode(), 0);
+
+    // A rand handle element controls its slot, not the object's field modes.
+    random_handles[0].rand_mode(0);
+    random_dyn[0].rand_mode(0);
+    random_q[0].rand_mode(0);
+    `checkh(random_handles[0].rand_mode(), 0);
+    `checkh(random_handles[1].rand_mode(), 1);
+    `checkh(random_dyn[0].rand_mode(), 0);
+    `checkh(random_dyn[1].rand_mode(), 1);
+    `checkh(random_q[0].rand_mode(), 0);
+    `checkh(random_q[1].rand_mode(), 1);
+    `checkh(random_handles[0].v.rand_mode(), 1);
+    `checkh(random_dyn[0].v.rand_mode(), 1);
+    `checkh(random_q[0].v.rand_mode(), 1);
+
+    // Object mode clearing uses the same once-captured receiver as field updates.
+    dyn[0].values[0].rand_mode(0);
+    dyn[1].values[0].rand_mode(0);
+    index_calls = 0;
+    argument_calls = 1;
+    dyn[next_index()].rand_mode(next_mode());
+    `checkh(index_calls, 1);
+    `checkh(argument_calls, 2);
+    `checkh(dyn[1].values[0].rand_mode(), 1);
+    `checkh(dyn[0].values[0].rand_mode(), 0);
+    dyn[1].values.rand_mode(0);
+    `checkh(dyn[1].values[0].rand_mode(), 0);
+    dyn[1].rand_mode(1);
+    `checkh(dyn[1].values[0].rand_mode(), 1);
   endtask
 endclass
 
