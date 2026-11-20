@@ -1406,9 +1406,11 @@ class WidthVisitor final : public VNVisitor {
                 && !(nodep->fromBracket() && VN_IS(basep, NodeDType))
                 && !m_paramsOnly  // Skip during parameter evaluation
                 && !inDeadModule && !inParameterizedTemplate && !inTypeTable) {
+                // Before the warning, as a too wide bound reports an error
+                const int left = nodep->leftConst();
+                const int right = nodep->rightConst();
                 nodep->v3warn(ASCRANGE, "Ascending bit range vector: left < right of bit range: ["
-                                            << nodep->leftConst() << ":" << nodep->rightConst()
-                                            << "]");
+                                            << left << ":" << right << "]");
             }
         }
     }
@@ -1519,17 +1521,19 @@ class WidthVisitor final : public VNVisitor {
                 if (m_doGenerate) {
                     UINFO(5, "Selection index out of range inside generate");
                 } else if (!inParameterizedTemplate) {
+                    // Before the warning, as a too wide index reports an error
+                    const int msb = nodep->msbConst();
+                    const int lsb = nodep->lsbConst();
                     const int indexDiv = nodep->widthConst() == elw ? elw : 1;
                     if (nodep->declRange().ranged()) {
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
-                                                    << (nodep->msbConst() / indexDiv) << ":"
-                                                    << (nodep->lsbConst() / indexDiv)
+                                                    << (msb / indexDiv) << ":" << (lsb / indexDiv)
                                                     << " outside " << (frommsb / indexDiv) << ":"
                                                     << (fromlsb / indexDiv));
                     } else {
                         nodep->v3warn(SELRANGE,
                                       "Selection "
-                                          << nodep->msbConst() << ":" << nodep->lsbConst()
+                                          << msb << ":" << lsb
                                           << " performed on an object without declared range");
                     }
                     UINFO(1, "    Related node: " << nodep);
