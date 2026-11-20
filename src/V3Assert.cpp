@@ -613,31 +613,53 @@ void V3AssertCommon::lowerSvaLocalVarInits(
     }
 }
 
+//######################################################################
+// AssertActionXRefVisitor
+// Find hierarchical references in an action to its variables, through a block of the action
+// enclosing the reference. Their name resolution (IEEE 1800-2023 23.8) stays in the action, so in
+// the current instance; other paths may select another instance.
+
+class AssertActionXRefVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_set<const AstVar*> m_declVarps;  // Variables declared in the action
+    std::vector<std::string> m_blockNames;  // Names of the blocks enclosing the current node
+    std::vector<AstVarXRef*> m_xrefps;  // References found
+
+    // VISITORS
+    void visit(AstNodeBlock* nodep) override {
+        VL_RESTORER_COPY(m_blockNames);
+        m_blockNames.push_back(nodep->name());
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstVarXRef* nodep) override {
+        const std::string dotted = nodep->dotted();
+        const std::string firstName = dotted.substr(0, dotted.find('.'));
+        if (m_declVarps.count(nodep->varp())
+            && std::find(m_blockNames.begin(), m_blockNames.end(), firstName)
+                   != m_blockNames.end()) {
+            m_xrefps.push_back(nodep);
+        }
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit AssertActionXRefVisitor(AstNodeStmt* actionp) {
+        actionp->foreachAndNext([&](const AstVar* const varp) { m_declVarps.emplace(varp); });
+        iterateAndNextConstNull(actionp);
+    }
+    ~AssertActionXRefVisitor() override = default;
+    const std::vector<AstVarXRef*>& xrefps() const { return m_xrefps; }
+};
+
 // All executions of an action share its static variables, initialized once, and each has its
 // own automatic variables (IEEE 1800-2023 6.21). So the clone refers to the original static
 // declarations, and renames its automatic ones, which V3Begin may lift to the same scope.
 AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* const actionp, V3UniqueNames& names) {
     // V3LinkDot finds hierarchical references again by name, which fails for a clone in
-    // another scope. So a reference to a variable of the action, relative to a block of the
-    // action, refers to it directly. Other paths stay by name: they may select another instance.
-    std::unordered_set<std::string> blockNames;  // Names of the blocks of the action
-    std::unordered_set<const AstVar*> declVarps;  // Variables declared in the action
-    actionp->foreachAndNext([&](const AstNode* const nodep) {
-        if (const AstNodeBlock* const blockp = VN_CAST(nodep, NodeBlock)) {
-            blockNames.emplace(blockp->name());
-        } else if (const AstVar* const varp = VN_CAST(nodep, Var)) {
-            declVarps.emplace(varp);
-        }
-    });
-    std::vector<AstVarXRef*> xrefps;  // References to replace
-    actionp->foreachAndNext([&](AstVarXRef* const xrefp) {
-        const std::string dotted = xrefp->dotted();
-        if (declVarps.count(xrefp->varp())
-            && blockNames.count(dotted.substr(0, dotted.find('.')))) {
-            xrefps.push_back(xrefp);
-        }
-    });
-    for (AstVarXRef* const xrefp : xrefps) {
+    // another scope, so these refer to their variable directly
+    const AssertActionXRefVisitor xrefVisitor{actionp};
+    for (AstVarXRef* const xrefp : xrefVisitor.xrefps()) {
         xrefp->replaceWithKeepDType(
             new AstVarRef{xrefp->fileline(), xrefp->varp(), xrefp->access()});
         VL_DO_DANGLING(xrefp->deleteTree(), xrefp);
