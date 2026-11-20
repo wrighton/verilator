@@ -18,7 +18,7 @@ test.execute()
 test.files_identical(test.run_log_filename, test.golden_filename, is_logfile=True, strip_hex=True)
 
 test.file_grep(test.stats, r'Optimizations, Inlined instances\s+(\d+)', 8)
-# Four references per Holder instance, each recorded once
-test.file_grep(test.stats, r'Node count, INTFREF\s+(\d+)', 16)
+# Four references per Holder instance and one in Keep, each recorded once
+test.file_grep(test.stats, r'Node count, INTFREF\s+(\d+)', 17)
 
 test.passes()

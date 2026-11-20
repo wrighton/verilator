@@ -583,6 +583,11 @@ void inlineCell(AstNodeModule* modp, AstCell* cellp, const std::vector<AstScope*
             if (!cellp->isTrace()) varp->trace(false);
         } else if (AstCell* const subCellp = VN_CAST(nodep, Cell)) {
             subCellp->name(prefix + subCellp->name());
+            // References to an interface instance are named relative to its module
+            for (AstIntfRef* const refp : subCellp->intfRefspList()) {
+                refp->name(prefix + refp->name());
+                refp->parentName(prefix + refp->parentName());
+            }
             // Need to update graph. Note the vertex of the original cell was either
             // deleted (if 'last'), or user4p is a copy made by cloneTree, so reset it.
             subCellp->user4p(nullptr);

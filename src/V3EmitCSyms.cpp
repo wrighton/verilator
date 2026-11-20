@@ -770,14 +770,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         // Exclude classes inside interfaces; the cell's modp is the interface, not the Class
         if (!cellp || !VN_IS(cellp->modp(), Iface) || !VN_IS(nodep->modp(), Iface)) return;
 
-        // References are named relative to the block declaring the interface instance, which
-        // the scope name, including any inlined levels, carries before the instance name
-        const std::string& name = nodep->name();
-        const std::string& instName = cellp->origName();
-        UASSERT_OBJ(VString::endsWith(name, instName), nodep,
-                    "Interface scope name " << name << " does not end with instance name "
-                                            << instName);
-        const std::string prefix = name.substr(0, name.length() - instName.length());
+        // References are named relative to the scope containing the interface instance
+        const std::string prefix = nodep->aboveScopep()->name() + ".";
 
         for (AstIntfRef* const intfRefp : cellp->intfRefspList()) {
             m_ifaceRefs.emplace_back(nodep, scopeSymString(prefix + intfRefp->parentName()),

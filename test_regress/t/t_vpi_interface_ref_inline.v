@@ -1,14 +1,11 @@
 // DESCRIPTION: Verilator: Verilog Test module
 //
-// This program is free software; you can redistribute it and/or modify it
-// under the terms of either the GNU Lesser General Public License Version 3
-// or the Perl Artistic License Version 2.0.
+// This file ONLY is placed under the Creative Commons Public Domain
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
-// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+// SPDX-License-Identifier: CC0-1.0
 
-// Interface references of a module instantiated many times through inlined
-// levels. Each instance of Holder declares its own interfaces, which reach
-// Leaf through a port of Mid.
+// Interface references of a module with many instances. Each instance of
+// Holder declares its own interfaces, which reach Leaf through a port of Mid.
 
 interface SomeIntf;
 
@@ -50,6 +47,36 @@ module Holder;
 
 endmodule
 
+// Public, so an instance named a C++ keyword is renamed
+interface PubIntf;
+
+  // verilator lint_off UNOPTPUBLIC
+  logic [6:0] pub_intf_var  /* verilator public */;
+  // verilator lint_on UNOPTPUBLIC
+
+endinterface
+
+module PubSink (
+    PubIntf pub_ref
+);
+
+  logic [6:0] sink_saw;
+
+  always_comb sink_saw = pub_ref.pub_intf_var;
+
+endmodule
+
+module Keep;
+  /* verilator no_inline_module */
+
+  // verilator lint_off SYMRSVDWORD
+  PubIntf friend ();
+  // verilator lint_on SYMRSVDWORD
+
+  PubSink sink (.pub_ref(friend));
+
+endmodule
+
 module Pair;
 
   Holder h0 ();
@@ -61,9 +88,12 @@ module t;
 
   Pair p0 ();
   Pair p1 ();
+  Keep k ();
 
   initial begin
+`ifdef VERILATOR
     $c("Verilated::scopesDump();");
+`endif
     $write("*-* All Finished *-*\n");
     $finish;
   end
