@@ -61,10 +61,18 @@ void VlCoroutineHandle::destroy() {
     if (m_process && m_process->state() != VlProcess::KILLED && !m_coro.promise().m_forever) {
         m_process->state(VlProcess::FINISHED);
     }
-    m_coro.destroy();
+    // Destroying may run code that sets the current process, e.g. a DPI import resumed to
+    // unwind, so make the current one current again afterwards. Not owned, see
+    // VlProcess::currentp().
+    VlProcess* const currentProcessp = VlProcess::currentp();
+    std::exchange(m_coro, nullptr).destroy();
 #if VM_DPI
+    // Killing a process might leak a thread if
+    // it was in the middle of executing a DPI import.
+    // This function resumes those threads.
     VerilatedDpiCall::resumeAborted();
 #endif
+    VlProcess::currentp(currentProcessp);
 }
 
 void VlCoroutineHandle::resume() {
@@ -72,25 +80,17 @@ void VlCoroutineHandle::resume() {
     // main process
     if (VL_LIKELY(m_coro)) {
         VL_DEBUG_IF(VL_DBG_MSGF("             Resuming: "); dump(););
-        if (m_process) {  // If process state is managed with std::process
-            if (m_process->state() == VlProcess::KILLED) {
-                m_coro.destroy();
-                m_coro = nullptr;
-#if VM_DPI
-                // Killing a process might leak a thread if
-                // it was in the middle of executing a DPI import.
-                // This function resumes those threads.
-                VerilatedDpiCall::resumeAborted();
-#endif
-            } else {
-                m_process->state(VlProcess::RUNNING);
-                VlProcess::currentp(m_process.get());
-                m_coro();
-                VlProcess::currentp(nullptr);
-            }
+        if (m_process && m_process->state() == VlProcess::KILLED) {
+            destroy();
         } else {
-            VlProcess::currentp(nullptr);
+            // This may run within another process, e.g. one killing a process that is being
+            // joined, so make that process current again afterwards. Not owned, see
+            // VlProcess::currentp().
+            VlProcess* const callerProcessp = VlProcess::currentp();
+            if (m_process) m_process->state(VlProcess::RUNNING);
+            VlProcess::currentp(m_process.get());
             m_coro();
+            VlProcess::currentp(callerProcessp);
         }
         m_coro = nullptr;
     }

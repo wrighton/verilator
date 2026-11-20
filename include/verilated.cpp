@@ -4294,6 +4294,9 @@ void VerilatedEvalLoop::didNotConverge(const char* namep,
 template <bool Profiling>
 void VerilatedEvalLoop::evalImpl() {
     VL_DEBUG_IF(VL_DBG_MSGF("+ Eval\n"););
+    // The model may be evaluated from within a process of another model, e.g. by an import,
+    // but its code without a process of its own must not draw from that one.
+    const VlProcessCurrentGuard currentGuard{nullptr};
 
     if VL_CONSTEXPR_CXX17 (Profiling) {
         // Advance the profiling window
