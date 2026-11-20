@@ -547,7 +547,7 @@ TriggerKit::TriggerKit(const std::string& name, bool slow, uint32_t nSenseWords,
 
 AstAssign* TriggerKit::createSenTrigVecAssignment(AstVarScope* const targetp,
                                                   std::vector<AstNodeExpr*>& trigps,
-                                                  size_t firstWord) {
+                                                  const size_t firstWord) {
     FileLine* const flp = targetp->fileline();
     AstAssign* trigStmtsp = nullptr;
     // Assign sense triggers vector one word at a time

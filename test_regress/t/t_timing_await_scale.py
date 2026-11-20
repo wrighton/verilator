@@ -13,8 +13,7 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-# Each process awaits its own trigger. Its before-trigger function must compute only the trigger
-# words it reads, so the function does not grow with the index of the trigger.
+# Each process awaits the edge of its own bit, so verilation must scale linearly with their number.
 SIZE_RATIO = 4
 SIZE_SMALL = 400
 SIZE_LARGE = SIZE_SMALL * SIZE_RATIO
@@ -22,12 +21,11 @@ RATIO_MIN = 3
 RATIO_MAX = 6  # Linear scaling gives 4x, quadratic gives 16x
 
 
-# Returns the size of the initial evaluation when scheduled. Not --binary, so can verilate the
-# large size without building it.
+# Returns the size of the initial evaluation when scheduled
 def verilation(size, **kwargs):
-    test.compile(
-        verilator_flags2=["--exe", "--main", "--timing", "--stats", "-GSize=" + str(size)],
-        **kwargs)
+    test.compile(timing_loop=True,
+                 verilator_flags2=["--timing", "--stats", "-GSize=" + str(size)],
+                 **kwargs)
     found = re.search(r"Size of eval, instr - 'initial', sched\s+(\d+)",
                       test.file_contents(test.stats))
     if not found:

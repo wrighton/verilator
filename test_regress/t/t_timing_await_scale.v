@@ -12,7 +12,7 @@
 module t;
   parameter int Size = 100;
 
-  // Each bit has its own trigger
+  // Each process awaits the edge of its own bit
   logic [Size-1:0] c = '0;
   int rises[Size];
   int ownRises[Size];
@@ -29,7 +29,7 @@ module t;
     end
   end
 
-  // Shares its previous value with the awaited posedge of the same bit
+  // Sensitive to the other edge of a bit awaited above
   int falls = 0;
   always @(negedge c[0]) ++falls;
 
