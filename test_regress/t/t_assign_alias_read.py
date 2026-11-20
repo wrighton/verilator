@@ -11,8 +11,7 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-# V3Coalesce would otherwise redirect the reads of the copies before V3Split
-test.compile(verilator_flags2=['--binary', '--stats', '-fno-coalesce'])
+test.compile(verilator_flags2=['--binary', '--stats'])
 
 test.execute()
 
