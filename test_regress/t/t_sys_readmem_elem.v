@@ -14,6 +14,14 @@ class Cls;
   logic [6:0] mem[2][4];
 endclass
 
+class Holder;
+  logic [6:0] mem[0:2][4];
+  task load(string file, bit [1:0] i);
+    foreach (mem[r, c]) mem[r][c] = 7'h7f;
+    $readmemh(file, this.mem[i]);
+  endtask
+endclass
+
 module t;
   // Index values known only at run time
   int one;
@@ -95,6 +103,18 @@ module t;
       `checkh(st.mem[1][0], 7'h21);
       `checkh(st.mem[1][3], 7'h24);
       `checkh(st.mem[0][3], 7'h7f);
+    end
+
+    begin
+      // Test: element selected through this, in range and out of range
+      Holder holder;
+      holder = new;
+      holder.load(path("elem_a.hex"), 2'(one));
+      `checkh(holder.mem[1][0], 7'h11);
+      `checkh(holder.mem[1][3], 7'h14);
+      `checkh(holder.mem[0][0], 7'h7f);
+      holder.load(path("elem_a.hex"), 2'(three));
+      foreach (holder.mem[i, j]) `checkh(holder.mem[i][j], 7'h7f);
     end
 
     begin
@@ -185,6 +205,20 @@ module t;
       `checkh(back[1], 7'h11);
       `checkh(back[2], 7'h12);
       `checkh(back[3], 7'h7f);
+    end
+
+    begin
+      // Test: $writememh of a slice and of an element of a slice
+      logic [6:0] mem[3:0][0:3];
+      logic [6:0] back[0:3];
+      logic [6:0] back2[0:7];
+      foreach (mem[i, j]) mem[i][j] = 7'(i * 16 + j);
+      $writememh(path("elem_s.hex"), mem[2:1][one]);
+      $readmemh(path("elem_s.hex"), back);
+      foreach (back[j]) `checkh(back[j], 7'(16 + j));
+      $writememh(path("elem_u.hex"), mem[2:1]);
+      $readmemh(path("elem_u.hex"), back2);
+      foreach (back2[j]) `checkh(back2[j], 7'(j < 4 ? 16 + j : 28 + j));
     end
 
     $write("*-* All Finished *-*\n");
