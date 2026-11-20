@@ -487,6 +487,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                      // though that module's own graph has no Z on the net.
         std::map<int, int> bitPulls;  // Per-bit pull: bit_index -> direction (1=up, 0=down)
         bool assigned = false;  // Written as a whole other than by a cell's port connection
+        std::vector<bool> selBits;  // Bits written by constant selects
         bool cellOutput = false;  // Written by a cell's port connection, so may carry a z the
                                   // cell's module did not recognise as tristate
     };
@@ -2291,12 +2292,17 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
         if (refp && isTristateVar(refp->varp()) && !refp->varp()->isIO()) {
-            const AuxAstVar& aux = m_varAux(refp->varp());
-            // The enable of a net excludes its pull
-            if (aux.bitPulls.empty()) {
+            AstVar* const varp = refp->varp();
+            const AuxAstVar& aux = m_varAux(varp);
+            // The enable of a net excludes its pull, which a force of the net overrides; only
+            // the enable of an interface strength net follows its own forces
+            if (!aux.bitPulls.empty()) return nullptr;
+            if (!varp->isForced()) {
                 return aux.pullp ? newAllZerosOrOnes(lhsp, true)
                                  : newEnSelp(rhsp, refp, VAccess::READ);
             }
+            return !aux.pullp && isIfaceStrengthNet(varp) ? newEnSelp(rhsp, refp, VAccess::READ)
+                                                          : nullptr;
         }
         return mayBeZ(rhsp) ? nullptr : newAllZerosOrOnes(lhsp, true);
     }
@@ -2326,9 +2332,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstAssignForce* const forcep = VN_CAST(stmtp, AssignForce);
         AstNodeExpr* const lhsp = forcep ? forcep->lhsp() : VN_AS(stmtp, Release)->lhsp();
         if (!forcedStrengthNetRefp(lhsp)) return;
+        // Of a value lowered here, only a constant's enable is exactly its z bits
         AstNodeExpr* const enp = forcep ? VN_AS(forcep->rhsp()->user1p(), NodeExpr) : nullptr;
         if (enp) forcep->rhsp()->user1p(nullptr);
-        m_forceEnables.emplace_back(stmtp, enp);
+        m_forceEnables.emplace_back(stmtp, forcep && VN_IS(forcep->rhsp(), Const) ? enp : nullptr);
         // A tristate variable of this module read by the value needs its enable variable
         // before insertTristates
         if (forcep) {
@@ -2821,8 +2828,18 @@ class TristateVisitor final : public TristateBaseVisitor {
                 AuxAstVar& aux = m_varAux(nodep->varp());
                 if (m_cellp) {
                     aux.cellOutput = true;
-                } else if (!VN_IS(nodep->backp(), Sel) && !VN_IS(nodep->backp(), NodeSel)) {
-                    // Bits a select does not write stay undriven
+                } else if (const AstSel* const selp = VN_CAST(nodep->backp(), Sel)) {
+                    // Bits a select does not write stay undriven; constant selects writing
+                    // every bit write the whole variable
+                    if (const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const)) {
+                        aux.selBits.resize(nodep->width());
+                        const int msb = std::min(lsbp->toSInt() + selp->widthConst(),
+                                                 nodep->width());  // Out of range bits ignored
+                        for (int i = lsbp->toSInt(); i < msb; ++i) aux.selBits[i] = true;
+                        aux.assigned |= std::find(aux.selBits.begin(), aux.selBits.end(), false)
+                                        == aux.selBits.end();
+                    }
+                } else if (!VN_IS(nodep->backp(), NodeSel)) {
                     aux.assigned = true;
                 }
             }
