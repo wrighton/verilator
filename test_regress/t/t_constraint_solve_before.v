@@ -120,6 +120,7 @@ module t;
 
   class PackedPart;
     rand cfg_t cfg;
+    rand cfg_t cfgs[3];
     rand bit [3:1][6:0] pa;
     rand bit [6:0] u;
     rand bit [6:0] v;
@@ -129,6 +130,7 @@ module t;
 
     constraint c_order {
       solve cfg.op before cfg.kind;
+      solve cfgs[1].op before cfgs[1].kind;
       solve pa[k] before pa[k - 1];
       // Leaving bits of cfg between them unordered
       solve cfg.pasid before cfg.mmu[3:0];
@@ -143,6 +145,8 @@ module t;
       cfg.bypass == 1;
       cfg.pasid == 0;
       cfg.mmu == 64'h1234_5678_9abc_def0;
+      cfgs[1].op inside {[0:3]};
+      (cfgs[1].op != 0) -> cfgs[1].kind == 0;
       pa[3] inside {[0:3]};
       (pa[3] != 0) -> pa[2] == 0;
       v != w;
@@ -176,19 +180,24 @@ module t;
     rand bit [6:0] mx;
     rand bit [3:0] mz;
     rand bit [2:0] my;
+    rand bit [3:0] ma[2];
 
     constraint c_order {
       solve mx before my;
       solve mz before mx[3:0];
+      solve ma before my;
+      solve mz before ma[1][1:0];
       mz inside {[0:3]};
       (mz != 0) -> mx[3:0] == 0;
+      (mz != 0) -> ma[1][1:0] == 0;
       my < 3'd7;
     }
   endclass
 
 `ifdef VERILATOR
   // Test 6: a circular ordering, which IEEE 1800-2023 18.5.9 forbids: Verilator reports it and
-  // fails randomize(). Also through overlapping parts.
+  // fails randomize(). Also through overlapping parts, and an array and its element, which an
+  // operand of the whole array is taken to contain.
   class Circular;
     rand bit [3:0] a;
     rand bit [3:0] b;
@@ -208,6 +217,17 @@ module t;
       solve a before b;
       solve b before a[1:0];
       a < b;
+    }
+  endclass
+
+  class CircularElem;
+    rand bit [3:0] a[2];
+    rand bit [3:0] b;
+
+    constraint c_order {
+      solve a before b;
+      solve b before a[1];
+      a[1] < b;
     }
   endclass
 `endif
@@ -303,6 +323,7 @@ module t;
     begin
       automatic PackedPart pp = new;
       automatic int n_cfg = 0;
+      automatic int n_elem = 0;
       automatic int n_arr = 0;
       repeat (200) begin
         randomize_result = pp.randomize();
@@ -312,12 +333,16 @@ module t;
         `checkd(pp.cfg.bypass, 1);
         `checkd(pp.cfg.pasid, 0);
         `checkh(pp.cfg.mmu, 64'h1234_5678_9abc_def0);
+        `check_range(pp.cfgs[1].op, 0, 3);
+        if (pp.cfgs[1].op != 0) `checkd(pp.cfgs[1].kind, 0);
         `check_range(pp.pa[3], 0, 3);
         if (pp.pa[3] != 0) `checkd(pp.pa[2], 0);
         n_cfg += pp.cfg.op == 0;
+        n_elem += pp.cfgs[1].op == 0;
         n_arr += pp.pa[3] == 0;
       end
       `check_range(n_cfg, 1, 160);
+      `check_range(n_elem, 1, 160);
       `check_range(n_arr, 1, 160);
       // Nested select
       begin
@@ -338,6 +363,7 @@ module t;
         `checkd(randomize_result, 1);
         `check_range(mo.mz, 0, 3);
         if (mo.mz != 0) `checkd(mo.mx[3:0], 0);
+        if (mo.mz != 0) `checkd(mo.ma[1][1:0], 0);
         `check_range(mo.my, 0, 6);
       end
     end
@@ -347,6 +373,7 @@ module t;
     begin
       automatic Circular c = new;
       automatic CircularPart cp = new;
+      automatic CircularElem ce = new;
       c.a = 5;
       c.b = 6;
       randomize_result = c.randomize();
@@ -354,6 +381,8 @@ module t;
       `checkd(c.a, 5);
       `checkd(c.b, 6);
       randomize_result = cp.randomize();
+      `checkd(randomize_result, 0);
+      randomize_result = ce.randomize();
       `checkd(randomize_result, 0);
     end
 `endif
