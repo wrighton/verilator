@@ -2943,6 +2943,8 @@ AstNodeDType::CTypeRecursed AstNodeDType::cTypeRecurse(bool compound, bool packe
             info.m_type = "::VlCovInstHandle";
         } else if (bdtypep->isMailboxMessage()) {
             info.m_type = "::VlMailboxMessage";
+        } else if (bdtypep->isWaitQueue()) {
+            info.m_type = "::VlWaitQueue";
         } else if (bdtypep->isEvent()) {
             info.m_type = v3Global.assignsEvents() ? "::VlAssignableEvent" : "::VlEvent";
         } else if (dtypep->widthMin() <= 8) {  // Handle unpacked arrays; not bdtypep->width

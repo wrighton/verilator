@@ -293,6 +293,7 @@ static void process() {
 
         if (!(v3Global.opt.serializeOnly() && !v3Global.opt.flatten())) {
             if (v3Global.opt.timing().isSetTrue()) {
+                V3Timing::chooseMailboxWaits(v3Global.rootp());
                 // Generate classes and tasks required to maintain proper lifetimes for references
                 // in forks
                 V3Fork::makeDynamicScopes(v3Global.rootp());

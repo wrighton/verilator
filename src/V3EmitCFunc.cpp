@@ -630,7 +630,9 @@ string EmitCFunc::emitVarResetRecurse(const AstVar* varp, bool constructing,
         return "";
     } else if (basicp && (basicp->isRandomGenerator() || basicp->isStdRandomGenerator())) {
         return "";
-    } else if (basicp && (basicp->isCovergroupInstHandle() || basicp->isMailboxMessage())) {
+    } else if (basicp
+               && (basicp->isCovergroupInstHandle() || basicp->isMailboxMessage()
+                   || basicp->isWaitQueue())) {
         // The type's own constructor deals with it.
         return "";
     } else if (basicp && (basicp->isEvent())) {

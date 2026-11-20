@@ -589,10 +589,11 @@ public:
     virtual void clearTriggered() = 0;
 };
 
-/// Wait list of the processes waiting on one event, as seen by the event and by its waiting
-/// processes. The timing scheduler owns the list. In a model with parallel MTasks, logic in any
-/// MTask may fire an event, so notify() only uses the atomics here, and the next pointer that
-/// only the one pusher writes before a release CAS publishes it: the first fire or kill of a
+/// Wait list of the processes waiting on one event, or on a wait queue of the std package (see
+/// VlWaitQueue), as seen by them and by its waiting processes. The timing scheduler owns the
+/// list. In a model with parallel MTasks, logic in any MTask may fire an event or wake a wait
+/// queue, so notify() and notifyOne() only use the atomics here, and the next pointer that only
+/// the one pusher writes before a release CAS publishes it: the first fire, wake or kill of a
 /// waiter since the last trigger evaluation pushes the list onto the scheduler's pending chain.
 /// Starting a wait, killing a waiter, trigger evaluation and finishing only happen while no
 /// MTask runs in parallel: in the serial scheduling steps, or in an MTask that controls
@@ -607,6 +608,9 @@ struct VlEventWaitLink VL_NOT_FINAL {
     VlEvent* m_eventp = nullptr;
     std::atomic<bool> m_pending{false};  // On the pending chain, or about to be pushed onto it
     std::atomic<bool> m_fired{false};  // Fired, so its waiters resume, and it takes no new ones
+    std::atomic<bool> m_wokenOne{false};  // Woken, so its first waiter resumes (wait queues)
+    bool m_isQueue = false;  // Waited on as a wait queue (see VlWaitQueue)
+    size_t m_live = 0;  // Waiting processes not killed, counted for wait queues only
     VlEventWaitLink* m_nextp = nullptr;  // Next list on the pending chain
     std::atomic<VlEventWaitLink*>* m_headpp = nullptr;  // Head of the pending chain
     VlProcess* m_killedHeadp = nullptr;  // Killed waiters to drop, in any order
@@ -618,15 +622,27 @@ struct VlEventWaitLink VL_NOT_FINAL {
         m_fired.store(true, std::memory_order_relaxed);
         push();
     }
+    /// Resume the first waiter of a wait queue at the next trigger evaluation. Called like
+    /// notify(), and thread safe in the same way.
+    void notifyOne() VL_MT_SAFE {
+        m_wokenOne.store(true, std::memory_order_relaxed);
+        push();
+    }
     /// Drop this killed waiter from its slot at the next trigger evaluation that drains the
-    /// pending lists (see VlDynamicTriggerScheduler::evaluate). The process waits on this list,
-    /// where its handle keeps it alive, and the list is not freed before that drain. Called once
-    /// per process: by its kill, or when it starts waiting already killed.
+    /// pending lists (see VlDynamicTriggerScheduler::evaluate), where its handle keeps it alive,
+    /// and the list is not freed before that drain. A waiter selected to resume from it is
+    /// dropped when it would resume instead (see VlDynamicTriggerScheduler::resumeSelected).
+    /// Called once per process: by its kill, or when it starts waiting already killed.
     void noteKilled(VlProcess& process) {
+        // A waiter selected to resume no longer counts as waiting (see SELECTED)
+        if (m_isQueue && process.waitIndex() != SELECTED) --m_live;
         process.nextKilledp(m_killedHeadp);
         m_killedHeadp = &process;
         push();
     }
+    // Slot index of a process selected to resume from a wait queue, which keeps its link to the
+    // list until it resumes (see VlDynamicTriggerScheduler::selectFirst)
+    static constexpr size_t SELECTED = ~static_cast<size_t>(0);
     /// Take the killed waiters to drop
     VlProcess* takeKilled() {
         VlProcess* const headp = m_killedHeadp;
