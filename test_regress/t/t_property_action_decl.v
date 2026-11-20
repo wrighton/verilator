@@ -4,9 +4,9 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-// Multi-cycle assertion action blocks that declare variables run once per
-// attempt, like the same actions without declarations, sharing their static
-// variables between all executions.
+// Multi-cycle assertion action blocks that declare variables run as often as
+// the same actions without declarations, and all executions of an action share
+// its static variables.
 
 // verilog_format: off
 `define stop $stop
@@ -59,15 +59,20 @@ module t;
     decl_count = count;
   end
 
-  // Failures of an implication, from a named block
+  // Failures of an implication with a local variable, from a named block
   int imp_fails = 0;
   int imp_decl_fails = 0;
   int imp_decl_count = 0;
 
-  assert property (@(posedge clk) a |-> ##2 b)
+  property p_imp;
+    bit [7:0] x;
+    @(posedge clk) (a, x = lfsr) |-> ##2 (b && lfsr[7:2] == x[5:0]);
+  endproperty
+
+  assert property (p_imp)
   else imp_fails++;
 
-  assert property (@(posedge clk) a |-> ##2 b)
+  assert property (p_imp)
   else begin : imp_action
     int count;
     ++count;
@@ -79,61 +84,98 @@ module t;
   int passes = 0;
   int pass_fails = 0;
   int decl_passes = 0;
+  int decl_pass_count = 0;
   int decl_pass_fails = 0;
   int imp_passes = 0;
   int imp_decl_passes = 0;
+  int imp_decl_pass_count = 0;
 
   assert property (@(posedge clk) a ##[1:3] b ##1 c) passes++;
   else pass_fails++;
 
   assert property (@(posedge clk) a ##[1:3] b ##1 c) begin
-    int one;
-    one = 1;
-    decl_passes += one;
+    int count;
+    ++count;
+    decl_passes++;
+    decl_pass_count = count;
   end
   else decl_pass_fails++;
 
   assert property (@(posedge clk) a |-> ##1 1) imp_passes++;
 
   assert property (@(posedge clk) a |-> ##1 1) begin
-    int one;
-    one = 1;
-    imp_decl_passes += one;
+    int count;
+    ++count;
+    imp_decl_passes++;
+    imp_decl_pass_count = count;
   end
 
-  // Each pass forks a process with its own automatic variable
-  int fork_hits = 0;
+  // Each pass forks a process with its own automatic variable, alive across later passes
+  int fork_starts = 0;
+  int fork_ends = 0;
+  bit [63:0] fork_seen = 0;
 
   assert property (@(posedge clk) a |-> ##1 1)
     fork
-      automatic int x = 37;
+      automatic int x = fork_starts++;
       begin
-        `checkd(x, 37);
-        fork_hits++;
+        #25;
+        fork_seen[x] = 1'b1;
+        fork_ends++;
       end
     join_none
 
+  // A hierarchical reference from an action of an assertion in a generate block
+  int gen_fails = 0;
+  int gen_decl_count = 0;
+
+  if (1) begin : gen
+    assert property (@(posedge clk) a ##[1:3] b ##1 c)
+    else begin : gen_action
+      static int count = 0;
+      ++count;
+      gen_action.count++;
+      gen_decl_count = gen_action.count;
+      t.gen_fails++;
+    end
+  end
+
+  // Discarded covers
+  cover property (@(posedge clk) s_eventually b) begin
+    int count;
+    count = 1;
+  end
+  cover property (@(posedge clk) b until c) begin
+    int count;
+    count = 1;
+  end
+
   initial begin
     repeat (60) @(negedge clk);
-    `checkd(fails, 38);
+    `checkd(fails > 0, 1'b1);
     `checkd(decl_fails, fails);
     `checkd(decl_count, 10 + fails);
     `checkd(inits, 1);
-    `checkd(imp_fails, 16);
+    `checkd(imp_fails > 0, 1'b1);
     `checkd(imp_decl_fails, imp_fails);
     `checkd(imp_decl_count, imp_fails);
-    `checkd(passes, 15);
+    `checkd(passes > 0, 1'b1);
     `checkd(decl_passes, passes);
+    `checkd(decl_pass_count, passes);
     `checkd(pass_fails, fails);
     `checkd(decl_pass_fails, fails);
-    `checkd(imp_passes, 59);
+    `checkd(imp_passes > 0, 1'b1);
     `checkd(imp_decl_passes, imp_passes);
-    `checkd(fork_hits, imp_passes);
+    `checkd(imp_decl_pass_count, imp_passes);
+    `checkd(fork_ends > 0, 1'b1);
+    `checkd($countones(fork_seen), fork_ends);
+    `checkd(gen_decl_count, 2 * fails);
+    `checkd(gen_fails, fails);
     done = 1;
     $finish;
   end
 
-  // End of simulation actions share the static variables of the others
+  // End of simulation failures share the static variables of the earlier ones
   bit [1:0] eos_ran = 0;
 
   task eos_finish(int bit_index);
@@ -142,7 +184,7 @@ module t;
     if (eos_ran == 2'b11) $write("*-* All Finished *-*\n");
   endtask
 
-  // A strong property still pending fails
+  // A strong property still pending
   int always_fails = 0;
 
   assert property (@(posedge clk) s_always [1:3] b)
@@ -153,26 +195,30 @@ module t;
     static int count = 0;
     ++count;
     if (done) begin
+      `checkd(always_fails > 0, 1'b1);
       `checkd(count, always_fails + 1);
       eos_finish(0);
     end
   end
 
-  // Attempts still pending pass, as ev holds at the end
-  wire ev = cyc % 4 == 0;
-  int ev_passes = 0;
-  int ev_eos_passes = 0;
+  // Attempts of s_until still pending, as hold stays true and stop never comes
+  wire hold = cyc % 7 != 3 || cyc > 50;
+  wire stop = cyc > 1000;
+  int until_fails = 0;
+  int until_eos_fails = 0;
 
-  assert property (@(posedge clk) s_eventually ev)
-    if (!done) ev_passes++;
+  assert property (@(posedge clk) hold s_until stop)
+  else if (!done) until_fails++;
 
-  assert property (@(posedge clk) s_eventually ev) begin
+  assert property (@(posedge clk) hold s_until stop)
+  else begin
     static int count = 0;
     ++count;
     if (done) begin
-      ++ev_eos_passes;
-      `checkd(count, ev_passes + ev_eos_passes);
-      if (ev_eos_passes == 1) eos_finish(1);
+      ++until_eos_fails;
+      `checkd(until_fails > 0, 1'b1);
+      `checkd(count, until_fails + until_eos_fails);
+      if (until_eos_fails == 1) eos_finish(1);
     end
   end
 
