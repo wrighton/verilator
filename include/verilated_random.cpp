@@ -3230,9 +3230,9 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
     return true;
 }
 
-bool VlRandomizer::layerHasArray(const std::vector<std::string>& layerVars) const {
+bool VlRandomizer::layerHasArray(const std::vector<std::string>& layerVars) {
     for (const std::string& name : layerVars) {
-        if (m_vars.find(name)->second->dimension() > 0) return true;
+        if (solveBeforeVarp(name)->dimension() > 0) return true;
     }
     return false;
 }
@@ -3272,7 +3272,9 @@ VlSolverStatus VlRandomizer::sampleLayer(VlSolverSession& sess, VlRNG& rngr,
     for (int i = 0; i < phaseSampleTries; ++i) {
         os << "(push 1)\n";
         for (size_t v = 0; v < phaseVars.size(); ++v) {
-            const int width = m_vars.find(phaseVars[v])->second->width();
+            // A variable, a segment of one, or an array element
+            const VlRandomVar* const varp = solveBeforeVarp(phaseVars[v]);
+            const int width = varp->width();
             words.resize(VL_WORDS_I(width));
             for (IData& word : words) word = VL_RANDOM_RNG_I(rngr);
             std::string& literal = trial[v];
@@ -3281,7 +3283,7 @@ VlSolverStatus VlRandomizer::sampleLayer(VlSolverSession& sess, VlRNG& rngr,
             for (int b = width - 1; b >= 0; --b) {
                 literal += VL_BITISSET_I(words[VL_BITWORD_I(b)], b) ? '1' : '0';
             }
-            os << "(assert (= " << phaseVars[v] << ' ' << literal << "))\n";
+            os << "(assert (= " << varp->name() << ' ' << literal << "))\n";
         }
         os << "(check-sat)\n";
         VlSolverStatus status = sess.readStatus();
@@ -3296,7 +3298,9 @@ VlSolverStatus VlRandomizer::sampleLayer(VlSolverSession& sess, VlRNG& rngr,
         os << "(pop 1)\n";
         if (status != VlSolverStatus::UNSAT) {
             if (status == VlSolverStatus::SAT && valuesp) {
-                for (size_t v = 0; v < phaseVars.size(); ++v) (*valuesp)[phaseVars[v]] = trial[v];
+                for (size_t v = 0; v < phaseVars.size(); ++v) {
+                    (*valuesp)[solveBeforeVarp(phaseVars[v])->name()] = trial[v];
+                }
             }
             return status;
         }
