@@ -463,7 +463,7 @@ void V3DfgPasses::binToOneHot(DfgGraph& dfg, V3DfgBinToOneHotContext& ctx) {
                 new AstArraySel{flp, new AstVarRef{flp, tabVtxp->vscp(), VAccess::WRITE},
                                 idxRefp},  //
                 new AstConst{flp, AstConst::BitTrue{}}});
-            DfgAstRd* const astRdp = new DfgAstRd{dfg, idxRefp, false, false};
+            DfgAstRd* const astRdp = new DfgAstRd{dfg, idxRefp, false, false, false};
             astRdp->srcp(idxVtxp);
         }
         {  // pre = idx
@@ -471,7 +471,7 @@ void V3DfgPasses::binToOneHot(DfgGraph& dfg, V3DfgBinToOneHotContext& ctx) {
             logicp->addStmtsp(new AstAssign{flp,  //
                                             new AstVarRef{flp, preVscp, VAccess::WRITE},  //
                                             idxRefp});
-            DfgAstRd* const astRdp = new DfgAstRd{dfg, idxRefp, false, false};
+            DfgAstRd* const astRdp = new DfgAstRd{dfg, idxRefp, false, false, false};
             astRdp->srcp(idxVtxp);
         }
 
