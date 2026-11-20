@@ -829,24 +829,18 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         // Exclude classes inside interfaces; the cell's modp is the interface, not the Class
         if (!cellp || !VN_IS(cellp->modp(), Iface) || !VN_IS(nodep->modp(), Iface)) return;
 
-        // vpiName() to match the scope table these are looked up alongside. Inlining
-        // flattens the hierarchy but leaves the inlined levels in the scope name, which
-        // therefore carries the full enclosing path.
-        const std::string path = AstNode::vpiName(nodep->name());
-        const std::string instName = AstNode::vpiName(cellp->origName());
-        UASSERT_OBJ(path.length() > instName.length() && VString::endsWith(path, instName), nodep,
-                    "Interface scope name " << path << " does not end with instance name "
+        // References are named relative to the block declaring the interface instance, which
+        // the scope name, including any inlined levels, carries before the instance name
+        const std::string& name = nodep->name();
+        const std::string& instName = cellp->origName();
+        UASSERT_OBJ(VString::endsWith(name, instName), nodep,
+                    "Interface scope name " << name << " does not end with instance name "
                                             << instName);
-        const std::string parentPath = path.substr(0, path.length() - instName.length());
+        const std::string prefix = name.substr(0, name.length() - instName.length());
 
         for (AstIntfRef* const intfRefp : cellp->intfRefspList()) {
-            const std::string refName = AstNode::vpiName(intfRefp->name());
-            // Assume only references under the same parent scope reference the same interface.
-            // TODO: This is not actually correct. An interface can propagate upwards and
-            //       sideways when passed to a port via a downward hierarchical reference,
-            //       which we will miss here.
-            if (!VString::startsWith(refName, parentPath)) continue;
-            m_ifaceRefs.emplace_back(nodep, scopeSymString(intfRefp->parentName()), refName,
+            m_ifaceRefs.emplace_back(nodep, scopeSymString(prefix + intfRefp->parentName()),
+                                     AstNode::vpiName(prefix + intfRefp->name()),
                                      AstNode::vpiName(intfRefp->baseName()),
                                      intfRefp->modportName());
         }

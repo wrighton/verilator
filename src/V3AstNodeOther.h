@@ -1514,8 +1514,8 @@ public:
 };
 class AstIntfRef final : public AstNode {
     // An interface reference
-    string m_name;  // Hierarchical path of the reference
-    string m_parentName;  // Hierarchical path of the declaring module, before inlining
+    string m_name;  // Path of the reference, relative to the block declaring the interface
+    string m_parentName;  // Path of the instance with the reference port, relative likewise
     string m_baseName;  // Final component of m_name, i.e. the reference port name
     string m_modportName;  // "" = no modport, else name of the modport referenced
 public:
