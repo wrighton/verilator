@@ -148,6 +148,23 @@ module flat_controls (
   assign low_value = 1'b0;
 endmodule
 
+interface force_defaults;
+  bit local_force = 1'b0;
+  wire [6:0] value;
+  assign (weak0, weak1) value = 7'h2a;
+  always @(local_force)
+    if (local_force) force value = 7'h4e;
+    else release value;
+endinterface
+
+module force_driver (
+    force_defaults p,
+    input bit enable,
+    input bit [6:0] data
+);
+  assign p.value = enable ? data : 7'bz;
+endmodule
+
 module t;
   default_zero high_override ();
   default_zero idle_zero ();
@@ -210,6 +227,56 @@ module t;
       enable,
       data
   );
+
+  // A force overrides every driver of the net; release restores the strength-resolved value
+  // (IEEE 1800-2023 10.6.2).
+  force_defaults forced ();
+  force_defaults unforced ();
+  bit force_enable = 1'b1;
+  bit [6:0] force_data = 7'h15;
+  force_driver forced_drive (
+      forced,
+      force_enable,
+      force_data
+  );
+  force_driver unforced_drive (
+      unforced,
+      force_enable,
+      force_data
+  );
+  initial begin
+    #1;
+    `checkh(forced.value, 7'h15);
+    `checkh(unforced.value, 7'h15);
+    force forced.value = 7'h63;
+    #1;
+    `checkh(forced.value, 7'h63);
+    force_data = 7'h0c;
+    #1;
+    `checkh(forced.value, 7'h63);
+    `checkh(unforced.value, 7'h0c);
+    force_enable = 1'b0;
+    release forced.value;
+    #1;
+    `checkh(forced.value, 7'h2a);
+    `checkh(unforced.value, 7'h2a);
+    force forced.value[4:2] = 3'b101;
+    #1;
+    `checkh(forced.value, 7'h36);
+    force_enable = 1'b1;
+    #1;
+    `checkh(forced.value, 7'h14);
+    release forced.value[4:2];
+    #1;
+    `checkh(forced.value, 7'h0c);
+    forced.local_force = 1'b1;
+    #1;
+    `checkh(forced.value, 7'h4e);
+    `checkh(unforced.value, 7'h0c);
+    forced.local_force = 1'b0;
+    #1;
+    `checkh(forced.value, 7'h0c);
+  end
 
   initial begin
     bit [9:3] expected_down;
