@@ -21,6 +21,18 @@ test.compile(
     # Checks below care about thread count
     threads=4)
 
+# Processors /proc/cpuinfo lists, and those this process may run on
+try:
+    with open("/proc/cpuinfo", encoding="utf8") as fh:
+        listed = {int(m.group(1)) for m in re.finditer(r'^processor\s*:\s*(\d+)', fh.read(), re.M)}
+except OSError:
+    listed = set()
+cpus = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else set()
+# Assignment is skipped if this process may not run on every listed processor
+numa_status = r'assigned|%Warning: no /proc/cpuinfo'
+if listed - cpus:
+    numa_status += r'|processor affinity already set|too many threads'
+
 # We need several experiments to make sure that the algorithm is working
 trials = 4
 for trial in range(0, trials):
@@ -41,7 +53,7 @@ for trial in range(0, trials):
 
     if sys.platform != "darwin":
         test.file_grep(gantt_log, r'CPU info:')
-        test.file_grep(gantt_log, r'NUMA status += (assigned|%Warning: no /proc/cpuinfo)')
+        test.file_grep(gantt_log, r'NUMA status += (' + numa_status + ')')
         # False fails occasionally
         # test.file_grep_not(gantt_log, r'%Warning:')  # e.g. There were fewer CPUs (1) than threads (3).
 
@@ -74,5 +86,27 @@ if sys.platform != "darwin":
     test.file_grep(
         gantt_log_numa_invalid,
         r"NUMA status += %Warning: unknown VERILATOR_NUMA_STRATEGY value 'invalid_value'")
+
+# Test processor affinity already set by the user is kept
+mask = set(sorted(cpus & listed)[:3])  # Three processors fit the three workers of threads=4
+restricted = False
+if len(mask) == 3 and listed - mask:
+    try:
+        os.sched_setaffinity(0, mask)  # Only this test's own process
+        restricted = os.sched_getaffinity(0) == mask
+    except OSError:
+        pass
+if restricted:
+    gantt_log_affinity = test.obj_dir + "/gantt_affinity.log"
+    test.execute(all_run_flags=[
+        "+verilator+prof+exec+start+2", " +verilator+prof+exec+window+2",
+        " +verilator+prof+exec+file+" + test.obj_dir + "/profile_exec.dat"
+    ])
+
+    test.run(cmd=[
+        os.environ["VERILATOR_ROOT"] + "/bin/verilator_gantt", "--no-vcd", test.obj_dir +
+        "/profile_exec.dat", "| tee " + gantt_log_affinity
+    ])
+    test.file_grep(gantt_log_affinity, r'NUMA status += processor affinity already set')
 
 test.passes()
