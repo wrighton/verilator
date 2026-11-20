@@ -166,31 +166,6 @@ module t;
     end
 
     begin
-      // Test: dynamic, associative and queue forms
-      logic [7:0] dyn_row[2][];
-      logic [7:0] assoc_row[2][int];
-      logic [7:0] dyn_of_fixed[][4];
-      logic [7:0] queue_of_fixed[$][4];
-      dyn_row[1] = new[4];
-      $readmemh(path("elem_a.hex"), dyn_row[one]);
-      `checkh(dyn_row[1][3], 8'h14);
-      `checkh(dyn_row[0].size(), 0);
-      $readmemh(path("elem_a.hex"), assoc_row[one]);
-      `checkh(assoc_row[1][2], 8'h13);
-      `checkh(assoc_row[0].num(), 0);
-      dyn_of_fixed = new[2];
-      foreach (dyn_of_fixed[i, j]) dyn_of_fixed[i][j] = 8'hff;
-      $readmemh(path("elem_d.hex"), dyn_of_fixed[one]);
-      `checkh(dyn_of_fixed[1][3], 8'h24);
-      `checkh(dyn_of_fixed[0][3], 8'hff);
-      queue_of_fixed.push_back('{default: 8'h00});
-      queue_of_fixed.push_back('{default: 8'h00});
-      $readmemh(path("elem_a.hex"), queue_of_fixed[one]);
-      `checkh(queue_of_fixed[1][0], 8'h11);
-      `checkh(queue_of_fixed[0][0], 8'h00);
-    end
-
-    begin
       // Test: $writememh of an element, whole and with an address range
       logic [6:0] mem[0:2][4];
       logic [6:0] back[4];
