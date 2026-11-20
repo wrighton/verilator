@@ -93,7 +93,6 @@ class V3Global final {
     std::atomic_int m_debugFileNumber{0};  // Number to append to debug files created
     bool m_assertDTypesResolved = false;  // Tree should have dtypep()'s
     bool m_assertScoped = false;  // Tree is scoped
-    bool m_parameterizing = false;  // V3Param is copying templates into specializations
     bool m_staticsLifted = false;  // Static variables have been lifted to module scope
     bool m_assignsEvents = false;  // Design uses assignments on SystemVerilog Events
     bool m_constRemoveXs = false;  // Const needs to strip any Xs
@@ -166,8 +165,6 @@ public:
                                     bool doCheck = true);
     void assertDTypesResolved(bool flag) { m_assertDTypesResolved = flag; }
     void assertScoped(bool flag) { m_assertScoped = flag; }
-    bool parameterizing() const { return m_parameterizing; }
-    void parameterizing(bool flag) { m_parameterizing = flag; }
     void staticsLifted(bool flag) { m_staticsLifted = flag; }
     void widthMinUsage(const VWidthMinUsage& flag) { m_widthMinUsage = flag; }
     bool constRemoveXs() const { return m_constRemoveXs; }
