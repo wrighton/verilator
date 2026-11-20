@@ -615,30 +615,46 @@ void V3AssertCommon::lowerSvaLocalVarInits(
 
 //######################################################################
 // AssertActionXRefVisitor
-// Find hierarchical references in an action to its variables, through a block of the action
-// enclosing the reference. Their name resolution (IEEE 1800-2023 23.8) stays in the action, so in
-// the current instance; other paths may select another instance.
+// Find hierarchical references in an action to its variables whose first name the upward name
+// resolution (IEEE 1800-2023 23.8) finds inside the action, so in the current instance: as a
+// block of the action enclosing the reference, or as a child block of one. Other paths may
+// leave the action and select another instance.
 
 class AssertActionXRefVisitor final : public VNVisitorConst {
     // STATE
     std::unordered_set<const AstVar*> m_declVarps;  // Variables declared in the action
-    std::vector<std::string> m_blockNames;  // Names of the blocks enclosing the current node
+    std::vector<const AstNodeBlock*> m_blockps;  // Named blocks enclosing the current node
+    // Names of the child blocks of each named block, transparent through unnamed blocks
+    std::unordered_map<const AstNodeBlock*, std::unordered_set<std::string>> m_childNames;
+    // References to variables of the action, with their enclosing named blocks
+    std::vector<std::pair<AstVarXRef*, std::vector<const AstNodeBlock*>>> m_candidates;
     std::vector<AstVarXRef*> m_xrefps;  // References found
+
+    bool resolvesInAction(const AstVarXRef* xrefp,
+                          const std::vector<const AstNodeBlock*>& blockps) const {
+        const std::string dotted = xrefp->dotted();
+        const std::string firstName = dotted.substr(0, dotted.find('.'));
+        for (auto it = blockps.rbegin(); it != blockps.rend(); ++it) {
+            const auto childIt = m_childNames.find(*it);
+            if (childIt != m_childNames.end() && childIt->second.count(firstName)) return true;
+            if ((*it)->name() == firstName) return true;
+        }
+        return false;
+    }
 
     // VISITORS
     void visit(AstNodeBlock* nodep) override {
-        VL_RESTORER_COPY(m_blockNames);
-        m_blockNames.push_back(nodep->name());
+        if (nodep->name().empty()) {
+            iterateChildrenConst(nodep);
+            return;
+        }
+        if (!m_blockps.empty()) m_childNames[m_blockps.back()].emplace(nodep->name());
+        VL_RESTORER_COPY(m_blockps);
+        m_blockps.push_back(nodep);
         iterateChildrenConst(nodep);
     }
     void visit(AstVarXRef* nodep) override {
-        const std::string dotted = nodep->dotted();
-        const std::string firstName = dotted.substr(0, dotted.find('.'));
-        if (m_declVarps.count(nodep->varp())
-            && std::find(m_blockNames.begin(), m_blockNames.end(), firstName)
-                   != m_blockNames.end()) {
-            m_xrefps.push_back(nodep);
-        }
+        if (m_declVarps.count(nodep->varp())) m_candidates.emplace_back(nodep, m_blockps);
     }
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
@@ -647,6 +663,10 @@ public:
     explicit AssertActionXRefVisitor(AstNodeStmt* actionp) {
         actionp->foreachAndNext([&](const AstVar* const varp) { m_declVarps.emplace(varp); });
         iterateAndNextConstNull(actionp);
+        // Child blocks after a reference count too, so decide only once all are known
+        for (const auto& itr : m_candidates) {
+            if (resolvesInAction(itr.first, itr.second)) m_xrefps.push_back(itr.first);
+        }
     }
     ~AssertActionXRefVisitor() override = default;
     const std::vector<AstVarXRef*>& xrefps() const { return m_xrefps; }
