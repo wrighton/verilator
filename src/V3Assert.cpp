@@ -919,7 +919,27 @@ class DefaultSampledValueVisitor final : public VNVisitor {
     void visit(AstSel* nodep) override { visitSelect(nodep); }
     void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
-        if (!hasDefaultValue(nodep->varp())) return;
+        AstVar* const varp = nodep->varp();
+        if (!hasDefaultValue(varp)) {
+            // The value of its declaration initializer, not of a later write during
+            // initialization (IEEE 1800-2023 16.5.1). V3LinkParse placed that initialization
+            // just after a module variable. A connected input does not have the value of its
+            // default. With X or Z, the value assigned depends on the X options. Otherwise the
+            // variable is read when used, so may have a later value.
+            if (varp->isParam() || varp->isNonOutput()) return;
+            AstInitialStatic* const initp = VN_CAST(varp->nextp(), InitialStatic);
+            if (!initp) return;
+            AstAssign* const assignp = VN_AS(initp->stmtsp(), Assign);
+            AstConst* const constp = VN_CAST(assignp->rhsp(), Const);
+            if (!constp || constp->num().isAnyXZ()) return;
+            UASSERT_OBJ(VN_AS(assignp->lhsp(), VarRef)->varp() == varp, nodep,
+                        "Initialization of another variable");
+            AstConst* const newp = constp->cloneTree(false);
+            newp->dtypeFrom(nodep);
+            nodep->replaceWith(newp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }

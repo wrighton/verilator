@@ -674,6 +674,7 @@ class LinkParseVisitor final : public VNVisitor {
             } else if (m_valueModp) {
                 // 4. Under modules/class, it's the time 0 initialziation value
                 // Making an AstAssign (vs AstAssignW) to a wire is an error, suppress it
+                // V3Assert relies on this initialization directly following the variable
                 UINFO(9, "VarInit case4 " << nodep);
                 if (nodep->valuep()) {
                     nodep->noCReset(true);
