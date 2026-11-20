@@ -717,6 +717,96 @@ AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
 }
 
 //######################################################################
+// AssertActionXRefVisitor
+// Find hierarchical references in an action to its variables whose first name the upward name
+// resolution (IEEE 1800-2023 23.8) finds inside the action, so in the current instance: as a
+// block enclosing the reference, or a child block of one or of the action. Other paths may
+// leave the action and select another instance.
+
+class AssertActionXRefVisitor final : public VNVisitorConst {
+    // STATE
+    std::unordered_set<const AstVar*> m_declVarps;  // Variables declared in the action
+    // Names of the child blocks of each named block (nullptr: the action), through unnamed blocks
+    std::unordered_map<const AstNodeBlock*, std::vector<std::string>> m_childNames;
+    std::unordered_map<std::string, int> m_visibleNames;  // Count of first names found inside
+    const AstNodeBlock* m_blockp = nullptr;  // Enclosing named block (nullptr: the action)
+    bool m_collecting = true;  // Collecting m_childNames, else finding references
+    std::vector<AstVarXRef*> m_xrefps;  // References found
+
+    void showNames(const AstNodeBlock* blockp, int delta) {
+        for (const std::string& name : m_childNames[blockp]) m_visibleNames[name] += delta;
+    }
+
+    // VISITORS
+    void visit(AstNodeBlock* nodep) override {
+        if (nodep->name().empty()) {
+            iterateChildrenConst(nodep);
+            return;
+        }
+        if (m_collecting) m_childNames[m_blockp].push_back(nodep->name());
+        VL_RESTORER(m_blockp);
+        m_blockp = nodep;
+        if (!m_collecting) showNames(nodep, 1);
+        iterateChildrenConst(nodep);
+        if (!m_collecting) showNames(nodep, -1);
+    }
+    void visit(AstVarXRef* nodep) override {
+        if (m_collecting || !m_declVarps.count(nodep->varp())) return;
+        const std::string dotted = nodep->dotted();
+        if (m_visibleNames[dotted.substr(0, dotted.find('.'))] > 0) m_xrefps.push_back(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit AssertActionXRefVisitor(AstNodeStmt* actionp) {
+        actionp->foreachAndNext([&](const AstVar* const varp) { m_declVarps.emplace(varp); });
+        iterateAndNextConstNull(actionp);
+        m_collecting = false;
+        showNames(nullptr, 1);
+        iterateAndNextConstNull(actionp);
+    }
+    ~AssertActionXRefVisitor() override = default;
+    const std::vector<AstVarXRef*>& xrefps() const { return m_xrefps; }
+};
+
+// All executions of an action share its static variables, initialized once, and each has its
+// own automatic variables (IEEE 1800-2023 6.21). So the clone refers to the original static
+// declarations, and renames its automatic ones, which V3Begin may lift to the same scope.
+AstNodeStmt* V3AssertCommon::cloneAction(AstNodeStmt* const actionp, V3UniqueNames& names) {
+    // V3LinkDot finds hierarchical references again by name, which fails for a clone in
+    // another scope, so these refer to their variable directly
+    const AssertActionXRefVisitor xrefVisitor{actionp};
+    for (AstVarXRef* const xrefp : xrefVisitor.xrefps()) {
+        xrefp->replaceWithKeepDType(
+            new AstVarRef{xrefp->fileline(), xrefp->varp(), xrefp->access()});
+        VL_DO_DANGLING(xrefp->deleteTree(), xrefp);
+    }
+    AstNodeStmt* const clonep = actionp->cloneTree(true);
+    std::unordered_map<const AstVar*, AstVar*> origVarps;  // Cloned to original static variable
+    actionp->foreachAndNext([&](AstVar* const varp) {
+        if (varp->lifetime().isStatic()) origVarps.emplace(varp->clonep(), varp);
+    });
+    std::vector<AstNode*> declps;  // Static declarations of the clone
+    clonep->foreachAndNext([&](AstNode* const nodep) {
+        if (AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+            const auto it = origVarps.find(refp->varp());
+            if (it != origVarps.end()) refp->varp(it->second);
+        } else if (AstVar* const varp = VN_CAST(nodep, Var)) {
+            if (origVarps.count(varp)) {
+                declps.push_back(varp);
+            } else {
+                varp->name(names.get(varp->name()));
+            }
+        } else if (VN_IS(nodep, Typedef) || VN_IS(nodep, InitialStaticStmt)) {
+            declps.push_back(nodep);
+        }
+    });
+    for (AstNode* const nodep : declps) nodep->unlinkFrBack()->deleteTree();
+    return clonep;
+}
+
+//######################################################################
 // AssertDeFutureVisitor
 // If any AstFuture, then move all non-future varrefs to be one cycle behind,
 // see IEEE 1800-2023 16.9.4.
@@ -1019,6 +1109,7 @@ class AssertVisitor final : public VNVisitor {
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
     V3UniqueNames m_matchCountNames{"__VnfaRemainingMatchCount"};  // Match replay counter names
     V3UniqueNames m_obsNames{"__VassertObs"};  // Observed deferred assertion temp names
+    V3UniqueNames m_actionNames{"__VassertAction"};  // Automatics of cloned actions
     // Key equality for the delayed value maps. AstNode::sameTree is not enough, as
     // AstVar::sameNode compares only names, and before V3Begin distinct variables in
     // different scopes (e.g. generate blocks) can have the same name.
@@ -1740,6 +1831,12 @@ class AssertVisitor final : public VNVisitor {
             replaysp->addNext(loopp);
             passsp = replaysp;
         }
+        // A discarded cover runs no action, so also not at the end of simulation.
+        if (selfDestruct) {
+            if (AstPExpr* const pexprp = VN_CAST(propExprp, PExpr)) {
+                if (pexprp->finalp()) pushDeletep(pexprp->finalp()->unlinkFrBack());
+            }
+        }
         AstNodeStmt* bodysp = assertBody(nodep, propExprp, passsp, failsp);
         if (disablep) bodysp = new AstIf{flp, new AstLogNot{flp, disablep}, bodysp};
         // Add assertOn check last, for better combining
@@ -2158,12 +2255,15 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstPExprClause* nodep) override {
         AstNodeStmt* stmtsp = nullptr;
         if (nodep->pass() && m_passsp) {
-            // Cover adds COVERINC by AstNode::addNext, thus need to clone next too.
-            stmtsp = m_passsp->cloneTree(true);
+            // Cover adds COVERINC by AstNode::addNext, so the action is a list.
+            // The first clause takes the action, later ones a clone.
+            stmtsp = m_passsp->backp() ? V3AssertCommon::cloneAction(m_passsp, m_actionNames)
+                                       : m_passsp;
             stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
                                        nodep->vacuous());
         } else if (!nodep->pass() && m_failsp) {
-            stmtsp = m_failsp->cloneTree(true);
+            stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
+                                       : m_failsp;
             stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
         }
         if (stmtsp) {
