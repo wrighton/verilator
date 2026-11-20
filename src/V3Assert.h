@@ -61,6 +61,8 @@ public:
     static void checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
+    // Clone an action block for one more execution site, naming its automatics from names
+    static AstNodeStmt* cloneAction(AstNodeStmt* actionp, V3UniqueNames& names) VL_MT_DISABLED;
     // Check the constants of a sequence or property instance, reporting errors on instp
     static void checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
     // Create a module variable for each local variable of one sequence or property instance
