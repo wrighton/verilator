@@ -203,8 +203,16 @@ with Verilator's internal symbols, any double underscore is replaced with
 Bind
 ----
 
-Verilator only supports bind to a target module name, not to an instance
-path.
+Verilator supports bind to a target module name, and to an instance path,
+e.g. ``bind top.gen[1].u_sub monitor u_monitor (.*);``, which binds into
+that instance only (IEEE 1800-2023 23.11). A bind to an instance path is
+not supported inside a generate construct; into a hierarchical block;
+through an arrayed instance, an unnamed generate block, or generate blocks
+sharing a name; starting at a module that is neither a top module nor the
+module containing the bind; with a generate loop index that is not made of
+literals; binding instances of different modules with the same name into
+iterations of one generate loop; or, in a bind inside a module, with a path
+that is not below that module.
 
 
 Class
