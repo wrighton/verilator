@@ -61,6 +61,99 @@ module t (
     c.m_ok2[3:0] <= 2;  // OK: nonblocking class non-static, part of it
   end
 
+  // Nor reading them in a force, whose value is read after the subroutine returns
+  reg forced;
+  bit static_bit;
+  function automatic bit get_bit(bit x);
+    return x;
+  endfunction
+  task static_arg(bit v);
+    force forced = v;  // OK: argument of a static task is static
+  endtask
+  task automatic auto_arg(bit v);
+    bit lv;
+    force forced = v;  // Error: force reads an argument of an automatic task
+    force forced = lv;  // Error: force reads an automatic
+    force forced = get_bit(static_bit);  // OK: the call evaluates its own argument
+  endtask
+  task automatic ref_arg(ref bit v);
+    force forced = v;  // Error: force reads a reference argument
+  endtask
+  task automatic cref_arg(const ref bit v);
+    force forced = v;  // Error: force reads a constant reference argument
+  endtask
+
+  class ForceObj;
+    bit m_prop;
+  endclass
+  task automatic ref_object(ref ForceObj r);
+    force forced = r.m_prop;  // Error: a reference argument names the value
+  endtask
+  task automatic cref_object(const ref ForceObj r);
+    force forced = r.m_prop;  // Error: a constant reference argument names the value
+  endtask
+  typedef struct {ForceObj obj; bit bits[2];} force_wrap_t;
+  typedef struct {force_wrap_t inner;} force_outer_t;
+  class ForceCls;
+    bit m_prop;
+    static ForceCls s_self;
+    static ForceCls s_arr[2];
+    static ForceCls s_queue[$];
+    static ForceCls s_assoc[string];
+    static ForceCls s_dyn[];
+    static bit [31:0] s_vec;
+    task drive();
+      force forced = m_prop;  // OK: a property lasts as long as its object
+      force forced = s_self.m_prop;  // OK: property read through a static handle
+    endtask
+    task write_prop();
+      force m_prop = 1'b0;  // Error: only an NBA may update a non-static property
+    endtask
+    task auto_handle();
+      automatic ForceCls lh = s_self;
+      force forced = lh.m_prop;  // Error: an automatic handle names the value
+    endtask
+    task auto_handle_arg(ForceCls h);
+      force forced = h.m_prop;  // Error: an automatic argument names the value
+    endtask
+    task auto_handle_array();
+      automatic ForceCls la[2];
+      force forced = la[0].m_prop;  // Error: an element of an automatic array of handles
+    endtask
+    task auto_index();
+      automatic int which = 0;
+      force forced = s_arr[which].m_prop;  // Error: an automatic index of a static array
+    endtask
+    task auto_index_queue();
+      automatic int which = 0;
+      force forced = s_queue[which].m_prop;  // Error: an automatic index of a queue
+    endtask
+    task auto_index_assoc();
+      automatic string key = "a";
+      force forced = s_assoc[key].m_prop;  // Error: an automatic key of an associative array
+    endtask
+    task auto_index_dyn();
+      automatic int which = 0;
+      force forced = s_dyn[which].m_prop;  // Error: an automatic index of a dynamic array
+    endtask
+    task auto_sel_bound();
+      automatic int lo = 0;
+      force forced = s_vec[lo];  // Error: an automatic index of a packed vector
+    endtask
+    task auto_struct();
+      automatic force_wrap_t w;
+      force forced = w.obj.m_prop;  // Error: an automatic struct holding the handle
+    endtask
+    task auto_struct_array();
+      automatic force_wrap_t w;
+      force forced = w.bits[0];  // Error: an automatic struct, array member
+    endtask
+    task auto_struct_nested();
+      automatic force_outer_t o;
+      force forced = o.inner.bits[1];  // Error: a nested member of an automatic struct
+    endtask
+  endclass
+
   // Nor reading automatic variables in the event control of a non-blocking assignment
   reg areg;
   task automatic ev_tsk;
