@@ -26,5 +26,10 @@ test.file_grep(log, r'; sampler: default')
 test.file_grep_not(log, r'\(error')
 # The UniGen2 diversification literals that d0 is named after are declared
 test.file_grep(log, r'\(declare-fun __Vd0 ')
+# ScalarAndEmpty's s is still enumerated: UniGen2 excludes each witness it finds
+test.file_grep(log, r'^  \(assert \(not (?:\(and )?\(= s +#b[01]+\)\)?\)\)$')
+# Nothing to enumerate leaves no empty get-value or connective for the solver
+test.file_grep_not(log, r'\(get-value \( *\)\)')
+test.file_grep_not(log, r'\((?:and|or) *\)')
 
 test.passes()
