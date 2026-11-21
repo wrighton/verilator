@@ -90,4 +90,20 @@
                                      : ... Right-hand data type: 'int$[0:2]$[*]'
    60 |     n2 = n3;   
       |        ^
+%Error: t/t_assoc_wildcard_bad.v:72:23: Array method 'next' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   72 |         end while (mm.next(id));
+      |                       ^~~~
+%Error: t/t_assoc_wildcard_bad.v:69:14: Array method 'first' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   69 |       if (mm.first(id)) begin
+      |              ^~~~~
+%Error: t/t_assoc_wildcard_bad.v:90:21: Array method 'prev' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   90 |       end while (mm.prev(id));
+      |                     ^~~~
+%Error: t/t_assoc_wildcard_bad.v:87:12: Array method 'last' not legal on wildcard associative arrays
+                                      : ... note: In instance 't'
+   87 |     if (mm.last(id)) begin
+      |            ^~~~
 %Error: Exiting due to
