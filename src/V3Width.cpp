@@ -10012,7 +10012,10 @@ class WidthVisitor final : public VNVisitor {
     // The actual argument of a formal that may be assigned through a sequence must be an entire
     // local variable (IEEE 1800-2023 16.10); a formal of the enclosing declaration passed on is
     // checked at that declaration's instances
-    void checkAssignedActual(const AstVar* const portp, const AstNodeExpr* const actualp) {
+    // The variable an actual argument names, and whether it is that entire variable rather than
+    // a select or member of it. Taken as written, as typeUntypedFormals widths the actual
+    // arguments of a typed copy before its body is checked.
+    static std::pair<const AstVar*, bool> writtenActualVar(const AstNodeExpr* const actualp) {
         const AstNodeExpr* rootp = actualp;  // Variable selected from, if a select or member
         while (true) {
             if (const AstNodePreSel* const selp = VN_CAST(rootp, NodePreSel)) {
@@ -10024,15 +10027,20 @@ class WidthVisitor final : public VNVisitor {
             }
         }
         const AstVarRef* const refp = VN_CAST(rootp, VarRef);
-        if (refp && m_schemaVars.count(refp->varp())) {
-            if (rootp != actualp) {
+        return {refp ? refp->varp() : nullptr, rootp == actualp};
+    }
+    void checkAssignedActual(const AstVar* const portp, const AstNodeExpr* const actualp,
+                             const std::pair<const AstVar*, bool>& writtenVar) {
+        const AstVar* const varp = writtenVar.first;
+        if (varp && m_schemaVars.count(varp)) {
+            if (!writtenVar.second) {
                 actualp->v3warn(E_UNSUPPORTED, "Unsupported: select or member as the actual"
                                                " argument of formal "
                                                    << portp->prettyNameQ()
                                                    << ", which may be assigned through a"
                                                       " sequence.");
-            } else if (refp->varp()->isIO()) {
-                m_assignedFormals.emplace(refp->varp());
+            } else if (varp->isIO()) {
+                m_assignedFormals.emplace(varp);
             }
             return;
         }
@@ -10049,12 +10057,22 @@ class WidthVisitor final : public VNVisitor {
         if (propp && hasPropertyOperator(propp) && replacePropertyInSExpr(nodep)) return;
         if (nodep->didWidth()) return;
         if (!m_underSvaExpr) checkSvaInstanceContext(nodep);
+        std::vector<std::pair<const AstVar*, bool>> writtenVars;
+        for (const auto& tconnect : V3Task::taskConnects(nodep)) {
+            const AstNodeExpr* const actualp = tconnect.second->exprp();
+            writtenVars.push_back(actualp ? writtenActualVar(actualp)
+                                          : std::pair<const AstVar*, bool>{nullptr, false});
+        }
         if (needsTypedFormals(nodep->schemap())) typeUntypedFormals(nodep);
         userIterate(nodep->schemap(), nullptr);
+        size_t argn = 0;
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
             const AstArg* const argp = tconnect.second;
-            if (m_assignedFormals.count(portp)) checkAssignedActual(portp, argp->exprp());
+            if (m_assignedFormals.count(portp)) {
+                checkAssignedActual(portp, argp->exprp(), writtenVars[argn]);
+            }
+            ++argn;
             // An untyped formal preserves the actual argument's self-determined type, a typed
             // one casts it to its type (IEEE 1800-2023 16.8.1)
             if (portp->basicp() && portp->basicp()->untyped()) {
