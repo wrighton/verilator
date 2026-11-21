@@ -159,7 +159,7 @@ void EmitCFunc::emitOpName(AstNode* nodep, const string& format, AstNode* lhsp, 
                         commaOut();
                         out += cvtToStr(lhsp->widthWords());
                         needComma = true;
-                    } else if (VN_IS(lhsp, StreamR)) {
+                    } else if (rhsp && VN_IS(lhsp, StreamR)) {  // Binary op on a queue stream
                         commaOut();
                         out += cvtToStr(rhsp->widthWords());
                         needComma = true;
