@@ -27,7 +27,11 @@ Randomization failed.
 Expected failure: conflicting constraints detected
 
 === Test: std::randomize conflict (y > 10 && y < 5) after a valid call ===
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:80: Unsatisfied constraint: 'if (std::randomize(y) with { y > 10; y < 5; } == 0) begin'
-%Warning-UNSATCONSTR: t/t_constraint_unsat.v:80: Unsatisfied constraint: 'if (std::randomize(y) with { y > 10; y < 5; } == 0) begin'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:88: Unsatisfied constraint: 'if (std::randomize(y) with { y > 10; y < 5; } == 0) begin'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:88: Unsatisfied constraint: 'if (std::randomize(y) with { y > 10; y < 5; } == 0) begin'
 Expected failure: conflicting constraints detected
+
+=== Test: Size of an array with rand_mode off ===
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:39: Unsatisfied constraint: 'q.size() == 2;'
+%Warning-UNSATCONSTR: t/t_constraint_unsat.v:39: Unsatisfied constraint: 'q.size() == 2;'
 *-* All Finished *-*
