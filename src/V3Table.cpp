@@ -18,6 +18,9 @@
 //      Count # of input bits and # of output bits, and # of statements
 //      If high # of statements relative to inpbits*outbits,
 //      replace with lookup table
+//      If the logic is the same as logic already converted, other than
+//      using different input/output variables in the same positions,
+//      reuse the tables built for that logic instead of simulating again
 //
 //*************************************************************************
 
@@ -26,11 +29,13 @@
 #include "V3Table.h"
 
 #include "V3ConstPool.h"
+#include "V3Hasher.h"
 #include "V3SharedTmps.h"
 #include "V3Simulate.h"
 #include "V3Stats.h"
 
 #include <cmath>
+#include <unordered_map>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -149,15 +154,33 @@ public:
 };
 
 //######################################################################
+// Tables built for converted logic, and the logic they were built from
+
+struct TableCacheEntry final {
+    struct OutTable final {
+        AstVarScope* const vscp;  // Table of the output value for each input value
+        const bool mayBeUnassigned;  // Output may be unassigned for some input values
+    };
+    // Original statements of the logic, deleted at the end of the pass
+    const AstNode* const stmtsp;
+    // Number of each input/output variable, by position in the input/output lists
+    std::unordered_map<AstVarScope*, uint32_t> varNums;
+    AstVarScope* const assignedVscp;  // Table of the outputs assigned for each input value
+    std::vector<OutTable> outTables;  // Per output
+};
+
+//######################################################################
 // Table class functions
 
 class TableVisitor final : public VNVisitor {
     // NODE STATE
     // Cleared on each always/assignw
+    //  AstVarScope::user4()    -> V3Hash. Variable number, see hashLogic (V3Hasher in use)
 
     // STATE
     double m_totalBytes = 0;  // Total bytes in tables created
-    VDouble0 m_statTablesCre;  // Statistic tracking
+    VDouble0 m_statTablesCre;  // Statistic tracking, including reused tables
+    VDouble0 m_statTablesReused;  // Statistic tracking
     V3SharedTmps m_indexTmps{"__Vtableidx", VVarType::BLOCKTEMP};  // Table index variables
 
     //  State cleared on each scope
@@ -169,6 +192,12 @@ class TableVisitor final : public VNVisitor {
     unsigned m_outWidthBytes = 0;  // Output table width - in bytes
     std::vector<AstVarScope*> m_inVarps;  // Input variable list
     std::vector<TableOutputVar> m_outVarps;  // Output variable list
+    std::unordered_map<AstVarScope*, uint32_t> m_varNums;  // Number of each input/output variable
+
+    // Converted logic, by hash of the statements with variables hashed by their number
+    std::unordered_map<V3Hash, std::vector<TableCacheEntry>> m_cache;
+    // Jump blocks of cached logic matched to the current logic, see sameLogic
+    std::unordered_map<const AstNode*, const AstNode*> m_sameBlocks;
 
     // METHODS
 
@@ -245,6 +274,66 @@ private:
         return chkvis.optimizable();
     }
 
+    void numberVar(AstVarScope* const vscp) {
+        // Number by position in the input/output lists, so logic in different scopes can match.
+        // V3Simulate may use the value of a variable that has one instead of the input, so such
+        // variables are not numbered and only match themselves.
+        if (vscp->varp()->valuep()) return;
+        // Numbers start at 1, as V3Hasher does not use a cached hash of 0
+        m_varNums.emplace(vscp, m_varNums.size() + 1);
+    }
+
+    V3Hash hashLogic(AstNode* stmtsp) const {
+        const V3Hasher hasher;
+        // V3Hasher uses the hash cached in user4, so this hashes variables by their number
+        for (const auto& pair : m_varNums) pair.first->user4(pair.second);
+        V3Hash hash;
+        for (AstNode* nodep = stmtsp; nodep; nodep = nodep->nextp()) hash += hasher(nodep);
+        return hash;
+    }
+
+    static uint32_t varNum(const std::unordered_map<AstVarScope*, uint32_t>& varNums,
+                           AstVarScope* const vscp) {
+        const auto it = varNums.find(vscp);
+        return it == varNums.end() ? 0 : it->second;
+    }
+
+    bool sameLogic(const TableCacheEntry& entry, const AstNode* ap, const AstNode* bp) {
+        // Like AstNode::sameTree, but numbered variables must have the same number, and jumps
+        // must go to corresponding blocks. Otherwise a mismatch needs a hash collision.
+        while (true) {
+            if (!ap || !bp) return ap == bp;
+            if (ap->type() != bp->type()) return false;
+            UASSERT_OBJ(!ap->dtypep() == !bp->dtypep(), ap,
+                        "Comparison of a node with dtypep() with a node without dtypep()");
+            if (ap->dtypep() && !ap->dtypep()->similarDType(bp->dtypep())) return false;
+            if (const AstVarRef* const arefp = VN_CAST(ap, VarRef)) {
+                const AstVarRef* const brefp = VN_AS(bp, VarRef);
+                const uint32_t anum = varNum(entry.varNums, arefp->varScopep());
+                if (anum ? (anum != varNum(m_varNums, brefp->varScopep())
+                            || arefp->access() != brefp->access())
+                         : !ap->isSame(bp)) {
+                    return false;
+                }
+            } else if (const AstJumpGo* const agop = VN_CAST(ap, JumpGo)) {
+                // The block encloses the jump, so is mapped already if the logic is the same
+                if (m_sameBlocks[agop->blockp()] != VN_AS(bp, JumpGo)->blockp()) return false;
+            } else if (!ap->isSame(bp)) {
+                return false;
+            } else if (VN_IS(ap, JumpBlock)) {
+                m_sameBlocks[ap] = bp;
+            }
+            if (!sameLogic(entry, ap->op1p(), bp->op1p())
+                || !sameLogic(entry, ap->op2p(), bp->op2p())
+                || !sameLogic(entry, ap->op3p(), bp->op3p())
+                || !sameLogic(entry, ap->op4p(), bp->op4p())) {
+                return false;
+            }
+            ap = ap->nextp();
+            bp = bp->nextp();
+        }
+    }
+
     void replaceWithTable(AstAlways* nodep) {
         // We've determined this table of nodes is optimizable, do it.
         ++m_statTablesCre;
@@ -254,24 +343,62 @@ private:
         // We will need a table index variable, create it here.
         AstVarScope* const indexVscp = m_indexTmps.make(fl, m_scopep, m_inWidthBits);
 
-        // The 'output assigned' table builder
-        TableBuilder outputAssignedTableBuilder{fl};
-        outputAssignedTableBuilder.setTableSize(
-            nodep->findBitDType(m_outVarps.size(), m_outVarps.size(), VSigning::UNSIGNED),
-            VL_MASK_I(m_inWidthBits));
+        // Find the tables of the same logic, or build them
+        m_varNums.clear();
+        m_varNums.reserve(m_inVarps.size() + m_outVarps.size());
+        for (AstVarScope* const vscp : m_inVarps) numberVar(vscp);
+        for (const TableOutputVar& tov : m_outVarps) numberVar(tov.varScopep());
+        std::vector<TableCacheEntry>& entries = m_cache[hashLogic(nodep->stmtsp())];
+        const TableCacheEntry* entryp = nullptr;
+        for (const TableCacheEntry& entry : entries) {
+            const bool same = sameLogic(entry, entry.stmtsp, nodep->stmtsp());
+            m_sameBlocks.clear();
+            if (same) {
+                entryp = &entry;
+                break;
+            }
+        }
+        if (entryp) {
+            ++m_statTablesReused;
+            UASSERT_OBJ(entryp->outTables.size() == m_outVarps.size(), nodep,
+                        "Reusing tables with a different number of outputs");
+        } else {
+            // The 'output assigned' table builder
+            TableBuilder outputAssignedTableBuilder{fl};
+            outputAssignedTableBuilder.setTableSize(
+                nodep->findBitDType(m_outVarps.size(), m_outVarps.size(), VSigning::UNSIGNED),
+                VL_MASK_I(m_inWidthBits));
 
-        // Set sizes of output tables
-        for (TableOutputVar& tov : m_outVarps) tov.setTableSize(VL_MASK_I(m_inWidthBits));
+            // Set sizes of output tables
+            for (TableOutputVar& tov : m_outVarps) tov.setTableSize(VL_MASK_I(m_inWidthBits));
 
-        // Populate the tables
-        createTables(nodep, outputAssignedTableBuilder);
+            // Populate the tables
+            createTables(nodep, outputAssignedTableBuilder);
+
+            AstVarScope* const assignedVscp = outputAssignedTableBuilder.varScopep();
+            std::vector<TableCacheEntry::OutTable> outTables;
+            outTables.reserve(m_outVarps.size());
+            for (TableOutputVar& tov : m_outVarps) {
+                outTables.push_back({tov.tabeVarScopep(), tov.mayBeUnassigned()});
+            }
+            entries.push_back(
+                {nodep->stmtsp(), std::move(m_varNums), assignedVscp, std::move(outTables)});
+            entryp = &entries.back();
+        }
 
         AstNodeStmt* const stmtsp = createLookupInput(fl, indexVscp);
-        createOutputAssigns(nodep, stmtsp, indexVscp, outputAssignedTableBuilder.varScopep());
+        createOutputAssigns(nodep, stmtsp, indexVscp, *entryp);
 
         // Link it in.
-        // Replace the body, keeping the AstAlways itself under its AstActive
-        nodep->stmtsp()->unlinkFrBackWithNext()->deleteTree();
+        // Replace the body, keeping the AstAlways itself under its AstActive.
+        // A new cache entry needs the original statements until the end of the pass, the
+        // statements of reused logic are freed now, as there may be many copies of it.
+        AstNode* const oldStmtsp = nodep->stmtsp()->unlinkFrBackWithNext();
+        if (oldStmtsp == entryp->stmtsp) {
+            VL_DO_DANGLING(pushDeletep(oldStmtsp), oldStmtsp);
+        } else {
+            VL_DO_DANGLING(oldStmtsp->deleteTree(), oldStmtsp);
+        }
         nodep->addStmtsp(stmtsp);
         UINFOTREE(6, nodep, "", "table_new");
     }
@@ -353,22 +480,23 @@ private:
     }
 
     void createOutputAssigns(AstNode* nodep, AstNode* stmtsp, AstVarScope* indexVscp,
-                             AstVarScope* outputAssignedTableVscp) {
+                             const TableCacheEntry& entry) {
         FileLine* const fl = nodep->fileline();
-        for (TableOutputVar& tov : m_outVarps) {
+        for (const TableOutputVar& tov : m_outVarps) {
+            const TableCacheEntry::OutTable& outTable = entry.outTables[tov.ord()];
             AstNodeExpr* const alhsp = new AstVarRef{fl, tov.varScopep(), VAccess::WRITE};
-            AstNodeExpr* const arhsp = select(fl, tov.tabeVarScopep(), indexVscp);
+            AstNodeExpr* const arhsp = select(fl, outTable.vscp, indexVscp);
             AstNodeStmt* outsetp
                 = m_assignDly ? static_cast<AstNodeStmt*>(new AstAssignDly{fl, alhsp, arhsp})
                               : static_cast<AstNodeStmt*>(new AstAssign{fl, alhsp, arhsp});
 
             // If this output is unassigned on some code paths, wrap the assignment in an If
-            if (tov.mayBeUnassigned()) {
+            if (outTable.mayBeUnassigned) {
                 V3Number outputChgMask{nodep, static_cast<int>(m_outVarps.size()), 0};
                 outputChgMask.setBit(tov.ord(), 1);
                 AstNodeExpr* const condp
                     = new AstNeq{fl,
-                                 new AstAnd{fl, select(fl, outputAssignedTableVscp, indexVscp),
+                                 new AstAnd{fl, select(fl, entry.assignedVscp, indexVscp),
                                             new AstConst{fl, outputChgMask}},
                                  new AstConst{fl, AstConst::WidthedValue{},
                                               static_cast<int>(m_outVarps.size()), 0}};
@@ -405,6 +533,7 @@ public:
     explicit TableVisitor(AstNetlist* nodep) { iterate(nodep); }
     ~TableVisitor() override {  //
         V3Stats::addStat("Optimizations, Tables created", m_statTablesCre);
+        V3Stats::addStat("Optimizations, Tables reused", m_statTablesReused);
     }
 };
 
