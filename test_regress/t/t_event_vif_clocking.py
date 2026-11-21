@@ -20,7 +20,7 @@ if test.vlt_all:
                    r'Timing, event controls on interface events through handles\s+(\d+)', 18)
     test.file_grep(test.stats, r'Timing, writes of handles notifying event controls\s+(\d+)', 60)
     test.file_grep(test.stats,
-                   r'Timing, writes of handles notifying event controls if changed\s+(\d+)', 12)
+                   r'Timing, writes of handles notifying event controls if changed\s+(\d+)', 10)
     test.file_grep(test.stats,
                    r"Timing, event controls through handles with 'iff' effects\s+(\d+)", 0)
     test.file_grep(test.stats,
