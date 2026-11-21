@@ -32,6 +32,7 @@
 // verilator lint_off DECLFILENAME
 // verilator lint_off TIMESCALEMOD
 // verilator lint_off UNUSEDSIGNAL
+// verilator lint_off VARHIDDEN
 // Library code, not the user's design
 // verilator coverage_off
 package std;
