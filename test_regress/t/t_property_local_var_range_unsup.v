@@ -250,38 +250,12 @@ module t (
   endproperty
   assert property (p_first_read);
 
-  // A local variable in a chain of property instances is unsupported.
-  sequence s_chain;
-    int t;
-    (1, t = cyc) ##2 (cyc == t + 2);
-  endsequence
-  property p_chain_in;
-    @(posedge clk) s_chain;
-  endproperty
-  property p_chain_out;
-    p_chain_in;
-  endproperty
-  assert property (p_chain_out);
-
   // A read after an unbounded repetition assigning the variable is unsupported.
   property p_rep_unbounded;
     int t;
     @(posedge clk) valid |-> ((1, t = cyc) [* 1:$]) ##1 (cyc > t);
   endproperty
   assert property (p_rep_unbounded);
-
-  // A clocked sequence instance in a property with a local variable is
-  // unsupported.
-  // verilog_format: off
-  sequence s_clocked;
-    @(posedge clk) 1'b1
-  endsequence
-  // verilog_format: on
-  property p_clocked;
-    int t;
-    @(posedge clk) (valid, t = cyc) |=> s_clocked ##1 (cyc != t + 1);
-  endproperty
-  assert property (p_clocked);
 
   // A read after first_match of a sequence assigning the variable is
   // unsupported.

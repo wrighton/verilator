@@ -394,7 +394,7 @@ module t;
                 if ((SUB_B !== 2'h1)) begin
                     begin
                         $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", "t/t_debug_emitv.v", 
-                               32'sh19d, SUB_B, 2'h1);
+                               32'sh1a7, SUB_B, 2'h1);
                         $stop;
                     end
                 end
@@ -586,7 +586,7 @@ module t;
      p_args
     endproperty
     begin : assert_chain
-        assert property (@(posedge clk) (| in)
+        assert property (@(posedge clk) in
         ) begin
         end
         else begin
@@ -1105,12 +1105,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1165,12 +1167,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1225,12 +1229,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1286,12 +1292,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1371,12 +1379,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1465,12 +1475,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1547,12 +1559,14 @@ module t;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1622,7 +1636,7 @@ module t;
     logic [1:0]  \esc/e ;
     logic \$esc ;
     logic \9esc ;
-    task \esc/task ;
+    task \esc/task ();
     endtask
     initial begin
         begin : \esc/blk 
@@ -1657,14 +1671,14 @@ class Cls;
     constraint array_values {
 
         ???? // CONSTRAINTBEFORE
-        (rarray[2'h0])rmember1
+        (rarray[32'sh0])rmember1
         ???? // CONSTRAINTFOREACH
 
         ???? // FOREACHHEADER
         rarrayint i;
 
         ???? // CONSTRAINTEXPR
-        ((rarray[i[1:0]]) == (rmember1 + i))}
+        ((rarray[i]) == (rmember1 + i))}
     static constraint static_c {
 
         ???? // CONSTRAINTEXPR
@@ -1713,12 +1727,14 @@ class Cls;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1768,12 +1784,14 @@ class Cls;
     endfunction
     function void stop();
     endfunction
-    static function real get_coverage(input string covered_bins, input 
-                                      string total_bins);
+    static function real get_coverage(ref int covered_bins = 
+                                      __Vint, ref int total_bins = 
+                                      __Vint);
         get_coverage = /*CRESET*/;
     endfunction
-    function real get_inst_coverage(input string covered_bins, input 
-                                    string total_bins);
+    function real get_inst_coverage(ref int covered_bins = 
+                                    __Vint, ref int total_bins = 
+                                    __Vint);
         get_inst_coverage = /*CRESET*/;
     endfunction
     function void set_inst_name(input string name);
@@ -1881,9 +1899,8 @@ class ClsParamExt extends ClsParam__Tz7d09f080_P2;
         new();
     endfunction
 endclass
-function rand_reduce;
-    input Cls obj;
-    begin : label9
+function int rand_reduce(input Cls obj);
+    begin : label10
         rand_reduce = obj.randomize() with (
             ???? // CONSTRAINTEXPR
             (__Vrandwith_obj.rarray.r_sum() with ((
@@ -1891,7 +1908,7 @@ function rand_reduce;
                                                    + 
                                                    __Vrandwith_obj.rmember1))  
              > 32'sh0)) ;
-        disable label9;
+        disable label10;
     end
 endfunction
 process __VprocessQueue_named__0[$];
@@ -1920,13 +1937,13 @@ module sub;
         o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
     endtask
     function int f(input int v);
-        begin : label10
+        begin : label11
             if ((v == 32'sh0)) begin
                 f = 32'sh21;
-                disable label10;
+                disable label11;
             end
             f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
-            disable label10;
+            disable label11;
         end
     endfunction
     real r;
@@ -1943,33 +1960,32 @@ module seq_event;
         begin
 
             ???? // EVENTCONTROL
-            @( __VseqEvent_h9d9f741d__0)end
+            @( __VseqEvent_hfea32072__0)end
     end
-    event __VseqEvent_h9d9f741d__0;
+    event __VseqEvent_hfea32072__0;
     cover property (@() @(posedge clk) a##1 b##1 c
 
     ) begin
 
         ???? // FIREEVENT
-        __VseqEvent_h9d9f741d__0end
+        __VseqEvent_hfea32072__0end
 endmodule
 package p;
     logic pkgvar;
-    function ident;
-        input int value;
-        begin : label11
+    function int ident(input int value);
+        begin : label12
             ident = /*CRESET*/;
             ident = value;
-            disable label11;
+            disable label12;
         end
     endfunction
-    function uses_const_func;
+    function int uses_const_func();
         logic [1:0]  v;
-        begin : label12
+        begin : label13
             uses_const_func = /*CRESET*/;
             v = /*CRESET*/;
             uses_const_func = 32'h2;
-            disable label12;
+            disable label13;
         end
     endfunction
 endpackage
@@ -1998,7 +2014,7 @@ package std;
         protected chandle m_process;
         static function process self();
             process p;
-            begin : label11
+            begin : label14
                 self = /*CRESET*/;
                 p = /*CRESET*/;
                 $c(vlProcess->initFromSelf(p););
@@ -2010,17 +2026,17 @@ package std;
                     end
                 end
                 self = p;
-                disable label11;
+                disable label14;
             end
         endfunction
         protected task set_status(input int s);
             $c(m_process->state(s););
         endtask
         function int status();
-            begin : label12
+            begin : label15
                 status = /*CRESET*/;
                 status = $c(m_process->state());
-                disable label12;
+                disable label15;
             end
         endfunction
         task kill();
@@ -2055,12 +2071,12 @@ package std;
         endtask
         function string get_randstate();
             string s;
-            begin : label13
+            begin : label16
                 get_randstate = /*CRESET*/;
                 s = string'($c(0));
                 $c(s = m_process->randstate(););
                 get_randstate = s;
-                disable label13;
+                disable label16;
             end
         endfunction
         task set_randstate(input string s);
@@ -2095,7 +2111,7 @@ package std;
             m_keyCount = (m_keyCount + keyCount);
         endtask
         task get(input int keyCount);
-            begin : label14
+            begin : label17
                 dropKilled();
                 if (((m_keyCount >= keyCount) && ((
                                                    m_queue.size() 
@@ -2108,7 +2124,7 @@ package std;
                     begin
                         m_keyCount = (m_keyCount - 
                                       keyCount);
-                        disable label14;
+                        disable label17;
                     end
                 end
                 m_queue.push_back(
@@ -2134,15 +2150,15 @@ package std;
             end
         endtask
         function int try_get(input int keyCount);
-            begin : label15
+            begin : label18
                 try_get = /*CRESET*/;
                 if ((m_keyCount < keyCount)) begin
                     try_get = 32'sh0;
-                    disable label15;
+                    disable label18;
                 end
                 m_keyCount = (m_keyCount - keyCount);
                 try_get = 32'sh1;
-                disable label15;
+                disable label18;
             end
         endfunction
     endclass
@@ -2206,7 +2222,7 @@ package Pkg;
         BAR = 32'h1,
         BAZ = 32'h2
     } enum_t;
-    task disable_named;
+    task disable_named();
         begin : named
             fork
             begin

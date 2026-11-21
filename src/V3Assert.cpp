@@ -123,6 +123,7 @@ AstVar* V3AssertCommon::newSequenceEvent(FileLine* flp, AstNodeModule* modp, con
                                           firep, VAssertType::CONCURRENT};
     coverp->isCoverSeq(true);
     coverp->isSeqEvent(true);
+    // A concurrent assertion is in its own process, clocked by it in AssertVisitor
     modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::ASSERT_COVER, nullptr, coverp});
     return eventp;
 }
@@ -310,13 +311,14 @@ static void checkSvaGotoOrNonConsRep(T_Rep* nodep, const char* kind, AstNode* er
         errp->v3error(std::string{kind}
                       + " repetition range min count must be non-negative"
                         " (IEEE 1800-2023 16.9.2)");
+        replaceSvaRepCount(nodep->countp());
+        if (!unbounded) replaceSvaRepCount(nodep->maxCountp());
     } else if (unbounded) {
+        // Only ever written in the body, as a '$' actual argument is checked when substituted
         nodep->maxCountp()->v3warn(E_UNSUPPORTED,
                                    "Unsupported: " << kind
                                                    << " repetition range with '$' maximum"
                                                       " (IEEE 1800-2023 16.9.2)");
-        replaceSvaRepCount(nodep->countp());
-        replaceSvaRepCount(nodep->maxCountp());
     } else if (maxConstp->toSInt() < minConstp->toSInt()) {
         errp->v3error(std::string{kind}
                       + " repetition range max count must be >= min count"
@@ -408,36 +410,6 @@ bool V3AssertCommon::refsSvaFormal(const AstNode* nodep) {
     });
 }
 
-void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
-    // Equivalent when the property is attempted at every tick (IEEE 1800-2023 16.12.11).
-    // Unlike under always, p may then contain property operators.
-    AstPropAlways* const alwaysp = VN_CAST(specp->propp(), PropAlways);
-    if (!alwaysp || !alwaysp->isPlainAlways()) return;
-    alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
-    VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
-}
-
-AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
-    // A single edge event none of whose variables is used in the procedure body. A use in an
-    // event, as in the clock that assertion lowering gives a sampled value function, is ignored.
-    AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
-    if (!itemp || itemp->nextp() || !itemp->edgeType().anEdge() || !alwaysp->stmtsp()) {
-        return nullptr;
-    }
-    const auto inEvent = [alwaysp](const AstNode* nodep) {
-        for (; nodep != alwaysp; nodep = nodep->aboveLoopp()) {
-            if (VN_IS(nodep, SenItem)) return true;
-        }
-        return false;
-    };
-    const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
-        return alwaysp->stmtsp()->existsAndNext([&](const AstVarRef* refp) {
-            return refp->varp() == clkRefp->varp() && !inEvent(refp);
-        });
-    });
-    return usedInBody ? nullptr : itemp;
-}
-
 AstNode* V3AssertCommon::checkSvaUnboundedActuals(
     AstNode* nodep, const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
     AstNode* instp) {
@@ -495,6 +467,63 @@ AstNode* V3AssertCommon::checkSvaUnboundedActuals(
     });
     for (AstVarRef* const refp : badps) VL_DO_DANGLING(refp->deleteTree(), refp);
     return nodep;
+}
+
+void V3AssertCommon::checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) {
+    // Check the cycle delays, repetition counts, always ranges and $past tick counts, now that
+    // the formal arguments are replaced with the actual arguments (IEEE 1800-2023 16.8).
+    // A delay still referencing a formal argument of an enclosing sequence or property is
+    // checked when that is instanced. Collect first, as checking edits the delays.
+    std::vector<AstDelay*> delayps;
+    nodep->foreach([&](AstDelay* delayp) {
+        if (!delayp->isCycleDelay() || refsSvaFormal(delayp->lhsp())) return;
+        if (delayp->rhsp() && refsSvaFormal(delayp->rhsp())) return;
+        delayps.push_back(delayp);
+    });
+    for (AstDelay* const delayp : delayps) checkSvaCycleDelay(delayp, instp);
+    // Likewise repetitions and $past
+    std::vector<AstNodeExpr*> exprps;
+    nodep->foreach([&](AstNodeExpr* exprp) {
+        const AstPast* const pastp = VN_CAST(exprp, Past);
+        if (VN_IS(exprp, SConsRep) || VN_IS(exprp, SGotoRep) || VN_IS(exprp, SNonConsRep)
+            || VN_IS(exprp, PropAlways) || (pastp && pastp->ticksp())) {
+            if (!refsSvaFormal(exprp)) exprps.push_back(exprp);
+        }
+    });
+    // Inner ones first, as checking an outer one may delete an invalid count holding them
+    for (auto it = exprps.rbegin(); it != exprps.rend(); ++it) {
+        AstNodeExpr* const exprp = *it;
+        if (AstSConsRep* const repp = VN_CAST(exprp, SConsRep)) {
+            checkSvaRepetition(repp, instp);
+        } else if (AstSGotoRep* const repp = VN_CAST(exprp, SGotoRep)) {
+            checkSvaRepetition(repp, instp);
+        } else if (AstSNonConsRep* const repp = VN_CAST(exprp, SNonConsRep)) {
+            checkSvaRepetition(repp, instp);
+        } else if (AstPropAlways* const alwaysp = VN_CAST(exprp, PropAlways)) {
+            checkSvaAlwaysRange(alwaysp, instp);
+        } else {
+            checkSvaPastTicks(VN_AS(exprp, Past), instp);
+        }
+    }
+}
+
+std::unordered_map<const AstVar*, AstVar*>
+V3AssertCommon::newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* modp,
+                                V3UniqueNames& names) {
+    std::unordered_map<const AstVar*, AstVar*> localVarMap;
+    for (const AstNode* const declp : schemap->declspList()) {
+        const AstVar* const varp = VN_CAST(declp, Var);
+        if (!varp || varp->isIO()) continue;
+        // An XTEMP stays one, see isMatchItem in V3AssertNfa
+        const VVarType varType
+            = varp->varType() == VVarType::XTEMP ? VVarType::XTEMP : VVarType::MODULETEMP;
+        AstVar* const newVarp
+            = new AstVar{varp->fileline(), varType, names.get(varp), varp->dtypep()};
+        newVarp->lifetime(VLifetime::STATIC_EXPLICIT);
+        modp->addStmtsp(newVarp);
+        localVarMap[varp] = newVarp;
+    }
+    return localVarMap;
 }
 
 AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstSchemaRef* instp) {
@@ -611,6 +640,36 @@ void V3AssertCommon::lowerSvaLocalVarInits(
                                          " local variable (IEEE 1800-2023 16.10)");
         }
     }
+}
+
+void V3AssertCommon::reducePlainAlways(AstPropSpec* specp) {
+    // Equivalent when the property is attempted at every tick (IEEE 1800-2023 16.12.11).
+    // Unlike under always, p may then contain property operators.
+    AstPropAlways* const alwaysp = VN_CAST(specp->propp(), PropAlways);
+    if (!alwaysp || !alwaysp->isPlainAlways()) return;
+    alwaysp->replaceWith(alwaysp->propp()->unlinkFrBack());
+    VL_DO_DANGLING(alwaysp->deleteTree(), alwaysp);
+}
+
+AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
+    // A single edge event none of whose variables is used in the procedure body. A use in an
+    // event, as in the clock that assertion lowering gives a sampled value function, is ignored.
+    AstSenItem* const itemp = alwaysp->sentreep() ? alwaysp->sentreep()->sensesp() : nullptr;
+    if (!itemp || itemp->nextp() || !itemp->edgeType().anEdge() || !alwaysp->stmtsp()) {
+        return nullptr;
+    }
+    const auto inEvent = [alwaysp](const AstNode* nodep) {
+        for (; nodep != alwaysp; nodep = nodep->aboveLoopp()) {
+            if (VN_IS(nodep, SenItem)) return true;
+        }
+        return false;
+    };
+    const bool usedInBody = itemp->sensp()->exists([&](const AstVarRef* clkRefp) {
+        return alwaysp->stmtsp()->existsAndNext([&](const AstVarRef* refp) {
+            return refp->varp() == clkRefp->varp() && !inEvent(refp);
+        });
+    });
+    return usedInBody ? nullptr : itemp;
 }
 
 //######################################################################
@@ -1464,6 +1523,9 @@ class AssertVisitor final : public VNVisitor {
     // Pending calls run in the Reactive region unless a flush of their process clears them
     // (IEEE 1800-2023 16.4.1).
     AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp) {
+        // The null statement of an 'else;', an empty implied block, has no call to defer
+        const AstBegin* const beginp = VN_CAST(actionsp, Begin);
+        if (beginp && beginp->implied() && !beginp->stmtsp()) return actionsp;
         if (!(actionsp->isOutputter() || VN_IS(actionsp, SFormat) || VN_IS(actionsp, StmtExpr))) {
             actionsp->v3error("Observed deferred immediate assertion action block must be a "
                               "single subroutine call (IEEE 1800-2023 16.4).");
@@ -2077,7 +2139,8 @@ class AssertVisitor final : public VNVisitor {
             nodep->v3warn(E_UNSUPPORTED, "Unsupported: sampled value function clocked by a"
                                          " clocking block or sequence event, of an expression"
                                          " with a nested sampled value function");
-            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+            nodep->replaceWith(
+                new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()});
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }

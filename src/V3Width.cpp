@@ -9883,10 +9883,10 @@ class WidthVisitor final : public VNVisitor {
             // Declarations also hold typedefs of inline types, see V3LinkParse
             AstVar* const varp = VN_CAST(declp, Var);
             if (!varp || varp->isIO()) continue;
-            // A sequence local variable initializer is not lowered; V3AssertElab lowers a property
-            // one where the property is inlined
-            if (VN_IS(nodep, Property)) continue;
-            if (AstNode* const valuep = varp->valuep()) {
+            // A property local variable initializer is lowered by V3AssertElab, a sequence one
+            // is not
+            AstNode* const valuep = varp->valuep();
+            if (valuep && VN_IS(nodep, Sequence)) {
                 valuep->v3warn(E_UNSUPPORTED, "Unsupported: initializer of a "
                                                   << kindp
                                                   << " local variable (IEEE 1800-2023 16.10).");
@@ -9982,8 +9982,10 @@ class WidthVisitor final : public VNVisitor {
             if (!varp) continue;  // Typedef of an inline type, see V3LinkParse
             m_schemaVars.emplace(varp);
             if (!varp->isInput()) continue;
-            const AstBasicDType* const basicp = VN_CAST(varp->childDTypep(), BasicDType);
-            if (basicp && basicp->implicit()) m_seqUntypedFormals.insert(varp);
+            // Also one of a copy typed by the actual arguments, see typeUntypedFormals
+            if (isUntypedFormal(varp) || m_typedCopyFormals.count(varp)) {
+                m_seqUntypedFormals.insert(varp);
+            }
         }
         registerLocalVars(nodep, "sequence");
         // The body is a sequence expression, also when first widthed through an instance
@@ -9993,6 +9995,15 @@ class WidthVisitor final : public VNVisitor {
         m_underSExpr = true;
         m_underSvaExpr = true;
         m_underConcAssert = true;
+        VL_RESTORER(m_underDisableIff);
+        m_underDisableIff = false;
+        VL_RESTORER(m_underSampledArg);
+        m_underSampledArg = false;
+        VL_RESTORER_CLEAR(m_propLocalVarps);
+        for (const AstNode* const declp : nodep->declspList()) {
+            const AstVar* const varp = VN_CAST(declp, Var);
+            if (varp && !varp->isIO()) m_propLocalVarps.emplace(varp);
+        }
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "SeqBody", nodep->exprp(), SELF, BOTH);
         checkSvaInstanceOperands(nodep->exprp(), true);
@@ -10182,6 +10193,9 @@ class WidthVisitor final : public VNVisitor {
         if (!pair.second) return pair.first->second;
         const bool needs = taskp->exists([&](const AstNode* np) {
             if (const AstVarRef* const refp = VN_CAST(np, VarRef)) {
+                // An assigned one has the type of its actual, a local variable (IEEE 1800-2023
+                // 16.10)
+                if (refp->access().isWriteOrRW() && isUntypedFormal(refp->varp())) return true;
                 return typedOperandUntypedFormal(refp);
             }
             if (const AstNodePreSel* const selp = VN_CAST(np, NodePreSel)) {

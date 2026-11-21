@@ -30,16 +30,16 @@ module t (
   endproperty
 
   property q_loc;
-    logic t;
-    (b, t = a) |=> a == t;
+    logic v;
+    (b, v = a) |=> a == v;
   endproperty
 
-  property q_arg(x);
-    x ##1 x;
+  property q_arg_strong(x);
+    strong(x ##1 x);
   endproperty
 
   property q_chain(x);
-    q_arg(x);
+    q_arg_strong(x);
   endproperty
 
   assert property (@(posedge clk) a |-> q_clk);
@@ -48,17 +48,11 @@ module t (
   assert property (@(posedge clk) b |-> q_loc);
   // A property instance as an actual argument
   assert property (@(posedge clk) a |-> q_arg(q_ovl));
-  // A property instance as a sequence operand
-  assert property (@(posedge clk) q_ovl ##1 a);
-  assert property (@(posedge clk) a ##1 q_ovl);
-  assert property (@(posedge clk) q_ovl [*2]);
-  assert property (@(posedge clk) q_ovl [->2]);
-  assert property (@(posedge clk) q_ovl [=2]);
-  assert property (@(posedge clk) q_ovl intersect (a ##1 b));
-  assert property (@(posedge clk) q_ovl within (a ##1 b));
-  assert property (@(posedge clk) a throughout q_ovl);
-  // A property instance as an implication antecedent
-  assert property (@(posedge clk) q_ovl |-> a);
-  assert property (@(posedge clk) q_ovl |-> ##1 a);
+  // Reported at the nested instance also in a composite or through a chain, and 'c' that
+  // only the rejected instance reads is not reported as unused
+  assert property (@(posedge clk) q_strong or a);
+  assert property (@(posedge clk) a |-> q_chain(c));
+  // A property instance as a sequence operand or implication antecedent is illegal, see
+  // t_property_sexpr_bad
 
 endmodule

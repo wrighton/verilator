@@ -1,26 +1,22 @@
-%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:27:37: Unsupported: multiclocked sequence or property
+%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:24:37: Unsupported: multiclocked sequence or property
                                                           : ... note: In instance 't'
-   27 |   assert property (@(posedge clk2) (@(posedge clk) a));
+   24 |   assert property (@(posedge clk2) (@(posedge clk) a));
       |                                     ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:28:42: Unsupported: clocking event inside sequence expression
+%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:25:42: Unsupported: clocking event inside sequence expression
                                                           : ... note: In instance 't'
-   28 |   assert property (@(posedge clk) a |-> (@(posedge clk2) b));
+   25 |   assert property (@(posedge clk) a |-> (@(posedge clk2) b));
       |                                          ^
-%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:29:42: Unsupported: clocking event inside sequence expression
+%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:26:42: Unsupported: clocking event inside sequence expression
                                                           : ... note: In instance 't'
-   29 |   assert property (@(posedge clk) a |-> (@(posedge clk2) not b));
+   26 |   assert property (@(posedge clk) a |-> (@(posedge clk2) not b));
       |                                          ^
-%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:18:12: Unsupported: clocking event inside sequence expression
+%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:15:12: Unsupported: clocking event inside sequence expression
                                                           : ... note: In instance 't'
-   18 |     a |-> (@(posedge clk2) b);
+   15 |     a |-> (@(posedge clk2) b);
       |            ^
-%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:21:6: Unsupported: clocking event inside sequence expression
+%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:18:6: Unsupported: clocking event inside sequence expression
                                                          : ... note: In instance 't'
-   21 |     (@(posedge clk2) b);
+   18 |     (@(posedge clk2) b);
       |      ^
-%Error-UNSUPPORTED: t/t_assert_clocked_paren_unsup.v:30:39: Unsupported: clock event in a nested property instance
-                                                          : ... note: In instance 't'
-   30 |   assert property (@(posedge clk) not p_paren);
-      |                                       ^~~~~~~
 %Error: Exiting due to

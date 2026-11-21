@@ -325,6 +325,33 @@ static AstAlways* newAssertAlways(FileLine* flp, VAlwaysKwd kwd, AstSenTree* sen
     return alwaysp;
 }
 
+// True if nodep is a global clocking future sampled value function (IEEE 1800-2023 16.9.4)
+static bool isFutureValueFn(const AstNode* nodep) {
+    return VN_IS(nodep, Future) || VN_IS(nodep, Rising) || VN_IS(nodep, Falling)
+           || VN_IS(nodep, Steady);
+}
+
+// Return the fail action of an assertion without one
+static AstNodeStmt* newDefaultFailp(FileLine* flp, AstNodeModule* modp, const string& message) {
+    // V3Assert turns the DT_ERROR display into the standard "Assertion failed in %m"
+    AstDisplay* const dispp
+        = new AstDisplay{flp, VDisplayType::DT_ERROR, message, nullptr, nullptr};
+    dispp->fmtp()->timeunit(modp->timeunit());
+    AstNodeStmt* const stmtsp = dispp;
+    if (v3Global.opt.stopFail()) stmtsp->addNext(new AstStop{flp, false});
+    return stmtsp;
+}
+
+// Prepend stmtsp to the fail action, keeping the default one of an assertion without 'else'
+static void prependFailAction(AstAssert* assertp, AstNodeModule* modp, AstNodeStmt* stmtsp) {
+    // Without 'else', a failure calls $error (IEEE 1800-2023 16.14.1), which V3Assert adds only
+    // to an assertion with no fail action
+    if (!assertp->failsp()) {
+        assertp->addFailsp(newDefaultFailp(assertp->fileline(), modp, "'assert' failed."));
+    }
+    assertp->prependFailsp(stmtsp);
+}
+
 //######################################################################
 // NFA Builder
 
@@ -1175,11 +1202,12 @@ class SvaNfaBuilder final {
             [](const AstSConsRep* repp) { return getConstUInt(repp->countp()) == 0; });
     }
 
-    // True if a leaf's condition has no implication or multi-cycle sequence in it
+    // True if a leaf's condition has no implication, s_eventually or multi-cycle sequence in it
     // (a leaf can be e.g. 'not (x |-> y)')
     static bool isPlainBoolean(const AstNodeExpr* condp) {
-        return !condp->exists(
-            [](const AstNodeExpr* np) { return np->isMultiCycleSva() || VN_IS(np, Implication); });
+        return !condp->exists([](const AstNodeExpr* np) {
+            return np->isMultiCycleSva() || VN_IS(np, Implication) || VN_IS(np, SEventually);
+        });
     }
     // Build `b or p` at the end of an asserted property, with b boolean
     BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
@@ -1187,6 +1215,20 @@ class SvaNfaBuilder final {
         // It holds at once when b holds and otherwise exactly when p does (IEEE 1800-2023
         // 16.12.4). So p is evaluated only when b is false, with the rejections of a top-level
         // property.
+        // In a negated property, a success through b would not be counted with the vacuous
+        // successes of an implication in p, which fail it too.
+        const AstImplication* implp = nullptr;
+        if (m_trackVacuous) {
+            propp->exists([&implp](const AstImplication* np) {
+                if (!np->isFollowedBy()) implp = np;
+                return implp != nullptr;
+            });
+        }
+        if (implp) {
+            implp->v3warn(E_UNSUPPORTED, "Unsupported: implication inside another property "
+                                         "operator in a negated property");
+            return BuildResult::failWithError();
+        }
         SvaStateVertex* const propEntryp = scopedCreateVertex();
         guardedLink(entryVtxp, propEntryp,
                     new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
@@ -1223,17 +1265,251 @@ class SvaNfaBuilder final {
         return {mergeVtxp, nullptr, {}};
     }
 
+    // Collect the operands of nested sequence 'or's
+    static void collectOrOperands(AstNodeExpr* nodep, std::vector<AstNodeExpr*>& out) {
+        if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            collectOrOperands(orp->lhsp(), out);
+            collectOrOperands(orp->rhsp(), out);
+        } else {
+            out.push_back(nodep);
+        }
+    }
+    // Operand of a sequence 'or' of fixed-length sequences of boolean leaves
+    struct FixedOrOperand final {
+        std::map<int, std::vector<AstNodeExpr*>> checks;  // Leaf checks by clock offset
+        int length = 0;  // Offset of its last clock tick
+    };
+    static constexpr size_t MAX_FIXED_OR_OPERANDS = 4;  // Limits the 2^n operand sets tracked
+    static constexpr size_t MAX_FIXED_OR_TRANSITIONS = 1024;  // Limits their transitions
+    // Sampled checks of an operand at clock offset 'offset', true if it has none there
+    static AstNodeExpr* newOperandCondp(const FixedOrOperand& op, int offset, FileLine* flp) {
+        const auto it = op.checks.find(offset);
+        if (it == op.checks.end()) return new AstConst{flp, AstConst::BitTrue{}};
+        AstNodeExpr* condp = nullptr;
+        for (AstNodeExpr* const leafp : it->second) {
+            AstNodeExpr* const clonep = sampled(newLeafCondp(leafp));
+            condp = condp ? new AstLogAnd{flp, condp, clonep} : clonep;
+        }
+        return condp;
+    }
+    // Whether any operand in 'mask' holds at clock offset 'offset'
+    static AstNodeExpr* newAnyHoldsp(const std::vector<FixedOrOperand>& ops, unsigned mask,
+                                     int offset, FileLine* flp) {
+        AstNodeExpr* condp = nullptr;
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!(mask & (1U << i))) continue;
+            AstNodeExpr* const opp = newOperandCondp(ops[i], offset, flp);
+            condp = condp ? new AstLogOr{flp, condp, opp} : opp;
+        }
+        return condp;
+    }
+    // Whether every operand in 'mask' holds at clock offset 'offset', or fails if not 'holds'
+    static AstNodeExpr* newAllHoldp(const std::vector<FixedOrOperand>& ops, unsigned mask,
+                                    int offset, bool holds, FileLine* flp) {
+        AstNodeExpr* condp = nullptr;
+        for (size_t i = 0; i < ops.size(); ++i) {
+            if (!(mask & (1U << i))) continue;
+            AstNodeExpr* opp = newOperandCondp(ops[i], offset, flp);
+            if (!holds) opp = new AstLogNot{flp, opp};
+            condp = condp ? new AstLogAnd{flp, condp, opp} : opp;
+        }
+        return condp;
+    }
+    // `s ##N (s1 or s2 ...)` with a fixed cycle delay distributed over the operands of the 'or',
+    // or nullptr for other sequences. The caller owns the result.
+    static AstNodeExpr* newDistributedOrp(AstSExpr* sexprp) {
+        AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+        if (!delayp || !delayp->isCycleDelay() || delayp->isRangeDelay()) return nullptr;
+        if (!VN_IS(sexprp->exprp(), SOr)) return nullptr;
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(sexprp->exprp(), opps);
+        AstNodeExpr* resultp = nullptr;
+        for (AstNodeExpr* const opp : opps) {
+            FileLine* const flp = opp->fileline();
+            AstNodeExpr* const preExprp = sexprp->preExprp();
+            AstNodeExpr* const termp
+                = new AstSExpr{flp, preExprp ? preExprp->cloneTreePure(false) : nullptr,
+                               delayp->cloneTree(false), opp->cloneTreePure(false)};
+            resultp = resultp ? new AstSOr{sexprp->fileline(), resultp, termp} : termp;
+        }
+        return resultp;
+    }
+    // Build `s1 or s2 ...` at the end of an asserted property, with fixed-length sequences of
+    // boolean leaves as operands, or return an invalid result for other operands
+    BuildResult buildFixedSeqOrProp(AstNodeExpr* lhsp, AstNodeExpr* rhsp,
+                                    SvaStateVertex* entryVtxp, FileLine* flp) {
+        // It holds when any operand matches, and fails once all have failed (IEEE 1800-2023
+        // 16.9.7, 16.12.2). The operands of an attempt start together and have fixed lengths, so
+        // at each clock offset track the set of operands of the attempt still matching. Offsets
+        // with no check and no end leave the set unchanged, so a delay ring skips them.
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(lhsp, opps);
+        collectOrOperands(rhsp, opps);
+        if (opps.size() > MAX_FIXED_OR_OPERANDS) return BuildResult::fail();
+        std::vector<FixedOrOperand> ops(opps.size());
+        std::set<int> offsets{0};  // Offsets of the start, and where an operand checks or ends
+        for (size_t i = 0; i < opps.size(); ++i) {
+            if (!flattenFixedSeq(opps[i], 0, ops[i].checks)) return BuildResult::fail();
+            ops[i].length = fixedLength(opps[i]);
+            for (const auto& offsetChecks : ops[i].checks) offsets.insert(offsetChecks.first);
+            offsets.insert(ops[i].length);
+        }
+        SvaStateVertex* const matchVtxp = scopedCreateVertex();
+        SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+        sinkVtxp->m_isRejectSink = true;
+        // The operand sets an attempt can move to number up to 3^n per checked offset, so their
+        // transitions are bounded
+        size_t transitions = 0;
+        // Vertices of the current offset, by the set of operands still matching
+        std::map<unsigned, SvaStateVertex*> livep;
+        livep[(1U << ops.size()) - 1] = entryVtxp;
+        for (auto it = offsets.begin(); !livep.empty(); ++it) {
+            const int offset = *it;
+            unsigned checkedMask = 0;
+            for (size_t i = 0; i < ops.size(); ++i) {
+                if (ops[i].checks.count(offset)) checkedMask |= 1U << i;
+            }
+            // Vertices entering the delay to the next offset, by the set of operands holding
+            std::map<unsigned, SvaStateVertex*> holdp;
+            for (const auto& maskVtx : livep) {
+                const unsigned mask = maskVtx.first;
+                SvaStateVertex* const fromp = maskVtx.second;
+                // The attempt fails when no operand still matching holds
+                m_graph.addLink(fromp, sinkVtxp, newAnyHoldsp(ops, mask, offset, flp))
+                    ->m_rejectOnFail
+                    = true;
+                // It matches when an operand ending here holds
+                unsigned endedMask = 0;
+                for (size_t i = 0; i < ops.size(); ++i) {
+                    if ((mask & (1U << i)) && ops[i].length == offset) endedMask |= 1U << i;
+                }
+                if (endedMask) {
+                    guardedLink(fromp, matchVtxp, newAnyHoldsp(ops, endedMask, offset, flp), flp);
+                }
+                // Otherwise it continues with the operands that hold. An operand with no check
+                // here holds.
+                const unsigned contMask = mask & ~endedMask;
+                const unsigned uncheckedMask = contMask & ~checkedMask;
+                for (unsigned checkedSub = contMask & checkedMask;;
+                     checkedSub = (checkedSub - 1) & contMask & checkedMask) {
+                    const unsigned sub = checkedSub | uncheckedMask;
+                    if (sub) {
+                        if (++transitions > MAX_FIXED_OR_TRANSITIONS) {
+                            flp->v3warn(E_UNSUPPORTED,
+                                        "Unsupported: sequence 'or' with more than "
+                                            << MAX_FIXED_OR_TRANSITIONS
+                                            << " transitions between the sets of operands still"
+                                               " matching in an asserted property"
+                                               " (IEEE 1800-2023 16.9.7)");
+                            return BuildResult::failWithError();
+                        }
+                        AstNodeExpr* condp = newAllHoldp(ops, sub, offset, true, flp);
+                        if (const unsigned failMask = (contMask & ~sub) | endedMask) {
+                            condp = new AstLogAnd{flp, condp,
+                                                  newAllHoldp(ops, failMask, offset, false, flp)};
+                        }
+                        SvaStateVertex*& toVtxp = holdp[sub];
+                        if (!toVtxp) toVtxp = scopedCreateVertex();
+                        guardedLink(fromp, toVtxp, condp, flp);
+                    }
+                    if (!checkedSub) break;
+                }
+            }
+            std::map<unsigned, SvaStateVertex*> nextp;
+            for (const auto& subVtx : holdp) {
+                const unsigned gap = static_cast<unsigned>(*std::next(it) - offset);
+                nextp[subVtx.first] = addDelayChain(subVtx.second, gap, flp);
+            }
+            livep = std::move(nextp);
+        }
+        V3Stats::addStatSum("Assertions, NFA 'or' operand set transitions", transitions);
+        return {matchVtxp, nullptr, {}};
+    }
+
+    // The conjunction of the checks of a sequence of boolean leaves with no cycle delay, or
+    // nullptr for other sequences
+    static AstNodeExpr* newZeroLengthCondp(AstNodeExpr* nodep, FileLine* flp) {
+        std::map<int, std::vector<AstNodeExpr*>> checks;
+        if (!flattenFixedSeq(nodep, 0, checks) || checks.size() != 1 || checks.count(0) != 1) {
+            return nullptr;
+        }
+        AstNodeExpr* condp = nullptr;
+        for (AstNodeExpr* const leafp : checks[0]) {
+            AstNodeExpr* const clonep = newLeafCondp(leafp);
+            condp = condp ? new AstLogAnd{flp, condp, clonep} : clonep;
+        }
+        return condp;
+    }
+    // Whether an operand of 'or' is a property rather than a sequence (IEEE 1800-2023 16.12)
+    static bool isPropertyOperand(const AstNode* const nodep) {
+        return nodep->exists([](const AstNodeExpr* const np) {
+            const AstLogNot* const notp = VN_CAST(np, LogNot);
+            return VN_IS(np, Implication) || VN_IS(np, Until) || VN_IS(np, PropAlways)
+                   || VN_IS(np, SEventually) || VN_IS(np, AbortOn)
+                   || (notp && hasMultiCycleExpr(notp->lhsp()));
+        });
+    }
+    // Whether a property operand detects failures without the 'or' merge vertex
+    static bool hasOwnFailure(const AstNode* const nodep) {
+        return nodep->exists([](const AstNodeExpr* const np) {
+            const AstAbortOn* const abortp = VN_CAST(np, AbortOn);
+            return VN_IS(np, PropAlways) || (abortp && !abortp->kind().isAccept());
+        });
+    }
+    // Describe an asserted 'or' that buildFixedSeqOrProp does not handle
+    static std::string orUnsupportedContext(AstNodeExpr* lhsp, AstNodeExpr* rhsp,
+                                            bool wantBoolLeaf) {
+        if (!wantBoolLeaf) {
+            return "sequence 'or' with a multi-cycle operand inside another operator of an"
+                   " asserted property (IEEE 1800-2023 16.9.7)";
+        }
+        if (isPropertyOperand(lhsp) || isPropertyOperand(rhsp)) {
+            return "property 'or' with a property operand in an asserted property"
+                   " (IEEE 1800-2023 16.12.4)";
+        }
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(lhsp, opps);
+        collectOrOperands(rhsp, opps);
+        if (opps.size() > MAX_FIXED_OR_OPERANDS) {
+            return "sequence 'or' with more than " + std::to_string(MAX_FIXED_OR_OPERANDS)
+                   + " operands in an asserted property (IEEE 1800-2023 16.9.7)";
+        }
+        return "sequence 'or' with an operand that is not a fixed-length sequence of boolean"
+               " expressions in an asserted property (IEEE 1800-2023 16.9.7)";
+    }
+
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
                              FileLine* flp, bool wantBoolLeaf) {
         // An attempt fails when every operand fails, which the merge vertex does not see
         const bool canFail = !m_noEosFailure && !m_inAntecedent;
+        if (wantBoolLeaf || (canFail && !m_inEmptyMatchConsequent)) {
+            // Operands with no cycle delay hold or fail at once, as the boolean OR-fold below
+            if (AstNodeExpr* const lhsCondp = newZeroLengthCondp(lhsp, flp)) {
+                if (AstNodeExpr* const rhsCondp = newZeroLengthCondp(rhsp, flp)) {
+                    return {entryVtxp, new AstLogOr{flp, lhsCondp, rhsCondp}, {}};
+                }
+                VL_DO_DANGLING(lhsCondp->deleteTree(), lhsCondp);
+            }
+        }
         if (canFail && wantBoolLeaf) {
             if (isPlainBoolean(lhsp) && hasMultiCycleExpr(rhsp)) {
                 return buildBoolOrProp(lhsp, rhsp, entryVtxp, flp);
             }
             if (isPlainBoolean(rhsp) && hasMultiCycleExpr(lhsp)) {
                 return buildBoolOrProp(rhsp, lhsp, entryVtxp, flp);
+            }
+            if (!isPlainBoolean(lhsp) && !isPlainBoolean(rhsp)) {
+                const BuildResult fixedOr = buildFixedSeqOrProp(lhsp, rhsp, entryVtxp, flp);
+                if (fixedOr.valid() || fixedOr.errorEmitted) return fixedOr;
+                // A property operand reports its own unsupported forms when built
+                if (!m_isNegated && !m_isSeqEvent && !isPropertyOperand(lhsp)
+                    && !isPropertyOperand(rhsp)) {
+                    // The merge vertex below would drop an attempt in which every operand fails
+                    flp->v3warn(E_UNSUPPORTED,
+                                "Unsupported: " << orUnsupportedContext(lhsp, rhsp, true));
+                    return BuildResult::failWithError();
+                }
             }
         }
         const BuildResult lhs = buildExpr(lhsp, entryVtxp);
@@ -1268,6 +1544,18 @@ class SvaNfaBuilder final {
                 freeUnlinkedCondp(rhs.finalCondp);
                 return {entryVtxp, orCondp, {}};
             }
+        }
+        // An 'always' or 'reject_on' operand rejects on its own, and keeps the failures that
+        // the merge vertex below reports, including those at the end of simulation
+        const bool ownFailure = (isPropertyOperand(lhsp) || isPropertyOperand(rhsp))
+                                && (hasOwnFailure(lhsp) || hasOwnFailure(rhsp));
+        if (canFail && !m_isNegated && !m_isSeqEvent && !booleanOnly && !ownFailure) {
+            // The merge vertex below would drop an attempt in which every operand fails
+            flp->v3warn(E_UNSUPPORTED,
+                        "Unsupported: " << orUnsupportedContext(lhsp, rhsp, wantBoolLeaf));
+            freeUnlinkedCondp(lhs.finalCondp);
+            freeUnlinkedCondp(rhs.finalCondp);
+            return BuildResult::failWithError();
         }
         SvaStateVertex* const mergeVtxp = scopedCreateVertex();
         if (booleanOnly) {
@@ -1504,7 +1792,7 @@ class SvaNfaBuilder final {
         if (it == checks.end()) return nullptr;
         AstNodeExpr* condp = nullptr;
         for (AstNodeExpr* const leafp : it->second) {
-            AstNodeExpr* const checkp = sampled(leafp->cloneTreePure(false));
+            AstNodeExpr* const checkp = sampled(newLeafCondp(leafp));
             condp = condp ? new AstLogAnd{flp, condp, checkp} : checkp;
         }
         return condp;
@@ -1765,6 +2053,14 @@ class SvaNfaBuilder final {
         }
         FileLine* const flp = nodep->fileline();
         const int slack = outerLen - innerLen;
+        // The alternative inner placements below form a sequence 'or', which drops an attempt
+        // in which every placement fails
+        if (slack && !m_noEosFailure && !m_inAntecedent && !m_isNegated && !m_isSeqEvent) {
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'within' with an inner sequence shorter"
+                                         " than the outer sequence in an asserted property"
+                                         " (IEEE 1800-2023 16.9.10)");
+            return BuildResult::failWithError();
+        }
         AstNodeExpr* innerOrp = nullptr;
         for (int i = 0; i <= slack; ++i) {
             const int postPad = slack - i;
@@ -1823,9 +2119,46 @@ class SvaNfaBuilder final {
             }
             return flattenFixedSeq(sexprp->exprp(), baseOffset + preLen + delayCycles, out);
         }
+        if (AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
+            // Over a single-cycle sequence, both conditions hold at that tick (IEEE 1800-2023
+            // 16.9.9)
+            if (fixedLength(throughp->rhsp()) != 0 || !isPlainBoolean(throughp->lhsp())
+                || !flattenFixedSeq(throughp->rhsp(), baseOffset, out)) {
+                return false;
+            }
+            out[baseOffset].push_back(throughp->lhsp());
+            return true;
+        }
+        if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            // A boolean leaf if single-cycle, see newLeafCondp
+            std::map<int, std::vector<AstNodeExpr*>> lhsChecks;
+            std::map<int, std::vector<AstNodeExpr*>> rhsChecks;
+            if (!implp->isOverlapped() || implp->isFollowedBy()
+                || !flattenFixedSeq(implp->lhsp(), 0, lhsChecks)
+                || !flattenFixedSeq(implp->rhsp(), 0, rhsChecks) || lhsChecks.size() != 1
+                || !lhsChecks.count(0) || rhsChecks.size() != 1 || !rhsChecks.count(0)) {
+                return false;
+            }
+            out[baseOffset].push_back(nodep);
+            return true;
+        }
         if (!isPlainBoolean(nodep)) return false;
         out[baseOffset].push_back(nodep);
         return true;
+    }
+    // Condition of a leaf that flattenFixedSeq collected
+    static AstNodeExpr* newLeafCondp(AstNodeExpr* leafp) {
+        const AstImplication* const implp = VN_CAST(leafp, Implication);
+        if (!implp) return leafp->cloneTreePure(false);
+        // A single-cycle overlapped implication holds unless its antecedent holds and its
+        // consequent does not (IEEE 1800-2023 16.12.7)
+        FileLine* const flp = implp->fileline();
+        AstNodeExpr* const notAntp = new AstLogNot{flp, newZeroLengthCondp(implp->lhsp(), flp)};
+        notAntp->dtypeSetBit();
+        AstNodeExpr* const condp
+            = new AstLogOr{flp, notAntp, newZeroLengthCondp(implp->rhsp(), flp)};
+        condp->dtypeSetBit();
+        return condp;
     }
 
     // Conjoin two fixed-length sequences starting together into one sequence, or null
@@ -1847,7 +2180,7 @@ class SvaNfaBuilder final {
             const int offset = offsetChecks.first;
             AstNodeExpr* condp = nullptr;
             for (AstNodeExpr* const leafp : offsetChecks.second) {
-                AstNodeExpr* const clonep = leafp->cloneTreePure(false);
+                AstNodeExpr* const clonep = newLeafCondp(leafp);
                 if (!condp) {
                     condp = clonep;
                 } else {
@@ -2397,6 +2730,17 @@ public:
         const bool wantBoolLeaf = m_wantBoolLeaf;
         m_wantBoolLeaf = false;
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            if (wantBoolLeaf && !m_noEosFailure && !m_inAntecedent && !m_isNegated
+                && !m_isSeqEvent) {
+                if (AstNodeExpr* const orp = newDistributedOrp(sexprp)) {
+                    // Build `s ##N (s1 or s2)` as `(s ##N s1) or (s ##N s2)` (IEEE 1800-2023
+                    // 16.9.7), which buildFixedSeqOrProp can make fail
+                    m_wantBoolLeaf = true;
+                    const BuildResult result = buildExpr(orp, entryVtxp, isTopLevelStep);
+                    VL_DO_DANGLING(orp->deleteTree(), orp);
+                    return result;
+                }
+            }
             return buildSExpr(sexprp, entryVtxp, isTopLevelStep);
         }
         if (AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
@@ -2652,6 +2996,7 @@ class SvaNfaLowering final {
     V3UniqueNames& m_actionNames;  // Automatics of cloned actions
     size_t m_statDelayRingEdgeVisits = 0;  // Delay-ring incoming edges visited
     size_t m_statLinkResolves = 0;  // Combinational vertex state signals built
+    size_t m_statVertices = 0;  // NFA state vertices lowered
 
     // Per-lowering shared context (passed to phase sub-functions)
     // Per-vertex lowering state is stored in SvaVertexData and accessed via
@@ -3236,8 +3581,7 @@ class SvaNfaLowering final {
         if (guardRejects) {
             for (AstNodeExpr* const cp : vtxp->m_throughoutConds) {
                 AstNodeExpr* const sp = sampled(cp->cloneTreePure(false));
-                guardp = guardp ? static_cast<AstNodeExpr*>(new AstLogAnd{c.flp, guardp, sp})
-                                : sp;
+                guardp = guardp ? static_cast<AstNodeExpr*>(new AstLogAnd{c.flp, guardp, sp}) : sp;
             }
         }
         if (vtxp->m_abortRejectp) {
@@ -3436,9 +3780,14 @@ class SvaNfaLowering final {
 
         // Exact counts always count failures, from zero
         if (c.exactCounts) sigs.threadFailCountp = newTypedConstp(c.flp, m_u32DTypep, 0);
-        // Each terminal thread fails when the final condition is false.
+        // Each terminal thread fails when the final condition is false. A final condition with
+        // a future value function is only known one global clock tick later (see
+        // unloweredFuturep), so its failures are not counted: several on one tick run the fail
+        // action once.
         AstNodeExpr* terminalCountp = nullptr;
-        const bool needTerminalCount = needRejectCount && c.matchCondp;
+        const bool needTerminalCount
+            = needRejectCount && c.matchCondp
+              && !c.matchCondp->exists([](const AstNode* np) { return isFutureValueFn(np); });
         computeTerminalMatchAndReject(c, sigs, needMatchCount,
                                       needTerminalCount ? &terminalCountp : nullptr);
         if (terminalCountp) {
@@ -3836,6 +4185,7 @@ public:
     ~SvaNfaLowering() {
         V3Stats::addStatSum("Assertions, NFA delay ring edge visits", m_statDelayRingEdgeVisits);
         V3Stats::addStatSum("Assertions, NFA link resolves", m_statLinkResolves);
+        V3Stats::addStatSum("Assertions, NFA state vertices", m_statVertices);
     }
 
     // Return the statements run by an assertion failing at end of simulation
@@ -4026,6 +4376,8 @@ public:
             m_modp->addStmtsp(varp);
             vtx[i]->datap()->stateVarp = varp;
         }
+
+        m_statVertices += vtx.size();
 
         // Build lowering context for phase sub-functions.
         LowerCtx c{flp,           senTreep, disableExprp, matchCondp,  assertType,
@@ -4641,8 +4993,19 @@ class AssertNfaMatchItemVisitor final : public VNVisitor {
         }
         iterateAndNextNull(nodep->exprp());
     }
+    // True if exprStmtp is a match item, not an ExprStmt that V3Width made assigning a
+    // temporary, e.g. for 'inside' with an impure left-hand side
+    static bool isMatchItem(const AstExprStmt* exprStmtp) {
+        const AstAssign* const assignp = VN_CAST(exprStmtp->stmtsp(), Assign);
+        const AstVarRef* const lhsRefp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
+        return !lhsRefp || lhsRefp->varp()->varType() != VVarType::XTEMP;
+    }
     void visit(AstExprStmt* nodep) override {
         ++m_statWork;
+        if (!isMatchItem(nodep)) {
+            iterateChildren(nodep);
+            return;
+        }
         if (m_operandStart) {
             iterateSequentialOperand(nodep);
             return;
@@ -4797,18 +5160,6 @@ public:
 // Top-level visitor
 
 class AssertNfaVisitor final : public VNVisitor {
-    // True if exprStmtp is a match item
-    static bool isMatchItem(const AstExprStmt* exprStmtp) {
-        // V3Width also creates an ExprStmt assigning a temporary, e.g. for 'inside' with an
-        // impure left-hand side
-        const AstAssign* const assignp = VN_CAST(exprStmtp->stmtsp(), Assign);
-        const AstVarRef* const lhsRefp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
-        return !lhsRefp || lhsRefp->varp()->varType() != VVarType::XTEMP;
-    }
-    // True if nodep contains a match item
-    static bool hasMatchItem(const AstNode* nodep) {
-        return nodep->exists([](const AstExprStmt* exprStmtp) { return isMatchItem(exprStmtp); });
-    }
     // STATE
     AstNodeModule* m_modp = nullptr;  // Current module being processed
     AstClocking* m_defaultClockingp = nullptr;  // Default clocking
@@ -4846,6 +5197,25 @@ class AssertNfaVisitor final : public VNVisitor {
             graph.addLink(srcVtxp, graph.m_matchVertexp, condp);
             srcVtxp->m_isUnbounded = true;
         }
+    }
+
+    // First subroutine call match item of a multi-cycle sequence in a property, or nullptr
+    static const AstNode* matchItemCall(const AstNode* nodep) {
+        // Calls are not executed at the end points of such a sequence (IEEE 1800-2023 16.11);
+        // V3AssertNfa lowers those of a boolean. Any other match item is an assignment by
+        // here, as V3LinkInc lowers increments.
+        const AstNode* callp = nullptr;
+        nodep->exists([&callp](const AstExprStmt* exprStmtp) {
+            if (!hasMultiCycleExpr(exprStmtp->resultp())) return false;
+            for (const AstNode* stmtp = exprStmtp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (!VN_IS(stmtp, Assign)) {
+                    callp = stmtp;
+                    return true;
+                }
+            }
+            return false;
+        });
+        return callp;
     }
 
     // Report a goto or nonconsecutive repetition in nodep with a sequence operand, true if any
@@ -4947,7 +5317,7 @@ class AssertNfaVisitor final : public VNVisitor {
                           /*vacuous=*/false);
         splitsp = AstNode::addNextNull<AstNodeStmt>(splitsp, nonvacuousp);
         // Another attempt failing on the same tick runs the fail action instead
-        assertp->prependFailsp(V3AssertCommon::cloneAction(splitsp, m_actionNames));
+        prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(splitsp, m_actionNames));
         assertp->addPasssp(splitsp);
     }
 
@@ -5094,7 +5464,7 @@ class AssertNfaVisitor final : public VNVisitor {
             assertp->addPasssp(ifp);
             // Fail-handler prefix for overlapping instances (IEEE 16.12):
             // fires when reject=1 && match=1 in the same cycle.
-            assertp->prependFailsp(V3AssertCommon::cloneAction(ifp, m_actionNames));
+            prependFailAction(assertp, m_modp, V3AssertCommon::cloneAction(ifp, m_actionNames));
         }
     }
 
@@ -5106,7 +5476,8 @@ class AssertNfaVisitor final : public VNVisitor {
     }
 
     // Takes ownership of outputp, and of matchp, matchCountp, failCountp and passCountp if
-    // non-null
+    // non-null. failCountp and passCountp count the failures and passes on a tick, to replay
+    // their action blocks.
     void finishDirective(AstNodeCoverOrAssert* assertp, const PropertyParts& parts,
                          AstSenTree* senTreep, AstNodeExpr* outputp, AstNodeExpr* matchp,
                          AstNodeExpr* matchCountp, AstNodeExpr* failCountp,
@@ -5149,6 +5520,18 @@ class AssertNfaVisitor final : public VNVisitor {
         return nullptr;
     }
 
+    // True if V3AssertPre lowers a chain of property instances with one fail per attempt
+    static bool isPreChain(const AstPropSpec* specp) {
+        bool repetition = false;
+        const bool unsupported = specp->exists([&](const AstNode* np) {
+            if (VN_IS(np, SGotoRep) || VN_IS(np, SNonConsRep)) repetition = true;
+            const AstVarRef* const refp = VN_CAST(np, VarRef);
+            const AstDelay* const delayp = VN_CAST(np, Delay);
+            return (refp && refp->varp()->isAssertLocal()) || (delayp && delayp->isRangeDelay());
+        });
+        return repetition && !unsupported;
+    }
+
     // Reject unsupported shapes.
     // Returns the PropSpec to lower, or nullptr when fully handled here.
     AstPropSpec* prepareAssertionProp(AstNodeCoverOrAssert* assertp) {
@@ -5157,23 +5540,11 @@ class AssertNfaVisitor final : public VNVisitor {
             return nullptr;
         }
         if (AstPropSpec* const specp = VN_CAST(assertp->propp(), PropSpec)) {
-            // Leave a chain of property instances to V3AssertPre: the NFA lowering
-            // reports one fail for attempts failing in the same cycle, e.g. after a goto
-            // repetition antecedent, but each attempt fails (IEEE 1800-2023 16.14.1).
-            if (specp->fromInstanceChain()) {
-                // V3AssertPre keeps no per-attempt storage for a local variable
-                const AstVarRef* localp = nullptr;
-                specp->exists([&](const AstVarRef* refp) {
-                    if (refp->varp()->isAssertLocal()) localp = refp;
-                    return localp != nullptr;
-                });
-                if (localp) {
-                    localp->v3warn(E_UNSUPPORTED, "Unsupported: local variable in a chain of"
-                                                  " property instances (IEEE 1800-2023 16.10).");
-                    replaceBodyOnBuildError(specp->fileline(), specp, /*errorEmitted=*/true);
-                }
-                return nullptr;
-            }
+            // Leave a chain of property instances with a goto or nonconsecutive repetition to
+            // V3AssertPre: the NFA lowering reports one fail for attempts failing in the same
+            // cycle, but each attempt fails (IEEE 1800-2023 16.14.1). V3AssertPre keeps no
+            // per-attempt storage for a local variable, and does not lower a range delay.
+            if (specp->fromInstanceChain() && isPreChain(specp)) return nullptr;
             if (hoistClockedSeq(specp)) return nullptr;
         }
 
@@ -5202,6 +5573,12 @@ class AssertNfaVisitor final : public VNVisitor {
         }
 
         if (!hasMultiCycleExpr(propp)) return nullptr;
+        if (const AstNode* const callp = matchItemCall(propp)) {
+            callp->v3warn(E_UNSUPPORTED, "Unsupported: subroutine call match item in a multi-cycle"
+                                         " property (IEEE 1800-2023 16.11)");
+            VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
+            return nullptr;
+        }
         if (isBareTopLevelUntil(propp)) return nullptr;
         // An 'iff' is a Boolean equivalence (AstLogEq), which cannot hold a multi-cycle operand.
         // A followed-by operand is reported more specifically by V3AssertPre.
@@ -5223,24 +5600,6 @@ class AssertNfaVisitor final : public VNVisitor {
             replaceBodyOnBuildError(assertp->fileline(), propp, /*errorEmitted=*/true);
             return nullptr;
         }
-        // Match items in a repetition update the attempt's local variables at each iteration,
-        // the value flowing into the next one (IEEE 1800-2023 16.10), which is not modeled.
-        // Checked before the match items are lowered, which would report it less precisely.
-        const AstNodeExpr* itemRepp = nullptr;
-        propp->exists([&](const AstNodeExpr* repp) {
-            if (!VN_IS(repp, SConsRep) && !VN_IS(repp, SGotoRep) && !VN_IS(repp, SNonConsRep)) {
-                return false;
-            }
-            if (!hasMatchItem(repp)) return false;
-            itemRepp = repp;
-            return true;
-        });
-        if (itemRepp) {
-            itemRepp->v3warn(E_UNSUPPORTED, "Unsupported: sequence match item in repetition"
-                                            " (IEEE 1800-2023 16.10)");
-            VL_DO_DANGLING(pushDeletep(assertp->unlinkFrBack()), assertp);
-            return nullptr;
-        }
         return propp;
     }
 
@@ -5256,24 +5615,17 @@ class AssertNfaVisitor final : public VNVisitor {
     static const AstNode* unloweredFuturep(const AstPropSpec* propp, const PropertyParts& parts) {
         // V3Assert evaluates the property one global clock tick late, delaying the other values
         // of its final condition (IEEE 1800-2023 16.9.4), so future values are supported only in
-        // a boolean consequent, which stays in the final condition
+        // a boolean consequent, which stays in the final condition. One in the disable
+        // condition is illegal, which V3Assert reports.
         const AstNode* futurep = nullptr;
-        const auto findFuture = [&futurep](const AstNode* nodep) {
-            if (!nodep) return;
-            nodep->exists([&futurep](const AstNode* np) {
-                if (!VN_IS(np, Future) && !VN_IS(np, Rising) && !VN_IS(np, Falling)
-                    && !VN_IS(np, Steady))
-                    return false;
-                futurep = np;
-                return true;
-            });
-        };
-        if (!parts.hasImplication || hasMultiCycleExpr(parts.seqExprp)) {
-            findFuture(propp);
-        } else {
-            findFuture(parts.triggerExprp);
-            findFuture(propp->disablep());
-        }
+        const AstNode* const searchp = !parts.hasImplication || hasMultiCycleExpr(parts.seqExprp)
+                                           ? propp->propp()
+                                           : parts.triggerExprp;
+        searchp->exists([&futurep](const AstNode* np) {
+            if (!isFutureValueFn(np)) return false;
+            futurep = np;
+            return true;
+        });
         return futurep;
     }
 
@@ -5529,6 +5881,11 @@ class AssertNfaVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstAlways* nodep) override {
+        // The process of a concurrent assertion item is not a procedural context
+        if (nodep->keyword() == VAlwaysKwd::ASSERT_COVER) {
+            iterateChildren(nodep);
+            return;
+        }
         VL_RESTORER(m_alwaysp);
         VL_RESTORER(m_alwaysClockp);
         m_alwaysp = nodep;

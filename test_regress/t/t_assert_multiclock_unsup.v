@@ -28,11 +28,20 @@ module t (
   endproperty
   // verilog_format: on
 
+  // An instance chain with a goto repetition, left to V3AssertPre
+  property p_goto;
+    push [->1] |-> @(posedge rclk) pop;
+  endproperty
+  property p_goto_chain;
+    p_goto;
+  endproperty
+
   assert property (@(posedge wclk) push |=> @(posedge rclk) pop);
   assert property (@(posedge wclk) push |-> @rclk pop);
   assert property (s_mclk);
   cover property (@(posedge wclk) push ##2 @(negedge rclk) pop);
   assert property (@(posedge wclk) pop |-> p_nested);
   assert property (@(posedge wclk) pop |-> p_nested_item);
+  assert property (@(posedge wclk) p_goto_chain);
 
 endmodule
