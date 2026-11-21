@@ -3440,6 +3440,33 @@ class ConstraintExprVisitor final : public VNVisitor {
         }
         return condp;
     }
+    // Return whether the index of 'selp' depends on a randomized variable
+    static bool isRandIndex(const AstArraySel* selp) {
+        // Not just user1, which can be over-marked in sum/with expansion contexts. A
+        // std::randomize() with-clause argument carries no rand qualifier of its own but is
+        // still part of the solve.
+        return selp->bitp()->exists([](const AstNodeVarRef* vrefp) {
+            return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+        });
+    }
+    // Return SMT condition that the rand indices of select chain 'nodep' are in range, or nullptr
+    static AstNodeExpr* newIndexInRangep(const AstArraySel* nodep) {
+        AstNodeExpr* condp = nullptr;
+        for (const AstArraySel* selp = nodep; selp; selp = VN_CAST(selp->fromp(), ArraySel)) {
+            const uint32_t elements
+                = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+            const int width = selp->bitp()->width();
+            if (!isRandIndex(selp) || (width < 32 && (1U << width) <= elements)) continue;
+            FileLine* const fl = selp->fileline();
+            AstNodeExpr* const gtep
+                = new AstGte{fl, new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1},
+                             selp->bitp()->cloneTreePure(false)};
+            gtep->user1(true);
+            condp = condp ? new AstLogAnd{fl, condp, gtep} : gtep;
+            condp->user1(true);
+        }
+        return condp;
+    }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
@@ -3465,9 +3492,9 @@ class ConstraintExprVisitor final : public VNVisitor {
             = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
         const bool indexIsRand = isRandIndex(nodep->bitp());
-        if (!indexIsRand) {
-            // V3Width keeps all index bits; truncate as it did before, as the names of struct
-            // and class array elements depend on the index width
+        if (!indexIsRand || m_structSel) {
+            // V3Width keeps all index bits; truncate to the array's select width, which the
+            // names of struct and class array elements require, also for a random index
             const int selWidth
                 = V3Number::log2b(VN_AS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)
                                       ->declRange()

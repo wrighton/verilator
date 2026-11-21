@@ -1649,15 +1649,17 @@ class WidthVisitor final : public VNVisitor {
                 // Note we've already subtracted off LSB
                 if (const AstConst* const constp = VN_CAST(nodep->bitp(), Const)) {
                     const bool hasAnyXZ = constp->num().isAnyXZ();
-                    if (hasAnyXZ || constp->toSInt() > (frommsb - fromlsb)
-                        || constp->toSInt() < 0) {
+                    // A wider value is out of range
+                    if (hasAnyXZ || !constp->num().fitsInUInt()
+                        || (constp->num().isSigned() && constp->num().isNegative())
+                        || constp->num().toUInt() > static_cast<uint32_t>(frommsb - fromlsb)) {
                         // Suppress in dead/parameterized template modules
                         if (!(m_modep && (m_modep->dead() || m_modep->parameterizedTemplate()))) {
                             std::stringstream val;
                             if (hasAnyXZ) {
                                 val << constp->num();
                             } else {
-                                val << (constp->toSInt() + fromlsb);
+                                val << declIndexStr(nodep, constp->num(), fromlsb);
                             }
                             nodep->v3warn(SELRANGE, "Selection index out of range: "
                                                         << val.str() << " outside " << frommsb
@@ -1675,6 +1677,25 @@ class WidthVisitor final : public VNVisitor {
         }
     }
 
+    // Return storage index 'num' of an array with low bound 'lsb' as declared index string
+    static string declIndexStr(const AstNode* nodep, const V3Number& num, int lsb) {
+        // Wide enough that adding 'lsb' cannot overflow
+        const int width = std::max(num.width(), 32) + 1;
+        V3Number numExt{&num, width, 0};
+        if (num.isSigned()) {
+            numExt.opExtendS(num, num.width());
+        } else {
+            numExt.opAssign(num);
+        }
+        V3Number lsbNum{&num, width, 0};
+        lsbNum.opExtendS(V3Number{&num, 32, static_cast<uint32_t>(lsb)}, 32);
+        V3Number declNum{&num, width, 0};
+        declNum.opAdd(numExt, lsbNum);
+        if (!declNum.isNegative()) return declNum.displayed(nodep, "%0d");
+        V3Number posNum{&num, width, 0};
+        posNum.opNegate(declNum);
+        return "-" + posNum.displayed(nodep, "%0d");
+    }
     void visit(AstAssocSel* nodep) override {
         // Signed/Real: Output type based on array-declared type; binary operator
         assertAtExpr(nodep);
