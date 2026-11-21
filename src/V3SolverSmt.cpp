@@ -67,6 +67,28 @@ static std::string buildMemberPath(const AstNodeExpr* const exprp) {
 //######################################################################
 // Helpers shared by the lowering visitors
 
+// Whether any operand of nodep depends on a randomized variable
+static bool operandsRand(const AstNode* nodep) {
+    return (nodep->op1p() && nodep->op1p()->user1()) || (nodep->op2p() && nodep->op2p()->user1())
+           || (nodep->op3p() && nodep->op3p()->user1())
+           || (nodep->op4p() && nodep->op4p()->user1());
+}
+
+// Whether an array index depends on a variable being randomized
+static bool isRandIndex(const AstNodeExpr* indexp) {
+    // Not user1, which can be over-marked in sum/with expansion contexts. A std::randomize()
+    // with-clause argument carries no rand qualifier of its own but is still part of the solve.
+    return indexp->exists([](const AstNodeVarRef* const vrefp) {
+        return vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg();
+    });
+}
+
+// Return the index of an array element select
+static AstNodeExpr* selIndexp(AstNode* selp) {
+    if (AstArraySel* const arraySelp = VN_CAST(selp, ArraySel)) return arraySelp->bitp();
+    return VN_AS(selp, CMethodHard)->pinsp();
+}
+
 // SMT constant with the value of nodep
 static AstSFormatF* getConstFormat(AstNodeExpr* nodep) {
     return new AstSFormatF{nodep->fileline(), (nodep->width() & 3) ? "#b%b" : "#x%x", false,
@@ -553,7 +575,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     bool editFormat(AstNodeExpr* nodep) {
-        if (nodep->user1()) return false;
+        if (nodep->user1()) return editStateArraySel(nodep);
         // Replace computable expression with SMT constant
         VNRelinker handle;
         nodep->unlinkFrBack(&handle);
@@ -854,6 +876,112 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const argsp = AstNode::addNext(arrExprp, idxExprp);
         AstSFormatF* const formatp = new AstSFormatF{fl, "(select %s %s)", false, argsp};
         return formatp;
+    }
+
+    // Return a random array index widened to the 32-bit index sort of SMT arrays
+    static AstNodeExpr* newSmtIndexp(AstNodeExpr* indexp, bool isSigned) {
+        if (indexp->width() >= 32) return indexp;
+        AstNodeExpr* extendp;
+        if (isSigned) {
+            extendp = new AstExtendS{indexp->fileline(), indexp, 32};
+        } else {
+            extendp = new AstExtend{indexp->fileline(), indexp, 32};
+        }
+        extendp->user1(true);
+        return extendp;
+    }
+    // Return an SMT array of the value of exprp at each element of the array selp selects
+    AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp) {
+        // Element i is exprp with the random index of selp replaced by i, so it may read
+        // members of the array element and depend on other random variables. Elements that do
+        // not exist read as zero, the default value of a 2-state type (IEEE 1800-2023 7.4.6),
+        // which also makes 'inside' a member array of a nonexistent element false. The index
+        // of a fixed-size array was already truncated to the width that addresses the array,
+        // as in other expressions.
+        FileLine* const fl = selp->fileline();
+        AstNodeExpr* const arrayp = VN_IS(selp, ArraySel) ? VN_AS(selp, ArraySel)->fromp()
+                                                          : VN_AS(selp, CMethodHard)->fromp();
+        const int idxWidth = std::max(32, selIndexp(selp)->width());
+        AstVar* const idxVarp
+            = new AstVar{fl, VVarType::BLOCKTEMP, "__VarrIdx", arrayp->findIntDType()};
+        AstForeachHeader* const headerp
+            = new AstForeachHeader{fl, arrayp->cloneTreePure(false), idxVarp};
+        // Key is the offset from the low bound, as in ArraySel
+        AstNodeExpr* posp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        if (const AstUnpackArrayDType* const adtypep
+            = VN_CAST(arrayp->dtypep()->skipRefp(), UnpackArrayDType)) {
+            posp = new AstSub{fl, posp,
+                              new AstConst{fl, AstConst::WidthedValue{}, 32,
+                                           static_cast<uint32_t>(adtypep->lo())}};
+            posp->dtypeFrom(idxVarp);
+        }
+        AstNodeExpr* const elemp = exprp->cloneTreePure(false);
+        AstNode* const elemSelp = selp->clonep();
+        AstNodeExpr* const oldIndexp = selIndexp(elemSelp);
+        oldIndexp->replaceWith(posp->cloneTreePure(false));
+        VL_DO_DANGLING(oldIndexp->deleteTree(), oldIndexp);
+        // The path from elemp down to the element select, through fromp (see randIndexSelp),
+        // no longer depends on the index
+        std::vector<AstNode*> pathps;
+        for (AstNode* nodep = elemp;; nodep = nodep->op1p()) {
+            pathps.push_back(nodep);
+            if (nodep == elemSelp) break;
+        }
+        for (auto it = pathps.rbegin(); it != pathps.rend(); ++it) {
+            (*it)->user1(operandsRand(*it));
+        }
+        AstNodeExpr* const handlep = selp->cloneTreePure(false);
+        AstNodeExpr* const handleIndexp = selIndexp(handlep);
+        handleIndexp->replaceWith(posp->cloneTreePure(false));
+        VL_DO_DANGLING(handleIndexp->deleteTree(), handleIndexp);
+        const int width = exprp->width();
+        AstCStmt* const cstmtp = new AstCStmt{fl};
+        cstmtp->add("ret = \"(store \" + ret + \" \" + ");
+        cstmtp->add(getConstFormat(idxWidth > 32 ? new AstExtend{fl, posp, idxWidth} : posp));
+        cstmtp->add(" + \" \" + ");
+        cstmtp->add(iterateSubtreeReturnEdits(elemp));
+        cstmtp->add(" + \")\";\n");
+        AstCExpr* const cexprp = new AstCExpr{fl};
+        cexprp->dtypeSetString();
+        const std::string zero
+            = (width & 3) ? "#b" + std::string(width, '0') : "#x" + std::string(width / 4, '0');
+        cexprp->add("([&]{\nstd::string ret = \"((as const (Array (_ BitVec " + cvtToStr(idxWidth)
+                    + ") (_ BitVec " + cvtToStr(width) + "))) " + zero + ")\";\n");
+        AstNodeStmt* bodyp = cstmtp;
+        if (VN_IS(handlep->dtypep()->skipRefp(), ClassRefDType)) {
+            // A null handle has no members; its element reads as zero like a nonexistent one
+            AstNeq* const nonNullp = new AstNeq{fl, handlep, new AstConst{fl, AstConst::Null{}}};
+            nonNullp->dtypeSetBit();
+            bodyp = new AstIf{fl, nonNullp, cstmtp};
+        } else {
+            VL_DO_DANGLING(handlep->deleteTree(), handlep);
+        }
+        cexprp->add(new AstBegin{fl, m_uniqueNames.get("__VrandBlock"),
+                                 new AstForeach{fl, headerp, bodyp}, true});
+        cexprp->add("return ret;\n})()");
+        return new AstSFormatF{fl, "%s", false, cexprp};
+    }
+    // Replace an expression reading a non-random array through a random index
+    bool editStateArraySel(AstNodeExpr* nodep) {
+        if (!nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return false;
+        AstNodeExpr* const selp = RandomizeUtil::randIndexSelp(nodep, isRandIndex);
+        if (!selp) return false;
+        AstSFormatF* const arrayp = newIndexedArrayp(nodep, selp);
+        AstNodeExpr* const indexp = selIndexp(selp)->unlinkFrBack();
+        // The offset into a fixed-size array is unsigned, even when computed as signed
+        AstNodeExpr* const smtIndexp
+            = newSmtIndexp(indexp, VN_IS(selp, CMethodHard) && indexp->isSigned());
+        nodep->replaceWith(createSolverArrDerefp(
+            nodep->fileline(), arrayp, VN_AS(iterateSubtreeReturnEdits(smtIndexp), NodeExpr)));
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
+    // Report a random index into a non-random array not read as an integral value
+    void unsupportedStateArraySel(AstNodeExpr* selp) {
+        selp->v3warn(E_UNSUPPORTED, "Unsupported: Randomized index into a non-random array "
+                                    "selecting a non-integral value");
+        selp->user1(false);
+        editFormat(selp);
     }
 
     // Add registration regp of a variable reached through member objects
@@ -1955,31 +2083,26 @@ class ConstraintExprVisitor final : public VNVisitor {
             VL_DO_DANGLING(origp->deleteTree(), origp);
         }
     }
-    void renameArrayExpr(AstSFormatF* const newp) const {
+    // Name an element of an array of structs or objects the way the solver registers it
+    void renameArrayExpr(AstSFormatF* const newp, const bool objectElem) const {
         if (m_structSel) {
             newp->name("%s.%s");
-            newp->exprsp()->nextp()->name("%x");
+            // Objects are registered with an unpadded index (createWriteVarForClassFields)
+            newp->exprsp()->nextp()->name(objectElem ? "%0x" : "%x");
         }
     }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
+        const bool objectElem = VN_IS(nodep->dtypep()->skipRefp(), ClassRefDType);
         VNRelinker handle;
-        // Check if index actually references a rand variable (not just user1,
-        // which can be over-marked in sum/with expansion contexts). A
-        // std::randomize() with-clause argument carries no rand qualifier of
-        // its own but is still part of the solve.
-        bool indexIsRand = false;
-        nodep->bitp()->foreach([&](const AstNodeVarRef* vrefp) {
-            if (vrefp->varp()->rand().isRandomizable() || vrefp->varp()->isStdRandomizeArg()) {
-                indexIsRand = true;
-            }
-        });
+        const bool indexIsRand = isRandIndex(nodep->bitp());
         if (m_nestedAccessp) {
             AstNodeExpr* const bitp = nodep->bitp()->cloneTreePure(false);
             AstNodeExpr* const bitFormatp
-                = indexIsRand ? new AstSFormatF{bitp->fileline(), bitp->name(), false, nullptr}
-                              : new AstSFormatF{bitp->fileline(), "%x", false, bitp};
+                = indexIsRand
+                      ? new AstSFormatF{bitp->fileline(), bitp->name(), false, nullptr}
+                      : new AstSFormatF{bitp->fileline(), objectElem ? "%0x" : "%x", false, bitp};
             AstSFormatF* const herep
                 = new AstSFormatF{nodep->fileline(), "%s.%s", false, bitFormatp};
             if (AstSel* const selp = VN_CAST(bitp, Sel)) {
@@ -1995,18 +2118,15 @@ class ConstraintExprVisitor final : public VNVisitor {
                 return;
             }
         }
-        if (indexIsRand) {
+        if (indexIsRand && !nodep->fromp()->user1()) {
+            unsupportedStateArraySel(nodep);
+        } else if (indexIsRand) {
             // Index depends on rand variable -- keep as SMT symbol.
-            // Array index sort is 32-bit, so zero-extend narrower indices.
-            AstNodeExpr* indexp = nodep->bitp()->unlinkFrBack(&handle);
-            if (indexp->width() < 32) {
-                AstExtend* const extendp = new AstExtend{fl, indexp, 32};
-                extendp->user1(true);
-                indexp = extendp;
-            }
+            // The offset from the low bound is unsigned, even when computed as signed
+            AstNodeExpr* const indexp = newSmtIndexp(nodep->bitp()->unlinkFrBack(&handle), false);
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
-            renameArrayExpr(newp);
+            renameArrayExpr(newp, objectElem);
         } else {
             // Index is constant or non-rand -- format as hex literal.
             // Keep a pre-edit clone for the rand_mode hoist below.
@@ -2015,7 +2135,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 = new AstSFormatF{fl, "#x%8x", false, nodep->bitp()->unlinkFrBack(&handle)};
             handle.relink(indexp);
             AstSFormatF* const newp = editSMT(nodep, nodep->fromp(), indexp);
-            renameArrayExpr(newp);
+            renameArrayExpr(newp, objectElem);
             if (!newp || !hoistRandModeOverSelectAndMember(newp, origp)) {
                 VL_DO_DANGLING(origp->deleteTree(), origp);
             }
@@ -2073,6 +2193,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         return true;
     }
     void visit(AstMemberRef* nodep) override {
+        if (nodep->user1() && editStateArraySel(nodep)) return;
         // Check if rootVar is globalConstrained
         if (nodep->user1() && nodep->varp()->rand().isRandomizable() && nodep->fromp()) {
             FileLine* const fl = nodep->fileline();
@@ -2603,9 +2724,7 @@ class ConstraintExprVisitor final : public VNVisitor {
 
         if (nodep->method() == VCMethod::ARRAY_AT) {
             addStringNamePart(nodep->pinsp(), "%x");
-            const bool indexIsRand = nodep->pinsp()->exists([](const AstNodeVarRef* const vrefp) {
-                return vrefp->varp()->rand().isRandomizable();
-            });
+            const bool indexIsRand = isRandIndex(nodep->pinsp());
             if (nodep->fromp()->user1()) {
                 // Queue/dynamic element: pre-edit clone for the rand_mode hoist, non-rand index
                 // only. A std::randomize() with-clause argument carries no rand qualifier of its
@@ -2678,9 +2797,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 }
 
             } else if (indexIsRand) {
-                nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported: Randomization of an index to a non-random variable");
-
+                unsupportedStateArraySel(nodep);
             } else {
                 nodep->user1(false);
                 UASSERT_OBJ(editFormat(nodep), nodep,
@@ -3302,26 +3419,45 @@ class SolverSmtLowering final : public V3SolverLowering {
         setp->dtypeSetVoid();
         ftaskp->addStmtsp(setp->makeStmt());
     }
-    // Skip the elements with rand_mode off in a constraint cloned from the objects of an array
+    // Element at offset offsetp of array arrVarp of objp, or of 'this' if objp is nullptr
+    static AstNodeExpr* newElemp(FileLine* const fl, AstNodeExpr* const objp,
+                                 AstVar* const arrVarp, AstNodeExpr* const offsetp) {
+        AstNodeExpr* const arrp = RandomizeUtil::newMemberRefp(fl, objp, arrVarp);
+        AstNodeExpr* const elemp
+            = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType)
+                  ? static_cast<AstNodeExpr*>(new AstArraySel{fl, arrp, offsetp})
+                  : new AstCMethodHard{fl, arrp, VCMethod::ARRAY_AT, offsetp};
+        elemp->dtypep(arrVarp->dtypep()->skipRefp()->subDTypep());
+        return elemp;
+    }
+    // Skip the elements without a randomized object in a constraint cloned for an array
     void skipInactiveElems(AstConstraint* const constrp, AstBegin* const holderp) {
-        // The object of an inactive element is not randomized (IEEE 1800-2023 18.8), so its
-        // constraints do not apply. Such a clone is a foreach over the array, already lowered
-        // to setup statements in holderp, which are skipped for those elements.
+        // A null element has no object (IEEE 1800-2023 18.4), and the object of an element
+        // with rand_mode off is not randomized (18.8), so their constraints do not apply. Such a
+        // clone is a foreach over the array, already lowered to setup statements in holderp,
+        // which are skipped for those elements.
         const auto it = m_cloneObjps.find(constrp);
         if (it == m_cloneObjps.end()) return;
         AstMemberRef* const selp = VN_CAST(it->second.objp, MemberRef);
-        AstVar* const modeVarp
-            = m_elemModes.modeVarp(selp ? selp->varp() : VN_AS(it->second.objp, VarRef)->varp());
-        if (!modeVarp) return;
+        AstVar* const arrVarp = selp ? selp->varp() : VN_AS(it->second.objp, VarRef)->varp();
+        if (VN_IS(arrVarp->dtypep()->skipRefp(), ClassRefDType)) return;  // Cloned for an object
+        AstNodeExpr* const objp = selp ? selp->fromp() : nullptr;
         AstForeach* const foreachp = VN_AS(VN_AS(holderp->declsp(), Begin)->stmtsp(), Foreach);
         FileLine* const fl = foreachp->fileline();
-        AstVarRef* const idxRefp
-            = new AstVarRef{fl, VN_AS(foreachp->headerp()->elementsp(), Var), VAccess::READ};
-        AstNodeExpr* const offp = RandomizeUtil::newElemModeOffp(
-            RandomizeUtil::newMemberRefp(fl, selp ? selp->fromp() : nullptr, modeVarp), idxRefp);
-        VL_DO_DANGLING(idxRefp->deleteTree(), idxRefp);
+        AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+            fl, arrVarp,
+            new AstVarRef{fl, VN_AS(foreachp->headerp()->elementsp(), Var), VAccess::READ});
+        AstNodeExpr* condp = new AstNeq{fl, newElemp(fl, objp, arrVarp, offsetp->cloneTree(false)),
+                                        new AstConst{fl, AstConst::Null{}}};
+        if (AstVar* const modeVarp = m_elemModes.modeVarp(arrVarp)) {
+            condp = new AstLogAnd{
+                fl, condp,
+                new AstNot{fl, RandomizeUtil::newElemModeOffp(
+                                   RandomizeUtil::newMemberRefp(fl, objp, modeVarp), offsetp)}};
+        }
+        VL_DO_DANGLING(offsetp->deleteTree(), offsetp);
         AstNodeStmt* const bodyp = foreachp->bodyp()->unlinkFrBackWithNext();
-        foreachp->addBodyp(new AstIf{fl, new AstNot{fl, offp}, bodyp});
+        foreachp->addBodyp(new AstIf{fl, condp, bodyp});
     }
     // Statements making the solver keep the array's elements with rand_mode off unchanged
     AstNodeStmt* newElemModePinsp(AstVar* const arrVarp, AstVar* const modeVarp,
@@ -3332,21 +3468,10 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstVar* const idxVarp = new AstVar{fl, VVarType::VAR, m_randArrayUniqueNames.get(""),
                                            arrVarp->findUInt32DType()};
         // Offset of the element, as used by the solver
-        AstNodeExpr* offsetp = new AstVarRef{fl, idxVarp, VAccess::READ};
-        AstNodeExpr* elemp;
-        const AstUnpackArrayDType* const unpackDtp
-            = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
-        if (unpackDtp) {
-            offsetp = new AstSub{fl, offsetp,
-                                 new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
-            offsetp->dtypeSetUInt32();
-            elemp = new AstArraySel{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp),
-                                    offsetp->cloneTree(false)};
-        } else {
-            elemp = new AstCMethodHard{fl, RandomizeUtil::newMemberRefp(fl, objp, arrVarp),
-                                       VCMethod::ARRAY_AT, offsetp->cloneTree(false)};
-        }
-        elemp->dtypep(arrVarp->dtypep()->skipRefp()->subDTypep());
+        AstNodeExpr* const offsetp = RandomizeUtil::newElemOffsetp(
+            fl, arrVarp, new AstVarRef{fl, idxVarp, VAccess::READ});
+        AstNodeExpr* const elemp = newElemp(fl, objp, arrVarp, offsetp->cloneTree(false));
+        const bool unpacked = VN_IS(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
         // Pin solver term termFmt (formatted with the offset) of variable varFmt to valuep
         const auto newPinp = [&](const std::string& varFmt, const std::string& termFmt,
                                  AstNodeExpr* valuep) {
@@ -3365,7 +3490,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         if (const AstClassRefDType* const classRefp
             = VN_CAST(elemp->dtypep()->skipRefp(), ClassRefDType)) {
             // Each field registered by createWriteVarForClassFields
-            const std::string elemFmt = name + "." + (unpackDtp ? "%0x" : "%8x") + ".";
+            const std::string elemFmt = name + "." + (unpacked ? "%0x" : "%8x") + ".";
             foreachSolverElemField(classRefp->classp(), [&](AstVar* const memberVarp) {
                 const std::string fieldFmt = elemFmt + memberVarp->name();
                 pinsp = AstNode::addNextNull(
