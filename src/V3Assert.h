@@ -48,6 +48,8 @@ public:
     static void checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) VL_MT_DISABLED;
     // True if the expression references a formal argument of a sequence or property
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
+    // Reduce a whole property 'always p' to p
+    static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
 };
 
 class V3Assert final {
