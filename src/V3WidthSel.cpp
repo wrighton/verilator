@@ -554,8 +554,14 @@ class WidthSelVisitor final : public VNVisitor {
                     nodep->fileline(), fromp, VNumRange{msb, lsb, fromRange.ascending()}};
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            } else {
-                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Slice of non-constant bounds");
+            } else {  // Slice with a variable position (IEEE 1800-2023 7.4.6)
+                AstNodeExpr* const lsbp
+                    = newSubNeg(rhsp, (VN_IS(nodep, SelPlus) ? 0 : width - 1) + fromRange.lo());
+                AstSliceSel* const newp
+                    = new AstSliceSel{nodep->fileline(), fromp,
+                                      VNumRange{width - 1, 0, fromRange.ascending()}, lsbp};
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
             }
         } else if (VN_IS(ddtypep, BasicDType) || VN_IS(ddtypep, PackArrayDType)
                    || (VN_IS(ddtypep, NodeUOrStructDType)
