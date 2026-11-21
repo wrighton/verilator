@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_sys_readmem_unsup.v:9:37: Unsupported: $readmemh into other than unpacked array, dynamic array, queue, or associative array
+                                                : ... note: In instance 't'
+    9 |   initial $readmemh("not_read.mem", packed_mem);
+      |                                     ^~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
