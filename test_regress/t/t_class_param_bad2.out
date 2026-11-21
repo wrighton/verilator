@@ -28,23 +28,18 @@
    35 |   ClsTV tv;
       |   ^~~~~
 %Error: t/t_class_param_bad2.v:8:10: Parameter type without default value is never given value (IEEE 1800-2023 6.20.1): 'PARAMB'
-                                   : ... note: In instance 't'
     8 |     type PARAMB
       |          ^~~~~~
 %Error: t/t_class_param_bad2.v:13:10: Parameter type without default value is never given value (IEEE 1800-2023 6.20.1): 'A'
-                                    : ... note: In instance 't'
    13 |     type A,
       |          ^
 %Error: t/t_class_param_bad2.v:14:10: Parameter type without default value is never given value (IEEE 1800-2023 6.20.1): 'B'
-                                    : ... note: In instance 't'
    14 |     type B
       |          ^
 %Error: t/t_class_param_bad2.v:20:10: Parameter type without default value is never given value (IEEE 1800-2023 6.20.1): 'T'
-                                    : ... note: In instance 't'
    20 |     type T
       |          ^
 %Error: t/t_class_param_bad2.v:25:10: Parameter type without default value is never given value (IEEE 1800-2023 6.20.1): 'T'
-                                    : ... note: In instance 't'
    25 |     type T,
       |          ^
 %Error: Exiting due to

@@ -18,7 +18,6 @@
                         ... For warning description see https://verilator.org/warn/IGNOREDRETURN?v=latest
                         ... Use "/* verilator lint_off IGNOREDRETURN */" and lint_on around source to disable this message.
 %Error: t/t_constraint_mode_bad.v:12:12: Cannot call 'constraint_mode()' as a function on a variable
-                                       : ... note: In instance 't'
    12 |     return constraint_mode();
       |            ^~~~~~~~~~~~~~~
 %Error: Exiting due to
