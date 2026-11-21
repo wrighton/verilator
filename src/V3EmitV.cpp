@@ -150,7 +150,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     }
     void emitDpiExport(AstNodeFTask* nodep) {
         puts("export \"DPI-C\" " + nodep->verilogKwd() + " ");
-        putqs(nodep, nodep->prettyName() + ";\n");
+        putqs(nodep, nodep->verilogIdent() + ";\n");
     }
     void emitPortList(AstNodeFTask* nodep) {
         bool first = true;
@@ -1794,7 +1794,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             }
             if (ovr.isFinal()) puts(":final ");
         }
-        puts(nodep->prettyName());
+        puts(nodep->verilogIdent());
         if (!nodep->itemsp()) {
             puts(";\n");
             return;
