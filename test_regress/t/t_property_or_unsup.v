@@ -36,6 +36,20 @@ module t (
   // An implication inside another property operator is not at the end of the property body
   assert property (@(posedge clk) (a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c)))
       and (b |-> c));
+  assert property (@(posedge clk) (a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c)))
+      or (always [0:2] b));
+  // Negated, each operand end would fail the attempt again
+  assert property (@(posedge clk) not ((a ##1 b) or (a ##[2:3] c)));
+  assert property (@(posedge clk) not (((a ##1 b) or c) ##1 a));
+  assert property (@(posedge clk) not ((always [0:1] a) or (b ##[2:3] c)));
+  assert property (@(posedge clk) not ((a #-# b) or (c ##1 a)));
+  assert property (@(posedge clk) not ((a #=# b) or (c ##[2:3] a)));
+  assert property (@(posedge clk) not ((s_eventually a) or (b ##1 c)));
+  assert property (@(posedge clk) not (((a |-> b) and a) or (a ##[1:2] c)));
+  assert property (@(posedge clk) not ((b ##1 c) or (a |=> b)));
+  assert property (@(posedge clk) not ((a |=> b) or (b ##1 c)));
+  assert property (@(posedge clk) not (((a ##1 b) or (c ##2 a)) |-> b));
+  assert property (@(posedge clk) not ((##1 a) or (##2 b) or (##3 c) or (##4 a) or (##5 b)));
   // An operand holding another operator would count every end inside it
   assert property (@(posedge clk) a |-> ((c throughout ((##2 a) or (##3 b) or (##4 c) or (##5 a)
       or (##6 b))) or (b ##2 a) or (c ##3 b) or (a ##4 c) or (b ##5 a)));
