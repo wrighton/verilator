@@ -85,6 +85,8 @@ public:
     static string topClassName() VL_MT_SAFE {  // Return name of top wrapper module
         return v3Global.opt.prefix();
     }
+    // Return a call reversing the descending dimensions of an unpacked array, "" if none
+    static std::string unpackReverseCall(const AstNodeDType* dtypep);
     // Split a pretty path below the model into the name it is below, as an index into the
     // run-time names (0 for the model, e.g. in a package, else AstNetlist::l2Names() index plus
     // one), and the rest of the path
