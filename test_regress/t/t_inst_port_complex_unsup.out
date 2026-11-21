@@ -35,13 +35,34 @@
 %Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:31:33: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
    31 |   output wire .co_30(co[3:0]),  .co_74(co[7:4])
       |                                 ^
-%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:56:3: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
-   56 |   .abi({ai, bi}),
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:37:5: Unsupported: non-ANSI port reference with select (IEEE 1800-2023 23.2.2.1)
+   37 |   ci[3:0], ci[7:4],
+      |     ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:37:14: Unsupported: non-ANSI port reference with select (IEEE 1800-2023 23.2.2.1)
+   37 |   ci[3:0], ci[7:4],
+      |              ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:38:5: Unsupported: non-ANSI port reference with select (IEEE 1800-2023 23.2.2.1)
+   38 |   co[3:0], co[7:4]
+      |     ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:38:14: Unsupported: non-ANSI port reference with select (IEEE 1800-2023 23.2.2.1)
+   38 |   co[3:0], co[7:4]
+      |              ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:46:3: Unsupported: non-ANSI port concatenation (IEEE 1800-2023 23.2.2.1)
+   46 |   {ai, bi},
       |   ^
-%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:57:3: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
-   57 |   .abo({ao, bo})
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:47:3: Unsupported: non-ANSI port concatenation (IEEE 1800-2023 23.2.2.1)
+   47 |   {ao, bo}
       |   ^
-%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:70:30: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
-   70 | module nansi_mixed_direction(.aio({ai, ao}));
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:56:3: Unsupported: non-ANSI port concatenation (IEEE 1800-2023 23.2.2.1)
+   56 |   {ci[3:0], ci[7:4]},
+      |   ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:65:3: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
+   65 |   .abi({ai, bi}),
+      |   ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:66:3: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
+   66 |   .abo({ao, bo})
+      |   ^
+%Error-UNSUPPORTED: t/t_inst_port_complex_unsup.v:79:30: Unsupported: complex ports (IEEE 1800-2023 23.2.2.1/2)
+   79 | module nansi_mixed_direction(.aio({ai, ao}));
       |                              ^
 %Error: Exiting due to
