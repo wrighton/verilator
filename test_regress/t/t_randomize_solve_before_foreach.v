@@ -25,6 +25,41 @@ typedef struct packed {
 } preg_t;
 
 module t;
+  class Sub;
+    rand bit [3:0] arr[2];
+  endclass
+
+  // Element of an array of a rand member object
+  class Holder;
+    rand Sub s;
+    rand bit [3:0] y;
+    constraint c {
+      s.arr[0] < 4'd5;
+      s.arr[0] < 4'd2 -> y == 0;
+      solve s.arr[0] before y;
+    }
+    function new();
+      s = new;
+    endfunction
+  endclass
+
+  class Cell;
+    rand bit [3:0] v;
+  endclass
+
+  // Element of a two-dimensional array of objects
+  class Grid;
+    rand Cell g[2][3];
+    rand bit [3:0] y;
+    constraint c {
+      g[1][2].v < 4'd2 -> y == 0;
+      solve g[1][2].v before y;
+    }
+    function new();
+      foreach (g[i, j]) g[i][j] = new;
+    endfunction
+  endclass
+
   class item;
     rand bit [3:0] mode;
     rand bit [7:0] data[4];
@@ -79,6 +114,8 @@ module t;
   initial begin
     static item it = new;
     static Packet pkt = new;
+    static Holder holder = new;
+    static Grid grid = new;
     int randomize_result;
 
     // Test: solve...before with conditional constraints
@@ -104,6 +141,19 @@ module t;
     // Test: solve...before with static array index (non-foreach)
     repeat (20) begin
       randomize_result = it.randomize();
+      `checkd(randomize_result, 1);
+    end
+
+    // Test 4: solve...before with an element of a member object's array
+    repeat (20) begin
+      randomize_result = holder.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(holder.s.arr[0] < 4'd5, 1'b1);
+    end
+
+    // Test 5: solve...before with an element of a two-dimensional array of objects
+    repeat (20) begin
+      randomize_result = grid.randomize();
       `checkd(randomize_result, 1);
     end
 
