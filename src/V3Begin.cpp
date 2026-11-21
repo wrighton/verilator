@@ -60,7 +60,6 @@ class BeginVisitor final : public VNVisitor {
     AstNode* m_liftedp = nullptr;  // Local nodes we are lifting into m_ftaskp
     string m_displayScope;  // Name of %m in $display/AstScopeName
     string m_namedScope;  // Name of begin blocks above us
-    string m_ftaskNamedScope;  // m_namedScope outside of current function/task
     string m_unnamedScope;  // Name of begin blocks, including unnamed blocks
     int m_ifDepth = 0;  // Current if depth
 
@@ -169,8 +168,6 @@ class BeginVisitor final : public VNVisitor {
         VL_RESTORER_COPY(m_displayScope);
         VL_RESTORER(m_ftaskp);
         VL_RESTORER(m_liftedp);
-        VL_RESTORER_CLEAR(m_ftaskNamedScope);
-        m_ftaskNamedScope = m_namedScope;
         VL_RESTORER_CLEAR(m_namedScope);
         VL_RESTORER_CLEAR(m_unnamedScope);
         m_displayScope = dot(m_displayScope, nodep->name());
@@ -351,8 +348,6 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstVarXRef* nodep) override {
         if (nodep->user1SetOnce()) return;
         if (nodep->varp()->isParam()) m_paramRefps.push_back(nodep);
-        const std::string& scope = m_ftaskp ? m_ftaskNamedScope : m_namedScope;
-        if (scope != "" && nodep->inlinedDots() == "") nodep->inlinedDots(scope);
     }
     void visit(AstMemberRef* nodep) override {
         if (nodep->user1SetOnce()) return;
@@ -362,8 +357,6 @@ class BeginVisitor final : public VNVisitor {
     void visit(AstNodeFTaskRef* nodep) override {
         if (nodep->user1SetOnce()) return;
         m_ftaskRefps.push_back(nodep);
-        const std::string& scope = m_ftaskp ? m_ftaskNamedScope : m_namedScope;
-        if (scope != "" && nodep->inlinedDots() == "") nodep->inlinedDots(scope);
         iterateChildren(nodep);
     }
     void visit(AstIfaceRefDType* nodep) override {
@@ -429,7 +422,58 @@ public:
 };
 
 //######################################################################
+
+class BeginXRefScopeVisitor final : public VNVisitor {
+    // Record the named block scope of hierarchical references, before other passes move them
+    // out of their block. V3Begin flattens the blocks, and V3LinkDot resolves the references
+    // relative to their recorded scope.
+
+    // STATE - for current visit position (use VL_RESTORER)
+    std::string m_scope;  // Named blocks above, as flattened by V3Begin
+    bool m_inSubroutine = false;  // Under function/task/class, which V3Begin does not flatten
+
+    // VISITORS
+    void visit(AstNodeModule* nodep) override {
+        VL_RESTORER(m_inSubroutine);
+        m_inSubroutine = VN_IS(nodep, Class);
+        iterateChildren(nodep);
+    }
+    void visit(AstNodeFTask* nodep) override {
+        VL_RESTORER(m_inSubroutine);
+        m_inSubroutine = true;
+        iterateChildren(nodep);
+    }
+    void visit(AstGenBlock* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        m_scope = VString::dot(m_scope, "__DOT__", nodep->name());
+        iterateChildren(nodep);
+    }
+    void visit(AstNodeBlock* nodep) override {
+        VL_RESTORER_COPY(m_scope);
+        if (!m_inSubroutine) m_scope = VString::dot(m_scope, "__DOT__", nodep->name());
+        iterateChildren(nodep);
+    }
+    void visit(AstVarXRef* nodep) override { nodep->inlinedDots(m_scope); }
+    void visit(AstNodeFTaskRef* nodep) override {
+        if (!nodep->dotted().empty()) nodep->inlinedDots(m_scope);
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit BeginXRefScopeVisitor(AstNetlist* nodep) { iterate(nodep); }
+    ~BeginXRefScopeVisitor() override = default;
+};
+
+//######################################################################
 // Task class functions
+
+void V3Begin::xrefScopeAll(AstNetlist* nodep) {
+    UINFO(2, __FUNCTION__ << ":");
+    { BeginXRefScopeVisitor{nodep}; }
+    V3Global::dumpCheckGlobalTree("begin_xref", 0, dumpTreeEitherLevel() >= 6);
+}
 
 void V3Begin::debeginAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
