@@ -8189,6 +8189,20 @@ class WidthVisitor final : public VNVisitor {
                 valuep = newp;
             }
         }
+        // A structure member is written by its own type, so a 2-state member loses X even in a
+        // 4-state packed structure, which only as a whole keeps X (IEEE 1800-2023 7.2.1, 10.9.2)
+        const AstMemberDType* const memberp = VN_CAST(dtypep, MemberDType);
+        const AstBasicDType* const basicp = memberp ? memberp->basicp() : nullptr;
+        if (basicp && basicp->isIntegralOrPacked() && basicp->isZeroInit()) {
+            if (AstConst* const constp = VN_CAST(valuep, Const)) {
+                constp->num().opCleanTwoStateNumber(memberp);
+            } else {
+                // Converted when folded, if constant
+                valuep = new AstCastWrap{valuep->fileline(), valuep};
+                valuep->dtypeFrom(memberp->subDTypep());
+                valuep->didWidth(true);
+            }
+        }
         return valuep;
     }
 
