@@ -3772,6 +3772,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
         VSymEnt* lookupSymp;  // Scope it was looked up from
     };
     std::vector<WildcardExportRef> m_wildcardExportRefs;
+    // Superclass symbols are completed independently of class bodies, which may nest
+    // classes deriving from a class whose superclass is currently being resolved.
+    std::set<const AstClass*> m_classInheritanceResolved;
     std::set<AstClass*> m_extendsParam;  // Classes that have a parameterized super class
                                          // (except the default instances)
                                          // They are added to the set only in linkDotPrimary.
@@ -4188,6 +4191,20 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         return classSymp;
     }
+    // Link declaration specifiers without visiting the definition's body or processing
+    // its prototype signature, so inheritance can classify methods before body traversal.
+    const AstNodeFTask* resolveExternSpecifiers(AstNodeFTask* const nodep, VSymEnt* const scopep) {
+        const VSymEnt* const foundp = scopep->findIdFallback("extern " + nodep->name());
+        if (!foundp) return nullptr;
+        const AstNodeFTask* const protop = VN_AS(foundp->nodep(), NodeFTask);
+        // An out-of-block definition cannot have specifiers, so none are overwritten.
+        nodep->isHideLocal(protop->isHideLocal());
+        nodep->isHideProtected(protop->isHideProtected());
+        nodep->isStatic(protop->isStatic());
+        nodep->isVirtual(protop->isVirtual());
+        nodep->lifetime(protop->lifetime());
+        return protop;
+    }
     // Is the current scope within the given class, including within its nested classes
     bool insideClass(const AstClass* classp) const {
         for (const VSymEnt* symp = m_curSymp; symp; symp = symp->parentp()) {
@@ -4313,7 +4330,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             "Class " << derivedClassp->prettyNameQ() << impOrExtends
                                      << baseClassp->prettyNameQ()
                                      << " but missing inheritance conflict resolution for "
-                                     << baseSubp->prettyNameQ() << " (IEEE 1800-2023 8.26.6.2)\n"
+                                     << baseSubp->prettyNameQ() << " (IEEE 1800-2023 8.26.6.1)\n"
                                      << derivedClassp->warnContextPrimary() << '\n'
                                      << baseSubp->warnOther()
                                      << "... Location of interface class's function\n"
@@ -6991,16 +7008,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         if (nodep->isExternDef() && !nodep->didProto()) {
             nodep->didProto(true);
-            if (const VSymEnt* const foundp
-                = m_curSymp->findIdFallback("extern " + nodep->name())) {
-                const AstNodeFTask* const protop = VN_AS(foundp->nodep(), NodeFTask);
-                // Copy specifiers.
-                // External definition cannot have any specifiers, so no value will be overwritten.
-                nodep->isHideLocal(protop->isHideLocal());
-                nodep->isHideProtected(protop->isHideProtected());
-                nodep->isStatic(protop->isStatic());
-                nodep->isVirtual(protop->isVirtual());
-                nodep->lifetime(protop->lifetime());
+            if (const AstNodeFTask* const protop = resolveExternSpecifiers(nodep, m_curSymp)) {
                 // AstTask is a task or void function; a task versus a non-void function is
                 // reported by V3Width as a return data type mismatch
                 if (VN_IS(protop, Task) && VN_IS(nodep, Task)
@@ -7283,6 +7291,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 iterate(nodep->childDTypep());
             } else if (AstParamTypeDType* const paramp
                        = VN_CAST(foundp->nodep(), ParamTypeDType)) {
+                if (nodep->isImplements() || VN_AS(m_modp, Class)->isInterfaceClass()) {
+                    nodep->v3error("Type parameter "
+                                   << paramp->prettyNameQ() << " cannot be "
+                                   << (nodep->isImplements() ? "implemented by a class"
+                                                             : "extended by an interface class")
+                                   << " (IEEE 1800-2023 8.26.4).");
+                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                }
                 AstRefDType* const refParamp = new AstRefDType{nodep->fileline(), paramp->name()};
                 refParamp->refDTypep(paramp);
                 nodep->childDTypep(refParamp);
@@ -7345,11 +7362,113 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
     }
+    // Complete inheritance before visiting any class bodies. A superclass may contain a
+    // nested class deriving from this class, so visiting it before importing symbols would
+    // expose an incomplete inherited scope.
+    void resolveClassInheritance(AstClass* const nodep) {
+        if (!m_classInheritanceResolved.emplace(nodep).second) return;
+        VL_RESTORER_COPY(m_ds);
+        VL_RESTORER(m_curSymp);
+        VL_RESTORER(m_modSymp);
+        VL_RESTORER(m_modp);
+        VL_RESTORER(m_insideClassExtParam);
+        m_ds.init(m_statep->getNodeSym(nodep));
+        m_curSymp = m_modSymp = m_ds.m_dotSymp;
+        m_modp = nodep;
+        // Definitions may follow nested classes in the member list. Their declaration
+        // specifiers must be available before inherited methods are imported or checked.
+        for (AstNode* const memberp : nodep->memberspList()) {
+            if (AstNodeFTask* const ftaskp = VN_CAST(memberp, NodeFTask)) {
+                if (ftaskp->isExternDef() && !ftaskp->didProto()) {
+                    resolveExternSpecifiers(ftaskp, m_curSymp);
+                }
+            }
+        }
+        m_insideClassExtParam = nodep->isCovergroup() && nodep->covergroupEnclosingClassp()
+                                && m_extendsParam.count(nodep->covergroupEnclosingClassp());
+        int next = 0;
+        for (AstClassExtends* cextp = nodep->extendsp(); cextp;
+             cextp = VN_AS(cextp->nextp(), ClassExtends)) {
+            // Replace abstract reference with hard pointer
+            // Will need later resolution when deal with parameters
+            if (++next == 2 && !nodep->isInterfaceClass() && !cextp->isImplements()) {
+                cextp->v3error("Multiple inheritance illegal on non-interface classes"
+                               " (IEEE 1800-2023 8.13)");
+            }
+            iterate(cextp);
+            if (m_statep->forPrimary()) {
+                if (cextp->parameterized()) {
+                    // Parameters in extends statement.
+                    // The class can't be resolved in the current pass.
+                    m_extendsParam.insert(nodep);
+                    m_insideClassExtParam = true;
+                }
+                if (AstClassRefDType* const classRefp
+                    = VN_CAST(cextp->childDTypep(), ClassRefDType)) {
+                    AstClass* const classp = classRefp->classp();
+                    if (classp != nodep) resolveClassInheritance(classp);
+                    if (m_extendsParam.find(classp) != m_extendsParam.end()) {
+                        // One of its super classes has parameters in extends statement.
+                        // Some links may not be resolved in the first pass.
+                        m_extendsParam.insert(nodep);
+                        m_insideClassExtParam = true;
+                    }
+                }
+            }
+
+            if (AstClass* const baseClassp = cextp->classOrNullp()) {
+                // Must be here instead of in LinkDotParam to handle
+                // "class (type T) extends T".
+                if (baseClassp == nodep) {
+                    cextp->v3error("Attempting to extend class " << nodep->prettyNameQ()
+                                                                 << " from itself");
+                } else if (extendsClass(baseClassp, nodep)) {
+                    cextp->v3error("Attempting to extend class "
+                                   << nodep->prettyNameQ() << " from " << baseClassp->prettyNameQ()
+                                   << ", which circularly inherits from it");
+                } else if (cextp->isImplements() && !baseClassp->isInterfaceClass()) {
+                    cextp->v3error("Attempting to implement from non-interface class "
+                                   << baseClassp->prettyNameQ() << '\n'
+                                   << "... Suggest use 'extends'");
+                } else if (!cextp->isImplements() && nodep->isInterfaceClass()
+                           && !baseClassp->isInterfaceClass()) {
+                    cextp->v3error("Interface class " << nodep->prettyNameQ()
+                                                      << " attempts to extend non-interface class "
+                                                      << baseClassp->prettyNameQ()
+                                                      << " (IEEE 1800-2023 8.26.2).");
+                } else if (!cextp->isImplements() && !nodep->isInterfaceClass()
+                           && baseClassp->isInterfaceClass()) {
+                    cextp->v3error("Attempting to extend from interface class "
+                                   << baseClassp->prettyNameQ() << '\n'
+                                   << "... Suggest use 'implements'");
+                } else if (baseClassp->isInterfaceClass()
+                           && baseClassp->declTokenNum() < cextp->fileline()->tokenNum()
+                           && cextp->fileline()->tokenNum() < baseClassp->fileline()->tokenNum()) {
+                    // Forward typedef (it lowered declTokenNum) < use < declaration
+                    cextp->v3error("Interface class "
+                                   << baseClassp->prettyNameQ() << " is "
+                                   << (cextp->isImplements() ? "implemented" : "extended")
+                                   << " through a forward typedef, before its declaration"
+                                      " (IEEE 1800-2023 8.26.4)\n"
+                                   << cextp->warnContextPrimary() << '\n'
+                                   << baseClassp->warnOther() << "... Location of declaration\n"
+                                   << baseClassp->warnContextSecondary());
+                }
+                baseClassp->isExtended(true);
+                nodep->isExtended(true);
+                resolveClassInheritance(baseClassp);
+                if (!cextp->isImplements()) {
+                    m_curSymp->importFromClass(m_statep->getNodeSym(baseClassp));
+                }
+            }
+        }
+    }
     void visit(AstClass* nodep) override {
         if (nodep->user3SetOnce()) return;
         LINKDOT_VISIT_START();
         UINFO(5, indent() << "visit " << nodep);
         checkNoDot(nodep);
+        resolveClassInheritance(nodep);
         VL_RESTORER(m_curSymp);
         VL_RESTORER(m_modSymp);
         VL_RESTORER(m_modp);
@@ -7360,87 +7479,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
             m_ifClassImpNames.clear();
             m_ifForwards.clear();
             m_ds.init(m_curSymp);
-            m_insideClassExtParam = nodep->isCovergroup() && nodep->covergroupEnclosingClassp()
-                                    && m_extendsParam.find(nodep->covergroupEnclosingClassp())
-                                           != m_extendsParam.end();
+            m_insideClassExtParam
+                = m_extendsParam.count(nodep)
+                  || (nodep->isCovergroup() && nodep->covergroupEnclosingClassp()
+                      && m_extendsParam.count(nodep->covergroupEnclosingClassp()));
             // Until overridden by a SCOPE
             m_ds.m_dotSymp = m_curSymp = m_modSymp = m_statep->getNodeSym(nodep);
             m_modp = nodep;
-            int next = 0;
-            for (AstClassExtends* cextp = nodep->extendsp(); cextp;
-                 cextp = VN_AS(cextp->nextp(), ClassExtends)) {
-                // Replace abstract reference with hard pointer
-                // Will need later resolution when deal with parameters
-                if (++next == 2 && !nodep->isInterfaceClass() && !cextp->isImplements()) {
-                    cextp->v3error("Multiple inheritance illegal on non-interface classes"
-                                   " (IEEE 1800-2023 8.13)");
-                }
-                iterate(cextp);
-                if (m_statep->forPrimary()) {
-                    if (cextp->parameterized()) {
-                        // Parameters in extends statement.
-                        // The class can't be resolved in the current pass.
-                        m_extendsParam.insert(nodep);
-                        m_insideClassExtParam = true;
-                    }
-                    if (AstClassRefDType* const classRefp
-                        = VN_CAST(cextp->childDTypep(), ClassRefDType)) {
-                        AstClass* const classp = classRefp->classp();
-                        if (classp != nodep) iterate(classp);
-                        if (m_extendsParam.find(classp) != m_extendsParam.end()) {
-                            // One of its super classes has parameters in extends statement.
-                            // Some links may not be resolved in the first pass.
-                            m_extendsParam.insert(nodep);
-                            m_insideClassExtParam = true;
-                        }
-                    }
-                }
-
-                if (AstClass* const baseClassp = cextp->classOrNullp()) {
-                    // Already converted. Update symbol table to link unlinked members.
-                    // Base class has to be visited in a case if its extends statement
-                    // needs to be handled. Recursive inheritance was already checked.
-                    // Must be here instead of in LinkDotParam to handle
-                    // "class (type T) extends T".
-                    if (baseClassp == nodep) {
-                        cextp->v3error("Attempting to extend class " << nodep->prettyNameQ()
-                                                                     << " from itself");
-                    } else if (extendsClass(baseClassp, nodep)) {
-                        cextp->v3error("Attempting to extend class "
-                                       << nodep->prettyNameQ() << " from "
-                                       << baseClassp->prettyNameQ()
-                                       << ", which circularly inherits from it");
-                    } else if (cextp->isImplements() && !baseClassp->isInterfaceClass()) {
-                        cextp->v3error("Attempting to implement from non-interface class "
-                                       << baseClassp->prettyNameQ() << '\n'
-                                       << "... Suggest use 'extends'");
-                    } else if (!cextp->isImplements() && !nodep->isInterfaceClass()
-                               && baseClassp->isInterfaceClass()) {
-                        cextp->v3error("Attempting to extend from interface class "
-                                       << baseClassp->prettyNameQ() << '\n'
-                                       << "... Suggest use 'implements'");
-                    } else if (baseClassp->isInterfaceClass()
-                               && baseClassp->declTokenNum() < cextp->fileline()->tokenNum()
-                               && cextp->fileline()->tokenNum()
-                                      < baseClassp->fileline()->tokenNum()) {
-                        // Forward typedef (it lowered declTokenNum) < use < declaration
-                        cextp->v3error("Interface class "
-                                       << baseClassp->prettyNameQ() << " is "
-                                       << (cextp->isImplements() ? "implemented" : "extended")
-                                       << " through a forward typedef, before its declaration"
-                                          " (IEEE 1800-2023 8.26.4)\n"
-                                       << cextp->warnContextPrimary() << '\n'
-                                       << baseClassp->warnOther()
-                                       << "... Location of declaration\n"
-                                       << baseClassp->warnContextSecondary());
-                    }
-                    baseClassp->isExtended(true);
-                    nodep->isExtended(true);
-                    iterate(baseClassp);
-                    if (!cextp->isImplements()) {
-                        m_curSymp->importFromClass(m_statep->getNodeSym(baseClassp));
-                    }
-                    continue;
+            // Link base-class method prototypes before checking inherited implementations.
+            for (AstClassExtends* const cextp : nodep->extendspList()) {
+                if (AstClassRefDType* const classRefp
+                    = VN_CAST(cextp->childDTypep(), ClassRefDType)) {
+                    iterate(classRefp->classp());
                 }
             }
             m_ds.m_dotSymp = m_curSymp;
