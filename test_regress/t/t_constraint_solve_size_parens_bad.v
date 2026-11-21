@@ -67,4 +67,9 @@ class OwnSize;
 endclass
 
 module t;
+  // The only constraint of a randomize() with names no variable
+  initial begin
+    automatic C c = new;
+    void'(c.randomize() with { disable soft in.f(3); });
+  end
 endmodule

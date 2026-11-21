@@ -87,4 +87,8 @@
                                                     : ... note: In instance 't'
    66 |   constraint c {solve n before this.size();}
       |                                     ^~~~
+%Error: t/t_constraint_solve_size_parens_bad.v:73:48: Expected a variable or an array's size() in disable soft (IEEE 1800-2023 18.5.13.2).
+                                                    : ... note: In instance 't'
+   73 |     void'(c.randomize() with { disable soft in.f(3); });
+      |                                                ^
 %Error: Exiting due to
