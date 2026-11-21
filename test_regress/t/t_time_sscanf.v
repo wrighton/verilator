@@ -18,6 +18,7 @@ module main;
   real r;
   integer rc;
   time t;
+  string tfmt = "t";
 
   // verilator lint_off REALCVT
 
@@ -40,14 +41,24 @@ module main;
     begin
       integer fd;
       fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/fscanf.log"}, "w");
-      $fdisplay(fd, "2.5");
+      $fdisplay(fd, "2.5 3.5");
       $fclose(fd);
       fd = $fopen({`STRINGIFY(`TEST_OBJ_DIR), "/fscanf.log"}, "r");
       rc = $fscanf(fd, "%t", r);  // in ms
-      $fclose(fd);
       `checkd(rc, 1);
       t = r;
       `checkr(t, 2500000);
+      // Format known only at runtime
+      tfmt = {"%", tfmt};
+      rc = $fscanf(fd, tfmt, r);
+      $fclose(fd);
+      `checkd(rc, 1);
+      t = r;
+      `checkr(t, 3500000);
+      rc = $sscanf("8.125", tfmt, r);
+      `checkd(rc, 1);
+      t = r;
+      `checkr(t, 8125000);
     end
 
     $finish;
