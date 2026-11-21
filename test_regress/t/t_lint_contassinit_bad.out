@@ -1,9 +1,13 @@
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:89:24: Selection index out of range: 1'bx outside 1:0
+                                                   : ... note: In instance 't'
+   89 |   initial unknown_index[1'bx] = 0;
+      |                        ^
+                   ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
+                   ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
 %Warning-SELRANGE: t/t_lint_contassinit_bad.v:93:24: Selection index out of range: 7 outside 1:0
                                                    : ... note: In instance 't'
    93 |   initial invalid_index[7] = 0;
       |                        ^
-                   ... For warning description see https://verilator.org/warn/SELRANGE?v=latest
-                   ... Use "/* verilator lint_off SELRANGE */" and lint_on around source to disable this message.
 %Warning-WIDTHTRUNC: t/t_lint_contassinit_bad.v:97:21: Bit extraction of array[1:0] requires 1 bit index, not 80 bits.
                                                      : ... note: In instance 't'
    97 |   initial wide_index[80'h10000000000] = 0;
@@ -14,6 +18,10 @@
                                                    : ... note: In instance 't'
    97 |   initial wide_index[80'h10000000000] = 0;
       |                     ^
+%Warning-SELRANGE: t/t_lint_contassinit_bad.v:101:28: Selection index out of range: 1'bz outside 1:0
+                                                    : ... note: In instance 't'
+  101 |   assign unknown_continuous[1'bz] = out;
+      |                            ^
 %Warning-SELRANGE: t/t_lint_contassinit_bad.v:105:28: Selection index out of range: 5 outside 1:0
                                                     : ... note: In instance 't'
   105 |   assign invalid_continuous[5] = out;
