@@ -100,6 +100,22 @@ module t_cstmt;
    end
 endmodule
 
+//========================================================================
+// Edges of a concatenation or replication are those of its least significant bit
+//
+module t_concat_edges(input a, b, input [3:0] v);
+  int posedges = 0;
+  int negedges = 0;
+  int replposedges = 0;
+  int iffposedges = 0;
+  int iffchanges = 0;
+  always @(posedge {a, b}) ++posedges;
+  always @(negedge {a, {2{b}}}) ++negedges;
+  always @(posedge {2{b}}) ++replposedges;
+  always @(posedge {a, b} iff v[0]) ++iffposedges;
+  always @({a, b} iff v[0]) ++iffchanges;
+endmodule
+
 module t(
   input clk
    );
@@ -112,6 +128,7 @@ module t(
   logic[3:0] v = '0;
   t_reduce u_reduce(.*);
   t_concat2 u_concat2(.*);
+  t_concat_edges u_concat_edges(.*);
 
   int i = 0, j = 0;
   t_add u_add(.*);
@@ -158,6 +175,13 @@ module t(
       $time, clk, cyc, a, b, v, i, j, t[0], t[1], t[2], t[3], t[4], k));
     `WRITE_VERBOSE(("          q=%p\n", q));
     if (cyc == 20) begin
+      // b rose at cyc 0, 4, ..., 16 and fell at cyc 2, 6, ..., 18
+      if (u_concat_edges.posedges != 5) $stop;
+      if (u_concat_edges.negedges != 5) $stop;
+      if (u_concat_edges.replposedges != 5) $stop;
+      // v[0] is set after cyc 0, 3, ..., 18, so when b rose at cyc 0 and 12
+      if (u_concat_edges.iffposedges != 2) $stop;
+      if (u_concat_edges.iffchanges != 7) $stop;
       $write("*-* All Finished *-*\n");
       $finish;
     end
