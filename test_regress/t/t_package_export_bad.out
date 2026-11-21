@@ -2,6 +2,15 @@
    44 |   export pkg1::BAD_DOES_NOT_EXIST;
       |                ^~~~~~~~~~~~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_package_export.v:120:10: Import object not found: 'pkg1'
+  120 |   import pkg1::BAD_DOES_NOT_EXIST;
+      |          ^~~~
+%Error: t/t_package_export.v:121:10: Import object not exported by package: 'pkg20::PARAM2' (IEEE 1800-2023 26.6)
+  121 |   import pkg20::PARAM2;
+      |          ^~~~~
+%Error: t/t_package_export.v:122:10: Import object not exported by package: 'pkg41::PARAM3' (IEEE 1800-2023 26.6)
+  122 |   import pkg41::PARAM3;
+      |          ^~~~~
 %Error: t/t_package_export.v:85:15: Can't find definition of scope/variable/func: 'PARAM2'
                                   : ... Suggested alternative: 'PARAM1'
    85 |   reg [pkg11::PARAM2 : 0] bus12;
