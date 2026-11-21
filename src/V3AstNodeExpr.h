@@ -262,6 +262,8 @@ public:
     void superReference(bool flag) { m_superReference = flag; }
     bool mayEnqueueGlobalNBA() const { return m_mayEnqueueGlobalNBA; }
     void setMayEnqueueGlobalNBA() { m_mayEnqueueGlobalNBA = true; }
+    // Passes the VlProcess of the caller, rather than a new one, to the called function
+    bool passesVlProcess() const;
 };
 class AstNodeCons VL_NOT_FINAL : public AstNodeExpr {
     // Construct a value of an aggregate type

@@ -246,7 +246,7 @@ class OutlineVisitor final : public VNVisitor {
         // Take the process of the function, which makes one if a call needs it, else each new
         // function would make its own
         if (m_funcp->needsVlProcess() || firstp->existsAndNext([](const AstNodeCCall* callp) {
-                return callp->funcp()->needsVlProcess();
+                return callp->passesVlProcess();
             })) {
             subFuncp->setNeedsVlProcess();
         }
