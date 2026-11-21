@@ -3,4 +3,8 @@
    24 |     ->>ae;   
       |        ^~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_event_nba_automatic_bad.v:28:8: Automatic lifetime variable not allowed in non-blocking event trigger (IEEE 1800-2023 6.21): 'pe'
+                                          : ... note: In instance 't'
+   28 |     ->>pe;   
+      |        ^~
 %Error: Exiting due to
