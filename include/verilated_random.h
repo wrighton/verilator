@@ -384,6 +384,7 @@ class VlRandomizer VL_NOT_FINAL {
         int lsb;  // Lowest bit
         int width;  // Number of bits
         int root;  // Index of the whole variable or element it is part of
+        int value0 = 0;  // Lowest bit of the value it is pinned to
     };
     // Move the solution towards random values the constraints allow
     void solveDiversity(VlRNG& rngr, VlSolverSession& sess,
@@ -391,7 +392,8 @@ class VlRandomizer VL_NOT_FINAL {
     // Assume literals __Va<first>... (one per term) with keep, dropping conflicting ones until SAT
     bool assumeDropping(VlSolverSession& sess, const std::string& keep, int first,
                         const std::vector<PinTerm>& terms, std::vector<bool>& droppedr,
-                        int& checksLeftr, std::vector<bool>* guessedp = nullptr);
+                        int& checksLeftr, std::vector<bool>* guessedp = nullptr,
+                        std::vector<int>* slotIdsp = nullptr, int* satisfiedLeftp = nullptr);
     // Values of a (get-value) reply, in order
     bool readValues(VlSolverSession& sess, std::vector<std::string>& valuesr);
     // Layers of solve...before variables in dependency order
