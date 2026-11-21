@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_sequence_arg_local_unsup.v:21:16: Unsupported: select or member as the actual argument of formal 'lv', which may be assigned through a sequence.
+                                                        : ... note: In instance 't'
+   21 |     s_capture(t[2]) |=> 1;
+      |                ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_sequence_arg_local_unsup.v:31:17: Unsupported: select or member as the actual argument of formal 'lv', which may be assigned through a sequence.
+                                                        : ... note: In instance 't'
+   31 |     s_capture(t.b) |=> 1;
+      |                 ^
+%Error: Exiting due to

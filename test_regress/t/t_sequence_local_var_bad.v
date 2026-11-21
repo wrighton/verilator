@@ -27,19 +27,6 @@ module t (
   sequence s_assign(lv);
     (1, lv = in);
   endsequence
-  property p_select;
-    bit [2:0] t;
-    @(posedge clk) s_assign(t[1]) |=> t[1];
-  endproperty
-  assert property (p_select);
-  sequence s_assign_outer(lv);
-    s_assign(lv);
-  endsequence
-  property p_select_outer;
-    bit [2:0] t;
-    @(posedge clk) s_assign_outer(t[2]) |=> t[2];
-  endproperty
-  assert property (p_select_outer);
   property p_legal;
     bit t;
     @(posedge clk) s_assign(t) |=> t;
@@ -47,4 +34,85 @@ module t (
   assert property (p_legal);
   bit static_var;
   assert property (@(posedge clk) s_assign(static_var) |=> static_var);
+
+  // The actual argument of an untyped formal assigned in a sequence must be an entire local
+  // variable (IEEE 1800-2023 16.10)
+  int cyc = 0;
+  always @(posedge clk) cyc <= cyc + 1;
+
+  sequence s_capture(lv);
+    (1, lv = cyc[0]);
+  endsequence
+  sequence s_forward(w);
+    s_capture(w);
+  endsequence
+
+  logic m = 0;
+  property p_module_var;
+    s_capture(m) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_module_var);
+
+  property p_forward_module_var;
+    s_forward(m) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_forward_module_var);
+
+  property p_property(lv);
+    s_capture(lv) |=> 1;
+  endproperty
+  property p_property_module_var;
+    p_property(m);
+  endproperty
+  assert property (@(posedge clk) p_property_module_var);
+
+  logic [3:1] mw = 0;
+  property p_module_select;
+    s_capture(mw[2]) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_module_select);
+
+  property p_constant;
+    s_capture(1'b1) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_constant);
+
+  property p_expression;
+    logic t;
+    s_capture(!t) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_expression);
+
+  property p_cast;
+    logic t;
+    s_capture(1'(t)) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_cast);
+
+  // Passed on through a typed formal
+  sequence s_typed_forward(bit w);
+    s_capture(w);
+  endsequence
+  property p_typed_sequence_module_var;
+    s_typed_forward(m) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_typed_sequence_module_var);
+  property p_typed_sequence_constant;
+    s_typed_forward(1'b1) |=> 1;
+  endproperty
+  assert property (@(posedge clk) p_typed_sequence_constant);
+
+  property p_typed_forward(bit w);
+    s_capture(w) |=> 1;
+  endproperty
+  property p_typed_property_module_var;
+    p_typed_forward(m);
+  endproperty
+  assert property (@(posedge clk) p_typed_property_module_var);
+  property p_typed_property_constant;
+    p_typed_forward(1'b1);
+  endproperty
+  assert property (@(posedge clk) p_typed_property_constant);
+
+  assert property (@(posedge clk) s_capture(m));
 endmodule
