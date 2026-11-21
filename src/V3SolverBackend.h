@@ -27,8 +27,8 @@
 
 #include "V3Ast.h"
 
-#include <map>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -122,17 +122,6 @@ class RandomizeUtil final {
 public:
     // Look through unpacked array dimensions to the element type
     static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
-    // Look through unpacked array dimensions to the element type
-    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
-};
-
-//######################################################################
-// Helpers shared by the randomize front end and the back-ends
-
-class RandomizeUtil final {
-public:
-    // Look through unpacked array dimensions to the element type
-    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
     // Offset of the element at declared index idxp of array arrDtp, as selects and the solver
     // use
     static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstNodeDType* arrDtp,
@@ -145,6 +134,10 @@ public:
                                     const std::vector<AstVar*>& idxVarps) VL_MT_DISABLED;
     // Whether varp is an unpacked array of class handles
     static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
+    // Return the random index select into a non-random array that exprp reads through
+    static AstNodeExpr*
+    randIndexSelp(AstNodeExpr* exprp,
+                  bool (*isRandIndexp)(const AstNodeExpr* indexp)) VL_MT_DISABLED;
     // Return the random index select into a random array that exprp reads through
     static AstNodeExpr* randArrayIndexSelp(
         AstNodeExpr* exprp,
@@ -154,19 +147,6 @@ public:
     // Read reference to member varp of objp, or of 'this' if objp is nullptr
     static AstNodeExpr* newMemberRefp(FileLine* fl, AstNodeExpr* objp,
                                       AstVar* varp) VL_MT_DISABLED;
-    // Return the random index select into a non-random array that exprp reads through
-    static AstNodeExpr*
-    randIndexSelp(AstNodeExpr* exprp,
-                  bool (*isRandIndexp)(const AstNodeExpr* indexp)) VL_MT_DISABLED;
-};
-
-//######################################################################
-// Helpers shared by the randomize front end and the back-ends
-
-class RandomizeUtil final {
-public:
-    // Look through unpacked array dimensions to the element type
-    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
 };
 
 //######################################################################
@@ -226,7 +206,8 @@ public:
     // after the front end has emitted the assignment that evaluates it
     virtual void addAfterClassSolve(AstClass* classp, AstFunc* randomizep) = 0;
     // Complete class solver lowering after both result and basic-randomization assignments,
-    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand.
+    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand, or
+    // __VBasicRandVars of a class whose member objects are randomized after the solve.
     virtual void finishClassRandomize(AstClass* classp, AstFunc* randomizep,
                                       const AstFunc* basicRandomizep)
         = 0;
@@ -237,8 +218,8 @@ public:
         = 0;
     // randomize() with {...} called by nodep: lower the captured constraints
     // into randomizeFuncp, and assign its return value from the solver result
-    // and basicRandomizeCallp (__VBasicRand()). thisVarp is the captured
-    // 'this' of the caller.
+    // and basicRandomizeCallp (__VBasicRand(), or __VBasicRandVars() of such a class).
+    // thisVarp is the captured 'this' of the caller.
     virtual void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp,
                                       AstFunc* randomizeFuncp, AstNode* capturedTreep,
                                       const AstVar* thisVarp, AstNodeExpr* basicRandomizeCallp)
