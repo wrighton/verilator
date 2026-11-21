@@ -17,6 +17,8 @@ module t;
   logic [7:0] dyn_row[2][];
   logic [7:0] assoc_row[2][int];
   bank_t bank[0:1];
+  logic [7:0] q[$];
+  logic [7:0] queue_row[2][$];
   int i = 1;
   initial begin
     $readmemh("t/t_sys_readmem_h.mem", mem[3:2]);
@@ -30,5 +32,7 @@ module t;
     $readmemh("t/t_sys_readmem_h.mem", dyn_row[i]);
     $readmemh("t/t_sys_readmem_h.mem", assoc_row[i]);
     $readmemh("t/t_sys_readmem_h.mem", bank[0]);
+    $readmemh("t/t_sys_readmem_h.mem", q[1:2]);
+    $readmemh("t/t_sys_readmem_h.mem", queue_row[i]);
   end
 endmodule
