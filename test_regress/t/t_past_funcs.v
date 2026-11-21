@@ -41,6 +41,13 @@ module t (
       .in(in[31:0])
   );
 
+  Test5 test5 (
+      .clk(clk),
+      .in(in[31:0]),
+      .pin(4'h5),
+      .pout()
+  );
+
   always @(posedge clk) begin
     if (cyc != 0) begin
       cyc <= cyc + 1;
@@ -267,5 +274,72 @@ module Test4 (  /*AUTOARG*/
       `checkd($past(lv[{1'b0, in[1:0]}]), lvdly);
       `checkd($past(vec[in[2:0]]), odly);
     end
+  end
+endmodule
+
+module Test5 (
+    input clk,
+    input [31:0] in,
+    input bit [3:0] pin = 4'h3,
+    output bit [3:0] pout = 4'h2
+);
+  // Before the first tick, the value of the declaration initializer, not of a later write
+  // during initialization
+  bit [6:0] s = 7'h15;
+  // Initializers that are not constant, and in a block
+  bit [6:0] nc = 7'h15 ^ s;
+  // Not with X, and with the type of the variable
+  bit b = 1'bx;
+  real r = 1.5;
+  typedef enum bit [1:0] {
+    IDLE = 2'd1,
+    RUN = 2'd2
+  } state_t;
+  state_t st = IDLE;
+  typedef struct packed {
+    bit [2:0] a;
+    bit b;
+  } ps_t;
+  ps_t ps = 4'b1011;
+  const bit [3:0] cv = 4'h6;
+
+  class Cls;
+  endclass
+  Cls h = null;
+  string str = "ab";
+  function automatic bit set_s();
+    s = 7'h6a;
+    pout = 4'hd;
+    st = RUN;
+    ps = 0;
+    h = new;
+    str = "cd";
+    return 1;
+  endfunction
+  bit ready = set_s();
+
+  always @(posedge clk) begin
+    static bit [6:0] bs = 7'h2a;
+    if (in == 1) begin
+      `checkd(ready, 1);
+      `checkd(s, 7'h6a);
+      `checkd($past(s), 7'h15);
+      `checkd($past(nc), nc);
+      `checkd($past(bs), 7'h2a);
+      `checkd($past(b === 1'bx), 0);
+      `checkd($past(r > 1.0), 1);
+      `checkd($past(st), IDLE);
+      `checkd($past(ps.a), 3'b101);
+      `checkd($past(cv), 4'h6);
+      `checkd($past(pout), 4'h2);
+      `checkd($past(h == null), 1);
+      `checkd($past(str == "ab"), 1);
+    end
+    if (in == 2) begin
+      `checkd($past(pin), 4'h5);
+    end
+    st <= RUN;
+    ps <= 0;
+    pout <= 0;
   end
 endmodule
