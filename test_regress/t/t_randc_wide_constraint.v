@@ -38,6 +38,12 @@ class RandcWideEnum;
   randc wide_enum_t value;
 endclass
 
+// Constrained randc of the maximum implemented width
+class RandcQuad;
+  randc bit [63:0] value;
+  constraint range_c {value inside {64'h8000_0000_0000_0003, 64'h3, 64'h8000_0000_0000_0005};}
+endclass
+
 module t;
   initial begin
     RandcFull full_obj;
@@ -87,6 +93,23 @@ module t;
           && enum_obj.value != E03 && enum_obj.value != ELARGE) begin
         $write("%%Error: enum value %0h not a valid member\n", enum_obj.value);
         `stop;
+      end
+    end
+
+    // Test 5: 64-bit constrained randc cycles, also through values differing only in the upper word
+    begin
+      automatic RandcQuad quad_obj = new;
+      bit [63:0] cycle_seen[bit [63:0]];
+      repeat (2) begin
+        cycle_seen.delete();
+        repeat (3) begin
+          rand_ok = quad_obj.randomize();
+          `checkd(rand_ok, 1)
+          `checkd(quad_obj.value inside {64'h8000_0000_0000_0003, 64'h3, 64'h8000_0000_0000_0005},
+                  1'b1)
+          `checkd(cycle_seen.exists(quad_obj.value), 0)
+          cycle_seen[quad_obj.value] = quad_obj.value;
+        end
       end
     end
 
