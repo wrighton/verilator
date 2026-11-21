@@ -1413,8 +1413,7 @@ class RandomizeVisitor final : public VNVisitor {
 
     // STATE
     V3UniqueNames m_inlineUniqueNames;  // For generating unique function names
-    std::map<const AstClass*, std::vector<AstClass*>>
-        m_classFamilies;  // Base-most class -> classes derived from it, and itself
+    std::map<AstClass*, std::vector<AstClass*>> m_derivedClasses;  // Directly derived classes
     V3UniqueNames m_randArrayUniqueNames{"__Vrandarr"};  // Random array loop indices
     V3UniqueNames m_modeUniqueNames{"__Vmode"};  // For generating unique rand/constraint
                                                  // mode state var names
@@ -2181,6 +2180,8 @@ class RandomizeVisitor final : public VNVisitor {
             if (memberClassp == classp) return;  // Avoid self-reference
             // Others are randomized by member.randomize(), which calls their callbacks
             if (!memberVarp->globalConstrained()) return;
+            // Randomized by member.randomize(), which calls its callbacks
+            if (inRandHandleCycle(memberVarp, classp)) return;
 
             // Force-visit member class if not yet processed
             if (memberClassp->user1()) {
@@ -2216,26 +2217,11 @@ class RandomizeVisitor final : public VNVisitor {
             if (!stmtsp) return;
 
             // Wrap in null check
-            AstNodeExpr* condp
-                = new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
-                             new AstConst{fl, AstConst::Null{}}};
-            // Each object of a cycle is reached once, while flagged as being randomized
-            if (inRandHandleCycle(memberVarp, classp)) {
-                condp
-                    = new AstLogAnd{fl, condp,
-                                    new AstNot{fl, newRandomizingSelp(fl, ownerClassp, memberVarp,
-                                                                      VAccess::READ)}};
-                AstNodeStmt* const setp = new AstAssign{
-                    fl, newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
-                    new AstConst{fl, AstConst::BitTrue{}}};
-                stmtsp = AstNode::addNext(setp, stmtsp);
-                stmtsp = AstNode::addNext(
-                    stmtsp,
-                    new AstAssign{fl,
-                                  newRandomizingSelp(fl, ownerClassp, memberVarp, VAccess::WRITE),
-                                  new AstConst{fl, AstConst::BitFalse{}}});
-            }
-            AstIf* const nullCheckp = new AstIf{fl, condp, stmtsp};
+            AstIf* const nullCheckp = new AstIf{
+                fl,
+                new AstNeq{fl, new AstVarRef{fl, ownerClassp, memberVarp, VAccess::READ},
+                           new AstConst{fl, AstConst::Null{}}},
+                stmtsp};
 
             // Wrap in rand_mode check
             callbackTaskp->addStmtsp(wrapIfRandMode(classp, memberVarp, nullCheckp));
@@ -2350,23 +2336,25 @@ class RandomizeVisitor final : public VNVisitor {
     // Whether an object of classp may reach one of targetp through rand handles
     bool reachesByRandHandle(AstClass* classp, AstClass* targetp,
                              std::set<const AstClass*>& visited) {
-        // A handle may hold an object of a derived class, so a class stands for all classes
-        // with its base-most class. Visits each once; called per class handle member of a
-        // randomized class, which is quadratic only in the number of such classes.
-        AstClass* const rootp = classp->baseMostClassp();
-        if (rootp == targetp->baseMostClassp()) return true;
-        if (!visited.insert(rootp).second) return false;
-        for (const AstClass* const familyp : m_classFamilies[rootp]) {
-            if (familyp->existsMember([&](const AstClass*, const AstVar* varp) {
-                    const AstClassRefDType* const classRefp
-                        = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
-                    return varp->rand().isRandomizable() && classRefp
-                           && reachesByRandHandle(classRefp->classp(), targetp, visited);
-                })) {
-                return true;
-            }
+        // A handle holds an object of its class or of a class derived from it, so it may
+        // hold an object of targetp only if one of the classes derives from the other;
+        // classes that just share a base class (e.g. all UVM classes) do not. Visits each
+        // once; called per class handle member of a randomized class, which is quadratic
+        // only in the number of such classes.
+        if (AstClass::isClassExtendedFrom(classp, targetp)
+            || AstClass::isClassExtendedFrom(targetp, classp)) {
+            return true;
         }
-        return false;
+        if (!visited.insert(classp).second) return false;
+        for (AstClass* const derivedp : m_derivedClasses[classp]) {
+            if (reachesByRandHandle(derivedp, targetp, visited)) return true;
+        }
+        return classp->existsMember([&](const AstClass*, const AstVar* varp) {
+            const AstClassRefDType* const classRefp
+                = VN_CAST(varp->dtypep()->skipRefp(), ClassRefDType);
+            return varp->rand().isRandomizable() && classRefp
+                   && reachesByRandHandle(classRefp->classp(), targetp, visited);
+        });
     }
 
     // Whether rand handle varp of classp is part of a cycle of rand handles
@@ -3325,7 +3313,8 @@ public:
         , m_solverp{v3Global.solverBackendp()->newLowering(m_memberMap, m_uniqueNames, m_modeVars,
                                                            m_elemModes, cloneObjps, deleter())} {
         nodep->foreach([&](AstClass* const classp) {
-            m_classFamilies[classp->baseMostClassp()].push_back(classp);
+            if (classp->extendsp())
+                m_derivedClasses[classp->extendsp()->classp()].push_back(classp);
         });
         createRandomizeClassVars(nodep);
         // Flag local constraint leaves as solver-owned so __VBasicRand skips them.
