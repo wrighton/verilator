@@ -211,6 +211,30 @@ module t;
     l[n%2] = 8'(n);
     return r * 10 + int'(l[0]) + int'(l[1]);
   endfunction
+  // Selects within elements and members
+  function automatic int f_part(int x);
+    logic [7:0] a[2];
+    mix_t m;
+    cfgs_t cs;
+    a = '{default: 8'h0};
+    a[1][3:0] = 4'hf;
+    a[0][7] = 1'b1;
+    m.l = '0;
+    m.l[6:4] = 3'(x);
+    cs = '{default: '{1'b0, 0}};
+    cs[2].w[15:8] = 8'h1;
+    return int'(a[1]) + int'(a[0]) + int'(m.l) + cs[2].w;
+  endfunction
+  // Calls each assigning a select within an element of a fresh local
+  typedef bit [6:0] septs_t[0:2];
+  function automatic int f_part_call(int i, bit [3:0] v);
+    septs_t a;
+    a[i][3:0] = v;
+    return int'(a[0]) * 100 + int'(a[1]) * 10 + int'(a[2]);
+  endfunction
+  function automatic int f_part_calls();
+    return f_part_call(0, 4'h1) * 1000 + f_part_call(2, 4'h2);
+  endfunction
   // Issue #3826: an array of structures built in a loop over its size, used by a generate
   typedef cfg_t list_t[3];
   function list_t make_list;
@@ -243,6 +267,8 @@ module t;
   localparam int LOOP = f_loop(5);
   localparam int PARTIALS = f_partials();
   localparam int REC_PART = f_rec_part(3);
+  localparam int PART = f_part(5);
+  localparam int PART_CALLS = f_part_calls();
   localparam int RECURSE = f_recurse('{1'b1, 4});
   localparam int COMPARE_EQ = f_compare('{1'b1, 5}, '{1'b1, 5});
   localparam int COMPARE_NE = f_compare('{1'b1, 5}, '{1'b1, 6});
@@ -288,6 +314,8 @@ module t;
     `checkd(LOOP, 10);
     `checkd(PARTIALS, 33 * 10000 + 63 * 100 + 93);
     `checkd(REC_PART, 123);
+    `checkd(PART, 479);
+    `checkd(PART_CALLS, 100002);
     `checkd(RECURSE, 10);
     `checkd(COMPARE_EQ, 'b0_1011);
     `checkd(COMPARE_NE, 'b0_0110);
