@@ -56,6 +56,35 @@ module t;
     stage = 6;
   end
 
+  // An event copied into a queue is the same event (IEEE 1800-2023 15.5.5.1)
+  event merged;
+  event mq[$];
+  event mnest[$][2][$];
+  int merged_seen;
+  initial begin
+    event mtmp[2][$];
+    mq.push_back(merged);
+    mtmp[1].push_back(merged);
+    mnest.push_back(mtmp);
+    fork
+      begin
+        @(mq[0]);
+        ++merged_seen;
+      end
+      begin
+        @(mnest[0][1][0]);
+        ++merged_seen;
+      end
+    join_none
+  end
+
+  initial begin
+    #1;
+    ->merged;
+    #1;
+    `checkd(merged_seen, 2);
+  end
+
   initial begin
     #1;
     stage = 1;
