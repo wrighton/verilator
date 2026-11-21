@@ -35,6 +35,9 @@ EmitCParentModule::EmitCParentModule() {
                 && EmitCBaseVisitorConst::isExplicitlyConstructed(varp)) {
                 m_members(varp).index = moduleData.count++;
             }
+            if (varp && EmitCBaseVisitorConst::isNameableTrivial(varp)) {
+                m_members(varp).index = moduleData.trivialCount++;
+            }
         }
     };
     for (AstNode* const modp : v3Global.rootp()->modulespList()) {
