@@ -550,4 +550,27 @@ module t;
       $finish;
     end
   end
+
+  typedef text_t names_t[2];
+  always @(posedge clk) begin
+    names_t names;
+    string grid[2][1];
+    real reals[2];
+    string fmt;
+    string formatted;
+
+    // %p of unpacked arrays of strings and reals prints every element
+    names = '{$sformatf("n%0d", cyc), "x"};
+    formatted = $sformatf("%p", names);
+    `checks(formatted, {"'{\"", names[0], "\", \"x\"}"});
+    fmt = cyc[0] ? "%p" : "%P";
+    formatted = $sformatf(fmt, names);
+    `checks(formatted, {"'{\"", names[0], "\", \"x\"}"});
+    grid = '{'{names[0]}, '{"y"}};
+    formatted = $sformatf("%p", grid);
+    `checks(formatted, {"'{'{\"", names[0], "\"}, '{\"y\"}}"});
+    reals = '{cyc + 0.5, 2.5};
+    formatted = $sformatf("%p", reals);
+    `checks(formatted, $sformatf("'{%0.1f, 2.5}", cyc + 0.5));
+  end
 endmodule
