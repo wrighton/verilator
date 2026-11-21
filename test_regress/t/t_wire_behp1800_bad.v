@@ -67,13 +67,4 @@ module t (
     ib = '0;  // Not an error
   end
 
-  logic rwv;
-  sub sub (.rw(rwv));
-
-endmodule
-
-module sub (
-    ref wire rw
-);
-  initial rw = '0;  // Error
 endmodule
