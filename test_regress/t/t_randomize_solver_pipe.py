@@ -8,6 +8,9 @@
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
 import os
+import shlex
+import signal
+import sys
 
 import vltest_bootstrap
 
@@ -46,6 +49,22 @@ for mode, once, npass in runs:
     test.file_grep(logfile, r'Solver died or replied unreadably')
 
 test.file_grep(test.obj_dir + '/sim_garbage_at_always.log', r'Solver failed repeatedly')
+
+# The harness ignores SIGPIPE; restore the default disposition before the model runs.
+if os.name == 'posix' and hasattr(signal, 'SIGPIPE'):
+    logfile = test.obj_dir + '/sim_close_stdin.log'
+    latch = test.obj_dir + '/close_stdin.latch'
+    if os.path.exists(latch):
+        os.unlink(latch)
+    prefix = (shlex.quote(sys.executable) +
+              ' -c "import os, signal, sys; signal.signal(signal.SIGPIPE, signal.SIG_DFL);'
+              ' os.execv(sys.argv[1], sys.argv[1:])"')
+    test.execute(logfile=logfile,
+                 run_env='VERILATOR_SOLVER="' + sys.executable + ' ' + test.t_dir +
+                 '/randomize_solver_tamper.py" TAMPER=close_stdin_at TAMPER_AT=1 TAMPER_ONCE="' +
+                 latch + '" ' + prefix)
+    test.file_grep(logfile, r'NPASS=(\d+)', 11)
+    test.file_grep(logfile, r'Solver died or replied unreadably')
 
 # A solver that never starts is not restarted, so it is never reported as dead
 logfile = test.obj_dir + '/sim_nosolver.log'
