@@ -43,4 +43,28 @@
                                      : ... note: In instance 't'
    42 |   always @(posedge clk) $cast(e, $future_gclk(a));
       |                                  ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:45:48: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   45 |   assert property (@(posedge clk) disable iff ($future_gclk(a)) a);
+      |                                                ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:46:47: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   46 |   cover property (@(posedge clk) disable iff ($rising_gclk(a)) a);
+      |                                               ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:47:48: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   47 |   assert property (@(posedge clk) disable iff ($falling_gclk(a)) a |-> ##1 a);
+      |                                                ^~~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:50:33: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   50 |     @(posedge clk) disable iff ($steady_gclk(a)) a;
+      |                                 ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:57:33: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't'
+   57 |   always @(posedge clk) assert ($future_gclk(a));
+      |                                 ^~~~~~~~~~~~
+%Error: t/t_assert_future_bad.v:71:24: Future sampled value function called outside property or sequence expression (IEEE 16.9.4)
+                                     : ... note: In instance 't.u_sub'
+   71 |   default disable iff ($changing_gclk(a));
+      |                        ^~~~~~~~~~~~~~
 %Error: Exiting due to

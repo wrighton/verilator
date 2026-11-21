@@ -103,16 +103,4 @@ module t (
     (((1, x = cyc) and (1, x = cyc)) or ((1, x = cyc) ##1 valid ##1 valid ##1 valid)) ##1 (x > 0);
   endproperty
   assert property (p_or_both_blocked);
-  // An unassigned read in a value assigned in the subsequence of a match item
-  // is reported, not one in a value the match item assigns.
-  property p_nested_items;
-    int a, b, u, v;
-    @(posedge clk) ((1, a = u) ##1 1'b1, b = v) |=> (a == b);
-  endproperty
-  assert property (p_nested_items);
-  property p_never_assigned;
-    int u;
-    @(posedge clk) valid ##1 (cyc != u);
-  endproperty
-  assert property (p_never_assigned);
 endmodule

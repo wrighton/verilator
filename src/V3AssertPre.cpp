@@ -817,7 +817,7 @@ private:
                 // Finalize before any clone: the declaration is renamed only after its lift.
                 const AstVar* const varp = nodep->varp();
                 xrefp->name(itemp->user1p() ? varp->name()
-                                          : clockvarName(clockingOf(itemp), varp->name()));
+                                            : clockvarName(clockingOf(itemp), varp->name()));
                 UINFO(8, " -clockvarxref-out: " << xrefp);
             }
 
@@ -1787,8 +1787,8 @@ private:
         iterateNull(nodep->matchCountp());
     }
     void visit(AstSClocked* nodep) override {
-        // V3AssertNfa hoists or reports the clocking events in the assertions it inlines;
-        // the ones left here came from the body of a nested property instance
+        // V3AssertNfa hoists or reports the clocking events in the assertions it lowers; the
+        // ones left here came from the body of an instance chain left to this pass
         nodep->v3warn(E_UNSUPPORTED,
                       "Unsupported: clocking event inside nested property instance");
         nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});

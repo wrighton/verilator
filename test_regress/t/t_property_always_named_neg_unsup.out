@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_property_always_named_neg_unsup.v:13:5: Unsupported: unbounded 'always' in a negated property
+                                                              : ... note: In instance 't'
+   13 |     always a;
+      |     ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

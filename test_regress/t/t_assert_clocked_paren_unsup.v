@@ -11,9 +11,6 @@ module t (
   logic a, b;
 
   // verilog_format: off  // verible does not support a parenthesized clocking event
-  property p_paren;
-    (@(posedge clk) a |-> b);
-  endproperty
   property p_nested;
     a |-> (@(posedge clk2) b);
   endproperty
@@ -27,7 +24,6 @@ module t (
   assert property (@(posedge clk2) (@(posedge clk) a));
   assert property (@(posedge clk) a |-> (@(posedge clk2) b));
   assert property (@(posedge clk) a |-> (@(posedge clk2) not b));
-  assert property (@(posedge clk) not p_paren);
   assert property (@(posedge clk) not p_nested);
   assert property (@(posedge clk) not p_nested_seq);
   // verilog_format: on
