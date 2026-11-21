@@ -4872,24 +4872,32 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         if (m_statep->forPrimary()) {
-            // A hierarchical interface actual must not resolve through a generate block or an
-            // arrayed instance; their indices are placeholders in the scope until V3Param
-            const AstNode* exprp = nodep->exprp();
-            if (const AstUnlinkedRef* const unlinkedp = VN_CAST(exprp, UnlinkedRef)) {
+            AstNode* exprp = nodep->exprp();
+            if (AstUnlinkedRef* const unlinkedp = VN_CAST(exprp, UnlinkedRef)) {
                 exprp = unlinkedp->refp();
             }
-            // Also an element of an interface array reached hierarchically
-            while (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
+            // An element of an interface array reached hierarchically
+            bool element = false;
+            while (AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
                 exprp = selp->fromp();
+                element = true;
             }
-            const AstVarXRef* const xrefp = VN_CAST(exprp, VarXRef);
-            if (xrefp && xrefp->varp()->isIfaceRef()
-                && (xrefp->containsGenBlock()
-                    || xrefp->dotted().find("__BRA__??__KET__") != string::npos)) {
-                nodep->v3error("Illegal port connection "
-                               << nodep->prettyNameQ()
-                               << ", hierarchical reference to an interface resolves through an "
-                                  "arrayed instance or a generate block (IEEE 1800-2023 25.3)");
+            AstVarXRef* const xrefp = VN_CAST(exprp, VarXRef);
+            if (xrefp && xrefp->varp()->isIfaceRef()) {
+                // Or the whole interface array, with the element selected after V3Param
+                if (VN_IS(xrefp->varp()->subDTypep(), UnpackArrayDType)) element = true;
+                if (element
+                    && (xrefp->containsGenBlock()
+                        || xrefp->dotted().find("__BRA__??__KET__") != string::npos)) {
+                    nodep->v3error("Illegal port connection "
+                                   << nodep->prettyNameQ()
+                                   << ", hierarchical reference to an interface resolves through "
+                                      "an arrayed instance or a generate block "
+                                      "(IEEE 1800-2023 25.3)");
+                }
+                // V3Param resolves an interface actual through its variable, so keep the
+                // variable of one into a generate block, instead of relinking after V3Param
+                xrefp->containsGenBlock(false);
             }
         }
         if (!nodep->modVarp()) {
