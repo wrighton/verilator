@@ -375,10 +375,10 @@ class WidthVisitor final : public VNVisitor {
     std::unordered_map<const AstClass*, std::unordered_map<string, AstNodeFuncCovItem*>>
         m_coverItems;  // Coverpoints and crosses of each covergroup, by name
     V3TaskConnectState m_taskConnectState;  // State to cache V3Task::taskConnects
-    // Property whose untyped formal arguments must be typed with the actual arguments, see
-    // needsTypedFormals; false while computing
+    // Property or sequence whose untyped formal arguments must be typed with the actual
+    // arguments, see needsTypedFormals; false while computing
     std::map<const AstNodeSchema*, bool> m_needsTypedFormals;
-    // Copies of such a property with typed formal arguments, by actual argument types
+    // Copies of such a property or sequence with typed formal arguments, by actual argument types
     using TypedFormalCopy = std::pair<std::vector<AstNodeDType*>, AstNodeSchema*>;
     std::map<const AstNodeSchema*, std::vector<TypedFormalCopy>> m_typedFormalCopies;
     std::vector<AstNodeSchema*> m_untypedFormalDecls;  // Such declarations, deleted at the end
@@ -9572,6 +9572,7 @@ class WidthVisitor final : public VNVisitor {
         // IEEE 1800-2023 16.7 (sequence declarations), 16.8 (sequence instances)
         // Width-check the sequence body so expressions are typed for later inlining.
         if (nodep->didWidth()) return;
+        if (skipUntypedFormalDecl(nodep)) return;
         // An untyped formal may be assigned when its actual is a local variable
         // (IEEE 1800-2023 16.8.1, 16.10)
         VL_RESTORER_COPY(m_seqUntypedFormals);
@@ -9775,12 +9776,12 @@ class WidthVisitor final : public VNVisitor {
                    || VN_IS(parentp, NodeTriop) || VN_IS(parentp, NodeQuadop))
                && !isLogicalOperator(parentp) && !parentp->isMultiCycleSva();
     }
-    // True if a property uses an untyped formal argument where its type matters
+    // True if a property or sequence uses an untyped formal argument where its type matters
     bool needsTypedFormals(const AstNodeSchema* taskp) {
         // That is in a select, an edge, or as an operand of an operator, also through another
-        // property. Such a formal can only be typed with the actual argument (IEEE 1800-2023
-        // 16.8, 16.12).
-        if (!VN_IS(taskp, Property)) return false;
+        // property or sequence. Such a formal can only be typed with the actual argument (IEEE
+        // 1800-2023 16.8, 16.12).
+        if (!VN_IS(taskp, Property) && !VN_IS(taskp, Sequence)) return false;
         const auto pair = m_needsTypedFormals.emplace(taskp, false);
         if (!pair.second) return pair.first->second;
         const bool needs = taskp->exists([&](const AstNode* np) {
@@ -9814,7 +9815,7 @@ class WidthVisitor final : public VNVisitor {
         }
         return true;
     }
-    // Retarget a property instance to a copy typed by the actual arguments
+    // Retarget a property or sequence instance to a copy typed by the actual arguments
     void typeUntypedFormals(AstSchemaRef* nodep) {
         // The copy's untyped formal arguments have the types of the actual arguments.
         AstNodeSchema* const origp = nodep->schemap();
