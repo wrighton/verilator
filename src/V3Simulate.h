@@ -1241,7 +1241,9 @@ private:
         }
         if (m_checkOnly || !optimizable()) return;
         AstNode* const vscp = varOrScope(varrefp);
-        AstNodeExpr* rootp = fetchOutValueNull(vscp);
+        // Only a delayed assignment builds on the pending value. Others edit the current value,
+        // which a call or initialization may have replaced without updating the pending one.
+        AstNodeExpr* rootp = VN_IS(nodep, AssignDly) ? fetchOutValueNull(vscp) : nullptr;
         if (!rootp) rootp = fetchValueNull(vscp);
         if (!rootp) {  // As initVar couldn't make an initial value of its type
             clearOptimizable(varrefp, "Assigned variable has unsupported data type");
