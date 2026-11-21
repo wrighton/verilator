@@ -101,6 +101,41 @@ class BinExpr extends Expr;
   rand Expr rhs;
 endclass
 
+// Cycles through arrays of rand handles
+typedef class ArrB;
+
+class ArrA;
+  rand bit [6:0] v;
+  rand ArrB bs[];
+  rand ArrA kids[2];
+  int post_count;
+  constraint c_v {v < 7'd3;}
+  function void post_randomize();
+    ++post_count;
+  endfunction
+endclass
+
+class ArrB;
+  rand bit [6:0] w;
+  rand ArrA as[$];
+  constraint c_w {w < 7'd3;}
+endclass
+
+// A constraint across the objects of such a cycle
+typedef class CrossA;
+
+class CrossB;
+  rand bit [6:0] w;
+  rand CrossA as[2];
+  constraint c_w {w > 7'd5;}
+endclass
+
+class CrossA;
+  rand bit [6:0] v;
+  rand CrossB b;
+  constraint c_v {b.w < v;}
+endclass
+
 module t;
   initial begin
     automatic Ring ring = new;
@@ -193,6 +228,36 @@ module t;
         `checkd(ll.post_count, i);
         `checkd(r.post_count, i);
         `checkd(be.v != 0 && l.v != 0 && ll.v != 0 && r.v != 0, 1'b1);
+      end
+    end
+    begin
+      automatic ArrA aa = new;
+      automatic ArrB ab = new;
+      aa.bs = new[2];
+      aa.bs[0] = ab;
+      aa.bs[1] = new;
+      ab.as.push_back(aa);
+      aa.kids[0] = aa;
+      for (int i = 1; i <= 5; ++i) begin
+        aa.v = 7'd100;
+        ab.w = 7'd100;
+        randomize_result = aa.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(aa.v < 7'd3, 1'b1);
+        `checkd(aa.bs[0].w < 7'd3, 1'b1);
+        `checkd(aa.bs[1].w < 7'd3, 1'b1);
+        `checkd(aa.post_count, i);
+      end
+    end
+    begin
+      automatic CrossA ca = new;
+      ca.b = new;
+      ca.b.as[0] = ca;
+      repeat (10) begin
+        randomize_result = ca.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(ca.b.w > 7'd5, 1'b1);
+        `checkd(ca.b.w < ca.v, 1'b1);
       end
     end
     $write("*-* All Finished *-*\n");
