@@ -424,8 +424,7 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
         elemDtp = elemDtp->subDTypep()->skipRefp();
     }
     if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
-        if (bdtypep->isEvent() || bdtypep->isString()
-            || bdtypep->keyword() == VBasicDTypeKwd::CHANDLE) {
+        if (bdtypep->isEvent()) {
             instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
                                                 << dtypep->prettyDTypeNameQ() << " type");
             return;
@@ -468,7 +467,7 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
         cmhp->dtypeSetBit();
         neqp = cmhp;
     } else {
-        neqp = new AstNeq{flp, rdInst(instVscp), rdPrev(prevVscp)};
+        neqp = AstNeq::newTyped(flp, rdInst(instVscp), rdPrev(prevVscp));
     }
 
     // Build post-update: prev = inst
