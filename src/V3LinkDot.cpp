@@ -4584,12 +4584,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                 }
             }
-            if (enclosingVarp && enclosingVarp->varType() == VVarType::IFACEREF
-                && VN_IS(enclosingVarp->childDTypep()->skipRefp(), IfaceGenericDType)) {
-                // Nested generic-iface forwarding (#7454): enclosing port is itself still
-                // generic, so emit a placeholder __VGIfaceParam pin carrying a VarRef to
-                // the outer port. V3Param rewrites it to the concrete IfaceRefDType once
-                // the enclosing module is specialized (see
+            if (enclosingVarp && enclosingVarp->isIfaceRef() && enclosingVarp->pinNum()) {
+                // An interface port of the enclosing module (#7454), generic or named,
+                // refers to a concrete interface only once that module is specialized, so
+                // emit a placeholder __VGIfaceParam pin carrying a VarRef to the outer port.
+                // V3Param rewrites it to the concrete IfaceRefDType then (see
                 // ParamProcessor::resolveGenericIfaceForwardingPins for the ordering
                 // constraint that keeps the rewrite inside V3Param).
                 AstVarRef* const fwdRefp
@@ -4601,8 +4600,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 nodep->addParamsp(newPinp);
             } else if (varRefp) {
                 const AstVar* const varp = varRefp->varp();
-                if (const AstIfaceRefDType* const refp
-                    = VN_CAST(varp->childDTypep()->elemDTypep(), IfaceRefDType)) {
+                const AstIfaceRefDType* const refp
+                    = VN_CAST(varp->childDTypep()->elemDTypep(), IfaceRefDType);
+                // An interface instance; not a virtual interface (IEEE 1800-2023 25.9)
+                if (refp && refp->cellp()) {
                     AstIface* const ifacep = VN_AS(refp->cellp()->modp(), Iface);
                     AstIfaceRefDType* newIfaceRefp;
                     if (refp->modportp()) {

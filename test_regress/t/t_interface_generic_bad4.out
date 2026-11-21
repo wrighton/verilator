@@ -5,4 +5,7 @@
 %Error: t/t_interface_generic_bad4.v:37:8: Instance attempts to connect to 'lv', but it is a variable
    37 |       .lv(inf_inst2)
       |        ^~
+%Error: t/t_interface_generic_bad4.v:41:10: Generic interfaces can only connect to an interface and 'vinf' is of type 'virtual interface inf2'
+   41 |       .a(vinf),
+      |          ^~~~
 %Error: Exiting due to
