@@ -57,6 +57,12 @@ module t (
   assert property (disable iff (cyc < 2) ((a ##3 b) within (c ##1 d)) |-> 1'b0)
   else f_within <= f_within + 1;
 
+  // An inner sequence of 4 ticks cannot fit within an outer sequence of 3 ticks. Without
+  // --coverage-user a cover does not run, so only its NEVERMATCH warning and that it
+  // compiles are checked.
+  cp_within_rep :
+  cover property (disable iff (cyc < 2) (a ##3 b) within (c ##1 !c[*1] ##1 c));
+
   final begin
     // TODO need better non-zero test
     `checkd(f_fix, 0);
