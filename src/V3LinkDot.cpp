@@ -510,6 +510,10 @@ public:
         symp->fallbackp(abovep);
         nodep->user1p(symp);
         checkDuplicate(abovep, nodep, name);
+        // Variables have no declaration order check, so need one for IEEE 1800-2023 26.3.
+        // Not in $unit, whose imports are not checked (see visit(AstPackageImport*))
+        symp->hidesWildcard(VN_IS(nodep, Var) && abovep != dunitEntp()
+                            && abovep->wildImportable(name));
         abovep->reinsert(name, symp);
         return symp;
     }
@@ -767,11 +771,12 @@ private:
     }
 
     VSymEnt* findWithAltFlat(VSymEnt* symp, const string& name, const string& altname) {
-        VSymEnt* findp = symp->findIdFlat(name);
+        // A scoped name, e.g. 'pkg::name', which does not import a wildcard candidate of pkg
+        VSymEnt* findp = symp->findIdFlatNoRef(name);
         if (findp) return findp;
         if (altname != "") {
             UINFO(8, "     alt flat");
-            findp = symp->findIdFlat(altname);
+            findp = symp->findIdFlatNoRef(altname);
         }
         return findp;
     }
@@ -1170,7 +1175,7 @@ class LinkDotFindVisitor final : public VNVisitor {
             VSymEnt* const pkgSymp = m_statep->getNodeSym(nodep->packagep());
             m_curSymp->exportFromPackage(pkgSymp, nodep->name());
             if (!m_statep->forPrimary() || nodep->name() == "*") continue;
-            const VSymEnt* const srcp = pkgSymp->findIdFlat(nodep->name());
+            const VSymEnt* const srcp = pkgSymp->findIdFlatNoRef(nodep->name());
             if (!srcp) continue;  // Already reported as not found
             const VSymEnt* const foundp = m_curSymp->findIdFlat(nodep->name());
             if (foundp && foundp->nodep() == srcp->nodep() && foundp->exported()) continue;
@@ -2241,7 +2246,7 @@ class LinkDotFindVisitor final : public VNVisitor {
                 }
             }
         } else if (!nodep->resolvedClassp()) {
-            VSymEnt* const impp = srcp->findIdFlat(nodep->name());
+            VSymEnt* const impp = srcp->findIdFlatNoRef(nodep->name());
             if (!impp) {
                 nodep->v3error("Import object not found: " << nodep->prettyPkgNameQ());
             } else if (!impp->exported()) {
@@ -2257,7 +2262,9 @@ class LinkDotFindVisitor final : public VNVisitor {
                     new AstClassOrPackageRef{nodep->fileline(), classp->name(), classp, nullptr});
             }
         }
-        m_curSymp->importFromPackage(srcp, nodep->name());
+        // All files share $unit, but may be separate compilation units (IEEE 1800-2023 3.12.1),
+        // so its imports are not checked for conflicts
+        m_curSymp->importFromPackage(srcp, nodep->name(), m_curSymp != m_statep->dunitEntp());
         UINFO(9, "    Link Done: " << nodep);
         // No longer needed, but can't delete until any multi-instantiated modules are expanded
     }
@@ -2266,7 +2273,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         if (!nodep->packagep()) return;  // Errored in V3LinkCells
         VSymEnt* const srcp = m_statep->getNodeSym(nodep->packagep());
         if (nodep->name() != "*") {
-            VSymEnt* const impp = srcp->findIdFlat(nodep->name());
+            VSymEnt* const impp = srcp->findIdFlatNoRef(nodep->name());
             if (!impp) {
                 nodep->v3error("Export object not found: '" << nodep->packagep()->prettyName()
                                                             << "::" << nodep->prettyName() << "'");
@@ -3594,6 +3601,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<std::string, AstNode*> m_ifClassImpNames;  // Names imported from interface class
     // Inherited interface implementations needing a forward in the current class, by name
     std::map<std::string, const VSymEnt*> m_ifForwards;
+    // References to names imported through a wildcard package export
+    struct WildcardExportRef final {
+        const AstNode* nodep;  // Reference
+        const VSymEnt* foundp;  // Entry it found
+        VSymEnt* lookupSymp;  // Scope it was looked up from
+    };
+    std::vector<WildcardExportRef> m_wildcardExportRefs;
     std::set<AstClass*> m_extendsParam;  // Classes that have a parameterized super class
                                          // (except the default instances)
                                          // They are added to the set only in linkDotPrimary.
@@ -4165,6 +4179,45 @@ class LinkDotResolveVisitor final : public VNVisitor {
                            << declp->warnOther() << "... Location of original declaration\n"
                            << declp->warnContextSecondary());
         }
+    }
+    void checkWildcardImportRef(const AstNode* nodep, const VSymEnt* foundp) {
+        // IEEE 1800-2023 26.3: A reference must not match a name wildcard imported from
+        // multiple packages, nor precede a declaration hiding a wildcard imported name
+        if (foundp->importAmbiguous()) {
+            nodep->v3error("Reference to " << nodep->prettyNameQ()
+                                           << " is ambiguous, as wildcard imports of multiple"
+                                              " packages define it (IEEE 1800-2023 26.3)");
+        } else if (foundp->hidesWildcard()
+                   && nodep->fileline()->tokenNum() < foundp->nodep()->fileline()->tokenNum()) {
+            nodep->v3error("Reference to "
+                           << nodep->prettyNameQ()
+                           << " makes a wildcard imported name visible, so a later declaration "
+                              "of the same name is illegal (IEEE 1800-2023 26.3)\n"
+                           << nodep->warnContextPrimary() << '\n'
+                           << foundp->nodep()->warnOther() << "... Location of declaration\n"
+                           << foundp->nodep()->warnContextSecondary());
+        }
+        // IEEE 1800-2023 26.6: Checked once all references are known, see constructor.
+        // Later passes do not look up all references again, so cannot check this.
+        if (m_statep->forPrimary() && foundp->exportedWildcardp()) {
+            m_wildcardExportRefs.push_back({nodep, foundp, m_curSymp});
+        }
+    }
+    // Whether a reference finds the declaration of foundp also through an enclosing scope
+    static bool foundOtherwise(const WildcardExportRef& ref) {
+        // A name a wildcard export does not export is not a candidate of the importing scope,
+        // so the lookup continues upward (IEEE 1800-2023 26.6), e.g. to a wildcard import in
+        // $unit. The scopes up to the one holding the entry found have no entry of the name.
+        const string& name = ref.nodep->name();
+        VSymEnt* symp = ref.lookupSymp;
+        while (symp && symp->findIdFlatNoRef(name) != ref.foundp) symp = symp->fallbackp();
+        for (symp = symp ? symp->fallbackp() : nullptr; symp; symp = symp->fallbackp()) {
+            const VSymEnt* const altp = symp->findIdFlatNoRef(name);
+            if (!altp) continue;
+            return altp->nodep() == ref.foundp->nodep()
+                   && (!altp->exportedWildcardp() || altp->exportedWildcardp()->referenced());
+        }
+        return false;
     }
     void checkMemberDeclOrder(AstNode* nodep, AstMemberDType* declp) {
         const uint32_t declTokenNum = declp->fileline()->tokenNum();
@@ -5129,7 +5182,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (first) {
                 foundp = m_ds.m_dotSymp->findIdFallback(nodep->name());
             } else {
-                foundp = m_ds.m_dotSymp->findIdFlat(nodep->name());
+                // A scoped name, which does not import a wildcard candidate of its scope
+                foundp = m_ds.m_dotSymp->findIdFlatNoRef(nodep->name());
             }
             // In a generate block, an implicit net is local to the block, even if an enclosing
             // scope declares the name later (IEEE 1800-2023 6.10)
@@ -5181,6 +5235,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (foundp) {
                 UINFO(9, indent() << "found=se" << cvtToHex(foundp) << "  exp=" << expectWhat
                                   << "  n=" << foundp->nodep());
+                if (first) checkWildcardImportRef(nodep, foundp);
             }
             // Rest of a path into a recursive instance not yet created, see below
             if (m_ds.m_unresolvedRecursive) foundp = nullptr;
@@ -5753,6 +5808,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 nodep->addParamsp(pinp);
             }
 
+            if (m_statep->forPrimary() && m_ds.m_dotPos != DP_PACKAGE) {
+                // Usually resolved by the parser, so look up for the check
+                if (const VSymEnt* const foundp = m_ds.m_dotSymp->findIdFallback(nodep->name())) {
+                    checkWildcardImportRef(nodep, foundp);
+                }
+            }
             m_ds.init(m_curSymp);
             UINFO(4, indent() << "(Backto) Link ClassOrPackageRef: " << nodep);
             iterateChildren(nodep);
@@ -6289,6 +6350,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
 
             if (taskp) {
+                if (first) checkWildcardImportRef(nodep, foundp);
                 if (staticAccess && !taskp->isStatic()) {
                     // TODO bug4077
                     // nodep->v3error("Static access to non-static task/function "
@@ -7223,9 +7285,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (!nodep->typedefp() && !nodep->subDTypep()) {
             const VSymEnt* foundp;
             if (nodep->classOrPackagep()) {
-                foundp = m_statep->getNodeSym(nodep->classOrPackagep())->findIdFlat(nodep->name());
+                foundp = m_statep->getNodeSym(nodep->classOrPackagep())
+                             ->findIdFlatNoRef(nodep->name());
             } else if (m_ds.m_dotPos == DP_FIRST || m_ds.m_dotPos == DP_NONE) {
                 foundp = findIdFallbackSkipMemberDType(m_curSymp, nodep->name());
+                if (foundp) checkWildcardImportRef(nodep, foundp);
             } else {
                 // Defensive: dotPos should be DP_FIRST/DP_NONE or classOrPackagep set.
                 v3fatalSrc("Unexpected dotPos="
@@ -7376,7 +7440,27 @@ class LinkDotResolveVisitor final : public VNVisitor {
         checkNoDot(nodep);
         if (m_statep->forParamed()) VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
-    void visit(AstPackageImport* nodep) override { visitPackageImportOrExport(nodep); }
+    void visit(AstPackageImport* nodep) override {
+        // IEEE 1800-2023 26.3: An explicit import is illegal if the identifier is declared in
+        // the same scope or explicitly imported from another package. Not checked in $unit,
+        // shared by files that may be separate compilation units.
+        if (m_statep->forPrimary() && nodep->name() != "*" && m_curSymp != m_statep->dunitEntp()) {
+            const VSymEnt* const impp
+                = m_statep->getNodeSym(nodep->packagep())->findIdFlatNoRef(nodep->name());
+            const VSymEnt* const foundp = m_curSymp->findIdFlat(nodep->name());
+            if (impp && foundp && foundp->nodep() != impp->nodep()) {
+                nodep->v3error("Explicit import of '"
+                               << nodep->packagep()->prettyName() << "::" << nodep->prettyName()
+                               << "' conflicts with a declaration or import of the same name"
+                                  " in the same scope (IEEE 1800-2023 26.3)\n"
+                               << nodep->warnContextPrimary() << '\n'
+                               << foundp->nodep()->warnOther()
+                               << "... Location of other declaration\n"
+                               << foundp->nodep()->warnContextSecondary());
+            }
+        }
+        visitPackageImportOrExport(nodep);
+    }
     void visit(AstPackageExport* nodep) override { visitPackageImportOrExport(nodep); }
     void visit(AstPackageExportStarStar* nodep) override { visitPackageImportOrExport(nodep); }
     void visit(AstCellRef* nodep) override {
@@ -7486,6 +7570,21 @@ public:
             AstNodeModule* const modp = p.second;
             modp->foreach([](AstNode* const nodep) { nodep->user3(false); });
             iterate(modp);
+        }
+        // A wildcard export only exports names its package references (IEEE 1800-2023 26.6)
+        std::stable_sort(m_wildcardExportRefs.begin(), m_wildcardExportRefs.end(),
+                         [](const WildcardExportRef& a, const WildcardExportRef& b) {
+                             return a.nodep->fileline()->operatorCompare(*b.nodep->fileline()) < 0;
+                         });
+        for (const WildcardExportRef& ref : m_wildcardExportRefs) {
+            if (ref.foundp->exportedWildcardp()->referenced() || foundOtherwise(ref)) continue;
+            const AstNode* const declp = ref.foundp->nodep();
+            const AstNode* const exporterp = ref.foundp->exporterp()->nodep();
+            ref.nodep->v3error("Reference to " << declp->prettyNameQ() << " through the wildcard"
+                                               << " export of package " << exporterp->prettyNameQ()
+                                               << ", but " << exporterp->prettyNameQ()
+                                               << " does not reference it, so does not export it"
+                                                  " (IEEE 1800-2023 26.6)");
         }
     }
     ~LinkDotResolveVisitor() override = default;
