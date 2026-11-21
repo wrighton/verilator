@@ -23,7 +23,7 @@
 // unsupported (recommended not to): `default_trireg_strength 10
 
 `default_nettype wire
-// unsupported: `default_nettype tri
+`default_nettype tri
 // unsupported: `default_nettype tri0
 // unsupported: `default_nettype wand
 // unsupported: `default_nettype triand
