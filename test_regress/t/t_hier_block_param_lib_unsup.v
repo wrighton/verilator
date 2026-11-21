@@ -27,6 +27,7 @@ module t;
   // A library cannot receive defparams
   fixed f0 ();
   defparam f0.child.N = 2;
+  bind_target b0 ();
   nested n0 ();
   generated g0 ();
   // Nor a defparam to a parameter in a named block
@@ -74,6 +75,17 @@ module fixed;
   /*verilator hier_block*/
   leaf child ();
 endmodule
+
+module bind_target;
+  /*verilator hier_block*/
+  leaf child ();
+endmodule
+
+module bound;
+endmodule
+
+// A library cannot receive binds into its body
+bind t.b0.child bound u_bound ();
 
 // Defparam in a module below the block
 module nested;
