@@ -1,0 +1,34 @@
+%Error-UNSUPPORTED: t/t_assert_procedural_delay_unsup.v:15:13: Unsupported: multi-cycle procedural concurrent assertion under a condition or loop (IEEE 1800-2023 16.14.6)
+                                                             : ... note: In instance 't'
+   15 |     if (en) assert property (a |-> ##1 b);
+      |             ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_procedural_delay_unsup.v:18:33: Unsupported: multi-cycle procedural concurrent assertion under a condition or loop (IEEE 1800-2023 16.14.6)
+                                                             : ... note: In instance 't'
+   18 |     for (int i = 0; i < 2; i++) assert property (a |-> ##1 b);
+      |                                 ^~~~~~
+%Error-UNSUPPORTED: t/t_assert_procedural_delay_unsup.v:22:13: Unsupported: multi-cycle procedural concurrent assertion under a condition or loop (IEEE 1800-2023 16.14.6)
+                                                             : ... note: In instance 't'
+   22 |       1'b1: assert property (a ##1 b);
+      |             ^~~~~~
+%Error-UNSUPPORTED: t/t_assert_procedural_delay_unsup.v:30:5: Unsupported: multi-cycle procedural concurrent assertion in an always procedure with several events (IEEE 1800-2023 16.14.6)
+                                                            : ... note: In instance 't'
+   30 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
+%Error: t/t_assert_procedural_delay_unsup.v:35:5: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest provide a clocking event, a default clocking, or a clocked always procedure (IEEE 1800-2023 16.14.6)
+   35 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_procedural_delay_unsup.v:39:5: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest provide a clocking event, a default clocking, or a clocked always procedure (IEEE 1800-2023 16.14.6)
+   39 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
+%Error: t/t_assert_procedural_delay_unsup.v:42:5: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest provide a clocking event, a default clocking, or a clocked always procedure (IEEE 1800-2023 16.14.6)
+   42 |     assert property (a |-> ##1 b);
+      |     ^~~~~~
+%Error: Exiting due to
