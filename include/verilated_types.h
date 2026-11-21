@@ -329,6 +329,9 @@ using VlProcessRef = std::shared_ptr<VlProcess>;
 class VlForkSync;
 class VlForkSyncState;
 
+class VlEvent;
+struct VlEventWaitLink;
+
 class VlProcess final {
     // MEMBERS
     int m_state;  // Current state of the process
@@ -339,6 +342,9 @@ class VlProcess final {
     bool m_forkSyncOnKillDone = false;  // Ensure on-kill callback fires only once
     VlRNG m_rng;  // Per-process RNG (IEEE 1800-2023 18.14)
     VlClass* m_selfp = nullptr;  // std::process object of this process, not owned
+    VlEventWaitLink* m_waitListp = nullptr;  // Event wait list it waits on, if any
+    VlProcess* m_nextKilledp = nullptr;  // Next process on the killed chain of that list
+    size_t m_waitIndex = 0;  // Slot of its handle on that list
 
     // Thread-local current process pointer for hierarchical object seeding
     static thread_local VlProcess* t_currentp;
@@ -419,6 +425,14 @@ public:
         selfRef = VlClassRef<T_Class>{selfp};
     }
     void setSelf(VlClass* selfp) { m_selfp = selfp; }
+    /// Set the event wait list this process waits on, or nullptr once it no longer waits there
+    void waitListp(VlEventWaitLink* listp) { m_waitListp = listp; }
+    /// Slot of its handle on the event wait list it waits on
+    size_t waitIndex() const { return m_waitIndex; }
+    void waitIndex(const size_t index) { m_waitIndex = index; }
+    /// Next process on the killed chain of the event wait list it waits on
+    VlProcess* nextKilledp() const { return m_nextKilledp; }
+    void nextKilledp(VlProcess* const processp) { m_nextKilledp = processp; }
 
     // Called from the std::process destructor.
     // The destroyed object may have waited in VlDeleter while self() returned null and a newer
@@ -553,20 +567,95 @@ public:
     virtual void clearTriggered() = 0;
 };
 
+/// Wait list of the processes waiting on one event, as seen by the event and by its waiting
+/// processes. The timing scheduler owns the list. In a model with parallel MTasks, logic in any
+/// MTask may fire an event, so notify() only uses the atomics here, and the next pointer that
+/// only the one pusher writes before a release CAS publishes it: the first fire or kill of a
+/// waiter since the last trigger evaluation pushes the list onto the scheduler's pending chain.
+/// Starting a wait, killing a waiter, trigger evaluation and finishing only happen while no
+/// MTask runs in parallel: in the serial scheduling steps, or in an MTask that controls
+/// processes, which runs alone (see V3OrderMTaskFixHazards). This only covers the list: other
+/// state a fire updates, such as the model's record of triggered events, is not made safe for
+/// parallel fires here.
+struct VlEventWaitLink VL_NOT_FINAL {
+    // Event waited on, while the list is live. It outlives the list while it has waiters: as
+    // static storage, as a member of the class object of its waiters, which keep it alive, or
+    // as an assignable event the list keeps alive. When the model finishes, whichever of the
+    // event and the scheduler goes first unlinks the other (see ~VlEvent).
+    VlEvent* m_eventp = nullptr;
+    std::atomic<bool> m_pending{false};  // On the pending chain, or about to be pushed onto it
+    std::atomic<bool> m_fired{false};  // Fired, so its waiters resume, and it takes no new ones
+    VlEventWaitLink* m_nextp = nullptr;  // Next list on the pending chain
+    std::atomic<VlEventWaitLink*>* m_headpp = nullptr;  // Head of the pending chain
+    VlProcess* m_killedHeadp = nullptr;  // Killed waiters to drop, in any order
+    /// Resume the waiters at the next trigger evaluation. A fired list takes no new waiters
+    /// (IEEE 1800-2023 15.5.2). Called by logic in any MTask: it is thread safe only against
+    /// other notify() calls, as under the MTask scheduling nothing else on the list runs in
+    /// parallel with it (see above).
+    void notify() VL_MT_SAFE {
+        m_fired.store(true, std::memory_order_relaxed);
+        push();
+    }
+    /// Drop this killed waiter from its slot at the next trigger evaluation that drains the
+    /// pending lists (see VlDynamicTriggerScheduler::evaluate). The process waits on this list,
+    /// where its handle keeps it alive, and the list is not freed before that drain. Called once
+    /// per process: by its kill, or when it starts waiting already killed.
+    void noteKilled(VlProcess& process) {
+        process.nextKilledp(m_killedHeadp);
+        m_killedHeadp = &process;
+        push();
+    }
+    /// Take the killed waiters to drop
+    VlProcess* takeKilled() {
+        VlProcess* const headp = m_killedHeadp;
+        m_killedHeadp = nullptr;
+        return headp;
+    }
+
+private:
+    // Only the caller that sets 'm_pending' writes 'm_nextp', before the release CAS publishes it
+    void push() VL_MT_SAFE {
+        if (m_pending.exchange(true, std::memory_order_acq_rel)) return;
+        m_nextp = m_headpp->load(std::memory_order_relaxed);
+        while (!m_headpp->compare_exchange_weak(m_nextp, this, std::memory_order_release,
+                                                std::memory_order_relaxed)) {}
+    }
+};
+
 class VlEvent final : public VlEventBase {
     // MEMBERS
     bool m_fired = false;  // Fired on this scheduling iteration
     bool m_triggered = false;  // Triggered state of event persisting until next time step
+    VlEventWaitLink* m_waitp = nullptr;  // Wait list of processes waiting, if any
 
 public:
-    // CONSTRUCTOR
+    // CONSTRUCTORS
     VlEvent() = default;
-    ~VlEvent() override = default;
+    // A copy does not take over the wait list of the original. Sharing the waiters of the
+    // original, as a shallow copy of an object does (IEEE 1800-2023 8.12, 15.5.5), needs a
+    // VlAssignableEvent.
+    VlEvent(const VlEvent& other)
+        : m_fired{other.m_fired}
+        , m_triggered{other.m_triggered} {}
+    VlEvent& operator=(const VlEvent& other) {
+        m_fired = other.m_fired;
+        m_triggered = other.m_triggered;
+        return *this;
+    }
+    ~VlEvent() override {
+        if (VL_UNLIKELY(m_waitp)) m_waitp->m_eventp = nullptr;
+    }
 
     friend std::string VL_TO_STRING(const VlEvent& e);
     friend class VlAssignableEvent;
     // METHODS
-    void fire() override { m_fired = m_triggered = true; }
+    void fire() override {
+        m_fired = m_triggered = true;
+        if (VL_UNLIKELY(m_waitp)) m_waitp->notify();
+    }
+    /// Wait list of the timing scheduler that firing notifies, if any
+    VlEventWaitLink* waitp() const { return m_waitp; }
+    void waitp(VlEventWaitLink* waitp) { m_waitp = waitp; }
     bool isFired() const override { return m_fired; }
     bool isTriggered() const override { return m_triggered; }
     void clearFired() override { m_fired = false; }
@@ -581,7 +670,7 @@ public:
     ~VlAssignableEvent() override = default;
 
     // METHODS
-    void fire() override { (*this)->m_fired = (*this)->m_triggered = true; }
+    void fire() override { (*this)->fire(); }
     bool isFired() const override { return (*this)->m_fired; }
     bool isTriggered() const override { return (*this)->m_triggered; }
     void clearFired() override { (*this)->m_fired = false; }
