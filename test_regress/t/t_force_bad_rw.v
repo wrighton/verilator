@@ -8,7 +8,7 @@ module t;
 
   int value;
 
-  task increment(ref int i);
+  task automatic increment(ref int i);
     // verilator no_inline_task
     ++i;
   endtask

@@ -21,7 +21,7 @@ module t (
 
   typedef int q_t[$];
 
-  function void set_val(ref int lhs, input int rhs);
+  function automatic void set_val(ref int lhs, input int rhs);
     lhs = rhs;
   endfunction
 
