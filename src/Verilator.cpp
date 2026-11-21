@@ -220,6 +220,9 @@ static void process() {
 
         V3Error::abortIfErrors();
 
+        // Record scope of hierarchical references, before passes move them out of their block
+        V3Begin::xrefScopeAll(v3Global.rootp());
+
         // Inline property and sequence instances before widths are committed.
         V3AssertElab::assertElabAll(v3Global.rootp());
         // V3Undriven would report what a rejected instance or sequence event control leaves
@@ -229,9 +232,6 @@ static void process() {
         V3WidthCommit::widthCommit(v3Global.rootp());
         v3Global.assertDTypesResolved(true);
         v3Global.widthMinUsage(VWidthMinUsage::MATCHES_WIDTH);
-
-        // Record scope of hierarchical references, before passes move them out of their block
-        V3Begin::xrefScopeAll(v3Global.rootp());
 
         // End of elaboration
         V3Stats::addStatPerf(V3Stats::STAT_WALLTIME_ELAB, elabWallTime.deltaTime());
