@@ -41,6 +41,8 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // Common component builders
 
 string V3Common::makeToStringCall(AstNodeDType* nodep, const std::string& lhs) {
+    const std::string call = EmitCUtil::toStringCall(nodep, lhs);
+    if (!call.empty()) return call;
     std::string stmt;
     if (VN_IS(nodep->skipRefp(), BasicDType) && nodep->isWide()) {
         stmt += "VL_TO_STRING_W(";
@@ -49,8 +51,7 @@ string V3Common::makeToStringCall(AstNodeDType* nodep, const std::string& lhs) {
     } else {
         stmt += "VL_TO_STRING(";
     }
-    const std::string reverseCall = EmitCUtil::unpackReverseCall(nodep);
-    stmt += reverseCall.empty() ? lhs : reverseCall + "(" + lhs + ")";
+    stmt += lhs;
     stmt += ")";
     return stmt;
 }
