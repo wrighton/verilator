@@ -113,7 +113,7 @@ package std;
     } state;
 
     // Width visitor changes it to VlProcessRef
-    // V3Name is hardcoded not to rename this variable
+    // V3Name is hardcoded not to rename or --protect-ids this variable
     protected chandle m_process;
 
     static function process self();
