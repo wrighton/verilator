@@ -1298,6 +1298,14 @@ class TimingControlVisitor final : public VNVisitor {
         if (assignp->rhsp()->exists([](AstNode* const np) { return !np->isPure(); })) {
             return nullptr;
         }
+        // Notified for this write, so a handle on a waited chain, never an aggregate of handles,
+        // as each such link is the class or interface the next member is selected from
+        UASSERT_OBJ(m_waitedHandles.count(lhsp->varp()), lhsp, "Write of an unwaited handle");
+        // A virtual interface handle is a C++ pointer, which has no value before its first write
+        // if not reset, as with an initializer, so it cannot be read before
+        if (!lhsp->varp()->needsCReset() && VN_IS(lhsp->dtypep()->skipRefp(), IfaceRefDType)) {
+            return nullptr;
+        }
         FileLine* const flp = assignp->fileline();
         AstVarScope* const prevVscp = createTemp(flp, m_handlePrevNames.get(lhsp), lhsp->dtypep(),
                                                  addCLocalScope(flp, assignp), scopep);
