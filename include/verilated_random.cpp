@@ -1125,7 +1125,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
             // Check-only results are not random, so leave the random state alone
             emitSolverSeed(os, rngr);
         }
-        os << "(set-logic QF_ABV)\n";
+        os << "(set-logic " << solverLogic() << ")\n";
         emitDefines(os);
         emitDeclares(os, m_checkOnly);
         emitAsserts(os, uniqueExprs, false);
@@ -1193,7 +1193,7 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
         std::iostream& solver = sess.os();
 
         solver << "(set-option :produce-models true)\n";
-        solver << "(set-logic QF_ABV)\n";
+        solver << "(set-logic " << solverLogic() << ")\n";
         emitDefines(solver);
         emitDeclares(solver, false);
         emitAsserts(solver, uniqueExprs, false);
@@ -1879,6 +1879,23 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
         layersr.push_back(std::move(currentLayer));
     }
     return true;
+}
+
+const char* VlRandomizer::solverLogic() const {
+    // Without arrays, QF_BV lets z3 answer the incremental checks of the sampling with
+    // its bit-blasting SAT solver, which is several times faster than the SMT core it
+    // uses for QF_ABV. Phased solves keep phasedLogic(): their XOR rounds solve slower
+    // with QF_BV.
+    for (const auto& var : m_vars) {
+        if (var.second->dimension() > 0) return "QF_ABV";
+    }
+    // A constraint may hold an array term of its own, such as an array literal
+    for (const auto* const constraintsp : {&m_constraints, &m_softConstraints}) {
+        for (const std::string& constraint : *constraintsp) {
+            if (constraint.find("(Array ") != std::string::npos) return "QF_ABV";
+        }
+    }
+    return "QF_BV";
 }
 
 const char* VlRandomizer::phasedLogic() const {
