@@ -171,7 +171,7 @@ module t;
       if (chars != 3) $stop;
       if (letterq != 64'h2) $stop;
       if (letterw != 128'hd2a55) $stop;
-      if (letterz != {"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0","2"}) $stop;
+      if (letterz != {"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0","2"}) $stop;
 
       chars = $sscanf("oa=23 oi=11 ob=125634123615234123681236",
                    "oa=%o oi=%*o ob=%o", letterq, letterw);
