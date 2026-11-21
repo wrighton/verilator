@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_wire_net_array_unsup.v:14:18: Unsupported: Driver of a whole unpacked array of wired nets, with other drivers of the array: 'w_whole'
+                                                    : ... note: In instance 't'
+   14 |   assign w_whole = '{y, 7'h40};
+      |                  ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_wire_net_array_unsup.v:17:17: Unsupported: Driver of a whole unpacked array of wired nets, with other drivers of the array: 'w_elem'
+                                                    : ... note: In instance 't'
+   17 |   assign w_elem = '{x, y};
+      |                 ^
+%Error: Exiting due to
