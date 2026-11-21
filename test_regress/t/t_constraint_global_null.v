@@ -6,6 +6,7 @@
 
 // verilog_format: off
 `define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
@@ -42,6 +43,36 @@ class Outer;
     inner = new;
     mid = new;
   endfunction
+endclass
+
+// Fields wider than 64 bits of member objects, registered only through non-null handles
+class WideItem;
+  rand bit [64:0] w;
+  rand bit [2:0][32:0] p;
+  constraint c_w {w[64:58] > 7'd100;}
+endclass
+
+class WideHolder;
+  rand WideItem arr[2];
+  function new();
+    foreach (arr[i]) arr[i] = new;
+  endfunction
+endclass
+
+class WideSeq;
+  rand WideItem item;
+  rand WideHolder holder;
+  rand bit [6:0] low;
+  function new();
+    item = new;
+    holder = new;
+  endfunction
+  constraint c_low {low > 7'd100;}
+  constraint c {
+    item.w[64:58] == low;
+    item.p[1][32:26] == low;
+    holder.arr[1].w[64:58] == low;
+  }
 endclass
 
 module t;
@@ -94,6 +125,62 @@ module t;
       `checkd(o.inner.x > 7'd100, 1'b1);
       `checkd(o.mid.in.x > 7'd100, 1'b1);
       foreach (o.mid.a[i]) `checkd(o.mid.a[i].v < 7'd10, 1'b1);
+    end
+    begin
+      automatic WideSeq s = new;
+      repeat (5) begin
+        randomize_result = s.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(s.low > 7'd100, 1'b1);
+        `checkh(s.item.w[64:58], s.low);
+        `checkh(s.item.p[1][32:26], s.low);
+        `checkh(s.holder.arr[1].w[64:58], s.low);
+      end
+      // A field with rand_mode off is a state variable
+      s.item.w = {7'd117, 57'h0, 1'b1};
+      s.item.w.rand_mode(0);
+      randomize_result = s.randomize();
+      `checkd(randomize_result, 1);
+      `checkh(s.item.w, {7'd117, 57'h0, 1'b1});
+      `checkd(s.low, 7'd117);
+      `checkh(s.holder.arr[1].w[64:58], 7'd117);
+      s.item.w.rand_mode(1);
+      s.holder.arr[1].w = {7'd109, 57'h0, 1'b1};
+      s.holder.arr[1].w.rand_mode(0);
+      randomize_result = s.randomize();
+      `checkd(randomize_result, 1);
+      `checkh(s.holder.arr[1].w, {7'd109, 57'h0, 1'b1});
+      `checkd(s.low, 7'd109);
+      `checkh(s.item.w[64:58], 7'd109);
+      s.holder.arr[1].w.rand_mode(1);
+      // Null member objects, with the constraint through them off; the objects they held
+      // are left alone
+      begin
+        automatic WideItem oldItem = s.item;
+        automatic WideHolder oldHolder = s.holder;
+        oldItem.w = 65'h1_2345_6789_abcd_ef01;
+        oldItem.p = 99'h7_0123_4567_89ab_cdef_0123_4567;
+        oldHolder.arr[1].w = 65'h0_fedc_ba98_7654_3210;
+        s.c.constraint_mode(0);
+        s.item = null;
+        s.holder = null;
+        repeat (5) begin
+          randomize_result = s.randomize();
+          `checkd(randomize_result, 1);
+          `checkd(s.low > 7'd100, 1'b1);
+          `checkh(oldItem.w, 65'h1_2345_6789_abcd_ef01);
+          `checkh(oldItem.p, 99'h7_0123_4567_89ab_cdef_0123_4567);
+          `checkh(oldHolder.arr[1].w, 65'h0_fedc_ba98_7654_3210);
+        end
+        s.item = oldItem;
+        s.holder = oldHolder;
+        s.c.constraint_mode(1);
+        randomize_result = s.randomize();
+        `checkd(randomize_result, 1);
+        `checkh(s.item.w[64:58], s.low);
+        `checkh(s.item.p[1][32:26], s.low);
+        `checkh(s.holder.arr[1].w[64:58], s.low);
+      end
     end
     $write("*-* All Finished *-*\n");
     $finish;
