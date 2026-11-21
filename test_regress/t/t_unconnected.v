@@ -31,6 +31,14 @@ module t (
   wire [2:0] od_omit;
   wire [2:0] od_empty;
   wire [2:0] od_blank;
+  wire [2:0] o_p1;
+  wire [2:0] o_p0;
+  wire signed [2:0] o_p1_signed;
+  wire signed [2:0] o_p0_signed;
+  wire [32:0] o_p1_wide;
+  wire [32:0] o_p0_wide;
+  wire [1:0][3:0] o_p1_packed;
+  wire [1:0][3:0] o_p0_packed;
 
   // verilator lint_off PINMISSING
   sub_0 sub_0 (.o_0, .ov_0, .oa_0);
@@ -38,6 +46,14 @@ module t (
   sub_n sub_n (.o_n);
   ifc_1 ifc_1 ();
   prg_1 prg_1 (.o_p);
+  sub_p1 sub_p1 (.o(o_p1));
+  sub_p0 sub_p0 (.o(o_p0));
+  sub_p1_signed sub_p1_signed (.o(o_p1_signed));
+  sub_p0_signed sub_p0_signed (.o(o_p0_signed));
+  sub_p1_wide sub_p1_wide (.o(o_p1_wide));
+  sub_p0_wide sub_p0_wide (.o(o_p0_wide));
+  sub_p1_packed sub_p1_packed (.o(o_p1_packed));
+  sub_p0_packed sub_p0_packed (.o(o_p0_packed));
   // verilator lint_on PINMISSING
   sub_d sub_d_omit (.od(od_omit));
   sub_d sub_d_empty (
@@ -66,6 +82,14 @@ module t (
     //4-state if (o_n !== 1'bz) $stop;
     `checkh(ifc_1.o_i, 1'b1);
     `checkh(o_p, 1'b1);
+    if (o_p1 !== 3'b111) $stop;
+    if (o_p0 !== 3'b000) $stop;
+    if (o_p1_signed !== 3'b111) $stop;
+    if (o_p0_signed !== 3'b000) $stop;
+    if (o_p1_wide !== {33{1'b1}}) $stop;
+    if (o_p0_wide !== {33{1'b0}}) $stop;
+    if (o_p1_packed !== 8'hff) $stop;
+    if (o_p0_packed !== 8'h00) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -160,4 +184,64 @@ program prg_1 (
 );
   assign o_p = i;
 endprogram
+`nounconnected_drive
+
+`unconnected_drive pull1
+module sub_p1 (
+    input [2:0] i,
+    output wire [2:0] o
+);
+  assign o = i;
+endmodule
+
+module sub_p1_signed (
+    input signed [2:0] i,
+    output wire signed [2:0] o
+);
+  assign o = i;
+endmodule
+
+module sub_p1_wide (
+    input [32:0] i,
+    output wire [32:0] o
+);
+  assign o = i;
+endmodule
+
+module sub_p1_packed (
+    input [1:0][3:0] i,
+    output wire [1:0][3:0] o
+);
+  assign o = i;
+endmodule
+
+`unconnected_drive pull0
+module sub_p0 (
+    input [2:0] i,
+    output wire [2:0] o
+);
+  assign o = i;
+endmodule
+
+module sub_p0_signed (
+    input signed [2:0] i,
+    output wire signed [2:0] o
+);
+  assign o = i;
+endmodule
+
+module sub_p0_wide (
+    input [32:0] i,
+    output wire [32:0] o
+);
+  assign o = i;
+endmodule
+
+module sub_p0_packed (
+    input [1:0][3:0] i,
+    output wire [1:0][3:0] o
+);
+  assign o = i;
+endmodule
+
 `nounconnected_drive
