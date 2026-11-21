@@ -9172,8 +9172,9 @@ class WidthVisitor final : public VNVisitor {
         nodep->didWidth(true);
     }
     void visit(AstSchemaRef* nodep) override {
+        const AstProperty* const propp = VN_CAST(nodep->schemap(), Property);
+        if (propp && hasPropertyOperator(propp) && replacePropertyInSExpr(nodep)) return;
         if (nodep->didWidth()) return;
-        if (VN_IS(nodep->schemap(), Property) && replacePropertyInSExpr(nodep)) return;
         userIterate(nodep->schemap(), nullptr);
         bool illegalActual = false;
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
@@ -9228,6 +9229,20 @@ class WidthVisitor final : public VNVisitor {
             pkgItemp = pkgItemp->backp();
         }
         return VN_CAST(pkgItemp->backp(), Package);
+    }
+    // True if the body of property nodep has a property operator
+    static bool hasPropertyOperator(const AstProperty* nodep) {
+        // Then an instance of it is not a sequence expression (IEEE 1800-2023 A.2.10). A nested
+        // property instance counts as one rather than being looked through, as it may be
+        // recursive.
+        return nodep->exists([](const AstNode* np) {
+            if (const AstLogNot* const notp = VN_CAST(np, LogNot)) return notp->fromProperty();
+            if (const AstSchemaRef* const refp = VN_CAST(np, SchemaRef)) {
+                return VN_IS(refp->schemap(), Property);
+            }
+            return VN_IS(np, Implication) || VN_IS(np, Until) || VN_IS(np, PropAlways)
+                   || VN_IS(np, AbortOn);
+        });
     }
     void visit(AstFuncRef* nodep) override {
         visit(static_cast<AstNodeFTaskRef*>(nodep));
