@@ -1600,6 +1600,35 @@ module t;
             end
         end
     end
+    typedef struct packed {
+        logic \m.a ;
+        logic [2:0]  \m/b ;
+    } \esc.struct_t ;
+    typedef enum logic [1:0] {
+        \E.one  = 2'h0,
+        \E/two  = 2'h1
+    } esc_enum_t;
+    struct packed {
+        logic \m.a ;
+        logic [2:0]  \m/b ;
+    } \esc.s ;
+    logic [1:0]  \esc/e ;
+    logic \$esc ;
+    logic \9esc ;
+    task \esc/task ;
+    endtask
+    initial begin
+        begin : \esc/blk 
+            \esc.s [3] = 1'h1;
+            \esc/e  = \E/two ;
+            \$esc  = 1'h0;
+            \9esc  = 1'h0;
+            \esc/task ();
+            if (sub.\xr.esc ) begin
+                $write("");
+            end
+        end
+    end
     Iface bound_iface ();
     enum logic [2:0] {
         ZERO = 3'h0,
@@ -1858,6 +1887,7 @@ endinterface
 module sub;
     input logic clk;
     logic [7:0]  xr_vec;
+    logic \xr.esc ;
     /* generate */ begin : sub_gen
         typedef enum logic [1:0] {
             SUB_A = 2'h0,

@@ -482,7 +482,7 @@ class ProtectVisitor final : public VNVisitor {
     // The wrapper's module ports are connected by name, so they must use the user's
     // names rather than the hashed form of long names used internally
     static string svPortName(const AstVar* varp) {
-        return AstNode::prettyName(VName::dehash(varp->name()));
+        return AstNode::verilogIdent(VName::dehash(varp->name()));
     }
 
     static AstVar* newSvPortVar(AstVar* varp) {
@@ -533,8 +533,8 @@ class ProtectVisitor final : public VNVisitor {
             UASSERT_OBJ(ports.inp && ports.outp && ports.enp, m_vfilep,
                         "Incomplete lowered library inout");
             const string in = svPortName(ports.inp);
-            const string out = ports.outp->prettyName();
-            const string en = ports.enp->prettyName();
+            const string out = ports.outp->verilogIdent();
+            const string en = ports.enp->verilogIdent();
             std::vector<std::pair<int, int>> dimensions;
             const AstNodeDType* dtypep = ports.inp->dtypep()->skipRefp();
             while (const AstNodeArrayDType* const arrayp = VN_CAST(dtypep, NodeArrayDType)) {
@@ -580,10 +580,14 @@ class ProtectVisitor final : public VNVisitor {
         textp->add(newVarp);
     }
 
+    // Reference to a local variable from addLocalVariable
+    static string localName(const AstVar* varp, const char* suffix) {
+        return AstNode::verilogIdent(varp->name() + suffix);
+    }
+
     void handleOutput(AstVar* const varp) {
-        const std::string pname = varp->prettyName();
         // Restored inout drivers are local signals and retain their internal names.
-        const std::string portName = restoreInout(varp) ? pname : svPortName(varp);
+        const std::string portName = restoreInout(varp) ? varp->verilogIdent() : svPortName(varp);
         if (restoreInout(varp)) {
             AstVar* const localp = varp->cloneTree(false);
             localp->direction(VDirection::NONE);
@@ -592,10 +596,10 @@ class ProtectVisitor final : public VNVisitor {
             m_modPortsp->add(newSvPortVar(varp));
         }
         m_comboPortsp->add(varp->cloneTree(false));
-        m_comboParamsp->add(pname + "_combo__V");
+        m_comboParamsp->add(localName(varp, "_combo__V"));
         if (m_hasClk) {
             m_seqPortsp->add(varp->cloneTree(false));
-            m_seqParamsp->add(pname + "_tmp__V");
+            m_seqParamsp->add(localName(varp, "_tmp__V"));
         }
 
         addLocalVariable(m_comboDeclsp, varp, "_combo__V");
@@ -604,10 +608,11 @@ class ProtectVisitor final : public VNVisitor {
             addLocalVariable(m_seqDeclsp, varp, "_seq__V");
             addLocalVariable(m_tmpDeclsp, varp, "_tmp__V");
 
-            m_nbAssignsp->add(pname + "_seq__V <= " + pname + "_tmp__V;\n");
-            m_seqAssignsp->add(portName + " = " + pname + "_seq__V;\n");
+            m_nbAssignsp->add(localName(varp, "_seq__V") + " <= " + localName(varp, "_tmp__V")
+                              + ";\n");
+            m_seqAssignsp->add(portName + " = " + localName(varp, "_seq__V") + ";\n");
         }
-        m_comboAssignsp->add(portName + " = " + pname + "_combo__V;\n");
+        m_comboAssignsp->add(portName + " = " + localName(varp, "_combo__V") + ";\n");
         m_cComboParamsp->add(varp->dpiArgType(true, false));
         m_cComboOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->") + "\n");
         if (m_hasClk) {
