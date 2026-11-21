@@ -1,0 +1,11 @@
+%Warning-CONSTRAINTIGN: t/t_constraint_cls_arr_elem_unsup.v:20:12: Unsupported: Constraint item on an array or object member of an element of a rand class handle array, which the containing class solves; ignored.
+   20 |     arr[0] < 7'd5;
+      |            ^
+                        ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
+                        ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
+%Warning-CONSTRAINTIGN: t/t_constraint_cls_arr_elem_unsup.v:21:7: Unsupported: Constraint item on an array or object member of an element of a rand class handle array, which the containing class solves; ignored.
+   21 |     v < arr[1];
+      |       ^
+%Warning-CONSTRAINTIGN: t/t_constraint_cls_arr_elem_unsup.v:22:5: Unsupported: Constraint item on an array or object member of an element of a rand class handle array, which the containing class solves; ignored.
+   22 |     if (v > 7'd1) {arr[1] > 7'd2;}
+      |     ^~

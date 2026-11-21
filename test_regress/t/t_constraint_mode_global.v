@@ -14,7 +14,10 @@
 
 class Leaf;
   rand bit [7:0] z;
+  // Ignored for the objects of Foo.bars, which Foo solves: an object member of an element
+  /* verilator lint_off CONSTRAINTIGN */
   constraint c_z {z == 7;}
+  /* verilator lint_on CONSTRAINTIGN */
 endclass
 
 class Bar;
