@@ -110,3 +110,93 @@ AstNodeDType* RandomizeUtil::arrayElementDTypep(AstNodeDType* dtypep) {
     while (dtypep->isNonPackedArray()) dtypep = dtypep->subDTypep()->skipRefToEnump();
     return dtypep;
 }
+
+AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstNodeDType* const arrDtp,
+                                           AstNodeExpr* const idxp) {
+    const AstUnpackArrayDType* const unpackDtp = VN_CAST(arrDtp->skipRefp(), UnpackArrayDType);
+    if (!unpackDtp) return idxp;
+    AstNodeExpr* const offsetp
+        = new AstSub{fl, idxp, new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
+    offsetp->dtypeSetUInt32();
+    return offsetp;
+}
+
+AstNodeExpr* RandomizeUtil::newIdxSelp(FileLine* const fl, AstNodeExpr* const arrp,
+                                       AstVar* const idxVarp) {
+    AstNodeDType* const arrDtp = arrp->dtypep()->skipRefp();
+    // foreach gives the declared index, a select takes the offset
+    AstNodeExpr* const offsetp
+        = RandomizeUtil::newElemOffsetp(fl, arrDtp, new AstVarRef{fl, idxVarp, VAccess::READ});
+    AstNodeExpr* selp;
+    if (VN_IS(arrDtp, UnpackArrayDType)) {
+        selp = new AstArraySel{fl, arrp, offsetp};
+    } else {
+        selp = new AstCMethodHard{fl, arrp, VCMethod::ARRAY_AT, offsetp};
+    }
+    selp->dtypep(arrDtp->subDTypep());
+    return selp;
+}
+
+AstNodeExpr* RandomizeUtil::newElemSelp(FileLine* const fl, AstNodeExpr* arrp,
+                                        const std::vector<AstVar*>& idxVarps) {
+    for (AstVar* const idxVarp : idxVarps) arrp = RandomizeUtil::newIdxSelp(fl, arrp, idxVarp);
+    return arrp;
+}
+
+bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
+    return varp->dtypep()->skipRefp()->isNonPackedArray()
+           && VN_IS(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
+}
+
+// The random index select into an array, random or not as randArray, that exprp reads through
+static AstNodeExpr*
+randIndexSelImpp(AstNodeExpr* exprp, bool randArray,
+                 const std::function<bool(const AstNodeExpr* indexp)>& isRandIndexp) {
+    // exprp is the select itself, or reached from it through member and element selects and
+    // array methods, e.g. 'arr[idx].q.size()'. Each step is to the first operand, fromp.
+    for (AstNodeExpr* curp = exprp;;) {
+        AstNodeExpr* fromp;
+        AstNodeExpr* indexp = nullptr;
+        if (AstArraySel* const arraySelp = VN_CAST(curp, ArraySel)) {
+            fromp = arraySelp->fromp();
+            indexp = arraySelp->bitp();
+        } else if (AstAssocSel* const assocSelp = VN_CAST(curp, AssocSel)) {
+            fromp = assocSelp->fromp();
+            indexp = assocSelp->bitp();
+        } else if (AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
+            fromp = methodp->fromp();
+            if (methodp->method() == VCMethod::ARRAY_AT) indexp = methodp->pinsp();
+        } else if (AstStructSel* const structSelp = VN_CAST(curp, StructSel)) {
+            fromp = structSelp->fromp();
+        } else if (AstMemberRef* const memberSelp = VN_CAST(curp, MemberRef)) {
+            fromp = memberSelp->fromp();
+        } else {
+            return nullptr;
+        }
+        if (indexp && (fromp->user1() != 0) == randArray && isRandIndexp(indexp)) return curp;
+        curp = fromp;
+    }
+}
+
+AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
+                                          bool (*isRandIndexp)(const AstNodeExpr* indexp)) {
+    return randIndexSelImpp(exprp, false, isRandIndexp);
+}
+
+AstNodeExpr* RandomizeUtil::randArrayIndexSelp(
+    AstNodeExpr* exprp, const std::function<bool(const AstNodeExpr* indexp)>& isRandIndexp) {
+    return randIndexSelImpp(exprp, true, isRandIndexp);
+}
+
+AstNodeExpr* RandomizeUtil::newElemModeOffp(AstNodeExpr* const modesp, AstNodeExpr* const indexp) {
+    AstCMethodHard* const atp = new AstCMethodHard{indexp->fileline(), modesp, VCMethod::ARRAY_AT,
+                                                   indexp->cloneTree(false)};
+    atp->dtypeSetBit();
+    return atp;
+}
+
+AstNodeExpr* RandomizeUtil::newMemberRefp(FileLine* const fl, AstNodeExpr* const objp,
+                                          AstVar* const varp) {
+    if (objp) return new AstMemberRef{fl, objp->cloneTreePure(false), varp};
+    return new AstVarRef{fl, VN_AS(varp->user2p(), Class), varp, VAccess::READ};
+}
