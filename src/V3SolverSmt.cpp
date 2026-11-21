@@ -315,8 +315,8 @@ class ConstraintExprVisitor final : public VNVisitor {
     AstClass* const m_classp;  // Class being processed
     AstBegin* const m_inlineInitBlockp;  // Block to add write_var calls to
                                          // (may be null, then new() is used)
-    AstNodeFTask* const m_memberrefInitTaskp;  // Fallback for memberref write_var when
-                                               // classp has no randomize() (inherited members)
+    AstNodeFTask* const m_memberrefInitTaskp;  // Setup of the constraint, for memberref
+                                               // write_var
     AstVar* const m_genp;  // VlRandomizer variable of the class
     AstVar* m_randModeVarp;  // Relevant randmode state variable
     bool m_wantSingle = false;  // Whether to merge constraint expressions with LOGAND
@@ -1202,14 +1202,10 @@ class ConstraintExprVisitor final : public VNVisitor {
         if (m_inlineInitBlockp) return m_inlineInitBlockp;
         varp->user3(true);
         if (memberrefOrStructSel) {
-            if (AstNodeFTask* const taskp
-                = VN_AS(m_memberMap.findMember(classp, "randomize"), NodeFTask)) {
-                return newInitBlockp(taskp);
-            }
-            // Inherited rand members may belong to a base class
-            // that has no randomize(); use the caller's function
-            if (m_memberrefInitTaskp) return newInitBlockp(m_memberrefInitTaskp);
-            classp->v3fatalSrc("No randomize() in class");
+            // Not in new(), as the selected object may not exist yet. In the setup of the
+            // constraint, as every class solving the constraint runs it.
+            UASSERT_OBJ(m_memberrefInitTaskp, varp, "No setup task for the constraint");
+            return newInitBlockp(m_memberrefInitTaskp);
         } else {
             AstNodeFTask* const taskp = VN_AS(m_memberMap.findMember(classp, "new"), NodeFTask);
             UASSERT_OBJ(taskp, classp, "No new() in class");
@@ -4871,7 +4867,7 @@ public:
                     const ConstraintExprVisitor exprVisitor{
                         classp,        m_memberMap,  holderp->declsp(), nullptr,
                         genp,          randModeVarp, m_writtenVars,     &m_uniqueConstraintId,
-                        m_uniqueNames, randomizep,   &sizeArrays,       prepareArraysTaskp};
+                        m_uniqueNames, taskp,        &sizeArrays,       prepareArraysTaskp};
                     if (holderp->declsp()) skipInactiveElems(constrp, holderp);
                     std::vector<ConstraintFuncCall>& calls = m_constraintFuncCalls[constrp];
                     const std::vector<ConstraintFuncCall>& newCalls = exprVisitor.funcCalls();
@@ -4915,9 +4911,8 @@ public:
                     setupAllTaskp->addStmtsp(pinsp);
                 }
             }
-            // For derived classes: clone write_var calls from parent's randomize()
-            // and save every array that has is size-constrained array to generate
-            // array element refresh later
+            // For derived classes: save every array that has is size-constrained array to
+            // generate array element refresh later
             VInsertionSet<AstVar*> sizeArrayVars;
             std::set<std::string>& writtenVars = m_classWrittenVars[nodep];
             writtenVars = m_writtenVars;
@@ -4930,9 +4925,6 @@ public:
                     if (writtenIt != m_classWrittenVars.end()) {
                         writtenVars.insert(writtenIt->second.begin(), writtenIt->second.end());
                     }
-                    AstFunc* const parentRandomizep
-                        = VN_CAST(m_memberMap.findMember(parentClassp, "randomize"), Func);
-                    if (parentRandomizep) copyVariableRegistrations(parentRandomizep, randomizep);
                     parentClassp
                         = parentClassp->extendsp() ? parentClassp->extendsp()->classp() : nullptr;
                 }
@@ -4947,17 +4939,8 @@ public:
             AstTask* const setupAllTaskp
                 = SmtUtil::getCreateConstraintSetupFunc(nodep, m_memberMap);
             if (!sizeArrayVars.empty() && prepareArraysTaskp->stmtsp()) {
-                AstNodeStmt* const preparep = (new AstTaskRef{fl, prepareArraysTaskp})->makeStmt();
-                // A size-constrained array always has a preceding write_var registration.
-                for (AstNode* const stmtp : randomizep->stmtspList()) {  // LCOV_EXCL_BR_LINE
-                    bool writesArray = false;
-                    stmtp->foreach([&](AstCMethodHard* methodp) {
-                        writesArray |= methodp->method() == VCMethod::RANDOMIZER_WRITE_VAR;
-                    });
-                    if (!writesArray) continue;
-                    stmtp->addHereThisAsNext(preparep);
-                    break;
-                }
+                // Before the setup registers the elements
+                randomizep->addStmtsp((new AstTaskRef{fl, prepareArraysTaskp})->makeStmt());
             }
             AstTaskRef* const setupTaskRefp = new AstTaskRef{fl, setupAllTaskp};
             randomizep->addStmtsp(setupTaskRefp->makeStmt());
@@ -5062,10 +5045,6 @@ public:
             = randomizeFuncp->stmtsp() ? randomizeFuncp->stmtsp()->lastp() : nullptr;
         // Add constraints clearing code
         if (classGenp) {
-            // Clone write_var calls from main randomize() for path-connected variables
-            AstFunc* const mainRandomizep
-                = VN_CAST(m_memberMap.findMember(classp, "randomize"), Func);
-            if (mainRandomizep) copyVariableRegistrations(mainRandomizep, randomizeFuncp);
             randomizeFuncp->addStmtsp(
                 implementConstraintsClear(randomizeFuncp->fileline(), classGenp));
         }
