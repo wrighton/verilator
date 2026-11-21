@@ -1,0 +1,7 @@
+%Error: t/t_string_integral_implicit_param_bad.v:9:31: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+                                                     : ... note: In instance 't'
+                                                     : ... Suggest use a static cast, or string method atoi()
+    9 |   localparam logic [15:0] P = S;   
+      |                               ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

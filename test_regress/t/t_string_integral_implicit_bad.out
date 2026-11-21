@@ -1,0 +1,64 @@
+%Error: t/t_string_integral_implicit_bad.v:39:11: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest use a static cast, or string method atoi()
+   39 |       .in(s),
+      |           ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_string_integral_implicit_bad.v:40:12: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+   40 |       .out(w)
+      |            ^
+%Error: t/t_string_integral_implicit_bad.v:43:14: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest use a static cast, or string method atoi()
+   43 |   assign v = s;   
+      |              ^
+%Error: t/t_string_integral_implicit_bad.v:47:9: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use a static cast, or string method atoi()
+   47 |     i = s;
+      |         ^
+%Error: t/t_string_integral_implicit_bad.v:48:9: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use a static cast, or string method atoi()
+   48 |     i = S;
+      |         ^
+%Error: t/t_string_integral_implicit_bad.v:49:9: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use a static cast, or string method atoi()
+   49 |     i = ts;
+      |         ^~
+%Error: t/t_string_integral_implicit_bad.v:50:9: Illegal implicit conversion to 'byte' from 'string' (IEEE 1800-2023 6.16)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use a static cast, or string method atoi()
+   50 |     b = s;
+      |         ^
+%Error: t/t_string_integral_implicit_bad.v:51:9: Illegal implicit conversion to 'enum t.enum_t' from 'string' (IEEE 1800-2023 6.16)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use a static cast, or string method atoi()
+   51 |     e = s;
+      |         ^
+%Error: t/t_string_integral_implicit_bad.v:52:9: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use a static cast, or string method atoi()
+   52 |     v = $sformatf("%0d", i);
+      |         ^~~~~~~~~
+%Error: t/t_string_integral_implicit_bad.v:53:11: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest use a static cast, or string method atoi()
+   53 |     i = c ? s : 5;
+      |           ^
+%Error: t/t_string_integral_implicit_bad.v:54:14: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+                                                : ... Suggest use a static cast, or string method atoi()
+   54 |     i = f_in(s);
+      |              ^
+%Error: t/t_string_integral_implicit_bad.v:55:11: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+   55 |     t_out(i);
+      |           ^
+%Error: t/t_string_integral_implicit_bad.v:56:13: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+                                                : ... note: In instance 't'
+   56 |     t_inout(i);
+      |             ^
+%Error: Exiting due to
