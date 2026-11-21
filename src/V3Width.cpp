@@ -468,7 +468,8 @@ class WidthVisitor final : public VNVisitor {
         }
     }
     static void packIfUnpacked(AstNodeExpr* const nodep) {
-        AstUnpackArrayDType* const unpackDTypep = VN_CAST(nodep->dtypep(), UnpackArrayDType);
+        AstUnpackArrayDType* const unpackDTypep
+            = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         // Not an array of unpacked structs, which only packStreamOperand packs, e.g. in a cast,
         // nor an assigned value, which must stay a variable
         if (unpackDTypep && !unpackDTypep->containsUnpackedStruct() && !nodep->isLValue()) {
@@ -13439,6 +13440,13 @@ public:
                 || lowerAsFixedAggregate(lhsDTypeSkippedRefp)) {
                 FileLine* const flp = streamp->fileline();
                 AstNodeExpr* srcp = streamp->unlinkFrBack();
+                const AstNodeDType* const operandDTypep = streamp->lhsp()->dtypep()->skipRefp();
+                if (VN_IS(operandDTypep, UnpackArrayDType)
+                    && !lowerAsFixedAggregate(operandDTypep)) {
+                    // Convert an unpacked array operand to the target through its packed value
+                    packIfUnpacked(streamp->lhsp());
+                    streamp->dtypeFrom(streamp->lhsp());
+                }
                 if (packedToDynamic) {
                     // Zero-fill to a whole number of elements as for a queue target before:
                     // a '>>' stream on the left, as a queue source is read back, a '<<' stream
