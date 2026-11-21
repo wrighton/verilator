@@ -2668,9 +2668,7 @@ class LinkDotParamVisitor final : public VNVisitor {
                                             -1,  // Pin# not relevant
                                             VString::dot(scopePath, ".", name), exprp};
             pinp->param(true);
-            // V3Param matches the path against instance names, which start at the top module
-            pinp->paramPath(VString::startsWith(cellPath, "$root.") ? cellPath.substr(6)
-                                                                    : cellPath);
+            pinp->paramPath(cellPath);
             pinp->modVarp(scopedVarp);
             cellp->addParamsp(pinp);
             if (!exprp) {
