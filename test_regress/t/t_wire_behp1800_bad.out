@@ -55,8 +55,4 @@
                                                 : ... note: In instance 't'
    53 |     po = '0;   
       |     ^~
-%Error-PROCASSWIRE: t/t_wire_behp1800_bad.v:78:11: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'rw'
-                                                 : ... note: In instance 't.sub'
-   78 |   initial rw = '0;   
-      |           ^~
 %Error: Exiting due to
