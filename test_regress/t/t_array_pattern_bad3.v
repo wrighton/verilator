@@ -49,6 +49,10 @@ module t (
       logic [3:0] vec;
       vec = '{3: 1'b1, int: 1'b0};  // Bad, the data type key is not of the elements' type
     end
+    begin
+      int q[$];
+      arr = '{q, '0, '1};  // Bad, a queue is not an element
+    end
   end
 
 endmodule
