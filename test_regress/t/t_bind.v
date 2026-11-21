@@ -29,7 +29,8 @@ module t (
       .si(si)
   );
 
-  always @(posedge clk) begin
+  // The programs' initial procedures end the simulation (IEEE 1800-2023 24.7)
+  final begin
     if (!a_finished) $stop;
     if (!b_finished) $stop;
 `ifdef VERILATOR
@@ -37,7 +38,6 @@ module t (
     if (lib_bound) $stop;
 `endif
     $write("*-* All Finished *-*\n");
-    $finish;
   end
 
 endmodule
