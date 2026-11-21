@@ -22,7 +22,8 @@ module t (
   int d = 0;  // Changes at negedges
   int np_plain = 0, np_const = 0, np_plain_same = 0, np_const_same = 0, nf = 0, nact = 0, nref = 0;
   always @(posedge clk) cyc <= cyc + 1;
-  always @(negedge clk) d <= d + 1;
+  // Count only clock edges after sampling starts, not a four-state clock's initial X-to-0 edge.
+  always @(negedge clk) if (cyc != 0) d <= d + 1;
   always @(posedge clk) if (d[0]) nref++;  // Reference for the action below
 
   property p_plain;
