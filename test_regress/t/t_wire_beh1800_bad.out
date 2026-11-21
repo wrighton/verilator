@@ -19,4 +19,12 @@
                                                : ... note: In instance 't'
    29 |     woa = '0;   
       |     ^~~
+%Error-PROCASSWIRE: t/t_wire_beh1800_bad.v:35:5: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'oa'
+                                               : ... note: In instance 't'
+   35 |     oa[0] = '0;   
+      |     ^~
+%Error-PROCASSWIRE: t/t_wire_beh1800_bad.v:36:5: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'woa'
+                                               : ... note: In instance 't'
+   36 |     woa[1:0] <= '0;   
+      |     ^~~
 %Error: Exiting due to
