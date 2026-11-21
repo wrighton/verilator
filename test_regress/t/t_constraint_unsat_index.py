@@ -21,6 +21,10 @@ test.execute()
 
 test.file_grep(test.run_log_filename, r"a > 8'd200")
 test.file_grep(test.run_log_filename, r"a < 8'd100")
+# An implicit STATE pin must have its own line record, not shift the user constraint.
+test.file_grep(test.run_log_filename,
+               r'UNSATCONSTR: [^\n]*t_constraint_unsat_index\.v:34: Unsatisfied constraint\r?\n')
+test.file_grep(test.run_log_filename, r'constraint c \{ arr\[1\]\.b == 1; \}')
 test.file_grep(test.run_log_filename, r'All Finished')
 
 test.passes()
