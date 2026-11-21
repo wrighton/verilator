@@ -64,6 +64,8 @@ module t (
   else fails++;
   assert property (prop_goto(n))
   else fails++;
+  assert property (prop_goto($past(n, 1)))  // Checking the count deletes the $past in it
+  else fails++;
   assert property (prop_past(n))
   else fails++;
   assert property (prop_rep(-1))
