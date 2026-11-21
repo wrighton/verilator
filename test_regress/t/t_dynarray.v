@@ -38,6 +38,16 @@ module t (
 
   string s[] = {"hello", "sad", "world"};
 
+  initial begin
+    // Array query functions of a typedef'd dynamic array
+    typedef int d_t[];
+    d_t d;
+    d = new[3];
+    `checkh($size(d), 3);
+    `checkh($high(d), 2);
+    `checkh($right(d), 2);
+  end
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     begin
