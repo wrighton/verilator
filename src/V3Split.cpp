@@ -286,7 +286,7 @@ class SplitVisitor final : public VNVisitor {
         // Also counts the statements in 'stmts', and the copies of 'if's the
         // split would make in 'ifCopies'
         std::set<uint32_t> colors;
-        for (AstNode* const stmtp : VNList<AstNode>{stmtsp}) {
+        for (AstNode* stmtp = stmtsp; stmtp; stmtp = stmtp->nextp()) {
             if (VN_IS(stmtp, Comment)) continue;
             ++stmts;
             const SplitStmtVertex* const vtxp = stmtp->user1u().to<SplitStmtVertex*>();

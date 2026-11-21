@@ -9,9 +9,9 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// Register-model style classes: the nested pre/post_randomize callbacks of
-// Reg are also called from Block, so are kept, and are not inlined into
-// Reg's randomize()
+// Register-model style classes: Block's constraint selects through Reg's
+// fields, so the nested pre/post_randomize callbacks of Reg are also called
+// from Block, so are kept, and are not inlined into Reg's randomize()
 
 class Field;
   rand int value;
@@ -45,6 +45,14 @@ endclass
 
 class Block;
   rand Reg r;
+  constraint c_fields {
+    r.f0.value < 1000;
+    r.f1.value < 1000;
+    r.f2.value < 1000;
+    r.f3.value < 1000;
+    r.f4.value < 1000;
+    r.f5.value < 1000;
+  }
   function new;
     r = new;
   endfunction
@@ -71,6 +79,9 @@ module t;
     `checkd(r.f5.npost, 20);
     ok = b.randomize();
     `checkd(ok, 1);
+    if (b.r.f0.value >= 1000 || b.r.f5.value >= 1000) `stop;
+    `checkd(b.r.f0.npre, 1);
+    `checkd(b.r.f5.npost, 1);
     $write("*-* All Finished *-*\n");
     $finish;
   end

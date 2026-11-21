@@ -189,47 +189,6 @@ class AssocArray64bitMoreTest;
 
 endclass
 
-// Struct elements with keys having a zero 32-bit word
-typedef struct {rand int x;} elem_t;
-class StructWideKeyTest;
-  rand elem_t a[bit [62:0]];
-
-  function new();
-    a[63'h1_0000_0010] = '{x: 0};
-    a[63'h110] = '{x: 0};
-  endfunction
-
-  constraint c {
-    a[63'h1_0000_0010].x == 5;
-    a[63'h110].x == 7;
-  }
-
-  function void self_check();
-    `checkd(a[63'h1_0000_0010].x, 5);
-    `checkd(a[63'h110].x, 7);
-  endfunction
-endclass
-
-// VlWide struct keys with a zero middle word, distinct from the integral-key path.
-class StructWide95KeyTest;
-  rand elem_t a[bit [94:0]];
-
-  function new();
-    a[95'h1_0000_0000_0000_0010] = '{x: 0};
-    a[95'h110] = '{x: 0};
-  endfunction
-
-  constraint c {
-    a[95'h1_0000_0000_0000_0010].x == 9;
-    a[95'h110].x == 11;
-  }
-
-  function void self_check();
-    `checkd(a[95'h1_0000_0000_0000_0010].x, 9);
-    `checkd(a[95'h110].x, 11);
-  endfunction
-endclass
-
 // Keys added after new(), also to an inherited array, are randomized too
 typedef bit [6:0] assoc_keys_t[int];
 typedef struct {
@@ -295,6 +254,47 @@ class AssocKeysInNew extends AssocKeysAfterNew;
   endfunction
 endclass
 
+// Struct elements with keys having a zero 32-bit word
+typedef struct {rand int x;} elem_t;
+class StructWideKeyTest;
+  rand elem_t a[bit [62:0]];
+
+  function new();
+    a[63'h1_0000_0010] = '{x: 0};
+    a[63'h110] = '{x: 0};
+  endfunction
+
+  constraint c {
+    a[63'h1_0000_0010].x == 5;
+    a[63'h110].x == 7;
+  }
+
+  function void self_check();
+    `checkd(a[63'h1_0000_0010].x, 5);
+    `checkd(a[63'h110].x, 7);
+  endfunction
+endclass
+
+// VlWide struct keys with a zero middle word, distinct from the integral-key path.
+class StructWide95KeyTest;
+  rand elem_t a[bit [94:0]];
+
+  function new();
+    a[95'h1_0000_0000_0000_0010] = '{x: 0};
+    a[95'h110] = '{x: 0};
+  endfunction
+
+  constraint c {
+    a[95'h1_0000_0000_0000_0010].x == 9;
+    a[95'h110].x == 11;
+  }
+
+  function void self_check();
+    `checkd(a[95'h1_0000_0000_0000_0010].x, 9);
+    `checkd(a[95'h110].x, 11);
+  endfunction
+endclass
+
 module t_constraint_assoc_arr_basic;
 
   constrained_associative_array_basic my_array;
@@ -323,7 +323,6 @@ module t_constraint_assoc_arr_basic;
       wide_copy_obj.self_check();
       wide_obj.self_check();
     end
-
     // Before any AssocKeysAfterNew is randomized on its own
     begin
       automatic AssocKeysOwner owner_obj = new;
@@ -352,25 +351,6 @@ module t_constraint_assoc_arr_basic;
     repeat (2) begin
       success = test_obj.randomize();
       if (success != 1) $stop;
-    end
-
-    begin
-      StructWideKeyTest struct_obj;
-      StructWideKeyTest copy_obj;
-      struct_obj = new();
-      success = struct_obj.randomize();
-      `checkd(success, 1);
-      struct_obj.self_check();
-
-      // Shallow copying calls __VupdateRandVars to rebind the copied fields.
-      copy_obj = new struct_obj;
-      copy_obj.a[63'h1_0000_0010].x = 0;
-      copy_obj.a[63'h110].x = 0;
-      struct_obj.self_check();
-      success = copy_obj.randomize();
-      `checkd(success, 1);
-      copy_obj.self_check();
-      struct_obj.self_check();
     end
 
     begin
@@ -409,6 +389,24 @@ module t_constraint_assoc_arr_basic;
       success = new_obj.randomize_self();
       if (success != 1) $stop;
       if (new_obj.new_arr[1] != 4 || new_obj.new_arr[4] != 7) $stop;
+    end
+    begin
+      StructWideKeyTest struct_obj;
+      StructWideKeyTest copy_obj;
+      struct_obj = new();
+      success = struct_obj.randomize();
+      `checkd(success, 1);
+      struct_obj.self_check();
+
+      // Shallow copying calls __VupdateRandVars to rebind the copied fields.
+      copy_obj = new struct_obj;
+      copy_obj.a[63'h1_0000_0010].x = 0;
+      copy_obj.a[63'h110].x = 0;
+      struct_obj.self_check();
+      success = copy_obj.randomize();
+      `checkd(success, 1);
+      copy_obj.self_check();
+      struct_obj.self_check();
     end
 
     // my_1d_array.debug_display();

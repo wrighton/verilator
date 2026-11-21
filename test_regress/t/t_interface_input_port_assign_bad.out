@@ -3,6 +3,11 @@
    56 | bind ref_target ref_port rp (.r(i));   
       |                                 ^
                  ... For error description see https://verilator.org/warn/ASSIGNIN?v=latest
+%Error: t/t_interface_input_port_assign_bad.v:56:33: Ref port 'r' is connected to net 'i', but must be connected to a variable (IEEE 1800-2023 23.3.3.2)
+                                                   : ... note: In instance 't.u_ref'
+   56 | bind ref_target ref_port rp (.r(i));   
+      |                                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error-ASSIGNIN: t/t_interface_input_port_assign_bad.v:42:32: Assigning to input/const variable: 'i'
                                                             : ... note: In instance 't.u_var'
    42 | bind var_target out_if oif (.o(i));   

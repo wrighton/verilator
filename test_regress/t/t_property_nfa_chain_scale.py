@@ -30,7 +30,9 @@ def const_seconds(steps):
         f.write(f"  assert property (@(posedge clk) {seq} ##1 b);\n")
         f.write(f"  assert property (@(posedge clk) c throughout ({seq}));\n")
         f.write("endmodule\n")
-    test.compile(verilator_flags2=["--stats"], make_main=False, verilator_make_gmake=False)
+    test.compile(verilator_flags2=["--stats"],
+                 make_main=False,
+                 verilator_make_gmake=False)
     stats = test.file_contents(test.stats)
     times = re.findall(r'Stage, Elapsed time \(sec\), \d+_const\S*\s+(\S+)', stats)
     if not times:

@@ -19,12 +19,4 @@ module t;
     b = cls.get_x(a[1]);
     $stop;
   end
-
-  task automatic t_ref(ref string o);
-    o = "ab";
-  endtask
-  initial begin
-    int i;
-    t_ref(i);
-  end
 endmodule

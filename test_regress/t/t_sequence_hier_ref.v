@@ -82,9 +82,10 @@ interface ifc (
   else outer_fails++;
   assert property (@(posedge clk) a |-> c == b)
   else ref_outer_fails++;
-  // A method called on a class handle of the interface
+  // A method called on a class handle of the interface; static, as a concurrent assertion
+  // shall not reference a non-static class member (IEEE 1800-2023 16.6)
   class Cls;
-    function automatic logic inv(logic x);
+    static function automatic logic inv(logic x);
       return !x;
     endfunction
   endclass
@@ -92,14 +93,15 @@ interface ifc (
   sequence s_method;
     obj.inv(a) ##1 b;
   endsequence
-  // A task called in a match item
+  // A task called in a match item, of a single-cycle sequence, as one in a multi-cycle
+  // property is not supported
   int n_calls = 0;
   task automatic count();
     n_calls++;
   endtask
   // verilator lint_off SIDEEFFECT
   sequence s_task;
-    (a, count()) ##1 b;
+    (a, count());
   endsequence
   // verilator lint_on SIDEEFFECT
   if (1) begin : g
@@ -227,7 +229,7 @@ module t;
   assert property (@(posedge clk) i.s_task |-> i.c)
   else fails[14]++;
   // verilator lint_off SIDEEFFECT
-  assert property (@(posedge clk) (i.a, i.count()) ##1 i.b |-> i.c)
+  assert property (@(posedge clk) (i.a, i.count()) |-> i.c)
   else ref_fails[14]++;
   // verilator lint_on SIDEEFFECT
 
@@ -237,26 +239,26 @@ module t;
   // Counts read in final (Postponed) to avoid same-timestep races.
   final begin
     for (int k = 0; k < 17; k++) `checkd(fails[k], ref_fails[k]);
-    `checkd(fails[0], 16);
+    `checkd(fails[0], 21);
     `checkd(fails[1], 31);
-    `checkd(fails[2], 30);
-    `checkd(fails[3], 21);
-    `checkd(fails[4], 28);
+    `checkd(fails[2], 32);
+    `checkd(fails[3], 30);
+    `checkd(fails[4], 31);
     `checkd(fails[5], 9);
     `checkd(fails[6], 3);
     `checkd(fails[7], 9);
-    `checkd(fails[8], 21);
-    `checkd(fails[9], 26);
-    `checkd(fails[10], 23);
-    `checkd(fails[11], 20);
+    `checkd(fails[8], 25);
+    `checkd(fails[9], 30);
+    `checkd(fails[10], 30);
+    `checkd(fails[11], 30);
     `checkd(fails[13], 4);
-    `checkd(fails[14], 3);
+    `checkd(fails[14], 4);
     `checkd(fails[15], 10);
-    `checkd(fails[16], 23);
+    `checkd(fails[16], 31);
     `checkd(i.outer_fails, i.ref_outer_fails);
     `checkd(i.outer_fails, 10);
     `checkd(ck.fails, ck.ref_fails);
-    `checkd(ck.fails, 16);
+    `checkd(ck.fails, 21);
     `checkd(events, 10);
     $write("*-* All Finished *-*\n");
   end

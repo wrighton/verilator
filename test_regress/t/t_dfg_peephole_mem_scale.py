@@ -48,7 +48,10 @@ for i, (stage, peak) in enumerate(peaks):
         growth += float(peak) - float(peaks[i - 1][1])
 if not any(stage == "dfg-peephole" for stage, _ in peaks):
     test.error("DFG peephole stage not found in " + test.stats)
-if growth > MAX_GROWTH_MB:
+print(f"Peak memory growth in DFG peephole with {N_BITS} bits: {growth:.1f} MB")
+# With AddressSanitizer, peak memory also holds freed memory in its quarantine, so the limit
+# applies only without it; Verilator is still checked for memory errors and leaks
+if growth > MAX_GROWTH_MB and not test.have_dev_asan:
     test.error(f"Peak memory grew {growth:.1f} MB in DFG peephole with {N_BITS} bits " +
                f"(over {MAX_GROWTH_MB} MB)")
 

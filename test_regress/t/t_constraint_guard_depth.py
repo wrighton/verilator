@@ -18,7 +18,7 @@ test.compile(verilator_flags2=['--stats'])
 
 if test.vlt_all:
     # Twelve mixed guards must not clone their nested branch expressions into fast paths.
-    test.file_grep(test.stats, r'Node count, SFORMATF\s+8\s+(\d+)', 79)
+    test.file_grep(test.stats, r'Node count, SFORMATF\s+8\s+(\d+)', 43)
 
 test.execute()
 

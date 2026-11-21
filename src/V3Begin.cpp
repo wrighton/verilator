@@ -175,7 +175,14 @@ class BeginVisitor final : public VNVisitor {
         UINFO(8, "  " << nodep);
         // %m uses the original name; m_displayScope already has the enclosing blocks
         VL_RESTORER_COPY(m_displayScope);
-        m_displayScope = dot(m_displayScope, nodep->name());
+        if (nodep->forkBranch()) {
+            // The branch keeps the %m of the fork it was moved out of
+            const auto it = m_forkBranchScopes.find(nodep);
+            UASSERT_OBJ(it != m_forkBranchScopes.end(), nodep, "Fork branch before its call");
+            m_displayScope = it->second;
+        } else {
+            m_displayScope = dot(m_displayScope, nodep->name());
+        }
         // Rename it
         if (m_unnamedScope != "") {
             nodep->name(dot(m_unnamedScope, nodep->name()));
@@ -190,13 +197,6 @@ class BeginVisitor final : public VNVisitor {
         VL_RESTORER(m_liftedp);
         VL_RESTORER_CLEAR(m_namedScope);
         VL_RESTORER_CLEAR(m_unnamedScope);
-        if (nodep->forkBranch()) {
-            // The branch keeps the %m of the fork it was moved out of
-            const auto it = m_forkBranchScopes.find(nodep);
-            UASSERT_OBJ(it != m_forkBranchScopes.end(), nodep, "Fork branch before its call");
-            m_displayScope = it->second;
-        } else {
-            }
 
         m_ftaskp = nodep;
         m_liftedp = nullptr;
@@ -238,12 +238,9 @@ class BeginVisitor final : public VNVisitor {
             UASSERT_OBJ(m_ftaskp, nodep, "Unlifted declarations outside a function");
             m_liftedp = AstNode::addNextNull(m_liftedp, declsp->unlinkFrBackWithNext());
         }
-        AstNode* addsp = nullptr;
         if (AstNode* const stmtsp = nodep->stmtsp()) {
-            stmtsp->unlinkFrBackWithNext();
-            addsp = AstNode::addNext(addsp, stmtsp);
+            nodep->addHereThisAsNext(stmtsp->unlinkFrBackWithNext());
         }
-        if (addsp) nodep->addHereThisAsNext(addsp);
         nodep->name("");
     }
     void visit(AstBegin* nodep) override {
@@ -374,7 +371,11 @@ class BeginVisitor final : public VNVisitor {
     }
     void visit(AstVarXRef* nodep) override {
         if (nodep->user1SetOnce()) return;
-        if (nodep->varp()->isParam()) m_paramRefps.push_back(nodep);
+        if (nodep->varp()->isParam()) {
+            m_paramRefps.push_back(nodep);
+        } else {
+            m_staticVarRefps.push_back(nodep);
+        }
     }
     void visit(AstMemberRef* nodep) override {
         if (nodep->user1SetOnce()) return;

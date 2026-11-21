@@ -64,7 +64,6 @@
    46 | function void Cls::farg_name_bad(bit declname);
       |                                  ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:17:36: In prototype for 'fret_arg_bad', argument 'a' data-type does not match out-of-block declaration's data-type (IEEE 1800-2023 8.24)
-                                                      : ... note: In instance 't'
                                                       : ... Prototype data type: 'int'
                                                       : ... Declaration data type: 'byte'
    17 |   extern function int fret_arg_bad(int a);   
@@ -73,7 +72,6 @@
    49 | function int Cls::fret_arg_bad(byte a);
       |                                ^~~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:18:28: In prototype for 'tret_arg_bad', argument 'a' data-type does not match out-of-block declaration's data-type (IEEE 1800-2023 8.24)
-                                                      : ... note: In instance 't'
                                                       : ... Prototype data type: 'int'
                                                       : ... Declaration data type: 'byte'
    18 |   extern task tret_arg_bad(int a);   

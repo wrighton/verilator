@@ -30,7 +30,7 @@ module t;
   endclocking
   always_ff @(posedge clk) begin
     ##1;  // <--- Bad
-    // Cycle delay in a property is legal, but unsupported
+    // A cycle delay in a property is legal
     assert property (d ##1 d);
   end
 

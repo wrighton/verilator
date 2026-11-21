@@ -14,4 +14,7 @@
 %Error: t/t_assert_obs_defer_bad.v:29:24: Observed deferred immediate assertion action argument must be input, ref, or const ref (IEEE 1800-2023 16.4).
    29 |     else report_output(x);
       |                        ^
+%Error: t/t_assert_obs_defer_bad.v:31:20: Observed deferred immediate assertion action block must be a single subroutine call (IEEE 1800-2023 16.4).
+   31 |     assert #0 (0) x++;
+      |                    ^~
 %Error: Exiting due to

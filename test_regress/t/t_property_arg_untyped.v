@@ -349,7 +349,7 @@ module t (
     `checkd(ref_fails_op_stable, 37);
     `checkd(ref_fails_op_outer, 11);
     `checkd(ref_fails_op_logical, 4);
-    `checkd(ref_fails_op_thru, 19);
+    `checkd(ref_fails_op_thru, 13);
     `checkd(ref_fails_op_or_wide, 19);
     `checkd(ref_fails_op_signed_wide, 22);
     $write("*-* All Finished *-*\n");

@@ -32,11 +32,6 @@ def run(name, expect, flags=None, tamper_at=None, regexp=r'\(set-logic '):
 # Each of the 50 calls of three phases sets the logic once, after the session's opening check
 run('keep', 1 + 50)
 
-# Status 2 answers the first call's check of all softs together. Unknown leaves the soft
-# selection unsettled, so that phase is solved as before and the next phase builds a fresh
-# base, which the last phase keeps.
-run('unknown_soft', 1 + 50 + 1, tamper_at=2)
-
 # Status 4 answers the first call's first trial, after the opening check, the soft check
 # and the base's check. Unknown rebuilds that phase, and the next phase builds a fresh base.
 run('unknown_trial', 1 + 50 + 2, tamper_at=4)

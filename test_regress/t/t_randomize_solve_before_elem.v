@@ -56,6 +56,15 @@ class ElemAssoc;
   endfunction
 endclass
 
+class Elem2D;
+  rand bit a[2][3];
+  rand bit [7:0] x;
+  constraint c {
+    a[1][2] -> x == 0;
+    solve a[1][2] before x;
+  }
+endclass
+
 class Sub;
   rand bit [7:0] y;
 endclass
@@ -89,11 +98,13 @@ module t;
     automatic ElemDyn ed = new;
     automatic ElemQueue eq = new;
     automatic ElemAssoc ea = new;
+    automatic Elem2D e2 = new;
     automatic ElemIgnored ei = new;
     automatic int n_fixed = 0;
     automatic int n_dyn = 0;
     automatic int n_queue = 0;
     automatic int n_assoc = 0;
+    automatic int n_2d = 0;
     int randomize_result;
     repeat (200) begin
       randomize_result = ef.randomize();
@@ -108,10 +119,13 @@ module t;
       randomize_result = ea.randomize();
       `checkd(randomize_result, 1);
       n_assoc += ea.a[5];
+      randomize_result = e2.randomize();
+      `checkd(randomize_result, 1);
+      n_2d += e2.a[1][2];
     end
-    if (n_fixed < 50 || n_dyn < 50 || n_queue < 50 || n_assoc < 50) begin
-      $write("%%Error: element 1 in %0d, %0d, %0d, %0d of 200\n", n_fixed, n_dyn, n_queue,
-             n_assoc);
+    if (n_fixed < 50 || n_dyn < 50 || n_queue < 50 || n_assoc < 50 || n_2d < 50) begin
+      $write("%%Error: element 1 in %0d, %0d, %0d, %0d, %0d of 200\n", n_fixed, n_dyn, n_queue,
+             n_assoc, n_2d);
       `stop;
     end
     // Ordering on elements it cannot name has no effect

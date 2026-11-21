@@ -267,6 +267,41 @@ class InstStatic final {
         return rhsp;
     }
 
+    // Value an unconnected input is pulled to by `unconnected_drive (IEEE 1800-2023 22.9). An
+    // input with a data type made of integral bits is pulled, whatever its port kind; other
+    // types, e.g. real, have no pull value, so return nullptr to leave the input unconnected.
+    static AstNodeExpr* newPullValue(AstPin* pinp, AstNodeDType* dtypep, bool pull1) {
+        FileLine* const fl = pinp->fileline();
+        dtypep = dtypep->skipRefp();
+        if (AstUnpackArrayDType* const adtypep = VN_CAST(dtypep, UnpackArrayDType)) {
+            AstNodeExpr* const elementp = newPullValue(pinp, adtypep->subDTypep(), pull1);
+            return elementp ? new AstConsArray{fl, adtypep, elementp} : nullptr;
+        }
+        if (dtypep->isIntegralOrPacked()) {
+            AstConst* const constp = new AstConst{fl, AstConst::DTyped{}, dtypep};
+            if (pull1) constp->num().setAllBits1();
+            return constp;
+        }
+        if (AstStructDType* const sdtypep = VN_CAST(dtypep, StructDType)) {
+            AstConsStruct* const consp = new AstConsStruct{fl, sdtypep};
+            for (AstMemberDType* const memberp : sdtypep->memberspList()) {
+                AstNodeExpr* const valuep = newPullValue(pinp, memberp->subDTypep(), pull1);
+                if (!valuep) {
+                    VL_DO_DANGLING(consp->deleteTree(), consp);
+                    return nullptr;
+                }
+                consp->addItemsp(new AstConsStructItem{fl, memberp, valuep});
+            }
+            return consp;
+        }
+        if (VN_IS(dtypep, UnionDType)) {
+            pinp->v3warn(E_UNSUPPORTED,
+                         "Unsupported: `unconnected_drive of input with unpacked union type: "
+                             << pinp->modVarp()->prettyNameQ());
+        }
+        return nullptr;
+    }
+
 public:
     static AstAssignW* pinReconnectSimple(AstPin* pinp, AstCell* cellp, bool forTristate,
                                           bool alwaysCvt) {
@@ -284,17 +319,9 @@ public:
             // default (IEEE 1800-2023 23.2.2.4, 23.3.2.1), an explicit empty named connection
             // is not (IEEE 1800-2023 23.3.2.2).
             if (pinVarp->hasUserInit() && !pinp->svDotName()) return nullptr;
-            if (!pinVarp->dtypep()->skipRefp()->isIntegralOrPacked()) {
-                pinp->v3error("Unconnected input port "
-                              << pinVarp->prettyNameQ()
-                              << " is of non-integral type, so it cannot be pulled by"
-                                 " `unconnected_drive.");
-                return nullptr;
-            }
-            AstConst* const constp
-                = new AstConst{pinp->fileline(), AstConst::DTyped{}, pinVarp->dtypep()};
-            if (drive.isSetTrue()) constp->num().setAllBits1();
-            pinp->exprp(constp);
+            AstNodeExpr* const pullp = newPullValue(pinp, pinVarp->dtypep(), drive.isSetTrue());
+            if (!pullp) return nullptr;
+            pinp->exprp(pullp);
         }
         const AstVarRef* const connectRefp = VN_CAST(pinp->exprp(), VarRef);
         const AstVarXRef* const connectXRefp = VN_CAST(pinp->exprp(), VarXRef);

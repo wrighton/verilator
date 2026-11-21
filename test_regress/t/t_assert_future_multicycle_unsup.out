@@ -11,10 +11,6 @@
                                                               : ... note: In instance 't'
    21 |   assert property (@(posedge clk) a |-> $future_gclk(b) ##1 c);
       |                                         ^~~~~~~~~~~~
-%Error-UNSUPPORTED: t/t_assert_future_multicycle_unsup.v:22:48: Unsupported: future sampled value function in a multi-cycle property, other than in a boolean implication consequent
-                                                              : ... note: In instance 't'
-   22 |   assert property (@(posedge clk) disable iff ($steady_gclk(c)) a |=> b);
-      |                                                ^~~~~~~~~~~~
 %Error-UNSUPPORTED: t/t_assert_future_multicycle_unsup.v:16:5: Unsupported: future sampled value function in a multi-cycle property, other than in a boolean implication consequent
                                                              : ... note: In instance 't'
    16 |     $rising_gclk(a);

@@ -67,4 +67,45 @@ module t;
     $write("*-* All Finished *-*\n");
     $finish;
   end
+
+  // Address directives in the file within the range
+  task automatic check_addresses();
+    int fd;
+    string filename;
+    logic [6:0] mem[0:7];
+
+    filename = {`STRINGIFY(`TEST_OBJ_DIR), "/reenter.mem"};
+    fd = $fopen(filename, "w");
+    $fdisplay(fd, "@2 22 33 @0 11");
+    $fclose(fd);
+    foreach (mem[i]) mem[i] = 7'h7f;
+    $readmemh(filename, mem, 0, 3);
+    `checkh(mem[0], 7'h11);
+    `checkh(mem[1], 7'h7f);
+    `checkh(mem[2], 7'h22);
+    `checkh(mem[3], 7'h33);
+    // Following words beyond the finish address are not loaded, without a warning as the
+    // file has addresses
+    filename = {`STRINGIFY(`TEST_OBJ_DIR), "/beyond.mem"};
+    fd = $fopen(filename, "w");
+    $fdisplay(fd, "@2 22 33 44");
+    $fclose(fd);
+    foreach (mem[i]) mem[i] = 7'h7f;
+    $readmemh(filename, mem, 0, 3);
+    `checkh(mem[3], 7'h33);
+    `checkh(mem[4], 7'h7f);
+    // A file that fills the range exactly, ending without a newline, gives no warning
+    filename = {`STRINGIFY(`TEST_OBJ_DIR), "/exact.mem"};
+    fd = $fopen(filename, "w");
+    $fwrite(fd, "01 02");
+    $fclose(fd);
+    foreach (mem[i]) mem[i] = 7'h7f;
+    $readmemh(filename, mem, 1, 0);
+    `checkh(mem[1], 7'h01);
+    `checkh(mem[0], 7'h02);
+    $readmemh(filename, mem, 4, 5);
+    `checkh(mem[4], 7'h01);
+    `checkh(mem[5], 7'h02);
+    `checkh(mem[6], 7'h7f);
+  endtask
 endmodule

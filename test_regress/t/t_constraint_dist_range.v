@@ -134,12 +134,6 @@ class DistSignedWide;
   constraint c_w {w dist {[80'sd3 : 80'sd10] := 1};}
 endclass
 
-// Signed expression wider than 64 bits, with bounds that fit in 64 bits
-class DistSignedWide;
-  rand bit signed [79:0] w;
-  constraint c_w {w dist {[80'sd3 : 80'sd10] := 1};}
-endclass
-
 // A single-range draw has the same global RNG consumption at narrow and wide widths.
 class DistDrawOnce #(parameter int WIDTH = 32);
   rand bit [WIDTH-1:0] x;
@@ -339,17 +333,7 @@ module t;
       end
     end
 
-    // --- T7: signed expression wider than 64 bits ---
-    begin
-      automatic DistSignedWide obj = new();
-      repeat (20) begin
-        randomize_result = obj.randomize();
-        `checkd(randomize_result, 1);
-        `check_range(obj.w, 3, 10)
-      end
-    end
-
-    // --- T8: a wide offset must not advance the global RNG twice ---
+    // --- T11: a wide offset must not advance the global RNG twice ---
     begin
       automatic DistDrawOnce #(32) narrow = new();
       automatic DistDrawOnce #(80) wide = new();

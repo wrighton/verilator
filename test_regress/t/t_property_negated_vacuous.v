@@ -96,6 +96,7 @@ module t (
   // Without a fail action; passes are the failures of the implication
   int pass_true = 0, ref_pass_true = 0;
   assert property (@(posedge clk) disable iff (cyc < 2) not (1'b1 |=> b)) ++pass_true;
+  else;
   always @(posedge clk) begin
     if (cyc >= 3 && !b) ++ref_pass_true;
   end

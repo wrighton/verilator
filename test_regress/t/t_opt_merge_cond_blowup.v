@@ -23,8 +23,7 @@ module t (
     end
   end
 
-  // One more element than written, so each NBA gets its own temporary variables, which the
-  // conditional merging then sees
+  // One unwritten element keeps per-NBA temporaries for the conditional-merging fixture.
   reg a[N:0];
   reg b[N:0];
 

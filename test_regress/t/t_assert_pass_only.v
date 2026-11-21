@@ -26,6 +26,7 @@ module t;
   assert property (@(posedge clk) ok) passes++;
   assume property (@(posedge clk) ok) passes++;
   assert property (@(posedge clk) 1 ##1 ok) passes++;
+  assert property (@(posedge clk) 1 |-> 1 ##1 ok) passes++;
   assert property (@(posedge clk) ok) passes++;
   else;
   assert property (@(posedge clk) ok)
@@ -33,21 +34,21 @@ module t;
   assert property (@(posedge clk) 1 ##1 ok)
   else;
 
-  // A deferred assertion's action is a single subroutine call (IEEE 1800-2023 16.4)
-  function void count_pass();
+  // An observed deferred assertion action is a single subroutine call (IEEE 1800-2023 16.4)
+  function void pass();
     passes++;
   endfunction
-
   always @(posedge clk) begin
     assert (ok) passes++;
     assume (ok) passes++;
-    assert #0 (ok) count_pass();
-    assert final (ok) count_pass();
+    assert #0 (ok) pass();
+    // Runs in the Postponed region, where writing a variable is illegal (IEEE 1800-2023 4.4.2.9)
+    assert final (ok) $display("[%0t] final deferred pass", $time);
     assert (ok) passes++;
     else;
     assert (ok)
     else;
-    assert #0 (ok) count_pass();
+    assert #0 (ok) pass();
     else;
     assert final (ok)
     else;
@@ -57,8 +58,9 @@ module t;
     #30 $assertfailoff;
     #20;
     // Ticks at cyc 0..4 for the always and the plain concurrent assertions (each passing on
-    // 3); cyc 0..3 for the sequence, whose attempts check cyc 1..4 (passing on 2)
-    `checkd(passes, 3 * 9 + 2);
+    // 3); cyc 0..3 for the sequence and the implication, whose attempts check cyc 1..4
+    // (passing on 2). The final deferred pass action is checked by the expected output.
+    `checkd(passes, 3 * 8 + 2 * 2);
     $write("*-* All Finished *-*\n");
     $finish;
   end

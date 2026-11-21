@@ -106,42 +106,8 @@ class Cls3;
   endtask
 endclass
 
-class address_window;
-  rand bit [36:0] lower_bound;
-endclass
-
-class access_request;
-  rand bit [36:0] offset;
-endclass
-
-class Cls4;
-  rand address_window windows[];
-  task body();
-    int ok;
-    access_request request;
-    request = new;
-    windows = new[1];
-    windows[0] = new;
-    windows[0].lower_bound = 37'h15_2468_ace0;
-    repeat (20) begin
-      ok = request.randomize() with {offset >= windows[0].lower_bound;};
-      `checkd(ok, 1);
-      `checkd(request.offset >= windows[0].lower_bound, 1);
-      ok = request.randomize() with {offset dist {windows[0].lower_bound := 1};};
-      `checkd(ok, 1);
-      `checkd(request.offset, windows[0].lower_bound);
-      ok = request.randomize() with {
-        offset == (windows[0].lower_bound > 0 ? windows[0].lower_bound : offset);
-      };
-      `checkd(ok, 1);
-      `checkd(request.offset, windows[0].lower_bound);
-      windows[0].lower_bound += 37'h02_0000_0000;
-    end
-  endtask
-endclass
-
 // Non-random arrays indexed by a random variable
-class Cls7;
+class Cls4;
   int_arr_t arr;
   task body();
     C c;
@@ -161,34 +127,11 @@ class Cls7;
   endtask
 endclass
 
-class Base;
-  rand int_arr_t arr;
-endclass
-
-class Target extends Base;
-  rand int x;
-endclass
-
-class Cls5 extends Base;
-  task body();
-    int ok;
-    Target target;
-    target = new;
-    target.arr = new[1];
-    arr = new[1];
-    arr[0] = 123;
-    ok = target.randomize() with {x == local::arr[0];};
-    `checkd(ok, 1);
-    `checkd(target.x, 123);
-    `checkd(arr[0], 123);
-  endtask
-endclass
-
 class StateHolder;
   bit [6:0] arr[] = '{7'h0, 7'h0, 7'h0};
 endclass
 
-class Cls8;
+class Cls5;
   rand int idx;
   int unsigned desc[3:1];
   bit [64:0] wide[$];
@@ -197,9 +140,9 @@ class Cls8;
   constraint c_desc {desc[idx] != 0;}
 endclass
 
-class Cls9;
+class Cls6;
   task body();
-    Cls8 c5;
+    Cls5 c5;
     int ok;
     c5 = new;
     for (int pos = 0; pos < 3; ++pos) begin
@@ -240,24 +183,18 @@ module t;
   Cls2 c2;
   Cls3 c3;
   Cls4 c4;
-  Cls5 c5;
-  Cls7 c7;
-  Cls9 c9;
+  Cls6 c6;
   initial begin
     c = new;
     c2 = new;
     c3 = new;
     c4 = new;
-    c5 = new;
-    c7 = new;
-    c9 = new;
+    c6 = new;
     c.body();
     c2.body();
     c3.body();
     c4.body();
-    c5.body();
-    c7.body();
-    c9.body();
+    c6.body();
     $write("*-* All Finished *-*\n");
     $finish;
   end

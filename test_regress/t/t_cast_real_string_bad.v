@@ -8,9 +8,14 @@ module t;
   typedef real real_t;
   string s;
   real r;
+  real rq[$];
+  string sq[$];
   initial begin
     // A string and a real are not cast compatible
     r = real'(s);
     r = real_t'(s);
+    // Nor is either an element of an array of the other
+    rq = {rq, s};
+    sq = {sq, r};
   end
 endmodule

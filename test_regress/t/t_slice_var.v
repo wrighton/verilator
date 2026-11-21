@@ -405,6 +405,25 @@ module t (
         `checkd(got[0], pos <= 2 ? rnd_a[pos] : 0);
         `checkd(got[1], pos <= 2 ? rnd_a[pos+1] : 0);
       end
+      for (int seed = 1; seed <= 20; seed++) begin
+        // An element of a 4-element array, with a 2-bit index, so not bound checked
+        int rows[4][2];
+        int row[2];
+        int pos;
+        foreach (rows[i, j]) rows[i][j] = 10 * i + j;
+        void'($urandom(seed));
+        row = rows[2'($urandom())];
+        void'($urandom(seed));
+        pos = 32'(2'($urandom()));
+        `checkd(row[0], rows[pos][0]);
+        `checkd(row[1], rows[pos][1]);
+        // Written to a slice
+        void'($urandom(seed));
+        rnd_a[1+:2] = rows[2'($urandom())];
+        `checkd(rnd_a[1], rows[pos][0]);
+        `checkd(rnd_a[2], rows[pos][1]);
+        rnd_a = '{10, 20, 30, 40};
+      end
     end
   end
 

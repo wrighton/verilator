@@ -32,5 +32,6 @@ module t;
   initial begin
     c = new;
     void'(c.randomize());
+    $stop;
   end
 endmodule

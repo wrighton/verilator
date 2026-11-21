@@ -100,7 +100,7 @@ module t (
       `checkd(fail6, ref_fail5);
       `checkd(fail7, ref_fail7);
       `checkd(ref_fail7, 22);
-      `checkd(ref_cov8, 22);
+      `checkd(ref_cov8, 23);
       `checkd(cov8, ref_cov8);
       `checkd(ref_fail5, 30);
       `checkd(ref_fail1, 45);

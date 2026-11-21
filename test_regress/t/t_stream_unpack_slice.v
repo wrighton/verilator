@@ -102,9 +102,49 @@ module t (
   end
   always_comb spacked = {>>{sarr[1:2]}};
 
+  // Slices with a variable position
+  logic [2:0] pos;
+  s_t varr[5];
+  s_t vdsc[6:2];
+  logic [15:0] vpacked;
+  logic [15:0] vdpacked;
+  always @(posedge clk) begin
+    pos <= 3'(cyc % 4);
+    varr <= '{default: '{0, 0}};
+    {>>{varr[pos+:2]}} <= w[15:0];
+    vdsc <= '{default: '{0, 0}};
+    {>>{vdsc[pos+2+:2]}} <= w[15:0];
+  end
+  always_comb vpacked = {>>{varr[pos+:2]}};
+  always_comb vdpacked = {>>{vdsc[pos+2+:2]}};
+
+  // A variable slice partly out of range is invalid as a whole, for elements of any type
+  typedef struct {
+    bit [3:0] a;
+    bit [3:0] b;
+  } bs_t;
+  bs_t os[5];
+  bit [7:0] ol[5];
+  logic [15:0] opacked;
+  int opos = 4;
+  initial begin
+    os = '{default: '{4'h1, 4'h2}};
+    ol = '{default: 8'h12};
+    {>>{os[opos+:2]}} = 16'h3456;
+    {>>{ol[opos+:2]}} = 16'h3456;
+    `checkh({os[4].a, os[4].b}, 8'h12);
+    `checkh(ol[4], 8'h12);
+    opacked = {>>{os[opos+:2]}};
+    `checkh(opacked, 16'h0);
+    opacked = {>>{ol[opos+:2]}};
+    `checkh(opacked, 16'h0);
+  end
+
   logic [31:0] w_d;  // w of the previous cycle
+  logic [2:0] pos_d;  // pos of the previous cycle
   always @(posedge clk) begin
     w_d <= w;
+    pos_d <= pos;
     if (cyc > 2) begin
       `checkh(arr[0], 8'h0);
       `checkh(arr[1], w_d[23:16]);
@@ -150,6 +190,14 @@ module t (
       `checkh({sdsc[2].a, sdsc[2].b}, 8'h0);
       `checkh(spacked, w_d[15:0]);
       `checkh(packed_l, {arr[2], arr[1]});
+      for (int i = 0; i < 5; ++i) begin
+        `checkh({varr[i].a, varr[i].b},
+                i == 32'(pos_d) ? w_d[15:8] : i == 32'(pos_d) + 1 ? w_d[7:0] : 8'h0);
+        `checkh({vdsc[i + 2].a, vdsc[i + 2].b},
+                i == 32'(pos_d) + 1 ? w_d[15:8] : i == 32'(pos_d) ? w_d[7:0] : 8'h0);
+      end
+      `checkh(vpacked, {varr[pos].a, varr[pos].b, varr[pos+1].a, varr[pos+1].b});
+      `checkh(vdpacked, {vdsc[pos+3].a, vdsc[pos+3].b, vdsc[pos+2].a, vdsc[pos+2].b});
     end
     if (cyc == 10) begin
       $write("*-* All Finished *-*\n");

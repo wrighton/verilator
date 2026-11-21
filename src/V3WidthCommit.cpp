@@ -97,9 +97,7 @@ class WidthCommitReadsVisitor final : public VNVisitorConst {
     // A member of a handle is read as a whole, e.g. a signal of a virtual interface
     void visit(AstMemberRef* nodep) override {
         const AstNode* basep = nodep->fromp();
-        while (const AstMemberRef* const memberRefp = VN_CAST(basep, MemberRef)) {
-            basep = memberRefp->fromp();
-        }
+        while (const AstMemberRef* const selp = VN_CAST(basep, MemberRef)) basep = selp->fromp();
         const AstNodeVarRef* const baseRefp = VN_CAST(basep, NodeVarRef);
         if (!baseRefp) {
             iterateChildrenConst(nodep);
@@ -135,8 +133,7 @@ public:
 class WidthCommitVisitor final : public VNVisitor {
     // NODE STATE
     //  AstVar::user1p           -> bool.  Processed
-    //  AstVar::user2()          -> bool.  Port of an automatic subroutine, or of a production
-    //                                     within one
+    //  AstVar::user2()          -> bool.  Port of an automatic subroutine
     //  AstNodeFTask::user2()    -> uint64_t. Non-zero if ever referenced (called)
     //  AstNew::user2()          -> uint64_t. Count of number of references, minus references in
     //  functions never called
@@ -315,7 +312,7 @@ private:
                 // Only an NBA may update a non-static class property
                 if (!m_inNba) varType = "Class non-static";
             } else if (varp->lifetime().isAutomatic() && (!varp->isIO() || varp->user2())) {
-                // V3LinkParse may also make ports of static subroutines automatic, so check user2.
+                // V3LinkParse may also make ports of static subroutines automatic, so check user2
                 varType = "Automatic lifetime";
             }
             if (varType.empty() && varDtp->isDynamicallySized() && m_dynsizedelem)
@@ -388,9 +385,9 @@ private:
 
     static std::vector<const AstVar*> ftaskPorts(const AstNodeFTask* nodep) {
         std::vector<const AstVar*> ports;
-        for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-            const AstVar* const portp = VN_CAST(stmtp, Var);
-            if (portp && portp->isIO()) ports.push_back(portp);
+        for (const AstNode* const declp : nodep->declspList()) {
+            const AstVar* const portp = VN_CAST(declp, Var);
+            if (portp && portp->isIO() && !portp->isFuncReturn()) ports.push_back(portp);
         }
         return ports;
     }
@@ -963,8 +960,7 @@ private:
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
         editDType(nodep);
-        // Ports precede the subroutine's own statements; hierarchical references to automatic
-        // variables are illegal anyway.
+        // Visited before references from within the subroutine, the only legal ones
         if (nodep->isIO() && m_ftaskp && m_ftaskp->lifetime().isAutomatic()) nodep->user2(true);
         if (nodep->isFuncLocal() && nodep->direction() == VDirection::INPUT && nodep->valuep()) {
             // It's the default value of optional argument.

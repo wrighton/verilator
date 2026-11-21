@@ -267,7 +267,7 @@ class DynScopeVisitor final : public VNVisitor {
                                         // i.e. not immediately followed by 'disable fork'
     bool m_afterTimingControl = false;  // A timing control might've be executed in the current
                                         // process
-    bool m_inNbaLhs = false;  // Under the destination of an NBA, diagnosed by V3WidthCommit
+    bool m_inNba = false;  // Under an NBA, not a user-authored asynchronous fork
     size_t m_id = 0;  // Unique ID for a frame
     size_t m_class_id = 0;  // Unique ID for a frame class
 
@@ -413,27 +413,14 @@ class DynScopeVisitor final : public VNVisitor {
                 v3Global.setAssignsEvents();
                 isEvent = dtypep->isEvent();
             }
-            if (!isEvent && !m_inNbaLhs && m_afterTimingControl
-                && m_survivingForkDepth > nodep->varp()->user3()
+            if (!isEvent && !m_inNba && m_afterTimingControl
+                && m_survivingForkDepth > nodep->varp()->user3() && nodep->varp()->isRef()
                 && nodep->access().isWriteOrRW()) {
-                if (nodep->varp()->isRef()) {
-                    // Reference arguments can refer to caller storage that has already expired.
-                    nodep->v3error(
-                        "Writing 'ref' argument "
-                        << nodep->prettyNameQ()
-                        << " after a timing control in a fork that may outlive the"
-                           " subroutine is not allowed (IEEE 1800-2023 9.3.2).\n"
-                        << nodep->warnMore()
-                        << "... Suggest copying it into a variable declared in the fork");
-                } else if (nodep->varp()->isWritable()
-                           && VN_IS(nodep->varp()->dtypep()->skipRefp(), AssocArrayDType)) {
-                    nodep->v3warn(
-                        E_UNSUPPORTED,
-                        "Unsupported: Writing associative array argument or return variable "
-                            << nodep->prettyNameQ()
-                            << " after a timing control in a fork that may outlive the"
-                               " subroutine.");
-                }
+                // Reference arguments can refer to caller storage that has already expired.
+                nodep->v3error(
+                    "Referencing 'ref' argument "
+                    << nodep->prettyNameQ()
+                    << " in an asynchronous fork is not allowed (IEEE 1800-2023 9.3.2).");
             }
             if (!framep->instance().initialized()) framep->createInstancePrototype();
             framep->captureVarInsert(nodep->varp());
@@ -454,14 +441,9 @@ class DynScopeVisitor final : public VNVisitor {
             forkp->addForksp(new AstForkItem{flp, nodep});
             UINFO(9, "assign new fork " << forkp);
         } else {
-            if (nodep->isTimingControl()) m_afterTimingControl = true;
-            iterateAndNextNull(nodep->rhsp());
-            {
-                VL_RESTORER(m_inNbaLhs);
-                m_inNbaLhs = true;
-                iterateAndNextNull(nodep->lhsp());
-            }
-            iterateAndNextNull(nodep->timingControlp());
+            VL_RESTORER(m_inNba);
+            m_inNba = true;
+            visit(static_cast<AstNodeStmt*>(nodep));
         }
     }
     void visit(AstNode* nodep) override {

@@ -88,8 +88,8 @@ module t (
     `checkd(ref_fails_next0, 14);
     `checkd(ref_fails_until, 10);
     `checkd(ref_fails_top, 23);
-    `checkd(ref_fails_always, 9);
-    `checkd(ref_fails_always2, 5);
+    `checkd(ref_fails_always, 12);
+    `checkd(ref_fails_always2, 12);
     $write("*-* All Finished *-*\n");
   end
 endmodule

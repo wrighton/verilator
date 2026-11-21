@@ -1,6 +1,8 @@
-%Error: t/t_string_real_implicit_bad.v:21:9: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
+%Error: t/t_string_real_implicit_bad.v:21:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                            : ... note: In instance 't'
-                                           : ... Suggest use string method atoreal() or realtoa()
+                                           : ... Source data type: 'string'
+                                           : ... Destination data type: 'real'
+                                           : ... Suggest use an explicit cast to the destination type
    21 |     r = s;   
       |         ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
@@ -14,8 +16,9 @@
                                             : ... Suggest use string method atoreal() or realtoa()
    23 |     s = c ? s : r;   
       |           ^
-%Error: t/t_string_real_implicit_bad.v:24:15: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)
-                                            : ... Suggest use string method atoreal() or realtoa()
+%Error: t/t_string_real_implicit_bad.v:24:15: Unpacked array concatenation item is neither an element nor an array of elements of its target (IEEE 1800-2023 10.10)
+                                            : ... Element data type: 'real'
+                                            : ... Item data type: 'string'
    24 |     rq = {rq, s};   
       |               ^
 %Error: t/t_string_real_implicit_bad.v:25:18: Illegal implicit conversion between string and real (IEEE 1800-2023 6.22.3)

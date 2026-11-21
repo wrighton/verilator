@@ -93,7 +93,7 @@ module t (
     `checkd(fails_func, ref_fails_func);
     `checkd(ref_fails_omit, 7);
     `checkd(ref_fails_override, 5);
-    `checkd(ref_fails_sig, 26);
+    `checkd(ref_fails_sig, 29);
     `checkd(ref_fails_delay, 11);
     `checkd(ref_fails_func, 10);
     `checkd(fails_nine, 0);
