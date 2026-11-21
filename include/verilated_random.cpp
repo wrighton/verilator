@@ -1480,7 +1480,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
         // trivially UNSAT after the first cycle.
         if (!m_checkOnly) emitRandcExclusions(os);
 
-        relaxSoftConstraints(sess);
+        if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
         os << "(check-sat)\n";
         const VlSolverStatus status = sess.readStatus();
 
@@ -2104,7 +2104,8 @@ bool VlRandomizer::readValues(VlSolverSession& sess, std::vector<std::string>& v
 }
 
 // Re-add softs highest-priority first, dropping incompatible ones.
-void VlRandomizer::relaxSoftConstraints(VlSolverSession& sess) VL_REQUIRES(sess.m_mutex) {
+VlSolverStatus VlRandomizer::relaxSoftConstraints(VlSolverSession& sess)
+    VL_REQUIRES(sess.m_mutex) {
     // A soft is kept when it fits the hard constraints and the higher-priority softs kept
     // so far; the last soft has the highest priority. A chunk of softs that fits together
     // is kept as a whole, as each would be on its own. A chunk that conflicts is halved
@@ -2125,7 +2126,7 @@ void VlRandomizer::relaxSoftConstraints(VlSolverSession& sess) VL_REQUIRES(sess.
             }
             os << "(check-sat)\n";
             const VlSolverStatus status = sess.readStatus();
-            if (status == VlSolverStatus::FAIL) return;
+            if (status != VlSolverStatus::SAT && status != VlSolverStatus::UNSAT) return status;
             if (status == VlSolverStatus::SAT) {
                 done += chunk;
                 chunk = done < conflictEnd ? conflictEnd - done : chunk * 2;
@@ -2140,6 +2141,7 @@ void VlRandomizer::relaxSoftConstraints(VlSolverSession& sess) VL_REQUIRES(sess.
             chunk /= 2;
         }
     }
+    return VlSolverStatus::SAT;
 }
 
 // Every complete run of digits in the reply, in order
@@ -2753,7 +2755,7 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
         emitRandcExclusions(os);
 
         // Soft constraints participate in every phase, priority-ordered.
-        relaxSoftConstraints(sess);
+        if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
 
         // Initial check-sat WITHOUT diversity (guaranteed sat if constraints are consistent)
         os << "(check-sat)\n";
