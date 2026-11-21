@@ -1,0 +1,44 @@
+%Error: t/t_class_compare_bad.v:20:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'bit[31:0]'
+   20 |     if (c == 5) $stop;   
+      |           ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_class_compare_bad.v:21:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'bit[31:0]'
+                                     : ... Right-hand data type: 'class Cls'
+   21 |     if (0 != c) $stop;   
+      |           ^~
+%Error: t/t_class_compare_bad.v:22:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls' (2-state)
+                                     : ... Right-hand data type: 'logic[7:0]' (4-state)
+   22 |     if (c !== v) $stop;   
+      |           ^~~
+%Error: t/t_class_compare_bad.v:23:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'chandle'
+   23 |     if (c == h) $stop;   
+      |           ^~
+%Error: t/t_class_compare_bad.v:24:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'class Cls'
+   24 |     if (c < d) $stop;   
+      |           ^
+%Error: t/t_class_compare_bad.v:25:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'class Cls'
+   25 |     if (c ==? d) $stop;   
+      |           ^~~
+%Error: t/t_class_compare_bad.v:26:11: Class handle can only be compared for equality with another class handle or null (IEEE 1800-2023 8.4)
+                                     : ... note: In instance 't'
+                                     : ... Left-hand data type: 'class Cls'
+                                     : ... Right-hand data type: 'null'
+   26 |     if (c !=? null) $stop;   
+      |           ^~~
+%Error: Exiting due to
