@@ -63,6 +63,16 @@ endclass
 class InheritedScalarArray extends ScalarArray;
 endclass
 
+// Elements reallocated or shifted between randomize() calls
+class ReallocStructArray;
+  rand Entry values[];
+  rand Entry queue[$];
+  constraint c_values {
+    foreach (values[i]) values[i].value inside {[1 : 9]};
+    foreach (queue[i]) queue[i].value inside {[1 : 9]};
+  }
+endclass
+
 module t;
   initial begin
     automatic int randomize_result;
@@ -125,6 +135,21 @@ module t;
       automatic OutOfBoundsArray out_of_bounds_array = new;
       randomize_result = out_of_bounds_array.randomize();
       `checkd(randomize_result, 0)
+    end
+
+    begin
+      automatic ReallocStructArray realloc_array = new;
+      realloc_array.values = new[3];
+      realloc_array.queue.push_back('{value: 0});
+      randomize_result = realloc_array.randomize();
+      `checkd(randomize_result, 1)
+      realloc_array.values = new[3];
+      foreach (realloc_array.values[i]) realloc_array.values[i].value = 100;
+      realloc_array.queue.push_front('{value: 100});
+      randomize_result = realloc_array.randomize();
+      `checkd(randomize_result, 1)
+      foreach (realloc_array.values[i]) `checkd(realloc_array.values[i].value inside {[1 : 9]}, 1)
+      foreach (realloc_array.queue[i]) `checkd(realloc_array.queue[i].value inside {[1 : 9]}, 1)
     end
 
     $write("*-* All Finished *-*\n");
