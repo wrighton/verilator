@@ -9164,12 +9164,16 @@ class WidthVisitor final : public VNVisitor {
                 nodep = selp->fromp();
             } else if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) {
                 if (!isWhole && !VN_IS(dtypep, UnpackArrayDType)) {
-                    return "into a selected dynamic or associative array";
+                    return "into a selected dynamic array, queue, or associative array";
                 }
                 return nullptr;
             } else if (VN_IS(nodep, SliceSel)) {
                 return "into a slice of an unpacked array";
-            } else if (VN_IS(nodep, CMethodHard)) {
+            } else if (const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
+                // Other than an element access, this is a queue slice
+                if (!methodp->method().isDynElementAccess()) {
+                    return "into a slice of an unpacked array";
+                }
                 return "through an element of a dynamic array or queue";
             } else {
                 return "through an element of an associative array";
