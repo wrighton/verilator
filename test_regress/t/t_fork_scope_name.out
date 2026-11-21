@@ -1,0 +1,10 @@
+[1] t.main y=3
+[2] %Error: t_fork_scope_name.v:91: Assertion failed in t.main.ga: 'assert' failed.
+-Info: t/t_fork_scope_name.v:91: Verilog $stop, ignored due to +verilator+error+limit
+[3] t.task_none.f x=3
+[5] -Info: t_fork_scope_name.v:31: t.task_any.b: x=3
+[6] %Warning: t_fork_scope_name.v:50: t.C.run_any.f: x=3
+[7] %Error: t_fork_scope_name.v:40: Assertion failed in t.func_none: 'assert' failed.
+[9] t.C.run_none x=3
+[11] t.nest.o.i y=1
+*-* All Finished *-*
