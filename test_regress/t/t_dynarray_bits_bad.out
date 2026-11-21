@@ -1,0 +1,18 @@
+%Error: t/t_dynarray_bits_bad.v:13:9: Cannot take the size in bits of dynamically sized data type 'int$[]' (IEEE 1800-2023 20.6.2)
+                                    : ... note: In instance 't'
+   13 |     n = $bits(dyn_t);
+      |         ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_dynarray_bits_bad.v:14:9: Cannot take the size in bits of dynamically sized data type 'byte$[$]' (IEEE 1800-2023 20.6.2)
+                                    : ... note: In instance 't'
+   14 |     n = $bits(queue_t);
+      |         ^~~~~
+%Error: t/t_dynarray_bits_bad.v:15:9: Cannot take the size in bits of dynamically sized data type 'byte$[$]' (IEEE 1800-2023 20.6.2)
+                                    : ... note: In instance 't'
+   15 |     v = {<<queue_t{v}};
+      |         ^
+%Error: t/t_dynarray_bits_bad.v:15:10: Slice size cannot be zero.
+                                     : ... note: In instance 't'
+   15 |     v = {<<queue_t{v}};
+      |          ^~
+%Error: Exiting due to
