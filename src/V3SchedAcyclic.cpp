@@ -39,6 +39,7 @@
 #include "V3File.h"
 #include "V3Graph.h"
 #include "V3Sched.h"
+#include "V3SenExprBuilder.h"
 #include "V3SenTree.h"
 #include "V3Stats.h"
 
@@ -157,8 +158,12 @@ std::unique_ptr<Graph> buildGraph(const LogicByScope& lbs) {
             nodep->foreach([&](AstVarRef* refp) {
                 AstVarScope* const vscp = refp->varScopep();
                 SchedAcyclicVarVertex* const vvtxp = getVarVertex(vscp);
-                // We want to cut the narrowest signals
-                const int weight = vscp->width() / 8 + 1;
+                // We want to cut the narrowest signals. Breaking a cycle on a variable
+                // whose changes cannot be detected is unsupported, so cut one only as a
+                // last resort.
+                const int weight = SenExprBuilder::isSupportedDType(vscp->dtypep())
+                                       ? vscp->width() / 8 + 1
+                                       : V3GraphEdge::WEIGHT_LAST_RESORT;
                 // If written, add logic -> var edge
                 if (refp->access().isWriteOrRW() && !refp->varp()->ignoreSchedWrite()
                     && !vscp->user2SetOnce())

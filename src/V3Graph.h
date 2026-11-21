@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 
 class FileLine;
 class V3Graph;
@@ -84,6 +85,10 @@ class V3GraphEdge VL_NOT_FINAL {
     VL_RTTI_IMPL_BASE(V3GraphEdge)
     // Wires/variables aren't edges.  Edges have only a single to/from vertex
 public:
+    // CONSTANTS
+    // Weight of an edge to cut only when nothing else can be. Merging edges keeps it, and the
+    // weights of other merged edges saturate below it.
+    static constexpr int WEIGHT_LAST_RESORT = std::numeric_limits<int>::max();
     // ENUMS
     enum Cutable : uint8_t { NOT_CUTABLE = false, CUTABLE = true };  // For passing to V3GraphEdge
 protected:

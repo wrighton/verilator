@@ -371,6 +371,13 @@ void GraphAcyc::simplifyOut(GraphAcycVertex* avertexp) {
     }
 }
 
+// Sum of two edge weights, keeping the last-resort weight and saturating below it
+static int addWeights(int lhs, int rhs) {
+    constexpr int last = V3GraphEdge::WEIGHT_LAST_RESORT;
+    if (lhs == last || rhs == last) return last;
+    return lhs > last - 1 - rhs ? last - 1 : lhs + rhs;
+}
+
 void GraphAcyc::simplifyDup(GraphAcycVertex* avertexp) {
     // Remove redundant edges
     if (avertexp->isDelete()) return;
@@ -392,9 +399,10 @@ void GraphAcyc::simplifyDup(GraphAcycVertex* avertexp) {
                 VL_DO_DANGLING(prevEdgep->unlinkDelete(), prevEdgep);
                 outVertexp->userp(edgep);
             } else {
-                //  cutable duplicates prev  cutable: combine weights
+                //  cutable duplicates prev  cutable: combine weights, which saturate, as
+                //  the sum of many of them would otherwise overflow
                 UINFO(8, "    DelDupComb " << avertexp << " -> " << edgep->top());
-                prevEdgep->weight(prevEdgep->weight() + edgep->weight());
+                prevEdgep->weight(addWeights(prevEdgep->weight(), edgep->weight()));
                 addOrigEdgep(prevEdgep, edgep);
                 VL_DO_DANGLING(edgep->unlinkDelete(), edgep);
             }
