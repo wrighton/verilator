@@ -1,3 +1,9 @@
+%Warning-NONSTD: t/t_wire_behp1800_bad.v:26:16: Initializer on output port 'wni' that is a net (IEEE 1800-2023 23.2.2.2)
+                                              : ... Suggest use a continuous assignment, or declare the port as a variable
+   26 |     wire wni = '0,
+      |                ^~
+                 ... For warning description see https://verilator.org/warn/NONSTD?v=latest
+                 ... Use "/* verilator lint_off NONSTD */" and lint_on around source to disable this message.
 %Error-PROCASSWIRE: t/t_wire_behp1800_bad.v:40:5: Procedural assignment to wire, perhaps intended var (IEEE 1800-2023 6.5): 'w'
                                                 : ... note: In instance 't'
    40 |     w = '0;   
