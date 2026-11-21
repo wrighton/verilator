@@ -23,6 +23,7 @@
 class AstClass;
 class AstFunc;
 class AstNetlist;
+class AstNodeExpr;
 class AstNodeModule;
 
 class VMemberMap;
@@ -38,6 +39,9 @@ public:
     static AstFunc* newRandomizeStdFunc(AstNodeModule* nodep,
                                         const std::string& name) VL_MT_DISABLED;
     static AstFunc* newSRandomFunc(VMemberMap& memberMap, AstClass* nodep) VL_MT_DISABLED;
+    // Whether randomize() argument part 'exprp' is the method call target 'fromp'
+    static bool isRandomizeTarget(const AstNodeExpr* exprp,
+                                  const AstNodeExpr* fromp) VL_MT_DISABLED;
 };
 
 #endif  // Guard
