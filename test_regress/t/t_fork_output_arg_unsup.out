@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_fork_output_arg_unsup.v:15:9: Unsupported: Writing associative array argument or return variable 'io' after a timing control in a fork that may outlive the subroutine.
+                                                    : ... note: In instance 't'
+   15 |         io["a"] = 2;   
+      |         ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_fork_output_arg_unsup.v:24:9: Unsupported: Writing associative array argument or return variable 'o' after a timing control in a fork that may outlive the subroutine.
+                                                    : ... note: In instance 't'
+   24 |         o[3] = 4;   
+      |         ^
+%Error-UNSUPPORTED: t/t_fork_output_arg_unsup.v:33:9: Unsupported: Writing associative array argument or return variable 'io_td' after a timing control in a fork that may outlive the subroutine.
+                                                    : ... note: In instance 't'
+   33 |         io_td["b"] = 3;   
+      |         ^~~~~
+%Error-UNSUPPORTED: t/t_fork_output_arg_unsup.v:42:9: Unsupported: Writing associative array argument or return variable 'f_ret' after a timing control in a fork that may outlive the subroutine.
+                                                    : ... note: In instance 't'
+   42 |         f_ret["c"] = 5;   
+      |         ^~~~~
+%Error: Exiting due to

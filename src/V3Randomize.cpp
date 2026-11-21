@@ -115,8 +115,8 @@ static AstVar* randModeElemArrayp(AstNodeExpr* fromp) {
     AstVar* varp = nullptr;
     if (const AstVarRef* const varrefp = VN_CAST(arrayp, VarRef)) {
         varp = varrefp->varp();
-    } else if (const AstMemberRef* const memberSelp = VN_CAST(arrayp, MemberRef)) {
-        varp = memberSelp->varp();
+    } else if (const AstMemberRef* const memberRefp = VN_CAST(arrayp, MemberRef)) {
+        varp = memberRefp->varp();
     }
     // One dimension of an array of integral or class handle elements
     if (!varp) return nullptr;
@@ -551,10 +551,10 @@ class RandomizeMarkVisitor final : public VNVisitor {
         cloneConstrp->foreach([&](AstNodeExpr* exprp) {
             if (AstVarRef* const varRefp = VN_CAST(exprp, VarRef)) {
                 if (!varRefp->varp()->isClassMember()) return;
-                AstMemberRef* const finalSelp = new AstMemberRef{
+                AstMemberRef* const finalRefp = new AstMemberRef{
                     varRefp->fileline(), objp->cloneTree(false), varRefp->varp()};
-                finalSelp->user2p(m_classp);
-                varRefp->replaceWith(finalSelp);
+                finalRefp->user2p(m_classp);
+                varRefp->replaceWith(finalRefp);
                 VL_DO_DANGLING(pushDeletep(varRefp), varRefp);
             } else if (AstFuncRef* const funcRefp = VN_CAST(exprp, FuncRef)) {
                 // Static and non-member calls are correctly qualified already
@@ -2508,11 +2508,11 @@ class RandomizeVisitor final : public VNVisitor {
             return new AstVarRef{exprp->fileline(), VN_AS(modeVarp->user2p(), NodeModule),
                                  modeVarp, access};
         }
-        if (AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef)) {
-            AstMemberRef* const newMemberSelp = new AstMemberRef{
-                exprp->fileline(), memberSelp->fromp()->cloneTree(false), modeVarp};
-            V3LinkLValue::linkLValueSet(newMemberSelp, access);  // Not array indices
-            return newMemberSelp;
+        if (AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
+            AstMemberRef* const newMemberRefp = new AstMemberRef{
+                exprp->fileline(), memberRefp->fromp()->cloneTree(false), modeVarp};
+            V3LinkLValue::linkLValueSet(newMemberRefp, access);  // Not array indices
+            return newMemberRefp;
         }
         UASSERT_OBJ(VN_IS(exprp, VarRef), exprp, "Should be a VarRef");
         return new AstVarRef{exprp->fileline(), VN_AS(modeVarp->user2p(), Class), modeVarp,

@@ -5727,6 +5727,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                            << varp->prettyNameQ());
                         }
                     }
+                    // Ports of a static task/function are static (IEEE 1800-2023 13.3.1), but
+                    // V3LinkParse marks them automatic, as normally not needed after the call.
+                    // A hierarchical reference needs them kept.
+                    const AstNodeFTask* const dotFtaskp
+                        = VN_CAST(m_ds.m_dotSymp->nodep(), NodeFTask);
+                    if (!first && dotFtaskp && dotFtaskp->lifetime().isStatic() && varp->isIO()) {
+                        varp->lifetime(VLifetime::STATIC_IMPLICIT);
+                    }
                     AstNode* newp;
                     if (m_ds.m_dotText != "") {
                         AstVarXRef* const refp

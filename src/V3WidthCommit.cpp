@@ -133,7 +133,8 @@ public:
 class WidthCommitVisitor final : public VNVisitor {
     // NODE STATE
     //  AstVar::user1p           -> bool.  Processed
-    //  AstVar::user2()          -> bool.  Port of an automatic subroutine
+    //  AstVar::user2()          -> bool.  Port of an automatic subroutine, or of a production
+    //                                     within one
     //  AstNodeFTask::user2()    -> uint64_t. Non-zero if ever referenced (called)
     //  AstNew::user2()          -> uint64_t. Count of number of references, minus references in
     //  functions never called
@@ -312,7 +313,7 @@ private:
                 // Only an NBA may update a non-static class property
                 if (!m_inNba) varType = "Class non-static";
             } else if (varp->lifetime().isAutomatic() && (!varp->isIO() || varp->user2())) {
-                // V3LinkParse may also make ports of static subroutines automatic, so check user2
+                // V3LinkParse may also make ports of static subroutines automatic, so check user2.
                 varType = "Automatic lifetime";
             }
             if (varType.empty() && varDtp->isDynamicallySized() && m_dynsizedelem)
@@ -960,7 +961,8 @@ private:
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
         editDType(nodep);
-        // Visited before references from within the subroutine, the only legal ones
+        // Ports precede the subroutine's own statements; hierarchical references to automatic
+        // variables are illegal anyway.
         if (nodep->isIO() && m_ftaskp && m_ftaskp->lifetime().isAutomatic()) nodep->user2(true);
         if (nodep->isFuncLocal() && nodep->direction() == VDirection::INPUT && nodep->valuep()) {
             // It's the default value of optional argument.

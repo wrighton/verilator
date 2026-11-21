@@ -386,7 +386,7 @@ class WidthVisitor final : public VNVisitor {
     WidthVP* m_vup = nullptr;  // Current node state
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
-    bool m_underSExpr = false;  // Visiting under a sequence expression
+    bool m_underSExpr = false;  // Visiting a sequence or boolean operand, not a property
     const AstNodeExpr* m_cycleDelayPropp = nullptr;  // Operand of unary cycle delay
     bool m_underSvaExpr = false;  // Under a property spec, property, sequence, or sequence event
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
@@ -536,7 +536,11 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstLogAnd* nodep) override { visit_log_and_or(nodep); }
     void visit(AstLogOr* nodep) override { visit_log_and_or(nodep); }
     // Sequence and/or/intersect (IEEE 1800-2023 16.9.2), same width rules as LogAnd/LogOr
-    void visit(AstSAnd* nodep) override { visit_log_and_or(nodep); }
+    void visit(AstSAnd* nodep) override {
+        // The 'and' a property if/case is parsed into is a property operator
+        if (nodep->propertyControl() && replacePropertyInSExpr(nodep)) return;
+        visit_log_and_or(nodep);
+    }
     void visit(AstSIntersect* nodep) override {
         VL_RESTORER(m_underSExpr);
         m_underSExpr = true;
@@ -2232,13 +2236,17 @@ class WidthVisitor final : public VNVisitor {
 
     // Report and replace a property operator or instance in a sequence expression, true if so
     bool replacePropertyInSExpr(AstNodeExpr* nodep) {
-        // IEEE 1800-2023 A.2.10: A property operator or instance is not a sequence operand, but
-        // the parser accepts a property expression for some sequence operands.
+        // A property operator or instance is not a sequence operand, but the parser accepts a
+        // property expression for some sequence operands.
         if (!m_underSExpr || nodep == m_cycleDelayPropp) return false;
-        nodep->v3error("Unexpected property "
-                       << (VN_IS(nodep, SchemaRef) ? "instance" : "operator")
-                       << " in sequence expression context"
-                          " (IEEE 1800-2023 A.2.10)");
+        if (const AstSchemaRef* const refp = VN_CAST(nodep, SchemaRef)) {
+            nodep->v3error("Unexpected property instance " << refp->prettyNameQ()
+                                                           << " in sequence expression context"
+                                                              " (IEEE 1800-2023 16.12).");
+        } else {
+            nodep->v3error("Unexpected property operator in sequence expression context"
+                           " (IEEE 1800-2023 A.2.10).");
+        }
         AstConst* const newp = new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}};
         newp->dtypeSetBit();
         nodep->replaceWith(newp);
@@ -4260,12 +4268,98 @@ class WidthVisitor final : public VNVisitor {
         return valuep;
     }
     void visit(AstConstraintBefore* nodep) override {
+        for (AstNodeExpr* const itemp : nodep->lhsspList()) {
+            if (!isPrimaryCallsOk(itemp, false))
+                VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
+        }
+        for (AstNodeExpr* const itemp : nodep->rhsspList()) {
+            if (!isPrimaryCallsOk(itemp, false))
+                VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
+        }
         userIterateAndNext(nodep->lhssp(), WidthVP{SELF, BOTH}.p());
         userIterateAndNext(nodep->rhssp(), WidthVP{SELF, BOTH}.p());
+        for (const AstNodeExpr* const itemp : nodep->lhsspList()) checkPrimaryRoot(itemp, false);
+        for (const AstNodeExpr* const itemp : nodep->rhsspList()) checkPrimaryRoot(itemp, false);
         // Not checked in 'randomize() with', where arguments can make other variables random
         if (!m_constraintp) return;
         checkSolveBeforeRand(nodep->lhssp());
         checkSolveBeforeRand(nodep->rhssp());
+    }
+    static void reportPrimaryError(const AstNode* const nodep, const bool disableSoft) {
+        nodep->v3error("Expected a variable or an array's size() in "
+                       << (disableSoft ? "disable soft (IEEE 1800-2023 18.5.13.2)."
+                                       : "solve...before (IEEE 1800-2023 18.5.9)."));
+    }
+    // An operand of solve...before or disable soft names a random variable or the size of an
+    // array (IEEE 1800-2023 18.5.9, 18.5.13.2): the only call on its path is an outermost
+    // argument-free size(). Checked as written, before width resolves methods into other
+    // expressions; calls in index expressions are values, not part of the path. Return false
+    // after reporting an error, so the caller removes the operand.
+    static bool isPrimaryCallsOk(const AstNodeExpr* const itemp, const bool disableSoft) {
+        const AstNodeExpr* exprp = itemp;
+        while (exprp) {
+            if (const AstNodeFTaskRef* const refp = VN_CAST(exprp, NodeFTaskRef)) {
+                // A receiver obtained by a call is not a variable, even from one named size().
+                if (refp != itemp || refp->name() != "size" || refp->argsp()) {
+                    reportPrimaryError(refp, disableSoft);
+                    return false;
+                }
+                const AstMethodCall* const callp = VN_CAST(refp, MethodCall);
+                exprp = callp ? callp->fromp() : nullptr;
+            } else if (const AstNodePreSel* const selp = VN_CAST(exprp, NodePreSel)) {
+                exprp = selp->fromp();
+            } else if (const AstMemberRef* const refp = VN_CAST(exprp, MemberRef)) {
+                exprp = refp->fromp();
+            } else if (const AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                // Widthed already, as the constraints of a randomize() with are visited again.
+                exprp = selp->fromp();
+            } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+                exprp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else {
+                break;
+            }
+        }
+        // A path starts at a name; e.g. a cast result is not a variable. A size() or element
+        // of a randomize() with is widthed already when its constraints are visited again.
+        if (!exprp || VN_IS(exprp, NodeVarRef) || VN_IS(exprp, LambdaArgRef)
+            || VN_IS(exprp, CMethodHard)) {
+            return true;
+        }
+        reportPrimaryError(exprp, disableSoft);
+        return false;
+    }
+    // After width, an operand must be a path of selects and members of a variable, optionally
+    // under the size of an array.
+    static void checkPrimaryRoot(const AstNodeExpr* const itemp, const bool disableSoft) {
+        const AstNodeExpr* exprp = itemp;
+        if (const AstCMethodHard* const sizep = VN_CAST(exprp, CMethodHard)) {
+            if (sizep->method() == VCMethod::DYN_SIZE || sizep->method() == VCMethod::ASSOC_SIZE) {
+                exprp = sizep->fromp();
+            }
+        }
+        while (true) {
+            if (const AstNodeSel* const selp = VN_CAST(exprp, NodeSel)) {
+                exprp = selp->fromp();
+            } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+                exprp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else if (const AstMemberRef* const refp = VN_CAST(exprp, MemberRef)) {
+                exprp = refp->fromp();
+            } else if (const AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+                // An element of a dynamic array or queue.
+                if (!methodp->method().isDynElementAccess()) break;
+                exprp = methodp->fromp();
+            } else {
+                break;
+            }
+        }
+        // The object randomize() with randomizes is a LambdaArgRef.
+        if (VN_IS(exprp, NodeVarRef) || VN_IS(exprp, LambdaArgRef)) return;
+        // E.g. another method written without parentheses, which width resolved.
+        reportPrimaryError(exprp, disableSoft);
     }
     // Report each variable in a solve before list that is not declared rand
     void checkSolveBeforeRand(const AstNode* const itemsp) {
@@ -4296,6 +4390,7 @@ class WidthVisitor final : public VNVisitor {
             return;
         }
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
+        if (nodep->isDisableSoft()) checkPrimaryRoot(nodep->exprp(), true);
     }
     void visit(AstConstraintForeach* nodep) override {
         if (nodep->didWidth()) return;
