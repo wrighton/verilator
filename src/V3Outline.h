@@ -20,6 +20,8 @@
 #include "config_build.h"
 #include "verilatedos.h"
 
+class AstCCall;
+class AstCFunc;
 class AstNetlist;
 
 //============================================================================
@@ -27,6 +29,9 @@ class AstNetlist;
 class V3Outline final {
 public:
     static void outlineAll(AstNetlist* nodep) VL_MT_DISABLED;
+    // Pass to new function 'funcp', called by 'callp', by reference, the local variables of the
+    // function its statements came from, which they reference. Returns whether it suspends.
+    static bool passLocals(AstCFunc* funcp, AstCCall* callp) VL_MT_DISABLED;
 };
 
 #endif  // Guard
