@@ -187,8 +187,8 @@ randIndexSelImpp(AstNodeExpr* exprp, bool randArray,
             if (methodp->method() == VCMethod::ARRAY_AT) indexp = methodp->pinsp();
         } else if (AstStructSel* const structSelp = VN_CAST(curp, StructSel)) {
             fromp = structSelp->fromp();
-        } else if (AstMemberRef* const memberSelp = VN_CAST(curp, MemberRef)) {
-            fromp = memberSelp->fromp();
+        } else if (AstMemberRef* const memberRefp = VN_CAST(curp, MemberRef)) {
+            fromp = memberRefp->fromp();
         } else {
             return nullptr;
         }
