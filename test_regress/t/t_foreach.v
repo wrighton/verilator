@@ -165,6 +165,55 @@ module t;
     end
     `checkh(add, 0);
 
+    // Ranges ending at an end of the range of int
+    begin
+      int top1[32'sh7fffffff:32'sh7fffffff];
+      int top2[32'sh7ffffffe:32'sh7fffffff];
+      int bot2[32'sh80000001:32'sh80000000];
+      int last;
+      add = 0;
+      foreach (top1[index_a]) begin
+        ++add;
+        last = index_a;
+      end
+      `checkh(add, 1);
+      `checkh(last, 32'sh7fffffff);
+      add = 0;
+      foreach (top2[index_a]) begin
+        ++add;
+        last = index_a;
+      end
+      `checkh(add, 2);
+      `checkh(last, 32'sh7fffffff);
+      add = 0;
+      foreach (bot2[index_a]) begin
+        ++add;
+        last = index_a;
+      end
+      `checkh(add, 2);
+      `checkh(last, 32'sh80000000);
+    end
+    // Loops too long to unroll
+    begin
+      int top100[32'sh7fffff9c:32'sh7fffffff];
+      int bot100[32'sh80000063:32'sh80000000];
+      int last;
+      add = 0;
+      foreach (top100[k]) begin
+        ++add;
+        last = k;
+      end
+      `checkh(add, 100);
+      `checkh(last, 32'sh7fffffff);
+      add = 0;
+      foreach (bot100[k]) begin
+        ++add;
+        last = k;
+      end
+      `checkh(add, 100);
+      `checkh(last, 32'sh80000000);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
