@@ -122,6 +122,117 @@ module t (
     or_checked = 1;
   end
 
+  // Property 'and' with a failing sequence operand fails on the first failing check of either
+  // operand (IEEE 1800-2023 16.12.5, 16.12.2). Counted once per failing tick by nonblocking
+  // increments, one attempt starting per tick.
+  int and_cyc = 0;
+  always @(posedge clk) and_cyc <= and_cyc + 1;
+  localparam logic [11:0] AND_A = 12'b101000111011;
+  localparam logic [11:0] AND_B = 12'b000111001000;
+  localparam logic [11:0] AND_C = 12'b000001100110;
+  localparam logic [11:0] AND_D = 12'b101111011101;
+  wire and_a = and_cyc < 12 ? AND_A[and_cyc] : 1'b1;
+  wire and_b = and_cyc < 12 ? AND_B[and_cyc] : 1'b1;
+  wire and_c = and_cyc < 12 ? AND_C[and_cyc] : 1'b1;
+  wire and_d = and_cyc < 12 ? AND_D[and_cyc] : 1'b1;
+  int and_seq_impl_fail = 0, and_bool_seq_fail = 0, and_long_impl_fail = 0;
+  int and_seq_seq_fail = 0;
+
+  assert property (@(posedge clk) (and_a ##1 and_b) and (and_c |-> and_d))
+  else and_seq_impl_fail <= and_seq_impl_fail + 1;
+  assert property (@(posedge clk) and_a and (and_c ##1 and_d))
+  else and_bool_seq_fail <= and_bool_seq_fail + 1;
+  assert property (@(posedge clk) (and_a ##1 and_b ##1 and_a) and (and_c |-> and_d))
+  else and_long_impl_fail <= and_long_impl_fail + 1;
+  assert property (@(posedge clk) (and_a ##1 and_b) and (and_c ##2 and_d))
+  else and_seq_seq_fail <= and_seq_seq_fail + 1;
+
+  // Property 'and' fails once per attempt, at the first failing check of either operand, and
+  // is a vacuous success only when both operands are (IEEE 1800-2023 16.12.5, 16.14.8).
+  // Attempts start apart, so each callback is one attempt.
+  bit and_go = 0, and_ant = 0, and_cons = 0, and_x = 0, and_p = 0;
+  bit and_ctl_done = 0;
+  int and_dly_pass = 0, and_dly_fail = 0, and_imp_pass = 0, and_imp_fail = 0;
+  int and_vac_pass = 0, and_vac_fail = 0, and_mix_pass = 0, and_mix_fail = 0;
+
+  assert property (@(posedge clk) and_go |-> ((##1 and_x) and (and_ant |-> and_cons)))
+    and_dly_pass++;
+  else and_dly_fail++;
+  assert property (@(posedge clk) and_go |-> ((and_p ##1 and_x) and (and_ant |-> and_cons)))
+    and_imp_pass++;
+  else and_imp_fail++;
+  assert property (@(posedge clk) (and_ant |-> and_cons) and (and_ant |-> and_p))
+    and_vac_pass++;
+  else and_vac_fail++;
+  assert property (@(posedge clk) and_go |-> ((and_ant |-> and_cons) and and_p))
+    and_mix_pass++;
+  else and_mix_fail++;
+
+  initial begin
+    @(negedge clk);
+    // Test: the implication operands fail at the first tick, before the delayed check
+    {and_go, and_ant, and_cons, and_p} = 4'b1101;
+    @(negedge clk);
+    {and_go, and_ant, and_cons, and_x} = 4'b0011;
+    @(negedge clk);
+    // Test: the sequence operands fail a tick later, the implications are vacuous
+    {and_go, and_ant, and_p} = 3'b101;
+    @(negedge clk);
+    {and_go, and_x} = 2'b00;
+    @(negedge clk);
+    // Test: all pass, with the implications nonvacuous
+    {and_go, and_ant, and_cons, and_p} = 4'b1111;
+    @(negedge clk);
+    {and_go, and_x} = 2'b01;
+    @(negedge clk);
+    {and_ant, and_p, and_x} = 3'b000;
+    repeat (2) @(negedge clk);
+    `checkd(and_dly_fail, 2);
+    `checkd(and_dly_pass, 1);
+    `checkd(and_imp_fail, 2);
+    `checkd(and_imp_pass, 1);
+    `checkd(and_vac_fail, 1);
+    `checkd(and_vac_pass, 2);
+    `checkd(and_mix_fail, 1);
+    `checkd(and_mix_pass, 2);
+    and_ctl_done = 1;
+  end
+
+  // A boolean OR is a check of a conjoined 'and' wherever it falls, so its failure is the
+  // attempt's (IEEE 1800-2023 16.12.5)
+  bit andor_go = 0, andor_a = 1, andor_b = 1, andor_c = 1, andor_e = 0;
+  bit andor_done = 0;
+  int andor_end_fail = 0, andor_start_fail = 0;
+
+  assert property (@(posedge clk)
+      andor_go |-> ((andor_a ##1 (andor_b || andor_c)) and (andor_a ##2 andor_e)))
+  else andor_end_fail++;
+  assert property (@(posedge clk) andor_go |-> ((andor_b || andor_c) and (##1 andor_e)))
+  else andor_start_fail++;
+
+  initial begin
+    @(negedge clk);
+    andor_go = 1;
+    @(negedge clk);
+    `checkd(andor_end_fail, 0);
+    `checkd(andor_start_fail, 0);
+    // Test: the shorter operand's last check fails before the longer one ends
+    {andor_go, andor_b, andor_c, andor_e} = 4'b0001;
+    @(negedge clk);
+    `checkd(andor_end_fail, 1);
+    `checkd(andor_start_fail, 0);
+    // Test: the first check alone at its tick fails
+    {andor_go, andor_b, andor_c} = 3'b100;
+    @(negedge clk);
+    `checkd(andor_end_fail, 1);
+    `checkd(andor_start_fail, 1);
+    {andor_go, andor_b, andor_c} = 3'b011;
+    repeat (2) @(negedge clk);
+    `checkd(andor_end_fail, 1);
+    `checkd(andor_start_fail, 1);
+    andor_done = 1;
+  end
+
   initial begin
     $assertpasson;
     $assertvacuousoff;
@@ -180,6 +291,12 @@ module t (
     `checkd(isect_fail_zero, 18);
     `checkd(isect_unexp_zero_pass, 0);
     `checkd(isect_unexp_zero_fail, 0);
+    `checkd(and_seq_impl_fail, 8);
+    `checkd(and_bool_seq_fail, 10);
+    `checkd(and_long_impl_fail, 8);
+    `checkd(and_seq_seq_fail, 10);
+    `checkd(and_ctl_done, 1);
+    `checkd(andor_done, 1);
     wait (or_checked);
     $write("*-* All Finished *-*\n");
     $finish;
