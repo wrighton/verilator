@@ -54,6 +54,8 @@ private:
 
     V3UniqueNames m_prevNames{"__Vtrigprevexpr"};  // For generating unique temporary names
 
+public:
+    // Whether changes of a value of the given type can be detected
     static bool isSupportedDType(AstNodeDType* dtypep) {
         dtypep = dtypep->skipRefp();
         if (VN_IS(dtypep, BasicDType)) return true;
@@ -65,6 +67,7 @@ private:
         return false;
     }
 
+private:
     static bool isSimpleExpr(const AstNode* const exprp) {
         return exprp->forall([](const AstNode* const nodep) {
             return VN_IS(nodep, Const) || VN_IS(nodep, NodeVarRef) || VN_IS(nodep, Sel)
