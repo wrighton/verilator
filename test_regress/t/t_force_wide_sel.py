@@ -14,6 +14,7 @@ test.scenarios('simulator')
 test.compile(verilator_flags2=["--stats"])
 
 test.file_grep(test.stats, r'Non-overlapping force sels\s+(\d+)', 2)
+test.file_grep_not(test.stats, r'Scheduling, Cycles, cut variables')
 
 test.execute()
 
