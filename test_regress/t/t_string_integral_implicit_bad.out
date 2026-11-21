@@ -1,6 +1,8 @@
-%Error: t/t_string_integral_implicit_bad.v:39:11: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:39:11: Pin connection of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                 : ... note: In instance 't'
-                                                : ... Suggest use a static cast, or string method atoi()
+                                                : ... Source data type: 'string'
+                                                : ... Destination data type: 'logic[15:0]'
+                                                : ... Suggest use an explicit cast to the destination type
    39 |       .in(s),
       |           ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
@@ -8,49 +10,67 @@
                                                 : ... note: In instance 't'
    40 |       .out(w)
       |            ^
-%Error: t/t_string_integral_implicit_bad.v:43:14: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:43:14: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                 : ... note: In instance 't'
-                                                : ... Suggest use a static cast, or string method atoi()
+                                                : ... Source data type: 'string'
+                                                : ... Destination data type: 'logic[15:0]'
+                                                : ... Suggest use an explicit cast to the destination type
    43 |   assign v = s;   
       |              ^
-%Error: t/t_string_integral_implicit_bad.v:47:9: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:47:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                : ... note: In instance 't'
-                                               : ... Suggest use a static cast, or string method atoi()
+                                               : ... Source data type: 'string'
+                                               : ... Destination data type: 'int'
+                                               : ... Suggest use an explicit cast to the destination type
    47 |     i = s;
       |         ^
-%Error: t/t_string_integral_implicit_bad.v:48:9: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:48:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                : ... note: In instance 't'
-                                               : ... Suggest use a static cast, or string method atoi()
+                                               : ... Source data type: 'string'
+                                               : ... Destination data type: 'int'
+                                               : ... Suggest use an explicit cast to the destination type
    48 |     i = S;
       |         ^
-%Error: t/t_string_integral_implicit_bad.v:49:9: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:49:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                : ... note: In instance 't'
-                                               : ... Suggest use a static cast, or string method atoi()
+                                               : ... Source data type: 'string'
+                                               : ... Destination data type: 'int'
+                                               : ... Suggest use an explicit cast to the destination type
    49 |     i = ts;
       |         ^~
-%Error: t/t_string_integral_implicit_bad.v:50:9: Illegal implicit conversion to 'byte' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:50:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                : ... note: In instance 't'
-                                               : ... Suggest use a static cast, or string method atoi()
+                                               : ... Source data type: 'string'
+                                               : ... Destination data type: 'byte'
+                                               : ... Suggest use an explicit cast to the destination type
    50 |     b = s;
       |         ^
-%Error: t/t_string_integral_implicit_bad.v:51:9: Illegal implicit conversion to 'enum t.enum_t' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:51:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                : ... note: In instance 't'
-                                               : ... Suggest use a static cast, or string method atoi()
+                                               : ... Source data type: 'string'
+                                               : ... Destination data type: 'enum t.enum_t'
+                                               : ... Suggest use an explicit cast to the destination type
    51 |     e = s;
       |         ^
-%Error: t/t_string_integral_implicit_bad.v:52:9: Illegal implicit conversion to 'logic[15:0]' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:52:9: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                : ... note: In instance 't'
-                                               : ... Suggest use a static cast, or string method atoi()
+                                               : ... Source data type: 'string'
+                                               : ... Destination data type: 'logic[15:0]'
+                                               : ... Suggest use an explicit cast to the destination type
    52 |     v = $sformatf("%0d", i);
       |         ^~~~~~~~~
-%Error: t/t_string_integral_implicit_bad.v:53:11: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:53:11: Assign RHS of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                 : ... note: In instance 't'
-                                                : ... Suggest use a static cast, or string method atoi()
+                                                : ... Source data type: 'string'
+                                                : ... Destination data type: 'int'
+                                                : ... Suggest use an explicit cast to the destination type
    53 |     i = c ? s : 5;
       |           ^
-%Error: t/t_string_integral_implicit_bad.v:54:14: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)
+%Error: t/t_string_integral_implicit_bad.v:54:14: Function Argument of string type is not implicitly convertible to the destination data type (IEEE 1800-2023 6.16)
                                                 : ... note: In instance 't'
-                                                : ... Suggest use a static cast, or string method atoi()
+                                                : ... Source data type: 'string'
+                                                : ... Destination data type: 'int'
+                                                : ... Suggest use an explicit cast to the destination type
    54 |     i = f_in(s);
       |              ^
 %Error: t/t_string_integral_implicit_bad.v:55:11: Illegal implicit conversion to 'int' from 'string' (IEEE 1800-2023 6.16)

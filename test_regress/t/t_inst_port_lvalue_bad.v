@@ -52,6 +52,7 @@ module t;
   ifc i ();
   sub u_cat (.y({v[0], v[1]}));
   sub u_one (.y({v[3:2]}));
+  sub u_sel (.y(v[idx+:2]));
   sub u_elem (.y(arr[idx]));
   sub_arr u_slice (.y(arr[1:2]));
   sub u_stream (.y({<<{a[0], a[1]}}));

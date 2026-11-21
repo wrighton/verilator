@@ -352,8 +352,8 @@ module t_scope_std_randomize;
     if (arr1[0] != 42) $stop;
 
     test_struct();
-
     disable_soft_prefix();
+    disable_soft_guarded();
 
     $write("*-* All Finished *-*\n");
     $finish;

@@ -171,26 +171,6 @@ module t (
     `checkh(st.arr[1][2][0].x, 2);
     `checkh(b, 5);
 
-    // Opaque types, elements of arrays and class members
-    begin
-      automatic Opaque op = new;
-      automatic string sa[2] = '{"a", "b"};
-      automatic real ra[2] = '{1.0, 2.0};
-      append_x(sa[1]);
-      `checks(sa[1], "bx");
-      `checks(get_str(sa[1]), "bx");
-      op.s = "c";
-      append_x(op.s);
-      `checks(op.s, "cx");
-      add_half(ra[0]);
-      `checkr(ra[0], 1.5);
-      op.r = 3.0;
-      add_half(op.r);
-      `checkr(op.r, 3.5);
-      `checkr(get_real(ra[0]), 1.5);
-      `checkr(get_real(op.r), 3.5);
-    end
-
     // Elements by a variable index, which may exceed the array
     for (int i = 0; i < 1; ++i) `checkh(get_val(arr[i]), 2);
     begin
@@ -300,6 +280,25 @@ module t (
       `checkd(cls.cm.exists(3), 0);
       `checkd(sub_i.get_in_elem(3), 0);
       `checkd(in_aa.exists(3), 0);
+    end
+     // Opaque types, elements of arrays and class members
+    begin
+      automatic Opaque op = new;
+      automatic string sa[2] = '{"a", "b"};
+      automatic real ra[2] = '{1.0, 2.0};
+      append_x(sa[1]);
+      `checks(sa[1], "bx");
+      `checks(get_str(sa[1]), "bx");
+      op.s = "c";
+      append_x(op.s);
+      `checks(op.s, "cx");
+      add_half(ra[0]);
+      `checkr(ra[0], 1.5);
+      op.r = 3.0;
+      add_half(op.r);
+      `checkr(op.r, 3.5);
+      `checkr(get_real(ra[0]), 1.5);
+      `checkr(get_real(op.r), 3.5);
     end
   end
 

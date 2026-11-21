@@ -1,6 +1,8 @@
-%Error: t/t_bitsel_wire_array_const_bad.v:14:15: Illegal assignment of constant to unpacked array
+%Error: t/t_bitsel_wire_array_const_bad.v:13:12: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
                                                : ... note: In instance 't'
-   14 |   assign x = a[0];
-      |               ^
+                                               : ... Left-hand data type: 'logic$[0:0]' (4-state)
+                                               : ... Right-hand data type: 'bit' (2-state)
+   13 |   assign a = 1'b0;   
+      |            ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: Exiting due to

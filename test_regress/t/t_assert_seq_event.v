@@ -89,6 +89,22 @@ module t (
     future_hits = future_hits + 1;
   end
 
+  // A sequence used as an event may call a future sampled value function
+  global clocking @(posedge clk);
+  endclocking
+
+  // verilog_format: off  // verible does not support clocking events inside sequence declarations
+  sequence seq_future;
+    @(posedge clk) $future_gclk(a) != a;
+  endsequence
+  // verilog_format: on
+
+  int future_hits, future_ref;
+  initial forever begin
+    @seq_future;
+    future_hits = future_hits + 1;
+  end
+
   always @(posedge clk) begin
     if (a2 && b1 && c) ref_hits = ref_hits + 1;
     if (b && (a1 || a2 || a3)) rng_ref = rng_ref + 1;

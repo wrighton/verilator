@@ -15,7 +15,7 @@ test.compile(verilator_flags2=["--stats"])
 
 if test.vlt_all:
     test.file_grep(test.stats, r'Release read-back sels\s+(\d+)', 6)
-    test.file_grep(test.stats, r'Deassign read-back sels\s+(\d+)', 1)
+    test.file_grep(test.stats, r'Deassign read-back sels\s+(\d+)', 0)
 
 test.execute()
 

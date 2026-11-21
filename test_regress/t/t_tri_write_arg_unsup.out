@@ -1,3 +1,9 @@
+%Warning-NONSTD: t/t_tri_write_arg_unsup.v:15:17: Inout port 'y' is connected to variable 'v', but should be connected to a net (IEEE 1800-2023 23.3.3.2)
+                                                : ... note: In instance 't'
+   15 |   sub u_sub (.y(v));
+      |                 ^
+                 ... For warning description see https://verilator.org/warn/NONSTD?v=latest
+                 ... Use "/* verilator lint_off NONSTD */" and lint_on around source to disable this message.
 %Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:38:13: Unsupported: Tristate variable written by subroutine argument or system function: 'v'
                                                    : ... note: In instance 't'
    38 |     t_inout(v);   

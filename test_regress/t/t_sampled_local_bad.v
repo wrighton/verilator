@@ -28,6 +28,12 @@ module t (
   endproperty
   assert property (@(posedge clk) p_bad_gclk);
 
+  sequence s_bad;
+    logic t;
+    (a, t = b) ##1 $past(t);  // BAD: local variable
+  endsequence
+  assert property (@(posedge clk) s_bad);
+
   // Ports and module signals are fine, as is a local variable outside the function
   property p_ok(logic r);
     logic t;

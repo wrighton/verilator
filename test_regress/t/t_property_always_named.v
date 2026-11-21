@@ -131,10 +131,10 @@ module t (
     `checkd(fails_nest_if, ref_fails_nest_if);
     `checkd(fails_nest_arg, ref_fails_nest_arg);
     `checkd(fails_nest_wrap, ref_fails_nest_impl);
-    `checkd(ref_fails_nest_impl, 13);
-    `checkd(ref_fails_nest_next, 10);
-    `checkd(ref_fails_nest_if, 13);
-    `checkd(ref_fails_nest_arg, 12);
+    `checkd(ref_fails_nest_impl, 18);
+    `checkd(ref_fails_nest_next, 11);
+    `checkd(ref_fails_nest_if, 18);
+    `checkd(ref_fails_nest_arg, 14);
     `checkd(ref_fails_range, 16);
     `checkd(ref_fails_alw, 17);
     `checkd(ref_fails_arg, 19);

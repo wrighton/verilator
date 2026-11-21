@@ -62,10 +62,10 @@ module t (
     `checkd(fails3, ref_fails3);
     `checkd(fails4, ref_fails4);
     `checkd(ref_fails1, 12);
-    `checkd(ref_fails2, 26);
+    `checkd(ref_fails2, 29);
     `checkd(ref_passes3, 37);
     `checkd(ref_fails3, 4);
-    `checkd(ref_fails4, 13);
+    `checkd(ref_fails4, 14);
     $write("*-* All Finished *-*\n");
   end
 endmodule

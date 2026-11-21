@@ -92,9 +92,9 @@ module t (
     `checkd(fails_wide, ref_fails_wide);
     `checkd(fails_wide, 21);
     `checkd(fails_multi, ref_fails_multi);
-    `checkd(fails_multi, 16);
+    `checkd(fails_multi, 18);
     `checkd(fails_single, ref_fails_single);
-    `checkd(fails_single, 11);
+    `checkd(fails_single, 16);
     `checkd(fails_window, ref_fails_window);
     `checkd(fails_window, 11);
     `checkd(fails_typed, 0);

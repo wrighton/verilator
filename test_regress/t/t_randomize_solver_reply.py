@@ -51,12 +51,12 @@ runs = [
     ('garbage_assume', 1, 16),  # a bare word in place of the unsat assumptions
     ('garbage_model', 1, 15),  # half-valid model must not reach the variables
     ('garbage_status', 2, 15),  # a word that is not a status
-    ('garbage_status', 7, 15),  # a phased check-sat that does not answer with a status
+    ('garbage_status', 15, 15),  # a phased check-sat that does not answer with a status
     ('high_digit', 1, 15),  # a digit legal for some base but not the stated one
     ('indent', 1, 16),  # leading whitespace before every reply
     ('low_digit', 1, 15),  # a character below any digit or letter
     ('model_trunc', 1, 0),  # unterminated model, then the pipe closes
-    ('model_trunc', 4, 7),  # unterminated reply to a spreading query, then the pipe closes
+    ('model_trunc', 4, 15),  # unterminated reply to a spreading query, then the pipe closes
     ('multiline', 1, 16),  # S-expression split one token per line
     ('no_digits', 1, 15),  # a base marker with no digits after it
     ('octal', 1, 16),  # octal values
@@ -115,8 +115,8 @@ test.execute(logfile=logfile,
 test.file_grep(logfile, r'NPASS=(\d+)', 16)
 test.file_grep(solver_log, r'^  \(assert \(not \(and .*\(= \(select q #x00000000\) +#b[01]+\)')
 
-# The first UniGen2 sampler reply, for Packet's second call. Replies 1 to 15 answer the
-# first calls' solves and diversity rounds, so their count depends on the solver's models:
+# The first UniGen2 sampler reply, for Packet's second call. The replies before it answer
+# the first calls' solves and diversity rounds, so their count depends on the solver's models:
 # the injected reply must be the one right after the sampler's push and get-value, else
 # this case does not test the sampler. A value of the wrong width must not reach a
 # blocking clause, and the call still passes.

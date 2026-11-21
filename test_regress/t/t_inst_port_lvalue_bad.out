@@ -47,4 +47,8 @@
                                         : ... note: In instance 't'
    45 |   sub u_nest_bad (.y({a[0], {~a[1]}}));   
       |                      ^
+%Error: t/t_inst_port_lvalue_bad.v:55:19: Output port connection 'y' requires constant selection indices (IEEE 1800-2023 23.3.3, 10.2, A.8.5).
+                                        : ... note: In instance 't'
+   55 |   sub u_sel (.y(v[idx+:2]));
+      |                   ^~~
 %Error: Exiting due to
