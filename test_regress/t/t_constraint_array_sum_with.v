@@ -552,6 +552,12 @@ module t;
       end
     end
 
+    // Reduction selectors and values must be prepared at each element, not outside the loop.
+    begin
+      automatic test_value_carriers carrier = new;
+      for (int turn = 0; turn < 8; ++turn) carrier.verify(turn);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
