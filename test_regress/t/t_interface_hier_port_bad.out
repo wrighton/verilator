@@ -1,0 +1,23 @@
+%Error: t/t_interface_hier_port_bad.v:36:20: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   36 |     cons c_inner (.b(gfor[g].loc));   
+      |                    ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_hier_port_bad.v:44:16: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   44 |   cons c_for (.b(gfor[1].loc));   
+      |                ^
+%Error: t/t_interface_hier_port_bad.v:45:19: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   45 |   cons c_for_mp (.b(gfor[1].loc.mc));   
+      |                   ^
+%Error: t/t_interface_hier_port_bad.v:46:15: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   46 |   cons c_if (.b(gif.loc));   
+      |               ^
+%Error: t/t_interface_hier_port_bad.v:47:18: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   47 |   cons c_if_mp (.b(gif.loc.mc));   
+      |                  ^
+%Error: t/t_interface_hier_port_bad.v:48:16: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   48 |   cons c_arr (.b(u_arr[1].loc));   
+      |                ^
+%Error: t/t_interface_hier_port_bad.v:49:19: Illegal port connection 'b', hierarchical reference to an interface resolves through an arrayed instance or a generate block (IEEE 1800-2023 25.3)
+   49 |   cons c_arr_mp (.b(u_arr[1].loc.mc));   
+      |                   ^
+%Error: Exiting due to
