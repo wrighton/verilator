@@ -1787,12 +1787,17 @@ const char* AstDisable::broken() const {
 }
 void AstDisable::dump(std::ostream& str) const {
     Super::dump(str);
+    if (!targetPath().empty()) str << " " << targetPath();
     str << " -> ";
     if (targetp()) {
         targetp()->dump(str);
     } else {
         str << "UNLINKED";
     }
+}
+void AstDisable::dumpJson(std::ostream& str) const {
+    dumpJsonStrFunc(str, targetPath);
+    dumpJsonGen(str);
 }
 void AstDisplay::dump(std::ostream& str) const {
     Super::dump(str);

@@ -590,6 +590,7 @@ public:
 class AstDisable final : public AstNodeStmt {
     // @astgen op1 := targetRefp : Optional[AstNodeExpr]  // Reference to link in V3LinkDot
     // @astgen ptr := m_targetp : Optional[AstNode]  // Task or block after V3LinkDot
+    string m_targetPath;  // Dotted target as written but any index select, set by V3LinkDot
 public:
     AstDisable(FileLine* fl, AstNodeExpr* targetRefp)
         : ASTGEN_SUPER_Disable(fl) {
@@ -598,8 +599,11 @@ public:
     ASTGEN_MEMBERS_AstDisable;
     const char* broken() const override;
     void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     void targetp(AstNode* nodep) { m_targetp = nodep; }
     AstNode* targetp() const { return m_targetp; }
+    void targetPath(const string& path) { m_targetPath = path; }
+    const string& targetPath() const { return m_targetPath; }
     bool isBrancher() const override { V3ERROR_NA_RETURN(true); }  // Node removed early
 };
 class AstDisableFork final : public AstNodeStmt {
