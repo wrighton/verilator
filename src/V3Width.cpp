@@ -4383,7 +4383,10 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_inConstraintExpr);
         m_inConstraintExpr = true;
         if (nodep->isDisableSoft() && !isPrimaryCallsOk(nodep->exprp(), true)) {
-            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            // Replaced, not removed, as it may be all of a 'randomize() with' body
+            FileLine* const fl = nodep->fileline();
+            nodep->replaceWith(new AstConstraintExpr{fl, new AstConst{fl, AstConst::BitTrue{}}});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
         userIterateAndNext(nodep->exprp(), WidthVP{SELF, BOTH}.p());
