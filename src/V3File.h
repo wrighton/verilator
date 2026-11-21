@@ -178,7 +178,7 @@ public:
 
     // CALLBACKS - MUST OVERRIDE
     virtual void putcOutput(char chr) = 0;
-    virtual void putsOutput(const char* str) = 0;
+    virtual void putsOutput(const char* strp, size_t len) = 0;
 };
 
 //============================================================================
@@ -227,22 +227,21 @@ private:
     }
     // CALLBACKS
     void putcOutput(char chr) override {
-        m_bufferp->at(m_usedBytes++) = chr;
+        (*m_bufferp)[m_usedBytes++] = chr;
         if (VL_UNLIKELY(m_usedBytes >= WRITE_BUFFER_SIZE_BYTES)) writeBlock();
     }
-    void putsOutput(const char* str) override {
-        std::size_t len = strlen(str);
+    void putsOutput(const char* strp, size_t len) override {
         std::size_t availableBytes = WRITE_BUFFER_SIZE_BYTES - m_usedBytes;
         while (VL_UNLIKELY(len >= availableBytes)) {
-            std::memcpy(m_bufferp->data() + m_usedBytes, str, availableBytes);
+            std::memcpy(m_bufferp->data() + m_usedBytes, strp, availableBytes);
             m_usedBytes = WRITE_BUFFER_SIZE_BYTES;
             writeBlock();
-            str += availableBytes;
+            strp += availableBytes;
             len -= availableBytes;
             availableBytes = WRITE_BUFFER_SIZE_BYTES;
         }
         if (len > 0) {
-            std::memcpy(m_bufferp->data() + m_usedBytes, str, len);
+            std::memcpy(m_bufferp->data() + m_usedBytes, strp, len);
             m_usedBytes += len;
         }
     }
@@ -438,7 +437,9 @@ public:
     ~V3OutStream() override = default;
 
     void putcOutput(char chr) override { m_ostream << chr; };
-    void putsOutput(const char* str) override { m_ostream << str; };
+    void putsOutput(const char* strp, size_t len) override {
+        m_ostream.write(strp, static_cast<std::streamsize>(len));
+    };
 };
 
 //============================================================================
