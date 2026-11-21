@@ -228,6 +228,13 @@ struct BuildResult final {
     static BuildResult failWithError() { return {nullptr, nullptr, {}, true}; }
 };
 
+static bool hasMultiCycleExpr(const AstNode* nodep) {
+    return nodep->exists([](const AstNode* np) {
+        if (const auto* const ep = VN_CAST(np, NodeExpr)) return ep->isMultiCycleSva();
+        return false;
+    });
+}
+
 // Parser-marked SAnd of overlapped implications: a property if/else/case.
 static bool hasPropertyControlConjunction(const AstNodeExpr* nodep) {
     return nodep->exists([](const AstSAnd* andp) { return andp->propertyControl(); });
@@ -337,6 +344,8 @@ class SvaNfaBuilder final {
     bool m_markStrongPending = false;  // Mark new vertices as strong s_always in-window
     // A cover only records matches, so a pending obligation at $finish is not a failure
     bool m_noEosFailure = false;
+    // Rejections are not reported: a cover records matches, and a negated assertion fails on them
+    bool m_rejectsUnreported = false;
     // IEEE 1800-2023 16.14.3 cover sequence: each end-of-match fires the action,
     // not just the first. Builder builds parallel-branch (no first-match-wins)
     // topology when true. Default false preserves cover_property semantics.
@@ -345,6 +354,12 @@ class SvaNfaBuilder final {
     bool m_isSeqEvent = false;
     bool m_inSequencePrefix = false;  // Prefix composition does not preserve every endpoint
     bool m_wantBoolLeaf = false;  // Building a |-> / |=> or top-level body (see buildOrMerge)
+    // Building an operand whose rejection alone does not fail the attempt: an implication
+    // antecedent, or an operand of an 'or' merge vertex
+    bool m_inMatchOnly = false;
+    // Building the consequent of an antecedent with a zero-minimum repetition, whose empty
+    // match is not filtered (see buildImplicationEdges)
+    bool m_inEmptyMatchConsequent = false;
 
     struct RangeDelayRejectInfo final {
         SvaStateVertex* startp = nullptr;
@@ -981,10 +996,87 @@ class SvaNfaBuilder final {
         return !condp->exists(
             [](const AstNodeExpr* np) { return np->isMultiCycleSva() || VN_IS(np, Implication); });
     }
+    // Whether p, the multi-cycle operand of `b or p`, keeps the merge vertex: p can end at a
+    // source that only matches (a bounded ranged delay before a boolean, or an accept abort),
+    // or has an 'until', whose simultaneous attempts share one state
+    static bool keepsMergeVertex(const AstNodeExpr* propp) {
+        return propp->exists([](const AstNodeExpr* np) {
+            if (VN_IS(np, Until)) return true;
+            if (const AstSExpr* const sexprp = VN_CAST(np, SExpr)) {
+                const AstDelay* const delayp = VN_AS(sexprp->delayp(), Delay);
+                return delayp->isRangeDelay() && !delayp->isUnbounded()
+                       && !sexprp->exprp()->isMultiCycleSva();
+            }
+            if (const AstAbortOn* const abortp = VN_CAST(np, AbortOn)) {
+                return abortp->kind().isAccept();
+            }
+            return false;
+        });
+    }
+    // Build `b or p` at the end of an asserted property, with b boolean
+    BuildResult buildBoolOrProp(AstNodeExpr* boolp, AstNodeExpr* propp, SvaStateVertex* entryVtxp,
+                                FileLine* flp) {
+        // It holds at once when b holds and otherwise exactly when p does
+        // (IEEE 1800-2023 16.12.4). So p is evaluated only when b is false, with the rejections
+        // of a top-level property.
+        SvaStateVertex* const propEntryp = scopedCreateVertex();
+        guardedLink(entryVtxp, propEntryp,
+                    new AstLogNot{flp, sampled(boolp->cloneTreePure(false))}, flp);
+        VL_RESTORER(m_wantBoolLeaf);
+        m_wantBoolLeaf = true;
+        const BuildResult prop = buildExpr(propp, propEntryp, /*isTopLevelStep=*/true);
+        if (!prop.valid()) return prop;
+        SvaStateVertex* const propTermp = prop.termVertexp;
+        UASSERT_OBJ(prop.midSources.empty(), propp, "Operand of 'or' without a merge vertex");
+        UASSERT_OBJ(!propTermp->m_delayRingSize || propTermp->m_isFixedDelayRing, propTermp,
+                    "Ranged delay ring ends a property without mid-window sources");
+        // Otherwise reach the merge vertex as p would reach the match vertex
+        SvaStateVertex* const mergeVtxp = scopedCreateVertex();
+        guardedLink(entryVtxp, mergeVtxp, sampled(boolp->cloneTreePure(false)), flp);
+        if (!prop.finalCondp) {
+            guardedLink(propTermp, mergeVtxp, flp);
+            return {mergeVtxp, nullptr, {}};
+        }
+        guardedLink(propTermp, mergeVtxp, sampled(prop.finalCondp->cloneTreePure(false)), flp);
+        if (!propTermp->m_isUnbounded) {
+            SvaStateVertex* const sinkVtxp = m_graph.createStateVertex();
+            sinkVtxp->m_isRejectSink = true;
+            SvaTransEdge* const edgep = m_graph.addLink(
+                propTermp, sinkVtxp, sampled(prop.finalCondp->cloneTreePure(false)));
+            edgep->m_rejectOnFail = true;
+        }
+        freeUnlinkedCondp(prop.finalCondp);
+        return {mergeVtxp, nullptr, {}};
+    }
+
+    static bool isOr(const AstNodeExpr* nodep) { return VN_IS(nodep, SOr) || VN_IS(nodep, LogOr); }
+    static bool isOrOrBoolean(const AstNodeExpr* nodep) {
+        return isOr(nodep) || isPlainBoolean(nodep);
+    }
+    // A condition a build returned, to use in a new tree
+    static AstNodeExpr* ownedCondp(AstNodeExpr* condp) {
+        return condp->backp() ? condp->cloneTreePure(false) : condp;
+    }
 
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
                              FileLine* flp, bool wantBoolLeaf) {
+        // An attempt fails when every operand fails (IEEE 1800-2023 16.12.4), which the merge
+        // vertex does not see
+        const bool canFail = !m_rejectsUnreported && !m_inMatchOnly;
+        if (canFail && wantBoolLeaf) {
+            if (isPlainBoolean(lhsp) && hasMultiCycleExpr(rhsp) && !keepsMergeVertex(rhsp)) {
+                return buildBoolOrProp(lhsp, rhsp, entryVtxp, flp);
+            }
+            if (isPlainBoolean(rhsp) && hasMultiCycleExpr(lhsp) && !keepsMergeVertex(lhsp)) {
+                return buildBoolOrProp(rhsp, lhsp, entryVtxp, flp);
+            }
+        }
+        // A rejection inside an operand would fail the attempt while the other operand can
+        // still match, so the operands of a merge vertex only match. Booleans do not reject,
+        // and a nested 'or' guards its own operands, so a chain is checked once per operand.
+        VL_RESTORER(m_inMatchOnly);
+        if (!isOrOrBoolean(lhsp) || !isOrOrBoolean(rhsp)) m_inMatchOnly = true;
         const BuildResult lhs = buildExpr(lhsp, entryVtxp);
         const BuildResult rhs = buildExpr(rhsp, entryVtxp);
         if (!lhs.valid() || !rhs.valid()) {  // LCOV_EXCL_START -- sub-build fail bail
@@ -1005,16 +1097,16 @@ class SvaNfaBuilder final {
             freeUnlinkedCondp(rhs.finalCondp);
             return BuildResult::failWithError();
         }
-        if (booleanOnly && wantBoolLeaf) {
-            if (isPlainBoolean(lhs.finalCondp) && isPlainBoolean(rhs.finalCondp)) {
-                // As a |-> / |=> or top-level body, a disjunction of two plain booleans must
-                // be able to reject: return it as a boolean finalCondp. The merge vertex
-                // below drops the attempt silently when both operands are false.
+        if (booleanOnly && (wantBoolLeaf || (canFail && !m_inEmptyMatchConsequent))) {
+            // A nested 'or' with a final condition folded plain booleans
+            if ((isOr(lhsp) || isPlainBoolean(lhs.finalCondp))
+                && (isOr(rhsp) || isPlainBoolean(rhs.finalCondp))) {
+                // A disjunction of two plain booleans must be able to reject: return it as a
+                // boolean finalCondp. The merge vertex below drops the attempt silently when
+                // both operands are false. An unlinked condition is the operand's own, so a
+                // chain is not cloned again.
                 AstNodeExpr* const orCondp
-                    = new AstLogOr{flp, lhs.finalCondp->cloneTreePure(false),
-                                   rhs.finalCondp->cloneTreePure(false)};
-                freeUnlinkedCondp(lhs.finalCondp);
-                freeUnlinkedCondp(rhs.finalCondp);
+                    = new AstLogOr{flp, ownedCondp(lhs.finalCondp), ownedCondp(rhs.finalCondp)};
                 return {entryVtxp, orCondp, {}};
             }
         }
@@ -1624,11 +1716,13 @@ public:
     }
 
     SvaNfaBuilder(SvaGraph& graph, AstNodeModule* modp, V3UniqueNames& propTempNames,
-                  bool isCoverSeq = false, bool isSeqEvent = false, bool noEosFailure = false)
+                  bool isCoverSeq = false, bool isSeqEvent = false, bool noEosFailure = false,
+                  bool rejectsUnreported = false)
         : m_graph{graph}
         , m_modp{modp}
         , m_propTempNames{propTempNames}
         , m_noEosFailure{noEosFailure}
+        , m_rejectsUnreported{rejectsUnreported}
         , m_isCoverSeq{isCoverSeq}
         , m_isSeqEvent{isSeqEvent} {}
 
@@ -1714,6 +1808,13 @@ public:
         return {entryVtxp, nodep, {}};
     }
 
+    // An antecedent that does not match leaves the implication vacuously true
+    BuildResult buildAntecedent(AstNodeExpr* antExprp, SvaStateVertex* entryVtxp) {
+        VL_RESTORER(m_inMatchOnly);
+        m_inMatchOnly = true;
+        return buildExpr(antExprp, entryVtxp);
+    }
+
     // Wire an implication / followed-by from `entryVtxp`: builds the antecedent,
     // emits the match-link (and for followed-by the reject-sink edge), inserts a
     // delay vertex for non-overlapped forms, and builds the body. Used both for
@@ -1730,7 +1831,7 @@ public:
         // guards the antecedent adds to it are removed again below
         std::vector<AstNodeExpr*>& entryConds = entryVtxp->m_throughoutConds;
         const size_t entryCondsNum = entryConds.size();
-        const BuildResult antResult = buildExpr(antExprp, entryVtxp);
+        const BuildResult antResult = buildAntecedent(antExprp, entryVtxp);
         if (!antResult.valid()) return antResult;
         for (auto it = vertices.rbegin(); &*it != lastPrep; ++it)
             static_cast<SvaStateVertex*>(&*it)->m_isAntecedent = true;
@@ -1793,7 +1894,9 @@ public:
         // An empty antecedent match must not start the consequent, but a zero-minimum
         // repetition's empty match is not handled here; keep the merge vertex for those
         VL_RESTORER(m_wantBoolLeaf);
-        m_wantBoolLeaf = !isFollowedBy && !hasZeroMinRep(antExprp);
+        VL_RESTORER(m_inEmptyMatchConsequent);
+        m_inEmptyMatchConsequent = hasZeroMinRep(antExprp);
+        m_wantBoolLeaf = !isFollowedBy && !m_inEmptyMatchConsequent;
         return buildExpr(bodyExprp, bodyEntryp, /*isTopLevelStep=*/true);
     }
 
@@ -2957,13 +3060,6 @@ class AssertNfaVisitor final : public VNVisitor {
         }
     }
 
-    static bool hasMultiCycleExpr(const AstNode* nodep) {
-        return nodep->exists([](const AstNode* np) {
-            if (const auto* const ep = VN_CAST(np, NodeExpr)) return ep->isMultiCycleSva();
-            return false;
-        });
-    }
-
     static VPropStrength effectiveAssertPropStrength(const AstPropSpec* const propSpecp) {
         if (propSpecp->propStrength() != VPropStrength::DEFAULT) return propSpecp->propStrength();
         return propSpecp->fileline()->language() <= V3LangCode::L1800_2005 ? VPropStrength::STRONG
@@ -3391,8 +3487,13 @@ class AssertNfaVisitor final : public VNVisitor {
         FileLine* const flp = assertp->fileline();
 
         SvaGraph graph;
-        SvaNfaBuilder builder{graph,      m_modp,     m_propTempNames,
-                              isCoverSeq, isSeqEvent, coverp != nullptr};
+        SvaNfaBuilder builder{graph,
+                              m_modp,
+                              m_propTempNames,
+                              isCoverSeq,
+                              isSeqEvent,
+                              coverp != nullptr,
+                              (coverp != nullptr) != negated};
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
