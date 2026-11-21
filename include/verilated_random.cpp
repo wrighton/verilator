@@ -1544,6 +1544,15 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
         // Decline now and let the next call with the same set run UG2.
         return false;
     }
+    // With no element to enumerate there is nothing to sample, and bsat() would send an empty
+    // (get-value ()); the plain solve still checks the constraints. Asks this call's array table,
+    // as the variables' own array info and counts may still describe an earlier call.
+    if (std::none_of(m_vars.begin(), m_vars.end(), [this](const auto& var) {
+            return var.second->dimension() == 0
+                   || var.second->hasMatchingElements(m_arr_vars, var.second->name());
+        })) {
+        return false;
+    }
 
     // Nothing cached from a previous UG2 run, so refill the batch first.
     if (m_ug2.loThreshWitnesses.empty()) {
