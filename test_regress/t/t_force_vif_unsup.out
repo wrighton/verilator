@@ -1,0 +1,23 @@
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:19:5: Unsupported: Force of a signal through a virtual interface
+   19 |     force m_vif.sig = m_val;
+      |     ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:22:5: Unsupported: Force of a signal through a virtual interface
+   22 |     force m_vif.sig[3:0] = m_val[3:0];
+      |     ^~~~~
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:25:5: Unsupported: Force of a signal through a virtual interface
+   25 |     force m_vif.sig[2] = m_val[0];
+      |     ^~~~~
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:28:5: Unsupported: Force of a signal through a virtual interface
+   28 |     force m_vif.arr[1] = m_val;
+      |     ^~~~~
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:31:5: Unsupported: Release of a signal through a virtual interface
+   31 |     release m_vif.sig;
+      |     ^~~~~~~
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:34:5: Unsupported: Release of a signal through a virtual interface
+   34 |     release m_vif.sig[3:0];
+      |     ^~~~~~~
+%Error-UNSUPPORTED: t/t_force_vif_unsup.v:38:5: Unsupported: Deassign of a signal through a virtual interface
+   38 |     deassign m_vif.sig;
+      |     ^~~~~~~~
+%Error: Exiting due to

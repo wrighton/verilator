@@ -13605,6 +13605,21 @@ class WidthVisitor final : public VNVisitor {
         return nodep;
     }
     void checkForceReleaseLhs(AstNode* nodep, AstNode* lhsp) {
+        // The signal a virtual interface refers to is known only at run time, but a force
+        // applies to one signal chosen now. The signal may be selected from or be a member.
+        AstNodeExpr* const lhsExprp = VN_CAST(lhsp, NodeExpr);
+        if (const AstMemberRef* const memberp
+            = lhsExprp ? VN_CAST(lhsExprp->baseFromp(/* overMembers: */ false), MemberRef)
+                       : nullptr) {
+            if (VN_IS(memberp->fromp()->dtypep()->skipRefp(), IfaceRefDType)) {
+                const std::string what = VN_IS(nodep, Deassign)  ? "Deassign"
+                                         : VN_IS(nodep, Release) ? "Release"
+                                                                 : "Force";
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: " + what + " of a signal through a virtual interface");
+                return;
+            }
+        }
         // V3Force can't check as vector may have expanded, or propagated constant into index
         if (AstNode* const selNodep = V3Width::selectNonConstantRecurse(lhsp)) {
             // IEEE 1800-2023 10.6.1 states the select restriction for assign, not deassign,
