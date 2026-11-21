@@ -10073,9 +10073,9 @@ class WidthVisitor final : public VNVisitor {
         //             width mismatches sign extend
         //             else, compare is unsigned, **zero-extends**
         //   Real:  If either real, other side becomes real and real compare
-        //   TODO: chandle/class handle/iface handle: WildEq/WildNeq same as Eq/Neq
-        //   TODO: chandle/class handle/iface handle only allowed to self-compare or against null
-        //   TODO: chandle/class handle/iface handle no relational compares
+        //   TODO: chandle/iface handle: WildEq/WildNeq same as Eq/Neq
+        //   TODO: chandle/iface handle only allowed to self-compare or against null
+        //   TODO: chandle/iface handle no relational compares
         UASSERT_OBJ(nodep->rhsp(), nodep, "For binary ops only!");
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
@@ -10094,6 +10094,23 @@ class WidthVisitor final : public VNVisitor {
             } else {
                 userIterateAndNext(nodep->lhsp(), WidthVP{CONTEXT_DET, PRELIM}.p());
                 userIterateAndNext(nodep->rhsp(), WidthVP{CONTEXT_DET, PRELIM}.p());
+            }
+
+            const bool isClassLhs
+                = nodep->lhsp()->isClassHandleValue() && !nodep->lhsp()->isNull();
+            const bool isClassRhs
+                = nodep->rhsp()->isClassHandleValue() && !nodep->rhsp()->isNull();
+            if ((isClassLhs || isClassRhs)
+                && (cmpType == ComparisonType::NORMAL_GL || cmpType == ComparisonType::WILD
+                    || !nodep->lhsp()->isClassHandleValue()
+                    || !nodep->rhsp()->isClassHandleValue())) {
+                nodep->v3error(
+                    "Class handle can only be compared for equality with another class "
+                    "handle or null (IEEE 1800-2023 8.4)"
+                    << warnDTypes(nodep, nodep->lhsp()->dtypep(), nodep->rhsp()->dtypep()));
+                nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}});
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                return;
             }
 
             const string wildSuggestQ = VN_IS(nodep, EqWild) ? "'=='" : "'!='";
