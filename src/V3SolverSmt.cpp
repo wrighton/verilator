@@ -271,7 +271,7 @@ class ConstraintFuncRounds final {
     bool m_circular = false;  // Found a circular dependency
 
     int roundOf(const std::string& name, const ConstraintFuncCall& call) {
-        const auto pair = m_rounds.emplace(name, VISITING);
+        const auto pair = m_rounds.emplace(name, int{VISITING});
         if (!pair.second) {
             if (pair.first->second == VISITING) {
                 m_circular = true;
@@ -1314,15 +1314,6 @@ class ConstraintExprVisitor final : public VNVisitor {
     }
 
     void markRandc(AstVar* const varp, const std::string& smtName, AstBegin* const initp) {
-        // The randomizer records the used values of a randc variable as 64-bit numbers
-        const int width = SmtUtil::arrayElementDTypep(varp->dtypep())->width();
-        if (width > VL_QUADSIZE) {
-            varp->v3warn(E_UNSUPPORTED, "Unsupported: Constrained randc variable "
-                                            << varp->prettyNameQ() << " is " << width
-                                            << " bits, wider than the implemented " << VL_QUADSIZE
-                                            << " bits (IEEE 1800-2023 18.4.2).");
-            return;
-        }
         AstCMethodHard* const markp = new AstCMethodHard{
             varp->fileline(),
             new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
@@ -1332,6 +1323,7 @@ class ConstraintExprVisitor final : public VNVisitor {
         AstNodeExpr* const nameExprp
             = m_nestedAccessp ? m_nestedAccessp->cloneName()
                               : new AstSFormatF{varp->fileline(), smtName, false, nullptr};
+        nameExprp->dtypep(varp->dtypep());
         markp->addPinsp(nameExprp);
         addRegistrationStmt(markp->makeStmt(), initp);
     }
@@ -5134,7 +5126,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         callp->dtypeSetBit();
         callp->add(new AstVarRef{genp->fileline(), VN_CAST(genp->user2p(), NodeModule), genp,
                                  VAccess::READWRITE});
-        callp->add(sizeSolve ? ".next_size(__Vm_rng)" : ".next(__Vm_rng)");
+        callp->add(".next(__Vm_rng)");
         return callp;
     }
     // Solve for the element values if the size solve succeeded
@@ -5153,7 +5145,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         sizeOkVarp->funcLocal(true);
         randomizep->addDeclsp(sizeOkVarp);
         randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, sizeOkVarp, VAccess::WRITE},
-                                            newSolverCallp(genp, true)});
+                                            newSolverCallp(genp)});
         return sizeOkVarp;
     }
 
