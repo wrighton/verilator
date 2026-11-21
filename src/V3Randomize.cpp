@@ -353,6 +353,11 @@ class RandomizeMarkVisitor final : public VNVisitor {
     AstWith* m_withp = nullptr;  // Current 'with' constraint node
     const AstClass* m_constraintClassp = nullptr;  // Class of the current class constraint
     AstClass* m_withClassp = nullptr;  // Class of obj in the current obj.randomize() with
+    // For each 'item' name, whether the innermost enclosing array-method 'with' declaring it
+    // iterates a rand array
+    std::unordered_map<std::string, bool> m_withItems;
+    // References to the 'item' of an enclosing 'with' over a rand array, found in their scope
+    std::unordered_set<const AstLambdaArgRef*> m_randItemRefps;
     ClonedConstraints& m_cloneObjps;  // Constraints made by cloning
     std::unordered_set<AstVar*>& m_elemModeArrays;  // Arrays with per-element rand_mode()
 
@@ -369,6 +374,49 @@ class RandomizeMarkVisitor final : public VNVisitor {
                     varp->globalConstrained(true);
             }
         }
+    }
+    // Whether an index depends on a variable being randomized, by its marks, or on the 'item'
+    // of an enclosing 'with' over a rand array
+    bool isMarkedRandItemIndex(const AstNodeExpr* const indexp) const {
+        return isMarkedRandIndex(indexp)
+               || indexp->exists([this](const AstLambdaArgRef* const refp) {
+                      return m_randItemRefps.count(refp);
+                  });
+    }
+    // Whether an array index depends on a variable being randomized, by its marks
+    static bool isMarkedRandIndex(const AstNodeExpr* indexp) {
+        // Not isRandIndex: std::randomize() arguments get their own variables only later
+        return indexp->exists([](const AstNode* const nodep) {
+            return (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) && nodep->user1();
+        });
+    }
+    // Whether a constraint of the class has two member selects not from a variable or member
+    static bool selectsElementMembersTwice(const AstClass* classp) {
+        // Such as selects of object array elements, which a constraint cloned for an object of
+        // the class may not support ("Multiple expressions inside indices"), so such an object
+        // keeps its own randomize()
+        return classp->existsMember([](const AstClass*, const AstConstraint* constrp) {
+            int count = 0;
+            constrp->foreach([&](const AstMemberRef* selp) {
+                if (!VN_IS(selp->fromp(), NodeVarRef) && !VN_IS(selp->fromp(), MemberRef)) ++count;
+            });
+            return count > 1;
+        });
+    }
+    // Mark the rand handles that the member selects of a constraint select through
+    static void markSelectedHandles(AstNode* nodep) {
+        // Such a member is solved with the class of the constraint, so the constraint and the
+        // member's own constraints are solved together (IEEE 1800-2023 18.5.8). Other members
+        // are randomized by their own randomize().
+        nodep->foreach([](const AstMemberRef* selp) {
+            AstVar* varp = nullptr;
+            if (const AstNodeVarRef* const refp = VN_CAST(selp->fromp(), NodeVarRef)) {
+                varp = refp->varp();
+            } else if (const AstMemberRef* const fromSelp = VN_CAST(selp->fromp(), MemberRef)) {
+                varp = fromSelp->varp();
+            }
+            if (varp && varp->rand().isRandomizable()) varp->globalConstrained(true);
+        });
     }
     // Check if an expression in a 'with' clause is a std::randomize() argument
     bool isStdRandomizeArg(const AstNodeExpr* exprp) const {
@@ -1130,6 +1178,14 @@ class RandomizeMarkVisitor final : public VNVisitor {
         } else if (RandomizeUtil::randIndexSelp(nodep->fromp(), isMarkedRandIndex)) {
             // A member of an element of a non-random array selected by a random index
             nodep->user1(true);
+        } else if (!inStdWith
+                   && RandomizeUtil::randArrayIndexSelp(nodep->fromp(),
+                                                        [this](const AstNodeExpr* const indexp) {
+                                                            return isMarkedRandItemIndex(indexp);
+                                                        })) {
+            // A state member of an element selected by a random index, which is solved, or
+            // of an object or struct reached from such a member
+            nodep->user1(true);
         }
 
         if (m_withp) {
@@ -1167,6 +1223,22 @@ class RandomizeMarkVisitor final : public VNVisitor {
         VL_RESTORER(m_withp);
         VL_RESTORER(m_withClassp);
         m_withp = nodep;
+        // Only this 'with' item's entry is saved, as a copy of the map at every nesting level
+        // would be quadratic in the nesting depth
+        const AstCMethodHard* const methodp = VN_CAST(nodep->backp(), CMethodHard);
+        std::string itemName;
+        bool hadOuter = false;
+        bool outerRand = false;
+        if (methodp) {
+            itemName = nodep->valueArgRefp()->name();
+            const bool randItem = methodp->fromp()->user1() != 0;
+            const auto itemIt = m_withItems.emplace(itemName, randItem);
+            hadOuter = !itemIt.second;
+            if (hadOuter) {
+                outerRand = itemIt.first->second;
+                itemIt.first->second = randItem;
+            }
+        }
         if (const AstMethodCall* const callp = VN_CAST(nodep->backp(), MethodCall)) {
             m_withClassp = VN_AS(callp->fromp()->dtypep()->skipRefp(), ClassRefDType)->classp();
         }
@@ -1175,8 +1247,22 @@ class RandomizeMarkVisitor final : public VNVisitor {
         m_inStdWith = false;
         // So a method of a state array is random if its 'with' is, as in 'sum() with (item * r)'
         if (m_constraintExprGenp) nodep->user1(nodep->exprp()->user1());
+        if (methodp) {
+            if (hadOuter) {
+                m_withItems[itemName] = outerRand;
+            } else {
+                m_withItems.erase(itemName);
+            }
+        }
     }
 
+    void visit(AstLambdaArgRef* nodep) override {
+        if (!nodep->index()) {
+            const auto it = m_withItems.find(nodep->name());
+            if (it != m_withItems.end() && it->second) m_randItemRefps.emplace(nodep);
+        }
+        visit(static_cast<AstNodeExpr*>(nodep));
+    }
     void visit(AstNodeExpr* nodep) override {
         iterateChildrenConst(nodep);
         if (!m_constraintExprGenp && !m_inStdWith) return;
