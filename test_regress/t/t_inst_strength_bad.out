@@ -1,0 +1,11 @@
+%Error: t/t_inst_strength_bad.v:20:24: Drive strength is only allowed on UDP instances, not on an instance of module 'sub' (IEEE 1800-2023 23.3.2)
+   20 |   sub (strong0, weak1) u1 (o1, a);   
+      |                        ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_strength_bad.v:21:26: Drive strength is only allowed on UDP instances, not on an instance of module 'sub' (IEEE 1800-2023 23.3.2)
+   21 |   sub (pull0, pull1) #() u2 (.o(o2), .a(a));   
+      |                          ^~
+%Error: t/t_inst_strength_bad.v:22:22: Drive strength is only allowed on UDP instances, not on an instance of interface 'ifc' (IEEE 1800-2023 23.3.2)
+   22 |   ifc (weak0, weak1) u3 ();   
+      |                      ^~
+%Error: Exiting due to
