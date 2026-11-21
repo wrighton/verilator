@@ -223,6 +223,95 @@ class nest_outer extends base_cls implements f1_if;
   endclass
 endclass
 
+// A superclass's nested class can derive from the class extending that superclass.
+// The original missing-implementation reproducer (IEEE 1800-2023 8.23, 8.26.2).
+interface class J;
+  pure virtual function int g();
+endclass
+typedef class B;
+class A extends B;
+endclass
+class B;
+  virtual function int g();
+    return 7;
+  endfunction
+  class N extends A implements J;
+  endclass
+
+  // Inherited qualified types must also be ready, independently of implements.
+  typedef bit [6:0] word_t;
+  typedef enum { ONE = 1, SEVEN = 7 } kind_t;
+  int value;
+  class Lookup extends A;
+    A::word_t data;
+    A::kind_t kind;
+    function int read_value();
+      return value + int'(data) + int'(kind) + g();
+    endfunction
+  endclass
+endclass
+
+// Reverse source order must have identical inheritance and interface dispatch.
+package nested_reverse;
+  typedef class A;
+  class B;
+    virtual function int g();
+      return 7;
+    endfunction
+    class N extends A implements J;
+    endclass
+  endclass
+  class A extends B;
+  endclass
+endpackage
+
+// The same dependency after a parameterized superclass has been specialized.
+package nested_param;
+  typedef class B;
+  class A extends B #(7);
+  endclass
+  class B #(int V = 1);
+    typedef bit [6:0] word_t;
+    int value;
+    virtual function int g();
+      return V + value;
+    endfunction
+    class N extends A implements J;
+      A::word_t data;
+    endclass
+  endclass
+endpackage
+
+// Extern definitions inherit declaration specifiers before nested inheritance checks.
+package nested_extern;
+  typedef class B;
+  class A extends B;
+  endclass
+  class B;
+    extern virtual function int g();
+    class N extends A implements J;
+    endclass
+  endclass
+  function int B::g();
+    return 7;
+  endfunction
+endpackage
+
+package nested_extern_param;
+  typedef class B;
+  class A extends B #(9);
+  endclass
+  class B #(int V = 1);
+    int value;
+    extern virtual function int g();
+    class N extends A implements J;
+    endclass
+  endclass
+  function int B::g();
+    return V + value;
+  endfunction
+endpackage
+
 module t;
   initial begin
     derived_cls obj;
@@ -334,6 +423,65 @@ module t;
       pdobj = new;
       difc = pdobj;
       `checkd(difc.get_dag(), 112)
+    end
+
+    begin
+      B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
+
+    begin
+      nested_reverse::B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
+
+    begin
+      B::Lookup n;
+      n = new;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        n.data = 7'(i);
+        n.kind = B::SEVEN;
+        `checkd(n.read_value(), 27 + 2 * i)
+      end
+    end
+
+    begin
+      nested_param::B #(7)::N n;
+      J j;
+      n = new;
+      j = n;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        n.data = 7'(27 + i);
+        `checkd(j.g(), 20 + i)
+        `checkd(int'(n.data), 27 + i)
+      end
+    end
+
+    begin
+      nested_extern::B::N n;
+      J j;
+      n = new;
+      j = n;
+      `checkd(j.g(), 7)
+    end
+
+    begin
+      nested_extern_param::B #(9)::N n;
+      J j;
+      n = new;
+      j = n;
+      for (int i = 0; i < 5; ++i) begin
+        n.value = 13 + i;
+        `checkd(j.g(), 22 + i)
+      end
     end
 
     $write("*-* All Finished *-*\n");
