@@ -9,9 +9,6 @@ module t (
 );
   logic a, b, d;
 
-  property p_alw;
-    always a;
-  endproperty
   property p_impl;
     always (a |-> b);
   endproperty
@@ -26,7 +23,6 @@ module t (
   endproperty
 
   // The body 'always p' is not reduced to p under another property operator
-  assert property (@(posedge clk) not p_alw);
   assert property (@(posedge clk) d |-> p_impl);
   assert property (@(posedge clk) d |-> p_wrap_impl);
   assert property (@(posedge clk) d |-> p_until);

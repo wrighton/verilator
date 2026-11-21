@@ -1,1 +1,13 @@
 *-* All Finished *-*
+EOS_FAIL
+EOS_RING
+EOS_PAST=0
+EOS_BRANCH
+EOS_LARGE_RING
+EOS_DELAY_RING
+[115] %Error: t_prop_s_always_eos_count.v:83: Assertion failed in top.t: EOS_ERROR
+-Info: t/t_prop_s_always_eos_count.v:83: Verilog $stop, ignored due to +verilator+error+limit
+[115] %Error: t_prop_s_always_eos_count.v:86: Assertion failed in top.t
+EOS_NBA=1
+EOS_UNTIL
+[115] %Error: t_prop_s_always_eos_count.v:101: Assertion failed in top.t

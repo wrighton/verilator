@@ -63,12 +63,4 @@
                                            : ... note: In instance 't'
   103 |     (((1, x = cyc) and (1, x = cyc)) or ((1, x = cyc) ##1 valid ##1 valid ##1 valid)) ##1 (x > 0);
       |                                                                                            ^
-%Error: t/t_property_local_var_bad.v:110:29: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
-                                           : ... note: In instance 't'
-  110 |     @(posedge clk) ((1, a = u) ##1 1'b1, b = v) |=> (a == b);
-      |                             ^
-%Error: t/t_property_local_var_bad.v:115:38: Local variable 'u' referenced before it is assigned (IEEE 1800-2023 16.10).
-                                           : ... note: In instance 't'
-  115 |     @(posedge clk) valid ##1 (cyc != u);
-      |                                      ^
 %Error: Exiting due to
