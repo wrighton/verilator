@@ -19,7 +19,7 @@ class MyInt;
   endfunction
 endclass
 
-function int get_val_set_5(ref int x);
+function automatic int get_val_set_5(ref int x);
   automatic int y = x;
   x = 5;
   return y;
