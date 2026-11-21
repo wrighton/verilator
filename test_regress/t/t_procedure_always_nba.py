@@ -18,6 +18,8 @@ test.compile(verilator_flags2=["--binary", "--stats", "-DPROCEDURE=always"])
 test.file_grep(test.stats, r'Scheduling, \'act\' extra triggers\s+(\d+)', 0)
 test.file_grep(test.stats, r'Scheduling, \'act\' pre triggers\s+(\d+)', 0)
 test.file_grep(test.stats, r'Scheduling, \'act\' sense triggers\s+(\d+)', 3)
+# The 100 generated foo targets and bar commit through the global NBA queue.
+test.file_grep(test.stats, r'NBA, variables using GenericGlobal scheme\s+(\d+)', 101)
 
 test.execute()
 

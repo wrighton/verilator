@@ -169,6 +169,9 @@ module t;
       if (bas.b[0] != b0 && bas.a[0].v != a0 && bas.bf[1] != bf1 && bas.ba[3] != ba3) ++changed;
     end
     if (changed == 0) `stop;
+    // Nor checked by randomize(null) (IEEE 1800-2023 18.11.1)
+    randomize_result = bas.randomize(null);
+    `checkd(randomize_result, 1);
     // The element object itself is still randomized by its own randomize()
     randomize_result = bas.a[1].randomize();
     `checkd(randomize_result, 1);

@@ -133,8 +133,8 @@ class PackedMember;
   rand ab_s fixed;
   rand ab_s s;
   rand ab_u u;
-  // Constrained, so solved: an unconstrained packed struct is randomized member by member,
-  // its enum members restricted, as upstream t_randomize_method expects
+  rand ab_s bs;  // Unconstrained, so not solved
+  rand ab_u bu;
   constraint c {
     fixed == 2'b01;
     s <= 2'b11;
@@ -193,6 +193,8 @@ module t;
       PackedMember m;
       automatic int nonEnumS = 0;
       automatic int nonEnumU = 0;
+      automatic int nonEnumBs = 0;
+      automatic int nonEnumBu = 0;
       m = new;
       // Each misses the two non-enum values with probability 1/2 per try
       repeat (64) begin
@@ -201,9 +203,13 @@ module t;
         `checkd(m.fixed, 2'b01);
         if (!(m.s.ValidAB inside {AB_A, AB_B})) nonEnumS++;
         if (!(m.u.e inside {AB_A, AB_B})) nonEnumU++;
+        if (!(m.bs.ValidAB inside {AB_A, AB_B})) nonEnumBs++;
+        if (!(m.bu.e inside {AB_A, AB_B})) nonEnumBu++;
       end
       `check(nonEnumS > 0);
       `check(nonEnumU > 0);
+      `check(nonEnumBs > 0);
+      `check(nonEnumBu > 0);
     end
     $write("*-* All Finished *-*\n");
     $finish;

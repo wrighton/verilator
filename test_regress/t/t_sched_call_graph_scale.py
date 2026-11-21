@@ -77,7 +77,7 @@ def gen(filename):
 
 gen(test.top_filename)
 
-test.compile(verilator_flags2=["--timing", "--stats", "--no-debug-check", "--unlimited-stack"],
+test.compile(verilator_flags2=["--timing", "--stats", "--unlimited-stack"],
              make_main=False,
              verilator_make_gmake=False)
 

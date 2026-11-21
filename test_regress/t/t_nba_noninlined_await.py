@@ -15,4 +15,8 @@ test.compile(verilator_flags2=['--binary', '--stats'])
 
 test.execute()
 
+# A resumed call enqueues globally; its commit no longer uses cached await domains.
+# Both a and sub.y must use that queue, including the NBA before the first await.
+test.file_grep(test.stats, r'NBA, variables using GenericGlobal scheme\s+(\d+)', 2)
+
 test.passes()
