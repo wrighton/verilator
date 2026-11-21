@@ -24,6 +24,10 @@ package p1;
   endclass
   localparam int UNREF = 9;
   localparam int NAMED = 7;
+  class Q;
+    class Inner;
+    endclass
+  endclass
 endpackage
 
 package p2;
@@ -111,6 +115,12 @@ module t_scoped;
   initial $display("%0d", p2::UNREF);  // Not checked, but not a reference by p2 either
 endmodule
 
+module t_extends;
+  import p2::*;
+  class D extends Q::Inner;  // <--- Bad: p2 does not reference Q
+  endclass
+endmodule
+
 module top;
   t u ();
   t3 u3 ();
@@ -119,4 +129,5 @@ module top;
   t_direct u_direct ();
   t_expl u_expl ();
   t_scoped u_scoped ();
+  t_extends u_extends ();
 endmodule
