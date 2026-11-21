@@ -35,6 +35,8 @@
 #include "V3UndrivenCapture.h"
 #include "V3Width.h"
 
+#include <map>
+#include <memory>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -51,6 +53,29 @@ static bool isDriverNet(const AstVar* const varp) {
 // Class for every variable we may process
 
 class UndrivenVarEntry final {
+    // A path through independently addressable unpacked elements. A write at a
+    // prefix overlaps its descendants, but not a sibling (IEEE 1800-2023 11.5.3).
+    struct InitialContPrefix final {
+        // Ordered children make the chosen overlapping locations deterministic.
+        std::map<string, InitialContPrefix> children;
+        const AstNode* initialp = nullptr;
+        const AstNode* continuousp = nullptr;
+
+        std::pair<const AstNode*, const AstNode*> overlap(const AstNode* initp = nullptr,
+                                                          const AstNode* contp = nullptr) const {
+            if (!initp) initp = initialp;
+            if (!contp) contp = continuousp;
+            if (initp && contp) return {initp, contp};
+            for (const auto& child : children) {
+                const std::pair<const AstNode*, const AstNode*> result
+                    = child.second.overlap(initp, contp);
+                if (result.first) return result;
+            }
+            return {};
+        }
+    };
+    std::unique_ptr<InitialContPrefix> m_initialContPrefixp;  // Lazy CONTASSINIT-only state
+
     // MEMBERS
     AstVar* const m_varp;  // Variable this tracks
     std::vector<bool> m_wholeFlags;  // Used/Driven on whole vector
@@ -202,6 +227,13 @@ public:
         m_clockingp = clockingp;
     }
 
+    void recordInitialCont(const std::vector<string>& prefix, const AstNode* nodep, bool initial) {
+        if (!m_initialContPrefixp) m_initialContPrefixp.reset(new InitialContPrefix{});
+        InitialContPrefix* prefixp = m_initialContPrefixp.get();
+        for (const string& part : prefix) prefixp = &prefixp->children[part];
+        const AstNode*& locationp = initial ? prefixp->initialp : prefixp->continuousp;
+        if (!locationp) locationp = nodep;
+    }
     const AstNode* initStaticp() const { return m_initStaticp; }
     void initStaticp(const AstNode* nodep) { m_initStaticp = nodep; }
     const AstNode* initialp() const { return m_initialp; }
@@ -291,16 +323,22 @@ public:
                     << "... Perhaps should initialize instead using a reset in this process\n"
                     << procWritep()->warnContextSecondary());
         }
-        const AstNode* const initp = nodep->hasUserInit() ? initStaticp() : initialp();
-        if (initp && contAssignp() && !nodep->isClassMember() && !nodep->isFuncLocal()) {
-            initp->v3warn(E_CONTASSINIT, "Continuous assignment to variable with initial value: "
-                                             << nodep->prettyNameQ() << '\n'
-                                             << initp->warnMore()
-                                             << "... Location of variable initialization\n"
-                                             << initp->warnContextPrimary() << '\n'
-                                             << contAssignp()->warnOther()
-                                             << "... Location of continuous assignment\n"
-                                             << contAssignp()->warnContextSecondary());
+        const AstNode* initp = nodep->hasUserInit() ? initStaticp() : initialp();
+        const AstNode* contp = contAssignp();
+        if (m_initialContPrefixp) {
+            const std::pair<const AstNode*, const AstNode*> drivers
+                = m_initialContPrefixp->overlap();
+            initp = drivers.first;
+            contp = drivers.second;
+        }
+        if (initp && contp && !nodep->isClassMember() && !nodep->isFuncLocal()) {
+            initp->v3warn(E_CONTASSINIT,
+                          "Continuous assignment to variable with initial value: "
+                              << nodep->prettyNameQ() << '\n'
+                              << initp->warnMore() << "... Location of variable initialization\n"
+                              << initp->warnContextPrimary() << '\n'
+                              << contp->warnOther() << "... Location of continuous assignment\n"
+                              << contp->warnContextSecondary());
         }
         // Drivers no other check sees: the lowered initial value and output
         // port connections, which the DFG driver check does not lower into
@@ -509,9 +547,68 @@ class UndrivenVisitor final : public VNVisitorConst {
     const AstAlways* m_alwaysPlainp = nullptr;  // Current always if plain (not comb/ff/latch)
     const AstClocking* m_clockingp = nullptr;  // Current clocking block, otherwise nullptr
 
+    const AstNodeExpr* m_contAssTargetp = nullptr;  // Outermost select on the current from-chain
     V3UndrivenCapture* const m_capturep = nullptr;  // Capture object.  'nullptr' if disabled.
 
     // METHODS
+
+    void iterateContAssTarget(AstNodeExpr* nodep, AstNodeExpr* fromp) {
+        VL_RESTORER(m_contAssTargetp);
+        if (!m_contAssTargetp) m_contAssTargetp = nodep;
+        iterateConst(fromp);
+    }
+    void iterateContAssIndex(AstNodeExpr* nodep) {
+        // An index expression is independent of the selected assignment target.
+        VL_RESTORER(m_contAssTargetp);
+        m_contAssTargetp = nullptr;
+        iterateConst(nodep);
+    }
+    // Returns the static element path written, or false for a write through a
+    // constant invalid index, which selects no element (IEEE 1800-2023 7.4.5)
+    bool initialContPrefix(const AstNodeVarRef* nodep, std::vector<string>& prefix) const {
+        std::vector<const AstNodeExpr*> selects;
+        const AstNodeExpr* exprp = m_contAssTargetp;
+        while (exprp && exprp != nodep) {
+            selects.push_back(exprp);
+            if (const AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                exprp = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(exprp, StructSel)) {
+                exprp = selp->fromp();
+            } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+                exprp = selp->fromp();
+            } else if (const AstSliceSel* const selp = VN_CAST(exprp, SliceSel)) {
+                exprp = selp->fromp();
+            } else {
+                return true;
+            }
+        }
+        if (exprp != nodep) return true;  // Whole write, or not this variable's select chain
+        for (auto it = selects.rbegin(); it != selects.rend(); ++it) {
+            if (const AstArraySel* const selp = VN_CAST(*it, ArraySel)) {
+                const AstConst* const constp = VN_CAST(selp->bitp(), Const);
+                if (!constp) break;  // The longest static prefix ends here (IEEE 1800-2023 11.5.3)
+                // V3WidthSel already normalized the index. Never clip wide/X/Z values.
+                const AstUnpackArrayDType* const arrayp
+                    = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
+                if (constp->num().isFourState()
+                    || (constp->isSigned() && constp->num().isNegative())
+                    || !constp->num().fitsInUInt()
+                    || constp->toUInt() >= static_cast<uint32_t>(arrayp->elementsConst()))
+                    return false;
+                prefix.push_back("[" + cvtToStr(constp->toUInt()) + "]");
+            } else if (const AstStructSel* const selp = VN_CAST(*it, StructSel)) {
+                // Union fields alias; only an unpacked struct proves independence.
+                const AstStructDType* const structp
+                    = VN_CAST(selp->fromp()->dtypep()->skipRefp(), StructDType);
+                if (!structp) break;
+                prefix.push_back("." + selp->name());
+            } else {
+                // Preserve packed-bit/slice conservatism, retaining outer array axes.
+                break;
+            }
+        }
+        return true;
+    }
 
     UndrivenVarEntry* getEntryp(AstVar* nodep, int which_user) {
         if (!(which_user == 1 ? nodep->user1p() : nodep->user2p())) {
@@ -744,20 +841,25 @@ class UndrivenVisitor final : public VNVisitorConst {
         // Arrays are rarely constant assigned, so for now we punt and do all entries.
         // For the multiple driver checks, a constant element select is a partial write, as
         // the longest static prefix is not the whole array (IEEE 1800-2023 11.5.3).
+        // CONTASSINIT additionally records the static element path independently.
         {
             VL_RESTORER(m_inSelLhs);
             m_inSelLhs = !V3Width::selectNonConstantRecurse(nodep->bitp(), /*inSel=*/true);
-            iterateConst(nodep->fromp());
+            iterateContAssTarget(nodep, nodep->fromp());
         }
-        iterateConst(nodep->bitp());
+        iterateContAssIndex(nodep->bitp());
     }
     void visit(AstSliceSel* nodep) override {
         // Arrays are rarely constant assigned, so for now we punt and do all entries.
         // Slice bounds are constant, so a slice is a partial write, as for AstArraySel.
-        VL_RESTORER(m_inSelLhs);
-        m_inSelLhs = true;
-        iterateChildrenConst(nodep);
+        {
+            VL_RESTORER(m_inSelLhs);
+            m_inSelLhs = true;
+            iterateContAssTarget(nodep, nodep->fromp());
+        }
+        iterateContAssIndex(nodep->lsbp());
     }
+    void visit(AstStructSel* nodep) override { iterateContAssTarget(nodep, nodep->fromp()); }
     void visit(AstMemberRef* nodep) override {
         // The selected field is not a VarRef child; track it separately from the object handle.
         // Only user1: user2 tracks per-always_comb order, but this field declaration
@@ -809,7 +911,7 @@ class UndrivenVisitor final : public VNVisitorConst {
             {
                 VL_RESTORER(m_memberSelWidth);
                 m_memberSelWidth = 0;
-                iterateConst(nodep->lsbp());
+                iterateContAssIndex(nodep->lsbp());
             }
             VL_RESTORER(m_memberSelLsb);
             VL_RESTORER(m_memberSelWidth);
@@ -825,7 +927,7 @@ class UndrivenVisitor final : public VNVisitorConst {
             }
             VL_RESTORER(m_inSelLhs);
             m_inSelLhs = !V3Width::selectNonConstantRecurse(nodep->lsbp(), /*inSel=*/true);
-            iterateConst(nodep->fromp());
+            iterateContAssTarget(nodep, nodep->fromp());
         }
     }
     void visit(AstNodeVarRef* nodep) override {
@@ -984,6 +1086,20 @@ class UndrivenVisitor final : public VNVisitorConst {
                 if (m_inInitialStatic && !entryp->initStaticp()) entryp->initStaticp(nodep);
                 if (m_inInitial && !entryp->initialp()) entryp->initialp(nodep);
                 if (m_inContAssign && !entryp->contAssignp()) entryp->contAssignp(nodep);
+                const AstNodeDType* const rootDtypep = nodep->varp()->dtypep()->skipRefp();
+                const AstStructDType* const rootStructp = VN_CAST(rootDtypep, StructDType);
+                if (usr == 1
+                    && (VN_IS(rootDtypep, UnpackArrayDType)
+                        || (rootStructp && !rootStructp->packed()))) {
+                    const bool initial
+                        = nodep->varp()->hasUserInit() ? m_inInitialStatic : m_inInitial;
+                    if (initial || m_inContAssign) {
+                        std::vector<string> prefix;
+                        // A write selecting no element keeps element tracking, without a location
+                        const bool element = initialContPrefix(nodep, prefix);
+                        entryp->recordInitialCont(prefix, element ? nodep : nullptr, initial);
+                    }
+                }
                 if (m_drivingPinp && !entryp->outPinp()) entryp->outPinp(nodep);
                 if (inPlainProcAssign() && !entryp->plainProcp()) entryp->plainProcp(nodep);
                 if (m_alwaysp && m_inProcAssign && !entryp->procWritep())
