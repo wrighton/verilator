@@ -210,6 +210,15 @@ Class
 Verilator class support is limited but in active development. Verilator
 supports members, methods, class extend, and class parameters.
 
+A class declared in a module refers to the variables and tasks of the
+instance it is declared in. When such a class refers to them and the module
+is instantiated more than once, Verilator makes a copy of the module, and of
+the modules above it, for each instance, so the class's static members are
+then also per instance; otherwise one class serves all instances. A class
+declared in an interface is not copied, as a virtual interface may refer to
+any instance, so when the interface is instantiated more than once, the class
+may not refer to the interface's variables, or call its tasks that use them.
+
 
 Dotted cross-hierarchy references
 ---------------------------------
