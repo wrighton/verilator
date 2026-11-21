@@ -18,4 +18,6 @@ Expected failure: conflicting constraints detected
 
 === Test: std::randomize conflict (y > 10 && y < 5) after a valid call ===
 Expected failure: conflicting constraints detected
+
+=== Test: Size of an array with rand_mode off ===
 *-* All Finished *-*

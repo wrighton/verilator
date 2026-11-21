@@ -93,7 +93,7 @@ class Cls4;
   endtask
 endclass
 
-class Cls4;
+class Cls5;
   rand int x;
   rand int_arr_t arr[];
   task body();
@@ -109,7 +109,7 @@ class Cls4;
   endtask
 endclass
 
-class Cls5;
+class Cls6;
   rand int_arr_t arr[];
   task body();
     int ok;
@@ -127,20 +127,44 @@ class Cls5;
   endtask
 endclass
 
+class Cls7;
+  rand int x;
+  rand int_arr_t arr[];
+  task body();
+    int ok;
+    arr = new[2];
+    arr[1] = new[2];
+    repeat (40) begin
+      ok = this.randomize() with {x == arr[1][1];};
+      `checkd(ok, 1);
+      `checkd(x, arr[1][1]);
+    end
+  endtask
+endclass
+
 module t;
   Cls c;
   Cls2 c2;
   Cls3 c3;
   Cls4 c4;
+  Cls5 c5;
+  Cls6 c6;
+  Cls7 c7;
   initial begin
     c = new;
     c2 = new;
     c3 = new;
     c4 = new;
+    c5 = new;
+    c6 = new;
+    c7 = new;
     c.body();
     c2.body();
     c3.body();
     c4.body();
+    c5.body();
+    c6.body();
+    c7.body();
     $write("*-* All Finished *-*\n");
     $finish;
   end

@@ -27,7 +27,11 @@ Randomization failed.
 Expected failure: conflicting constraints detected
 
 === Test: std::randomize conflict (y > 10 && y < 5) after a valid call ===
-%Warning-UNSATCONSTR: PSkxop:80: Unsatisfied constraint
-%Warning-UNSATCONSTR: PSkxop:80: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:88: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:88: Unsatisfied constraint
 Expected failure: conflicting constraints detected
+
+=== Test: Size of an array with rand_mode off ===
+%Warning-UNSATCONSTR: PSkxop:39: Unsatisfied constraint
+%Warning-UNSATCONSTR: PSkxop:39: Unsatisfied constraint
 *-* All Finished *-*
