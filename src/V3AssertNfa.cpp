@@ -361,12 +361,16 @@ class SvaNfaBuilder final {
     // Building the consequent of an antecedent with a zero-minimum repetition, whose empty
     // match is not filtered (see buildImplicationEdges)
     bool m_inEmptyMatchConsequent = false;
+    bool m_isDeclarative = false;  // Directive outside any procedure
     // Building an implication antecedent, which cannot fail, and every match of which counts
     bool m_inAntecedent = false;
     // Building the consequent of an antecedent with a zero-minimum repetition, whose empty
     // match is not filtered (see buildImplicationEdges)
     bool m_inEmptyMatchConsequent = false;
     bool m_trackVacuous = false;  // Record vacuous successes (they fail a negated assertion)
+    // Building the outer operand of a variable-length 'within', which needs a vertex on every
+    // tick of each thread, so no delay ring (see buildVarLenWithin)
+    bool m_perTickVertices = false;
 
     struct RangeDelayRejectInfo final {
         SvaStateVertex* startp = nullptr;
@@ -597,6 +601,11 @@ class SvaNfaBuilder final {
             SvaStateVertex* const nextp = scopedCreateVertex();
             guardedEdge(startp, nextp, flp);
             return nextp;
+        }
+        if (isFixed && !advanceCondp && m_perTickVertices) {
+            SvaStateVertex* vtxp = startp;
+            for (unsigned i = 0; i < size; ++i) vtxp = addDelayChain(vtxp, 1, flp);
+            return vtxp;
         }
         SvaStateVertex* const ringVtxp = scopedCreateVertex();
         ringVtxp->m_isFixedDelayRing = isFixed;
@@ -931,7 +940,7 @@ class SvaNfaBuilder final {
         SvaStateVertex* currentp = entryVtxp;
         for (unsigned i = 0; i < minN; ++i) {
             // Keep the first repetition explicit, collapse all remaining checks into the ring.
-            if (i == 1) {
+            if (i == 1 && !m_perTickVertices) {
                 currentp = addDelayChain(currentp, minN - 1, flp);
                 currentp->m_delayRingClearCondp
                     = new AstLogNot{flp, sampledRefOrClone(hoistVarp, exprp, flp)};
@@ -941,6 +950,10 @@ class SvaNfaBuilder final {
                         sampledRefOrClone(hoistVarp, exprp, flp));
                 }
                 i = minN - 1;
+            } else if (i) {
+                // Per tick, so no ring; without m_perTickVertices i == 1 above already jumped
+                // to the last repetition, so this is not reached
+                currentp = addDelayChain(currentp, 1, flp);
             }
             // Every repetition in the minimum prefix is required.
             SvaStateVertex* const condVtxp = scopedCreateVertex();
@@ -982,17 +995,18 @@ class SvaNfaBuilder final {
             guardedLink(currentp, mergeVtxp, flp);
             unsigned tailMinN = minN;
             SvaStateVertex* tailStartp = currentp;
-            if (minN == 0) {
-                // Build the first optional iteration explicitly. Feeding the empty endpoint
-                // directly into a range ring would incorrectly keep that match alive.
+            // Build the first optional iteration explicitly. Feeding the empty endpoint
+            // directly into a range ring would incorrectly keep that match alive. Without
+            // rings, build every optional iteration so.
+            while (tailMinN == 0 || (m_perTickVertices && tailMinN < maxN)) {
                 SvaStateVertex* const nextVtxp = scopedCreateVertex();
-                guardedEdge(currentp, nextVtxp, flp);
+                guardedEdge(tailStartp, nextVtxp, flp);
                 SvaStateVertex* const checkVtxp = scopedCreateVertex();
                 guardedLink(nextVtxp, checkVtxp, sampledRefOrClone(hoistVarp, exprp, flp), flp);
                 guardedLink(checkVtxp, mergeVtxp, flp);
                 if (m_isCoverSeq) consMidSources.push_back(checkVtxp);
                 tailStartp = checkVtxp;
-                tailMinN = 1;
+                ++tailMinN;
             }
             if (maxN > tailMinN) {
                 // Add tail-ring only if the tail is non-empty.
@@ -1380,6 +1394,354 @@ class SvaNfaBuilder final {
         freeUnlinkedCondp(lhs.finalCondp);
         freeUnlinkedCondp(rhs.finalCondp);
         return {combVtxp, nullptr, {}};
+    }
+
+    // Limits the vertices plus condition nodes a variable-length 'within' adds, which has a
+    // vertex per tick of its operands and phase, where delay rings would have one per delay
+    static constexpr uint64_t MAX_WITHIN_SIZE = 16384;
+
+    // Whether boolean leafp requires boolean condp to be false: a conjunct of leafp is the
+    // logical negation of condp, or condp of the conjunct
+    static bool excludes(const AstNodeExpr* leafp, const AstNodeExpr* condp) {
+        if (const AstLogAnd* const andp = VN_CAST(leafp, LogAnd)) {
+            return excludes(andp->lhsp(), condp) || excludes(andp->rhsp(), condp);
+        }
+        return isNegationOf(leafp, condp) || isNegationOf(condp, leafp);
+    }
+    static bool isNegationOf(const AstNodeExpr* notp, const AstNodeExpr* exprp) {
+        if (const AstLogNot* const lognotp = VN_CAST(notp, LogNot)) {
+            return lognotp->lhsp()->sameTree(exprp);
+        }
+        const AstNot* const bitnotp = VN_CAST(notp, Not);
+        return bitnotp && bitnotp->width() == 1 && bitnotp->lhsp()->sameTree(exprp);
+    }
+
+    // Whether nodep is booleans joined by fixed cycle delays
+    static bool isBooleanChain(AstNodeExpr* nodep) {
+        if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+            return delayp && delayp->isCycleDelay() && !delayp->isRangeDelay()
+                   && isUIntConst(delayp->lhsp())
+                   && (!sexprp->preExprp() || isBooleanChain(sexprp->preExprp()))
+                   && isBooleanChain(sexprp->exprp());
+        }
+        return isPlainBoolean(nodep);
+    }
+    // Ticks of the longest match of a sequence isBooleanChain accepts, with each
+    // repetition at its maximum, or one more than its minimum if unbounded
+    static uint64_t chainTicks(AstNodeExpr* nodep) {
+        if (AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            const uint64_t minN = getConstUInt(repp->countp());
+            if (repp->unbounded()) return minN + 1;
+            return repp->maxCountp() ? getConstUInt(repp->maxCountp()) : minN;
+        }
+        AstSExpr* const sexprp = VN_CAST(nodep, SExpr);
+        if (!sexprp) return 1;
+        const uint64_t delay = getConstUInt(VN_AS(sexprp->delayp(), Delay)->lhsp());
+        const uint64_t preTicks = sexprp->preExprp() ? chainTicks(sexprp->preExprp()) : 1;
+        // A zero delay fuses the last tick of the prefix with the first of the rest
+        return preTicks - 1 + delay + chainTicks(sexprp->exprp());
+    }
+
+    // Split a concatenation into its operands and the cycle delays between them
+    static bool splitConcat(AstNodeExpr* nodep, std::vector<AstNodeExpr*>& operandps,
+                            std::vector<AstDelay*>& delayps) {
+        AstSExpr* const sexprp = VN_CAST(nodep, SExpr);
+        if (!sexprp || !sexprp->preExprp()) {
+            operandps.push_back(nodep);
+            return true;
+        }
+        AstDelay* const delayp = VN_CAST(sexprp->delayp(), Delay);
+        if (!delayp || !delayp->isCycleDelay() || delayp->isRangeDelay()
+            || !isUIntConst(delayp->lhsp())) {
+            return false;
+        }
+        if (!splitConcat(sexprp->preExprp(), operandps, delayps)) return false;
+        delayps.push_back(delayp);
+        return splitConcat(sexprp->exprp(), operandps, delayps);
+    }
+
+    // The consecutive repetition of an outer 'within' operand `P ##1 b[*m:n] ##1 Q` with
+    // boolean b and boolean chains P and Q, or nullptr. Fills operandps/delayps, the operands
+    // of the concatenation and the delays between them.
+    static AstSConsRep* runRepetition(AstNodeExpr* outerp, std::vector<AstNodeExpr*>& operandps,
+                                      std::vector<AstDelay*>& delayps, size_t& repIndex) {
+        if (!splitConcat(outerp, operandps, delayps)) return nullptr;
+        AstSConsRep* repp = nullptr;
+        for (size_t i = 0; i < operandps.size(); ++i) {
+            if (isBooleanChain(operandps[i])) continue;
+            AstSConsRep* const runp = VN_CAST(operandps[i], SConsRep);
+            if (repp || !runp || !isPlainBoolean(runp->exprp()) || !isUIntConst(runp->countp())
+                || (runp->maxCountp() && !isUIntConst(runp->maxCountp()))) {
+                return nullptr;
+            }
+            repp = runp;
+            repIndex = i;
+        }
+        if (!repp || repIndex == 0 || repIndex + 1 == operandps.size()) return nullptr;
+        if (getConstUInt(delayps[repIndex - 1]->lhsp()) != 1
+            || getConstUInt(delayps[repIndex]->lhsp()) != 1) {
+            return nullptr;
+        }
+        return repp;
+    }
+
+    // Whether boolean chain operandp checks a pure boolean requiring boolean condp to be false
+    // on its last (else first) tick: its last (first) boolean, which is checked on that tick
+    static bool edgeExcludes(AstNodeExpr* operandp, bool last, const AstNodeExpr* condp) {
+        while (AstSExpr* const sexprp = VN_CAST(operandp, SExpr)) {
+            // A leading delay leaves the first tick unchecked
+            if (!last && !sexprp->preExprp()) return false;
+            operandp = last ? sexprp->exprp() : sexprp->preExprp();
+        }
+        return operandp->isPure() && excludes(operandp, condp);
+    }
+
+    // Sampled checks of a fixed inner sequence at clock offset 'offset', or nullptr if none
+    static AstNodeExpr* newInnerCheckp(const std::map<int, std::vector<AstNodeExpr*>>& checks,
+                                       int offset, FileLine* flp) {
+        const auto it = checks.find(offset);
+        if (it == checks.end()) return nullptr;
+        AstNodeExpr* condp = nullptr;
+        for (AstNodeExpr* const leafp : it->second) {
+            AstNodeExpr* const checkp = sampled(leafp->cloneTreePure(false));
+            condp = condp ? new AstLogAnd{flp, condp, checkp} : checkp;
+        }
+        return condp;
+    }
+
+    // Whether constant expression exprp is a two-state value of at most 32 bits, as
+    // getConstUInt reads it
+    static bool isUIntConst(AstNodeExpr* exprp) {
+        AstNodeExpr* const constp = V3Const::constifyEdit(exprp->cloneTreePure(false));
+        const AstConst* const cp = VN_CAST(constp, Const);
+        const bool fits = cp && !cp->num().isFourState() && cp->num().fitsInUInt();
+        VL_DO_DANGLING(constp->deleteTree(), constp);
+        return fits;
+    }
+
+    static BuildResult withinTooLarge(AstSWithin* nodep) {
+        nodep->v3warn(E_UNSUPPORTED, "Unsupported: 'within' with a variable-length outer sequence"
+                                     " needing more than "
+                                         << MAX_WITHIN_SIZE << " states and conditions");
+        return BuildResult::failWithError();
+    }
+
+    // New vertex of a later phase of a variable-length 'within', with the scope of outer vertex
+    // fromp, which has no throughout guard (see buildVarLenWithin)
+    SvaStateVertex* newPhaseVertex(const SvaStateVertex* fromp) {
+        SvaStateVertex* const vtxp = m_graph.createStateVertex();
+        vtxp->m_isUnbounded = fromp->m_isUnbounded;
+        vtxp->m_strongPending = fromp->m_strongPending;
+        return vtxp;
+    }
+
+    // Lower `seq1 within seq2` (IEEE 1800-2023 16.9.10) for seq2 = `P ##1 b[*m:n] ##1 Q`, where
+    // the tick of P before the repetition and the tick of Q after it each require !b, and a
+    // seq1 of booleans checking c_0 .. c_L at its clock offsets. The repetition is then the
+    // maximal run of b after P, so each attempt of seq2 matches at most once, and as P requires
+    // !b no two attempts end on one tick. So the per-tick result of the cover property whose
+    // whole sequence this is reports each successful attempt once (IEEE 1800-2023 16.14.3),
+    // however many placements of seq1 match. Returns an invalid result without an error if
+    // seq1 and seq2 are not of that form.
+    //
+    // seq2 is built once, as phase 0, where seq1 has not started, with a vertex on each tick;
+    // phases 1 .. L+1 copy it, where seq1 has checked that many offsets. Each thread of seq2
+    // enters every tick at one arrival vertex: the entry, or a registered vertex, which a
+    // clocked edge enters and no Link does. There a phase-q thread checks c_q and continues in
+    // phase q+1 from the arrival's junction vertex, which has the arrival's outgoing edges; a
+    // phase-0 thread also stays in phase 0, so seq1 can start on any later tick. seq2 matching
+    // in phase L+1 is a match of seq1 within seq2.
+    BuildResult buildVarLenWithin(AstSWithin* nodep, SvaStateVertex* entryVtxp) {
+        FileLine* const flp = nodep->fileline();
+        // Checked before fixedLength and flattenFixedSeq, as the bounds can be large
+        std::vector<AstNodeExpr*> operandps;
+        std::vector<AstDelay*> delayps;
+        size_t repIndex = 0;
+        AstSConsRep* const repp = isBooleanChain(nodep->lhsp())
+                                      ? runRepetition(nodep->rhsp(), operandps, delayps, repIndex)
+                                      : nullptr;
+        if (!repp || !repp->exprp()->isPure()
+            || !edgeExcludes(operandps[repIndex - 1], true, repp->exprp())
+            || !edgeExcludes(operandps[repIndex + 1], false, repp->exprp())) {
+            return BuildResult::fail();
+        }
+        // The conditions become module state shared by all attempts, and sampled temporaries
+        // evaluated once per tick, so they may only be pure and read variables that live as
+        // long as the module
+        if (!nodep->isPure() || nodep->exists([](const AstNode* np) {
+                // A class handle, through which a member would be read, or a call may read
+                // other state
+                if (np->dtypep() && VN_IS(np->dtypep()->skipRefp(), ClassRefDType)) return true;
+                if (VN_IS(np, NodeFTaskRef) || VN_IS(np, CMethodHard)) return true;
+                const AstNodeVarRef* const refp = VN_CAST(np, NodeVarRef);
+                if (!refp) return false;
+                const AstVar* const varp = refp->varp();
+                return !varp || varp->isFuncLocal() || varp->lifetime().isAutomatic()
+                       || varp->isClassMember();
+            })) {
+            return BuildResult::fail();
+        }
+        uint64_t outerTicks = 0;
+        for (AstNodeExpr* const operandp : operandps) outerTicks += chainTicks(operandp);
+        for (AstDelay* const delayp : delayps) outerTicks += getConstUInt(delayp->lhsp());
+        const uint64_t innerTicks = chainTicks(nodep->lhsp());
+        uint64_t concats = 0;
+        nodep->rhsp()->foreach([&concats](const AstSExpr*) { ++concats; });
+        const uint64_t innerNodes = nodep->lhsp()->nodeCount();
+        const uint64_t outerNodes = nodep->rhsp()->nodeCount();
+        // Each factor is checked first, so the products below cannot wrap
+        for (const uint64_t factor : {innerTicks, outerTicks, concats, innerNodes, outerNodes}) {
+            if (factor > MAX_WITHIN_SIZE) return withinTooLarge(nodep);
+        }
+        // Phase 0 has the entry, per tick at most a delay vertex and the two of a repetition
+        // step, and per concatenation a check vertex and the merge of an empty repetition; each
+        // vertex has at most three outgoing edges. Its conditions are sampled clones of the
+        // booleans of seq2 and a condition per repetition step. Each of the innerTicks later
+        // phases clones phase 0, adds at most a junction per vertex, and checks seq1's booleans
+        // at one offset from each junction.
+        const uint64_t phase0Vertices = 3 * outerTicks + 2 * concats + 2;
+        const uint64_t phase0CondNodes = 2 * outerNodes + 2 * outerTicks;
+        const uint64_t size = 4 * (2 * innerTicks + 1) * phase0Vertices
+                              + (innerTicks + 1) * phase0CondNodes
+                              + innerTicks * phase0Vertices * (2 * innerNodes + 1);
+        if (size > MAX_WITHIN_SIZE) return withinTooLarge(nodep);
+        std::map<int, std::vector<AstNodeExpr*>> innerChecks;
+        flattenFixedSeq(nodep->lhsp(), 0, innerChecks);
+        const int innerLen = fixedLength(nodep->lhsp());
+        SvaStateVertex* const startp = scopedCreateVertex();
+        guardedLink(entryVtxp, startp, flp);
+        BuildResult outer;
+        {
+            // In a cover property each match of seq2 counts, as one without seq1 does not end
+            // the attempt, and none rejects
+            VL_RESTORER(m_perTickVertices);
+            m_perTickVertices = true;
+            outer = buildExpr(nodep->rhsp(), startp);
+        }
+        if (!outer.valid()) return outer;
+        UASSERT_OBJ(outer.midSources.empty() && !outer.termIsMidMerge, nodep,
+                    "Variable-length within outer sequence with mid-window sources");
+        // Phase 0 vertices, in creation order
+        std::vector<SvaStateVertex*> vtxps;
+        std::unordered_map<const SvaStateVertex*, size_t> indexes;
+        for (V3GraphVertex& vtxr : m_graph.m_graph.vertices()) {
+            SvaStateVertex* const vtxp = static_cast<SvaStateVertex*>(&vtxr);
+            if (vtxps.empty() && vtxp != startp) continue;
+            // A vertex on each tick has no ring, throughout guard, combiner, reject sink or
+            // enclosing abort yet
+            UASSERT_OBJ(!vtxp->m_isMatch && !vtxp->m_delayRingSize && !vtxp->m_isFixedDelayRing
+                            && !vtxp->m_delayRingClearCondp && !vtxp->m_delayRingAdvanceCondp
+                            && !vtxp->m_replayAbortReject && !vtxp->m_abortClearp
+                            && !vtxp->m_abortRejectp && !vtxp->m_isAndCombiner
+                            && !vtxp->m_andLhsTermp && !vtxp->m_andRhsTermp && !vtxp->m_andLhsCondp
+                            && !vtxp->m_andRhsCondp && !vtxp->m_isRejectSink
+                            && vtxp->m_throughoutConds.empty(),
+                        vtxp, "Variable-length within outer vertex not built per tick");
+            indexes.emplace(vtxp, vtxps.size());
+            vtxps.push_back(vtxp);
+        }
+        std::vector<bool> arrivals(vtxps.size());
+        std::vector<const SvaTransEdge*> edgeps;
+        for (size_t i = 0; i < vtxps.size(); ++i) {
+            bool clocked = false;
+            bool linked = false;
+            for (const V3GraphEdge& edger : vtxps[i]->inEdges()) {
+                (static_cast<const SvaTransEdge&>(edger).m_consumesCycle ? clocked : linked)
+                    = true;
+            }
+            UASSERT_OBJ(!clocked || !linked, vtxps[i], "Registered vertex with an incoming Link");
+            arrivals[i] = !i || clocked;
+            for (const V3GraphEdge& edger : vtxps[i]->outEdges()) {
+                const SvaTransEdge* const tedgep = static_cast<const SvaTransEdge*>(&edger);
+                UASSERT_OBJ(indexes.count(tedgep->toVtxp()) && tedgep->toVtxp() != startp
+                                && !tedgep->m_rejectOnFail && !tedgep->m_condVtxp
+                                && !tedgep->m_abortReject,
+                            vtxps[i], "Variable-length within outer edge not built per tick");
+                edgeps.push_back(tedgep);
+            }
+        }
+        // Copies by phase; the entry has none, and a junction only in phase 1
+        const size_t lastPhase = static_cast<size_t>(innerLen) + 1;
+        std::vector<std::vector<SvaStateVertex*>> copyps(lastPhase + 1);
+        std::vector<std::vector<SvaStateVertex*>> junctionps(lastPhase + 1);
+        for (size_t q = 1; q <= lastPhase; ++q) {
+            copyps[q].resize(vtxps.size());
+            junctionps[q].resize(vtxps.size());
+            for (size_t i = 0; i < vtxps.size(); ++i) {
+                if (i) copyps[q][i] = newPhaseVertex(vtxps[i]);
+                if (arrivals[i] && (i || q == 1)) junctionps[q][i] = newPhaseVertex(vtxps[i]);
+            }
+        }
+        for (const SvaTransEdge* const tedgep : edgeps) {
+            const size_t from = indexes.at(tedgep->fromVtxp());
+            const size_t to = indexes.at(tedgep->toVtxp());
+            for (size_t q = 1; q <= lastPhase; ++q) {
+                SvaStateVertex* const fromp
+                    = arrivals[from] ? junctionps[q][from] : copyps[q][from];
+                if (!fromp) continue;
+                new SvaTransEdge{&m_graph.m_graph, fromp, copyps[q][to],
+                                 tedgep->m_condp ? tedgep->m_condp->cloneTreePure(false) : nullptr,
+                                 tedgep->m_consumesCycle};
+            }
+        }
+        for (size_t i = 0; i < vtxps.size(); ++i) {
+            if (!arrivals[i]) continue;
+            m_graph.addLink(vtxps[i], junctionps[1][i], newInnerCheckp(innerChecks, 0, flp));
+            if (!i) continue;
+            for (size_t q = 1; q < lastPhase; ++q) {
+                m_graph.addLink(copyps[q][i], junctionps[q + 1][i],
+                                newInnerCheckp(innerChecks, static_cast<int>(q), flp));
+            }
+            m_graph.addLink(copyps[lastPhase][i], junctionps[lastPhase][i]);
+        }
+        const size_t term = indexes.at(outer.termVertexp);
+        SvaStateVertex* const termp
+            = arrivals[term] ? junctionps[lastPhase][term] : copyps[lastPhase][term];
+        UASSERT_OBJ(termp, nodep, "Variable-length within outer sequence ends on its entry");
+        // A thread can only be in a vertex reachable from the entry. Later phases have no copy of
+        // the entry, so some of their vertices are not, and as their state would have no inputs,
+        // remove them. Phase 0 is reachable, as it is built from the entry.
+        std::unordered_set<const SvaStateVertex*> reachedps{startp};
+        std::vector<const SvaStateVertex*> workps{startp};
+        while (!workps.empty()) {
+            const SvaStateVertex* const vtxp = workps.back();
+            workps.pop_back();
+            for (const V3GraphEdge& edger : vtxp->outEdges()) {
+                const SvaStateVertex* const top = static_cast<const SvaTransEdge&>(edger).toVtxp();
+                if (reachedps.emplace(top).second) workps.push_back(top);
+            }
+        }
+        const bool termReached = reachedps.count(termp);
+        for (size_t q = 1; q <= lastPhase; ++q) {
+            for (std::vector<SvaStateVertex*>* const phasepsp : {&copyps[q], &junctionps[q]}) {
+                for (SvaStateVertex*& vtxp : *phasepsp) {
+                    if (vtxp && !reachedps.count(vtxp)) {
+                        VL_DO_CLEAR(vtxp->unlinkDelete(&m_graph.m_graph), vtxp = nullptr);
+                    }
+                }
+            }
+        }
+        // Ignoring conditions, a path reaches the last phase of the terminal exactly if seq2 has
+        // a match of at least as many ticks as seq1, so otherwise seq1 is longer than every
+        // match of seq2 (IEEE 1800-2023 16.9.10)
+        if (!termReached) {
+            for (size_t q = 1; q <= lastPhase; ++q) {
+                for (SvaStateVertex* const vtxp : copyps[q]) {
+                    if (vtxp) vtxp->unlinkDelete(&m_graph.m_graph);
+                }
+                for (SvaStateVertex* const vtxp : junctionps[q]) {
+                    if (vtxp) vtxp->unlinkDelete(&m_graph.m_graph);
+                }
+            }
+            for (size_t i = vtxps.size() - 1; i > 0; --i) {
+                VL_DO_DANGLING(vtxps[i]->unlinkDelete(&m_graph.m_graph), vtxps[i]);
+            }
+            freeUnlinkedCondp(outer.finalCondp);
+            return buildNeverMatchIntersect(
+                nodep, startp, false, "the inner sequence is longer than the outer sequence");
+        }
+        return {termp, outer.finalCondp, {}};
     }
 
     // Lower `seq1 within seq2` (IEEE 1800-2023 16.9.10) as:
@@ -1929,8 +2291,8 @@ public:
     }
 
     SvaNfaBuilder(SvaGraph& graph, AstNodeModule* modp, V3UniqueNames& propTempNames,
-                  bool isCoverSeq = false, bool isSeqEvent = false, bool noEosFailure = false,
-                  bool isNegated = false, bool trackVacuous = false)
+                  bool isCoverSeq = false, bool isSeqEvent = false, bool isCover = false,
+                  bool isNegated = false, bool trackVacuous = false, bool isDeclarative = false)
         : m_graph{graph}
         , m_modp{modp}
         , m_propTempNames{propTempNames}
@@ -1938,7 +2300,8 @@ public:
         , m_isNegated{isNegated}
         , m_isCoverSeq{isCoverSeq}
         , m_isSeqEvent{isSeqEvent}
-        , m_trackVacuous{trackVacuous} {}
+        , m_trackVacuous{trackVacuous}
+        , m_isDeclarative{isDeclarative} {}
 
     // Reset scope between antecedent and consequent: liveness must not leak.
     // m_outerAbortStack survives: an abort wrapping the implication covers the
@@ -2182,6 +2545,14 @@ public:
         m_graph.m_startVertexp = scopedCreateVertex();
         VL_RESTORER(m_wantBoolLeaf);
         m_wantBoolLeaf = true;
+        // A variable-length 'within' is supported as the whole sequence of a declarative cover
+        // property, where each attempt is reported once, see buildVarLenWithin
+        AstSWithin* const withinp = VN_CAST(exprp, SWithin);
+        if (withinp && m_isCover && m_isDeclarative && !m_isCoverSeq && !m_isSeqEvent
+            && !m_isNegated) {
+            const BuildResult result = buildVarLenWithin(withinp, m_graph.m_startVertexp);
+            if (result.valid() || result.errorEmitted) return result;
+        }
         return buildExpr(exprp, m_graph.m_startVertexp, /*isTopLevelStep=*/true);
     }
 };
@@ -4971,9 +5342,16 @@ class AssertNfaVisitor final : public VNVisitor {
         // A vacuous success fails a negated assertion (IEEE 1800-2023 16.12.3), so a cover,
         // counting passes, needs none; a negated property if/case is reported below instead
         const bool trackVacuous = negated && !coverp && !propertyControlp;
-        SvaNfaBuilder builder{graph,      m_modp,     m_propTempNames,
-                              isCoverSeq, isSeqEvent, coverp != nullptr,
-                              negated,    trackVacuous};
+        // A concurrent assertion item is the only statement of its own process, inside the
+        // implied block of its label if it has one
+        const AstNode* processp = assertp->aboveLoopp();
+        const AstBegin* const labelp = VN_CAST(processp, Begin);
+        if (labelp && labelp->implied()) processp = labelp->aboveLoopp();
+        const AstAlways* const alwaysp = VN_CAST(processp, Always);
+        const bool isDeclarative = alwaysp && alwaysp->keyword() == VAlwaysKwd::ASSERT_COVER;
+        SvaNfaBuilder builder{graph,      m_modp,       m_propTempNames,
+                              isCoverSeq, isSeqEvent,   coverp != nullptr,
+                              negated,    trackVacuous, isDeclarative};
 
         const BuildResult result = buildAssertionGraph(builder, graph, seqBodyp, parts, flp);
         if (result.valid()) wireMatchAndMidSources(graph, result, flp);
