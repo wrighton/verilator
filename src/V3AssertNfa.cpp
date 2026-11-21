@@ -4773,8 +4773,8 @@ class AssertNfaVisitor final : public VNVisitor {
     static bool isMatchItem(const AstExprStmt* exprStmtp) {
         // V3Width also creates an ExprStmt assigning a temporary, e.g. for 'inside' with an
         // impure left-hand side
-        const AstVarRef* const lhsRefp
-            = VN_CAST(VN_AS(exprStmtp->stmtsp(), Assign)->lhsp(), VarRef);
+        const AstAssign* const assignp = VN_CAST(exprStmtp->stmtsp(), Assign);
+        const AstVarRef* const lhsRefp = assignp ? VN_CAST(assignp->lhsp(), VarRef) : nullptr;
         return !lhsRefp || lhsRefp->varp()->varType() != VVarType::XTEMP;
     }
     // True if nodep contains a match item

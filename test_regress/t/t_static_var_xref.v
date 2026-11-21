@@ -69,6 +69,18 @@ module t;
     as = ai;
   endtask
 
+  // Ports of static tasks and functions are static (IEEE 1800-2023 13.3.1)
+  task static_task(input int a, inout int io, output int o);
+    int loc;
+    loc = a * 3;
+    io = io + a;
+    o = a + 1;
+  endtask
+
+  function int static_func(input int b);
+    return b * 2;
+  endfunction
+
   initial begin
     st(3);
     `checkd(st.blk.ba, 3);
@@ -87,6 +99,22 @@ module t;
     for (int i = 1; i <= 3; ++i) begin
       at(i);
       `checkd(at.as, i);
+    end
+    begin
+      int io;
+      int r;
+      io = 10;
+      static_task(5, io, r);
+      `checkd(static_task.a, 5);
+      `checkd(static_task.io, 15);
+      `checkd(static_task.o, 6);
+      `checkd(static_task.loc, 15);
+      `checkd(r, 6);
+      r = static_func(7);
+      `checkd(static_func.b, 7);
+      `checkd(r, 14);
+      r = static_func(r);
+      `checkd(static_func.b, 14);
     end
     $write("*-* All Finished *-*\n");
     $finish;
