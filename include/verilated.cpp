@@ -3934,6 +3934,10 @@ void VerilatedContextImp::scopeInsert(const VerilatedScope* scopep) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_impdatap->m_nameMutex};
     const auto it = m_impdatap->m_nameMap.find(scopep->name());
     if (it == m_impdatap->m_nameMap.end()) m_impdatap->m_nameMap.emplace(scopep->name(), scopep);
+    if (scopep->type() == VerilatedScope::SCOPE_PACKAGE) {
+        m_impdatap->m_packageMap.emplace(scopep->identifier(), scopep);
+    }
+    m_impdatap->m_generationMap.emplace(scopep, scopep->symsp()->__Vm_generation);
 }
 void VerilatedContextImp::scopeErase(const VerilatedScope* scopep) VL_MT_SAFE {
     // Slow ok - called once/scope at destruction
@@ -3941,6 +3945,33 @@ void VerilatedContextImp::scopeErase(const VerilatedScope* scopep) VL_MT_SAFE {
     VerilatedImp::userEraseScope(scopep);
     const auto it = m_impdatap->m_nameMap.find(scopep->name());
     if (it != m_impdatap->m_nameMap.end()) m_impdatap->m_nameMap.erase(it);
+    m_impdatap->m_generationMap.erase(scopep);
+    if (scopep->type() == VerilatedScope::SCOPE_PACKAGE) {
+        const auto range = m_impdatap->m_packageMap.equal_range(scopep->identifier());
+        for (auto it = range.first; it != range.second;) {
+            if (it->second == scopep) {
+                it = m_impdatap->m_packageMap.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+}
+const VerilatedScope* VerilatedContextImp::packageScopeFind(uint64_t generation,
+                                                            const char* namep) const VL_MT_SAFE {
+    // A model has one package of each name (IEEE 1800-2023 3.13). The map holds only scopes of
+    // existing models, so a deleted model's generation finds none.
+    const VerilatedLockGuard lock{m_impdatap->m_nameMutex};
+    const auto range = m_impdatap->m_packageMap.equal_range(namep);
+    for (auto it = range.first; it != range.second; ++it) {
+        if (it->second->symsp()->__Vm_generation == generation) return it->second;
+    }
+    return nullptr;
+}
+uint64_t VerilatedContextImp::scopeGeneration(const VerilatedScope* scopep) const VL_MT_SAFE {
+    const VerilatedLockGuard lock{m_impdatap->m_nameMutex};
+    const auto it = m_impdatap->m_generationMap.find(scopep);
+    return it == m_impdatap->m_generationMap.end() ? 0 : it->second;
 }
 const VerilatedScope* VerilatedContext::scopeFind(const char* namep) const VL_MT_SAFE {
     // Thread save only assuming this is called only after model construction completed
@@ -4008,8 +4039,12 @@ void VerilatedContext::trace(VerilatedTraceBaseC* tfp, int levels, int options) 
 //======================================================================
 // VerilatedSyms:: Methods
 
+std::atomic<uint64_t> VerilatedSyms::s_nextGeneration{1};
+
 VerilatedSyms::VerilatedSyms(VerilatedContext* contextp)
     : _vm_contextp__(contextp ? contextp : Verilated::threadContextp()) {
+    // Never reached, as it takes 2^64 models, but a generation must not be reused
+    if (VL_UNLIKELY(!__Vm_generation)) VL_FATAL_MT("", 0, "", "Too many models");
     VerilatedContext::checkMagic(_vm_contextp__);
     Verilated::threadContextp(_vm_contextp__);
     __Vm_evalMsgQp = new VerilatedEvalMsgQueue;

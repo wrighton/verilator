@@ -207,6 +207,12 @@ protected:
     // Used by scopeInsert, scopeFind, scopeErase, scopeNameMap
     mutable VerilatedMutex m_nameMutex;  // Protect m_nameMap
     VerilatedScopeNameMap m_nameMap VL_GUARDED_BY(m_nameMutex);
+    // Map of <package identifier, package scope>, a scope for each model with that package
+    // Used by scopeInsert, scopeErase, packageScopeFind
+    std::multimap<std::string, const VerilatedScope*> m_packageMap VL_GUARDED_BY(m_nameMutex);
+    // Map of <scope, __Vm_generation of its model>, for each scope
+    // Used by scopeInsert, scopeErase, scopeGeneration
+    std::unordered_map<const VerilatedScope*, uint64_t> m_generationMap VL_GUARDED_BY(m_nameMutex);
 
     // Map of <interface_reference_name, interface reference>
     // Used by ifaceRefInsert, ifaceRefFind, ifaceRefErase, ifaceRefMap
@@ -279,6 +285,11 @@ public:  // But only for verilated*.cpp
     // METHODS - scope name - INTERNAL only for verilated*.cpp
     void scopeInsert(const VerilatedScope* scopep) VL_MT_SAFE;
     void scopeErase(const VerilatedScope* scopep) VL_MT_SAFE;
+    // The package of the model with the given __Vm_generation, or nullptr
+    const VerilatedScope* packageScopeFind(uint64_t generation,
+                                           const char* namep) const VL_MT_SAFE;
+    // The __Vm_generation of the model of a scope, or 0 if not a scope of this context
+    uint64_t scopeGeneration(const VerilatedScope* scopep) const VL_MT_SAFE;
 
     // METHODS - interface references - INTERNAL only for verilated*.cpp
     const VerilatedIfaceRef* ifaceRefInsert(const VerilatedIfaceRef& ifaceRef) VL_MT_SAFE;

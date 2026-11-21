@@ -761,7 +761,8 @@ svScope svGetScope() {
 svScope svSetScope(const svScope scope) {
     const VerilatedScope* const prevScopep = Verilated::dpiScope();
     const VerilatedScope* const vscopep = reinterpret_cast<const VerilatedScope*>(scope);
-    Verilated::dpiScope(vscopep);
+    // Not read through the pointer, as it may be of a deleted model
+    Verilated::dpiScope(vscopep, Verilated::threadContextp()->impp()->scopeGeneration(vscopep));
     // NOLINTNEXTLINE(google-readability-casting)
     return (svScope)(prevScopep);
 }
@@ -772,8 +773,17 @@ const char* svGetNameFromScope(const svScope scope) {
 }
 
 svScope svGetScopeFromName(const char* scopeName) {
+    VerilatedContext* const contextp = Verilated::threadContextp();
+    const VerilatedScope* scopep = contextp->scopeFind(scopeName);
+    // Scope names start with the model name, so also find a package by its own name, as in
+    // simulators without that prefix, in the model of the scope set. The model is known by its
+    // generation, as the scope set may be of a deleted model.
+    const uint64_t generation = Verilated::dpiGeneration();
+    if (!scopep && generation) {
+        scopep = contextp->impp()->packageScopeFind(generation, scopeName);
+    }
     // NOLINTNEXTLINE(google-readability-casting)
-    return (svScope)(Verilated::threadContextp()->scopeFind(scopeName));
+    return (svScope)(scopep);
 }
 
 int svPutUserData(const svScope scope, void* userKey, void* userData) {
