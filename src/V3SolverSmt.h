@@ -31,6 +31,7 @@ public:
     std::vector<std::string> runtimeCFlags() const override VL_MT_DISABLED;
     std::unique_ptr<V3SolverLowering>
     newLowering(VMemberMap& memberMap, V3UniqueNames& uniqueNames, const RandModeVars& modeVars,
+                const ClonedConstraints& cloneObjps,
                 VNDeleter& deleter) const override VL_MT_DISABLED;
 };
 
