@@ -520,7 +520,18 @@ class ParamProcessor final {
             nodep = refp->skipRefToNonRefp();
         }
         string key = nodep->name();
-        if (const AstIfaceRefDType* const ifrtp = VN_CAST(nodep, IfaceRefDType)) {
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (constp && constp->num().isString()) {
+            // Escaped, so a string cannot imitate the separators of an aggregate value
+            key = '"'
+                  + VString::quoteAny(VString::quoteBackslash(constp->num().toString()), '"', '\\')
+                  + '"';
+        } else if (constp && constp->num().isDouble()) {
+            // By its bits, as distinct values, e.g. NaNs, can have the same text
+            V3Number bits{&constp->num(), 64};
+            bits.opRealToBits(constp->num());
+            key = "real:" + bits.ascii();
+        } else if (const AstIfaceRefDType* const ifrtp = VN_CAST(nodep, IfaceRefDType)) {
             if (ifrtp->cellp() && ifrtp->cellp()->modp()) {
                 key = ifrtp->cellp()->modp()->name();
             } else if (ifrtp->ifacep()) {
@@ -1665,6 +1676,30 @@ class ParamProcessor final {
         return match;
     }
 
+    // Whether the constant pin value 'exprp' is the default 'origp' of its parameter 'modvarp',
+    // so need not specialize. A real is compared by its bits, as it names a specialization so.
+    static bool isDefaultParamValue(const AstVar* modvarp, AstConst* exprp, AstConst* origp) {
+        if (origp->num().isDouble()) {
+            // An untyped parameter is of the type of its value, so not real for another value
+            if (modvarp->untypedParam() && !exprp->num().isDouble()) return false;
+            V3Number pinNum{exprp, V3Number::Double{}, 0.0};
+            if (exprp->num().isDouble()) {
+                pinNum.opAssign(exprp->num());
+            } else {
+                pinNum.opIToRD(exprp->num(), exprp->isSigned());
+            }
+            V3Number pinBits{exprp, 64};
+            pinBits.opRealToBits(pinNum);
+            V3Number origBits{origp, 64};
+            origBits.opRealToBits(origp->num());
+            return pinBits.isCaseEq(origBits);
+        }
+        return exprp->sameTree(origp)
+               || (!modvarp->untypedParam()
+                   && ((exprp->num().width() == origp->num().width()
+                        && ParameterizedHierBlocks::areSame(exprp, origp))
+                       || paramConstsEqualAtMaxWidth(exprp, origp)));
+    }
     static bool paramConstsEqualAtMaxWidth(AstConst* exprp, AstConst* origp) {
         // Return true if two integer constants are equal after sign-extending
         // both to max(width).  A typed parameter default (e.g. byte) is
@@ -1949,15 +1984,8 @@ class ParamProcessor final {
                     pinExprp->replaceWith(new AstConst{pinp->fileline(), AstConst::WidthedValue{},
                                                        modvarp->width(), 0});
                     VL_DO_DANGLING(pinExprp->deleteTree(), pinExprp);
-                } else if (defaultp
-                               ? normedNamep->num().isCaseEq(defaultp->num())
-                               : origp
-                                     && (exprp->sameTree(origp)
-                                         || (!modvarp->untypedParam()
-                                             && ((exprp->num().width() == origp->num().width()
-                                                  && ParameterizedHierBlocks::areSame(exprp,
-                                                                                      origp))
-                                                 || paramConstsEqualAtMaxWidth(exprp, origp))))) {
+                } else if (defaultp ? normedNamep->num().isCaseEq(defaultp->num())
+                                    : origp && isDefaultParamValue(modvarp, exprp, origp)) {
                     // Setting parameter to its default value.  Just ignore it.
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
