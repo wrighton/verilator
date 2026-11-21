@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_randc_wide_unsup.v:16:20: Unsupported: Constrained randc variable 'w' is 65 bits, wider than the implemented 64 bits (IEEE 1800-2023 18.4.2).
+   16 |   randc bit [64:0] w;
+      |                    ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_randc_wide_unsup.v:17:16: Unsupported: Constrained randc variable 's' is 65 bits, wider than the implemented 64 bits (IEEE 1800-2023 18.4.2).
+   17 |   randc wide_t s;
+      |                ^
+%Error-UNSUPPORTED: t/t_randc_wide_unsup.v:18:20: Unsupported: Constrained randc variable 'arr' is 65 bits, wider than the implemented 64 bits (IEEE 1800-2023 18.4.2).
+   18 |   randc bit [64:0] arr[2];
+      |                    ^~~
+%Error: Exiting due to
