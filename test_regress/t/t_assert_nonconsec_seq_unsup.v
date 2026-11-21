@@ -23,6 +23,8 @@ module t (
   assert property (@(posedge clk) (a within b) |-> c [=1]);
   assert property (@(posedge clk) a [*1:2] |-> c [=1]);
   assert property (@(posedge clk) a [*1:$] |-> c [=1]);
+  assert property (@(posedge clk) a |-> (c [=1]) [*2]);
+  assert property (@(posedge clk) (c [->1]) [*2] |-> d [=1]);
   // Property operators in a property with a nonconsecutive repetition
   assert property (@(posedge clk) if (a) b [=1] else c);
   assert property (@(posedge clk) (a |-> b) and (c |-> d [=1]));
