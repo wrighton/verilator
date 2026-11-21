@@ -102,6 +102,16 @@ static AstClassRefDType* classRefDTypeOfNode(AstNode* nodep) {
     return dtp ? VN_CAST(dtp->skipRefOrNullp(), ClassRefDType) : nullptr;
 }
 
+// Name of a generate block as V3LinkDot writes it in a defparam path: as declared, so an
+// escaped name containing '.' is one component, with the index of a loop iteration in brackets
+static string defparamBlockName(const string& name) {
+    const size_t braPos = name.find("__BRA__");
+    if (braPos == string::npos) return name;
+    string index = name.substr(braPos + 7, name.size() - braPos - 14);
+    if (VString::startsWith(index, "__02D")) index = "-" + index.substr(5);  // See encodeNumber
+    return name.substr(0, braPos) + "[" + index + "]";
+}
+
 // Instance path without the empty names of unnamed generate blocks, as V3LinkDot has no scope
 // for them
 static string defparamPath(const string& path) {
@@ -5246,7 +5256,7 @@ class ParamVisitor final : public VNVisitor {
             // An unnamed block that is not a generate scope has no name
             if (!nodep->name().empty()) {
                 m_processor.visitScopeItem(nodep, m_genBlockp);
-                m_generateHierName += "." + nodep->prettyName();
+                m_generateHierName += "." + defparamBlockName(nodep->name());
                 m_genBlockp = nodep;
             }
             iterateDefParams(nodep->itemsp());
