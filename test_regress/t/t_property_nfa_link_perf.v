@@ -19,4 +19,6 @@ module t (
     input b
 );
   assert property (@(posedge clk) `S6 ##1 b);
+  // A long sparse delay in a sequence 'or' adds a delay ring, not a vertex per cycle
+  assert property (@(posedge clk) a |-> (##10000 a) or (##10001 b));
 endmodule
