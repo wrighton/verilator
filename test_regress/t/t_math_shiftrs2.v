@@ -24,6 +24,9 @@ module top (
   wire signed [6:0] n7_100 = n7 >>> 100;
   wire signed [71:0] n72_100 = n72 >>> 100;
   wire signed [71:0] n72_200 = n72 >>> 200;
+  // Operand extended so its sign bit is the lowest bit of the top word
+  logic signed [126:0] n127;
+  wire signed [128:0] n127_200 = 129'(n127) >>> 200;
 
   // Expression operand with width % 32 == 1
   logic signed [64:0] a65;
@@ -50,6 +53,7 @@ module top (
     b33 = 33'sd2;
     a129 = -129'sd3;
     b129 = 129'sd2;
+    n127 = -127'sd3;
     #10;
     `checkh(e33, 33'h1_ffffffff);
     `checkh(e129, 129'h1_ffffffff_ffffffff_ffffffff_ffffffff);
@@ -60,12 +64,14 @@ module top (
     `checkh(n7_100, 7'h7f);
     `checkh(n72_100, 72'hff_ffffffff_ffffffff);
     `checkh(n72_200, 72'hff_ffffffff_ffffffff);
+    `checkh(n127_200, {129{1'b1}});
     n7 = 7'sd3;
     n72 = 72'sd3;
     a65 = 65'sd3;
     a97 = 97'sd3;
     a33 = 33'sd3;
     a129 = 129'sd3;
+    n127 = 127'sd3;
     #10;
     `checkh(e33, 33'h0);
     `checkh(e129, 129'h0);
@@ -75,6 +81,7 @@ module top (
     `checkh(n7_100, 7'h00);
     `checkh(n72_100, 72'h0);
     `checkh(n72_200, 72'h0);
+    `checkh(n127_200, 129'h0);
     $write("*-* All Finished *-*\n");
     $finish;
   end
