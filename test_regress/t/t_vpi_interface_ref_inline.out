@@ -1,0 +1,82 @@
+  scopesDump:
+    SCOPE 0x#: t
+    SCOPE 0x#: t.__SYM__register
+    SCOPE 0x#: t.__SYM__register.__SYM__friend
+       VAR 0x#: pub_intf_var
+    SCOPE 0x#: t.__SYM__register.sink
+       VAR 0x#: sink_saw
+    SCOPE 0x#: t.k
+    SCOPE 0x#: t.k.__SYM__friend
+       VAR 0x#: pub_intf_var
+    SCOPE 0x#: t.k.sink
+       VAR 0x#: sink_saw
+    SCOPE 0x#: t.p0
+    SCOPE 0x#: t.p0.h0
+    SCOPE 0x#: t.p0.h0.concrete_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p0.h0.gen
+    SCOPE 0x#: t.p0.h0.gen.block_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p0.h0.gen.mid
+    SCOPE 0x#: t.p0.h0.gen.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p0.h0.mid
+    SCOPE 0x#: t.p0.h0.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p0.h1
+    SCOPE 0x#: t.p0.h1.concrete_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p0.h1.gen
+    SCOPE 0x#: t.p0.h1.gen.block_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p0.h1.gen.mid
+    SCOPE 0x#: t.p0.h1.gen.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p0.h1.mid
+    SCOPE 0x#: t.p0.h1.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p1
+    SCOPE 0x#: t.p1.h0
+    SCOPE 0x#: t.p1.h0.concrete_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p1.h0.gen
+    SCOPE 0x#: t.p1.h0.gen.block_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p1.h0.gen.mid
+    SCOPE 0x#: t.p1.h0.gen.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p1.h0.mid
+    SCOPE 0x#: t.p1.h0.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p1.h1
+    SCOPE 0x#: t.p1.h1.concrete_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p1.h1.gen
+    SCOPE 0x#: t.p1.h1.gen.block_intf
+       VAR 0x#: some_intf_var
+    SCOPE 0x#: t.p1.h1.gen.mid
+    SCOPE 0x#: t.p1.h1.gen.mid.leaf
+       VAR 0x#: leaf_saw
+    SCOPE 0x#: t.p1.h1.mid
+    SCOPE 0x#: t.p1.h1.mid.leaf
+       VAR 0x#: leaf_saw
+    IFACEREF 0x#: t.__SYM__register.sink.pub_ref -> t.__SYM__register.__SYM__friend
+    IFACEREF 0x#: t.k.sink.pub_ref -> t.k.__SYM__friend
+    IFACEREF 0x#: t.p0.h0.gen.mid.leaf.intf_ref -> t.p0.h0.gen.block_intf.SomeModport
+    IFACEREF 0x#: t.p0.h0.gen.mid.plain_ref -> t.p0.h0.gen.block_intf
+    IFACEREF 0x#: t.p0.h0.mid.leaf.intf_ref -> t.p0.h0.concrete_intf.SomeModport
+    IFACEREF 0x#: t.p0.h0.mid.plain_ref -> t.p0.h0.concrete_intf
+    IFACEREF 0x#: t.p0.h1.gen.mid.leaf.intf_ref -> t.p0.h1.gen.block_intf.SomeModport
+    IFACEREF 0x#: t.p0.h1.gen.mid.plain_ref -> t.p0.h1.gen.block_intf
+    IFACEREF 0x#: t.p0.h1.mid.leaf.intf_ref -> t.p0.h1.concrete_intf.SomeModport
+    IFACEREF 0x#: t.p0.h1.mid.plain_ref -> t.p0.h1.concrete_intf
+    IFACEREF 0x#: t.p1.h0.gen.mid.leaf.intf_ref -> t.p1.h0.gen.block_intf.SomeModport
+    IFACEREF 0x#: t.p1.h0.gen.mid.plain_ref -> t.p1.h0.gen.block_intf
+    IFACEREF 0x#: t.p1.h0.mid.leaf.intf_ref -> t.p1.h0.concrete_intf.SomeModport
+    IFACEREF 0x#: t.p1.h0.mid.plain_ref -> t.p1.h0.concrete_intf
+    IFACEREF 0x#: t.p1.h1.gen.mid.leaf.intf_ref -> t.p1.h1.gen.block_intf.SomeModport
+    IFACEREF 0x#: t.p1.h1.gen.mid.plain_ref -> t.p1.h1.gen.block_intf
+    IFACEREF 0x#: t.p1.h1.mid.leaf.intf_ref -> t.p1.h1.concrete_intf.SomeModport
+    IFACEREF 0x#: t.p1.h1.mid.plain_ref -> t.p1.h1.concrete_intf
+
+*-* All Finished *-*

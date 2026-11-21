@@ -19,13 +19,16 @@
 //      Look for CELL...
 //          Keep track of scope and concrete interface along the way
 //          Find all interface references
-//              Add INTFREF to concrete interface's list of references
+//              Add INTFREF to concrete interface's list of references, named
+//              relative to the module declaring the interface instance
 //
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
 
 #include "V3Interface.h"
+
+#include <unordered_map>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -38,21 +41,23 @@ class InlineIntfRefVisitor final : public VNVisitor {
     const VNUser1InUse m_inuser1;
 
     string m_scope;  // Scope name
+    // Prefix of m_scope naming the first instance of the module declaring each interface
+    // instance. References are named relative to it, so all instances share them.
+    std::unordered_map<const AstCell*, string> m_declPrefixes;
 
     // VISITORS
     void visit(AstNetlist* nodep) override { iterateChildrenConst(nodep->topModulep()); }
     void visit(AstCell* nodep) override {
         VL_RESTORER_COPY(m_scope);
-        if (m_scope.empty()) {
-            m_scope = nodep->name();
-        } else {
-            m_scope += "__DOT__" + nodep->name();
-        }
+        const string prefix = m_scope.empty() ? "" : m_scope + "__DOT__";
+        m_scope = prefix + nodep->name();
 
         AstNodeModule* const modp = nodep->modp();
         // Pass Cell pointers down to the next module
         for (AstPin* const pinp : nodep->pinspList()) {
             AstVar* const varp = pinp->modVarp();
+            // TODO: An interface can also propagate upwards and sideways when passed to a port
+            //       via a downward hierarchical reference, which is missed here.
             const AstVarRef* const varrefp = VN_CAST(pinp->exprp(), VarRef);
             if (!varrefp) continue;
 
@@ -61,15 +66,23 @@ class InlineIntfRefVisitor final : public VNVisitor {
             if (!irdtp) continue;
 
             AstCell* cellp = VN_CAST(fromVarp->user1p(), Cell);
-            if (!cellp) cellp = irdtp->cellp();
-            if (!cellp) continue;
+            if (!cellp) {
+                cellp = irdtp->cellp();
+                if (!cellp) continue;
+                // The interface instance is declared in the module containing this instance
+                m_declPrefixes.emplace(cellp, prefix);
+            }
             varp->user1p(cellp);
-            const string alias = m_scope + "__DOT__" + pinp->name();
+            // Record each reference once, under the first instance of the declaring module
+            const string& declPrefix = m_declPrefixes.at(cellp);
+            if (!VString::startsWith(m_scope, declPrefix)) continue;
+            const string relScope = m_scope.substr(declPrefix.size());
+            const string alias = relScope + "__DOT__" + pinp->name();
             // Prefer the port's own dtype; the source may have no modport
             const AstIfaceRefDType* const portIrdtp = VN_CAST(varp->dtypep(), IfaceRefDType);
             const string modportName = portIrdtp ? portIrdtp->modportName() : irdtp->modportName();
             FileLine* const flp = pinp->fileline();
-            cellp->addIntfRefsp(new AstIntfRef{flp, alias, m_scope, pinp->name(), modportName});
+            cellp->addIntfRefsp(new AstIntfRef{flp, alias, relScope, pinp->name(), modportName});
         }
 
         iterateChildrenConst(modp);
