@@ -1662,16 +1662,23 @@ class WidthVisitor final : public VNVisitor {
                 // Must check bounds before adding a select that truncates the bound
                 // Note we've already subtracted off LSB
                 const AstConst* const constp = VN_CAST(nodep->bitp(), Const);
-                // An index with X or Z is not an error; a wider value is out of range
-                if (constp && !constp->num().isFourState()
-                    && (!constp->num().fitsInUInt()
+                const bool hasAnyXZ = constp && constp->num().isAnyXZ();
+                // A wider value is out of range too
+                if (constp
+                    && (hasAnyXZ || !constp->num().fitsInUInt()
                         || (constp->num().isSigned() && constp->num().isNegative())
                         || constp->num().toUInt() > static_cast<uint32_t>(frommsb - fromlsb))) {
                     // Suppress in dead/parameterized template modules
                     if (!(m_modep && (m_modep->dead() || m_modep->parameterizedTemplate()))) {
+                        std::stringstream val;
+                        if (hasAnyXZ) {
+                            val << constp->num();
+                        } else {
+                            val << declIndexStr(nodep, constp->num(), fromlsb);
+                        }
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
-                                                    << declIndexStr(nodep, constp->num(), fromlsb)
-                                                    << " outside " << frommsb << ":" << fromlsb);
+                                                    << val.str() << " outside " << frommsb << ":"
+                                                    << fromlsb);
                     }
                 }
                 // Never truncate the index, so V3Unknown's bounds check sees its whole value
@@ -9876,7 +9883,9 @@ class WidthVisitor final : public VNVisitor {
             // Declarations also hold typedefs of inline types, see V3LinkParse
             AstVar* const varp = VN_CAST(declp, Var);
             if (!varp || varp->isIO()) continue;
-            // A local variable initializer is not lowered
+            // A sequence local variable initializer is not lowered; V3AssertElab lowers a property
+            // one where the property is inlined
+            if (VN_IS(nodep, Property)) continue;
             if (AstNode* const valuep = varp->valuep()) {
                 valuep->v3warn(E_UNSUPPORTED, "Unsupported: initializer of a "
                                                   << kindp
