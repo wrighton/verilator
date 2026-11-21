@@ -2161,8 +2161,10 @@ class RandomizeVisitor final : public VNVisitor {
             AstNodeExpr* valp;
             AstVar* randVarp = nullptr;  // Random value of an enum
             AstNodeStmt* randStmtsp = nullptr;  // Draws the random value, before the assignment
+            // An enum member of a packed struct or union is not restricted to its values
+            // (IEEE 1800-2023 18.4)
             if (AstEnumDType* const enumDtp
-                = VN_CAST(fieldDtp->skipRefToEnump(true), EnumDType)) {
+                = memberp ? nullptr : VN_CAST(fieldDtp->skipRefToEnump(true), EnumDType)) {
                 // Random value in a variable: a wide value is copied word by word, each word
                 // evaluating the table index again
                 randVarp = new AstVar{fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__VenumRand"),
