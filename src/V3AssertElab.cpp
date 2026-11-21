@@ -221,8 +221,9 @@ class AssertElabVisitor final : public VNVisitor {
     promoteLocalVars(const AstNodeSchema* const schemap) {
         std::unordered_map<const AstVar*, AstVar*> localVarMap;
         for (const AstNode* const declp : schemap->declspList()) {
-            const AstVar* const varp = VN_AS(declp, Var);
-            if (varp->isIO()) continue;
+            // Declarations also hold typedefs of inline types, see V3LinkParse
+            const AstVar* const varp = VN_CAST(declp, Var);
+            if (!varp || varp->isIO()) continue;
             // V3Undriven checks the declared variable, not its per-instance copies
             FileLine* const flp = new FileLine{noCoverFileLine(varp->fileline())};
             flp->modifyWarnOff(V3ErrorCode::UNDRIVEN, true);
