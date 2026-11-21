@@ -572,6 +572,10 @@ class UnknownVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstArraySel* nodep) override {
+        // A constant index with X or Z selects no element (IEEE 1800-2023 7.4.6); its X or Z
+        // bits are replaced when iterating
+        const AstConst* const constIndexp = VN_CAST(nodep->bitp(), Const);
+        const bool xIndex = constIndexp && constIndexp->num().isFourState();
         iterateChildren(nodep);
         if (!nodep->user1SetOnce()) {
             UINFOTREE(9, nodep, "", "in");
@@ -612,7 +616,7 @@ class UnknownVisitor final : public VNVisitor {
                 = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, nodep->bitp()->width(),
                                static_cast<uint32_t>(declElements - 1)};
             AstNodeExpr* bitp = V3Const::constifyEdit(nodep->bitp()->unlinkFrBack());
-            if (isStaticlyGte(declElementsp, bitp)) {
+            if (!xIndex && isStaticlyGte(declElementsp, bitp)) {
                 // We don't need to add a conditional; we know the existing expression is ok
                 VL_DO_DANGLING(declElementsp->deleteTree(), declElementsp);
                 nodep->bitp(newIndexTrunc(bitp, declElements));
@@ -631,6 +635,10 @@ class UnknownVisitor final : public VNVisitor {
                     if (!abovep->isPure()) break;
                     readp = abovep;
                 }
+            }
+            if (xIndex) {
+                VL_DO_DANGLING(condp->deleteTree(), condp);
+                condp = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
             }
             // Note below has null backp(); the Edit function knows how to deal with that.
             AstNodeExpr* const defaultp = lvalue ? nullptr : newDefaultp(readp, readp->dtypep());

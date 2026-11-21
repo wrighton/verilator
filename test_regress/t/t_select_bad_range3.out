@@ -20,4 +20,14 @@
                                                 : ... note: In instance 't'
    27 |   wire [7:0] neg_index = lsb0[3'sb111];   
       |                              ^
+%Warning-SELRANGE: t/t_select_bad_range3.v:32:31: Selection index out of range: 4294967295 outside 3:-2
+                                                : ... note: In instance 't'
+   32 |   wire [7:0] wrap_index = negl[32'hffff_ffff];   
+      |                               ^
+%Warning-WIDTHTRUNC: t/t_select_bad_range3.v:34:30: Bit extraction of array[3:-2] requires 2 bit index, not 40 bits.
+                                                  : ... note: In instance 't'
+   34 |   wire [7:0] u40_index = negl[u40];   
+      |                              ^
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
 %Error: Exiting due to
