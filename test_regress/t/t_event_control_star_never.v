@@ -11,4 +11,16 @@ module t;
     #1;
     if (a != 0) $stop;
   end
+
+  logic clk = 0;
+  int b;
+  always @* begin  // Reads only in an event expression
+    @(posedge clk);
+    b = 100;
+  end
+  initial begin
+    #1 clk = 1;
+    #1;
+    if (b != 0) $stop;
+  end
 endmodule
