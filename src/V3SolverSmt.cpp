@@ -3737,7 +3737,6 @@ class ConstraintExprVisitor final : public VNVisitor {
         } else if (nodep->user1() && VN_IS(nodep->fromp(), CMethodHard)
                    && VN_AS(nodep->fromp(), CMethodHard)->method() == VCMethod::ARRAY_AT) {
             // Class ref array element member access (e.g., items[i].val)
-            AstCMethodHard* const cmethodp = VN_AS(nodep->fromp(), CMethodHard);
             AstNodeDType* const arrayDtp = cmethodp->fromp()->dtypep()->skipRefp();
             AstNodeDType* const elemDtp = arrayDtp->subDTypep()->skipRefp();
             if (VN_IS(elemDtp, ClassRefDType)) {
