@@ -236,6 +236,62 @@ module t;
     `checkd(AKHIT, 22);
     `checkd(AKMISS, 77);
   end
+  // A member written by a pattern has its own type, so a 2-state member loses X, but a whole
+  // value of a 4-state packed structure keeps it (IEEE 1800-2023 7.2.1)
+  typedef struct packed {
+    bit hi;
+    logic [6:0] lo;
+  } mixed_t;
+  localparam int MK[mixed_t] = '{mixed_t'{1'b0, 7'h1}: 11, default: 77};
+  localparam int MKHIT = MK[mixed_t'{1'bx, 7'h1}];
+  localparam int MKMISS = MK[mixed_t'{1'b0, 7'bx}];
+  localparam int MKWHOLE = MK[8'bx000_0001];
+  localparam int MKSTORED[mixed_t] = '{mixed_t'{1'bx, 7'h1}: 11, default: 77};
+  localparam int MKSTOREDHIT = MKSTORED[mixed_t'{1'b0, 7'h1}];
+  typedef struct {
+    bit b;
+    logic [3:0] l;
+  } ukey_t;
+  localparam int UKSTORED[ukey_t] = '{ukey_t'{1'bx, 4'h2}: 11, default: 77};
+  localparam ukey_t UK = '{1'b0, 4'h2};
+  localparam int UKSTOREDHIT = UKSTORED[UK];
+  typedef mixed_t [1:0] mixed2_t;
+  localparam int MAKSTORED[mixed2_t] = '{
+      mixed2_t'{mixed_t'{1'bx, 7'h1}, mixed_t'{1'b0, 7'h2}}: 11,
+      default: 77
+  };
+  localparam int MAKSTOREDHIT = MAKSTORED[mixed2_t'{mixed_t'{1'b0, 7'h1}, mixed_t'{1'b0, 7'h2}}];
+  localparam mixed_t MV[int] = '{0: mixed_t'{1'bx, 7'bx}};
+  localparam bit MVCLEAN = MV[0] === 8'b0xxx_xxxx;
+  localparam mixed2_t MAV[int] = '{0: mixed2_t'{mixed_t'{1'bx, 7'bx}, mixed_t'{1'bx, 7'h1}}};
+  localparam bit MAVCLEAN = MAV[0] === 16'b0xxx_xxxx_0000_0001;
+  localparam mixed_t MWHOLE = 8'bx;
+  localparam bit MWHOLEX = MWHOLE === 8'bx;
+  function automatic bit wholeKeepsX();
+    mixed_t v;
+    v = 8'bx;
+    return v === 8'bx;
+  endfunction
+  localparam bit FWHOLEX = wholeKeepsX();
+  typedef struct packed {
+    bit hi;
+    logic lo;
+  } mixed2b_t;
+  localparam mixed2b_t MCOMPUTED = mixed2b_t'{(1'bx ^ 1'b1), 1'bx};
+  localparam bit MCOMPUTEDCLEAN = MCOMPUTED === 2'b0x;
+  initial begin
+    `checkd(MKHIT, 11);
+    `checkd(MKMISS, 77);
+    `checkd(MKWHOLE, 77);
+    `checkd(MKSTOREDHIT, 11);
+    `checkd(UKSTOREDHIT, 11);
+    `checkd(MAKSTOREDHIT, 11);
+    `checkd(MVCLEAN, 1'b1);
+    `checkd(MAVCLEAN, 1'b1);
+    `checkd(MWHOLEX, 1'b1);
+    `checkd(FWHOLEX, 1'b1);
+    `checkd(MCOMPUTEDCLEAN, 1'b1);
+  end
   localparam st_t K45 = '{4, 5};
   localparam int SVA = SV[K45].a;
   initial `checkd(SVA, 6);
