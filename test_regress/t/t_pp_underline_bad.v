@@ -13,5 +13,10 @@ module t;
     endcase
     $stop;  // Should have failed
   end
+  // synopsys_parallel_case
+  // synopsys_ full_case
+  // Below are not misspelled directives, so no warning
+  // synopsys_translate_off
+  // synopsys_translate_on
 
 endmodule
