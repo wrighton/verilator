@@ -1,0 +1,46 @@
+%Error: t/t_func_ref_equiv_bad.v:53:7: Ref argument requires matching types; port 'a' requires 'struct t.a_t' but connection is 'logic[12:0]'.
+                                     : ... note: In instance 't'
+   53 |     f(v13);   
+      |       ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_func_ref_equiv_bad.v:55:7: Ref argument requires matching types; port 'a' requires 'struct t.a_t' but connection is 'struct t.a2_t'.
+                                     : ... note: In instance 't'
+   55 |     f(a2);   
+      |       ^~
+%Error: t/t_func_ref_equiv_bad.v:56:7: Ref argument requires matching types; port 'a' requires 'struct t.a_t' but connection is 'struct t.as_t'.
+                                     : ... note: In instance 't'
+   56 |     f(as);   
+      |       ^~
+%Error: t/t_func_ref_equiv_bad.v:57:8: Ref argument requires matching types; port 'a' requires 'struct t.u_t' but connection is 'struct t.u2_t'.
+                                     : ... note: In instance 't'
+   57 |     fu(u2);   
+      |        ^~
+%Error: t/t_func_ref_equiv_bad.v:58:7: Ref argument requires matching types; port 'a' requires 'struct t.a_t' but connection is 'enum t.e_t'.
+                                     : ... note: In instance 't'
+   58 |     f(e);   
+      |       ^
+%Error-ENUMVALUE: t/t_func_ref_equiv_bad.v:58:7: Implicit conversion to enum 'enum t.e_t' from 'struct t.a_t' (IEEE 1800-2023 6.19.3)
+                                               : ... note: In instance 't'
+                                               : ... Suggest use enum's mnemonic, or static cast
+   58 |     f(e);   
+      |       ^
+                  ... For error description see https://verilator.org/warn/ENUMVALUE?v=latest
+%Error: t/t_func_ref_equiv_bad.v:59:9: Ref argument requires matching types; port 'a' requires 'struct t.a_t[1:0]' but connection is 'bit[23:0]'.
+                                     : ... note: In instance 't'
+   59 |     faa(b24);   
+      |         ^~~
+%Error: t/t_func_ref_equiv_bad.v:60:8: Ref argument requires matching types; port 'a' requires 'int' but connection is 'logic[31:0]'.
+                                     : ... note: In instance 't'
+   60 |     fi(l32);   
+      |        ^~~
+%Error: t/t_func_ref_equiv_bad.v:61:8: Ref argument requires matching types; port 'a' requires 'chandle' but connection is 'logic[31:0]'.
+                                     : ... note: In instance 't'
+   61 |     fc(l32);   
+      |        ^~~
+%Warning-WIDTHEXPAND: t/t_func_ref_equiv_bad.v:61:5: Operator TASKREF 'fc' expects 64 bits on the Function Argument, but Function Argument's VARREF 'l32' generates 32 bits.
+                                                   : ... note: In instance 't'
+   61 |     fc(l32);   
+      |     ^~
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Error: Exiting due to
