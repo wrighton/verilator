@@ -1,10 +1,18 @@
-%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:12:29: Unsupported: Constant read of a key not in an associative array of element type 'class Cls'.
+%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:18:29: Unsupported: Constant read of a key not in an associative array of element type 'class Cls'.
                                                            : ... note: In instance 't'
-   12 |   localparam Cls MISSING = P[2];
+   18 |   localparam Cls MISSING = P[2];
       |                             ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:18:28: Unsupported: Constant select of an associative array whose key type 'int$[]' contains a dynamically sized array.
+%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:24:28: Unsupported: Constant select of an associative array whose key type 'int$[]' contains a dynamically sized array.
                                                            : ... note: In instance 't'
-   18 |   localparam int ADENSE = A[DENSE];
+   24 |   localparam int ADENSE = A[DENSE];
       |                            ^
+%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:27:10: Unsupported: Parameter override value containing a wildcard associative array: Param 'W' of 'u_sub'.
+                                                           : ... note: In instance 't'
+   27 |   sub #(.W(WV)) u_sub ();
+      |          ^
+%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:29:10: Unsupported: Parameter override value containing a wildcard associative array: Param 'WA' of 'u_sub_array'.
+                                                           : ... note: In instance 't'
+   29 |   sub #(.WA(WAV)) u_sub_array ();
+      |          ^~
 %Error: Exiting due to
