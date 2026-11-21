@@ -76,6 +76,42 @@ module M5;
   end
 endmodule
 
+module M8;
+  M0 dut (.value());
+endmodule
+
+// Has an instance named as the top module, with instances named as in the top module
+module M9;
+  if (0) begin : g_no
+  end else if (1) begin : g
+    M8 a ();
+  end
+  M8 b ();
+endmodule
+
+module M10;
+  M9 top ();
+endmodule
+
+// Sets an instance found upwards from each of its instances
+module M11;
+  defparam x.PRMTR = 29;
+endmodule
+
+module M12;
+  M8 u ();
+endmodule
+
+module M13;
+  if (1) begin : \h.esc
+    M8 u ();
+  end
+endmodule
+
+module M14;
+  defparam top.y.PRMTR = 34;
+endmodule
+
 package pkg;
   localparam PKG_PRMTR = 6;
   class Cls;
@@ -88,6 +124,17 @@ module M6;
   import pkg::*;
   defparam m0up.PRMTR = PKG_PRMTR;
   defparam top.m1a.m0b.PRMTR = Cls::CLS_PRMTR;
+  // Paths from the top module name only that instance
+  defparam top.g_yes.m0.PRMTR = 23;
+  defparam top.g.a.dut.PRMTR = 24;
+  defparam top.b.dut.PRMTR = 25;
+  defparam top.\g.esc .m0.PRMTR = 26;
+  // Found upwards, as the escaped instance
+  defparam \h.esc .u.dut.PRMTR = 30;
+  // An escaped generate block, not the nested blocks spelled the same
+  defparam top.\j.k .u.dut.PRMTR = 31;
+  defparam top.\m.n .u.dut.PRMTR = 32;
+  defparam top.m.n.u.dut.PRMTR = 33;
 endmodule
 
 module top;
@@ -104,6 +151,71 @@ module top;
   M6 m6 ();
   M0 m0up (.value());
   I0 i0 ();
+  for (genvar i = 0; i < 2; ++i) begin : gen_up
+    M0 x (.value());
+    M11 c ();
+  end
+  // An escaped instance name, and a generate block of the same name elsewhere
+  M12 \h.esc ();
+  M13 decoy ();
+  initial begin
+    int esc_inst_prmtr;
+    int esc_decoy_prmtr;
+    esc_inst_prmtr = \h.esc .u.dut.PRMTR;
+    esc_decoy_prmtr = decoy.\h.esc .u.dut.PRMTR;
+    `checkh(esc_inst_prmtr, 30);
+    `checkh(esc_decoy_prmtr, 1);
+  end
+  if (0) begin : g_no
+  end else if (1) begin : g_yes
+    M0 m0 (.value());
+  end
+  // In a generate block not built, an instance of a missing module named as the top module, and
+  // an instance setting the same parameter as a live one
+  if (0) begin : g_off
+    M_missing top ();
+    M14 c_off ();
+  end
+  M0 y (.value());
+  M14 c_on ();
+  // Escaped generate blocks containing '.', and nested blocks spelled the same
+  if (1) begin : \j.k
+    M8 u ();
+  end
+  if (1) begin : j
+    if (1) begin : k
+      M8 u ();
+    end
+  end
+  if (1) begin : \m.n
+    M8 u ();
+  end
+  if (1) begin : m
+    if (1) begin : n
+      M8 u ();
+    end
+  end
+  initial begin
+    int esc_jk_prmtr;
+    int esc_mn_prmtr;
+    esc_jk_prmtr = \j.k .u.dut.PRMTR;
+    esc_mn_prmtr = \m.n .u.dut.PRMTR;
+    `checkh(y.PRMTR, 34);
+    `checkh(esc_jk_prmtr, 31);
+    `checkh(j.k.u.dut.PRMTR, 1);
+    `checkh(esc_mn_prmtr, 32);
+    `checkh(m.n.u.dut.PRMTR, 33);
+  end
+  if (1) begin : g
+    M8 a ();
+  end
+  M8 b ();
+  M10 p ();
+  if (1) begin : \g.esc
+    M0 m0 (.value());
+  end
+  int esc_prmtr;
+  initial esc_prmtr = \g.esc .m0.PRMTR;
   generate
     begin
       M0 m0 (.value());
@@ -169,6 +281,14 @@ module top;
     `checkh(m0.PRMTR, 13);
     `checkh(i0.PRMTR, 14);
     `checkh(m0up.PRMTR, 6);
+    `checkh(g_yes.m0.PRMTR, 23);
+    `checkh(g.a.dut.PRMTR, 24);
+    `checkh(p.top.g.a.dut.PRMTR, 1);
+    `checkh(b.dut.PRMTR, 25);
+    `checkh(p.top.b.dut.PRMTR, 1);
+    `checkh(esc_prmtr, 26);
+    `checkh(gen_up[0].x.PRMTR, 29);
+    `checkh(gen_up[1].x.PRMTR, 29);
 
     #1;
     `checkh(value, 45);  // (2+3) * (4+5)
