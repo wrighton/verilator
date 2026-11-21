@@ -21,8 +21,8 @@
 //  externally via the vertex/edge user pointers.
 //
 //  OrderMTaskGraph maintains the critical paths of the MTasks, and the ones
-//  cached in the edge heaps, as the graph is mutated via 'addEdge' and
-//  'mergeMTasks'.
+//  cached in the edge heaps, as the graph is mutated via 'addEdge',
+//  'addEdges' and 'mergeMTasks'.
 //
 //*************************************************************************
 
@@ -41,6 +41,8 @@
 #include <memory>
 #include <sstream>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 class LogicMTask;
 class OrderMTaskGraph;
@@ -366,6 +368,10 @@ public:
         initCriticalPaths<GraphWay::FORWARD>();
         initCriticalPaths<GraphWay::REVERSE>();
     }
+    // Add an edge for each 'from, to' pair in 'edges', updating the critical paths once at the
+    // end, in time linear in the size of the graph. Adding many edges sharing an endpoint with
+    // 'addEdge' can take quadratic time, as each update can walk all edges of that endpoint.
+    void addEdges(const std::vector<std::pair<LogicMTask*, LogicMTask*>>& edges);
 
     // Merge 'donorp' into 'recipientp': move the contents and all edges of 'donorp' onto
     // 'recipientp', update impacted critical paths, then delete 'donorp'. The edge connecting the
