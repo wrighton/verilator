@@ -576,18 +576,17 @@
                "rhsp": [
                 {"type":"CCAST","addr":"(ML)","loc":"d,25:12,25:16","dtypep":"(T)","size":32,
                  "lhsp": [
-                  {"type":"CONST","name":"64'h1","addr":"(AI)","loc":"d,25:12,25:16","dtypep":"(OC)"}
-                ],
-                 "rhsp": [
-                  {"type":"RAND","addr":"(BI)","loc":"d,25:12,25:16","dtypep":"(PF)"}
+                  {"type":"AND","addr":"(NL)","loc":"d,25:12,25:16","dtypep":"(PF)",
+                   "lhsp": [
+                    {"type":"CONST","name":"64'h3","addr":"(OL)","loc":"d,25:12,25:16","dtypep":"(OC)"}
+                  ],
+                   "rhsp": [
+                    {"type":"RAND","addr":"(PL)","loc":"d,25:12,25:16","dtypep":"(PF)"}
+                  ]}
                 ]}
               ]},
               {"type":"VARREF","name":"__Vdist_bucket0","addr":"(QL)","loc":"d,25:12,25:16","dtypep":"(PF)","access":"RD","varp":"(QF)"},
               {"type":"VARREF","name":"__Vdist_bucket0","addr":"(RL)","loc":"d,25:12,25:16","dtypep":"(PF)","access":"RD","varp":"(QF)"}
-              ]}
-            ],
-             "resultp": [
-              {"type":"VARREF","name":"__Vtext","addr":"(GL)","loc":"d,25:12,25:16","dtypep":"(HB)","access":"RD","varp":"(BI)"}
             ]},
             {"type":"CEXPR","addr":"(SL)","loc":"d,25:12,25:16","dtypep":"(FC)","pure":true,
              "nodesp": [
