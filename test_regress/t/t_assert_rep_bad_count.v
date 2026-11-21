@@ -44,4 +44,9 @@ module t (
   assert property (@(posedge clk) a [= 32'h80000000] |-> b)
   else $error("FAIL");
 
+  // === Consecutive repetition [*N], which expands its operand N times ===
+
+  assert property (@(posedge clk) (a ##1 b) [*2147483647] |-> b)
+  else $error("FAIL");
+
 endmodule
