@@ -1484,9 +1484,11 @@ class WidthVisitor final : public VNVisitor {
                 && !(nodep->fromBracket() && VN_IS(basep, NodeDType))
                 && !m_paramsOnly  // Skip during parameter evaluation
                 && !inDeadModule && !inParameterizedTemplate && !inTypeTable) {
+                // Before the warning, as a too wide bound reports an error
+                const int left = nodep->leftConst();
+                const int right = nodep->rightConst();
                 nodep->v3warn(ASCRANGE, "Ascending bit range vector: left < right of bit range: ["
-                                            << nodep->leftConst() << ":" << nodep->rightConst()
-                                            << "]");
+                                            << left << ":" << right << "]");
             }
         }
     }
@@ -1503,7 +1505,7 @@ class WidthVisitor final : public VNVisitor {
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, PRELIM}.p());
             checkCvtUS(nodep->fromp(), false);
             iterateCheckSizedSelf(nodep, "Select LHS", nodep->fromp(), SELF, BOTH);
-            int width = nodep->widthConst();
+            const int width = nodep->widthConst();
             if (width <= 0) {
                 nodep->v3error("Width of bit extract must be positive (IEEE 1800-2023 11.5.1)");
                 nodep->dtypeSetBit();
@@ -1517,18 +1519,6 @@ class WidthVisitor final : public VNVisitor {
             const bool inParameterizedTemplate
                 = m_modep && (m_modep->dead() || m_modep->parameterizedTemplate());
 
-            if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() < nodep->lsbConst()) {
-                // Likely impossible given above width check
-                nodep->v3warn(E_UNSUPPORTED,
-                              "Unsupported: left < right of bit extract: "  // LCOV_EXCL_LINE
-                                  << nodep->msbConst() << "<" << nodep->lsbConst());
-                width = (nodep->lsbConst() - nodep->msbConst() + 1);
-                nodep->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED,
-                                               nodep->fromp()->isFourstateOrNoDtype());
-                nodep->widthConst(width);
-                pushDeletep(nodep->lsbp());
-                nodep->lsbp()->replaceWith(new AstConst{nodep->lsbp()->fileline(), 0});
-            }
             // We're extracting, so just make sure the expression is at least wide enough.
             if (nodep->fromp()->width() < width && !inParameterizedTemplate) {
                 // If it is not a lvalue, extend it
@@ -1585,7 +1575,16 @@ class WidthVisitor final : public VNVisitor {
             }
             if (VN_IS(nodep->fromp()->dtypep()->skipRefp(), PackArrayDType))
                 V3Const::constifyEdit(nodep->lsbp());
-            if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() > frommsb) {
+            // Bounds of a constant select, read before the range warnings, as reading a too wide
+            // index reports an error, and wider than int, as the index may be near its maximum
+            const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
+            const int64_t lsb = lsbConstp ? lsbConstp->toSInt() : 0;
+            const int64_t msb = lsb + width - 1;
+            if (lsbConstp && msb >= std::numeric_limits<int>::max()) {
+                nodep->v3warn(
+                    E_UNSUPPORTED,
+                    "Unsupported: Selection beyond the 32-bit index range: " << msb << ":" << lsb);
+            } else if (lsbConstp && msb > frommsb) {
                 // See also warning in V3Const
                 // We need to check here, because the widthCheckSized may silently
                 // add another SEL which will lose the out-of-range check
@@ -1600,14 +1599,13 @@ class WidthVisitor final : public VNVisitor {
                     const int indexDiv = nodep->widthConst() == elw ? elw : 1;
                     if (nodep->declRange().ranged()) {
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
-                                                    << (nodep->msbConst() / indexDiv) << ":"
-                                                    << (nodep->lsbConst() / indexDiv)
+                                                    << (msb / indexDiv) << ":" << (lsb / indexDiv)
                                                     << " outside " << (frommsb / indexDiv) << ":"
                                                     << (fromlsb / indexDiv));
                     } else {
                         nodep->v3warn(SELRANGE,
                                       "Selection "
-                                          << nodep->msbConst() << ":" << nodep->lsbConst()
+                                          << msb << ":" << lsb
                                           << " performed on an object without declared range");
                     }
                     UINFO(1, "    Related node: " << nodep);
@@ -1616,7 +1614,7 @@ class WidthVisitor final : public VNVisitor {
                 // because extending lvalue would lose write access.
                 if (!isWriteSelect) {
                     // Extend it
-                    const int extendTo = nodep->msbConst() + 1;
+                    const int extendTo = static_cast<int>(msb + 1);
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
                         extendTo, extendTo, nodep->fromp()->dtypep()->numeric(),
                         nodep->fromp()->dtypep()->isFourstate());
@@ -9451,6 +9449,7 @@ class WidthVisitor final : public VNVisitor {
         // leftmost element to the leftmost (most significant) slice
         if (conwidth == modwidth * elements * subElems) {
             if (rangep->ascending()) {
+                // V3Param already stopped on a bound too wide to read here
                 nodep->exprp()->v3warn(ASCRANGE, "Ascending instance range connecting to "
                                                  "vector: left < right of instance range: ["
                                                      << rangep->leftConst() << ":"
