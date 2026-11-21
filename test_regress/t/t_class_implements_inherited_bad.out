@@ -11,7 +11,7 @@
         t/t_class_implements_inherited_bad.v:10:29: ... Location of interface class's function
    10 |   pure virtual function int get_a();
       |                             ^~~~~
-%Error: t/t_class_implements_inherited_bad.v:18:1: Class 'from_abstract_cls' implements 'top_if' but missing inheritance conflict resolution for 'get_a' (IEEE 1800-2023 8.26.6.2)
+%Error: t/t_class_implements_inherited_bad.v:18:1: Class 'from_abstract_cls' implements 'top_if' but missing inheritance conflict resolution for 'get_a' (IEEE 1800-2023 8.26.6.1)
    18 | class from_abstract_cls extends abstract_cls implements top_if;
       | ^~~~~
         t/t_class_implements_inherited_bad.v:10:29: ... Location of interface class's function
