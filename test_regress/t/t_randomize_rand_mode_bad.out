@@ -26,7 +26,6 @@
    27 |     arr[0].rand_mode(0);
       |            ^~~~~~~~~
 %Error: t/t_randomize_rand_mode_bad.v:13:12: Cannot call 'rand_mode()' as a function on non-random variable
-                                           : ... note: In instance 't'
    13 |     return rand_mode();
       |            ^~~~~~~~~
 %Error: Exiting due to
