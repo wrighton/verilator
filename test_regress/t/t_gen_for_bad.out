@@ -1,0 +1,19 @@
+%Error: t/t_gen_for_bad.v:12:3: Unrolling generate loop took too long; probably this is an infinite loop, otherwise set '--unroll-limit' above 16384
+                              : ... note: In instance 't'
+   12 |   for (genvar i = 0; i < 2; i = i) begin : g_nonterm
+      |   ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_gen_for_bad.v:16:3: Loop unrolling failed
+                              : ... note: In instance 't'
+   16 |   for (genvar i = 0; i < 2; i = i + v) begin : g_nonconst   
+      |   ^~~
+%Error-UNSUPPORTED: t/t_gen_for_bad.v:16:3: Unsupported: Can't unroll generate for; Unable to unroll loop
+                                          : ... note: In instance 't'
+   16 |   for (genvar i = 0; i < 2; i = i + v) begin : g_nonconst   
+      |   ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_gen_for_bad.v:16:3: For loop doesn't have genvar index, or is malformed
+                              : ... note: In instance 't'
+   16 |   for (genvar i = 0; i < 2; i = i + v) begin : g_nonconst   
+      |   ^~~
+%Error: Exiting due to
