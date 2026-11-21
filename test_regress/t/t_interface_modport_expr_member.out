@@ -1,0 +1,47 @@
+%Error-UNSUPPORTED: t/t_interface_modport_expr_member.v:33:21: Unsupported: Modport expression with member select (IEEE 1800-2023 25.5.4)
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                     ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_interface_modport_expr_member.v:33:21: Modport item not found: 'ix'
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                     ^~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error-UNSUPPORTED: t/t_interface_modport_expr_member.v:33:37: Unsupported: Modport expression with member select (IEEE 1800-2023 25.5.4)
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                                     ^~
+%Error: t/t_interface_modport_expr_member.v:33:37: Modport item not found: 'ia'
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                                     ^~
+%Error-UNSUPPORTED: t/t_interface_modport_expr_member.v:33:56: Unsupported: Modport expression with member select (IEEE 1800-2023 25.5.4)
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                                                        ^~
+%Error: t/t_interface_modport_expr_member.v:33:56: Modport item not found: 'uw'
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                                                        ^~
+%Error-UNSUPPORTED: t/t_interface_modport_expr_member.v:33:73: Unsupported: Modport expression with member select (IEEE 1800-2023 25.5.4)
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                                                                         ^~
+%Error: t/t_interface_modport_expr_member.v:33:73: Modport item not found: 'ob'
+   33 |   modport mp(input .ix(s.x), input .ia(s.in.a), input .uw(u.w), output .ob(s.in.b));
+      |                                                                         ^~
+%Error: t/t_interface_modport_expr_member.v:42:17: Can't find definition of 'ix' in dotted variable/method: 'i.ix'
+   42 |   assign ox = i.ix;
+      |                 ^~
+        ... Known scopes under 'i': <no instances found>
+%Error: t/t_interface_modport_expr_member.v:43:17: Can't find definition of 'ia' in dotted variable/method: 'i.ia'
+   43 |   assign oa = i.ia;
+      |                 ^~
+        ... Known scopes under 'i': <no instances found>
+%Error: t/t_interface_modport_expr_member.v:44:17: Can't find definition of 'uw' in dotted variable/method: 'i.uw'
+   44 |   assign ow = i.uw;
+      |                 ^~
+        ... Known scopes under 'i': <no instances found>
+%Error: t/t_interface_modport_expr_member.v:45:19: Can't find definition of 'ix' in dotted variable/method: 'i.ix'
+   45 |   assign i.ob = i.ix[4:0] ^ 5'h15;
+      |                   ^~
+        ... Known scopes under 'i': <no instances found>
+%Error: t/t_interface_modport_expr_member.v:45:12: Can't find definition of 'ob' in dotted variable/method: 'i.ob'
+   45 |   assign i.ob = i.ix[4:0] ^ 5'h15;
+      |            ^~
+        ... Known scopes under 'i': <no instances found>
+%Error: Exiting due to
