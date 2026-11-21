@@ -23,6 +23,7 @@
 #include "V3Graph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <list>
 #include <vector>
 
@@ -40,7 +41,8 @@ class GraphAcycVertex final : public V3GraphVertex {
 protected:
     friend class GraphAcyc;
     V3ListLinks<GraphAcycVertex> m_links;  // List links to store instances of this class
-    uint32_t m_storedRank = 0;  // Rank held until commit to edge placement
+    uint32_t m_level = 0;  // Placement: level, not decreasing along uncutable edges
+    std::vector<V3GraphEdge*> m_levelIns;  // Placement: uncutable in-edges from the same level
     bool m_onWorkList = false;  // True if already on list of work to do
     bool m_deleted = false;  // True if deleted
 
@@ -110,6 +112,7 @@ class GraphAcyc final {
     //  m_breakGraph
     //    GraphEdge::user()     OrigEdgeList*   Old graph edges
     //    GraphVertex::user     bool            Detection of loops in simplifyDupIterate
+    //    GraphVertex::user     uint32_t        Search marks in placeLoop (m_placeStep values)
     // MEMBERS
     V3Graph* const m_origGraphp;  // Original graph
     V3Graph m_breakGraph;  // Graph with only breakable edges represented
@@ -117,7 +120,9 @@ class GraphAcyc final {
     std::vector<OrigEdgeList*> m_origEdgeDelp;  // List of deletions to do when done
     const V3EdgeFuncP
         m_origEdgeFuncp;  // Function that says we follow this edge (in original graph)
-    uint32_t m_placeStep = 0;  // Number that user() must be equal to to indicate processing
+    uint32_t m_placeStep = 0;  // Number that user() must be equal to to indicate visited
+    size_t m_placeLimit = 0;  // Placement: maximum edges in a backward search
+    std::vector<GraphAcycVertex*> m_placeVertices;  // Placement: vertices searched
 
     // METHODS
     void buildGraph(V3Graph* origGraphp);
@@ -132,7 +137,7 @@ class GraphAcyc final {
     void deleteMarked();
     void place();
     void placeTryEdge(V3GraphEdge* edgep);
-    bool placeIterate(GraphAcycVertex* vertexp, uint32_t currentRank);
+    bool placeLoop(GraphAcycVertex* fromp, GraphAcycVertex* topp);
 
     bool origFollowEdge(V3GraphEdge* edgep) {
         return (edgep->weight() && (m_origEdgeFuncp)(edgep));
@@ -433,13 +438,13 @@ void GraphAcyc::cutBackward(GraphAcycVertex* avertexp) {
 }
 
 void GraphAcyc::place() {
-    // Input is m_breakGraph with ranks already assigned on non-breakable edges
-
     // Make a list of all cutable edges in the graph
     int numEdges = 0;
+    size_t numAllEdges = 0;
     for (V3GraphVertex& vertex : m_breakGraph.vertices()) {
         for (V3GraphEdge& edge : vertex.outEdges()) {
             if (edge.weight() && edge.cutable()) ++numEdges;
+            ++numAllEdges;
         }
     }
     UINFO(4, "    Cutable edges = " << numEdges);
@@ -448,7 +453,12 @@ void GraphAcyc::place() {
     // Make the vector properly sized right off the bat -- faster than reallocating
     edges.reserve(numEdges + 1);
     for (V3GraphVertex& vertex : m_breakGraph.vertices()) {
-        vertex.user(0);  // Clear in prep of next step
+        GraphAcycVertex* const avertexp = static_cast<GraphAcycVertex*>(&vertex);
+        avertexp->user(0);  // Clear in prep of next step
+        avertexp->m_level = 1;
+        for (V3GraphEdge& edge : vertex.inEdges()) {
+            if (!edge.cutable()) avertexp->m_levelIns.push_back(&edge);
+        }
         for (V3GraphEdge& edge : vertex.outEdges()) {
             if (edge.weight() && edge.cutable()) edges.push_back(&edge);
         }
@@ -458,64 +468,85 @@ void GraphAcyc::place() {
     stable_sort(edges.begin(), edges.end(), GraphAcycEdgeCmp());
 
     // Process each edge in weighted order
-    m_placeStep = 10;
+    m_placeLimit = static_cast<size_t>(std::sqrt(numAllEdges));
     for (V3GraphEdge* edgep : edges) placeTryEdge(edgep);
 }
 
 void GraphAcyc::placeTryEdge(V3GraphEdge* edgep) {
     // Try to make this edge uncutable
-    m_placeStep++;
-    UINFO(8, "    PlaceEdge s" << m_placeStep << " w" << edgep->weight() << " " << edgep->fromp());
-    // Make the edge uncutable so we detect it in placement
-    edgep->cutable(false);
-    // Vertex::m_user begin: number indicates this edge was completed
-    // Try to assign ranks, presuming this edge is in place
-    // If we come across user()==placestep, we've detected a loop and must back out
-    const bool loop
-        = placeIterate(static_cast<GraphAcycVertex*>(edgep->top()), edgep->fromp()->rank() + 1);
-    if (!loop) {
+    UINFO(8, "    PlaceEdge w" << edgep->weight() << " " << edgep->fromp());
+    GraphAcycVertex* const fromp = static_cast<GraphAcycVertex*>(edgep->fromp());
+    GraphAcycVertex* const topp = static_cast<GraphAcycVertex*>(edgep->top());
+    if (fromp->m_level < topp->m_level || !placeLoop(fromp, topp)) {
         // No loop, we can keep it as uncutable
-        // Commit the new ranks we calculated
-        // Just cleanup the list.  If this is slow, we can add another set of
-        // user counters to avoid cleaning up the list.
-        while (workBeginp()) workPop();
+        edgep->cutable(false);
+        if (fromp->m_level == topp->m_level) topp->m_levelIns.push_back(edgep);
     } else {
         // Adding this edge would cause a loop, kill it
-        edgep->cutable(true);  // So graph still looks pretty
         cutOrigEdge(edgep, "  Cut loop");
         VL_DO_DANGLING(edgep->unlinkDelete(), edgep);
-        // Back out the ranks we calculated
-        while (GraphAcycVertex* vertexp = workBeginp()) {
-            workPop();
-            vertexp->rank(vertexp->m_storedRank);
-        }
     }
 }
 
-bool GraphAcyc::placeIterate(GraphAcycVertex* vertexp, uint32_t currentRank) {
-    // Assign rank to each unvisited node
-    //   rank() is the "committed rank" of the graph known without loops
-    // If larger rank is found, assign it and loop back through
-    // If we hit a back node make a list of all loops
-    if (vertexp->rank() >= currentRank) return false;  // Already processed it
-    if (vertexp->user() == m_placeStep) return true;  // Loop detected
-    vertexp->user(m_placeStep);
-    // Remember we're changing the rank of this node; might need to back out
-    if (!vertexp->m_onWorkList) {
-        vertexp->m_storedRank = vertexp->rank();
-        workPush(vertexp);
-    }
-    vertexp->rank(currentRank);
-    // Follow all edges and increase their ranks
-    for (V3GraphEdge& edge : vertexp->outEdges()) {
-        if (edge.weight() && !edge.cutable()) {
-            if (placeIterate(static_cast<GraphAcycVertex*>(edge.top()), currentRank + 1)) {
-                // We don't need to reset user(); we'll use a different placeStep for the next edge
-                return true;  // Loop detected
-            }
+bool GraphAcyc::placeLoop(GraphAcycVertex* fromp, GraphAcycVertex* topp) {
+    // Return true if uncutable edges lead from topp to fromp, else update levels for the edge
+    // This is the two-way search of Bender, Fineman, Gilbert and Tarjan, "A New Approach to
+    // Incremental Cycle Detection and Related Problems" (ACM TALG, 2016), O(E^1.5) time for
+    // the kept edges. A cut edge raises nothing, so its forward search is O(E) at worst.
+    // A path from topp to fromp only goes through levels from topp's to fromp's.
+    // First search backward from fromp through its own level, at most m_placeLimit edges. If
+    // that search completes, it found every vertex of that level reaching fromp, and topp is
+    // not one of them, so topp's level becomes fromp's. Else topp's level becomes one more.
+    // Then raise the vertices after topp below that level to it, unless one of the vertices
+    // after topp was found to reach fromp, which means a loop.
+    if (fromp == topp) return true;
+    const uint32_t level = fromp->m_level;
+    const uint32_t reachStep = ++m_placeStep;  // user() of vertices known to reach fromp
+    fromp->user(reachStep);
+    m_placeVertices.clear();
+    m_placeVertices.push_back(fromp);
+    size_t searched = 0;
+    for (size_t i = 0; i < m_placeVertices.size() && searched < m_placeLimit; ++i) {
+        for (V3GraphEdge* const edgep : m_placeVertices[i]->m_levelIns) {
+            GraphAcycVertex* const vertexp = static_cast<GraphAcycVertex*>(edgep->fromp());
+            if (vertexp == topp) return true;
+            if (++searched == m_placeLimit) break;
+            if (vertexp->user() == reachStep) continue;
+            vertexp->user(reachStep);
+            m_placeVertices.push_back(vertexp);
         }
     }
-    vertexp->user(0);
+    uint32_t newLevel = level;
+    if (searched == m_placeLimit) {
+        newLevel = level + 1;
+    } else if (topp->m_level == level) {
+        return false;
+    }
+    const uint32_t raiseStep = ++m_placeStep;  // user() of vertices to raise
+    topp->user(raiseStep);
+    m_placeVertices.clear();
+    m_placeVertices.push_back(topp);
+    for (size_t i = 0; i < m_placeVertices.size(); ++i) {
+        for (V3GraphEdge& edge : m_placeVertices[i]->outEdges()) {
+            if (edge.cutable()) continue;
+            GraphAcycVertex* const vertexp = static_cast<GraphAcycVertex*>(edge.top());
+            if (vertexp->user() == reachStep) return true;
+            if (vertexp->user() == raiseStep || vertexp->m_level >= newLevel) continue;
+            vertexp->user(raiseStep);
+            m_placeVertices.push_back(vertexp);
+        }
+    }
+    for (GraphAcycVertex* const vertexp : m_placeVertices) {
+        vertexp->m_level = newLevel;
+        vertexp->m_levelIns.clear();
+    }
+    for (GraphAcycVertex* const vertexp : m_placeVertices) {
+        for (V3GraphEdge& edge : vertexp->outEdges()) {
+            if (edge.cutable()) continue;
+            GraphAcycVertex* const toVertexp = static_cast<GraphAcycVertex*>(edge.top());
+            if (toVertexp->m_level == newLevel) toVertexp->m_levelIns.push_back(&edge);
+        }
+    }
     return false;
 }
 
@@ -541,10 +572,6 @@ void GraphAcyc::main() {
     UINFO(4, " Cutting trivial loops");
     simplify(true);
     if (dumpGraphLevel() >= 6) m_breakGraph.dumpDotFilePrefixed("acyc_mid");
-
-    UINFO(4, " Ranking");
-    m_breakGraph.rank(&V3GraphEdge::followNotCutable);
-    if (dumpGraphLevel() >= 6) m_breakGraph.dumpDotFilePrefixed("acyc_rank");
 
     UINFO(4, " Placement");
     place();
