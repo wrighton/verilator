@@ -30,7 +30,10 @@ endclass
 
 class Sub;
   rand bit [4:0] x;
+  // Also an element constraint on a member object, when cloned into Item
+  /* verilator lint_off CONSTRAINTIGN */
   constraint c_x {x != 5'd3;}
+  /* verilator lint_on CONSTRAINTIGN */
 endclass
 
 class Item extends ItemBase;
@@ -52,8 +55,10 @@ class Item extends ItemBase;
   }
   // Not solved with the container's constraints: the array and the object are not
   // variables of its solver
+  /* verilator lint_off CONSTRAINTIGN */
   constraint c_arr {foreach (arr[i]) arr[i] < 4'd3;}
   constraint c_sub {s.x < 5'd4;}
+  /* verilator lint_on CONSTRAINTIGN */
   function new();
     s = new;
     for (int i = 1; i < 128; i += 2) odds.push_back(7'(i));
