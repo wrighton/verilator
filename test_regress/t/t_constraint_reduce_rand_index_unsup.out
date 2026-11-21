@@ -1,0 +1,21 @@
+%Warning-CONSTRAINTIGN: t/t_constraint_reduce_rand_index_unsup.v:23:14: Unsupported: Array reduction constraint on array selected from a non-fixed-size array or by a random index, treating as state
+   23 |     m_d[m_b].sum() with (item) == 0;
+      |              ^~~
+                        ... For warning description see https://verilator.org/warn/CONSTRAINTIGN?v=latest
+                        ... Use "/* verilator lint_off CONSTRAINTIGN */" and lint_on around source to disable this message.
+%Warning-CONSTRAINTIGN: t/t_constraint_reduce_rand_index_unsup.v:24:14: Unsupported: Array reduction constraint on array selected from a non-fixed-size array or by a random index, treating as state
+   24 |     m_d[m_b].sum() == 0;
+      |              ^~~
+%Warning-CONSTRAINTIGN: t/t_constraint_reduce_rand_index_unsup.v:25:15: Unsupported: Array reduction constraint on array selected from a non-fixed-size array or by a random index, treating as state
+   25 |     m_dd[m_b].sum() with (item) == 0;
+      |               ^~~
+%Warning-CONSTRAINTIGN: t/t_constraint_reduce_rand_index_unsup.v:26:13: Unsupported: Array reduction constraint on array selected from a non-fixed-size array or by a random index, treating as state
+   26 |     m_dd[1].sum() with (item) == 0;
+      |             ^~~
+%Warning-CONSTRAINTIGN: t/t_constraint_reduce_rand_index_unsup.v:27:13: Unsupported: Array reduction constraint on array selected from a non-fixed-size array or by a random index, treating as state
+   27 |     m_ad[1].sum() with (item) == 0;
+      |             ^~~
+%Warning-CONSTRAINTIGN: t/t_constraint_reduce_rand_index_unsup.v:28:12: Unsupported: Array reduction constraint on array selected from a non-fixed-size array or by a random index, treating as state
+   28 |     m_q[1].sum() with (item) == 0;
+      |            ^~~
+%Error: Exiting due to
