@@ -69,4 +69,8 @@
                                                 : ... note: In instance 't'
    32 |     Foo::get().foo[0-:1<<20] = 0;   
       |                   ^
+%Warning-SELRANGE: t/t_mem_multi_ref_bad.v:32:19: Selection index out of range: 0:-1048575 outside 10:0
+                                                : ... note: In instance 't'
+   32 |     Foo::get().foo[0-:1<<20] = 0;   
+      |                   ^
 %Error: Exiting due to
