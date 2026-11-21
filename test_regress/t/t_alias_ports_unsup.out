@@ -1,10 +1,18 @@
-%Error-UNSUPPORTED: t/t_alias_ports_unsup.v:38:9: Unsupported: Port as alias argument: 'a'
+%Error-UNSUPPORTED: t/t_alias_ports_unsup.v:42:9: Unsupported: Port as alias argument: 'a'
                                                 : ... note: In instance 't.s'
-   38 |   alias a = b;
+   42 |   alias a = b;
       |         ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_alias_ports_unsup.v:38:13: Unsupported: Port as alias argument: 'b'
+%Error-UNSUPPORTED: t/t_alias_ports_unsup.v:42:13: Unsupported: Port as alias argument: 'b'
                                                  : ... note: In instance 't.s'
-   38 |   alias a = b;
+   42 |   alias a = b;
+      |             ^
+%Error-UNSUPPORTED: t/t_alias_ports_unsup.v:43:9: Unsupported: Port as alias argument: 'c'
+                                                : ... note: In instance 't.s'
+   43 |   alias c = d;
+      |         ^
+%Error-UNSUPPORTED: t/t_alias_ports_unsup.v:43:13: Unsupported: Port as alias argument: 'd'
+                                                 : ... note: In instance 't.s'
+   43 |   alias c = d;
       |             ^
 %Error: Exiting due to
