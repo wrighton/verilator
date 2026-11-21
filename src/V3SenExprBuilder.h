@@ -392,10 +392,10 @@ public:
             break;
         default: return nullptr;
         }
-        termp = wrapExprWithNullCheck(
-            flp, termp, hasNullableMemberAccess(senp) ? getBaseNullableRef(senp) : nullptr);
+        termp = wrapExprWithNullCheck(flp, termp, senp);
         if (AstNodeExpr* const condp = senItemp->condp()) {
-            termp = new AstAnd{flp, condp->cloneTreePure(false), termp};
+            termp = new AstAnd{flp, wrapExprWithNullCheck(flp, condp->cloneTreePure(false), condp),
+                               termp};
         }
         return termp;
     }

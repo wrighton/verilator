@@ -1271,7 +1271,7 @@ class LinkParseVisitor final : public VNVisitor {
         // ')' (IEEE 1800-2023 16.12), clocks the property as if not parenthesized
         if (!nodep->sensesp()) {
             if (AstSClocked* const clockedp = VN_CAST(nodep->propp(), SClocked)) {
-                nodep->sensesp(clockedp->sensesp()->unlinkFrBackWithNext());
+                nodep->addSensesp(clockedp->sensesp()->unlinkFrBackWithNext());
                 clockedp->replaceWith(clockedp->exprp()->unlinkFrBack());
                 VL_DO_DANGLING(pushDeletep(clockedp), clockedp);
             }

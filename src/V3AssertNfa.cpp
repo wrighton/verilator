@@ -356,12 +356,7 @@ class SvaNfaBuilder final {
     // Unsupported endpoint topology must reject, not ignore, or the wait hangs
     bool m_isSeqEvent = false;
     bool m_inSequencePrefix = false;  // Prefix composition does not preserve every endpoint
-    bool m_inAntecedent = false;  // Building an implication antecedent, which does not reject
     bool m_wantBoolLeaf = false;  // Building a |-> / |=> or top-level body (see buildOrMerge)
-    bool m_inAntecedent = false;  // Building an implication antecedent, which cannot fail
-    // Building the consequent of an antecedent with a zero-minimum repetition, whose empty
-    // match is not filtered (see buildImplicationEdges)
-    bool m_inEmptyMatchConsequent = false;
     bool m_isDeclarative = false;  // Directive outside any procedure
     // Building an implication antecedent, which cannot fail, and every match of which counts
     bool m_inAntecedent = false;
@@ -2376,7 +2371,7 @@ public:
     }
 
     SvaNfaBuilder(SvaGraph& graph, AstNodeModule* modp, V3UniqueNames& propTempNames,
-                  bool isCoverSeq = false, bool isSeqEvent = false, bool isCover = false,
+                  bool isCoverSeq = false, bool isSeqEvent = false, bool noEosFailure = false,
                   bool isNegated = false, bool trackVacuous = false, bool isDeclarative = false)
         : m_graph{graph}
         , m_modp{modp}
@@ -2385,8 +2380,8 @@ public:
         , m_isNegated{isNegated}
         , m_isCoverSeq{isCoverSeq}
         , m_isSeqEvent{isSeqEvent}
-        , m_trackVacuous{trackVacuous}
-        , m_isDeclarative{isDeclarative} {}
+        , m_isDeclarative{isDeclarative}
+        , m_trackVacuous{trackVacuous} {}
 
     // Reset scope between antecedent and consequent: liveness must not leak.
     // m_outerAbortStack survives: an abort wrapping the implication covers the
@@ -2632,7 +2627,7 @@ public:
         // A variable-length 'within' is supported as the whole sequence of a declarative cover
         // property, where each attempt is reported once, see buildVarLenWithin
         AstSWithin* const withinp = VN_CAST(exprp, SWithin);
-        if (withinp && m_isCover && m_isDeclarative && !m_isCoverSeq && !m_isSeqEvent
+        if (withinp && m_noEosFailure && m_isDeclarative && !m_isCoverSeq && !m_isSeqEvent
             && !m_isNegated) {
             const BuildResult result = buildVarLenWithin(withinp, m_graph.m_startVertexp);
             if (result.valid() || result.errorEmitted) return result;
@@ -3452,13 +3447,13 @@ class SvaNfaLowering final {
         // Phase 3a: required-step rejection.
         // Builder only sets m_rejectOnFail on non-clocked Links with m_condp
         // or m_condVtxp, and the source always has a resolved stateSig.
-        std::vector<AstNodeExpr*> failps;  // Terms of requiredStepRejectp
         // A thread or an attempt failing several checks on one tick, such as its next step and
         // a throughout guard, or both operands of an 'and', fails once. So count the rejections
         // of sources with one fixed offset once, and of other sources once per vertex.
         const std::vector<int> offsets
             = needThreadFailCount || needRejectCount ? vertexOffsets(c.graph) : std::vector<int>{};
         std::map<int, AstNodeExpr*> failps;  // By failKey
+        std::vector<AstNodeExpr*> rejectps;  // Terms of requiredStepRejectp
         for (const SvaTransEdge* const tedgep : c.graph.allEdges()) {
             if (!tedgep->m_rejectOnFail) continue;
             const SvaStateVertex* const fromVtxp = tedgep->fromVtxp();
@@ -3480,9 +3475,9 @@ class SvaNfaLowering final {
                 AstNodeExpr*& keyFailp = failps[failKey(offsets, fromVtxp)];
                 keyFailp = orExprs(c.flp, keyFailp, rawFailp->cloneTreePure(false));
             }
-            failps.push_back(gateNotKill(c, rawFailp));
+            rejectps.push_back(gateNotKill(c, rawFailp));
         }
-        sigs.requiredStepRejectp = newOrTree(c.flp, failps.cbegin(), failps.cend());
+        sigs.requiredStepRejectp = newOrTree(c.flp, rejectps.cbegin(), rejectps.cend());
 
         computeThroughoutReject(c, sigs, needRejectCount, offsets, failps);
         for (const auto& it : failps) {
@@ -4774,6 +4769,18 @@ public:
 // Top-level visitor
 
 class AssertNfaVisitor final : public VNVisitor {
+    // True if exprStmtp is a match item
+    static bool isMatchItem(const AstExprStmt* exprStmtp) {
+        // V3Width also creates an ExprStmt assigning a temporary, e.g. for 'inside' with an
+        // impure left-hand side
+        const AstVarRef* const lhsRefp
+            = VN_CAST(VN_AS(exprStmtp->stmtsp(), Assign)->lhsp(), VarRef);
+        return !lhsRefp || lhsRefp->varp()->varType() != VVarType::XTEMP;
+    }
+    // True if nodep contains a match item
+    static bool hasMatchItem(const AstNode* nodep) {
+        return nodep->exists([](const AstExprStmt* exprStmtp) { return isMatchItem(exprStmtp); });
+    }
     // STATE
     AstNodeModule* m_modp = nullptr;  // Current module being processed
     AstClocking* m_defaultClockingp = nullptr;  // Default clocking
