@@ -170,10 +170,13 @@ public:
             callable.second->foreach([this, callable](AstNodeExpr* const nodep) {
                 if (AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
                     // Only persistent interface storage is observable through a VIF read.
+                    // Random generator state has no value a read can observe.
                     UASSERT_OBJ(refp->varScopep(), refp, "No var scope");
                     AstVar* const varp = refp->varp();
+                    const AstBasicDType* const basicp = varp->basicp();
                     if (!refp->access().isWriteOrRW() || varp->isFuncLocal() || varp->isTemp()
-                        || varp->isEvent() || !VN_IS(refp->varScopep()->scopep()->modp(), Iface)) {
+                        || varp->isEvent() || (basicp && basicp->isStdRandomGenerator())
+                        || !VN_IS(refp->varScopep()->scopep()->modp(), Iface)) {
                         return;
                     }
                     varp->sensIfacep(callable.first);
