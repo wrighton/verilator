@@ -1424,7 +1424,10 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     }
 
     // Reseeded from outside, so everything cached came from the old seed.
-    if (m_ug2.rngReseeds != rngr.reseeds()) m_ug2 = Unigen2State{};
+    if (m_ug2.rngReseeds != rngr.reseeds()) {
+        m_ug2 = Unigen2State{};
+        m_phaseSampleStats.clear();
+    }
 
     // Fix the function arguments solved in earlier rounds (IEEE 1800-2023 18.5.11)
     for (const FuncArgRound& argRound : m_funcArgRounds) {
@@ -2848,41 +2851,81 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
     std::iostream& os = sess.os();
     std::map<std::string, std::string> solvedValues;  // varName -> SMT value literal
     const char* const logicp = phasedLogic();
+    // The final phase also solves the variables outside every solve...before pair
+    std::vector<std::string> finalVars = layers.back();
+    if (!solverSamples()) {
+        std::unordered_set<std::string> layered;
+        for (const std::vector<std::string>& layer : layers)
+            layered.insert(layer.begin(), layer.end());
+        for (const auto& var : m_vars) {
+            if (!layered.count(var.first)) finalVars.push_back(var.first);
+        }
+    }
+    // A phase whose variables are all scalars is sampled from a base kept from the previous
+    // phase (see sampleLayer). A phase with an array, a phase sampling took nothing for, and
+    // the phase after a phase that kept no base build a fresh base as before.
+    bool keepBase = false;
+    bool rebuild = false;  // Sampling took no assignment, so solve this phase afresh
 
-    for (size_t phase = 0; phase < layers.size(); phase++) {
+    size_t phase = 0;
+    while (true) {
         const bool isFinalPhase = (phase == layers.size() - 1);
-
-        os << "(set-option :produce-models true)\n";
-        if (solverSamples()) {
-            emitSolverSeed(os, rngr);
-        } else if (isFinalPhase) {
-            os << "(set-option :produce-unsat-assumptions true)\n";
+        const std::vector<std::string>& phaseVars = isFinalPhase ? finalVars : layers[phase];
+        // The solver sampler seeds each phase, so it always rebuilds
+        const bool sampled = !solverSamples() && !rebuild && !layerHasArray(phaseVars)
+                             && sampleWorthwhile(phaseVars);
+        if (keepBase && !sampled) {
+            os << "(reset)\n";
+            keepBase = false;
         }
-        os << "(set-logic " << logicp << ")\n";
-        emitDefines(os);
-        emitDeclares(os, false);
+        // A kept base with the previous layer's sampled pins has a model by construction
+        const bool reused = keepBase;
 
-        for (const auto& entry : solvedValues) {
-            os << "(assert (= " << entry.first << " " << entry.second << "))\n";
+        if (!keepBase) {
+            os << "(set-option :produce-models true)\n";
+            if (solverSamples()) {
+                emitSolverSeed(os, rngr);
+            } else if (isFinalPhase) {
+                os << "(set-option :produce-unsat-assumptions true)\n";
+            }
+            os << "(set-logic " << logicp << ")\n";
+            emitDefines(os);
+            emitDeclares(os, false);
+
+            for (const auto& entry : solvedValues) {
+                os << "(assert (= " << entry.first << " " << entry.second << "))\n";
+            }
+            emitAsserts(os, uniqueExprs, false);
+
+            // Randc: exclude previously used values
+            emitRandcExclusions(os);
+
+            // Soft constraints participate in every phase, priority-ordered. A relaxation
+            // that succeeded settled every check, so the kept selection stays maximal under
+            // this phase's pins.
+            if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
+            keepBase = sampled;
         }
-        emitAsserts(os, uniqueExprs, false);
-
-        // Randc: exclude previously used values
-        emitRandcExclusions(os);
-
-        // Soft constraints participate in every phase, priority-ordered.
-        if (relaxSoftConstraints(sess) != VlSolverStatus::SAT) return false;
 
         // Initial check-sat WITHOUT diversity (guaranteed sat if constraints are consistent)
-        os << "(check-sat)\n";
-        const VlSolverStatus status = sess.readStatus();
-        if (status != VlSolverStatus::SAT) {
-            // Only exhausted randc values are worth a retry; a lost solver is not
-            if (status == VlSolverStatus::UNSAT) exhaustedr = !m_randcUsedValues.empty();
-            return false;
+        if (!reused) {
+            os << "(check-sat)\n";
+            const VlSolverStatus status = sess.readStatus();
+            if (status != VlSolverStatus::SAT) {
+                // Only exhausted randc values are worth a retry; a lost solver is not
+                if (status == VlSolverStatus::UNSAT) exhaustedr = !m_randcUsedValues.empty();
+                return false;
+            }
         }
 
-        if (isFinalPhase) {
+        std::map<std::string, std::string> layerValues;
+        if (keepBase) {
+            const VlSolverStatus status
+                = sampleLayer(sess, rngr, phaseVars, isFinalPhase ? nullptr : &layerValues);
+            rebuild = status == VlSolverStatus::UNSAT || status == VlSolverStatus::UNKNOWN;
+            if (rebuild) continue;
+            if (status != VlSolverStatus::SAT) return false;
+        } else if (isFinalPhase) {
             if (!applyModel(sess)) return false;
             if (!solverSamples()) {
                 std::set<std::string> fixed;  // Variables of the earlier layers
@@ -2890,15 +2933,97 @@ bool VlRandomizer::solvePhases(VlRNG& rngr, VlSolverSession& sess,
                     fixed.insert(layers[i].begin(), layers[i].end());
                 solveDiversity(rngr, sess, &fixed);
             }
-            // Record solved randc values for future exclusion
-            recordRandcValues();
-        } else {
-            if (!solvePhaseValues(sess, rngr, layers[phase], solvedValues)) return false;
-            os << "(reset)\n";
+        } else if (!solvePhaseValues(sess, rngr, layers[phase], layerValues)) {
+            return false;
         }
+        rebuild = false;
+        if (isFinalPhase) break;
+
+        for (const auto& entry : layerValues) {
+            if (keepBase) os << "(assert (= " << entry.first << " " << entry.second << "))\n";
+            solvedValues.emplace(entry);
+        }
+        if (!keepBase) os << "(reset)\n";
+        ++phase;
     }
 
+    // Record solved randc values for future exclusion
+    recordRandcValues();
     return true;
+}
+
+bool VlRandomizer::layerHasArray(const std::vector<std::string>& layerVars) const {
+    for (const std::string& name : layerVars) {
+        if (m_vars.find(name)->second->dimension() > 0) return true;
+    }
+    return false;
+}
+
+// Sampling a phase pays up to phaseSampleTries solver checks before a rebuild, so once a
+// phase has had that many trials, it is rebuilt directly while they were satisfiable less
+// than once per phaseSampleTries. As the constraints can change between calls, such a phase
+// is sampled again after phaseSampleRetry calls without trials, and the counts are halved
+// whenever they reach phaseSampleWindow trials, so that recent trials weigh the most. The counts
+// restart with a reseed, so a result still depends only on the object's random state.
+bool VlRandomizer::sampleWorthwhile(const std::vector<std::string>& phaseVars) {
+    PhaseSampleStats& stats = m_phaseSampleStats[phaseVars.front()];
+    if (stats.tries < phaseSampleTries || stats.accepts * phaseSampleTries >= stats.tries) {
+        return true;
+    }
+    if (++stats.skips <= phaseSampleRetry) return false;
+    stats = PhaseSampleStats{};
+    return true;
+}
+
+// Sample a phase's scalars from the kept base, in scopes that leave the base unchanged.
+// A solver started fresh for each phase varies its model with the pins, but a kept solver
+// returns models near its last one, so the variation must come from the constraints sent.
+// Up to phaseSampleTries uniformly random assignments of the variables are tried; given
+// that one is satisfiable, the first such is uniform over the feasible assignments
+// (rejection sampling). An intermediate phase takes the assignment into valuesp; the final
+// phase writes the model to the variables. Returns SAT when an assignment was taken, UNSAT
+// or UNKNOWN when none was, and FAIL when a reply was unusable.
+VlSolverStatus VlRandomizer::sampleLayer(VlSolverSession& sess, VlRNG& rngr,
+                                         const std::vector<std::string>& phaseVars,
+                                         std::map<std::string, std::string>* const valuesp)
+    VL_REQUIRES(sess.m_mutex) {
+    std::iostream& os = sess.os();
+    PhaseSampleStats& stats = m_phaseSampleStats[phaseVars.front()];
+    std::vector<std::string> trial(phaseVars.size());
+    std::vector<IData> words;
+    for (int i = 0; i < phaseSampleTries; ++i) {
+        os << "(push 1)\n";
+        for (size_t v = 0; v < phaseVars.size(); ++v) {
+            const int width = m_vars.find(phaseVars[v])->second->width();
+            words.resize(VL_WORDS_I(width));
+            for (IData& word : words) word = VL_RANDOM_RNG_I(rngr);
+            std::string& literal = trial[v];
+            literal.reserve(width + 2);
+            literal = "#b";
+            for (int b = width - 1; b >= 0; --b) {
+                literal += VL_BITISSET_I(words[VL_BITWORD_I(b)], b) ? '1' : '0';
+            }
+            os << "(assert (= " << phaseVars[v] << ' ' << literal << "))\n";
+        }
+        os << "(check-sat)\n";
+        VlSolverStatus status = sess.readStatus();
+        if (++stats.tries == phaseSampleWindow) {
+            stats.tries /= 2;
+            stats.accepts /= 2;
+        }
+        if (status == VlSolverStatus::SAT) {
+            ++stats.accepts;
+            if (!valuesp && !applyModel(sess)) status = VlSolverStatus::FAIL;
+        }
+        os << "(pop 1)\n";
+        if (status != VlSolverStatus::UNSAT) {
+            if (status == VlSolverStatus::SAT && valuesp) {
+                for (size_t v = 0; v < phaseVars.size(); ++v) (*valuesp)[phaseVars[v]] = trial[v];
+            }
+            return status;
+        }
+    }
+    return VlSolverStatus::UNSAT;
 }
 
 // Intermediate phase: extract this layer's values, then optionally try one diversity round
