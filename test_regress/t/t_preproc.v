@@ -792,3 +792,13 @@ EXP: ja32 p q
 // coverage on -item s is not either
 // two words coverage off is not either
 // coverage
+
+// Escaped define name, white space then formal arguments
+`define \M@CRO3 (a=5, b=0, c="C") $display(a,,b,,c);
+EXP: $display(1,,0,,"C");
+`\M@CRO3 ( 1 )
+EXP: $display(5,,0,,"C");
+`\M@CRO3 ( )
+`define \NOFORMALS  (a)
+EXP: (a)
+`\NOFORMALS
