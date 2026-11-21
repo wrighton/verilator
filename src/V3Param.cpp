@@ -3590,8 +3590,10 @@ public:
     // properly widthed before any module that references those types.
     using WQKey = std::pair<bool, int>;
     std::multimap<WQKey, AstNodeModule*> m_workQueueNext;  // Modules left to process
-    // Map from AstNodeModule to set of all AstNodeModules that instantiates it.
-    std::unordered_map<AstNodeModule*, std::unordered_set<AstNodeModule*>> m_parentps;
+    // Map from module to the modules that instantiate it, in the order found (may repeat).
+    // Ordered, not a pointer set, so where fixLevel() breaks a cycle of parameterized classes
+    // does not depend on memory layout.
+    std::unordered_map<AstNodeModule*, std::vector<AstNodeModule*>> m_parentps;
 };
 
 //######################################################################
@@ -3758,7 +3760,7 @@ class ParamVisitor final : public VNVisitor {
                                       newModp);
 
                     // Add to the hierarchy registry
-                    m_state.m_parentps[newModp].insert(modp);
+                    m_state.m_parentps[newModp].push_back(modp);
 
                     // Eagerly specialize nested iface cells, even when the parent uses defaults,
                     // so their types have correct widths before sibling module cells run.
