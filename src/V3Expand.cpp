@@ -864,44 +864,50 @@ class ExpandVisitor final : public VNVisitor {
             AstNodeExpr* const destp = lhsp->fromp()->unlinkFrBack();
             const int lsb = lhsp->lsbConst();
             const int msb = lhsp->msbConst();
-            V3Number maskset{nodep, destp->widthMin()};
-            maskset.setMask(msb + 1 - lsb, lsb);
-            V3Number maskold{nodep, destp->widthMin()};
-            maskold.opNot(maskset);
             if (destwide) {
+                UASSERT_OBJ(lsb >= 0, nodep, "Negative destination bit range");
                 didPattern(VExpandPattern::ASSIGN_TO_SEL_CONST_WIDE, nodep);
-                for (int w = 0; w < destp->widthWords(); ++w) {
-                    if (w >= VL_BITWORD_E(lsb) && w <= VL_BITWORD_E(msb)) {
-                        // else we would just be setting it to the same exact value
-                        AstNodeExpr* oldvalp = newAstWordSelClone(destp, w);
-                        fixCloneLvalue(oldvalp);
-                        if (!ones) {
-                            oldvalp = new AstAnd{
-                                lfl,
-                                new AstConst{lfl, AstConst::SizedEData{}, maskold.edataWord(w)},
-                                oldvalp};
-                        }
-
-                        // Appropriate word of new value to insert:
-                        AstNodeExpr* newp = newWordGrabShift(lfl, w, rhsp, lsb);
-
-                        // Apply cleaning at the top word of the destination
-                        // (no cleaning to do if dst's width is a whole number
-                        // of words).
-                        if (w == destp->widthWords() - 1 && VL_BITBIT_E(destp->widthMin()) != 0) {
-                            V3Number cleanmask{nodep, VL_EDATASIZE};
-                            cleanmask.setMask(VL_BITBIT_E(destp->widthMin()));
-                            newp = new AstAnd{lfl, newp, new AstConst{lfl, cleanmask}};
-                        }
-                        AstNodeExpr* const orp
-                            = V3Const::constifyEditCpp(new AstOr{lfl, oldvalp, newp});
-                        addWordAssign(nodep, w, destp, orp);
+                // Only the words holding selected bits change, so build masks for those words only
+                const int lastWord = std::min(VL_BITWORD_E(msb), destp->widthWords() - 1);
+                for (int w = VL_BITWORD_E(lsb); w <= lastWord; ++w) {
+                    AstNodeExpr* oldvalp = newAstWordSelClone(destp, w);
+                    fixCloneLvalue(oldvalp);
+                    if (!ones) {
+                        // Keep the bits of the destination outside the select
+                        const int wordLsb = w * VL_EDATASIZE;
+                        const int selLsb = std::max(lsb - wordLsb, 0);
+                        const int selMsb = std::min(msb - wordLsb, VL_EDATASIZE - 1);
+                        const uint32_t selMask = VL_MASK_E(selMsb + 1 - selLsb) << selLsb;
+                        const int destBits = std::min(destp->widthMin() - wordLsb, VL_EDATASIZE);
+                        const uint32_t keepMask = VL_MASK_E(destBits) & ~selMask;
+                        V3Global::opCountInc();  // Built one word of mask
+                        oldvalp = new AstAnd{
+                            lfl, new AstConst{lfl, AstConst::SizedEData{}, keepMask}, oldvalp};
                     }
+
+                    // Appropriate word of new value to insert:
+                    AstNodeExpr* newp = newWordGrabShift(lfl, w, rhsp, lsb);
+
+                    // Apply cleaning at the top word of the destination
+                    // (no cleaning to do if dst's width is a whole number
+                    // of words).
+                    if (w == destp->widthWords() - 1 && VL_BITBIT_E(destp->widthMin()) != 0) {
+                        V3Number cleanmask{nodep, VL_EDATASIZE};
+                        cleanmask.setMask(VL_BITBIT_E(destp->widthMin()));
+                        newp = new AstAnd{lfl, newp, new AstConst{lfl, cleanmask}};
+                    }
+                    AstNodeExpr* const orp
+                        = V3Const::constifyEditCpp(new AstOr{lfl, oldvalp, newp});
+                    addWordAssign(nodep, w, destp, orp);
                 }
                 VL_DO_DANGLING(rhsp->deleteTree(), rhsp);
                 VL_DO_DANGLING(destp->deleteTree(), destp);
             } else {
                 didPattern(VExpandPattern::ASSIGN_TO_SEL_CONST_NARROW, nodep);
+                V3Number maskset{nodep, destp->widthMin()};
+                maskset.setMask(msb + 1 - lsb, lsb);
+                V3Number maskold{nodep, destp->widthMin()};
+                maskold.opNot(maskset);
                 if (destp->isQuad() && !rhsp->isQuad()) rhsp = new AstCCast{nfl, rhsp, nodep};
                 AstNodeExpr* oldvalp = destp->cloneTreePure(true);
                 fixCloneLvalue(oldvalp);
