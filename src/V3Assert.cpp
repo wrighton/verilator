@@ -168,7 +168,7 @@ void V3AssertCommon::checkSvaCycleDelay(AstDelay* nodep, AstNode* errp) {
     }
 }
 
-void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) {
+void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp, bool emptyOk) {
     // The counts must be valid elaboration-time constants.
     V3Const::constifyParamsEdit(nodep->countp());
     const AstConst* const minConstp = VN_CAST(nodep->countp(), Const);
@@ -178,7 +178,7 @@ void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) {
     } else if (minConstp->toSInt() < 0) {
         errp->v3error("Consecutive repetition count must be non-negative"
                       " (IEEE 1800-2023 16.9.2)");
-    } else if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1) {
+    } else if (!nodep->unbounded() && !nodep->maxCountp() && minConstp->toSInt() < 1 && !emptyOk) {
         errp->v3warn(E_UNSUPPORTED, "Unsupported: [*0] consecutive repetition");
     }
     if (!nodep->maxCountp()) return;
@@ -190,7 +190,7 @@ void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp) {
     } else if (minConstp && maxConstp->toSInt() < minConstp->toSInt()) {
         errp->v3error("Consecutive repetition max count must be >= min count"
                       " (IEEE 1800-2023 16.9.2)");
-    } else if (maxConstp->toSInt() < 1) {
+    } else if (maxConstp->toSInt() < 1 && !emptyOk) {
         errp->v3warn(E_UNSUPPORTED, "Unsupported: [*N:0] consecutive repetition"
                                     " with zero max count");
     }
