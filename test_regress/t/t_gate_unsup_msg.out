@@ -1,0 +1,29 @@
+%Error-UNSUPPORTED: t/t_gate_unsup.v:13:9: Unsupported: Verilog 1995 gate primitive: rcmos
+   13 |   rcmos (rc0, d, nc, pc);
+      |         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_gate_unsup.v:17:9: Unsupported: Verilog 1995 gate primitive: rnmos
+   17 |   rnmos (rn0, d, en);
+      |         ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:18:9: Unsupported: Verilog 1995 gate primitive: rpmos
+   18 |   rpmos (rp0, d, en);
+      |         ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:20:9: Unsupported: Verilog 1995 gate primitive: rtran
+   20 |   rtran (rt0, d);
+      |         ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:21:8: Unsupported: Verilog 1995 gate primitive: tran
+   21 |   tran (tr0, d);
+      |        ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:23:12: Unsupported: Verilog 1995 gate primitive: rtranif0
+   23 |   rtranif0 (r00, d, en);
+      |            ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:24:12: Unsupported: Verilog 1995 gate primitive: rtranif1
+   24 |   rtranif1 (r10, d, en);
+      |            ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:25:11: Unsupported: Verilog 1995 gate primitive: tranif0
+   25 |   tranif0 (t00, d, en);
+      |           ^
+%Error-UNSUPPORTED: t/t_gate_unsup.v:26:11: Unsupported: Verilog 1995 gate primitive: tranif1
+   26 |   tranif1 (t10, d, en);
+      |           ^
+%Error: Exiting due to
