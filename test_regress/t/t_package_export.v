@@ -108,3 +108,17 @@ module t;
     $finish;
   end
 endmodule
+
+// IEEE 1800-2023 26.6: Explicitly importing a name a package imports requires its export
+package pkg60;
+  import pkg40::PARAM3;
+  import pkg50::PARAM2;
+  parameter PARAM1 = PARAM2 + PARAM3 - 24;
+endpackage
+`ifdef T_PACKAGE_EXPORT_BAD
+package pkg61;
+  import pkg1::BAD_DOES_NOT_EXIST;
+  import pkg20::PARAM2;
+  import pkg41::PARAM3;
+endpackage
+`endif
