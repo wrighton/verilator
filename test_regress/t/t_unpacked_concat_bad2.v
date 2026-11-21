@@ -27,6 +27,10 @@ module t;
       string sq[$];
       s1 = {sq};  // Queue of other elements
     end
+    begin
+      logic [31:0] lq[$];
+      A9_logic = {lq, A3};  // Array of other elements, with a queue of the elements
+    end
     $write("*-* All Finished *-*\n");
     $finish;
   end
