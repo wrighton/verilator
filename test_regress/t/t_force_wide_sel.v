@@ -56,4 +56,26 @@ module t (
       $finish;
     end
   end
+
+  // Forced from its own bits, and read through a select while its source changes
+  logic [7:0] selfNarrow = 8'h5a;
+  logic [6:0] chain = 7'h0;
+  logic [99:0] cnt = '0;
+  logic [99:0] cntSig;
+  logic [7:0] cntSel;
+  always_comb cntSel = cntSig[57:50];
+  always @(posedge clk) begin
+    cnt <= cnt + (100'h1 << 50);
+    if (cyc == 1) begin
+      force selfNarrow[0] = selfNarrow[1];
+      force cntSig = cnt;
+      force chain[0] = chain[1];
+      force chain[1] = cnt[50];
+    end
+    else if (cyc > 1) begin
+      `checkh(selfNarrow, 8'h5b);
+      `checkh(cntSel, cnt[57:50]);
+      `checkh(chain[1:0], {2{cnt[50]}});
+    end
+  end
 endmodule

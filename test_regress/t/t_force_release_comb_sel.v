@@ -28,7 +28,40 @@ module t;
   end
   // verilator lint_on IEEEMAYDEPRECATE
 
+  // Releases of disjoint ranges, each reading back only the bits it releases
+  logic [95:0] many;
+  logic [95:0] manysrc = 96'h0;
+  logic [7:0] manyrd;
+  assign manyrd = many[23:16];
   initial begin
+    for (int i = 0; i < 12; ++i) begin
+      case (i)
+        0: force many[7:0] = manysrc[7:0];
+        1: force many[15:8] = manysrc[15:8];
+        2: force many[23:16] = manysrc[23:16];
+        default: ;
+      endcase
+    end
+    manysrc = 96'h00_0000_0000_0000_00ab_cdef;
+    #1;
+    `checkh(manyrd, 8'hab);
+    release many[23:16];
+    many[23:16] = 8'h5a;
+    #1;
+    `checkh(manyrd, 8'h5a);
+  end
+
+  // A combinational release of a variable whose force reads that variable
+  logic [62:0] selfsrc = 63'h0;
+  logic selfen = 0;
+  wire [62:0] selfw;
+  assign selfw = selfsrc;
+  // verilator lint_off LATCH
+  always @* if (selfen && selfw[0]) release selfw[0];
+  // verilator lint_on LATCH
+
+  initial begin
+    force selfw = selfw | 63'd1;
     w = '0;
     a = '0;
     #1 en = 1;
@@ -36,6 +69,15 @@ module t;
     #1;
     `checkh(w[47:40], 8'h5a);
     `checkh(a[47:40], 8'h5a);
+    `checkh(selfw, 63'h1);
+    selfsrc = 63'h2;
+    #1;
+    // Forcing the whole variable hides its continuous driver
+    `checkh(selfw, 63'h1);
+    selfen = 1;
+    #1;
+    // Bit 0 released, so it follows the continuous driver again
+    `checkh(selfw, 63'h0);
     $write("*-* All Finished *-*\n");
     $finish;
   end
