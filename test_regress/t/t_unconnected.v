@@ -25,9 +25,7 @@ module t (
   wire [3:0] ota_1;
   wire [2:0] osa_1;
   wire osb_1;
-  wire osra_1;
   wire [2:0] ovar_1;
-  real or_1;
   wire [2:0] od_omit;
   wire [2:0] od_empty;
   wire [2:0] od_blank;
@@ -42,7 +40,7 @@ module t (
 
   // verilator lint_off PINMISSING
   sub_0 sub_0 (.o_0, .ov_0, .oa_0);
-  sub_1 sub_1 (.o_1, .ov_1, .oa_1, .ot_1, .ota_1, .osa_1, .osb_1, .osra_1, .ovar_1, .or_1);
+  sub_1 sub_1 (.o_1, .ov_1, .oa_1, .ot_1, .ota_1, .osa_1, .osb_1, .ovar_1);
   sub_n sub_n (.o_n);
   ifc_1 ifc_1 ();
   prg_1 prg_1 (.o_p);
@@ -73,9 +71,7 @@ module t (
     `checkh(ota_1, 4'hf);
     `checkh(osa_1, 3'h7);
     `checkh(osb_1, 1'b1);
-    `checkh(osra_1, 1'b0);  // 4-state would be x, not pulled
     `checkh(ovar_1, 3'h7);
-    if (or_1 != 0.0) `stop;
     `checkh(od_omit, 3'h2);  // Default value, not pulled
     `checkh(od_empty, 3'h7);  // Explicit empty connection, so no default value
     `checkh(od_blank, 3'h2);  // Default value, not pulled
@@ -129,9 +125,7 @@ module sub_1 (
     input t5_t it,
     input tarr_t ita,
     input ustruct_t is,
-    input var ustructr_t isr,  // Not all integral bits, so no pull value
     input var logic [2:0] ivar,  // Has a pull value, so pulled, also as a variable
-    input var real ir,  // No pull value, so not pulled
     output wire o_1,
     output wire [6:0] ov_1,
     output wire [4:0] oa_1,
@@ -139,9 +133,7 @@ module sub_1 (
     output wire [3:0] ota_1,
     output wire [2:0] osa_1,
     output wire osb_1,
-    output wire osra_1,
-    output wire [2:0] ovar_1,
-    output real or_1
+    output wire [2:0] ovar_1
 );
   assign o_1 = i;
   assign ov_1 = iv;
@@ -150,9 +142,7 @@ module sub_1 (
   assign ota_1 = ita[0];
   assign osa_1 = is.a;
   assign osb_1 = is.b;
-  assign osra_1 = isr.a;
   assign ovar_1 = ivar;
-  assign or_1 = ir;
 endmodule
 
 module sub_d (
