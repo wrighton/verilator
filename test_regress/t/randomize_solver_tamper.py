@@ -189,8 +189,8 @@ once = os.environ.get("TAMPER_ONCE", "")
 
 # Modes acting on the TAMPER_AT'th status line rather than the Nth model reply
 STATUS_MODES = ("close_stdin_at", "die_status_at", "err_extra", "err_marker", "err_multiline",
-                "err_mute", "err_once", "err_trunc", "err_unbal", "err_unbal_cont", "garbage_status",
-                "unknown_once", "unknown_twice", "unsupported_once")
+                "err_mute", "err_once", "err_trunc", "err_unbal", "err_unbal_cont",
+                "garbage_status", "unknown_once", "unknown_twice", "unsupported_once")
 # Modes acting on the TAMPER_AT'th S-expression reply of any kind
 REPLY_MODES = ("err_reply", )
 # Modes acting on an array model reply, which arrives as (select ...) terms
