@@ -229,6 +229,41 @@ void OrderMTaskGraph::initCriticalPaths() {
     UASSERT(nVisited == vertices().size(), "MTask graph is cyclic");
 }
 
+template <GraphWay::en N_Way>
+void OrderMTaskGraph::updateCriticalPaths() {
+    constexpr GraphWay way{N_Way};
+    constexpr GraphWay inv = way.invert();
+    // Visit the MTasks in topological order of the given direction, so the critical paths of
+    // all MTasks unwayward of an MTask are final when it is visited. Adding edges only lengthens
+    // critical paths, so the edge heap keys only need increasing to the final ones.
+    GraphStreamUnordered stream{this, way};
+    while (const V3GraphVertex* const vtxp = stream.nextp()) {
+        LogicMTask* const mtaskp = const_cast<LogicMTask*>(vtxp->as<LogicMTask>());
+        mtaskp->cpExclusive<N_Way>(mtaskp->cpExclusiveFromEdges<N_Way>());
+        const uint64_t inclusiveCp = mtaskp->cpInclusive<way>();
+        for (V3GraphEdge& graphEdge : mtaskp->edges<way>()) {
+            MTaskEdge& edge = static_cast<MTaskEdge&>(graphEdge);
+            EdgeHeap::Node& edgeHeapNode = edge.m_edgeHeapNode[inv];
+            if (inclusiveCp > edgeHeapNode.key().m_cp) {
+                edge.furtherMTaskp<N_Way>()->m_edgeHeap[inv].increaseKey(&edgeHeapNode,
+                                                                         inclusiveCp);
+            }
+        }
+    }
+}
+
+void OrderMTaskGraph::addEdges(const std::vector<std::pair<LogicMTask*, LogicMTask*>>& edges) {
+    for (const std::pair<LogicMTask*, LogicMTask*>& edge : edges) {
+        UASSERT_OBJ(edge.first != edge.second, edge.first, "Should not create self-edges");
+        UDEBUGONLY(UASSERT_OBJ(!edge.first->hasEdgeTo(edge.second), edge.first,
+                               "Should not create redundant edges"););
+        new MTaskEdge{this, edge.first, edge.second};
+    }
+    updateCriticalPaths<GraphWay::FORWARD>();
+    updateCriticalPaths<GraphWay::REVERSE>();
+    validate();
+}
+
 void OrderMTaskGraph::mergeMTasks(LogicMTask* recipientp, LogicMTask* donorp) {
     UASSERT_OBJ(recipientp != donorp, recipientp, "Should not merge an MTask with itself");
     UASSERT_OBJ(recipientp->canMergeWith(donorp), recipientp, "Merging different fixed threads");
