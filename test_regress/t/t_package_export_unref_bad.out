@@ -1,0 +1,17 @@
+%Error: t/t_package_export_unref_bad.v:71:3: Reference to 'w_t' through the wildcard export of package 'p2', but 'p2' does not reference it, so does not export it (IEEE 1800-2023 26.6)
+   71 |   w_t bad_v;   
+      |   ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_package_export_unref_bad.v:74:21: Reference to 'UNREF' through the wildcard export of package 'p2', but 'p2' does not reference it, so does not export it (IEEE 1800-2023 26.6)
+   74 |     $display("%0d", UNREF);   
+      |                     ^~~~~
+%Error: t/t_package_export_unref_bad.v:82:21: Reference to 'W' through the wildcard export of package 'p3', but 'p3' does not reference it, so does not export it (IEEE 1800-2023 26.6)
+   82 |     $display("%0d", W);   
+      |                     ^
+%Error: t/t_package_export_unref_bad.v:90:21: Reference to 'UNREF' through the wildcard export of package 'p4', but 'p4' does not reference it, so does not export it (IEEE 1800-2023 26.6)
+   90 |     $display("%0d", UNREF);   
+      |                     ^~~~~
+%Error: t/t_package_export_unref_bad.v:107:3: Reference to 'w_t' through the wildcard export of package 'p2', but 'p2' does not reference it, so does not export it (IEEE 1800-2023 26.6)
+  107 |   w_t bad_v;   
+      |   ^~~
+%Error: Exiting due to
