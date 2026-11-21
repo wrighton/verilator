@@ -278,7 +278,7 @@ class RandcStateChange;
   endfunction
 endclass
 
-// Test: Per-element randc history for equal-size domains (IEEE 1800-2023 18.4)
+// Test 9: Per-element randc history for equal-size domains (IEEE 1800-2023 18.4)
 class RandcArray;
   randc bit [7:0] pair[2];  // Disjoint domains of the same size
   randc bit [1:0] fixed[3:1];  // Elements constrained equal

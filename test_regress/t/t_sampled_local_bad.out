@@ -39,4 +39,8 @@
                                      : ... note: In instance 't'
    27 |     (a, t = b) |=> $rising_gclk(t) || $falling_gclk(t) || $steady_gclk(t) || $future_gclk(t);   
       |                                                                                           ^
+%Error: t/t_sampled_local_bad.v:33:26: Sampled value function argument references local variable 't' (IEEE 1800-2023 16.9.3)
+                                     : ... note: In instance 't'
+   33 |     (a, t = b) ##1 $past(t);   
+      |                          ^
 %Error: Exiting due to

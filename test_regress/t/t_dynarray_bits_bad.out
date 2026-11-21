@@ -11,7 +11,7 @@
                                     : ... note: In instance 't'
    15 |     v = {<<queue_t{v}};
       |         ^
-%Error: t/t_dynarray_bits_bad.v:15:10: Slice size cannot be zero.
+%Error: t/t_dynarray_bits_bad.v:15:10: Slice size must be a positive 32-bit value (IEEE 1800-2023 11.4.14.2): '32'h0'
                                      : ... note: In instance 't'
    15 |     v = {<<queue_t{v}};
       |          ^~

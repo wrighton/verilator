@@ -32,7 +32,9 @@ module t (
   wire cond3 = &crc[2:0];
 
   reg shuf_q[63:0];
-  reg shuf_g[63:0];
+  // shuf_g: one unwritten element retains the original shared-flag lowering
+  // so the motion/no-motion comparison keeps exercising the same merging fixture.
+  reg shuf_g[64:0];
   wire shuf_w[63:0];
 
   always @(posedge clk) begin

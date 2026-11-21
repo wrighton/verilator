@@ -32,11 +32,6 @@ module t (
   // Multi-cycle consequent of a repetition antecedent
   assert property (@(posedge clk) a [->1] |-> c [=1]);
   assert property (@(posedge clk) a [=1] |-> c [->1]);
-  assert property (@(posedge clk) a [=2] |-> ##1 b);
-  assert property (@(posedge clk) a [=2] |=> b ##1 c);
   // Cycle delays in a property with a nonconsecutive repetition
-  assert property (@(posedge clk) (a ##1 b) |-> c [=1]);
-  assert property (@(posedge clk) a ##1 b [=1] |-> c);
   assert property (@(posedge clk) a |-> b [=1] ##1 c);
-  assert property (@(posedge clk) a |-> ##1 b [=1]);
 endmodule

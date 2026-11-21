@@ -8,7 +8,7 @@
    16 |     output chandle b[2]   
       |                    ^
 %Error: t/t_var_chandle_bad.v:10:19: Chandle type not legal on port (IEEE 1800-2023 6.14): 'i'
-                                   : ... note: In instance 't'
+                                   : ... note: In instance 't.ifc'
    10 |     input chandle i   
       |                   ^
 %Error: t/t_var_chandle_bad.v:36:12: Continuous assignment not legal to chandle type (IEEE 1800-2023 6.14)

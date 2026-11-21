@@ -74,12 +74,11 @@ module t (
     return n;
   endfunction
 
-  // An implication runs the fail action once per tick, so count the ticks with a failure
+  // Each failing attempt runs the fail action (IEEE 1800-2023 16.14.1)
   int fail_range_dense = 0;
   assert property (@(posedge clk) dd |-> ##2 (f throughout ##[0:2] (f && g)))
   else fail_range_dense++;
   function automatic int refRangeDense();
-    bit failed[CYCLES + 8];
     int n = 0;
     for (int s = 0; s < CYCLES; s++) begin
       automatic int failAt = s + 4;
@@ -93,9 +92,8 @@ module t (
           break;
         end
       end
-      if (ddh[s] && failAt >= 0) failed[failAt] = 1;
+      n += int'(ddh[s] && failAt >= 0);
     end
-    foreach (failed[t]) n += int'(failed[t]);
     return n;
   endfunction
 
@@ -103,14 +101,12 @@ module t (
   assert property (@(posedge clk) dd |-> ##3 (f throughout (1'b1 ##2 g)))
   else fail_fixed_dense++;
   function automatic int refFixedDense();
-    bit failed[CYCLES + 8];
     int n = 0;
     for (int s = 0; s < CYCLES; s++) begin
       automatic int failAt = gh[s+5] ? -1 : s + 5;
       for (int k = 2; k >= 0; k--) if (!fh[s+3+k]) failAt = s + 3 + k;
-      if (ddh[s] && failAt >= 0) failed[failAt] = 1;
+      n += int'(ddh[s] && failAt >= 0);
     end
-    foreach (failed[t]) n += int'(failed[t]);
     return n;
   endfunction
 

@@ -491,6 +491,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         int selBitCount = 0;  // Number of bits set in selBits
         bool cellOutput = false;  // Written by a cell's port connection, so may carry a z the
                                   // cell's module did not recognise as tristate
+        bool elemZ = false;  // An element or member procedurally written with z, stored as x
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -738,9 +739,10 @@ class TristateVisitor final : public TristateBaseVisitor {
     bool mayBeZ(const AstNodeVarRef* refp) {
         // A port or a cross-hierarchy reference may carry a z from another module, which this
         // module's graph does not show, and an undriven net is z.
-        const AstVar* const varp = refp->varp();
+        // An element or member written with z reads back two-state, see visitAssign.
+        AstVar* const varp = refp->varp();
         return VN_IS(refp, VarXRef) || varp->isIO() || m_tgraph.isTristate(varp)
-               || (varp->isNet() && !m_tgraph.isDriven(varp));
+               || (varp->isNet() && !m_tgraph.isDriven(varp)) || m_varAux(varp).elemZ;
     }
     AstNodeExpr* getEnExprBasedOnOriginalp(AstNodeExpr* const nodep) {
         if (AstVarRef* const varrefp = VN_CAST(nodep, VarRef)) {
@@ -1188,7 +1190,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         std::vector<size_t> nextBins;  // Per bit, one past the last bin with a driver of it
 
         for (DriverGroup& driver : drivers) {
-            AstSel* const selp = driver.m_procedurep ? nullptr : sharedSelp(driver.m_refsp[0]);
+            AstSel* const selp
+                = driver.m_procedurep || ifacep ? nullptr : sharedSelp(driver.m_refsp[0]);
             if (selp && nextBins.empty()) nextBins.resize(varp->width());
             const size_t binIndex = selp ? selDriverBin(nextBins, selp) : 0;
             if (selp && binIndex == bins.size()) bins.emplace_back();
@@ -2446,6 +2449,11 @@ class TristateVisitor final : public TristateBaseVisitor {
                     || VN_IS(lhsBasep, WildcardSel) || VN_IS(lhsBasep, CMethodHard)
                     || VN_IS(lhsBasep, StructSel) || VN_IS(lhsBasep, MemberRef))
                 && nodep->rhsp()->exists(writesZ)) {
+                for (const AstNode* basep = lhsBasep; basep; basep = basep->op1p()) {
+                    if (const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef)) {
+                        m_varAux(refp->varp()).elemZ = true;  // Its base variable
+                    }
+                }
                 return;
             }
             if (nodep->user2() & U2_GRAPHING) return;

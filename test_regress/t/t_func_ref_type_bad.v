@@ -10,6 +10,10 @@ task automatic set_real(ref real r);
   r = 1.0;
 endtask
 
+task automatic set_str(ref string o);
+  o = "ab";
+endtask
+
 function automatic string get_str(const ref string s);
   return s;
 endfunction
@@ -21,5 +25,6 @@ module t;
     set_real(l);  // Bad
     set_real(i);  // Bad
     void'(get_str(i));  // Bad
+    set_str(i);  // Bad
   end
 endmodule

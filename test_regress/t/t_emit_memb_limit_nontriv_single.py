@@ -16,5 +16,5 @@ test.top_filename = "t/t_emit_memb_limit_nontriv.v"
 test.compile(
     verilator_flags2=["--comp-limit-members", "1", "--vpi", "--output-split-cfuncs", "16"])
 test.execute()
-test.file_grep_count(test.obj_dir + "/" + test.vm_prefix + "___024root.h", r'\} __Vg\d+;', 42)
+test.file_grep_count(test.obj_dir + "/" + test.vm_prefix + "___024root.h", r'\} __Vg\d+;', 49)
 test.passes()

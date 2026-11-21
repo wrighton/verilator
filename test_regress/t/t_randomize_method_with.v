@@ -84,7 +84,10 @@ class Baz2;
     return this.randomize() with { v == 5; } == 1;
   endfunction
   function bit test_randomize_noparen;
-    return this.randomize with { v == 6; } == 1 && v == 6;
+    return randomize with { v == 6; } == 1 && v == 6;
+  endfunction
+  function bit test_this_randomize_noparen;
+    return this.randomize with { v == 7; } == 1 && v == 7;
   endfunction
 endclass
 
@@ -159,6 +162,19 @@ module mwith ();
     // verilator lint_on IGNOREDRETURN
     if (cls.b != 2) $stop;
 
+    // Check randomize without parentheses
+    if (cls.randomize with {b == 3;} != 1) $stop;
+    if (cls.b != 3) $stop;
+    if (cls.randomize with (b) {b == 4;} != 1) $stop;
+    if (cls.b != 4) $stop;
+    // verilator lint_off IGNOREDRETURN
+    cls.randomize with {b == 5;};
+    if (cls.b != 5) $stop;
+    cls.randomize with (b) {b == 6;};
+    // verilator lint_on IGNOREDRETURN
+    if (cls.b != 6) $stop;
+    if (!baz2.test_randomize_noparen()) $stop;
+
     // Check capture of a static variable
     if (foo.randomize() with {a > sub1.sub_var;} != 1) $stop;
     // Check reference to a function
@@ -197,6 +213,8 @@ module mwith ();
       void'(np.randomize with (b) {b == a + 4;});
       `checkd(np.b, 11);
       test_result = baz2.test_randomize_noparen();
+      `checkd(test_result, 1'b1);
+      test_result = baz2.test_this_randomize_noparen();
       `checkd(test_result, 1'b1);
     end
 

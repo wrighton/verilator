@@ -60,4 +60,5 @@
                                           : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
    49 |   assert property (a [* 2]);
       |   ^~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: Exiting due to

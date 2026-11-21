@@ -107,7 +107,7 @@ module t;
     endfunction
   endclass
 
-  // Test 4: members of a packed struct, and other parts of a variable, are ordered on
+  // Test 5: members of a packed struct, and other parts of a variable, are ordered on
   // their own. Solved together with kind, op is 0 in 128 of 131 solutions, ordered before
   // it in far fewer calls.
   typedef struct packed {
@@ -153,7 +153,7 @@ module t;
     }
   endclass
 
-  // Test 4, nested select: out of the range of pa2[0], pa2[0][j] with j = 7 does not select
+  // Test 5, nested select: out of the range of pa2[0], pa2[0][j] with j = 7 does not select
   // pa2[1][0], so is not ordered; with j = 6 it orders bit 6 before ny, before bit 7. Likewise
   // p3[0][i][0] with i = 3, out of the range of p3[0], does not select p3[1][0][0].
   class NestedSel;
@@ -174,7 +174,7 @@ module t;
     }
   endclass
 
-  // Test 5: a variable is solved after the predecessors of each of its parts, its other bits
+  // Test 6: a variable is solved after the predecessors of each of its parts, its other bits
   // as their own variable, as the solver log checked by the driver shows
   class MixedOrder;
     rand bit [6:0] mx;
@@ -195,7 +195,7 @@ module t;
   endclass
 
 `ifdef VERILATOR
-  // Test 6: a circular ordering, which IEEE 1800-2023 18.5.9 forbids: Verilator reports it and
+  // Test 7: a circular ordering, which IEEE 1800-2023 18.5.9 forbids: Verilator reports it and
   // fails randomize(). Also through overlapping parts, and an array and its element, which an
   // operand of the whole array is taken to contain.
   class Circular;
@@ -231,6 +231,23 @@ module t;
     }
   endclass
 `endif
+
+  // Elements solved before others share a phase with their whole array, which asks for every
+  // element, so each element is asked for once
+  class ElemAndWhole;
+    rand bit [3:0] a;
+    rand bit [2:0] eq[4];
+    rand bit [2:0] eb[4];
+
+    constraint c_order {
+      solve a before eq;
+      foreach (eq[i]) {
+        solve eq[i] before eb[i];
+        eb[i] != eq[i];
+        eq[i] != a[2:0];
+      }
+    }
+  endclass
 
   initial begin
     Packet p;
@@ -279,18 +296,6 @@ module t;
       `checkd(ok, 1);
     end
 
-    // Test: std::randomize calls ordering the same arguments both ways (issue #8882)
-    begin
-      bit [6:0] x;
-      bit [6:0] y;
-      randomize_result = std::randomize(x, y) with { solve x before y; x < y; };
-      `checkd(randomize_result, 1);
-      `checkd(x < y, 1);
-      randomize_result = std::randomize(x, y) with { solve y before x; x < y; };
-      `checkd(randomize_result, 1);
-      `checkd(x < y, 1);
-    end
-
     // Test 4: Nested member objects; without the ordering s is rarely 1
     begin
       automatic Req req = new;
@@ -319,7 +324,7 @@ module t;
       `check_range(top2_count, 60, 140);
     end
 
-    // Test 4: Packed struct members and parts of packed variables
+    // Test 5: Packed struct members and parts of packed variables
     begin
       automatic PackedPart pp = new;
       automatic int n_cfg = 0;
@@ -355,7 +360,7 @@ module t;
       end
     end
 
-    // Test 5: Mixed whole and part ordering
+    // Test 6: Mixed whole and part ordering
     begin
       automatic MixedOrder mo = new;
       repeat (20) begin
@@ -369,7 +374,7 @@ module t;
     end
 
 `ifdef VERILATOR
-    // Test 6: Circular ordering, a Verilator diagnostic
+    // Test 7: Circular ordering, a Verilator diagnostic
     begin
       automatic Circular c = new;
       automatic CircularPart cp = new;
@@ -386,6 +391,31 @@ module t;
       `checkd(randomize_result, 0);
     end
 `endif
+
+    // Test: Elements and their whole array in one phase
+    begin
+      automatic ElemAndWhole ew = new;
+      repeat (20) begin
+        randomize_result = ew.randomize();
+        `checkd(randomize_result, 1);
+        foreach (ew.eq[i]) begin
+          ok = (ew.eb[i] != ew.eq[i] && ew.eq[i] != ew.a[2:0]) ? 1 : 0;
+          `checkd(ok, 1);
+        end
+      end
+    end
+
+    // Test: std::randomize calls ordering the same arguments both ways (issue #8882)
+    begin
+      bit [6:0] x;
+      bit [6:0] y;
+      randomize_result = std::randomize(x, y) with { solve x before y; x < y; };
+      `checkd(randomize_result, 1);
+      `checkd(x < y, 1);
+      randomize_result = std::randomize(x, y) with { solve y before x; x < y; };
+      `checkd(randomize_result, 1);
+      `checkd(x < y, 1);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

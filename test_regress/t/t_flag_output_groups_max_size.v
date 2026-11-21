@@ -10,8 +10,8 @@ module t #(
 ) (
     input clk
 );
-  // One more element than written, so each NBA gets its own temporary variables, making the
-  // headers large
+  // Keep per-NBA temporaries: the header-splitting fixture must remain sparse enough
+  // that flag-array lowering does not remove the large generated member declarations.
   logic [63:0] r[N+1];
   logic [63:0] sum;
   int cyc = 0;

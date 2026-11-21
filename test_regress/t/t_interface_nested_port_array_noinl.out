@@ -1,5 +1,0 @@
-%Error: Internal Error: t/t_interface_nested_port_array.v:102:14: ../V3LinkDot.cpp:#: No symbol for interface alias rhs
-                                                                : ... note: In instance 't.m_l3.m_l2.m_l2a'
-  102 |       .l1(l2.l1[0]),
-      |              ^~
-                        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.

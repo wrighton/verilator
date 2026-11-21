@@ -3,7 +3,6 @@
       |                     ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_randomize_inline_var_ctl_bad.v:21:23: 'randomize()' argument must be a variable contained in 'f'
-                                                : ... note: In instance 't'
    21 |     void'(f.randomize(f));
       |                       ^
 %Error: t/t_randomize_inline_var_ctl_bad.v:32:44: 'randomize()' argument must be a variable contained in 'foo'

@@ -329,7 +329,8 @@ module t;
     cg15_inst.sample();
     `checkr(cg15_inst.get_inst_coverage(), 75.0);
 
-    // Hit cg16: 3 of 76 bins of cp, 2 of 13 of cps
+    // Hit cg16: 3 of 76 bins of cp, 2 of 13 of cps, 1 of 8 of cpr
+    rdata = 2.5;
     data = 148;
     sdata = -2;
     cg16_inst.sample();

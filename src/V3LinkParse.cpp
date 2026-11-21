@@ -1072,7 +1072,8 @@ class LinkParseVisitor final : public VNVisitor {
             m_genblkAbove = 0;
             m_genblkNum = 0;
             collectGenblkDeclNames(nodep->itemsp());
-            if (nodep->genforp()) collectGenblkDeclNames(nodep->genforp()->itemsp());
+            if (nodep->genforp())
+                collectGenblkDeclNames(nodep->genforp()->itemsp());
             iterateChildren(nodep);
         } else {
             iterateChildren(nodep);

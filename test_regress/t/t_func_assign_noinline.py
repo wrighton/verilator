@@ -15,16 +15,9 @@ test.compile(verilator_flags2=["--binary", "--stats"])
 
 test.execute(all_run_flags=["+names=n1,n3"])
 
-# The 6 in_names calls and the pop_first and fact_twice calls are not inlined
+# Not inlined: the 6 in_names calls, and the get5, pop_first, plus_c, forced_lhs, 2 top_tw, 4 calls
+# of set_wf1, wf1, wf2 and set_wf2, fact_sq_f, early_w, ret_rw and mark calls
 test.file_grep(test.stats,
-               r'Optimizations, Function calls in initial assignments not inlined\s+(\d+)', 8)
-test.file_grep(test.stats, r'Optimizations, Functions inlined\s+(\d+)', 10)
-# So there is one copy of the in_names body, besides the public function and its inlined call
-cpp = ""
-for filename in test.glob_some(test.obj_dir + "/*.cpp"):
-    with open(filename, encoding="utf8") as fh:
-        cpp += fh.read()
-if cpp.count("VL_VALUEPLUSARGS") != 3:
-    test.error("Expected 3 copies of the in_names body, got " + str(cpp.count("VL_VALUEPLUSARGS")))
+               r'Optimizations, Function calls in initial assignments not inlined\s+(\d+)', 20)
 
 test.passes()

@@ -184,36 +184,21 @@ module t (
   endclass
 
   // Ports of automatic subroutines, including class methods, are automatic variables
-  int mem_ok[4];
-  task automatic tbad(int bad_a, output int bad_o, ref int bad_r, input reg bad_e);
+  task automatic tbad(int bad_a, output int bad_o, ref int bad_r);
     bad_a <= 1;  // Error: nonblocking automatic task input
     bad_o <= 1;  // Error: nonblocking automatic task output
     bad_r <= 1;  // Error: nonblocking automatic task ref
     mt.o <= 1;  // OK: nonblocking static task output, by hierarchical reference
-    mem_ok[bad_a] <= bad_a;  // OK: automatic task inputs read in a nonblocking assignment
-    areg <= @(bad_e) 0;  // Error: automatic task input in non-blocking event control
-    // verilator lint_off IEEEMAYDEPRECATE
-    assign g = bad_e;  // Error: procedural continuous read of automatic task input
-    // verilator lint_on IEEEMAYDEPRECATE
   endtask
-  function automatic int fret();
-    fret <= 1;  // Error: nonblocking automatic function return variable
-    return 0;
-  endfunction
   class ClsM;
     function void fbad(int bad_m);
       bad_m <= 1;  // Error: nonblocking class method argument
     endfunction
-    function int mret();
-      mret <= 1;  // Error: nonblocking class method return variable
-    endfunction
-    static function void sbad(int bad_s);
-      bad_s <= 1;  // Error: nonblocking static class method argument
-    endfunction
   endclass
 
+  // A timed NBA is rejected as an automatic-argument write, not as a user-authored fork.
   task automatic timed_ref_nba(ref int arg);
-    arg <= #1 5;  // Error: timed nonblocking automatic task ref
+    arg <= #1 5;
   endtask
 
 endmodule

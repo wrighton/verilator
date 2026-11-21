@@ -34,8 +34,8 @@
 class EmitCParentModule final {
 public:
     struct MemberData final {
-        // Index of an explicitly constructed member, or of a nameable trivially constructible one
-        size_t index = 0;
+        size_t index = 0;  // Index of an explicitly constructed member, or of a nameable
+                           // trivially constructible member
         size_t count = 0;  // Number of explicitly constructed members in a module
         size_t trivialCount = 0;  // Number of nameable trivially constructible members in a module
     };

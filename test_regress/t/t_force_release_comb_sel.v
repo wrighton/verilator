@@ -9,7 +9,9 @@
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0x exp=%0x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
-// Release and deassign of a wide variable range in combinational logic
+// Release of a wide variable range, and deassign, in combinational logic.
+// Forcing a select of a variable is a Verilator extension (IEEE 1800-2023 10.6.2
+// allows only a net select); a procedural assign is to a whole variable (10.6.1).
 module t;
   logic [199:0] w;
   logic [199:0] a;
@@ -23,8 +25,8 @@ module t;
 
   // verilator lint_off IEEEMAYDEPRECATE
   always @* begin
-    if (en) assign a[47:40] = v;
-    else deassign a[47:40];
+    if (en) assign a = {152'b0, v, 40'b0};
+    else deassign a;
   end
   // verilator lint_on IEEEMAYDEPRECATE
 

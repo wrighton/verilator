@@ -93,6 +93,40 @@ class Cls4;
   endtask
 endclass
 
+class Cls4;
+  rand int x;
+  rand int_arr_t arr[];
+  task body();
+    int ok;
+    arr = new[2];
+    arr[1] = new[2];
+    arr[1][1] = 123;
+    repeat (40) begin
+      ok = randomize() with {x == arr[1][1];};
+      `checkd(ok, 1);
+      `checkd(x, arr[1][1]);
+    end
+  endtask
+endclass
+
+class Cls5;
+  rand int_arr_t arr[];
+  task body();
+    int ok;
+    arr = new[2];
+    arr[0] = new[2];
+    arr[1] = new[2];
+    arr[1][1] = 123;
+    repeat (40) begin
+      // Only the argument arr[0] is random; arr[1][1] is a state value
+      ok = std::randomize(arr[0]) with {arr[0][0] == arr[1][1];};
+      `checkd(ok, 1);
+      `checkd(arr[0][0], 123);
+      `checkd(arr[1][1], 123);
+    end
+  endtask
+endclass
+
 module t;
   Cls c;
   Cls2 c2;

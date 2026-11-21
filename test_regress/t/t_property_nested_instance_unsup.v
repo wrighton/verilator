@@ -11,6 +11,7 @@ module t (
 
   bit a = 0;
   bit b = 0;
+  bit c = 0;
 
   property q_clk;
     @(posedge clk) b;
@@ -31,6 +32,14 @@ module t (
   property q_loc;
     logic t;
     (b, t = a) |=> a == t;
+  endproperty
+
+  property q_arg(x);
+    x ##1 x;
+  endproperty
+
+  property q_chain(x);
+    q_arg(x);
   endproperty
 
   assert property (@(posedge clk) a |-> q_clk);
