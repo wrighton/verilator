@@ -255,6 +255,12 @@ module t;
   else begin : gi_f
     Tag #(201) inst ();
   end
+  // Class reference given parameters directly, not through a typedef
+  localparam int b6 = C#(6)::b;
+  localparam int w7 = $bits(C#(7)::inner_t);
+  if (b6 == 6 && w7 == 7) begin : gi_direct
+    Tag #(206) inst ();
+  end
   case (b5)
     3: begin : gc
       Tag #(303) inst ();
@@ -318,6 +324,7 @@ module t;
     `checkh(b8, 32'd8);
     `checkh(b13, 32'd13);
     `checkh(c8_ref, 32'd8);
+    `checkh(gi_direct.inst.ID, 32'd206);
     `checkh(d8_ref, 32'd9);
     // (1) interface pins took the deferred widths
     `checkh($bits(i_bare.data), 32'd8);
