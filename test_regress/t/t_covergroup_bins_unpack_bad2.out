@@ -15,10 +15,10 @@
                                                : ... note: In instance 't'
    23 |       bins real_value = (1.5);
       |                          ^~~
-%Error: t/t_covergroup_bins_unpack_bad2.v:24:27: Bin set expression must evaluate to a non-associative array, not 'string' (IEEE 1800-2023 19.5.1.2).
+%Error: t/t_covergroup_bins_unpack_bad2.v:24:33: Bin set expression must evaluate to a non-associative array, not 'string' (IEEE 1800-2023 19.5.1.2).
                                                : ... note: In instance 't'
    24 |       bins string_value = string'("one");
-      |                           ^~~~~~
+      |                                 ^
 %Error: t/t_covergroup_bins_unpack_bad2.v:25:40: Bin set expression must evaluate to a non-associative array, not 'bit' (IEEE 1800-2023 19.5.1.2).
                                                : ... note: In instance 't'
    25 |       wildcard bins wildcard_scalar = (1'b1);
