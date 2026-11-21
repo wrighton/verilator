@@ -103,7 +103,7 @@ module t (
       `checkd(count_p6, 21);  // Other sims: 16
       `checkd(count_p7, 15);  // Other sims: 9
       `checkd(count_p8, 15);  // Other sims: 4
-      `checkd(count_p9, 15);  // Other sims: 10
+      `checkd(count_p9, 10);
       `checkd(count_p10, 21);  // Other sims: 15
       $write("*-* All Finished *-*\n");
       $finish;
