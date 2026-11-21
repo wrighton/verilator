@@ -10,6 +10,7 @@
 // verilog_format: on
 
 int ended = 0;
+int ticks = 0;
 
 module t;
 
@@ -23,13 +24,16 @@ module t;
   p_delay #(.DELAY(10)) u_short ();
   p_delay #(.DELAY(37)) u_long ();
   p_zero u_zero ();
+  p_kill u_kill ();
   ifc u_ifc ();
 
   final begin
     // IEEE 1800-2023 24.7: implicit $finish when the last program initial ends
     `checkd($time, 37);
     `checkd(cyc, 4);
-    `checkd(ended, 5);
+    `checkd(ended, 7);
+    // Threads forked by p_kill were killed when its initial procedures ended at time 10
+    `checkd(ticks, 12);
     $write("*-* All Finished *-*\n");
   end
 
@@ -52,4 +56,32 @@ endinterface
 
 program p_zero;
   initial ++ended;
+endprogram
+
+// Descendant threads of a program's initial procedures are killed once they have all ended
+program p_kill;
+  task automatic spawn();
+    fork
+      begin
+        #1;
+        forever #2 ++ticks;
+      end
+    join_none
+  endtask
+  initial begin
+    fork
+      // A grandchild thread
+      fork
+        spawn();
+      join_none
+    join_none
+    // A child thread forked in a task
+    spawn();
+    #10 ++ended;
+  end
+  // Its thread keeps running after this initial procedure ends, until the other one ends
+  initial begin
+    spawn();
+    #2 ++ended;
+  end
 endprogram
