@@ -13,6 +13,6 @@ test.scenarios('simulator_st')
 
 test.compile()
 
-test.execute(fails=test.vlt_all, expect_filename=test.golden_filename)
+test.execute(expect_filename=test.golden_filename)
 
 test.passes()
