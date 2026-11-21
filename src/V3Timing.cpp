@@ -989,6 +989,29 @@ class TimingControlVisitor final : public VNVisitor {
     size_t m_statHandlePolledWaits = 0;  // Number of event controls on clocking events polled
 
     // METHODS
+    // Transform an assignment with an intra timing control into a timing control with the
+    // assignment under it
+    AstNodeStmt* factorOutTimingControl(AstNodeAssign* nodep) const {
+        AstNodeStmt* stmtp = nodep;
+        AstNode* const controlp = nodep->timingControlp();
+        if (AstDelay* const delayp = VN_CAST(controlp, Delay)) {
+            stmtp->replaceWith(delayp->unlinkFrBack());
+            delayp->addStmtsp(stmtp);
+            stmtp = delayp;
+        } else if (AstSenTree* const sentreep = VN_CAST(controlp, SenTree)) {
+            AstEventControl* const eventControlp
+                = new AstEventControl{sentreep->fileline(), sentreep->unlinkFrBack(), nullptr};
+            stmtp->replaceWith(eventControlp);
+            eventControlp->addStmtsp(stmtp);
+            stmtp = eventControlp;
+        } else if (AstEventControl* const eventControlp = VN_CAST(controlp, EventControl)) {
+            // Cycle delay from V3AssertPre
+            stmtp->replaceWith(eventControlp->unlinkFrBack());
+            eventControlp->addStmtsp(stmtp);
+            stmtp = eventControlp;
+        }
+        return stmtp == nodep ? nullptr : stmtp;
+    }
     static bool staticallyNonZeroDelay(const AstNodeExpr* valuep) {
         if (const AstConst* const constp = VN_CAST(valuep, Const)) return !constp->isZero();
         if (const AstCond* const condp = VN_CAST(valuep, Cond)) {
@@ -1857,7 +1880,7 @@ class TimingControlVisitor final : public VNVisitor {
         if (nodep->user1SetOnce()) return;
         UINFO(9, "control-visit " << nodep);
         FileLine* const flp = nodep->fileline();
-        AstNodeStmt* controlp = V3Timing::factorOutTimingControl(nodep);
+        AstNodeStmt* controlp = factorOutTimingControl(nodep);
         const bool inAssignDly = VN_IS(nodep, AssignDly);
         // Handle the intra assignment timing control
         if (!controlp) {
@@ -2326,28 +2349,6 @@ public:
 
 //######################################################################
 // Timing class functions
-
-AstNodeStmt* V3Timing::factorOutTimingControl(AstNodeAssign* nodep) {
-    AstNodeStmt* stmtp = nodep;
-    AstNode* const controlp = nodep->timingControlp();
-    if (AstDelay* const delayp = VN_CAST(controlp, Delay)) {
-        stmtp->replaceWith(delayp->unlinkFrBack());
-        delayp->addStmtsp(stmtp);
-        stmtp = delayp;
-    } else if (AstSenTree* const sentreep = VN_CAST(controlp, SenTree)) {
-        AstEventControl* const eventControlp
-            = new AstEventControl{sentreep->fileline(), sentreep->unlinkFrBack(), nullptr};
-        stmtp->replaceWith(eventControlp);
-        eventControlp->addStmtsp(stmtp);
-        stmtp = eventControlp;
-    } else if (AstEventControl* const eventControlp = VN_CAST(controlp, EventControl)) {
-        // Cycle delay from V3AssertPre
-        stmtp->replaceWith(eventControlp->unlinkFrBack());
-        eventControlp->addStmtsp(stmtp);
-        stmtp = eventControlp;
-    }
-    return stmtp == nodep ? nullptr : stmtp;
-}
 
 AstNodeExpr* V3Timing::delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) {
     FileLine* const flp = valuep->fileline();

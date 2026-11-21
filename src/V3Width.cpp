@@ -1534,12 +1534,11 @@ class WidthVisitor final : public VNVisitor {
                     UINFO(1, "    Related node: " << nodep);
                 }
             }
-            const bool lsbOutOfRange = lsbConstp && nodep->lsbConstOutOfRange(frommsb);
             if (lsbConstp && msb >= std::numeric_limits<int>::max()) {
                 nodep->v3warn(
                     E_UNSUPPORTED,
                     "Unsupported: Selection beyond the 32-bit index range: " << msb << ":" << lsb);
-            } else if (lsbOutOfRange) {
+            } else if (lsbConstp && msb > frommsb) {
                 // See also warning in V3Const
                 // We need to check here, because the widthCheckSized may silently
                 // add another SEL which will lose the out-of-range check
@@ -1551,23 +1550,21 @@ class WidthVisitor final : public VNVisitor {
                 if (m_doGenerate) {
                     UINFO(5, "Selection index out of range inside generate");
                 } else if (!inParameterizedTemplate) {
-                    const string msbStr = nodep->lsbConstStr(nodep->widthConst() - 1);
-                    const string lsbStr = nodep->lsbConstStr(0);
                     if (nodep->declRange().ranged()) {
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
-                                                    << msbStr << ":" << lsbStr << " outside "
-                                                    << frommsb << ":" << fromlsb);
+                                                    << msb << ":" << lsb << " outside " << frommsb
+                                                    << ":" << fromlsb);
                     } else {
                         nodep->v3warn(SELRANGE,
                                       "Selection "
-                                          << msbStr << ":" << lsbStr
+                                          << msb << ":" << lsb
                                           << " performed on an object without declared range");
                     }
                     UINFO(1, "    Related node: " << nodep);
                 }
-                // Extend unless it's a lvalue, because extending lvalue would lose write access,
-                // or the selection is below the vector
-                if (!isWriteSelect && lsb >= 0) {
+                // Extend unless it's a lvalue,
+                // because extending lvalue would lose write access.
+                if (!isWriteSelect) {
                     // Extend it
                     const int extendTo = static_cast<int>(msb + 1);
                     AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
@@ -1583,12 +1580,12 @@ class WidthVisitor final : public VNVisitor {
             // it down and mask it, so we have no chance of finding a real
             // error in the future. So don't do this for them.
             if (!m_doGenerate) {
-                // lsbp() must be self-determined. A wider index is truncated by V3Unknown after
-                // its bounds check, unless it is a constant in range.
-                if (nodep->lsbp()->width() < selwidth || (lsbConstp && !lsbOutOfRange)) {
-                    widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep,
-                                    EXTEND_EXP, false /*NOWARN*/);
-                }
+                // lsbp() must be self-determined, however for performance
+                // we want the select to be truncated to fit within the
+                // maximum select range, e.g. turn Xs outside of the select
+                // into something fast which pulls from within the array.
+                widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep, EXTEND_EXP,
+                                false /*NOWARN*/);
             }
             // UINFOTREE(9, nodep, "", "seldone");
         }

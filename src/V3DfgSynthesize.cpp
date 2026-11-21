@@ -461,7 +461,8 @@ class AstToDfgConverter final : public VNVisitor {
             const uint32_t lsb = constp->toUInt();
             const uint32_t msb = lsb + nodep->widthConst() - 1;
             DfgVertex* const fromp = nodep->fromp()->user2u().to<DfgVertex*>();
-            // A part-select can still extend above its operand, as V3Unknown only checks its lsb
+            // Unfortunately we can still have out of bounds selects due to how
+            // indices are truncated for speed reasons in V3Width/V3Unknown.
             if (msb >= fromp->size()) {
                 m_foundUnhandled = true;
                 ++m_ctx.m_conv.nonRepOOBSel;

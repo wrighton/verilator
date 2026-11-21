@@ -4402,18 +4402,6 @@ void AstSel::dumpJson(std::ostream& str) const {
     }
     dumpJsonGen(str);
 }
-bool AstSel::lsbConstOutOfRange(int maxBit) const {
-    const V3Number& num = VN_AS(lsbp(), Const)->num();
-    if (num.isFourState()) return false;
-    if (!num.fitsInUInt() || (num.isSigned() && num.isNegative())) return true;
-    return static_cast<int64_t>(num.toUInt()) + widthConst() - 1 > maxBit;
-}
-string AstSel::lsbConstStr(int offset, int scale) const {
-    const V3Number& num = VN_AS(lsbp(), Const)->num();
-    if (num.width() > 64) return num.ascii();
-    if (num.isSigned() && num.isNegative()) return cvtToStr((num.toSQuad() + offset) / scale);
-    return cvtToStr((num.toUQuad() + offset) / scale);
-}
 void AstSelBit::dump(std::ostream& str) const {
     Super::dump(str);
     str << " " << access().arrow();
