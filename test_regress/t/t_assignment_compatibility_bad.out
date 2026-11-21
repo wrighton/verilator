@@ -202,7 +202,7 @@
                                                  : ... Right-hand data type: 'logic' (4-state)
   107 |     holder.dynRealA = nonAggregate;
       |                     ^
-%Error: t/t_assignment_compatibility_bad.v:108:18: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+%Error: t/t_assignment_compatibility_bad.v:108:18: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
                                                  : ... note: In instance 't'
                                                  : ... Left-hand data type: 'logic' (4-state)
                                                  : ... Right-hand data type: 'real$[]' (2-state)
