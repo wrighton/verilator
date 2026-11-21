@@ -27,7 +27,7 @@ interface Ifc;
   function int not_listed_func();
     return 1;
   endfunction
-  modport mp(input a, import listed, export task exp_listed(), clocking cb);
+  modport mp(input a, input .alias_b(b), import listed, export task exp_listed(), clocking cb);
   modport impl(export task exp_unlisted());
 endinterface
 
@@ -47,6 +47,7 @@ class Cls;
     vif.b = 1;  // Bad
     x = vif.not_listed_func();  // Bad
     @(vif.cb_not_listed);  // Bad
+    vif.alias_b = 1;  // Bad
   endtask
 endclass
 
