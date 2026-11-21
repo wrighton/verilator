@@ -116,7 +116,7 @@ if os.path.exists(latch):
     os.unlink(latch)
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=err_mute TAMPER_AT=9 TAMPER_ONCE="' + latch + '" ')
+             'TAMPER=err_mute TAMPER_AT=47 TAMPER_ONCE="' + latch + '" ')
 test.file_grep(logfile, r'NPASS=(\d+)', 11)
 test.file_grep(logfile, r'Solver died or replied unreadably')
 
@@ -140,7 +140,7 @@ test.file_grep(logfile, r'NPASS=(\d+)', 12)
 logfile = test.obj_dir + '/sim_ug2_status.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=err_once TAMPER_AT=15 ')
+             'TAMPER=err_once TAMPER_AT=51 ')
 test.file_grep(logfile, r'NPASS=(\d+)', 12)
 
 # A command rejected at the first status of the sampler's cell enumeration fails it.
@@ -160,7 +160,7 @@ test.file_grep_not(logfile, r'Solver died')
 logfile = test.obj_dir + '/sim_phase_value.log'
 test.execute(logfile=logfile,
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
-             'TAMPER=bad_base TAMPER_AT=5 ')
+             'TAMPER=bad_base TAMPER_AT=7 ')
 test.file_grep(logfile, r'NPASS=(\d+)', 11)
 
 # A reply naming a variable the sampler didn't ask for.

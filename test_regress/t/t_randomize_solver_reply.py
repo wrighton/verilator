@@ -38,7 +38,9 @@ runs = [
     ('err_assume', 1, 16),  # error in place of the unsat assumptions
     ('err_core', 1, 16),  # error in place of the unsat core
     ('err_extra', 4, 15),  # error replying to a soft constraint, ahead of the relaxation status
-    ('err_marker', 4, 15),  # a later error whose text holds a marker-like line; one call fails
+    # A later error whose text holds a marker-like line. The runtime sends nothing after the
+    # rejected status, so the later error answers the next call, which fails too
+    ('err_marker', 4, 14),
     ('err_multiline', 2, 15),  # solver rejects a command with an error spanning two lines
     ('err_once', 2, 15),  # solver rejects a command instead of answering
     ('err_once', 9, 16),  # a rejected phase diversity round still lets the call pass
