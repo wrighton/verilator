@@ -213,7 +213,9 @@ List Of Warnings
    ``bind``.
 
    Ignoring this warning will only suppress the lint check; it will
-   simulate correctly.
+   simulate correctly, except for an input port of net kind driven inside
+   its module that cannot be coerced to inout, see Tri/Inout in
+   :ref:`Language Limitations`.
 
 
 .. option:: BADSTDPRAGMA
