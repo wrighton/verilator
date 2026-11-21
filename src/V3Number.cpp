@@ -2760,18 +2760,26 @@ V3Number& V3Number::opIToRD(const V3Number& lhs, bool isSigned) {
     // IEEE says we ignore x/z in real conversions
     V3Number noxz(lhs);
     noxz.opAssignNonXZ(lhs);
-    double d = 0;
     const bool negate = isSigned && noxz.isNegative();
     if (negate) {
         const V3Number noxz_signed = noxz;
         noxz.opNegate(noxz_signed);
     }
-    for (int bit = noxz.width() - 1; bit >= 0; bit--) {
-        // Some precision might be lost in this add, that's what we want
-        if (noxz.bitIs1(bit)) d += exp2(bit);
+    // Round once to nearest (IEEE 754): convert the 64 most significant bits, with
+    // any lower set bit folded into the least significant bit, then scale
+    const int shift = std::max(0, static_cast<int>(noxz.mostSetBitP1()) - VL_QUADSIZE);
+    uint64_t mant = 0;
+    for (int bit = 0; bit < VL_QUADSIZE && shift + bit < noxz.width(); ++bit) {
+        if (noxz.bitIs1(shift + bit)) mant |= 1ULL << bit;
     }
-    if (negate) d = -d;
-    return setDouble(d);
+    for (int bit = 0; bit < shift; ++bit) {
+        if (noxz.bitIs1(bit)) {
+            mant |= 1;
+            break;
+        }
+    }
+    const double d = std::ldexp(static_cast<double>(mant), shift);
+    return setDouble(negate ? -d : d);
 }
 V3Number& V3Number::opRToIS(const V3Number& lhs) {
     NUM_ASSERT_OP_ARGS1(lhs);
