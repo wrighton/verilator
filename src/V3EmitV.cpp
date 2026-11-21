@@ -691,7 +691,23 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         }
         puts(");\n");
     }
-    void visit(AstDisable* nodep) override { putbs("disable " + nodep->name() + ";\n"); }
+    void visit(AstDisable* nodep) override {
+        putbs("disable ");
+        if (nodep->targetp()) {
+            // As written, so it is looked up the same way (an index select is unsupported). Each
+            // name on its own, as for a whole path verilogIdent() drops a leading 'TOP'.
+            string sep;
+            for (const string& name : VString::split(nodep->targetPath(), '.')) {
+                puts(sep + AstNode::verilogIdent(name));
+                sep = ".";
+            }
+        } else if (const AstParseRef* const refp = VN_CAST(nodep->targetRefp(), ParseRef)) {
+            puts(refp->verilogIdent());  // A keyword escaped too, unlike visit(AstParseRef*)
+        } else {
+            iterateConstNull(nodep->targetRefp());
+        }
+        puts(";\n");
+    }
     void visit(AstDisplay* nodep) override {
         visitNodeDisplay(nodep, nodep->filep(), nodep->fmtp()->text(), nodep->fmtp()->exprsp());
     }
