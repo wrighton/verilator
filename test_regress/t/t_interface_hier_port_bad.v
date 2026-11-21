@@ -47,4 +47,20 @@ module t;
   cons c_if_mp (.b(gif.loc.mc));  // BAD
   cons c_arr (.b(u_arr[1].loc));  // BAD
   cons c_arr_mp (.b(u_arr[1].loc.mc));  // BAD
+
+  // Modport of an element of an interface array nested under an indexed prefix
+  nest_if nn[2] ();
+  for (genvar g = 0; g < 2; ++g) begin : gnest
+    nest_if n ();
+  end
+  cons c_nn_mp (.b(nn[0].arr[1].mc));  // BAD
+  cons c_gnest_mp (.b(gnest[1].n.arr[0].mc));  // BAD
+  if (1) begin : gifn
+    nest_if n ();
+  end
+  cons c_gifn_mp (.b(gifn.n.arr[0].mc));  // BAD
 endmodule
+
+interface nest_if;
+  ifc arr[2] ();
+endinterface
