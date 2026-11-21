@@ -2179,7 +2179,10 @@ class WidthVisitor final : public VNVisitor {
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
             userIterateAndNext(nodep->countp(), WidthVP{SELF, BOTH}.p());
-            userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            // A '$' maximum is legal, but is not an expression to width
+            if (!VN_IS(nodep->maxCountp(), Unbounded)) {
+                userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            }
             if (!svaCountsRefFormal(nodep->countp(), nodep->maxCountp())) {
                 V3AssertCommon::checkSvaRepetition(nodep, nodep);
             }
@@ -2191,7 +2194,10 @@ class WidthVisitor final : public VNVisitor {
         if (m_vup->prelim()) {
             iterateCheckBool(nodep, "exprp", nodep->exprp(), BOTH);
             userIterateAndNext(nodep->countp(), WidthVP{SELF, BOTH}.p());
-            userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            // A '$' maximum is legal, but is not an expression to width
+            if (!VN_IS(nodep->maxCountp(), Unbounded)) {
+                userIterateAndNext(nodep->maxCountp(), WidthVP{SELF, BOTH}.p());
+            }
             if (!svaCountsRefFormal(nodep->countp(), nodep->maxCountp())) {
                 V3AssertCommon::checkSvaRepetition(nodep, nodep);
             }
