@@ -93,6 +93,7 @@ module Test3 (
   else hits[4] = 1;
 
   assert property (@(posedge clk) a != b) hits[5] = 1;
+  else;
   assert property (@(posedge clk) a != b)
   else hits[6] = 1;
   assert property (@(posedge clk) a != b) hits[7] = 1;
