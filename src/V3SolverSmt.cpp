@@ -6763,14 +6763,10 @@ private:
             std::string fmt;
             AstNodeExpr* argsp = nullptr;
             bool randIndex = false;
-            if (const AstNodeExpr* const callp = findSelCallp(mselp, randIndex)) {
-                callp->v3error("'disable soft' of "
-                               << mselp->prettyNameQ()
-                               << " selects from the result of a call, but its"
-                                  " operand must be a constraint primary"
-                                  " (IEEE 1800-2023 18.5.13.2, A.1.10)");
-                keyp = new AstConst{fl, AstConst::String{}, ""};  // Not run: compiling stops
-            } else if (randIndex) {
+            // V3Width rejects a call on the path of a disable soft operand
+            UASSERT_OBJ(!findSelCallp(mselp, randIndex), mselp,
+                        "Call on the path of a disable soft operand");
+            if (randIndex) {
                 // The soft constraints are removed at setup, before the solver picks the
                 // object, so its field has no name yet
                 mselp->v3warn(E_UNSUPPORTED, "Unsupported: 'disable soft' of "
