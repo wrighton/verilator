@@ -1,0 +1,8 @@
+%Error: t/t_inst_implicit_gen_bad.v:23:12: Can't find definition of variable: 'w'
+   23 |   wire a = w;   
+      |            ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_implicit_gen_bad.v:24:15: Can't find definition of 'w' in dotted variable/method: 'g2.w'
+   24 |   wire b = g2.w;   
+      |               ^
+%Error: Exiting due to
