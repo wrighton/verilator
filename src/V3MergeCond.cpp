@@ -313,9 +313,9 @@ class CodeMotionAnalysisVisitor final : public VNVisitorConst {
             analyzeStmt(stmtp, /*tryCondMatch:*/ !singletonListStart);
         } else if (AstVarRef* const vrefp = VN_CAST(nodep, VarRef)) {
             analyzeVarRef(vrefp);
-        } else if (AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
+        } else if (AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
             // Through a class handle or virtual interface, may be a variable also referenced
-            analyzeAccess(selp->varp(), selp->access());
+            analyzeAccess(memberRefp->varp(), memberRefp->access());
             analyzeNode(nodep);
         } else {
             analyzeNode(nodep);
