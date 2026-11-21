@@ -1838,18 +1838,19 @@ class ConstVisitor final : public VNVisitor {
                                << nodep->lsbp()->name() << " width=" << nodep->widthConst());
                 // Replacing nodep will make a mess above, so we replace the offender
                 replaceZero(nodep->lsbp());
-            } else if (nodep->declRange().ranged() && nodep->lsbConstOutOfRange(maxDeclBit)) {
+            } else if (nodep->declRange().ranged()
+                       && (nodep->msbConst() > maxDeclBit || nodep->lsbConst() > maxDeclBit)) {
                 // See also warning in V3Width
                 // Must adjust by element width as declRange() is in number of elements
                 string msbLsbProtected;
                 if (nodep->declElWidth() == 0) {
                     msbLsbProtected = "(nodep->declElWidth() == 0) "
-                                      + nodep->lsbConstStr(nodep->widthConst() - 1) + ":"
-                                      + nodep->lsbConstStr(0);
+                                      + std::to_string(nodep->msbConst()) + ":"
+                                      + std::to_string(nodep->lsbConst());
                 } else {
-                    msbLsbProtected
-                        = nodep->lsbConstStr(nodep->widthConst() - 1, nodep->declElWidth()) + ":"
-                          + nodep->lsbConstStr(0, nodep->declElWidth());
+                    msbLsbProtected = std::to_string(nodep->msbConst() / nodep->declElWidth())
+                                      + ":"
+                                      + std::to_string(nodep->lsbConst() / nodep->declElWidth());
                 }
                 nodep->v3warn(SELRANGE,
                               "Selection index out of range: "

@@ -99,7 +99,8 @@ module t;
             if (downto_32[33]) begin
                 $write("");
             end
-            if (downto_32[(ident(32'sh21) - 32'h20) + 32
+            if (downto_32[$unsigned(6'((ident(32'sh21) 
+                                        - 32'h20))) + 32
                 +:1]) begin
                 $write("");
             end
@@ -466,7 +467,8 @@ module t;
             if (after_struct_packed) begin
                 $write("");
             end
-            if (ascending_packed[(32'h3 - 32'sh2) + 2
+            if (ascending_packed[$unsigned(2'((32'h3 
+                                               - 32'sh2))) + 2
                 +:1]) begin
                 $write("");
             end
