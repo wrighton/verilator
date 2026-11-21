@@ -14,7 +14,8 @@ test.scenarios('vlt')
 test.compile(verilator_flags2=["--stats"])
 
 # The exponential C++ compile time only shows with optimized C++, so check the peephole instead
-test.file_grep(test.stats, r'Optimizations, DFG, Peephole, replace or with and of not\s+(\d+)', 308)
+test.file_grep(test.stats, r'Optimizations, DFG, Peephole, replace or with and of not\s+(\d+)',
+               308)
 
 test.execute()
 
