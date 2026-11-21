@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_tri_net_delay_unsup.v:11:7: Unsupported: Tristate net with separate rise and fall net delays: 'w'
+                                                  : ... note: In instance 't'
+   11 |   tri #(10, 20) w;
+      |       ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
