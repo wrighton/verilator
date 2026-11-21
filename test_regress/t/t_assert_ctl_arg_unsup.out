@@ -1,15 +1,11 @@
-%Error-UNSUPPORTED: t/t_assert_ctl_arg_unsup.v:15:5: Unsupported: assert control assertion_type
+%Error-UNSUPPORTED: t/t_assert_ctl_arg_unsup.v:16:5: Unsupported: assert control of unique, unique0 or priority checks with this control_type
                                                    : ... note: In instance 't'
-   15 |     $assertcontrol(OFF, UNIQUE);
+   16 |     $assertcontrol(FAILOFF, UNIQUE);
       |     ^~~~~~~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_assert_ctl_arg_unsup.v:16:5: Unsupported: assert control assertion_type
+%Error-UNSUPPORTED: t/t_assert_ctl_arg_unsup.v:17:5: Unsupported: assert control of unique, unique0 or priority checks with this control_type
                                                    : ... note: In instance 't'
-   16 |     $assertcontrol(OFF, UNIQUE0);
-      |     ^~~~~~~~~~~~~~
-%Error-UNSUPPORTED: t/t_assert_ctl_arg_unsup.v:17:5: Unsupported: assert control assertion_type
-                                                   : ... note: In instance 't'
-   17 |     $assertcontrol(OFF, PRIORITY);
+   17 |     $assertcontrol(control_type, PRIORITY);
       |     ^~~~~~~~~~~~~~
 %Error-UNSUPPORTED: t/t_assert_ctl_arg_unsup.v:18:5: Unsupported: non-const assert directive type expression
                                                    : ... note: In instance 't'
