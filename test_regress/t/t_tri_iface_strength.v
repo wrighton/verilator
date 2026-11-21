@@ -148,6 +148,48 @@ module flat_controls (
   assign low_value = 1'b0;
 endmodule
 
+interface force_defaults;
+  bit local_force = 1'b0;
+  wire [6:0] value;
+  assign (weak0, weak1) value = 7'h2a;
+  always @(local_force)
+    if (local_force) force value = 7'h4e;
+    else release value;
+endinterface
+
+module force_driver (
+    force_defaults p,
+    input bit enable,
+    input bit [6:0] data
+);
+  assign p.value = enable ? data : 7'bz;
+endmodule
+
+interface float_defaults;
+  bit drive_on = 1'b0;
+  bit [6:0] data = 7'h0;
+  wire [6:0] value;
+  assign (weak0, weak1) value = drive_on ? data : 7'bz;
+  modport drive(inout value);
+endinterface
+
+interface overlap_defaults;
+  bit drive_on = 1'b0;
+  // verilator lint_off ASCRANGE
+  wire [1:4] value;
+  // verilator lint_on ASCRANGE
+  assign (weak0, weak1) value = drive_on ? 4'b0000 : 4'bz;
+endinterface
+
+module float_forcer (
+    float_defaults.drive p,
+    input bit force_on
+);
+  always @(force_on)
+    if (force_on) force p.value[4:2] = 3'b011;
+    else release p.value[4:2];
+endmodule
+
 module t;
   default_zero high_override ();
   default_zero idle_zero ();
@@ -210,6 +252,121 @@ module t;
       enable,
       data
   );
+
+  // A force overrides every driver of the net; release restores the strength-resolved value
+  // (IEEE 1800-2023 10.6.2).
+  force_defaults forced ();
+  force_defaults unforced ();
+  bit force_enable = 1'b1;
+  bit [6:0] force_data = 7'h15;
+  force_driver forced_drive (
+      forced,
+      force_enable,
+      force_data
+  );
+  force_driver unforced_drive (
+      unforced,
+      force_enable,
+      force_data
+  );
+  initial begin
+    #1;
+    `checkh(forced.value, 7'h15);
+    `checkh(unforced.value, 7'h15);
+    force forced.value = 7'h63;
+    #1;
+    `checkh(forced.value, 7'h63);
+    force_data = 7'h0c;
+    #1;
+    `checkh(forced.value, 7'h63);
+    `checkh(unforced.value, 7'h0c);
+    force_enable = 1'b0;
+    release forced.value;
+    #1;
+    `checkh(forced.value, 7'h2a);
+    `checkh(unforced.value, 7'h2a);
+    force forced.value[4:2] = 3'b101;
+    #1;
+    `checkh(forced.value, 7'h36);
+    force_enable = 1'b1;
+    #1;
+    `checkh(forced.value, 7'h14);
+    release forced.value[4:2];
+    #1;
+    `checkh(forced.value, 7'h0c);
+    forced.local_force = 1'b1;
+    #1;
+    `checkh(forced.value, 7'h4e);
+    `checkh(unforced.value, 7'h0c);
+    forced.local_force = 1'b0;
+    #1;
+    `checkh(forced.value, 7'h0c);
+  end
+
+  // Forced bits of a floating net are driven until release.
+  float_defaults floating ();
+  bit float_force = 1'b0;
+  float_forcer float_force_drive (
+      floating,
+      float_force
+  );
+  initial begin
+    #1;
+    `checkh(floating.value, 7'bz);
+    force floating.value = 7'h00;
+    #1;
+    `checkh(floating.value, 7'h00);
+    `checkh(floating.value === 7'bz, 1'b0);
+    release floating.value;
+    #1;
+    `checkh(floating.value, 7'bz);
+    float_force = 1'b1;
+    #1;
+    `checkh(floating.value, 7'bzz011zz);
+    floating.data = 7'h55;
+    floating.drive_on = 1'b1;
+    #1;
+    `checkh(floating.value, 7'h4d);
+    float_force = 1'b0;
+    #1;
+    `checkh(floating.value, 7'h55);
+    floating.drive_on = 1'b0;
+    #1;
+    `checkh(floating.value, 7'bz);
+  end
+  float_defaults floating_cat ();
+  bit float_other = 1'b0;
+  initial begin
+    #1;
+    force {floating_cat.value[6:5], float_other} = 3'b101;
+    #1;
+    `checkh(floating_cat.value, 7'b10zzzzz);
+    `checkh(float_other, 1'b1);
+    release {floating_cat.value[6:5], float_other};
+    #1;
+    `checkh(floating_cat.value, 7'bz);
+  end
+
+  // Overlapping forces and a partial release keep value and enable consistent.
+  overlap_defaults overlapped ();
+  initial begin
+    #1;
+    force overlapped.value[1:3] = 3'b101;
+    #1;
+    `checkh(overlapped.value, 4'b101z);
+    force overlapped.value[2:4] = 3'b011;
+    #1;
+    `checkh(overlapped.value, 4'b1011);
+    release overlapped.value[2:3];
+    #1;
+    `checkh(overlapped.value, 4'b1zz1);
+    overlapped.drive_on = 1'b1;
+    #1;
+    `checkh(overlapped.value, 4'b1001);
+    release overlapped.value;
+    #1;
+    `checkh(overlapped.value, 4'b0000);
+  end
 
   initial begin
     bit [9:3] expected_down;

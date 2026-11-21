@@ -1,0 +1,114 @@
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:208:11: Unsupported tristate construct (not in propagation graph): VARREF 'r'
+                                                      : ... note: In instance 't.forced_tristate_src'
+  208 |     force r = 2'b01;
+      |           ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:170:25: Unsupported tristate construct (not in propagation graph): CONCAT
+                                                      : ... note: In instance 't.concat_z_literal'
+  170 |     force tgt.value = {d, 1'bz};
+      |                         ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:159:25: Unsupported tristate construct (not in propagation graph): AND
+                                                      : ... note: In instance 't.and_z_literal'
+  159 |     force tgt.value = m & 2'bz1;
+      |                         ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:219:21: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.ports'
+  219 |     force p.value = io;
+      |                     ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:220:21: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.ports'
+  220 |     force p.value = in;
+      |                     ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:209:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.forced_tristate_src'
+  209 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:196:28: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.class_queue'
+  196 |     force tgt.value = held.field;
+      |                            ^~~~~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:197:29: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.class_queue'
+  197 |     force tgt.value = queued[0];
+      |                             ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:181:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.func_driven'
+  181 |     force tgt.value = fd(d);
+      |                       ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:184:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.func_driven'
+  184 |     force tgt.value = fd(d);
+      |                       ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:167:25: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.concat_z_literal'
+  167 |     force tgt.value = {d, 1'bz};
+      |                         ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:148:25: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.forced_pulled_src'
+  148 |     force tgt.value = s.ps;
+      |                         ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:151:25: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.forced_pulled_src'
+  151 |     force tgt.value = s.ps;
+      |                         ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:136:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.cell_const_net'
+  136 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:139:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.cell_const_net'
+  139 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:124:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.bitpull_net'
+  124 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:127:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.bitpull_net'
+  127 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:110:25: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.tristate_cond'
+  110 |     force tgt.value = c ? r : 2'b01;
+      |                         ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:113:25: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                      : ... note: In instance 't.tristate_cond'
+  113 |     force tgt.value = c ? r : 2'b01;
+      |                         ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:96:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.func_call'
+   96 |     force tgt.value = fz(d);
+      |                       ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:99:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.func_call'
+   99 |     force tgt.value = fz(d);
+      |                       ^~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:82:28: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.tristate_concat'
+   82 |     force tgt.value = {r[0], 1'b1};
+      |                            ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:85:28: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.tristate_concat'
+   85 |     force tgt.value = {r[0], 1'b1};
+      |                            ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:72:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.const_z'
+   72 |     force tgt.value = 2'bz1;
+      |                       ^~~~~
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:62:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.undriven_net'
+   62 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:65:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.undriven_net'
+   65 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:51:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.partial_net'
+   51 |     force tgt.value = r;
+      |                       ^
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:54:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+                                                     : ... note: In instance 't.partial_net'
+   54 |     force tgt.value = r;
+      |                       ^
+%Error: Exiting due to
