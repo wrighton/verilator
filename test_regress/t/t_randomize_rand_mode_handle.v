@@ -126,6 +126,22 @@ class Stat;
   constraint c_w {w == s.v;}
 endclass
 
+class StatSub extends Stat;
+  rand bit [6:0] w2;
+  constraint c_w2 {w2 == s.v;}
+endclass
+
+// The static handle of a derived class, whose mode array is in the base class
+class StatBase;
+  rand bit [6:0] b;
+endclass
+
+class StatDerived extends StatBase;
+  static rand Item s;
+  rand bit [6:0] w;
+  constraint c_w {w == s.v;}
+endclass
+
 module t;
   task automatic test_handle;
     Holder h = new;
@@ -321,15 +337,73 @@ module t;
   endtask
 
   task automatic test_static;
-    // The rand_mode() of a static handle is ignored (not supported), as before
+    // The rand_mode() of a static handle is shared by all objects of its class
     Stat st = new;
+    Stat st2 = new;
     int randomize_result;
     Stat::s = new;
-    st.s.rand_mode(1);
+    Stat::s.v = 7'h55;  // Violates s's own constraint
+    st.s.rand_mode(0);
+    repeat (5) begin
+      randomize_result = st.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(Stat::s.v, 7'h55);
+      `checkd(st.w, 7'h55);
+      randomize_result = st2.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(Stat::s.v, 7'h55);
+      `checkd(st2.w, 7'h55);
+    end
+    st2.s.rand_mode(1);
     repeat (5) begin
       randomize_result = st.randomize();
       `checkd(randomize_result, 1);
       `checkd(st.w, Stat::s.v);
+      if (Stat::s.v == 7'h55) `stop;
+    end
+  endtask
+
+  task automatic test_static_in_derived;
+    StatDerived st = new;
+    int randomize_result;
+    StatDerived::s = new;
+    StatDerived::s.v = 7'h55;
+    st.s.rand_mode(0);
+    repeat (5) begin
+      randomize_result = st.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(StatDerived::s.v, 7'h55);
+      `checkd(st.w, 7'h55);
+    end
+    st.s.rand_mode(1);
+    repeat (5) begin
+      randomize_result = st.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(st.w, StatDerived::s.v);
+      if (StatDerived::s.v == 7'h55) `stop;
+    end
+  endtask
+
+  task automatic test_static_derived;
+    // The static handle of a base class, constrained by a derived class
+    StatSub sub = new;
+    int randomize_result;
+    Stat::s = new;
+    Stat::s.v = 7'h55;
+    sub.s.rand_mode(0);
+    repeat (5) begin
+      randomize_result = sub.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(Stat::s.v, 7'h55);
+      `checkd(sub.w, 7'h55);
+      `checkd(sub.w2, 7'h55);
+    end
+    sub.s.rand_mode(1);
+    repeat (5) begin
+      randomize_result = sub.randomize();
+      `checkd(randomize_result, 1);
+      `checkd(sub.w2, Stat::s.v);
+      if (Stat::s.v == 7'h55) `stop;
     end
   endtask
 
@@ -338,6 +412,8 @@ module t;
     test_args();
     test_copied();
     test_static();
+    test_static_derived();
+    test_static_in_derived();
     test_member_objects();
     test_nested();
     test_array();
