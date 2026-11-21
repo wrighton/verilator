@@ -17,20 +17,20 @@
       |                                   ^~~~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:31:65: Unsupported: multi-cycle sequence expression inside consecutive repetition (IEEE 1800-2023 16.9.2)
                                                        : ... note: In instance 't'
-   31 |   assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 2]));
+   31 |   assert property (@(posedge clk) sync_accept_on (a) ((b ##1 c) [* 1:2]));
       |                                                                 ^~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:34:52: Unsupported: multi-cycle sequence expression inside consecutive repetition (IEEE 1800-2023 16.9.2)
                                                        : ... note: In instance 't'
-   34 |   assert property (@(posedge clk) if (a) ((b ##1 c)[*2]) else d) $display("pass");
+   34 |   assert property (@(posedge clk) if (a) ((b ##1 c)[*1:2]) else d) $display("pass");
       |                                                    ^~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:52:52: Unsupported: ranged cycle delay in an operand of property 'and'
-   52 |   assert property (@(posedge clk) (1'b1 ##[1:2] b) and c);
+   52 |   assert property (@(posedge clk) (1'b1 ##[1:2] b) and (c ##1 d));
       |                                                    ^~~
-%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:53:37: Unsupported: ranged cycle delay in an operand of property 'and'
-   53 |   assert property (@(posedge clk) c and (1'b1 ##[1:2] b));
-      |                                     ^~~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:53:45: Unsupported: ranged cycle delay in an operand of property 'and'
+   53 |   assert property (@(posedge clk) (c ##1 d) and (1'b1 ##[1:2] b));
+      |                                             ^~~
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:54:54: Unsupported: ranged cycle delay in an operand of property 'and'
-   54 |   assert property (@(posedge clk) (1'b1 ##[1:300] b) and c);
+   54 |   assert property (@(posedge clk) (1'b1 ##[1:300] b) and (c ##1 d));
       |                                                      ^~~
 %Warning-COVERIGN: t/t_property_nfa_msgs_unsup.v:57:45: Ignoring unsupported: cover sequence with a sequence operand of 'or'
    57 |   cover sequence (@(posedge clk) ((a and b) or(c ##1 d)));
@@ -49,12 +49,25 @@
 %Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:64:13: Unsupported: Bounded ranged cycle delay in a sequence prefix
    64 |       a |-> ##[1:2] (a | b | c | d | e) ##1 (a | b | c | d | e));
       |             ^~
-%Error: t/t_property_nfa_msgs_unsup.v:49:22: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
-                                           : ... note: In instance 't'
-                                           : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context
-   49 |   assert property (a [* 2]);
-      |                      ^~
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:68:43: Unsupported: sequence antecedent of an implication in a negated property
+                                                       : ... note: In instance 't'
+   68 |   assert property (@(posedge clk) not ((a ##1 b) |=> c));
+      |                                           ^~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:69:43: Unsupported: implication inside another property operator in a negated property
+                                                       : ... note: In instance 't'
+   69 |   assert property (@(posedge clk) not ((a |=> b) or c));
+      |                                           ^~~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:72:65: Unsupported: 'not' of a multi-cycle operand inside another property operator
+                                                       : ... note: In instance 't'
+   72 |   assert property (@(posedge clk) ((a ##1 b) and (c ##1 d)) or (not (a ##1 b) and not (c ##1 d)));
+      |                                                                 ^~~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:72:83: Unsupported: 'not' of a multi-cycle operand inside another property operator
+                                                       : ... note: In instance 't'
+   72 |   assert property (@(posedge clk) ((a ##1 b) and (c ##1 d)) or (not (a ##1 b) and not (c ##1 d)));
+      |                                                                                   ^~~
+%Error-UNSUPPORTED: t/t_property_nfa_msgs_unsup.v:75:37: Unsupported: property 'or' with an operand ending in a ranged delay
+   75 |   assert property (@(posedge clk) a or (b ##[1:2] c));
+      |                                     ^~
 %Error: t/t_property_nfa_msgs_unsup.v:49:3: Concurrent assertion has no clock (IEEE 1800-2023 16.16)
                                           : ... note: In instance 't'
                                           : ... Suggest provide a clocking event, a default clocking, or a clocked procedural context

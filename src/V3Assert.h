@@ -23,6 +23,10 @@
 #include "V3Ast.h"
 #include "V3UniqueNames.h"
 
+#include <unordered_map>
+
+class V3UniqueNames;
+
 //============================================================================
 
 class V3AssertCommon final {
@@ -59,10 +63,12 @@ public:
     static bool refsSvaFormal(const AstNode* nodep) VL_MT_DISABLED;
     // Clone an action block for one more execution site, naming its automatics from names
     static AstNodeStmt* cloneAction(AstNodeStmt* actionp, V3UniqueNames& names) VL_MT_DISABLED;
-    // Reduce a whole property 'always p' to p
-    static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
-    // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
-    static AstSenItem* inferredClock(const AstAlways* alwaysp) VL_MT_DISABLED;
+    // Check the constants of a sequence or property instance, reporting errors on instp
+    static void checkSvaInstanceConstants(AstNode* nodep, AstNode* instp) VL_MT_DISABLED;
+    // Create a module variable for each local variable of one sequence or property instance
+    static std::unordered_map<const AstVar*, AstVar*>
+    newSvaLocalVars(const AstNodeSchema* schemap, AstNodeModule* modp,
+                    V3UniqueNames& names) VL_MT_DISABLED;
     // Relink a body inlined at instp to the instancing scope, returning the possibly replaced body
     static AstNode* relinkSvaInstanceBody(AstNode* bodyp,
                                           const AstSchemaRef* instp) VL_MT_DISABLED;
@@ -78,6 +84,10 @@ public:
     static void lowerSvaLocalVarInits(
         AstProperty* propp, AstPropSpec* bodyp,
         const std::unordered_map<const AstVar*, AstVar*>& localVarMap) VL_MT_DISABLED;
+    // Reduce a whole property 'always p' to p
+    static void reducePlainAlways(AstPropSpec* specp) VL_MT_DISABLED;
+    // Clock inferred from an always procedure, or nullptr (IEEE 1800-2023 16.14.6)
+    static AstSenItem* inferredClock(const AstAlways* alwaysp) VL_MT_DISABLED;
 };
 
 class V3Assert final {

@@ -10,17 +10,12 @@ module t (
   int cyc;
   logic valid;
 
-  // An initializer of a sequence or property local variable is unsupported.
+  // An initializer of a sequence local variable is unsupported.
   /* verilator lint_off IMPLICITSTATIC */
   sequence s_init;
     int snap = 5;
     (1, snap = snap + cyc) ##1 (cyc > snap);
   endsequence
-  property p_init;
-    int snap = 5;
-    @(posedge clk) (snap == 5) ##1 (valid, snap = cyc) |=> (cyc == snap + 1);
-  endproperty
   /* verilator lint_on IMPLICITSTATIC */
   assert property (@(posedge clk) valid |-> s_init);
-  assert property (p_init);
 endmodule

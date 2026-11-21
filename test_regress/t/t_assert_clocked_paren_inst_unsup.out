@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_clocked_paren_inst_unsup.v:18:39: Unsupported: clock event in a nested property instance
+                                                               : ... note: In instance 't'
+   18 |   assert property (@(posedge clk) not p_paren);
+      |                                       ^~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

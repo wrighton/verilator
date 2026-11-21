@@ -116,12 +116,17 @@ class UndrivenVarEntry final {
         FLAGS_PER_BIT = 6  // Number of flags stored for each tracked bit
     };
 
+    // An untyped sequence or property formal argument has no width yet, it is checked as one bit
+    static int varBitCount(const AstVar* varp) {
+        return varp->basicp() && varp->basicp()->untyped() ? 1 : varp->width();
+    }
+
 public:
     // CONSTRUCTORS
     explicit UndrivenVarEntry(AstVar* varp)  // Construction for when a var is used
         : m_varp{varp}
         , m_wholeFlags(FLAGS_PER_BIT, false)  // Need () for sized-constructor
-        , m_bitFlags(varp->width() * FLAGS_PER_BIT, false) {  // Need () for sized-constructor
+        , m_bitFlags(varBitCount(varp) * FLAGS_PER_BIT, false) {  // Need () for sized-constructor
         UINFO(9, "create " << varp);
     }
     ~UndrivenVarEntry() = default;
