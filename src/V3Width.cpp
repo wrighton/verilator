@@ -4914,11 +4914,14 @@ class WidthVisitor final : public VNVisitor {
 
         AstBasicDType* dtypep = VN_CAST(nodep->exprp()->dtypep()->skipRefp(), BasicDType);
         AstNodeDType* expDTypep = nullptr;
+        // Any real operand makes the comparisons real (IEEE 1800-2023 11.3.1)
+        bool anyDouble = dtypep && dtypep->isDouble();
+        for (const AstNode* const itemp : nodep->itemspList()) anyDouble |= itemp->isDouble();
 
         if (dtypep && dtypep->isString()) {
             nodep->dtypeSetString();
             expDTypep = nodep->findStringDType();
-        } else if (dtypep && dtypep->isDouble()) {
+        } else if (anyDouble) {
             nodep->dtypeSetDouble();
             expDTypep = nodep->findDoubleDType();
         } else {
@@ -5052,9 +5055,22 @@ class WidthVisitor final : public VNVisitor {
                 }
             }
         }
-        // IEEE 1800-2023 11.4.13: '$' is the extreme value of the left-hand expression's
-        // type, so it does not contribute a width; take it from the other bound
-        nodep->dtypeFrom(VN_IS(nodep->lhsp(), Unbounded) ? nodep->rhsp() : nodep->lhsp());
+        // The comparison type covers both bounds (IEEE 1800-2023 11.4.13, 11.8.1)
+        const AstNodeExpr* const lhsp = nodep->lhsp();
+        const AstNodeExpr* const rhsp = nodep->rhsp();
+        if (VN_IS(lhsp, Unbounded) || VN_IS(rhsp, Unbounded)) {
+            nodep->dtypeFrom(VN_IS(lhsp, Unbounded) ? rhsp : lhsp);
+        } else if (lhsp->isDouble() || rhsp->isDouble()) {
+            nodep->dtypeSetDouble();
+        } else if (lhsp->isString() || rhsp->isString()) {
+            nodep->dtypeSetString();
+        } else {
+            // The minimum width, used only for lint, stays the lower bound's
+            nodep->dtypep(nodep->findBitOrLogicDType(
+                std::max(lhsp->width(), rhsp->width()), lhsp->widthMin(),
+                VSigning::fromBool(lhsp->isSigned() && rhsp->isSigned()),
+                lhsp->dtypep()->isFourstate() || rhsp->dtypep()->isFourstate()));
+        }
     }
 
     void visit(AstIfaceRefDType* nodep) override {
@@ -8297,7 +8313,13 @@ class WidthVisitor final : public VNVisitor {
         iterateCheck(casep, "Case expression", exprp, CONTEXT_DET, FINAL, subDTypep, EXTEND_EXP);
         for (CaseItem* const itemp : VNList<CaseItem>{itemsp}) {
             for (AstNode* const condp : itemp->condspList()) {
-                iterateCheck(casep, "Case Item", condp, CONTEXT_DET, FINAL, subDTypep, EXTEND_EXP);
+                if (VN_IS(condp, InsideRange)) {
+                    // Convert the bounds, not the range, as in visit(AstInside)
+                    userIterate(condp, WidthVP{subDTypep, FINAL}.p());
+                } else {
+                    iterateCheck(casep, "Case Item", condp, CONTEXT_DET, FINAL, subDTypep,
+                                 EXTEND_EXP);
+                }
             }
         }
     }
