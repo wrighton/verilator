@@ -5695,7 +5695,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 } else if (allowVar) {
                     VSymEnt* scopeSymp = m_ds.m_dotSymp;
                     while (VN_IS(scopeSymp->nodep(), NodeBlock)) scopeSymp = scopeSymp->parentp();
-                    const AstNodeFTask* const ftaskp = VN_CAST(scopeSymp->nodep(), NodeFTask);
                     if (!first
                         && (VN_IS(scopeSymp->nodep(), Property)
                             || VN_IS(scopeSymp->nodep(), Sequence))) {
@@ -5713,19 +5712,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         // No second error on the dotted path; the reference becomes a constant
                         m_ds.m_dotText = "";
                         m_ds.m_dotErr = true;
-                    } else if (!first && ftaskp && ftaskp != m_ftaskp
-                               && varp->lifetime().isAutomatic()) {
-                        // Items of an automatic task or function cannot be referenced
-                        // hierarchically from outside of it
-                        if (varp->isIO() && !ftaskp->lifetime().isAutomatic()) {
-                            // Static task/function ports are static, though V3LinkParse marks
-                            // them automatic when not needed after the call
-                            varp->lifetime(VLifetime::STATIC_IMPLICIT);
-                        } else {
-                            nodep->v3error("Automatic variable cannot be referenced"
-                                           " hierarchically (IEEE 1800-2023 13.3.1, 13.4.2): "
-                                           << varp->prettyNameQ());
-                        }
                     }
                     // Ports of a static task/function are static (IEEE 1800-2023 13.3.1), but
                     // V3LinkParse marks them automatic, as normally not needed after the call.

@@ -4,13 +4,13 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-module t;
+module automatic t;
   task automatic at(input int ai);
     int av;
     static int as;
     av = ai;
     as = ai;
-    $display("%0d", at.av);  // OK: inside the task
+    $display("%0d", at.av);  // Illegal (IEEE 1800-2023 13.3.1), but not detected in its own task.
   endtask
 
   function automatic int af(input int fi);
@@ -19,7 +19,7 @@ module t;
     return fv;
   endfunction
 
-  task st(input int si);
+  task static st(input int si);
     automatic int sav;
     int ssv;
     sav = si;
@@ -27,40 +27,31 @@ module t;
   endtask
 
   int w;
-  assign w = at.av;  // BAD
+  assign w = at.av;
 
   initial begin
-    $display("%0d", at.av);  // BAD
-    $display("%0d", at.ai);  // BAD
-    $display("%0d", at.as);  // OK: static
-    $display("%0d", af.fv);  // BAD
-    $display("%0d", af.fi);  // BAD
-    $display("%0d", st.sav);  // BAD
-    $display("%0d", st.ssv);  // OK: static
-    $display("%0d", st.si);  // OK: static
-    $display("%0d", abt.blk.bv);  // BAD
-    $display("%0d", abt.blk.bs);  // OK: static
-    $display("%0d", ta.f.a);  // BAD
-    $display("%0d", ta.f.s);  // OK: static
+    at.av = 1;
+    $display("%0d", at.av);
+    $display("%0d", at.ai);
+    $display("%0d", at.as);  // Static storage is legal.
+    $display("%0d", af.fv);
+    $display("%0d", af.fi);
+    $display("%0d", af.af);
+    $display("%0d", st.sav);
+    $display("%0d", st.ssv);  // Static storage is legal.
+    $display("%0d", st.si);  // Static formal argument is legal.
+    $display("%0d", dt.dv);
+    $display("%0d", df.fv);
   end
 
-  task automatic abt(input int ai);
-    begin : blk
-      int bv;
-      static int bs;
-      bv = ai;
-      bs = ai;
-    end
+  task dt;
+    int dv;
+    dv = 1;
   endtask
 
-  task automatic ta(input int ai);
-    fork : f
-      int a;
-      static int s;
-      begin
-        a = ai;
-        s = ai;
-      end
-    join
-  endtask
+  function int df;
+    int fv;
+    fv = 2;
+    return fv;
+  endfunction
 endmodule
