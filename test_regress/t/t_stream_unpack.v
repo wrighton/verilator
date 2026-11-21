@@ -496,6 +496,22 @@ module t;
         packed_84 = {>>{arr3d_7}};
         `checkh(packed_84, 84'h1_2345_6789_57cd_ef01_2345);
       end
+
+      // Wide elements not a multiple of 32 bits, bits above each element cleared
+      begin
+        automatic logic [139:0] packed_140;
+        automatic logic [69:0] arr_w70[2];
+        automatic logic [69:0] q_w70[$];
+
+        packed_140 = {70'h3f_ffff_ffff_ffff_ffff, 70'h1};
+        arr_w70 = { >> {packed_140}};
+        `checkh(arr_w70[0], 70'h3f_ffff_ffff_ffff_ffff);
+        `checkh(arr_w70[1], 70'h1);
+        `checkh(arr_w70[1] == 70'h1, 1'b1);
+        { >> {q_w70}} = packed_140;
+        `checkh(q_w70[1], 70'h1);
+        `checkh(q_w70[1] == 70'h1, 1'b1);
+      end
     end
 
     // A parameter as the slice size of a stream target is only read, not assigned
