@@ -22,39 +22,6 @@ interface bus_if (
   endclocking
 endinterface
 
-`ifdef T_STDPKG
-// A package named std, claiming to be in the std package's file, without the built-in std
-// package, with user C++ code assigning a clocking block event: it is the user's
-`line 1 "__STD_FILE__" 0
-package std;
-  class Waiter;
-    virtual bus_if m_vif;
-    virtual bus_if m_dst;
-    virtual bus_if m_other;
-    event m_alias;
-    int m_n;
-    function new(virtual bus_if vif, virtual bus_if other);
-      m_vif = vif;
-      m_dst = vif;
-      m_other = other;
-      m_alias = m_other.cb;  // So the clocking block events can be assigned
-    endfunction
-    task run();
-      forever begin
-        @(m_vif.cb);
-        ++m_n;
-      end
-    endtask
-    function void merge();
-`ifdef VERILATOR
-      $c(m_dst.cb, " = ", m_other.cb, ";");
-`endif
-    endfunction
-  endclass
-endpackage
-`line 56 "t/t_event_vif_clocking_effects.v" 0
-`endif
-
 module t;
   logic clk = 1'b0;
   always #5 clk = ~clk;
@@ -435,8 +402,7 @@ module t;
 
 `elsif T_LOCAL
   // An automatic variable of a task, which the branches of a fork within it share, written by
-  // one branch while another waits through it, with no other write of a handle to notify the
-  // scheduler
+  // one branch while another waits through it, with no other write of a handle
   bus_if iy (1'b0);  // Never clocked
   class Waiter;
     int m_log[2][$];
@@ -469,9 +435,7 @@ module t;
 
 `elsif T_CFIRE
   // An event that a clocking block event was assigned to, fired by user C++ code while
-  // evaluating the trigger of a wait, which, as in any design with such code, does not list
-  // waits: both waits on the clocking block event see it. With T_SPOOF, the code claims to be
-  // in the std package's file, which does not make it the std package's.
+  // evaluating the trigger of a wait: both waits on the clocking block event see it
   bus_if iq (1'b0);  // Never clocked
   class Waiter;
     virtual bus_if m_vif;
@@ -482,13 +446,7 @@ module t;
       if (m_arm && !m_fired) begin
         m_fired = 1'b1;
 `ifdef VERILATOR
-`ifdef T_SPOOF
-`line 1 "__STD_FILE__" 0
-`endif
         $c(m_alias, ".fire();");
-`ifdef T_SPOOF
-`line 491 "t/t_event_vif_clocking_effects.v" 0
-`endif
 `else
         ->m_alias;
 `endif
@@ -529,8 +487,7 @@ module t;
   end
 
 `elsif T_CWRITE
-  // A handle written by user C++ code, which is not seen, so, as in any design with such code,
-  // the waits through it are not listed
+  // A handle written by user C++ code, which the waits through it follow
   bus_if iz (1'b0);  // Never clocked
   class Waiter;
     virtual bus_if m_vif;
@@ -612,20 +569,6 @@ module t;
     #50;
     `checkd(w.m_n[0], 6);
     `checkd(w.m_n[1], 6);
-    $write("*-* All Finished *-*\n");
-    $finish;
-  end
-
-`elsif T_STDPKG
-  bus_if cold (1'b0);
-  initial begin
-    automatic std::Waiter w = new(cold, ia);
-    fork
-      w.run();
-    join_none
-    #23 w.merge();
-    #50;
-    `checkd(w.m_n, 6);
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -817,8 +760,8 @@ module t;
   end
 
 `elsif T_SYSC
-  // A design with '`systemc_*' code, which may write any handle, so waits through handles are
-  // not listed, and wake as when polling
+  // A design with '`systemc_*' code, which may write any handle: the waits through handles
+  // wake on the clocking block event as usual
   class Waiter;
     virtual bus_if m_vif;
     int m_n[2];
@@ -852,8 +795,7 @@ module t;
 `elsif T_XKILL
   // A process killed while suspended in a DPI export task, whose C++ caller then calls a public
   // function firing an event that a clocking block event was assigned to, while the triggers
-  // are evaluated (see the .cpp file): as in any design with DPI export tasks that may suspend,
-  // no wait is listed, and both waits on the clocking block event see it
+  // are evaluated (see the .cpp file): both waits on the clocking block event see it
   bus_if cold (1'b0);  // Never clocked
   bus_if hot (1'b0);  // Never clocked
   process victim;

@@ -798,51 +798,21 @@ mailbox, through handles in parallel MTasks, are not made safe by this. The
 semaphore still evaluates the condition of each waiter at each trigger
 evaluation, with its admission rule unchanged.
 
-A coroutine whose event control waits only on a clocking block event of an
-interface, through a chain of up to 16 class and virtual interface handle
-variables, such as ``m_cfg.m_vif.cb``, still evaluates its trigger as
-above, but not at every trigger evaluation. Its trigger can only be set
-after the event fires, or after one of the variables changes, as the wait
-follows them (IEEE 1800-2023 9.4.2). So while none of the handles is null,
-the coroutine awaits ``eventEvaluation(event)`` instead of
-``evaluation()``, which adds it to the wait list of the event, and the next
-trigger evaluation after the event fires resumes it to evaluate its
-trigger, including any ``iff`` condition (IEEE 1800-2023 9.4.2.3). As its
-trigger is evaluated less often, the ``iff`` condition must have no effect,
-such as drawing a random number. This needs every change of the waited
-event to be seen: the event must never be assigned another event, and only
-variables whose every write is a blocking assignment to the variable as a
-whole, or one like it, such as a ``$cast`` to it, or the copy back of an
-output or inout argument, and which are not visible outside the model,
-qualify. Each such write calls ``handlesWritten()``, except that an
-assignment of a variable as a whole, not of a member, with a pure value,
-calls it only if it changed the variable, after which the next trigger
-evaluation resumes every coroutine waiting on a wait list this way, to
-evaluate its trigger with the current values of the variables. As user
-``$c`` code not declared pure, and ```systemc_*`` code, may write any
-variable or assign any event, no wait is put on a wait list this way in a
-design with such code, other than in the built-in std package, nor in a
-design with DPI export tasks that may suspend, as killing a process
-suspended in one runs the C++ code that called it while the triggers are
-evaluated. The coroutines awaiting trigger evaluation, which await
-``evaluationKeyed()`` instead of ``evaluation()`` in a model with
-coroutines on wait lists this way, are resumed in the order they await it
-in: first those that awaited it again when last resumed to evaluate their
-triggers, then those that did when resumed for their post updates, then
-those whose waits started since, each in the order their waits started. A
-coroutine woken on a wait list is resumed among them where it would have
-been had it awaited ``evaluation()``, so all triggers are evaluated, with
-the same effects, and all coroutines are resumed, in the same order as
-without wait lists. Likewise, the coroutines awaiting an event's wait list
-are resumed in the order the lists got their first such coroutine. For
-this, the variables must not change while triggers are evaluated, so a
-variable written by evaluating a trigger, including through the functions
-it calls, does not qualify, and no wait starts and no event fires then, so
-no wait is put on a wait list this way if evaluating a trigger may start or
-end a process, fire an event, or call a DPI import not declared pure, whose
-C++ code may call back into the model. A coroutine waiting this way whose
-process is set running, for example by ``resume()``, is resumed at the next
-trigger evaluation, which sets it waiting again, as when polling.
+A coroutine whose event control waits only on an event reached through
+class and virtual interface handles, such as ``@(m_cfg.m_vif.cb)``, awaits
+``evaluationSkippable(event, ..., links...)`` instead of ``evaluation()``
+while none of the handles is null. Its trigger can only become set after
+the event fires, or after one of the handles changes, as the wait follows
+them (IEEE 1800-2023 9.4.2). The awaitable keeps each handle and its value.
+At the coroutine's turn in ``evaluate()``, if the event has not fired, the
+handles are unchanged and its process is waiting, which evaluating its
+trigger would leave it, the coroutine is skipped and takes its place in the
+post update step. There, if the handles are still unchanged and its process
+waiting, the event is only cleared before the coroutine awaits trigger
+evaluation again; otherwise the coroutine is resumed, sees
+``resumedSkipped()``, and only does its post updates. The coroutines thus
+evaluate their triggers in the same order, and the design sees the same
+effects, as if none was skipped.
 
 ``VlForkSync``
 ~~~~~~~~~~~~~~
@@ -862,7 +832,7 @@ false condition. See the `Timing Pass` section for more details.
 Timing Pass
 ~~~~~~~~~~~
 
-There are three visitors in ``V3Timing.cpp``.
+There are two visitors in ``V3Timing.cpp``.
 
 The first one, ``TimingSuspendableVisitor``, does not perform any AST
 transformations. It is responsible for marking processes and C++ functions
@@ -876,13 +846,7 @@ such cases. A function or process is dependent on a function if it calls
 it. A virtual class method is dependent on another class method if it calls
 it, overrides it, or is overriden by it.
 
-The second one, ``TimingHandleVisitor``, does not perform any AST
-transformations either. It finds the class and virtual interface handle
-variables whose writes can be tracked, and whether evaluating a trigger may
-change the order of evaluation, for the waits on clocking block events
-through handles (see the dynamic trigger scheduler above).
-
-The third visitor in ``V3Timing.cpp``, ``TimingControlVisitor``, uses the
+The second visitor in ``V3Timing.cpp``, ``TimingControlVisitor``, uses the
 information provided by ``TimingSuspendableVisitor`` and transforms each
 timing control into a ``co_await``. It also turns each suspendable
 ``always`` into an ``initial forever``, with the sensitivity list of a
@@ -901,10 +865,11 @@ clocked ``always`` as an event control at the start of the loop body.
   coroutine at the correct point of evaluation. If it waits only on a named
   event variable whose storage outlives the wait, not through a handle and
   without ``iff``, it instead awaits the wait list of the event, and is
-  resumed after the event fires. If it waits only on a clocking block event
-  of an interface through handle variables whose writes are all seen, it
-  awaits the wait list of the event to evaluate its trigger, while no
-  handle is null.
+  resumed after the event fires.
+
+- such an event control on an event reached through up to 4 handles, whose
+  ``iff``, if any, only reads variables, awaits ``evaluationSkippable``
+  while the handles are set.
 
 - delays are turned into ``co_await`` on a delay scheduler's ``delay``
   method. The created ``AstCAwait`` nodes also reference a special sentree

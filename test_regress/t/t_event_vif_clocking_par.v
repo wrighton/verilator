@@ -59,8 +59,8 @@ module t;
     endfunction
 `ifdef VERILATOR
     // A clocking block event assigned to another event, which Verilator allows, making all
-    // events assignable, and the two the same event: a wait on it waits on the same wait list as
-    // the waits through the handles, but to resume rather than to evaluate its trigger
+    // events assignable, and the two the same event: a wait on it wakes with the waits through
+    // the handles
     event m_alias;
     process m_procs[2];
     int m_nalias[2];

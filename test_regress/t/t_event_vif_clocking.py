@@ -16,14 +16,6 @@ test.compile(verilator_flags2=["--binary", "--stats"])
 test.execute()
 
 if test.vlt_all:
-    test.file_grep(test.stats,
-                   r'Timing, event controls on interface events through handles\s+(\d+)', 18)
-    test.file_grep(test.stats, r'Timing, writes of handles notifying event controls\s+(\d+)', 60)
-    test.file_grep(test.stats,
-                   r'Timing, writes of handles notifying event controls if changed\s+(\d+)', 12)
-    test.file_grep(test.stats,
-                   r"Timing, event controls through handles with 'iff' effects\s+(\d+)", 0)
-    test.file_grep(test.stats,
-                   r'Timing, event controls on clocking block events evaluated always\s+(\d+)', 29)
+    test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 4)
 
 test.passes()

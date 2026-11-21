@@ -357,12 +357,6 @@ private:
     }
 
 public:
-    // Returns the condition under which evaluating 'exprp' reads through no null class or
-    // virtual interface reference, or nullptr if it reads through none
-    static AstNodeExpr* newNullGuard(AstNodeExpr* const exprp) {
-        return NullGuardVisitor::newGuard(exprp);
-    }
-
     // Returns the expression computing the trigger, and a bool indicating that
     // this trigger should be fired on the first evaluation (at initialization)
     std::pair<AstNodeExpr*, bool> build(const AstSenItem* senItemp) {

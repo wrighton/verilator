@@ -22,7 +22,6 @@ test.compile(make_main=False, verilator_flags2=flags, threads=(2 if test.vltmt e
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, event controls on interface events through handles\s+(\d+)',
-               1)
+test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 1)
 
 test.passes()

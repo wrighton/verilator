@@ -14,19 +14,10 @@ test.top_filename = "t/t_event_vif_clocking_effects.v"
 test.pli_filename = "t/t_event_vif_clocking_effects_pub.cpp"
 
 test.compile(make_main=False,
-             verilator_flags2=[
-                 "--exe", "--timing", "--stats", "+define+T_PUB", "--debugi-V3Timing", "4",
-                 test.pli_filename
-             ])
+             verilator_flags2=["--exe", "--timing", "--stats", "+define+T_PUB", test.pli_filename])
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, event controls on interface events through handles\s+(\d+)',
-               0)
-test.file_grep(test.stats,
-               r'Timing, triggers changing the order of evaluation, keeping all polling\s+(\d+)',
-               1)
-test.file_grep(test.compile_log_filename,
-               r"Polled, evaluating a trigger may call a DPI import, wait at")
+test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 1)
 
 test.passes()

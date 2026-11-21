@@ -242,11 +242,6 @@ class ProcessControlVisitor final : public VNVisitorConst {
             m_funcVtxp->m_control = true;
         }
     }
-    void visit(AstCMethodHard* nodep) override {
-        // Notifying the dynamic trigger scheduler of a handle write is safe in parallel
-        if (nodep->method() == VCMethod::SCHED_HANDLES_WRITTEN) return;
-        iterateChildrenConst(nodep);
-    }
     void visit(AstNodeCCall* nodep) override {
         iterateChildrenConst(nodep);
         Vertex* const calleep = calleeVtxp(nodep);

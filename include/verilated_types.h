@@ -345,7 +345,6 @@ class VlProcess final {
     VlEventWaitLink* m_waitListp = nullptr;  // Event wait list it waits on, if any
     VlProcess* m_nextKilledp = nullptr;  // Next process on the killed chain of that list
     size_t m_waitIndex = 0;  // Slot of its handle on that list
-    bool m_waitEvaluates = false;  // Waits on that list to evaluate its trigger
 
     // Thread-local current process pointer for hierarchical object seeding
     static thread_local VlProcess* t_currentp;
@@ -428,8 +427,6 @@ public:
     void setSelf(VlClass* selfp) { m_selfp = selfp; }
     /// Set the event wait list this process waits on, or nullptr once it no longer waits there
     void waitListp(VlEventWaitLink* listp) { m_waitListp = listp; }
-    /// Whether it waits on the event wait list to evaluate its trigger, not to resume
-    void waitEvaluates(bool flag) { m_waitEvaluates = flag; }
     /// Slot of its handle on the event wait list it waits on
     size_t waitIndex() const { return m_waitIndex; }
     void waitIndex(const size_t index) { m_waitIndex = index; }
@@ -616,7 +613,6 @@ struct VlEventWaitLink VL_NOT_FINAL {
     size_t m_live = 0;  // Waiting processes not killed, counted for wait queues only
     VlEventWaitLink* m_nextp = nullptr;  // Next list on the pending chain
     std::atomic<VlEventWaitLink*>* m_headpp = nullptr;  // Head of the pending chain
-    std::atomic<bool>* m_reevaluatep = nullptr;  // Flag to evaluate the waiters to evaluate
     VlProcess* m_killedHeadp = nullptr;  // Killed waiters to drop, in any order
     /// Resume the waiters at the next trigger evaluation. A fired list takes no new waiters
     /// (IEEE 1800-2023 15.5.2). Called by logic in any MTask: it is thread safe only against
@@ -647,10 +643,6 @@ struct VlEventWaitLink VL_NOT_FINAL {
     // Slot index of a process selected to resume from a wait queue, which keeps its link to the
     // list until it resumes (see VlDynamicTriggerScheduler::selectFirst)
     static constexpr size_t SELECTED = ~static_cast<size_t>(0);
-    /// Evaluate the triggers of the waiters to evaluate at the next trigger evaluation, as
-    /// one of them changed the state of its process, which evaluating its trigger as when
-    /// polling sets back to waiting (see VlProcess::state)
-    void noteStateChanged() VL_MT_SAFE { m_reevaluatep->store(true, std::memory_order_relaxed); }
     /// Take the killed waiters to drop
     VlProcess* takeKilled() {
         VlProcess* const headp = m_killedHeadp;
