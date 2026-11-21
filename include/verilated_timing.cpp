@@ -277,9 +277,28 @@ bool VlDynamicTriggerScheduler::evaluate() {
     m_anyTriggered = false;
     VL_DEBUG_IF(dump(););
     std::swap(m_suspended, m_evaluated);
-    for (auto& coro : m_evaluated) coro.resume();
+    if (VL_LIKELY(!m_skippable)) {
+        for (auto& coro : m_evaluated) coro.resume();
+    } else {
+        evaluateSkipping();
+    }
     m_evaluated.clear();
     return m_anyTriggered;
+}
+
+void VlDynamicTriggerScheduler::evaluateSkipping() {
+    // Each coroutine is checked at its turn, so it sees what evaluating the triggers before it did
+    m_skippable = false;  // Until a coroutine awaits evaluationSkippable() again
+    for (auto& coro : m_evaluated) {
+        VlSkippableWait* const waitp = coro.skipWaitp();
+        if (waitp) m_skippable = true;
+        if (waitp && coro.waiting() && waitp->linksUnchanged() && !waitp->m_event.isFired()) {
+            // It takes the place it would have taken awaiting the post update step
+            m_post.push_back(std::move(coro));
+        } else {
+            coro.resume();
+        }
+    }
 }
 
 void VlDynamicTriggerScheduler::doPostUpdates() {
@@ -293,7 +312,23 @@ void VlDynamicTriggerScheduler::doPostUpdates() {
         m_post.clear();
         return;
     }
-    for (auto& coro : m_post) coro.resume();
+    if (VL_LIKELY(!m_skippable)) {
+        for (auto& coro : m_post) coro.resume();
+    } else {
+        // Only a coroutine that skipped evaluating its trigger is here still awaiting it
+        for (auto& coro : m_post) {
+            VlSkippableWait* const waitp = coro.skipWaitp();
+            if (waitp && coro.waiting() && waitp->linksUnchanged()) {
+                // Its post update would clear the event, then it would await trigger evaluation
+                waitp->m_event.clearFired();
+                m_suspended.push_back(std::move(coro));
+            } else {
+                m_resumedSkipped = waitp != nullptr;
+                coro.resume();
+                m_resumedSkipped = false;
+            }
+        }
+    }
     m_post.clear();
 }
 

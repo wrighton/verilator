@@ -646,6 +646,22 @@ The coroutines get resumed at trigger evaluation time, evaluate their local
 triggers, optionally await the post update step, and if the trigger is set,
 await proper resumption in the 'act' eval step.
 
+A coroutine whose event control waits only on an event reached through
+class and virtual interface handles, such as ``@(m_cfg.m_vif.cb)``, awaits
+``evaluationSkippable(event, ..., links...)`` instead of ``evaluation()``
+while none of the handles is null. Its trigger can only become set after
+the event fires, or after one of the handles changes, as the wait follows
+them (IEEE 1800-2023 9.4.2). The awaitable keeps each handle and its value.
+At the coroutine's turn in ``evaluate()``, if the event has not fired, the
+handles are unchanged and its process is waiting, which evaluating its
+trigger would leave it, the coroutine is skipped and takes its place in the
+post update step. There, if the handles are still unchanged and its process
+waiting, the event is only cleared before the coroutine awaits trigger
+evaluation again; otherwise the coroutine is resumed, sees
+``resumedSkipped()``, and only does its post updates. The coroutines thus
+evaluate their triggers in the same order, and the design sees the same
+effects, as if none was skipped.
+
 ``VlForkSync``
 ~~~~~~~~~~~~~~
 
@@ -695,6 +711,10 @@ clocked ``always`` as an event control at the start of the loop body.
   scheduler multiple times: for trigger evaluation, updates, and
   resumption. The dynamic trigger scheduler is responsible for resuming the
   coroutine at the correct point of evaluation.
+
+- such an event control on an event reached through up to 4 handles, whose
+  ``iff``, if any, only reads variables, awaits ``evaluationSkippable``
+  while the handles are set.
 
 - delays are turned into ``co_await`` on a delay scheduler's ``delay``
   method. The created ``AstCAwait`` nodes also reference a special sentree
