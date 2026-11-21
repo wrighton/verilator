@@ -31,7 +31,6 @@ class C;
     solve h.objects[1].arr.size() before n;
     solve n before q[$];
     disable soft q[$];
-    disable soft in.arr.size();
     disable soft fa[1];
     disable soft nd.size();
     n > 0 -> disable soft fa[2];
