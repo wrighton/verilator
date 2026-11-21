@@ -71,10 +71,12 @@ bool AstNode::isAllOnesV() const {
     return (VN_IS(this, Const) && VN_AS(this, Const)->isEqAllOnesV());
 }
 bool AstNode::sameTree(const AstNode* node2p) const {
-    return sameTreeIter(this, node2p, true, false);
+    SameJumpBlocks blocks;
+    return sameTreeIter(this, node2p, true, false, blocks);
 }
 bool AstNode::sameGateTree(const AstNode* node2p) const {
-    return sameTreeIter(this, node2p, true, true);
+    SameJumpBlocks blocks;
+    return sameTreeIter(this, node2p, true, true, blocks);
 }
 
 int AstNodeArrayDType::left() const VL_MT_STABLE { return rangep()->leftConst(); }
