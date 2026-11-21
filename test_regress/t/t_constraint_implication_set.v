@@ -79,8 +79,7 @@ class Forms;
   }
 endclass
 
-// Conditional `disable soft` is meta-level: V3Randomize hoists it into a
-// runtime AstIf attached to the setup task so the directive only fires
+// Conditional `disable soft` is meta-level: the directive only fires
 // when its outer condition is true.  When override_flag==0, the soft
 // `x == 4'h5` wins; when override_flag==1, the implication fires the
 // disable AND the override `x == 4'hc`, so x must be 4'hc.
@@ -111,9 +110,8 @@ class DisSoftMember;
   function new(); inner = new(); endfunction
 endclass
 
-// `disable soft` in BOTH then and else arms of a single if.  Exercises the
-// hoist-list concat path in the else branch (a then-arm hoist already
-// exists when the else-arm hoist is appended).  The hard constraint in each
+// `disable soft` in BOTH then and else arms of a single if, each applied
+// only under its own arm's condition.  The hard constraint in each
 // arm fires under its `pick` condition, and the soft constraint of the other
 // variable is kept.  The condition variable `pick` is non-rand so the setup
 // task sees its current value before the solver runs.
