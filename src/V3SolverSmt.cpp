@@ -1017,17 +1017,31 @@ class ConstraintExprVisitor final : public VNVisitor {
         return formatp;
     }
 
-    // Return a random array index widened to the 32-bit index sort of SMT arrays
+    // Return a random array index in the 32-bit index sort of solver arrays
     static AstNodeExpr* newSmtIndexp(AstNodeExpr* indexp, bool isSigned) {
-        if (indexp->width() >= 32) return indexp;
-        AstNodeExpr* extendp;
-        if (isSigned) {
-            extendp = new AstExtendS{indexp->fileline(), indexp, 32};
+        FileLine* const fl = indexp->fileline();
+        const int width = indexp->width();
+        AstNodeExpr* newp;
+        if (width < 32) {
+            newp = isSigned ? static_cast<AstNodeExpr*>(new AstExtendS{fl, indexp, 32})
+                            : new AstExtend{fl, indexp, 32};
+        } else if (width > 32) {
+            // Only a dynamic array or queue index can be wider. An index with any bit above 31
+            // set is out of range, so map it to the out of range index 2**32-1, not into range.
+            AstSel* const highp = new AstSel{fl, indexp->cloneTreePure(false), 32, width - 32};
+            AstEq* const inRangep
+                = new AstEq{fl, highp, new AstConst{fl, AstConst::WidthedValue{}, width - 32, 0}};
+            AstSel* const lowp = new AstSel{fl, indexp, 0, 32};
+            highp->user1(true);
+            inRangep->user1(true);
+            lowp->user1(true);
+            newp = new AstCond{fl, inRangep, lowp,
+                               new AstConst{fl, AstConst::WidthedValue{}, 32, 0xffffffffU}};
         } else {
-            extendp = new AstExtend{indexp->fileline(), indexp, 32};
+            return indexp;
         }
-        extendp->user1(true);
-        return extendp;
+        newp->user1(true);
+        return newp;
     }
     // Return an SMT array of the value of exprp at each element of the array selp selects
     AstSFormatF* newIndexedArrayp(AstNodeExpr* exprp, AstNodeExpr* selp) {
@@ -3037,6 +3051,11 @@ class ConstraintExprVisitor final : public VNVisitor {
                                                        VCMethod::DYN_SIZE}
                                   : nullptr;
                 AstNodeExpr* const originalPinp = nodep->pinsp();
+                if (indexIsRand) {
+                    // A negative index stays out of range when sign extended
+                    AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
+                    nodep->addPinsp(newSmtIndexp(pinp, pinp->isSigned()));
+                }
                 iterateChildren(nodep);
                 AstNodeExpr* const pinp = nodep->pinsp()->unlinkFrBack();
                 AstSFormatF* newp;
