@@ -51,6 +51,12 @@ class Single;
   }
 endclass
 
+// Long solver commands and replies, and many commands per randomize()
+class Long;
+  rand bit [19998:0] w;
+  constraint c {w != 0;}
+endclass
+
 module t;
 
   Packet p;
@@ -60,8 +66,15 @@ module t;
   initial begin
     p = new;
     v = p.randomize();
-    if (v != 1) $stop;
-    if (p.one != 1) $stop;
+    `checkd(v, 1);
+    `checkd(p.one, 1);
+    begin
+      Long l;
+      l = new;
+      v = l.randomize();
+      `checkd(v, 1);
+      `checkd(l.w != 0, 1);
+    end
 
     begin
       automatic Single s = new;
