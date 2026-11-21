@@ -438,8 +438,11 @@ class WidthVisitor final : public VNVisitor {
     ContainingClassFinder m_containingClassFinder;  // Finds the class containing a node
     std::unordered_set<AstVar*> m_aliasedVars;  // Variables referenced in alias
     std::unordered_set<const AstVar*> m_seqUntypedFormals;  // Untyped formals of current sequence
-    std::unordered_set<const AstVar*> m_seqAssignedFormals;  // Untyped sequence formals assigned
-    std::unordered_set<const AstVar*> m_assertLocalVars;  // Property and sequence locals
+    // Formals and local variables of the current property or sequence
+    std::unordered_set<const AstVar*> m_schemaVars;
+    // Formals that may be assigned through a sequence, kept for the whole pass as declarations
+    // are checked at instances anywhere
+    std::unordered_set<const AstVar*> m_assignedFormals;
     std::unordered_set<const AstVar*> m_curModVars;  // Variables declared in current module
     std::unordered_set<AstVar*> m_coercedPortps;  // Input net ports driven inside module
     std::unordered_set<const AstVar*> m_writtenInputps;  // Input net ports written by a reference
@@ -4666,11 +4669,9 @@ class WidthVisitor final : public VNVisitor {
             UASSERT_OBJ(nodep->dtypep(), nodep, "LHS var should be dtype completed");
         }
         // UINFOTREE(9, nodep, "", "VRout");
-        if (nodep->access().isWriteOrRW()) {
-            nodep->varp()->icoMaybeWritten(true);
-            if (m_seqUntypedFormals.count(nodep->varp())) {
-                m_seqAssignedFormals.emplace(nodep->varp());
-            }
+        if (nodep->access().isWriteOrRW()) nodep->varp()->icoMaybeWritten(true);
+        if (nodep->access().isWriteOrRW() && m_seqUntypedFormals.count(nodep->varp())) {
+            m_assignedFormals.emplace(nodep->varp());
         }
         if (nodep->access().isWriteOrRW() && nodep->varp()->direction() == VDirection::CONSTREF) {
             nodep->v3error("Assigning to const ref variable: " << nodep->prettyNameQ());
@@ -9836,9 +9837,9 @@ class WidthVisitor final : public VNVisitor {
     // Record the local variables of a property or sequence declaration
     void registerLocalVars(AstNodeSchema* const nodep, const char* const kindp) {
         for (AstNode* const declp : nodep->declspList()) {
-            AstVar* const varp = VN_AS(declp, Var);
-            if (varp->isIO()) continue;
-            m_assertLocalVars.emplace(varp);
+            // Declarations also hold typedefs of inline types, see V3LinkParse
+            AstVar* const varp = VN_CAST(declp, Var);
+            if (!varp || varp->isIO()) continue;
             // A sequence local variable initializer is not lowered; V3AssertElab lowers a property
             // one where the property is inlined
             if (VN_IS(nodep, Property)) continue;
@@ -9875,6 +9876,11 @@ class WidthVisitor final : public VNVisitor {
         for (const AstNode* const declp : nodep->declspList()) {
             const AstVar* const varp = VN_CAST(declp, Var);
             if (varp && !varp->isIO()) m_propLocalVarps.emplace(varp);
+        }
+        VL_RESTORER_CLEAR(m_schemaVars);
+        // Declarations also hold typedefs of inline types, see V3LinkParse
+        for (AstNode* const declp : nodep->declspList()) {
+            if (const AstVar* const varp = VN_CAST(declp, Var)) m_schemaVars.emplace(varp);
         }
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "PropSpec", nodep->specp(), SELF, BOTH);
@@ -9921,9 +9927,12 @@ class WidthVisitor final : public VNVisitor {
         // (IEEE 1800-2023 16.8.1, 16.10)
         VL_RESTORER_COPY(m_seqUntypedFormals);
         m_seqUntypedFormals.clear();
+        VL_RESTORER_CLEAR(m_schemaVars);
         for (AstNode* const declp : nodep->declspList()) {
             const AstVar* const varp = VN_CAST(declp, Var);
-            if (!varp || !varp->isInput()) continue;
+            if (!varp) continue;  // Typedef of an inline type, see V3LinkParse
+            m_schemaVars.emplace(varp);
+            if (!varp->isInput()) continue;
             const AstBasicDType* const basicp = VN_CAST(varp->childDTypep(), BasicDType);
             if (basicp && basicp->implicit()) m_seqUntypedFormals.insert(varp);
         }
@@ -9940,6 +9949,41 @@ class WidthVisitor final : public VNVisitor {
         checkSvaInstanceOperands(nodep->exprp(), true);
         nodep->didWidth(true);
     }
+    // The actual argument of a formal that may be assigned through a sequence must be an entire
+    // local variable (IEEE 1800-2023 16.10); a formal of the enclosing declaration passed on is
+    // checked at that declaration's instances
+    void checkAssignedActual(const AstVar* const portp, const AstNodeExpr* const actualp) {
+        const AstNodeExpr* rootp = actualp;  // Variable selected from, if a select or member
+        while (true) {
+            if (const AstNodePreSel* const selp = VN_CAST(rootp, NodePreSel)) {
+                rootp = selp->fromp();
+            } else if (const AstMemberRef* const memberp = VN_CAST(rootp, MemberRef)) {
+                rootp = memberp->fromp();
+            } else {
+                break;
+            }
+        }
+        const AstVarRef* const refp = VN_CAST(rootp, VarRef);
+        if (refp && m_schemaVars.count(refp->varp())) {
+            if (rootp != actualp) {
+                actualp->v3warn(E_UNSUPPORTED, "Unsupported: select or member as the actual"
+                                               " argument of formal "
+                                                   << portp->prettyNameQ()
+                                                   << ", which may be assigned through a"
+                                                      " sequence.");
+            } else if (refp->varp()->isIO()) {
+                m_assignedFormals.emplace(refp->varp());
+            }
+            return;
+        }
+        actualp->v3error("Formal argument "
+                         << portp->prettyNameQ()
+                         << " may be assigned through a sequence, so its actual argument must be"
+                            " an entire local variable (IEEE 1800-2023 16.10).\n"
+                         << actualp->warnMore()
+                         << "... Suggest passing a local variable of the enclosing property or"
+                            " sequence.");
+    }
     void visit(AstSchemaRef* nodep) override {
         const AstProperty* const propp = VN_CAST(nodep->schemap(), Property);
         if (propp && hasPropertyOperator(propp) && replacePropertyInSExpr(nodep)) return;
@@ -9947,24 +9991,10 @@ class WidthVisitor final : public VNVisitor {
         if (!m_underSvaExpr) checkSvaInstanceContext(nodep);
         if (needsTypedFormals(nodep->schemap())) typeUntypedFormals(nodep);
         userIterate(nodep->schemap(), nullptr);
-        bool illegalActual = false;
         for (const auto& tconnect : V3Task::taskConnects(nodep)) {
             const AstVar* const portp = tconnect.first;
             const AstArg* const argp = tconnect.second;
-            if (m_seqAssignedFormals.count(portp)) {
-                // The actual of an assigned formal is passed on to a formal of this sequence,
-                // or is an entire local variable (IEEE 1800-2023 16.10)
-                const AstVarRef* const refp = VN_CAST(argp->exprp(), VarRef);
-                if (refp && m_seqUntypedFormals.count(refp->varp())) {
-                    m_seqAssignedFormals.emplace(refp->varp());
-                } else if (!refp || !m_assertLocalVars.count(refp->varp())) {
-                    argp->exprp()->v3error("Actual argument of formal argument "
-                                           << portp->prettyNameQ()
-                                           << ", which the sequence assigns, is not an entire"
-                                              " local variable (IEEE 1800-2023 16.10).");
-                    illegalActual = true;
-                }
-            }
+            if (m_assignedFormals.count(portp)) checkAssignedActual(portp, argp->exprp());
             // An untyped formal preserves the actual argument's self-determined type, a typed
             // one casts it to its type (IEEE 1800-2023 16.8.1)
             if (portp->basicp() && portp->basicp()->untyped()) {
@@ -9984,12 +10014,6 @@ class WidthVisitor final : public VNVisitor {
                 iterateCheckAssign(nodep, "Function Argument", argp->exprp(), FINAL,
                                    portp->dtypep());
             }
-        }
-        if (illegalActual) {
-            VN_AS(nodep->schemap(), Sequence)->isReferenced(false);
-            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
-            VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
         }
         nodep->dtypeSetBit();
         nodep->didWidth(true);
