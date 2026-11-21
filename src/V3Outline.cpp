@@ -21,14 +21,16 @@
 // statement, such as the branches of an 'if' that call inlined tasks, the coroutine stays as
 // large as the whole process. A task or function that is not inlined is emitted as one C++
 // function, which V3Sched does not split at all, and C++ compilers also need super-linear time
-// for very large functions. This pass moves parts of such functions into sub-functions, until
-// each is no larger than --output-split-cfuncs.
+// for very large functions. This pass moves parts of such functions into sub-functions, to
+// bring each down to --output-split-cfuncs, as far as the statements that cannot move allow.
 //
-// For each coroutine, and each function made from a task or function, other than public ones:
+// For each coroutine, and each function made from a task or function, other than one that makes
+// its own process for its calls:
 //  1. Analysis: one traversal records the size of each statement in nodes, and whether it can
-//     move into another function: it cannot if it jumps out of itself, tests the condition
-//     of a loop around it, contains user C++ text, which may use C++ locals or return, or
-//     must stay in the function itself (VL_KEEP_THIS, the super.new call of a constructor).
+//     move into another function: it cannot if it jumps out of itself, returns, tests the
+//     condition of a loop around it, contains user C++ text, which may use C++ locals or
+//     return, uses an argument of a public function, or must stay in the function itself
+//     (VL_KEEP_THIS, the super.new call of a constructor).
 //  2. Decision: if the function is larger than the limit, take its statement list. Its
 //     statements larger than the limit stay in place, and the same is done first in each of
 //     them, with the statement lists directly under it. The consecutive movable statements in
@@ -41,11 +43,14 @@
 //     passed to it: its value from before a call of the new function is never read. A local
 //     passed to a coroutine stays, as the coroutine may keep it after returning, as the
 //     processes of a fork..join do until the join.
-//  4. Rewrite: each group moves into a new function, called in its place, with co_await if it
-//     suspends. Other local variables of the function that the group references are passed by
-//     reference. This runs before V3Localize, while most variables are module variables, so
-//     only the arguments and locals of tasks that are not inlined, including the variables of
-//     calls inlined into them, need passing.
+//  4. Rewrite: each group moves into a new function, an outline part, called in its place, with
+//     co_await if it suspends. Other local variables of the function that the group references
+//     are passed by reference, and so is the process of the function, leaving the current
+//     process unchanged. This runs before V3Localize, while most variables are module
+//     variables, so only the arguments and locals of tasks that are not inlined, including the
+//     variables of calls inlined into them, need passing. Statements using the arguments of a
+//     public function cannot move, so a public function using its arguments throughout is
+//     split only between them.
 //
 //*************************************************************************
 
@@ -92,6 +97,9 @@ class OutlineArgsVisitor final : public VNVisitor {
         const auto pair = m_argVscps.emplace(varp, nullptr);
         if (pair.second) {
             const bool constRef = varp->isConstRef();
+            // Combining does not compare argument directions, and an argument passed by const
+            // reference cannot be passed on by reference
+            if (constRef) m_funcp->dontCombine(true);
             pair.first->second
                 = V3Sched::util::newArgument(m_funcp, varp->dtypep(), varp->name(),
                                              constRef ? VDirection::CONSTREF : VDirection::REF);
@@ -159,6 +167,7 @@ class OutlineVisitor final : public VNVisitor {
     const size_t m_limit = static_cast<size_t>(v3Global.opt.outputSplitCFuncs());
     AstCFunc* m_funcp = nullptr;  // Current function
     size_t m_funcNum = 0;  // Number of functions outlined from the current function
+    std::string m_nameSuffix;  // Suffix of the names of functions outlined from the current one
     std::vector<StmtRange> m_groups;  // Statements to move, each group into a new function
     size_t m_count = 0;  // Number of nodes analyzed
     int m_depth = 0;  // Nesting depth of the statement being analyzed
@@ -360,25 +369,24 @@ class OutlineVisitor final : public VNVisitor {
     // declaring 'localps' in it
     void outline(AstNodeStmt* firstp, AstNodeStmt* lastp, const std::vector<AstVar*>& localps) {
         FileLine* const flp = firstp->fileline();
-        VNRelinker relinker;
-        firstp->unlinkFrBackWithNext(&relinker);
-        AstNode* const restp = lastp->nextp();
-        if (restp) restp->unlinkFrBackWithNext();
-
         AstScope* const scopep = m_funcp->scopep();
-        const std::string name = m_funcp->name() + "__outline" + cvtToStr(m_funcNum++);
+        const std::string name
+            = m_funcp->name() + "__outline" + cvtToStr(m_funcNum++) + m_nameSuffix;
         AstCFunc* const subFuncp = new AstCFunc{flp, name, scopep};
         scopep->addBlocksp(subFuncp);
         subFuncp->isStatic(m_funcp->isStatic());
         subFuncp->isLoose(m_funcp->isLoose());
         subFuncp->slow(m_funcp->slow());
-        subFuncp->addStmtsp(firstp);
-        // Take the process of the function, which makes one if a call needs it, else each new
-        // function would make its own
-        if (m_funcp->needsVlProcess() || firstp->existsAndNext([](const AstNodeCCall* callp) {
-                return callp->passesVlProcess();
-            })) {
-            subFuncp->setNeedsVlProcess();
+        subFuncp->isOutlinePart(true);
+        if (m_funcp->needsVlProcess()) subFuncp->setNeedsVlProcess();
+        // Move the statements one by one, as unlinking with the rest of a list takes time linear
+        // in the length of the rest
+        VNRelinker relinker;
+        AstNode* const endp = lastp->nextp();
+        for (AstNode *nodep = firstp, *nextp; nodep != endp; nodep = nextp) {
+            nextp = nodep->nextp();
+            nodep->unlinkFrBack(nodep == firstp ? &relinker : nullptr);
+            subFuncp->addStmtsp(VN_AS(nodep, NodeStmt));
         }
         AstCCall* const callp = new AstCCall{flp, subFuncp};
         callp->dtypeSetVoid();
@@ -401,7 +409,6 @@ class OutlineVisitor final : public VNVisitor {
         } else {
             stmtp = callp->makeStmt();
         }
-        if (restp) stmtp->addNext(restp);
         relinker.relink(stmtp);
         ++m_statFuncs;
     }
@@ -409,6 +416,8 @@ class OutlineVisitor final : public VNVisitor {
     void outlineFunc(AstCFunc* funcp) {
         m_funcp = funcp;
         m_funcNum = 0;
+        // V3Descope makes the names of public functions unique, but not of these
+        m_nameSuffix = funcp->funcPublic() ? "_" + funcp->scopep()->nameDotless() : "";
         m_count = 0;
         m_targetDepth = std::numeric_limits<int>::max();
         for (AstVar* const varp : funcp->varspList()) m_vars(varp) = VarInfo{true};
@@ -427,6 +436,8 @@ class OutlineVisitor final : public VNVisitor {
     void visit(AstLoopTest* nodep) override { analyze(nodep, m_info(nodep->loopp()).m_depth); }
     // Returns from the coroutine, so no statement containing it can move
     void visit(AstFinishFork* nodep) override { analyze(nodep, 0); }
+    // Returns from the function, so no statement containing it can move
+    void visit(AstCReturn* nodep) override { analyze(nodep, 0); }
     // VL_KEEP_THIS stays in the function
     void visit(AstCStmt* nodep) override {
         // It keeps 'this' alive until the coroutine ends
@@ -463,9 +474,13 @@ class OutlineVisitor final : public VNVisitor {
         ++m_count;
         iterateChildren(nodep);
     }
+    // The C++ types of the arguments of a public function differ from those of their
+    // variables, so no statement using them can move
     void visit(AstVarRef* nodep) override {
+        AstVar* const varp = nodep->varp();
+        if (m_funcp->funcPublic() && varp->isIO() && !varp->isFuncReturn()) m_targetDepth = 0;
         ++m_count;
-        ++m_vars(nodep->varp()).m_refs;
+        ++m_vars(varp).m_refs;
     }
     void visit(AstNode* nodep) override {
         ++m_count;
@@ -483,10 +498,15 @@ class OutlineVisitor final : public VNVisitor {
                 if (!scopep) continue;
                 for (AstNode* const blockp : scopep->blockspList()) {
                     AstCFunc* const funcp = VN_AS(blockp, CFunc);
-                    // Public functions return with a C++ 'return', and the C++ types of their
-                    // arguments differ from those of their variables
-                    if (funcp->funcPublic()) continue;
-                    if (funcp->isCoroutine() || funcp->fromFTask()) funcps.push_back(funcp);
+                    if (!funcp->isCoroutine() && !funcp->fromFTask()) continue;
+                    // A function without a process argument that makes its own process for its
+                    // calls stays whole, as code emitted for its parts would not see that process
+                    if (!funcp->needsVlProcess() && funcp->exists([](const AstNodeCCall* callp) {
+                            return callp->passesVlProcess();
+                        })) {
+                        continue;
+                    }
+                    funcps.push_back(funcp);
                 }
             }
         }
