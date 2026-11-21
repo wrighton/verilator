@@ -1448,6 +1448,87 @@ void AstConsArrayItem::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, index);
     Super::dumpJson(str);
 }
+void AstConsAssoc::addItemsp(AstConsAssocItem* nodep) {
+    m_keyItemps.clear();
+    m_keyIndexed = false;
+    addNOp2p(nodep);
+}
+const char* AstConsAssoc::broken() const {
+    BROKEN_RTN(!VN_IS(dtypep()->skipRefp(), AssocArrayDType));
+    if (m_keyIndexed) {
+        // The index has the first item of each key
+        size_t indexed = 0;
+        for (const AstConsAssocItem* const itemp : itemspList()) {
+            string key;
+            if (!keyText(itemp->keyp(), key)) continue;  // A NaN key is not indexed
+            const auto it = m_keyItemps.find(key);
+            BROKEN_RTN(it == m_keyItemps.end());
+            if (it->second == itemp) ++indexed;
+        }
+        BROKEN_RTN(indexed != m_keyItemps.size());
+    }
+    return nullptr;
+}
+void AstConsAssoc::cloneRelink() {
+    cloneRelinkGen();
+    // The copied index has the original items, so index the cloned items when next used
+    m_keyItemps.clear();
+    m_keyIndexed = false;
+}
+AstConsAssocItem* AstConsAssoc::itemByKeyp(const AstNodeExpr* keyp) {
+    string key;
+    if (!keyText(keyp, key)) return nullptr;
+    if (!m_keyIndexed) {
+        m_keyIndexed = true;
+        for (AstConsAssocItem* const itemp : itemspList()) {
+            V3Global::opCountInc();  // So scaling tests see the indexing
+            string itemKey;
+            // The first of equal keys is kept
+            if (keyText(itemp->keyp(), itemKey)) m_keyItemps.emplace(itemKey, itemp);
+        }
+    }
+    const auto it = m_keyItemps.find(key);
+    if (it == m_keyItemps.end()) return nullptr;
+    // An item changed other than by addItemsp() would not be indexed by its key
+    string itemKey;
+    const bool hasText = keyText(it->second->keyp(), itemKey);
+    UASSERT_OBJ(hasText && itemKey == key, it->second, "Index of keys out of date");
+    return it->second;
+}
+bool AstConsAssoc::keyText(const AstNodeExpr* nodep, string& keyr) {
+    if (const AstConst* const constp = VN_CAST(nodep, Const)) {
+        const V3Number& num = constp->num();
+        if (num.isDouble()) {
+            const double value = num.toDouble();
+            if (std::isnan(value)) return false;
+            // Equal reals have one text, so -0.0 has the zero bits of 0.0
+            V3Number bits{&num, 64};
+            if (value != 0.0) bits.opRealToBits(num);
+            keyr += "r" + bits.ascii(false) + ";";
+        } else if (num.isString()) {
+            keyr += "s" + cvtToStr(num.toString().size()) + ":" + num.toString();
+        } else {
+            keyr += "i" + num.ascii(false) + ";";
+        }
+        return true;
+    }
+    if (const AstConsStruct* const consp = VN_CAST(nodep, ConsStruct)) {
+        keyr += "{";
+        for (const AstConsStructItem* const itemp : consp->itemspList()) {
+            if (!keyText(itemp->valuep(), keyr)) return false;
+        }
+        keyr += "}";
+        return true;
+    }
+    const AstConsArray* const consp = VN_AS(nodep, ConsArray);
+    const int elements = VN_AS(consp->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+    keyr += "[";
+    for (int index = 0; index < elements; ++index) {
+        if (!keyText(consp->valuep(index), keyr)) return false;
+    }
+    keyr += "]";
+    return true;
+}
 const char* AstConsDynArray::broken() const {
     BROKEN_RTN(!VN_IS(dtypep()->skipRefp(), DynArrayDType));
     // Default only valid if sizep is present

@@ -288,6 +288,26 @@ public:
             for (AstConsStructItem* const itemp : structp->itemspList()) {
                 cleanTwoStateValue(itemp->valuep(), itemp->memberp()->subDTypep());
             }
+        } else if (AstConsAssoc* const assocp = VN_CAST(valuep, ConsAssoc)) {
+            cleanTwoStateItems(assocp->defaultp(), assocp->itemsp(), dtypep);
+        } else if (AstConsWildcard* const wildp = VN_CAST(valuep, ConsWildcard)) {
+            cleanTwoStateItems(wildp->defaultp(), wildp->itemsp(), dtypep);
+        } else if (AstConsDynArray* const dynp = VN_CAST(valuep, ConsDynArray)) {
+            cleanTwoStateItems(dynp->defaultp(), dynp->itemsp(), dtypep);
+        } else if (AstConsQueue* const queuep = VN_CAST(valuep, ConsQueue)) {
+            cleanTwoStateItems(queuep->defaultp(), queuep->itemsp(), dtypep);
+        }
+    }
+    // As cleanTwoStateValue(), for the default and the items of a container of type 'dtypep'.
+    // An item that is a constructor, e.g. an array spliced into a queue, has its own type.
+    template <typename T_Item>
+    static void cleanTwoStateItems(AstNodeExpr* defaultp, T_Item* itemsp, AstNodeDType* dtypep) {
+        AstNodeDType* const subDTypep = dtypep->skipRefp()->subDTypep();
+        if (defaultp) cleanTwoStateValue(defaultp, subDTypep);
+        for (T_Item* const itemp : VNList<T_Item>{itemsp}) {
+            AstNodeExpr* const itemValuep = itemp->valuep();
+            cleanTwoStateValue(itemValuep,
+                               VN_IS(itemValuep, NodeCons) ? itemValuep->dtypep() : subDTypep);
         }
     }
     static AstNodeExpr* defaultOf(FileLine* const flp, AstNodeDType* const dtypep) {

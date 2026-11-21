@@ -5191,17 +5191,31 @@ public:
 class AstConsAssoc final : public AstNodeCons {
     // Construct an associative array value, '{key: value, default: value}
     // @astgen op1 := defaultp : Optional[AstNodeExpr]
-    // @astgen op2 := itemsp : List[AstConsAssocItem]
+    // @astgen op2 := itemsp : private List[AstConsAssocItem]
+    // dist-ast-dump-suppress  // A lookup index of the itemsp list
+    std::unordered_map<string, AstConsAssocItem*> m_keyItemps;  // The item of each key
+    bool m_keyIndexed = false;  // Whether m_keyItemps is built, so even if empty
+    // Append to 'keyr' a text of the constant key 'nodep', the same for keys that match, or
+    // return false if it has a NaN, so matches no key
+    static bool keyText(const AstNodeExpr* nodep, string& keyr);
+
 public:
     explicit AstConsAssoc(FileLine* fl, AstNodeExpr* defaultp = nullptr)
         : ASTGEN_SUPER_ConsAssoc(fl) {
         this->defaultp(defaultp);
     }
     ASTGEN_MEMBERS_AstConsAssoc;
-    const char* broken() const override {
-        BROKEN_RTN(!VN_IS(dtypep()->skipRefp(), AssocArrayDType));
-        return nullptr;
+    const char* broken() const override;
+    void cloneRelink() override;
+    inline AstConsAssocItem* itemsp() const VL_MT_STABLE;
+    VNList<AstConsAssocItem> itemspList() const VL_MT_STABLE {
+        return VNList<AstConsAssocItem>{itemsp()};
     }
+    // Add items, so the index is built again when next used
+    void addItemsp(AstConsAssocItem* nodep);
+    // The item with the constant key 'keyp', or nullptr. The first call indexes the items,
+    // which must then be changed only by addItemsp().
+    AstConsAssocItem* itemByKeyp(const AstNodeExpr* keyp);
 };
 class AstConsDynArray final : public AstNodeCons {
     // Construct a dynamic array value, '{value, ...} and {value, array, ...}. With 'sizep',

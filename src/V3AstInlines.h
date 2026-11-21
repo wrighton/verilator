@@ -229,6 +229,9 @@ AstStmtExpr* AstNodeExpr::makeStmt() { return new AstStmtExpr{fileline(), this};
 AstConsArrayItem* AstConsArray::itemsp() const VL_MT_STABLE {
     return VN_DBG_AS(op2p(), ConsArrayItem);
 }
+AstConsAssocItem* AstConsAssoc::itemsp() const VL_MT_STABLE {
+    return VN_DBG_AS(op2p(), ConsAssocItem);
+}
 
 // Walk up the AST via backp() to find the containing AstNodeModule.
 // Returns nullptr if not found.
