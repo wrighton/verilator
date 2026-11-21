@@ -40,6 +40,9 @@ interface clkif (
     wait (t_pkg::go);
     seen_id = id;
   endtask
+  task automatic wait_any(output int seen_id);
+    @(*) seen_id = id;
+  endtask
 endinterface
 
 interface wrapif (
@@ -166,6 +169,18 @@ module t;
     seen_id = -1;
     vs.wait_pkg_go(seen_id);
     check("wait_pkg", $realtime - t0, 15, 25, seen_id, 1);
+
+    // Implicit event expression on the member, not the sibling's
+    fork
+      #10 sib_f.id = 5;
+      #30 main_s.id = 43;
+    join_none
+    t0 = $realtime;
+    seen_id = -1;
+    vs.wait_any(seen_id);
+    check("wait_star", $realtime - t0, 25, 35, seen_id, 43);
+    main_s.id = 1;
+    sib_f.id = 2;
 
     // Module-task wait on a task argument stays on the module path
     fork

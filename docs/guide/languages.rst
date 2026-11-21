@@ -105,6 +105,9 @@ With :vlopt:`--timing`, all timing controls are supported:
 
 - delay statements,
 - event control statements not only at the top of a process,
+- implicit event expressions (``@*``) of event control statements, and of
+  ``always @*`` blocks that contain a timing control, which wait for the
+  variables the statement reads,
 - intra-assignment timing controls,
 - net delays,
 - ``wait`` statements,
