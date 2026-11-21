@@ -1,0 +1,8 @@
+%Error-UNSUPPORTED: t/t_defparam_multiple_unsup.v:24:20: Unsupported: defparam to the same parameter as a defparam in another generate block of the same name
+   24 |     defparam m.s.P = 2;
+      |                    ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_defparam_multiple_unsup.v:33:22: Unsupported: defparam to the same parameter as a defparam in another generate block of the same name
+   33 |       defparam m.s.P = 4;
+      |                      ^
+%Error: Exiting due to
