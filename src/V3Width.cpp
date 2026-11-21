@@ -405,6 +405,7 @@ class WidthVisitor final : public VNVisitor {
     // For each item.index name in scope: its 'with' argument, and the declared index of the
     // array's storage index 0
     std::map<std::string, std::pair<const AstLambdaArgRef*, int>> m_withIndexes;
+    const AstWith* m_randomizeWithp = nullptr;  // Enclosing randomize-with object scope
     const AstFunc* m_funcp = nullptr;  // Current function
     const AstAttrOf* m_attrp = nullptr;  // Current attribute
     const AstNodeExpr* m_randomizeFromp = nullptr;  // Current randomize method call fromp
