@@ -287,7 +287,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     BaseToDerivedMap m_baseToDerivedMap;  // Mapping from base classes to classes that extend them
     std::vector<AstClass*> m_classps;  // All classes, in tree order
-    std::unordered_set<const AstConstraint*> m_cloneps;  // Constraints made by cloning
     AstClass* m_classp = nullptr;  // Current class
     AstNode* m_constraintExprGenp = nullptr;  // Current constraint or constraint if expression
     AstNodeModule* m_modp = nullptr;  // Current module
@@ -1114,12 +1113,65 @@ class RandomizeMarkVisitor final : public VNVisitor {
 
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
+    // Give shadowing rand members distinct names before any solver paths are built.
+    // Names on the current inheritance path are pushed and popped, so sibling classes
+    // do not affect each other and each declaration is visited only once.
+    void nameShadowedRandMembersRecurse(AstClass* const classp,
+                                        std::unordered_set<std::string>& names,
+                                        V3UniqueNames& uniqueNames,
+                                        std::unordered_set<AstVar*>& renamedVars) {
+        std::vector<std::string> addedNames;
+        for (AstNode* const memberp : classp->memberspList()) {
+            AstVar* const varp = VN_CAST(memberp, Var);
+            if (!varp) continue;
+            const std::string name = varp->name();
+            if (names.emplace(name).second) {
+                addedNames.push_back(name);
+            } else if (varp->rand().isRandomizable()) {
+                // IEEE 1800-2023 8.14: the hidden base member is a different variable.
+                varp->name(uniqueNames.get(name));
+                renamedVars.insert(varp);
+            }
+        }
+        const auto it = m_baseToDerivedMap.find(classp);
+        if (it != m_baseToDerivedMap.end()) {
+            for (AstClass* const derivedp : it->second) {
+                nameShadowedRandMembersRecurse(derivedp, names, uniqueNames, renamedVars);
+            }
+        }
+        for (const std::string& name : addedNames) names.erase(name);
+    }
+    void nameShadowedRandMembers(AstNode* const nodep) {
+        std::unordered_set<std::string> names;
+        std::unordered_set<AstVar*> renamedVars;
+        V3UniqueNames uniqueNames{"__VrandShadow"};
+        for (AstClass* const classp : m_classps) {
+            if (!classp->extendsp()) {
+                nameShadowedRandMembersRecurse(classp, names, uniqueNames, renamedVars);
+            }
+        }
+        // VarRef names follow varp(), but MemberRef keeps a separate name.
+        // Refresh only renamed references while all class members are still resolved.
+        nodep->foreach([&](AstMemberRef* const refp) {
+            if (renamedVars.count(refp->varp())) refp->name(refp->varp()->name());
+        });
+    }
+
 public:
     // CONSTRUCTORS
     RandomizeMarkVisitor(AstNode* nodep, ClonedConstraints& cloneObjps,
                          std::unordered_set<AstVar*>& elemModeArrays)
         : m_cloneObjps{cloneObjps}
         , m_elemModeArrays{elemModeArrays} {
+        // The traversal clones member constraints under names built from member names, so the
+        // hierarchy is recorded and shadowing members are named before it
+        nodep->foreach([&](AstClass* const classp) {
+            m_classps.push_back(classp);
+            if (classp->extendsp()) {
+                m_baseToDerivedMap[classp->extendsp()->classp()].push_back(classp);
+            }
+        });
+        nameShadowedRandMembers(nodep);
         iterateConst(nodep);
         markAllDerived();
         cloneMemberConstraints();
