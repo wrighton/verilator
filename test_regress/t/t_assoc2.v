@@ -10,6 +10,9 @@
 `define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
+class Key;
+endclass
+
 module t (
     input clk
 );
@@ -20,6 +23,37 @@ module t (
 
   // associative array of an associative array
   logic [31:0] a[logic [31:0]][logic [63:0]];
+
+  initial begin
+    // Index types need only be equivalent (IEEE 1800-2023 6.22.2, 7.9.9)
+    typedef string idx_t;
+    int src[string];
+    int dst[idx_t];
+    src["a"] = 7;
+    dst = src;
+    `checkh(dst["a"], 7);
+  end
+
+  initial begin
+    // A class index type is equivalent to itself
+    typedef Key key_t;
+    Key k;
+    int src[Key];
+    int dst[key_t];
+    k = new;
+    src[k] = 4;
+    dst = src;
+    `checkh(dst[k], 4);
+  end
+
+  initial begin
+    // Index types differing only in signedness are accepted
+    int src[int];
+    int dst[bit [31:0]];
+    src[5] = 9;
+    dst = src;
+    `checkh(dst[5], 9);
+  end
 
   task static disp();
     int i = 60;
