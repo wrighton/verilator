@@ -91,7 +91,6 @@ class SeqEventLowerVisitor final : public VNVisitor {
             if (automaticRefp) {
                 automaticRefp->v3error("Arguments to a sequence used as an event control must be"
                                        " static (IEEE 1800-2023 9.4.2.4)");
-                VN_AS(schemaRefp->schemap(), Sequence)->isReferenced(false);
                 schemaRefp->replaceWith(new AstConst{flp, AstConst::BitFalse{}});
                 VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
                 return;
@@ -412,8 +411,6 @@ class AssertElabVisitor final : public VNVisitor {
         substituteArgs(clonedp, schemaRefp, promoteLocalVars(seqp));
         schemaRefp->replaceWith(clonedp);
         VL_DO_DANGLING(pushDeletep(schemaRefp), schemaRefp);
-        // V3AssertPre reports sequences still referenced after inlining as unsupported
-        seqp->isReferenced(false);
         ++m_statSeqInlined;
     }
 
