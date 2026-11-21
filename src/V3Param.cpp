@@ -368,6 +368,11 @@ class ParamProcessor final {
     std::unordered_map<std::string, AstNode*> m_defparamValues;
     // Instance name -> original name of its module, for instances deparameterized so far
     std::unordered_map<string, string> m_instanceOrigNames;
+    // Module name -> whether a class in it or below it refers to its instance (see
+    // hasInstanceClasses), by name, as modules are created and deleted
+    std::map<std::string, bool> m_instanceClasses;
+    // Module name before per-instance copying -> number of instances seen so far
+    std::map<std::string, int> m_instanceCounts;
     VNDeleter m_deleter;  // Used to delay deletion of nodes
     // Class default type paramater dependencies
     std::vector<std::pair<AstParamTypeDType*, int>> m_classTypeParams;
@@ -767,6 +772,24 @@ class ParamProcessor final {
         // Instances above are deparameterized first; the top's name is its module's
         const auto it = m_instanceOrigNames.find(scope);
         return (it != m_instanceOrigNames.end() ? it->second : scope) == anchor;
+    }
+    // Return whether a class in the module, or in a module below it, refers to its instance
+    bool hasInstanceClasses(const AstNodeModule* modp) {
+        // A class is scoped once, so its code can only refer to one instance. A module below
+        // counts too, as it can only be copied per instance if its parents are.
+        // Interfaces are not copied, as a virtual interface may refer to any instance.
+        if (!VN_IS(modp, Module)) return false;
+        const auto pair = m_instanceClasses.emplace(modp->name(), false);
+        if (!pair.second) return pair.first->second;  // Searched, or being searched
+        const bool found = modp->exists([&](const AstNode* nodep) {
+            if (const AstClass* const classp = VN_CAST(nodep, Class)) {
+                return classp->instanceStateRefp() != nullptr;
+            }
+            const AstCell* const cellp = VN_CAST(nodep, Cell);
+            return cellp && hasInstanceClasses(cellp->modp());
+        });
+        pair.first->second = found;
+        return found;
     }
     // Check if parameter setting during instantiation is simple enough for hierarchical Verilation
     void checkSupportedParam(AstNodeModule* modp, AstPin* pinp) const {
@@ -2265,6 +2288,13 @@ class ParamProcessor final {
             // Defparams may give each instance different values (see nodeDeparam)
             longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
             any_overrides = true;
+        }
+        if (VN_IS(nodep, Cell) && !srcModp->hierBlock() && hasInstanceClasses(srcModp)) {
+            // A class referring to its module's instance needs a copy for each instance
+            if (const int count = m_instanceCounts[longname]++) {
+                longname += "__Vinst" + std::to_string(count);
+                any_overrides = true;
+            }
         }
 
         UINFO(9,
