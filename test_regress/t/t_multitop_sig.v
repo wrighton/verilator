@@ -37,6 +37,24 @@ module c (
   initial $display("In '%m'");
 endmodule
 
+package d_pkg;
+  localparam int W = 1;
+endpackage
+
+// Ports named like the instances of top modules and packages
+module d (
+    a,
+    d_pkg,
+    d
+);
+  input a;
+  input [d_pkg::W-1:0] d_pkg;
+  output d;
+  assign d = a ^ d_pkg;
+  sub sub ();
+  initial $display("In '%m'");
+endmodule
+
 module sub;
   initial $display("In '%m'");
 endmodule

@@ -214,10 +214,23 @@ void V3LinkLevel::wrapTopCell(AstNetlist* rootp) {
     AstNodeModule* const newmodp = rootp->modulesp();
     UASSERT_OBJ(newmodp && newmodp->isTop(), rootp, "No TOP module found to insert under");
 
-    // Find all duplicate signal names (if multitop)
+    const auto cellName = [](const AstNodeModule* modp) {
+        return !v3Global.opt.l2Name().empty() ? v3Global.opt.l2Name() : modp->name();
+    };
+
+    // Find all signal names that need a prefix to be unique
     using NameSet = std::unordered_set<std::string>;
     NameSet ioNames;
     NameSet dupNames;
+    // Signals must also not clash with the instances of the top modules, nor with the
+    // instances of packages wrapTop adds later, as all share the new top's namespace.
+    for (const AstNodeModule* const modp : rootp->modulespList()) {
+        if (VN_IS(modp, Package)) {
+            ioNames.insert(modp->name());
+        } else if (modp != newmodp && modp->isTop()) {
+            ioNames.insert(cellName(modp));
+        }
+    }
     // For all modules, skipping over new top
     // cppcheck-suppress constVariablePointer
     for (AstNodeModule* oldmodp = VN_AS(rootp->modulesp()->nextp(), NodeModule);
@@ -251,14 +264,13 @@ void V3LinkLevel::wrapTopCell(AstNetlist* rootp) {
         if (VN_IS(oldmodp, Package)) continue;
         // Add instance
         UINFO(5, "LOOP " << oldmodp);
-        AstCell* const cellp = new AstCell{
-            newmodp->fileline(),
-            newmodp->fileline(),
-            (!v3Global.opt.l2Name().empty() ? v3Global.opt.l2Name() : oldmodp->name()),
-            oldmodp->name(),
-            nullptr,
-            nullptr,
-            nullptr};
+        AstCell* const cellp = new AstCell{newmodp->fileline(),
+                                           newmodp->fileline(),
+                                           cellName(oldmodp),
+                                           oldmodp->name(),
+                                           nullptr,
+                                           nullptr,
+                                           nullptr};
         cellp->modp(oldmodp);
         newmodp->addStmtsp(cellp);
 
@@ -269,6 +281,14 @@ void V3LinkLevel::wrapTopCell(AstNetlist* rootp) {
                 if (oldvarp->isIO()) {
                     string name = oldvarp->name();
                     if (dupNames.find(name) != dupNames.end()) {
+                        // A library's wrapper would need the prefixed name for its port
+                        if (!v3Global.opt.libCreate().empty()) {
+                            oldvarp->v3warn(E_UNSUPPORTED,
+                                            "Unsupported: --lib-create or hierarchical block"
+                                            " input/output with the same name as its module or"
+                                            " a package: "
+                                                << oldvarp->prettyNameQ());
+                        }
                         // __02E=. while __DOT__ looks nicer but will break V3LinkDot
                         name = oldmodp->name() + "__02E" + name;
                     }
