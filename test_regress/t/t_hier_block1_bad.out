@@ -5,13 +5,17 @@
       |        ^
                     ... For warning description see https://verilator.org/warn/HIERBLOCK?v=latest
                     ... Use "/* verilator lint_off HIERBLOCK */" and lint_on around source to disable this message.
-%Error: t/t_hier_block1_bad.v:59:23: Modport cannot be used at the hierarchical block boundary
+%Error: t/t_hier_block1_bad.v:60:23: Interface port 'in' cannot be used at the hierarchical block boundary.
                                    : ... note: In instance 't.i_sub1'
-   59 |     byte_ifs.receiver in,
+   60 |     byte_ifs.receiver in,
       |                       ^~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_hier_block1_bad.v:60:21: Modport cannot be used at the hierarchical block boundary
+%Error: t/t_hier_block1_bad.v:61:21: Interface port 'out' cannot be used at the hierarchical block boundary.
                                    : ... note: In instance 't.i_sub1'
-   60 |     byte_ifs.sender out
+   61 |     byte_ifs.sender out
       |                     ^~~
+%Error: t/t_hier_block1_bad.v:68:14: Interface port 'bus' cannot be used at the hierarchical block boundary.
+                                   : ... note: In instance 't.i_sub2'
+   68 |     byte_ifs bus
+      |              ^~~
 %Error: Exiting due to
