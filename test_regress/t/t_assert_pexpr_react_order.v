@@ -192,6 +192,41 @@ module t;
     end
   end
 
+  // Test: a method shared by both regions resumes each invocation in its own region.
+  // The Active waiter sees the old value; the Reactive waiter sees the producer's NBA.
+  // Registration order within each region checks Verilator determinism, not LRM ordering.
+  Box mixedBox = new;
+  int mixedData = 0;
+  int mixedActive = -1, mixedActive2 = -1;
+  int mixedReactive = -1, mixedReactive2 = -1;
+  int mixedOrder = 0;
+  initial begin
+    mixedBox.take(mixedActive, mixedData);
+    mixedOrder = mixedOrder * 10 + 1;
+  end
+  initial begin
+    #10;
+    mixedBox.take(mixedActive2, mixedData);
+    mixedOrder = mixedOrder * 10 + 2;
+  end
+  assert property (@(posedge clk) p until q)
+  else begin
+    if (cyc == 1) begin
+      mixedBox.take(mixedReactive, mixedData);
+      mixedOrder = mixedOrder * 10 + 3;
+    end else if (cyc == 2) begin
+      mixedBox.take(mixedReactive2, mixedData);
+      mixedOrder = mixedOrder * 10 + 4;
+    end
+  end
+  // Fire on a separate edge after the second Reactive waiter has registered.
+  always @(negedge clk) begin
+    if (cyc == 2) begin
+      mixedData <= 1;
+      ->mixedBox.e;
+    end
+  end
+
   always #5 clk = ~clk;
   always @(posedge clk) cyc <= cyc + 1;
 
@@ -216,6 +251,11 @@ module t;
       `checkd(rb, 1);
       `checkd(seen_b, 0);
       `checkd(seen_b2, 0);
+      `checkd(mixedActive, 0);
+      `checkd(mixedActive2, 0);
+      `checkd(mixedReactive, 1);
+      `checkd(mixedReactive2, 1);
+      `checkd(mixedOrder, 1234);
       `checkd(rl, 9);
       `checkd(seen_l, 9);
       `checkd(dfk2, 0);
