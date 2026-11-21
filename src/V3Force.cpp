@@ -92,12 +92,11 @@ public:
         std::unordered_map<AstAssignForce*, ForceInfo> m_forces;
         std::unordered_map<string, int> m_forcePathToIndex;
         int m_nextForcePathIndex = 1;  // Start at 1 so 0 can be the base path (whole signal)
-        // Forces of this variable sorted by ascending range, with a segment tree of the
-        // highest range end in each span of them, to find those a read selects. Built when
-        // the number of forces last changed.
-        mutable std::vector<const ForceInfo*> m_forcesByRange;
-        mutable std::vector<int> m_maxMsbTree;
-        mutable std::size_t m_indexedForces = 0;
+        // Index of the forces of this variable, to find those a read selects. Built when the
+        // number of forces last changed.
+        mutable std::vector<const ForceInfo*> m_forcesByRange;  // The forces, by ascending range
+        mutable std::vector<int> m_maxMsbTree;  // Highest range end in each span of them
+        mutable std::size_t m_indexedForces = 0;  // Number of forces the index was built from
 
     private:
         void buildRangeIndex() const {
