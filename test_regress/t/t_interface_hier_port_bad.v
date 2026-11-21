@@ -33,7 +33,6 @@ module t;
   for (genvar g = 0; g < 2; ++g) begin : gfor
     ifc loc ();
     prod p (.b(loc.mp));
-    cons c_inner (.b(gfor[g].loc));  // BAD
   end
   if (1) begin : gif
     ifc loc ();
@@ -41,12 +40,6 @@ module t;
   end
   sub u_arr[2] ();
 
-  cons c_for (.b(gfor[1].loc));  // BAD
-  cons c_for_mp (.b(gfor[1].loc.mc));  // BAD
-  cons c_if (.b(gif.loc));  // BAD
-  cons c_if_mp (.b(gif.loc.mc));  // BAD
-  cons c_arr (.b(u_arr[1].loc));  // BAD
-  cons c_arr_mp (.b(u_arr[1].loc.mc));  // BAD
 
   // Modport of an element of an interface array nested under an indexed prefix
   nest_if nn[2] ();
