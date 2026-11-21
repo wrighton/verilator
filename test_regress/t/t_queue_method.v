@@ -165,6 +165,17 @@ module t;
 
     qi = q.find_index with (item.index == 2);
     `checkp(qi, "'{'h2}");
+    // Index results and item.index are int (IEEE 1800-2023 7.12.1, 7.12.4)
+    qi = q.find_last_index with (item == 2);
+    `checkh(qi[0] - 3 < 0, 1'b1);
+    qi = q.unique_index;
+    `checkh(qi[0] - 5 < 0, 1'b1);
+    qi = q.find_index with (item.index - 2 < 0);
+    qi.sort;
+    `checkp(qi, "'{'h0, 'h1}");
+    `checkh(q.sum with (int'(item.index - 2 < 0)), 2);
+    `checks($typename(q.map with (item.index)), "int$[$]");
+    `checks($typename(string_q.find_index with (item == "a")), "int$[$]");
     qi = q.find_index with (item.index == item);
     `checkp(qi, "'{'h2, 'h3, 'h4}");
 
