@@ -468,7 +468,8 @@ void VlDynamicTriggerScheduler::addWaiter(VlEvent& event, std::shared_ptr<VlEven
     // A waiter that evaluates its trigger retires the fired state of the event by its own post
     // update, as when evaluating its trigger at every evaluate()
     const size_t index = list.m_waiters.size();
-    if (!coro.promise().m_listEvaluates) {
+    const bool evaluates = coro.promise().m_listWait == VlPromise::ListWait::EVALUATE;
+    if (!evaluates) {
         // The waiters to resume are resumed in the order their lists got their first such
         // waiter, as when only they were on wait lists, whatever waiters to evaluate the lists
         // got before (see wakePending)
@@ -485,7 +486,7 @@ void VlDynamicTriggerScheduler::addWaiter(VlEvent& event, std::shared_ptr<VlEven
     // A killed process runs on until it waits, which only leaves its destruction
     if (VlProcess* const processp = list.m_waiters[index].processp()) {
         processp->waitIndex(index);
-        processp->waitEvaluates(coro.promise().m_listEvaluates);
+        processp->waitEvaluates(evaluates);
         processp->waitListp(&list);
         if (VL_UNLIKELY(processp->state() == VlProcess::KILLED)) list.noteKilled(*processp);
     }
@@ -819,7 +820,15 @@ bool VlDynamicTriggerScheduler::wakePending(VlCoroutineVec& killed) {
             for (VlCoroutineHandle& coro : waiters) {
                 if (!coro.framep()) continue;  // Left empty by a dropped killed waiter
                 coro.waitListp(nullptr);
-                (coro.listEvaluates() ? m_listWoken : m_triggered).push_back(std::move(coro));
+                switch (coro.listWait()) {
+                case VlPromise::ListWait::ACTIVE: m_triggered.push_back(std::move(coro)); break;
+                case VlPromise::ListWait::REACTIVE:
+                    // Transfer ownership after unlinking the waiter, just as for Active.
+                    // Trigger evaluation is serialized with the Reactive scheduler's resume.
+                    m_reactiveSchedp->m_fired.push_back(std::move(coro));
+                    break;
+                case VlPromise::ListWait::EVALUATE: m_listWoken.push_back(std::move(coro)); break;
+                }
             }
             // The waiters keep the event alive until the post update step, but not an
             // assignable event, which the list keeps alive. A list replaced on its event

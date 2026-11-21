@@ -2577,6 +2577,22 @@ class TimingReactiveVisitor final : public VNVisitor {
                 new AstIf{flp, new AstVarRef{flp, inReactivep, VAccess::READ}, twinp, awaitp});
             return;
         }
+        if (methodp && methodp->method() == VCMethod::SCHED_EVENT_TRIGGER) {
+            // A listed event can fire in Reactive. Route the waiter to its region at drain
+            // time, before Re-NBA, rather than resuming in Active and hopping back afterward.
+            AstCAwait* const reactAwaitp = funcp ? awaitp->cloneTree(false) : awaitp;
+            AstCMethodHard* const reactMethodp = VN_AS(reactAwaitp->exprp(), CMethodHard);
+            reactMethodp->method(VCMethod::SCHED_EVENT_TRIGGER_REACTIVE);
+            reactMethodp->addPinsp(new AstVarRef{flp, getCreateSchedp(false), VAccess::WRITE});
+            if (funcp) {
+                // The same method can also be called from Active; keep ordinary registrations.
+                VNRelinker handle;
+                awaitp->unlinkFrBack(&handle);
+                handle.relink(new AstIf{flp, new AstVarRef{flp, inReactivep, VAccess::READ},
+                                        reactAwaitp, awaitp});
+            }
+            return;
+        }
         // A dynamic trigger found set when evaluated, also in the reactive region set, resumes
         // the process from the 'act' region; one of the reactive region set is resumed in it
         // instead (see V3Sched)
