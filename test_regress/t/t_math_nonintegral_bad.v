@@ -76,4 +76,14 @@ module t (
     b = x <-> s;
     b = !s;
   end
+
+  // A wildcard associative array is not a numeric operand either
+  initial begin
+    int wa[*];
+    int i;
+    i = wa + 1;
+    if (wa) i = 1;
+    i = wa ? 1 : 0;
+    i = wa;
+  end
 endmodule
