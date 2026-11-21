@@ -131,9 +131,14 @@ module t;
     arr_t a;
     arr_t b;
     arr_t exp_b;
+    longint wide_index;
     a = f_arr();
     b = a;
     for (int i = 0; i < 3; ++i) b[i][1] = 5;
+    wide_index = 64'h1_0000_0003;
+    // verilator lint_off WIDTHTRUNC
+    b[wide_index][0] = 6;
+    // verilator lint_on WIDTHTRUNC
     exp_b = '{'{30, 31}, '{30, 5}, '{10, 5}};
     f_compare = int'({29'(0), b == exp_b, a == f_arr(), a != b});
   endfunction
