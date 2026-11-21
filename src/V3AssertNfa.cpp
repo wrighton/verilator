@@ -392,6 +392,8 @@ class SvaNfaBuilder final {
     bool m_inEmptyMatchConsequent = false;
     // Building a sequence 'or' that only records matches (see buildOrMerge)
     bool m_inMergeOr = false;
+    bool m_atRootOr = false;  // Building the 'or' at the root of the property (see buildOrMerge)
+    const AstNodeExpr* m_rootp = nullptr;  // Root of the property being built
     // Building the end of a property body, after any sequence concatenation or implication, and
     // inside no other property operator (see buildExpr)
     bool m_atSeqEnd = true;
@@ -1454,13 +1456,6 @@ class SvaNfaBuilder final {
                    || (notp && hasMultiCycleExpr(notp->lhsp()));
         });
     }
-    // Whether a property operand detects failures without the 'or' merge vertex
-    static bool hasOwnFailure(const AstNode* const nodep) {
-        return nodep->exists([](const AstNodeExpr* const np) {
-            const AstAbortOn* const abortp = VN_CAST(np, AbortOn);
-            return VN_IS(np, PropAlways) || (abortp && !abortp->kind().isAccept());
-        });
-    }
     // Describe an asserted 'or' that buildFixedSeqOrProp does not handle
     static std::string orUnsupportedContext(AstNodeExpr* lhsp, AstNodeExpr* rhsp,
                                             bool wantBoolLeaf) {
@@ -1619,11 +1614,14 @@ class SvaNfaBuilder final {
                 return {entryVtxp, orCondp, {}};
             }
         }
-        // An 'always' or 'reject_on' operand rejects on its own, and keeps the failures that
-        // the merge vertex below reports, including those at the end of simulation
-        const bool ownFailure = (isPropertyOperand(lhsp) || isPropertyOperand(rhsp))
-                                && (hasOwnFailure(lhsp) || hasOwnFailure(rhsp));
-        if (canFail && !m_isNegated && !m_isSeqEvent && !booleanOnly && !ownFailure) {
+        // At the root of a property, two 'always' operands of the same strength reject on their
+        // own, failing on the ticks upstream does; at the end of simulation two strong operands
+        // can report differently from upstream, and neither is exact there
+        const AstPropAlways* const lAlwaysp = VN_CAST(lhsp, PropAlways);
+        const AstPropAlways* const rAlwaysp = VN_CAST(rhsp, PropAlways);
+        const bool rootAlwaysOr
+            = m_atRootOr && lAlwaysp && rAlwaysp && lAlwaysp->isStrong() == rAlwaysp->isStrong();
+        if (canFail && !m_isNegated && !m_isSeqEvent && !booleanOnly && !rootAlwaysOr) {
             // The merge vertex below would drop an attempt in which every operand fails
             flp->v3warn(E_UNSUPPORTED,
                         "Unsupported: " << orUnsupportedContext(lhsp, rhsp, wantBoolLeaf));
@@ -2848,10 +2846,14 @@ public:
         }
         if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
             m_atSeqEnd = atSeqEnd && !isPropertyOperand(orp);
+            VL_RESTORER(m_atRootOr);
+            m_atRootOr = orp == m_rootp;
             return buildOrMerge(orp->lhsp(), orp->rhsp(), entryVtxp, orp->fileline(),
                                 wantBoolLeaf);
         }
         if (AstLogOr* const orp = VN_CAST(nodep, LogOr)) {
+            VL_RESTORER(m_atRootOr);
+            m_atRootOr = false;
             return buildOrMerge(orp->lhsp(), orp->rhsp(), entryVtxp, orp->fileline(),
                                 wantBoolLeaf);
         }
@@ -3062,6 +3064,8 @@ public:
         m_graph.m_startVertexp = scopedCreateVertex();
         VL_RESTORER(m_wantBoolLeaf);
         m_wantBoolLeaf = true;
+        VL_RESTORER(m_rootp);
+        m_rootp = exprp;
         // A variable-length 'within' is supported as the whole sequence of a declarative cover
         // property, where each attempt is reported once, see buildVarLenWithin
         AstSWithin* const withinp = VN_CAST(exprp, SWithin);
