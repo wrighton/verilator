@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2024 Antmicro
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 class Foo;
   rand int zero;
   int two;
@@ -70,7 +75,121 @@ class Boo extends Bar;
   rand int five;
 endclass
 
+class Item;
+  rand int x;
+  rand int y;
+  int w;
+
+  function void set;
+    x = 1;
+    y = 2;
+    w = 3;
+  endfunction
+
+  function bit [2:0] changed;
+    return {w != 3, y != 2, x != 1};
+  endfunction
+endclass
+
+class Holder;
+  rand int r;
+  Item tr = new;
+
+  function void randomize_w;
+    void'(tr.randomize(w));
+  endfunction
+endclass
+
+class HolderExt extends Holder;
+  function void randomize_this_y;
+    void'(this.tr.randomize(y));
+  endfunction
+
+  function void randomize_super_x;
+    void'(super.tr.randomize(x));
+  endfunction
+endclass
+
+class Outer;
+  rand int r;
+  Holder b = new;
+endclass
+
 module t;
+  int idx_calls;
+  function automatic int idx_count(int i);
+    idx_calls++;
+    return i;
+  endfunction
+
+  // randomize() with arguments on a target selected through members or an array
+  task automatic test_selected_target;
+    automatic Holder b = new;
+    automatic HolderExt d = new;
+    automatic Outer a = new;
+    automatic Item h[3];
+    automatic int idx = 1;
+    automatic bit [2:0] changed[10];
+    automatic int randomize_result;
+    foreach (h[k]) h[k] = new;
+    for (int i = 0; i < 20; i++) begin
+      b.tr.set();
+      randomize_result = b.tr.randomize(x);
+      `checkd(randomize_result, 1);
+      changed[0] |= b.tr.changed();
+      d.tr.set();
+      randomize_result = d.tr.randomize(x);
+      `checkd(randomize_result, 1);
+      changed[1] |= d.tr.changed();
+      d.tr.set();
+      d.randomize_this_y();
+      d.randomize_super_x();
+      changed[2] |= d.tr.changed();
+      a.b.tr.set();
+      randomize_result = a.b.tr.randomize(x, y);
+      `checkd(randomize_result, 1);
+      changed[3] |= a.b.tr.changed();
+      foreach (h[k]) h[k].set();
+      randomize_result = h[1].randomize(w);
+      `checkd(randomize_result, 1);
+      changed[4] |= h[0].changed() | h[2].changed();
+      changed[5] |= h[1].changed();
+      h[idx].set();
+      randomize_result = h[idx].randomize(y) with {y > 2;};
+      `checkd(randomize_result, 1);
+      if (h[idx].y <= 2) `stop;
+      changed[6] |= h[idx].changed();
+      // A null argument is not an argument list, so the target may have side effects
+      randomize_result = h[idx_count(2)].randomize(null);
+      `checkd(randomize_result, 1);
+      // Randomizing a member of the target does not make the target rand
+      b.randomize_w();
+      b.tr.set();
+      randomize_result = b.randomize();
+      `checkd(randomize_result, 1);
+      changed[7] |= b.tr.changed();
+      a.b.tr.set();
+      randomize_result = a.randomize();
+      `checkd(randomize_result, 1);
+      randomize_result = a.b.randomize();
+      `checkd(randomize_result, 1);
+      changed[8] |= a.b.tr.changed();
+      b.tr.set();
+      b.randomize_w();
+      changed[9] |= b.tr.changed();
+    end
+    `checkd(changed[0], 3'b001);
+    `checkd(changed[1], 3'b001);
+    `checkd(changed[2], 3'b011);
+    `checkd(changed[3], 3'b011);
+    `checkd(changed[4], 3'b000);
+    `checkd(changed[5], 3'b100);
+    `checkd(changed[6], 3'b010);
+    `checkd(changed[7], 3'b000);
+    `checkd(changed[8], 3'b000);
+    `checkd(changed[9], 3'b100);
+  endtask
+
   initial begin
     automatic Boo boo = new;
     automatic Bar bar = boo;
@@ -149,6 +268,8 @@ module t;
       if (qux.baz.four != 30000) ok[2] = 1;
     end
     if (ok != 'b111) $stop;
+
+    test_selected_target();
 
     $write("*-* All Finished *-*\n");
     $finish;
