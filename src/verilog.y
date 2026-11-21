@@ -3650,12 +3650,16 @@ stmtList<nodeStmtp>:
         |       stmtList error ';'                      { $$ = $1; }  // LCOV_EXCL_LINE
         ;
 
-stmt<nodeStmtp>:                    // IEEE: statement + statement_or_null + seq_block + par_block
+stmt<nodeStmtp>:                    // IEEE: statement_or_null
+                stmtNotNull                             { $$ = $1; }
+        //                      // from _or_null
+        |       ';'                                     { $$ = nullptr; }
+        ;
+
+stmtNotNull<nodeStmtp>:             // IEEE: statement + seq_block + par_block
                 statement_item                          { $$ = $1; }
         //                      // S05 block creation rule
         |       id/*block_identifier*/ ':' statement_item       { $$ = new AstBegin{$<fl>1, *$1, $3, false}; }
-        //                      // from _or_null
-        |       ';'                                     { $$ = nullptr; }
         //                      // labeled par_block/seq_block with leading ':'
         |       seq_blockPreId                          { $$ = $1; }
         |       par_blockPreId                          { $$ = $1; }
@@ -6613,12 +6617,15 @@ immediate_assertion_statement<nodeStmtp>:   // ==IEEE: immediate_assertion_state
 
 simple_immediate_assertion_statement<nodeStmtp>:    // ==IEEE: simple_immediate_assertion_statement
         //                      // action_block expanded here, for compatibility with AstAssert
-                assertOrAssume '(' expr ')' stmt %prec prLOWER_THAN_ELSE
+                assertOrAssume '(' expr ')' stmtNotNull %prec prLOWER_THAN_ELSE
                         { $$ = new AstAssert{$<fl>1, $3, $5, nullptr, VAssertType::SIMPLE_IMMEDIATE, $1}; }
+        //                      // A null pass statement is not followed by 'else'
+        |       assertOrAssume '(' expr ')' ';'
+                        { $$ = new AstAssert{$<fl>1, $3, nullptr, nullptr, VAssertType::SIMPLE_IMMEDIATE, $1}; }
         |       assertOrAssume '(' expr ')'           yELSE stmt
                         { $$ = new AstAssert{$<fl>1, $3, nullptr, V3ParseGrammar::elseAction($5, $6),
                                              VAssertType::SIMPLE_IMMEDIATE, $1}; }
-        |       assertOrAssume '(' expr ')' stmt yELSE stmt
+        |       assertOrAssume '(' expr ')' stmtNotNull yELSE stmt
                         { $$ = new AstAssert{$<fl>1, $3, $5, V3ParseGrammar::elseAction($6, $7),
                                              VAssertType::SIMPLE_IMMEDIATE, $1}; }
         //                      // IEEE: simple_immediate_cover_statement
@@ -6640,12 +6647,14 @@ final_zero<asserttypeen>:                     // IEEE: part of deferred_immediat
 
 deferred_immediate_assertion_statement<nodeStmtp>:  // ==IEEE: deferred_immediate_assertion_statement
         //                      // IEEE: deferred_immediate_assert_statement
-                assertOrAssume final_zero '(' expr ')' stmt %prec prLOWER_THAN_ELSE
+                assertOrAssume final_zero '(' expr ')' stmtNotNull %prec prLOWER_THAN_ELSE
                         { $$ = new AstAssert{$<fl>1, $4, $6, nullptr, $2, $1}; }
+        |       assertOrAssume final_zero '(' expr ')' ';'
+                        { $$ = new AstAssert{$<fl>1, $4, nullptr, nullptr, $2, $1}; }
         |       assertOrAssume final_zero '(' expr ')'           yELSE stmt
                         { $$ = new AstAssert{$<fl>1, $4, nullptr, V3ParseGrammar::elseAction($6, $7),
                                              $2, $1}; }
-        |       assertOrAssume final_zero '(' expr ')' stmt yELSE stmt
+        |       assertOrAssume final_zero '(' expr ')' stmtNotNull yELSE stmt
                         { $$ = new AstAssert{$<fl>1, $4, $6, V3ParseGrammar::elseAction($7, $8),
                                              $2, $1}; }
         //                      // IEEE: deferred_immediate_cover_statement
@@ -6666,9 +6675,11 @@ concurrent_assertion_statement<nodeStmtp>:  // ==IEEE: concurrent_assertion_stat
         //                      // IEEE: assert_property_statement
         //                      // IEEE: assume_property_statement
         //                      // action_block expanded here
-                assertOrAssume yPROPERTY '(' property_spec ')' stmt %prec prLOWER_THAN_ELSE
+                assertOrAssume yPROPERTY '(' property_spec ')' stmtNotNull %prec prLOWER_THAN_ELSE
                         { $$ = new AstAssert{$<fl>1, $4, $6, nullptr, VAssertType::CONCURRENT, $1}; }
-        |       assertOrAssume yPROPERTY '(' property_spec ')' stmt yELSE stmt
+        |       assertOrAssume yPROPERTY '(' property_spec ')' ';'
+                        { $$ = new AstAssert{$<fl>1, $4, nullptr, nullptr, VAssertType::CONCURRENT, $1}; }
+        |       assertOrAssume yPROPERTY '(' property_spec ')' stmtNotNull yELSE stmt
                         { $$ = new AstAssert{$<fl>1, $4, $6, V3ParseGrammar::elseAction($7, $8),
                                              VAssertType::CONCURRENT, $1}; }
         |       assertOrAssume yPROPERTY '(' property_spec ')' yELSE stmt
