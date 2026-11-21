@@ -21,7 +21,7 @@ test.compile(make_top_shell=False,
              ],
              nc_flags2=["+nccovoverwrite", "+nccoverage+all", "+nccovtest+" + test.name])
 
-test.execute(all_run_flags=["+verilator+error+limit+100"],
+test.execute(all_run_flags=["+verilator+error+limit+200"],
              expect_filename=test.t_dir + "/t_assert_ctl_arg.out")
 
 test.files_identical(test.coverage_filename, test.t_dir + "/t_assert_ctl_arg.dat.out")

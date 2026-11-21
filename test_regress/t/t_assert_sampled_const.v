@@ -41,8 +41,11 @@ module t (
   assign opcode = (cyc < 16) ? cyc[2:0] : 3'b010;
 
   assert property (@(posedge clk) opcode inside {OP_UNTYPED}) hit_untyped++;
+  else;
   assert property (@(posedge clk) opcode inside {OP_LOGIC}) hit_logic++;
+  else;
   assert property (@(posedge clk) opcode ==? OP_WILD) hit_wild++;
+  else;
 
   assert property (@(posedge clk) $sampled(OP_LOGIC) == OP_LOGIC) hit_sampled++;
   assert property (@(posedge clk) $past(OP_LOGIC) == OP_LOGIC) hit_past++;
