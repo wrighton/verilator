@@ -391,6 +391,23 @@ module t (
     end
   end
 
+  // A random position is evaluated once, for the bound check and the slice
+  int rnd_a[0:3] = '{10, 20, 30, 40};
+  always @(posedge clk) begin
+    if (cyc == 3) begin
+      for (int seed = 1; seed <= 20; seed++) begin
+        int got[2];
+        int pos;
+        void'($urandom(seed));
+        got = rnd_a[($urandom() % 5)+:2];
+        void'($urandom(seed));
+        pos = $urandom() % 5;
+        `checkd(got[0], pos <= 2 ? rnd_a[pos] : 0);
+        `checkd(got[1], pos <= 2 ? rnd_a[pos+1] : 0);
+      end
+    end
+  end
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     if (cyc == 10) begin
