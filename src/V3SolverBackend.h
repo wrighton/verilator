@@ -127,6 +127,10 @@ public:
 
 class RandomizeUtil final {
 public:
+    // Offset of the element at declared index idxp of array arrVarp, as selects and the solver
+    // use
+    static AstNodeExpr* newElemOffsetp(FileLine* fl, const AstVar* arrVarp,
+                                       AstNodeExpr* idxp) VL_MT_DISABLED;
     // Whether varp is an unpacked array of class handles
     static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
     // Whether the array element at indexp has rand_mode off, given the array's modesp
@@ -134,6 +138,10 @@ public:
     // Read reference to member varp of objp, or of 'this' if objp is nullptr
     static AstNodeExpr* newMemberRefp(FileLine* fl, AstNodeExpr* objp,
                                       AstVar* varp) VL_MT_DISABLED;
+    // Return the random index select into a non-random array that exprp reads through
+    static AstNodeExpr*
+    randIndexSelp(AstNodeExpr* exprp,
+                  bool (*isRandIndexp)(const AstNodeExpr* indexp)) VL_MT_DISABLED;
 };
 
 //######################################################################
