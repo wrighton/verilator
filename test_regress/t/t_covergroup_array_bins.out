@@ -27,20 +27,12 @@ t.cg13.cp.a[0]: 0
 t.cg13.cp.a[1]: 1
 t.cg13.cp.a[2]: 0
 t.cg13.cp.a[3]: 0
-t.cg13.cp.a[4]: 0
-t.cg13.cp.a[5]: 1
-t.cg13.cp.a[6]: 0
-t.cg13.cp.a[7]: 0
 t.cg13.cp.b: 1
 t.cg13.cps.one: 1
 t.cg13.x.<a[0],one> [cross]: 0
 t.cg13.x.<a[1],one> [cross]: 1
 t.cg13.x.<a[2],one> [cross]: 0
 t.cg13.x.<a[3],one> [cross]: 0
-t.cg13.x.<a[4],one> [cross]: 0
-t.cg13.x.<a[5],one> [cross]: 1
-t.cg13.x.<a[6],one> [cross]: 0
-t.cg13.x.<a[7],one> [cross]: 0
 t.cg13.x.<b,one> [cross]: 1
 t.cg14.cp.w[0]: 0
 t.cg14.cp.w[1]: 1
@@ -49,6 +41,103 @@ t.cg14.x.<w[0],one> [cross]: 0
 t.cg14.x.<w[1],one> [cross]: 1
 t.cg15.cp.v[0]: 0
 t.cg15.cp.v[1]: 1
+t.cg16.cp.b[0]: 0
+t.cg16.cp.b[10]: 0
+t.cg16.cp.b[11]: 0
+t.cg16.cp.b[12]: 0
+t.cg16.cp.b[13]: 0
+t.cg16.cp.b[14]: 0
+t.cg16.cp.b[15]: 0
+t.cg16.cp.b[16]: 0
+t.cg16.cp.b[17]: 0
+t.cg16.cp.b[18]: 0
+t.cg16.cp.b[19]: 0
+t.cg16.cp.b[1]: 0
+t.cg16.cp.b[20]: 0
+t.cg16.cp.b[21]: 1
+t.cg16.cp.b[22]: 0
+t.cg16.cp.b[23]: 0
+t.cg16.cp.b[24]: 0
+t.cg16.cp.b[25]: 0
+t.cg16.cp.b[26]: 0
+t.cg16.cp.b[27]: 0
+t.cg16.cp.b[28]: 0
+t.cg16.cp.b[29]: 0
+t.cg16.cp.b[2]: 0
+t.cg16.cp.b[30]: 0
+t.cg16.cp.b[31]: 0
+t.cg16.cp.b[32]: 0
+t.cg16.cp.b[33]: 0
+t.cg16.cp.b[34]: 0
+t.cg16.cp.b[35]: 0
+t.cg16.cp.b[36]: 0
+t.cg16.cp.b[37]: 0
+t.cg16.cp.b[38]: 0
+t.cg16.cp.b[39]: 0
+t.cg16.cp.b[3]: 0
+t.cg16.cp.b[40]: 0
+t.cg16.cp.b[41]: 0
+t.cg16.cp.b[42]: 0
+t.cg16.cp.b[43]: 0
+t.cg16.cp.b[44]: 0
+t.cg16.cp.b[45]: 0
+t.cg16.cp.b[46]: 0
+t.cg16.cp.b[47]: 0
+t.cg16.cp.b[48]: 0
+t.cg16.cp.b[49]: 0
+t.cg16.cp.b[4]: 0
+t.cg16.cp.b[50]: 0
+t.cg16.cp.b[51]: 0
+t.cg16.cp.b[52]: 0
+t.cg16.cp.b[53]: 0
+t.cg16.cp.b[54]: 0
+t.cg16.cp.b[55]: 0
+t.cg16.cp.b[56]: 0
+t.cg16.cp.b[57]: 0
+t.cg16.cp.b[58]: 0
+t.cg16.cp.b[59]: 0
+t.cg16.cp.b[5]: 0
+t.cg16.cp.b[60]: 0
+t.cg16.cp.b[61]: 0
+t.cg16.cp.b[62]: 0
+t.cg16.cp.b[63]: 0
+t.cg16.cp.b[64]: 0
+t.cg16.cp.b[65]: 1
+t.cg16.cp.b[66]: 0
+t.cg16.cp.b[67]: 0
+t.cg16.cp.b[68]: 0
+t.cg16.cp.b[69]: 0
+t.cg16.cp.b[6]: 0
+t.cg16.cp.b[70]: 0
+t.cg16.cp.b[71]: 0
+t.cg16.cp.b[72]: 0
+t.cg16.cp.b[73]: 1
+t.cg16.cp.b[74]: 0
+t.cg16.cp.b[75]: 0
+t.cg16.cp.b[7]: 0
+t.cg16.cp.b[8]: 0
+t.cg16.cp.b[9]: 0
+t.cg16.cpr.r[0]: 0
+t.cg16.cpr.r[1]: 3
+t.cg16.cpr.r[2]: 0
+t.cg16.cpr.r[3]: 0
+t.cg16.cpr.r[4]: 0
+t.cg16.cpr.r[5]: 0
+t.cg16.cpr.r[6]: 0
+t.cg16.cpr.r[7]: 0
+t.cg16.cps.s[0]: 0
+t.cg16.cps.s[10]: 0
+t.cg16.cps.s[11]: 2
+t.cg16.cps.s[12]: 0
+t.cg16.cps.s[1]: 0
+t.cg16.cps.s[2]: 0
+t.cg16.cps.s[3]: 1
+t.cg16.cps.s[4]: 0
+t.cg16.cps.s[5]: 0
+t.cg16.cps.s[6]: 0
+t.cg16.cps.s[7]: 0
+t.cg16.cps.s[8]: 0
+t.cg16.cps.s[9]: 0
 t.cg2.cp.range_arr[0]: 1
 t.cg2.cp.range_arr[1]: 1
 t.cg2.cp.range_arr[2]: 1
