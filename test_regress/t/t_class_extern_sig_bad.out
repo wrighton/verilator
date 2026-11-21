@@ -1,0 +1,26 @@
+%Error-PROTOTYPEMIS: t/t_class_extern_sig_bad.v:8:24: In prototype for 'ftask_bad', prototype is a function but out-of-block declaration is a task (IEEE 1800-2023 8.24)
+    8 |   extern function void ftask_bad();   
+      |                        ^~~~~~~~~
+                     t/t_class_extern_sig_bad.v:15:6: ... Location of out-of-block declaration
+   15 | task Cls::ftask_bad();
+      |      ^~~
+                     ... For error description see https://verilator.org/warn/PROTOTYPEMIS?v=latest
+%Error-PROTOTYPEMIS: t/t_class_extern_sig_bad.v:9:15: In prototype for 'tfunc_bad', prototype is a task but out-of-block declaration is a function (IEEE 1800-2023 8.24)
+    9 |   extern task tfunc_bad();   
+      |               ^~~~~~~~~
+                     t/t_class_extern_sig_bad.v:18:15: ... Location of out-of-block declaration
+   18 | function void Cls::tfunc_bad();
+      |               ^~~
+%Error-PROTOTYPEMIS: t/t_class_extern_sig_bad.v:10:42: In prototype for 'fdir_bad', argument 'a' direction 'input' does not match out-of-block declaration's direction 'output' (IEEE 1800-2023 8.24)
+   10 |   extern function int fdir_bad(input int a, output int b);   
+      |                                          ^
+                     t/t_class_extern_sig_bad.v:21:39: ... Location of out-of-block declaration
+   21 | function int Cls::fdir_bad(output int a, output int b);
+      |                                       ^
+%Error-PROTOTYPEMIS: t/t_class_extern_sig_bad.v:11:32: In prototype for 'tdir_bad', argument 'a' direction 'ref' does not match out-of-block declaration's direction 'const ref' (IEEE 1800-2023 8.24)
+   11 |   extern task tdir_bad(ref int a, const ref int b);   
+      |                                ^
+                     t/t_class_extern_sig_bad.v:25:34: ... Location of out-of-block declaration
+   25 | task Cls::tdir_bad(const ref int a, const ref int b);
+      |                                  ^
+%Error: Exiting due to

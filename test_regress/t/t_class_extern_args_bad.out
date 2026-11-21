@@ -4,8 +4,8 @@
                                                      : ... Declaration data type: 'bit'
     8 |   extern task func_bad();   
       |               ^~~~~~~~
-                     t/t_class_extern_args_bad.v:19:10: ... Location of out-of-block declaration
-   19 | function bit Cls::func_bad();
+                     t/t_class_extern_args_bad.v:21:10: ... Location of out-of-block declaration
+   21 | function bit Cls::func_bad();
       |          ^~~
                      ... For error description see https://verilator.org/warn/PROTOTYPEMIS?v=latest
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:9:19: In prototype for 'f1_bad', return data type does not match out-of-block declaration data-type (IEEE 1800-2023 8.24)
@@ -14,8 +14,8 @@
                                                      : ... Declaration data type: 'bit'
     9 |   extern function int f1_bad();   
       |                   ^~~
-                     t/t_class_extern_args_bad.v:23:10: ... Location of out-of-block declaration
-   23 | function bit Cls::f1_bad();
+                     t/t_class_extern_args_bad.v:25:10: ... Location of out-of-block declaration
+   25 | function bit Cls::f1_bad();
       |          ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:10:19: In prototype for 'f2_bad', return data type does not match out-of-block declaration data-type (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
@@ -23,8 +23,8 @@
                                                       : ... Declaration data type: 'VOIDDTYPE'
    10 |   extern function int f2_bad();   
       |                   ^~~
-                     t/t_class_extern_args_bad.v:26:15: ... Location of out-of-block declaration
-   26 | function void Cls::f2_bad();
+                     t/t_class_extern_args_bad.v:28:15: ... Location of out-of-block declaration
+   28 | function void Cls::f2_bad();
       |               ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:11:24: In prototype for 'f3_bad', return data type does not match out-of-block declaration data-type (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
@@ -32,8 +32,8 @@
                                                       : ... Declaration data type: 'bit'
    11 |   extern function void f3_bad();   
       |                        ^~~~~~
-                     t/t_class_extern_args_bad.v:28:10: ... Location of out-of-block declaration
-   28 | function bit Cls::f3_bad();
+                     t/t_class_extern_args_bad.v:30:10: ... Location of out-of-block declaration
+   30 | function bit Cls::f3_bad();
       |          ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:12:34: In prototype for 'f1bit_bad', argument 'a' data-type does not match out-of-block declaration's data-type (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
@@ -41,35 +41,53 @@
                                                       : ... Declaration data type: 'bit'
    12 |   extern function void f1bit_bad(int a);   
       |                                  ^~~
-                     t/t_class_extern_args_bad.v:32:30: ... Location of out-of-block declaration
-   32 | function void Cls::f1bit_bad(bit a);
+                     t/t_class_extern_args_bad.v:34:30: ... Location of out-of-block declaration
+   34 | function void Cls::f1bit_bad(bit a);
       |                              ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:13:24: In prototype for 'f2args1_bad', the argument counts do not match the out-of-block declaration (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
    13 |   extern function void f2args1_bad(bit a);   
       |                        ^~~~~~~~~~~
-                     t/t_class_extern_args_bad.v:35:15: ... Location of out-of-block declaration
-   35 | function void Cls::f2args1_bad(bit a, bit b);
+                     t/t_class_extern_args_bad.v:37:15: ... Location of out-of-block declaration
+   37 | function void Cls::f2args1_bad(bit a, bit b);
       |               ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:14:24: In prototype for 'f2args2', the argument counts do not match the out-of-block declaration (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
    14 |   extern function void f2args2(bit a);   
       |                        ^~~~~~~
-                     t/t_class_extern_args_bad.v:38:15: ... Location of out-of-block declaration
-   38 | function void Cls::f2args2(bit a, bit b);
+                     t/t_class_extern_args_bad.v:40:15: ... Location of out-of-block declaration
+   40 | function void Cls::f2args2(bit a, bit b);
       |               ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:15:24: In prototype for 'f2args3_bad', the argument counts do not match the out-of-block declaration (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
    15 |   extern function void f2args3_bad(bit a, bit b, bit c);   
       |                        ^~~~~~~~~~~
-                     t/t_class_extern_args_bad.v:41:15: ... Location of out-of-block declaration
-   41 | function void Cls::f2args3_bad(bit a, bit b);
+                     t/t_class_extern_args_bad.v:43:15: ... Location of out-of-block declaration
+   43 | function void Cls::f2args3_bad(bit a, bit b);
       |               ^~~
 %Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:16:38: In prototype for 'farg_name_bad', argument 1 named 'declnamebad' mismatches out-of-block argument name 'declname'  (IEEE 1800-2023 8.24)
                                                       : ... note: In instance 't'
    16 |   extern function void farg_name_bad(bit declnamebad);   
       |                                      ^~~
-                     t/t_class_extern_args_bad.v:44:34: ... Location of out-of-block declaration
-   44 | function void Cls::farg_name_bad(bit declname);
+                     t/t_class_extern_args_bad.v:46:34: ... Location of out-of-block declaration
+   46 | function void Cls::farg_name_bad(bit declname);
       |                                  ^~~
+%Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:17:36: In prototype for 'fret_arg_bad', argument 'a' data-type does not match out-of-block declaration's data-type (IEEE 1800-2023 8.24)
+                                                      : ... note: In instance 't'
+                                                      : ... Prototype data type: 'int'
+                                                      : ... Declaration data type: 'byte'
+   17 |   extern function int fret_arg_bad(int a);   
+      |                                    ^~~
+                     t/t_class_extern_args_bad.v:49:32: ... Location of out-of-block declaration
+   49 | function int Cls::fret_arg_bad(byte a);
+      |                                ^~~~
+%Error-PROTOTYPEMIS: t/t_class_extern_args_bad.v:18:28: In prototype for 'tret_arg_bad', argument 'a' data-type does not match out-of-block declaration's data-type (IEEE 1800-2023 8.24)
+                                                      : ... note: In instance 't'
+                                                      : ... Prototype data type: 'int'
+                                                      : ... Declaration data type: 'byte'
+   18 |   extern task tret_arg_bad(int a);   
+      |                            ^~~
+                     t/t_class_extern_args_bad.v:53:24: ... Location of out-of-block declaration
+   53 | task Cls::tret_arg_bad(byte a);
+      |                        ^~~~
 %Error: Exiting due to
