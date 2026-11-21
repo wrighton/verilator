@@ -11,6 +11,15 @@
 `define checkp(gotv,expv_s) do begin string gotv_s; gotv_s = $sformatf("%p", gotv); if ((gotv_s) != (expv_s)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv_s), (expv_s)); `stop; end end while(0);
 // verilog_format: on
 
+function automatic int f(int m);
+  return m;
+endfunction
+
+function automatic int counted_bound(int m, ref int calls);
+  ++calls;
+  return m;
+endfunction
+
 module t;
   int pos = 1;
   int calls = 0;
@@ -234,6 +243,48 @@ module t;
       d[pos_call()-:2] = '{3, 4};
       `checkp(d, "'{'h3, 'h4, 'h16, 'h17}");
       `checkh(calls, 3);
+    end
+
+    // Queue bounds are runtime expressions, including function calls.
+    begin
+      typedef int int_queue_t[$];
+      int_queue_t q;
+      int_queue_t result;
+      int m;
+      int calls;
+      for (m = 1; m <= 4; ++m) begin
+        q = '{0, 1, 2, 3, 4};
+        q = q[0:f(m) - 1];
+        `checkh(q.size(), m);
+        foreach (q[i]) `checkh(q[i], i);
+      end
+      q = '{0, 1, 2, 3, 4};
+      calls = 0;
+      result = q[counted_bound(1, calls):counted_bound(3, calls)];
+      `checkh(calls, 2);
+      `checkp(result, "'{'h1, 'h2, 'h3}");
+      result = q[$ - counted_bound(2, calls):$ - counted_bound(1, calls)];
+      `checkh(calls, 4);
+      `checkp(result, "'{'h2, 'h3}");
+      q = q[0:counted_bound(3, calls) - 1];
+      `checkh(calls, 5);
+      `checkp(q, "'{'h0, 'h1, 'h2}");
+      q[counted_bound(0, calls):counted_bound(1, calls)] = '{8, 9};
+      `checkh(calls, 7);
+      `checkp(q, "'{'h8, 'h9, 'h2}");
+    end
+
+    // Ordinary packed and fixed-array slices still evaluate constant functions.
+    begin
+      bit [14:0] word;
+      int source[3:1];
+      int result[2];
+      word = 15'h1a5;
+      source = '{31, 21, 11};
+      `checkh(word[f(4):f(1)], 4'h2);
+      result = source[f(3):f(2)];
+      `checkh(result[0], 31);
+      `checkh(result[1], 21);
     end
 
     $write("*-* All Finished *-*\n");
