@@ -24,4 +24,12 @@ module t;
     i = $cast(e, 10);  // 0
   end
 
+  initial begin
+    string s;
+    real r;
+    i = $cast(r, s);  // 0
+    i = $cast(s, r);  // 0
+    $cast(r, s);  // 0
+  end
+
 endmodule
