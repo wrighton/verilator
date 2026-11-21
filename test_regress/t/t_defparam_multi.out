@@ -1,13 +1,13 @@
-%Error-UNSUPPORTED: t/t_defparam_multi.v:15:20: Unsupported: defparam path with arrayed instance
+%Error-UNSUPPORTED: t/t_defparam_multi.v:15:16: Unsupported: defparam with arrayed instance
    15 |   defparam u_m3[0].PAR3 = 100;
-      |                    ^~~~
+      |                ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_defparam_multi.v:16:20: Unsupported: defparam path with arrayed instance
+%Error-UNSUPPORTED: t/t_defparam_multi.v:16:16: Unsupported: defparam with arrayed instance
    16 |   defparam u_m3[1].PAR3 = 200;
-      |                    ^~~~
-%Error-UNSUPPORTED: t/t_defparam_multi.v:24:28: Unsupported: defparam path with arrayed instance
+      |                ^
+%Error-UNSUPPORTED: t/t_defparam_multi.v:24:19: Unsupported: defparam with instance select other than one integer literal
    24 |       defparam blk[i].u_m3.PAR3 = i;
-      |                            ^~~~
+      |                   ^
 %Error-UNSUPPORTED: t/t_defparam_multi.v:75:26: Unsupported: defparam value using 'M6_PARAM' of a module, for an instance not under the defparam
    75 |   defparam t.u_up.PAR3 = M6_PARAM;   
       |                          ^~~~~~~~
