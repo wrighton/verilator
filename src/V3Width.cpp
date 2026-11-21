@@ -387,6 +387,7 @@ class WidthVisitor final : public VNVisitor {
     const AstNode* m_emptyRepOkp = nullptr;  // Repetition reduced as an empty operand of SExpr
     bool m_hasSExpr = false;  // Property has a sequence expression
     bool m_underDisableIff = false;  // Visiting under a disable iff condition
+    bool m_underSampledArg = false;  // Visiting under a sampled value function argument
     std::unordered_set<const AstVar*> m_propLocalVarps;  // Local variables of current property
     const AstCell* m_cellp = nullptr;  // Current cell, whose port connections are visited
     std::vector<AstVar*> m_splitIfaceArrayVarps;  // Interface arrays split by V3Param
@@ -1902,11 +1903,16 @@ class WidthVisitor final : public VNVisitor {
                           "Unsupported/Illegal: empty queue ('{}') in this context");
         }
     }
+    // IEEE 1800-2023 16.9.3: A sampled value function argument cannot reference local variables
+    void iterateSampledArg(AstNodeExpr* nodep, AstNode* exprp) {
+        VL_RESTORER(m_underSampledArg);
+        m_underSampledArg = true;
+        iterateCheckSizedSelf(nodep, "LHS", exprp, SELF, BOTH, /* deferUntyped */ true);
+    }
     void visit(AstFell* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateSampledArg(nodep, nodep->exprp());
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeSetBit();
         }
@@ -1914,8 +1920,7 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstFalling* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateSampledArg(nodep, nodep->exprp());
             nodep->dtypeSetBit();
         }
     }
@@ -2034,16 +2039,14 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstRising* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateSampledArg(nodep, nodep->exprp());
             nodep->dtypeSetBit();
         }
     }
     void visit(AstRose* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
-            iterateCheckSizedSelf(nodep, "LHS", nodep->exprp(), SELF, BOTH,
-                                  /* deferUntyped */ true);
+            iterateSampledArg(nodep, nodep->exprp());
             userIterate(nodep->sentreep(), nullptr);
             nodep->dtypeSetBit();
         }
@@ -4339,6 +4342,9 @@ class WidthVisitor final : public VNVisitor {
         if (m_underDisableIff && m_propLocalVarps.count(nodep->varp())) {
             nodep->v3error("Disable iff condition references local variable "
                            << nodep->prettyNameQ() << " (IEEE 1800-2023 16.12)");
+        } else if (m_underSampledArg && m_propLocalVarps.count(nodep->varp())) {
+            nodep->v3error("Sampled value function argument references local variable "
+                           << nodep->prettyNameQ() << " (IEEE 1800-2023 16.9.3)");
         }
         if (!m_paramsOnly && nodep->varp()->isIfaceArraySplit()) {
             replaceSplitIfaceArrayRef(nodep);
@@ -9148,6 +9154,8 @@ class WidthVisitor final : public VNVisitor {
         m_underSvaExpr = true;
         VL_RESTORER(m_underDisableIff);
         m_underDisableIff = false;
+        VL_RESTORER(m_underSampledArg);
+        m_underSampledArg = false;
         VL_RESTORER_CLEAR(m_propLocalVarps);
         for (const AstNode* const declp : nodep->declspList()) {
             const AstVar* const varp = VN_CAST(declp, Var);
@@ -11462,6 +11470,8 @@ class WidthVisitor final : public VNVisitor {
         // values ($past, $sampled, $stable, $future_gclk, $steady_gclk), so may also be real
         // (IEEE 1800-2023 16.9.3, 16.9.4). V3AssertPre also allows an unpacked array or
         // structure for $past, $sampled and $stable.
+        VL_RESTORER(m_underSampledArg);
+        m_underSampledArg = true;
         underp = userIterateSubtreeReturnEdits(underp, WidthVP{SELF, PRELIM}.p());
         if (underp->dtypep()->skipRefp()->isDouble()
             || V3AssertCommon::isSampledType(underp->dtypep())) {
