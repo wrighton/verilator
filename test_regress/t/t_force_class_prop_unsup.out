@@ -1,0 +1,26 @@
+%Error-UNSUPPORTED: t/t_force_class_prop_unsup.v:27:17: Unsupported: Force value read through a non-static class property
+                                                      : ... note: In instance 't'
+   27 |     force t.y = m_val;   
+      |                 ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_class_prop_unsup.v:30:17: Unsupported: Force value read through a non-static class property
+                                                      : ... note: In instance 't'
+   30 |     force t.y = m_vif.sig;   
+      |                 ^~~~~
+%Error-UNSUPPORTED: t/t_force_class_prop_unsup.v:33:17: Unsupported: Force value read through a non-static class property
+                                                      : ... note: In instance 't'
+   33 |     force t.y = m_nested.m_deep;   
+      |                 ^~~~~~~~
+%Error-UNSUPPORTED: t/t_force_class_prop_unsup.v:36:22: Unsupported: Force value read through a non-static class property
+                                                      : ... note: In instance 't'
+   36 |     force t.y = this.m_val;   
+      |                      ^~~~~
+%Error-UNSUPPORTED: t/t_force_class_prop_unsup.v:39:23: Unsupported: Force value read through a non-static class property
+                                                      : ... note: In instance 't'
+   39 |     force t.y = super.m_base;   
+      |                       ^~~~~~
+%Error-UNSUPPORTED: t/t_force_class_prop_unsup.v:43:24: Unsupported: Force value read through a non-static class property
+                                                      : ... note: In instance 't'
+   43 |     force t.y = 1'b0 ? m_val : t.src;
+      |                        ^~~~~
+%Error: Exiting due to
