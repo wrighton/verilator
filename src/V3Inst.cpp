@@ -298,6 +298,11 @@ class InstStatic final {
             pinp->v3warn(E_UNSUPPORTED,
                          "Unsupported: `unconnected_drive of input with unpacked union type: "
                              << pinp->modVarp()->prettyNameQ());
+        } else {
+            pinp->v3error("Unconnected input port "
+                          << pinp->modVarp()->prettyNameQ()
+                          << " is of non-integral type, so it cannot be pulled by"
+                             " `unconnected_drive.");
         }
         return nullptr;
     }
