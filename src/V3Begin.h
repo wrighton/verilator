@@ -28,6 +28,7 @@ class AstForeach;
 
 class V3Begin final {
 public:
+    static void xrefScopeAll(AstNetlist* nodep) VL_MT_DISABLED;
     static void debeginAll(AstNetlist* nodep) VL_MT_DISABLED;
     static AstNode* convertToWhile(AstForeach* nodep) VL_MT_DISABLED;
 };

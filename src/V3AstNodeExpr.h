@@ -6785,7 +6785,7 @@ public:
         const AstVarXRef* asamep = VN_DBG_AS(samep, VarXRef);
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
                 && name() == asamep->name() && dotted() == asamep->dotted()
-                && resolvedDotted() == asamep->resolvedDotted());
+                && inlinedDots() == asamep->inlinedDots());
     }
 };
 
