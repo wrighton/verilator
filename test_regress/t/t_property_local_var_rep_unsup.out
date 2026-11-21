@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_property_local_var_rep_unsup.v:17:35: Unsupported: sequence match item in repetition (IEEE 1800-2023 16.10)
+                                                            : ... note: In instance 't'
+   17 |     @(posedge clk) a ##1 (b, n++) [* 2] |-> (n == 2);
+      |                                   ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_local_var_rep_unsup.v:24:38: Unsupported: sequence match item in repetition (IEEE 1800-2023 16.10)
+                                                            : ... note: In instance 't'
+   24 |     @(posedge clk) a |-> (b, n += 1) [-> 2] ##1 (n == 2);
+      |                                      ^~~
+%Error-UNSUPPORTED: t/t_property_local_var_rep_unsup.v:31:33: Unsupported: sequence match item in repetition (IEEE 1800-2023 16.10)
+                                                            : ... note: In instance 't'
+   31 |     @(posedge clk) (b, n = cyc) [= 2] ##1 (n > 0);
+      |                                 ^~
+%Error: Exiting due to
