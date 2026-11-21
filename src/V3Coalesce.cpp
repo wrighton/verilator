@@ -16,13 +16,17 @@
 // V3Coalesce's Transformations:
 //
 // A continuous assignment of one whole variable to another, 'assign a = b', makes
-// 'a' nothing but a copy of 'b'. Redirect every reference to 'a' at 'b', so the
+// 'a' nothing but a copy of 'b'. Redirect the references to 'a' at 'b', so the
 // two are a single signal as far as the rest of the compiler is concerned. This is
 // done transitively, so a chain of copies collapses onto the signal at the end of
 // it in one pass.
 //
 // The assignment itself is kept, so 'a' still holds the value, and remains
 // traceable and visible via the VPI.
+//
+// A reference to 'a' in the logic that writes 'b' is not redirected, as there 'a'
+// still holds the value 'b' had before the logic ran. A subroutine counts as any
+// logic, as any logic may call it.
 //
 //*************************************************************************
 
@@ -47,12 +51,25 @@ class CoalesceVisitor final : public VNVisitorConst {
     //  AstVarScope::user2()   -> uint64_t. Number of references that write it
     //  AstVarScope::user3()   -> bool. Used in a sensitivity list
     //  AstVarScope::user4p()  -> AstConst*. The constant assigned to it, if any
+    //  AstNodeVarRef::user1p() -> AstNode*. The logic it is in
     const VNUser1InUse m_user1InUse;
     const VNUser2InUse m_user2InUse;
     const VNUser3InUse m_user3InUse;
     const VNUser4InUse m_user4InUse;
 
+    // TYPES
+    // A logic block, and a variable it writes
+    using Write = std::pair<const AstNode*, const AstVarScope*>;
+    struct WriteHash final {
+        size_t operator()(const Write& write) const {
+            return (V3Hash{write.first} + write.second).value();
+        }
+    };
+
     // STATE
+    AstNode* const m_anyLogicp;  // Stands for any logic
+    AstNode* m_logicp = nullptr;  // Logic being visited, nullptr outside logic
+    std::unordered_set<Write, WriteHash> m_writes;  // Variables written by each logic block
     std::vector<AstNodeVarRef*> m_refps;  // All references, to redirect at the end
     VDouble0 m_nCoalesced;  // Number of coalesced variables, for statistics
     VDouble0 m_nReplaced;  // Number of redirected references, for statistics
@@ -173,10 +190,27 @@ class CoalesceVisitor final : public VNVisitorConst {
         return nullptr;
     }
 
+    // Whether a copy of the given signal read in the given logic may not have followed
+    // the signal yet
+    bool copyMayLag(const AstVarScope* rootp, const AstNode* logicp) const {
+        if (logicp == m_anyLogicp) return true;
+        return m_writes.count({logicp, rootp}) || m_writes.count({m_anyLogicp, rootp});
+    }
+
     // VISITORS
+    void visit(AstScope* nodep) override {
+        for (AstNode* const itemp : nodep->blockspList()) {
+            VL_RESTORER(m_logicp);
+            m_logicp = VN_IS(itemp, NodeFTask) ? m_anyLogicp : itemp;
+            iterateConst(itemp);
+        }
+    }
     void visit(AstNodeVarRef* nodep) override {
         m_refps.push_back(nodep);
-        if (nodep->access().isWriteOrRW()) nodep->varScopep()->user2Inc();
+        nodep->user1p(m_logicp);
+        if (!nodep->access().isWriteOrRW()) return;
+        nodep->varScopep()->user2Inc();
+        m_writes.emplace(m_logicp, nodep->varScopep());
     }
     void visit(AstSenItem* nodep) override {
         iterateChildrenConst(nodep);
@@ -198,7 +232,8 @@ class CoalesceVisitor final : public VNVisitorConst {
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
     // CONSTRUCTORS
-    explicit CoalesceVisitor(AstNetlist* nodep) {
+    explicit CoalesceVisitor(AstNetlist* nodep)
+        : m_anyLogicp{nodep} {
         // Gather the references and the copy assignments
         iterateConst(nodep);
         releaseConstPorts();
@@ -215,6 +250,7 @@ class CoalesceVisitor final : public VNVisitorConst {
                 && !(vscp->varp()->direction() == VDirection::INPUT && vscp->user3())) {
                 continue;
             }
+            if (copyMayLag(rootp, refp->user1p())) continue;
             // A kept clock is coalesced, so it is no longer kept
             vscp->varp()->keepPort(false);
             // The sole write of a copy is the copy assignment itself, keep it

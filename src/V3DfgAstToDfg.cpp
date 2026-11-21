@@ -37,6 +37,9 @@ class AstToDfgAddAstRefs final : public VNVisitorConst {
     const std::function<DfgVertexVar*(AstVarScope*)> m_getVarVertex;
     bool m_inSenItem = false;  // Inside an AstSenItem
     bool m_inLoop = false;  // Inside an AstLoop
+    bool m_inClocked = false;  // Inside clocked logic, see keepClockedReads
+    bool m_inInitialActive = false;  // Inside an initial active
+    bool m_inAssignDlyLhs = false;  // Inside the LHS of an AstAssignDly
 
     // VISITORS
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
@@ -53,6 +56,44 @@ class AstToDfgAddAstRefs final : public VNVisitorConst {
         iterateChildrenConst(nodep);
     }
 
+    void visit(AstActive* nodep) override {
+        VL_RESTORER(m_inClocked);
+        VL_RESTORER(m_inInitialActive);
+        // Its sensitivity list triggers on the same changes either way
+        iterateAndNextConstNull(nodep->senTreeStorep());
+        m_inClocked = nodep->hasClocked();
+        m_inInitialActive = nodep->hasInitial();
+        iterateAndNextConstNull(nodep->procsp());
+    }
+
+    void visit(AstAlways* nodep) override {
+        // A timed 'always' is under the initial active until V3Timing
+        VL_RESTORER(m_inClocked);
+        m_inClocked = m_inClocked || m_inInitialActive;
+        iterateChildrenConst(nodep);
+    }
+
+    void visit(AstCFunc* nodep) override {
+        VL_RESTORER(m_inClocked);
+        m_inClocked = true;
+        iterateChildrenConst(nodep);
+    }
+
+    // Writes other than the target of a non-blocking assignment are blocking, as in V3Split
+    void visit(AstAssignDly* nodep) override {
+        iterateAndNextConstNull(nodep->timingControlp());
+        iterateAndNextConstNull(nodep->rhsp());
+        VL_RESTORER(m_inAssignDlyLhs);
+        m_inAssignDlyLhs = true;
+        iterateAndNextConstNull(nodep->lhsp());
+    }
+
+    void visit(AstExprStmt* nodep) override {
+        VL_RESTORER(m_inAssignDlyLhs);
+        m_inAssignDlyLhs = false;
+        iterateChildrenConst(nodep);
+    }
+
     void visit(AstVarRef* nodep) override {
         // Disguised hierarchical reference handled as external reference, ignore
         if (nodep->classOrPackagep()) return;
@@ -66,12 +107,13 @@ class AstToDfgAddAstRefs final : public VNVisitorConst {
         if (!varp) return;
         // Create Ast reference vertices
         if (nodep->access().isReadOnly()) {
-            DfgAstRd* const astp = new DfgAstRd{m_dfg, nodep, m_inSenItem, m_inLoop};
+            DfgAstRd* const astp = new DfgAstRd{m_dfg, nodep, m_inSenItem, m_inLoop, m_inClocked};
             astp->srcp(varp);
             return;
         }
         // Mark as written from non-DFG logic
         DfgVertexVar::setHasModWrRefs(vscp);
+        if (m_inClocked && !m_inAssignDlyLhs) DfgVertexVar::setHasClockedBlockingWrRefs(vscp);
     }
 
     AstToDfgAddAstRefs(DfgGraph& dfg, AstNode* nodep,
@@ -317,6 +359,39 @@ public:
                 while (varp->hasSinks()) varp->firtsSinkp()->unlinkDelete(dfg);
                 VL_DO_DANGLING(varp->unlinkDelete(dfg), varp);
             }
+        }
+        keepClockedReads(dfg);
+    }
+
+    // Clocked logic reads a variable as computed before any clocked logic ran. If the
+    // variable is computed from one written by a blocking assignment in clocked logic,
+    // substituting its drivers in clocked logic could see that write, as V3Split may have
+    // separated it from the reader, leaving the two unordered, or the caller of a function
+    // may have made it before the call. Keep such reads as references to the variable itself.
+    static void keepClockedReads(DfgGraph& dfg) {
+        DfgUserMap<bool> visited = dfg.makeUserMap<bool>();
+        std::vector<DfgVertex*> stack;
+        for (DfgVertexVar& vtx : dfg.varVertices()) {
+            if (DfgVertexVar::hasClockedBlockingWrRefs(vtx.vscp())) stack.push_back(&vtx);
+        }
+        std::vector<DfgAstRd*> astRdps;
+        while (!stack.empty()) {
+            DfgVertex* const vtxp = stack.back();
+            stack.pop_back();
+            if (visited[*vtxp]) continue;
+            visited[*vtxp] = true;
+            if (DfgAstRd* const astRdp = vtxp->cast<DfgAstRd>()) {
+                if (astRdp->inClocked()) astRdps.push_back(astRdp);
+                continue;
+            }
+            vtxp->foreachSink([&](DfgVertex& sink) {
+                stack.push_back(&sink);
+                return false;
+            });
+        }
+        for (DfgAstRd* const astRdp : astRdps) {
+            DfgVertexVar::setHasExtRdRefs(astRdp->srcp()->as<DfgVertexVar>()->vscp());
+            VL_DO_DANGLING(astRdp->unlinkDelete(dfg), astRdp);
         }
     }
 };
