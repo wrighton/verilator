@@ -22,6 +22,8 @@
 #include "V3Global.h"
 #include "V3Graph.h"
 
+#include <limits>
+
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
@@ -141,6 +143,37 @@ public:
         new V3GraphEdge{gp, g3p, ap, 2, true};
 
         gp->acyclic(&V3GraphEdge::followAlwaysTrue);
+        gp->order();
+        dumpSelf();
+    }
+};
+
+class V3GraphTestAcycWeights final : public V3GraphTest {
+public:
+    string name() override { return "acyc_weights"; }
+    void runTest() override {
+        V3Graph* const gp = &m_graph;
+        // Verify the last-resort weight survives merging and outranks any sum of other weights,
+        // so the cycle breaks on 'b', not on the last-resort edge
+        V3GraphTestVertex* const ip = new V3GraphTestVarVertex{gp, "*INPUTS*"};
+        V3GraphTestVertex* const ap = new V3GraphTestVarVertex{gp, "a"};
+        V3GraphTestVertex* const bp = new V3GraphTestVarVertex{gp, "b"};
+        V3GraphTestVertex* const lastp = new V3GraphTestVarVertex{gp, "last_resort"};
+        new V3GraphEdge{gp, ip, ap, 1, true};
+        new V3GraphEdge{gp, ap, lastp, V3GraphEdge::WEIGHT_LAST_RESORT, true};
+        // Parallel heavy edges merge into one, whose weight saturates below the last resort
+        for (int i = 0; i < 4; ++i) {
+            new V3GraphEdge{gp, lastp, bp, std::numeric_limits<int>::max() / 2, true};
+        }
+        new V3GraphEdge{gp, bp, ap, 1, true};
+
+        gp->acyclic(&V3GraphEdge::followAlwaysTrue);
+        for (const V3GraphVertex& vtx : gp->vertices()) {
+            for (const V3GraphEdge& edge : vtx.outEdges()) {
+                UASSERT(edge.weight() || edge.fromp() != ap || edge.top() != lastp,
+                        "Cut the last-resort edge of a cycle holding another edge");
+            }
+        }
         gp->order();
         dumpSelf();
     }
@@ -354,6 +387,7 @@ void V3Graph::selfTest() {
     UINFO(2, __FUNCTION__ << ":");
     { V3GraphTestStrong{}.run(); }
     { V3GraphTestAcyc{}.run(); }
+    { V3GraphTestAcycWeights{}.run(); }
     { V3GraphTestVars{}.run(); }
     { V3GraphTestRank{}.run(); }
     { V3GraphTestImport{}.run(); }
