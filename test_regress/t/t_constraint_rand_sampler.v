@@ -46,6 +46,12 @@ module t;
     randc bit [2:0] r;
   endclass
 
+  // One rand variable, so each UniGen2 witness has one element
+  class Single;
+    rand bit [6:0] v;
+    constraint c {v < 7'd100;}
+  endclass
+
   // Nothing for the sampler to enumerate: a constraint on state only, and an empty queue
   class StateOnly;
     int limit;
@@ -223,6 +229,22 @@ module t;
         `checkd(randomize_result, 1);
         `checkd(eq.size(), 0);
       end
+    end
+
+    begin
+      automatic Single one = new;
+      automatic bit [6:0] first_v;
+      automatic bit v_varied;
+      // A seed under which a UniGen2 hash equation selects no bit of v
+      one.srandom(211);
+      for (int i = 0; i < 20; ++i) begin
+        randomize_result = one.randomize();
+        `checkd(randomize_result, 1);
+        `checkd(one.v < 7'd100, 1'b1);
+        if (i == 0) first_v = one.v;
+        else if (one.v != first_v) v_varied = 1'b1;
+      end
+      if ($test$plusargs("check_varied")) `checkd(v_varied, 1'b1);
     end
 
     $write("*-* All Finished *-*\n");
