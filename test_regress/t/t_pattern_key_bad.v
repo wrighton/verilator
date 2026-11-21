@@ -79,4 +79,13 @@ module t;
   int snonconst[s_t] = '{'{k, 1} : 30};
   int sx[s_t] = '{'{1, 4'bx} : 31};
 
+  // An enum key needs a value of the enum, like an enum index (IEEE 1800-2023 6.19.3)
+  typedef enum {
+    E0,
+    E1
+  } e_t;
+  typedef enum {F0} f_t;
+  int eint[e_t] = '{E0: 40, e_t'(1): 41, 3: 42, 5: 43, default: 44};
+  int eother[e_t] = '{F0: 45};
+
 endmodule
