@@ -28,7 +28,9 @@ module t (
   wire [16:14] sixt2 = 3'b110;  // surefire lint_off_line ASWCBB
   wire [3:0] sixfrom = 13;
   wire [4:0] sixfrom2 = 16;
-  wire sixtext = sixt[sixfrom];
+  // verilator lint_off SELRANGE
+  wire sixtext = sixt[sixfrom];  // 13 is below the range
+  // verilator lint_on SELRANGE
   wire sixtext2 = sixt2[sixfrom2];
 
   // Non-power of 2 memory overwriting checks
