@@ -32,7 +32,6 @@
 #include <streambuf>
 #include <tuple>
 #include <unordered_map>
-#include <unordered_map>
 
 // Diversity: tie each variable, array element, or part of one, to a random target via
 //   a boolean assumption literal, then force them with (check-sat-assuming). If
@@ -127,8 +126,8 @@ class VlRProcess final : private std::streambuf, public std::iostream {
     bool m_logTried = false;  // Log file name looked up, at the first start
     std::unique_ptr<std::ofstream> m_logfp;  // Log file stream
     uint64_t m_logLastTime = ~0ULL;  // Last timestamp for logfile
-    std::string m_logLinePrefix;  // Prefix of the last logged line
-    bool m_logLineOpen = false;  // Last logged line has no newline yet
+    std::string m_logLinePrefix;  // Prefix of the last log line, unfinished if m_logLineOpen
+    bool m_logLineOpen = false;  // Last logged text did not end its line
 
 public:
     typedef std::streambuf::traits_type traits_type;
@@ -273,7 +272,6 @@ public:
             m_logTried = true;
             logOpen();
         }
-        log("", "# Open: "s + cmd[0]);
 #ifdef _VL_SOLVER_PIPE_UNIX
 #if !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE)
         errno = ENOTSUP;
@@ -320,6 +318,7 @@ public:
             return false;
         }
 
+        log("", "# Open: "s + cmd[0] + "\n");
         const pid_t pid = fork();
         if (VL_UNLIKELY(pid < 0)) {
             perror("VlRProcess::open: fork");
@@ -403,6 +402,7 @@ public:
         si.hStdError = stderrInheritable ? stderrInheritable : fd_stdout_wr;
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
+        log("", "# Open: "s + cmd[0] + "\n");
         const BOOL procOk
             = CreateProcessA(nullptr, &cmdline[0], nullptr, nullptr, TRUE /* inherit */,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -456,27 +456,27 @@ private:
         }
         *m_logfp << "# Verilator solver log\n";
     }
-    // Commands and replies are logged one I/O buffer at a time, and a buffer may end within
-    // a line, so a logged line ends only at its own newline, or where text with a different
-    // prefix follows
     void log(const std::string& prefix, const std::string& text) {
         if (VL_LIKELY(!m_logfp.get()) || text.empty()) return;
+        // Pipe buffers end anywhere, so continue an unfinished line of the same direction
+        // rather than breaking it (inside a token, unreadable by a solver)
         if (m_logLineOpen && prefix != m_logLinePrefix) {
             *m_logfp << '\n';
             m_logLineOpen = false;
         }
+        if (!m_logLineOpen && m_logLastTime != Verilated::threadContextp()->time()) {
+            m_logLastTime = Verilated::threadContextp()->time();
+            *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString() << "]\n";
+        }
         m_logLinePrefix = prefix;
-        for (const char c : text) {
-            if (!m_logLineOpen) {
-                if (m_logLastTime != Verilated::threadContextp()->time()) {
-                    m_logLastTime = Verilated::threadContextp()->time();
-                    *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString()
-                             << "]\n";
-                }
-                *m_logfp << prefix;
-            }
-            m_logfp->put(c);
-            m_logLineOpen = c != '\n';
+        std::size_t startPos = 0;
+        while (startPos < text.length()) {
+            if (!m_logLineOpen) *m_logfp << prefix;
+            const std::size_t endPos = text.find('\n', startPos);
+            m_logLineOpen = endPos == std::string::npos;
+            const std::size_t lineEnd = m_logLineOpen ? text.length() : endPos + 1;
+            *m_logfp << text.substr(startPos, lineEnd - startPos);
+            startPos = lineEnd;
         }
     }
 };
@@ -1301,7 +1301,7 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
             // The elements of a randc array, by their keys as VlRandomArrayVarTemplate::datap()
             // finds them, so a resized array gets a different hash
             int elements = 0;
-            while (m_arr_vars.count(var.first + std::to_string(elements))) ++elements;
+            while (m_arr_vars.count({var.first, elements})) ++elements;
             h ^= std::hash<int>{}(elements) + 0x9e3779b9 + (h << 6) + (h >> 2);
         }
     }
@@ -1310,6 +1310,7 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
         for (const auto& elem : m_arr_vars) {
             h ^= std::hash<std::string>{}(elem.first.first) + 0x9e3779b9 + (h << 6) + (h >> 2);
             h ^= std::hash<int>{}(elem.first.second) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
     }
     return h;
 }
@@ -1680,6 +1681,9 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     // An earlier function-call solve round has fewer constraints, not changed ones
     if (!m_randcVarNames.empty() && !funcPreRound()) {
         const size_t currentHash = hashConstraints(uniqueExprs, true);
+        // The final solve continues the history its size solve checked, though the resize
+        // changes the hash
+        const bool sizeSolved = std::exchange(m_sizeSolved, false);
         // Invalidate history if constraints changed (e.g., constraint_mode toggled)
         if (currentHash != m_randcConstraintHash && !sizeSolved) m_randcUsedValues.clear();
         m_randcConstraintHash = currentHash;
@@ -1695,6 +1699,7 @@ bool VlRandomizer::nextRandomize(VlRNGReseeds& rngr, bool checkOnly, const bool 
     for (const FuncArgRound& argRound : m_funcArgRounds) {
         if (argRound.round < m_funcRound && !argRound.pin.empty()) {
             m_constraints.push_back(argRound.pin);
+            m_constraintVarEnds.push_back(m_constraintVarNames.size());  // Names no randc
         }
     }
 
@@ -2887,10 +2892,7 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
     if (it != m_vars.end()) return it->second.get();
     const auto elemIt = m_solveBeforeElems.find(name);
     if (elemIt != m_solveBeforeElems.end()) return elemIt->second.get();
-    // A part of a variable, named by a solve...before layer
-    const auto partIt = m_solveBeforeParts.find(name);
-    if (partIt != m_solveBeforeParts.end()) return partIt->second.get();
-    // An element "array.index...", with an index of vlToSolverHex() for each dimension, of an
+    // An element "array.index...", with an index of 8 hex digits for each dimension, of an
     // array that the solver has as one variable
     std::vector<std::string> indices;
     std::string base = name;
@@ -2908,7 +2910,7 @@ const VlRandomVar* VlRandomizer::solveBeforeVarp(const std::string& name) {
         if (firstIt == m_arr_vars.end()) return nullptr;
         std::string term = base;
         for (size_t i = 0; i < indices.size(); ++i) {
-            // Wider keys, as strings or 64-bit integers, are not named by vlToSolverHex()
+            // Wider keys, as strings or 64-bit integers, are not named by 8 hex digits
             const size_t width = firstIt->second->m_idxWidths[i];
             if (width > 32) return nullptr;
             term = "(select " + term + " #x" + indices[i].substr(8 - width / 4) + ")";
@@ -2939,7 +2941,6 @@ bool VlRandomizer::buildSolveLayers(std::vector<std::vector<std::string>>& layer
     };
     std::vector<std::pair<SolveBeforeBits, SolveBeforeBits>> pairs;
     std::map<const VlRandomVar*, Root> roots;
-    m_solveBeforeParts.clear();
     m_solveBeforeElems.clear();
     m_solveBeforeArrays.clear();
     for (const auto& pair : m_solveBefore) {
@@ -3333,11 +3334,13 @@ bool VlRandomizer::solvePhaseValues(VlSolverSession& sess, VlRNG& rngr,
             varp->setArrayInfo(arrVarsp);
             // Enumerable arrays: query each element for a QF_ABV-safe pin.
             if (varp->hasMatchingElements(m_arr_vars, varp->name())) {
-                varp->emitGetValue(terms);
+                std::ostringstream elems;
+                varp->emitGetValue(elems);
+                ask(elems.str(), "");
                 continue;
             }
         }
-        terms << varp->name() << " ";
+        ask(varp->name(), " ");
     }
     // Get baseline values (deterministic, always valid)
     os << "(get-value (" << terms.str() << "))\n";

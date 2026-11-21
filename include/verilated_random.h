@@ -306,8 +306,6 @@ class VlRandomizer VL_NOT_FINAL {
         IData lo;  // First bit
         IData hi;  // Bit after the last
     };
-    // Parts of variables that solve-before pairs order, as variables of their solver terms
-    std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeParts;
     // Array elements that solve-before pairs name, as variables of their solver terms
     std::map<std::string, std::shared_ptr<const VlRandomVar>> m_solveBeforeElems;
     // Arrays of the array elements that solve-before pairs name
@@ -476,8 +474,7 @@ class VlRandomizer VL_NOT_FINAL {
     bool buildSolveLayers(std::vector<std::vector<std::string>>& layersr);
     // SMT logic for a flat or UniGen2 session
     const char* solverLogic() const;
-    // The variable, part of a variable or array element a solve...before name names, nullptr
-    // if none
+    // The variable or array element a solve...before name names, nullptr if none
     const VlRandomVar* solveBeforeVarp(const std::string& name);
     // Resolve a solve-before operand to its bits, false if it names none
     bool solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& bitsr);
@@ -512,6 +509,8 @@ class VlRandomizer VL_NOT_FINAL {
         uint64_t skips = 0;  // Calls since the last trials that rebuilt the phase without them
     };
     std::unordered_map<std::string, PhaseSampleStats> m_phaseSampleStats;
+    // The variable or element a phase term names, with its key, or nullptr
+    const VlRandomVar* phaseTermKey(const std::string& term, std::string& keyr) const;
     bool readPhaseValues(VlSolverSession& sess, const std::string& terms,
                          std::map<std::string, std::string>& solvedValuesr);
     bool parsePhaseValues(std::istream& is, const std::string& terms,
@@ -714,7 +713,9 @@ public:
                             void>::type
     write_var(T& var, int width, const std::string& name, int dimension,
               std::uint32_t randmodeIdx = std::numeric_limits<std::uint32_t>::max()) {
-        if (m_vars.find(name) != m_vars.end()) return;
+        // Registered again when reached through a member object that may have been replaced
+        const auto it = m_vars.find(name);
+        if (it != m_vars.end() && it->second->datap(0) == &var) return;
         // TODO: make_unique once VlRandomizer is per-instance not per-ref
         m_vars[name]
             = std::make_shared<const VlRandomVar>(name, width, &var, dimension, randmodeIdx);
@@ -1203,8 +1204,8 @@ public:
     void markRandc(const std::string& name);  // Mark variable as randc for cyclic tracking
     /// Restrict variable name to its enum values: domain is a Bool term over '__Ve'
     void enum_domain(const std::string& name, const char* domain) { m_enumDomains[name] = domain; }
-    /// Register solve-before ordering of bits [lsb, lsb + width) of variables, all bits if
-    /// width is 0
+    /// Register solve-before ordering of bits [lsb, lsb + width) of variables or array
+    /// elements, all bits if width is 0
     void solveBefore(const std::string& beforeName, IData beforeLsb, IData beforeWidth,
                      const std::string& afterName, IData afterLsb, IData afterWidth);
     void set_randmode(const VlQueue<CData>& randmode) { m_randmodep = &randmode; }
