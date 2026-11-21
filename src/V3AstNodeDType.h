@@ -561,6 +561,7 @@ public:
     bool isMailboxMessage() const VL_MT_SAFE {
         return keyword() == VBasicDTypeKwd::MAILBOX_MESSAGE;
     }
+    bool isWaitQueue() const VL_MT_SAFE { return keyword() == VBasicDTypeKwd::WAIT_QUEUE; }
     bool isOpaque() const VL_MT_SAFE { return keyword().isOpaque(); }
     bool isString() const VL_MT_STABLE { return keyword().isString(); }
     bool isZeroInit() const { return keyword().isZeroInit(); }
