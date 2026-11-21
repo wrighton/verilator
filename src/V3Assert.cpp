@@ -116,6 +116,22 @@ string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
            + std::to_string(directiveType) + ">(VerilatedAssertCtlQuery::"s + query + "))"s;
 }
 
+bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
+    // An integral type, or an unpacked array or structure of such types (IEEE 1800-2023 16.9.3).
+    dtypep = dtypep->skipRefp();
+    if (dtypep->isIntegralOrPacked()) return true;
+    if (const AstUnpackArrayDType* const arrayp = VN_CAST(dtypep, UnpackArrayDType)) {
+        return isSampledType(arrayp->subDTypep());
+    }
+    const AstStructDType* const structp = VN_CAST(dtypep, StructDType);
+    if (!structp) return false;
+    for (const AstMemberDType* memberp = structp->membersp(); memberp;
+         memberp = VN_AS(memberp->nextp(), MemberDType)) {
+        if (!isSampledType(memberp->subDTypep())) return false;
+    }
+    return true;
+}
+
 bool V3AssertCommon::checkSvaValueLimit(AstNode* nodep, const AstConst* constp, const char* what) {
     // Temporal values can materialize as O(N) AST or state in later passes.
     // Leave headroom for a range ring's extra slot and V3Number's signed
@@ -504,33 +520,62 @@ public:
 
 // Prepare one default sampled expression.
 class DefaultSampledValueVisitor final : public VNVisitor {
-    // STATE
-    bool m_defaulted = false;  // A reference below was replaced by its default
-
     // METHODS
-    AstConst* newTypeDefault(AstNodeExpr* nodep) {
-        m_defaulted = true;
-        AstConst* const constp
-            = new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()};
-        if (nodep->dtypep()->isFourstate()) constp->num().setAllBitsX();
-        constp->dtypeFrom(nodep);
+    static AstNodeExpr* newTypeDefault(FileLine* flp, AstNodeDType* dtypep) {
+        AstNodeDType* const skipDtp = dtypep->skipRefp();
+        if (AstUnpackArrayDType* const arrayp = VN_CAST(skipDtp, UnpackArrayDType)) {
+            return new AstConsArray{flp, arrayp, newTypeDefault(flp, arrayp->subDTypep())};
+        }
+        AstStructDType* const structp = VN_CAST(skipDtp, StructDType);
+        if (structp && !structp->packed()) {
+            AstConsStruct* const consp = new AstConsStruct{flp, structp};
+            for (AstMemberDType* memberp = structp->membersp(); memberp;
+                 memberp = VN_AS(memberp->nextp(), MemberDType)) {
+                consp->addItemsp(new AstConsStructItem{flp, memberp,
+                                                       newTypeDefault(flp, memberp->subDTypep())});
+            }
+            return consp;
+        }
+        AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
+        if (dtypep->isFourstate()) constp->num().setAllBitsX();
+        constp->dtypep(dtypep);
         return constp;
     }
-
+    static bool hasDefaultValue(const AstVar* varp) {
+        return !varp->isParam()
+               && (varp->isNet() || !varp->lifetime().isStatic() || !varp->hasUserInit());
+    }
+    static AstNodeExpr* selectFromp(AstNode* nodep) {
+        if (AstNodeSel* const selp = VN_CAST(nodep, NodeSel)) return selp->fromp();
+        if (AstSel* const selp = VN_CAST(nodep, Sel)) return selp->fromp();
+        if (AstStructSel* const selp = VN_CAST(nodep, StructSel)) return selp->fromp();
+        return nullptr;
+    }
     void visitSelect(AstNodeExpr* nodep) {
-        // A select of a replaced value or index is itself the default of its type
-        bool setDefaulted;
-        {
-            VL_RESTORER(m_defaulted);
-            m_defaulted = false;
-            iterateChildren(nodep);
-            setDefaulted = m_defaulted;
+        // A selection from a variable with its default value, or with an unknown index, has
+        // the default value of the selected type (IEEE 1800-2023 7.4.6, 11.5.1). Replace the
+        // whole selection: the variable may be unpacked, and a constant unknown index would
+        // be rejected later.
+        AstNodeExpr* basep = selectFromp(nodep);
+        while (AstNodeExpr* const fromp = selectFromp(basep)) basep = fromp;
+        const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
+        bool isDefault = refp && hasDefaultValue(refp->varp());
+        if (!isDefault) {
+            AstNodeExpr* selp = nodep;
+            for (; selectFromp(selp); selp = selectFromp(selp)) {
+                // The index of an AstNodeSel or AstSel; an AstStructSel has none
+                AstNodeBiop* const biopp = VN_CAST(selp, NodeBiop);
+                if (!biopp) continue;
+                iterate(biopp->rhsp());
+                const AstConst* const constp
+                    = VN_CAST(V3Const::constifyEdit(biopp->rhsp()), Const);
+                if (constp && constp->num().isAnyXZ()) isDefault = true;
+            }
+            iterate(selp);
         }
-        if (setDefaulted) {
-            m_defaulted = true;  // Propagate up that replacement was made
-            nodep->replaceWith(newTypeDefault(nodep));
+        if (isDefault) {
+            nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
-            return;
         }
     }
 
@@ -543,17 +588,14 @@ class DefaultSampledValueVisitor final : public VNVisitor {
             iterateChildren(nodep);
         }
     }
+    void visit(AstNodeSel* nodep) override { visitSelect(nodep); }
+    void visit(AstSel* nodep) override { visitSelect(nodep); }
+    void visit(AstStructSel* nodep) override { visitSelect(nodep); }
     void visit(AstNodeVarRef* nodep) override {
-        AstVar* const varp = nodep->varp();
-        if (varp->isParam()
-            || (!varp->isNet() && varp->lifetime().isStatic() && varp->hasUserInit())) {
-            return;
-        }
-        nodep->replaceWith(newTypeDefault(nodep));
+        if (!hasDefaultValue(nodep->varp())) return;
+        nodep->replaceWith(newTypeDefault(nodep->fileline(), nodep->dtypep()));
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
-    void visit(AstArraySel* nodep) override { visitSelect(nodep); }
-    void visit(AstSel* nodep) override { visitSelect(nodep); }
     void visit(AstNode* nodep) override { iterateChildren(nodep); }
 
 public:
