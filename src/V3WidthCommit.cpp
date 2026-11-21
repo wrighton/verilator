@@ -59,6 +59,8 @@ class WidthCommitVisitor final : public VNVisitor {
     AstNodeModule* m_modp = nullptr;  // Current module
     const char* m_contNbap = nullptr;  // In continuous- or non-blocking assignment, or trigger
     bool m_inNba = false;  // In a non-blocking assignment or event trigger
+    // In an assignment whose value is read after the enclosing subroutine returns
+    bool m_contOutlivesCall = false;
     bool m_contReads = false;  // Check read continuous automatic variables
     bool m_dynsizedelem = false;  // Under an element of a dynamically sized variable, not itself
     VMemberMap m_memberMap;  // Member names cached for fast lookup
@@ -166,7 +168,9 @@ private:
         if (!m_underSel && m_contNbap) {
             std::string varType;
             const AstNodeDType* const varDtp = varp->dtypep()->skipRefp();
-            if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+            if (m_contOutlivesCall) {
+                // Checked by outlivingRefCheck wherever the variable appears
+            } else if (varp->isClassMember() && !varp->lifetime().isStatic()) {
                 // Only an NBA may update a non-static class property
                 if (!m_inNba) varType = "Class non-static";
             } else if (varp->lifetime().isAutomatic() && !(varp->isFuncLocal() && varp->isIO())) {
@@ -447,6 +451,7 @@ private:
         iterateChildren(nodep);
         editDType(nodep);
         classEncapCheck(nodep, nodep->varp(), VN_CAST(nodep->classOrPackagep(), Class));
+        outlivingRefCheck(nodep, nodep->varp(), m_underSel || nodep->access().isReadOnly());
         if (nodep->access().isWriteOrRW() || m_contReads) varLifetimeCheck(nodep, nodep->varp());
         if (VN_IS(nodep, VarRef))
             nodep->name("");  // Clear to save memory; nodep->name() will work via nodep->varp()
@@ -480,6 +485,21 @@ private:
             VL_RESTORER(m_contReads);
             m_contNbap = "procedural continuous assignment";
             m_contReads = true;
+            iterateAndNextNull(nodep->lhsp());
+            iterateAndNextNull(nodep->rhsp());
+        }
+        editDType(nodep);
+    }
+    void visit(AstAssignForce* nodep) override {
+        {
+            // A force keeps evaluating its value after the force statement, so after the
+            // enclosing subroutine returns (IEEE 1800-2023 10.6.2)
+            VL_RESTORER(m_contNbap);
+            VL_RESTORER(m_contReads);
+            VL_RESTORER(m_contOutlivesCall);
+            m_contNbap = "procedural continuous assignment";
+            m_contReads = true;
+            m_contOutlivesCall = true;
             iterateAndNextNull(nodep->lhsp());
             iterateAndNextNull(nodep->rhsp());
         }
@@ -559,7 +579,30 @@ private:
             }
         }
     }
+    // In an assignment whose value is read after the enclosing subroutine returns, every
+    // variable naming the target or the value must live as long, wherever it appears: the
+    // value itself, the object of a member, or an index. A selected-from or object variable
+    // is read whatever its access says.
+    void outlivingRefCheck(AstNode* nodep, const AstVar* varp, bool isRead) {
+        if (!m_contOutlivesCall) return;
+        const char* varTypep = nullptr;
+        const char* clausep = "6.21";
+        if (varp->isClassMember()) {
+            // A property lasts as long as its object, but only an NBA may update one
+            if (!isRead && !varp->lifetime().isStatic()) varTypep = "Class non-static";
+        } else if (varp->isFuncLocal() && (varp->isRef() || varp->isConstRef())) {
+            // Refers to a variable of the caller, which may be automatic
+            varTypep = "Reference argument";
+            clausep = "13.5.2";
+        } else if (varp->lifetime().isAutomatic()) {
+            varTypep = "Automatic lifetime";
+        }
+        if (!varTypep) return;
+        nodep->v3error(varTypep << " variable not allowed in " << m_contNbap << " (IEEE 1800-2023 "
+                                << clausep << "): " << varp->prettyNameQ());
+    }
     void visit(AstMemberRef* nodep) override {
+        const int errors = V3Error::errorCount();
         {
             VL_RESTORER(m_underSel);
             m_underSel = true;
@@ -569,6 +612,10 @@ private:
         if (AstClassRefDType* const classrefp = VN_CAST(nodep->fromp()->dtypep(), ClassRefDType)) {
             classEncapCheck(nodep, nodep->varp(), classrefp->classp());
         }  // else might be struct, etc
+        // Once its object is reported, the member adds nothing
+        if (V3Error::errorCount() == errors) {
+            outlivingRefCheck(nodep, nodep->varp(), m_underSel || nodep->access().isReadOnly());
+        }
         varLifetimeCheck(nodep, nodep->varp());
     }
     void visit(AstVar* nodep) override {
