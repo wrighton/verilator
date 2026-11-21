@@ -103,8 +103,8 @@ module t (
     static ForceCls s_dyn[];
     static bit [31:0] s_vec;
     task drive();
-      force forced = m_prop;  // OK: a property lasts as long as its object
-      force forced = s_self.m_prop;  // OK: property read through a static handle
+      force forced = m_prop;  // Unsupported: a property of this object
+      force forced = s_self.m_prop;  // OK: a property through a static handle
     endtask
     task write_prop();
       force m_prop = 1'b0;  // Error: only an NBA may update a non-static property
