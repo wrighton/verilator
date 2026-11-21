@@ -1435,8 +1435,9 @@ private:
                     clearOptimizable(nodep, "Unsupported array element type");
                     return;
                 }
-                newValue(nodep, valuep);
-                VL_DO_DANGLING(valuep->deleteTree(), valuep);
+                // Not newValue, as the previous value may alias an element of the array
+                m_reclaimValuesp.push_back(valuep);
+                setValue(nodep, valuep);
                 return;
             }
             AstNodeExpr* const itemp = consp->valuep(indexp->toUInt());
