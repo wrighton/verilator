@@ -2833,7 +2833,7 @@ class LinkDotParamVisitor final : public VNVisitor {
         }
         string anchoredPath = path;
         for (symp = symp->parentp(); VN_IS(symp->nodep(), GenBlock); symp = symp->parentp()) {
-            anchoredPath = symp->nodep()->prettyName() + "." + anchoredPath;
+            anchoredPath = symp->nodep()->name() + "." + anchoredPath;
         }
         // A module's symbols are under its instance's, but the top module's are not
         const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
