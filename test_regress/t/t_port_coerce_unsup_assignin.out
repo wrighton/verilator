@@ -1,0 +1,10 @@
+%Error-ASSIGNIN: t/t_port_coerce_unsup.v:41:10: Assigning to input/const variable: 'a'
+                                              : ... note: In instance 't.u_var'
+   41 |   assign a = 2'b11;
+      |          ^
+                 ... For error description see https://verilator.org/warn/ASSIGNIN?v=latest
+%Error-ASSIGNIN: t/t_port_coerce_unsup.v:38:10: Assigning to input/const variable: 'a'
+                                              : ... note: In instance 't.u_net'
+   38 |   assign a = 2'b11;
+      |          ^
+%Error: Exiting due to
