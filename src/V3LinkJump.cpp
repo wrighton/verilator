@@ -279,7 +279,6 @@ class LinkJumpVisitor final : public VNVisitor {
         bodyp->setDisableWrapper();
         bodyp->addStmtsp(getQueuePushProcessSelfp(fl, processQueuep));
         AstFork* const forkp = new AstFork{fl, VJoinType::JOIN};
-        forkp->disableWrap(true);
         forkp->addForksp(bodyp);
         // The ports of a task are in its declarations, so stay in the task for calls to see them
         AstNodeBlock* const blockp = VN_CAST(nodep, NodeBlock);
