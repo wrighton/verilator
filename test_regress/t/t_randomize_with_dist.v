@@ -29,6 +29,18 @@ class C;
   endfunction
 endclass
 
+class SizedDist;
+  rand int q[];
+  rand int unsigned a[4];
+  rand int unsigned nested[2][2];
+  rand bit outer_value[2];
+  constraint size_c {q.size() == 5;}
+endclass
+
+class InlineSizedDist;
+  rand int unsigned a[];
+endclass
+
 module t;
   parameter int N = 400;
 
@@ -125,6 +137,81 @@ module t;
     `checkd(randomize_result, 0);
     `checkd(c.x, 5);
     c.x.rand_mode(1);
+
+    begin
+      localparam int DRAWS = 800;
+      automatic SizedDist d = new;
+      automatic int hits[2] = '{default: 0};
+      automatic int nested_hits[2] = '{default: 0};
+      automatic int outer_hits[2] = '{default: 0};
+      // Separate 1:1 and 1:9 groups detect an incorrectly captured weight index.
+      repeat (DRAWS) begin
+        randomize_result = d.randomize() with {
+          foreach (a[i]) {
+            a[i] dist {i := 1, (i + 8) := ((i % 2) != 0) ? 9 : 1};
+          }
+          foreach (nested[i]) {
+            outer_value[i] dist {
+              0 := 1,
+              1 := (i != 0) ? 9 : 1
+            };
+            // The single-index vehicle isolates the separate omitted-index capture fix.
+            foreach (outer_value[j]) {
+              nested[i][j] dist {
+                (16 * i + j) := 1,
+                (16 * i + j + 8) := (i != 0) ? 9 : 1
+              };
+            }
+          }
+        };
+        `checkd(randomize_result, 1);
+        `checkd(d.q.size(), 5);
+        foreach (d.a[i]) begin
+          `checkd(d.a[i] inside {i, (i + 8)}, 1);
+          if (d.a[i] == i + 8) hits[i%2]++;
+        end
+        foreach (d.nested[i, j]) begin
+          `checkd(d.nested[i][j] inside {(16 * i + j), (16 * i + j + 8)}, 1);
+          if (d.nested[i][j] == 16 * i + j + 8) nested_hits[i]++;
+        end
+        foreach (d.outer_value[i]) begin
+          if (d.outer_value[i]) outer_hits[i]++;
+        end
+      end
+      `check_range(hits[0], 2 * DRAWS * 4 / 10, 2 * DRAWS * 6 / 10);
+      `check_range(hits[1], 2 * DRAWS * 82 / 100, 2 * DRAWS * 98 / 100);
+      `check_range(nested_hits[0], 2 * DRAWS * 4 / 10, 2 * DRAWS * 6 / 10);
+      `check_range(nested_hits[1], 2 * DRAWS * 82 / 100, 2 * DRAWS * 98 / 100);
+      `check_range(outer_hits[0], DRAWS * 4 / 10, DRAWS * 6 / 10);
+      `check_range(outer_hits[1], DRAWS * 82 / 100, DRAWS * 98 / 100);
+    end
+
+    begin
+      localparam int DRAWS = 800;
+      automatic InlineSizedDist d = new;
+      automatic int hits[2] = '{default: 0};
+      automatic int samples[2] = '{default: 0};
+      automatic int length;
+      // Changing lengths give 1200 even and 800 odd-index observations.
+      for (int call_index = 0; call_index < DRAWS; call_index++) begin
+        length = 1 + call_index % 4;
+        randomize_result = d.randomize() with {
+          a.size() == length;
+          foreach (a[i]) {
+            a[i] dist {i := 1, (i + 8) := ((i % 2) != 0) ? 9 : 1};
+          }
+        };
+        `checkd(randomize_result, 1);
+        `checkd(d.a.size(), length);
+        foreach (d.a[i]) begin
+          `checkd(d.a[i] inside {i, (i + 8)}, 1);
+          if (d.a[i] == i + 8) hits[i%2]++;
+          samples[i%2]++;
+        end
+      end
+      `check_range(hits[0], samples[0] * 4 / 10, samples[0] * 6 / 10);
+      `check_range(hits[1], samples[1] * 82 / 100, samples[1] * 98 / 100);
+    end
 
     // std::randomize() with
     n0 = 0;
