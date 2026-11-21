@@ -314,6 +314,15 @@ private:
         if (m_logp) *m_logp << '\n';
     }
 
+    // Whether adding a file of positive 'score' to a bucket of 'bucketScore' gets it closer to
+    // 'targetScore'. Computed without signed arithmetic, so it holds for any scores.
+    static bool closerIfAdded(uint64_t bucketScore, uint64_t score, uint64_t targetScore) {
+        if (bucketScore >= targetScore) return false;
+        const uint64_t below = targetScore - bucketScore;
+        // Distance from the target if added is |below - score|
+        return score < below || score - below < below;
+    }
+
     void buildOutputList() {
         // Assign files to buckets and build final list of files
 
@@ -329,21 +338,21 @@ private:
                 continue;
             }
 
-            // Ideal bucket score limited to buckets and score of the current Work List.
-            const uint64_t listIdealBucketScore = list.m_totalScore / list.m_bucketsNum;
-
             std::vector<std::vector<const FilenameWithScore*>> buckets;
             auto fileIt = list.m_files.cbegin();
+            uint64_t remainingScore = list.m_totalScore;
             for (int i = 0; i < list.m_bucketsNum; ++i) {
                 std::vector<const FilenameWithScore*> bucket;
                 uint64_t bucketScore = 0;
+                // Aim for an equal share of the score left, so a bucket filled below or above
+                // its share is evened out by the following ones. The last bucket takes all the
+                // files left, which are then about one share.
+                const uint64_t bucketTargetScore = remainingScore / (list.m_bucketsNum - i);
+                const bool lastBucket = i + 1 == list.m_bucketsNum;
 
                 for (; fileIt != list.m_files.cend(); ++fileIt) {
-                    const uint64_t diffNow
-                        = std::abs(static_cast<int64_t>(listIdealBucketScore - bucketScore));
-                    const uint64_t diffIfAdded = std::abs(static_cast<int64_t>(
-                        listIdealBucketScore - bucketScore - fileIt->m_score));
-                    if (bucketScore == 0 || fileIt->m_score == 0 || diffNow > diffIfAdded) {
+                    if (lastBucket || bucketScore == 0 || fileIt->m_score == 0
+                        || closerIfAdded(bucketScore, fileIt->m_score, bucketTargetScore)) {
                         // Bucket score will be better with the file in it.
                         bucketScore += fileIt->m_score;
                         bucket.push_back(&*fileIt);
@@ -353,14 +362,10 @@ private:
                     }
                 }
 
+                remainingScore -= bucketScore;
                 // Most likely no bucket will be empty in normal situations. If it happen the
                 // bucket will just be dropped, as it creates no output.
                 buckets.push_back(std::move(bucket));
-            }
-            for (; fileIt != list.m_files.cend(); ++fileIt) {
-                // The Work List is out of buckets, but some files were left.
-                // Add them to the last bucket.
-                buckets.back().push_back(&*fileIt);
             }
             for (const std::vector<const FilenameWithScore*>& bucket : buckets) {
                 addBucketGroups(bucket);
