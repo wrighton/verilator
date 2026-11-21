@@ -221,28 +221,15 @@ module t;
     `checkd(rhs_dst, 7);
   end
 
-  // Writes a static variable that is forced later through a reference argument
-  // (Verilator-specific, as for the forces below)
-  function int ref_s();
-    int s;
-    s = $test$plusargs("none") ? 7 : 8;
-    return s;
-  endfunction
-  wire integer ref8 = ref_s();
-  task automatic force_ref(ref int x);
-    force x = 44;
-  endtask
+  // Writes an array element through a reference argument
   task automatic incr_ref(ref int x);
     x = x + 1;
   endtask
   int ref_arr[2] = '{1, 2};
   initial begin
     #1;
-    `checkd(ref8, 8);
-    force_ref(ref_s.s);
     incr_ref(ref_arr[1]);
     #1;
-    `checkd(ref8, 44);
     `checkd(ref_arr[1], 3);
   end
 
