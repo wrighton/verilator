@@ -21,6 +21,8 @@ module sub;
 
   integer i_ok20 = 23.0;  // No warning
   integer i_bad21 = 23.1;
+  longint l_ok22 = 9223372036854774784.0;  // No warning, largest double below 2^63
+  longint l_bad23 = 9223372036854775808.0;  // 2^63 does not fit
 
   initial begin
     int i;
