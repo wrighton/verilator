@@ -35,6 +35,8 @@ public:
     static void linkDotPrimary(AstNetlist* nodep) VL_MT_DISABLED;
     static void linkDotParamed(AstNetlist* nodep) VL_MT_DISABLED;
     static void linkDotScope(AstNetlist* nodep) VL_MT_DISABLED;
+    // Describe the kind of declaration nodep is for messages, e.g. "variable"
+    static string nodeTextType(AstNode* nodep) VL_MT_DISABLED;
 };
 
 #endif  // Guard
