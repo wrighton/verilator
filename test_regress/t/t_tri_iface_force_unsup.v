@@ -189,12 +189,12 @@ module u_class_queue;
   tgt_if tgt (1'b0);
   class holder;
     logic [1:0] field;
+    logic [1:0] arr[2];
   endclass
   holder held = new;
-  logic [1:0] queued[$];
   initial begin
     force tgt.value = held.field;
-    force tgt.value = queued[0];
+    force tgt.value = held.arr[1];
   end
 endmodule
 
