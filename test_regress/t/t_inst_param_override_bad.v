@@ -4,8 +4,8 @@
 // SPDX-FileCopyrightText: 2023 Anthony Donlon
 // SPDX-License-Identifier: CC0-1.0
 
-module sub ();
-endmodule
+interface sub ();
+endinterface
 
 interface axi_stream_if #(
     parameter int DATA_WIDTH = 64,
