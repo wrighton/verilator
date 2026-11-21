@@ -1,10 +1,8 @@
 %Error-UNSUPPORTED: t/t_constraint_dist_randmode_unsup.v:18:5: Unsupported: 'rand_mode' on a variable used inside this form of 'dist' expression
-                                                             : ... note: In instance 't'
    18 |     get(idx).x dist {
       |     ^~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error-UNSUPPORTED: t/t_constraint_dist_randmode_unsup.v:32:8: Unsupported: 'rand_mode' on a variable used inside this form of 'dist' expression
-                                                             : ... note: In instance 't'
    32 |     iq.sum() dist {
       |        ^~~
 %Error: Exiting due to
