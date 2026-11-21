@@ -1,0 +1,16 @@
+%Error: t/t_bind_dot_dup_bad.v:29:25: Duplicate declaration of instance: 'u_probe'
+                                    : ... note: In instance 't.u_leaf1'
+   29 | bind t.u_leaf1 probe_if u_probe ();   
+      |                         ^~~~~~~
+        t/t_bind_dot_dup_bad.v:28:25: ... Location of original declaration
+   28 | bind t.u_leaf1 probe_if u_probe ();
+      |                         ^~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_bind_dot_dup_bad.v:18:30: Duplicate declaration of instance: 'u_probe'
+                                    : ... note: In instance 't.u_owner.u_leaf'
+   18 |   bind owner.u_leaf probe_if u_probe ();
+      |                              ^~~~~~~
+        t/t_bind_dot_dup_bad.v:30:35: ... Location of original declaration
+   30 | bind t.u_owner.u_leaf other_probe u_probe ();   
+      |                                   ^~~~~~~
+%Error: Exiting due to

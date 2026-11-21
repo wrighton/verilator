@@ -32,6 +32,13 @@ class V3LinkDot final {
     static void linkDotGuts(AstNetlist* rootp, VLinkDotStep step) VL_MT_DISABLED;
 
 public:
+    // Components of a hierarchical instance path, as of a defparam, each with the index
+    // selecting a generate loop iteration, if any
+    using PathSegments = std::vector<std::pair<std::string, AstNodeExpr*>>;
+    // Append the components of pathp to segs, folding each index of constants only to a
+    // constant; return false if a component has other than one index
+    static bool pathSegments(AstNode* pathp, PathSegments& segs) VL_MT_DISABLED;
+
     static void linkDotPrimary(AstNetlist* nodep) VL_MT_DISABLED;
     static void linkDotParamed(AstNetlist* nodep) VL_MT_DISABLED;
     static void linkDotScope(AstNetlist* nodep) VL_MT_DISABLED;
