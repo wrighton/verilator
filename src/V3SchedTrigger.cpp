@@ -703,7 +703,10 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         // Add initialization time trigger
         AstNodeExpr* rhsp = nullptr;
         if (pair.second) {
-            rhsp = new AstConst{flp, AstConst::BitTrue{}};
+            // An event qualified with 'iff' triggers only when the condition is true
+            // (IEEE 1800-2023 9.4.2.3)
+            rhsp = senItemp->condp() ? SenExprBuilder::newIffCondp(senItemp)
+                                     : new AstConst{flp, AstConst::BitTrue{}};
         } else if (v3Global.opt.xInitialEdge()) {
             rhsp = senExprBuilder.buildXInitialEdge(senItemp);
         }

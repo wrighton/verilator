@@ -49,7 +49,17 @@ module t (
     #2 b = 1'b1;
     #1 b = 1'b0;
     #1 `checkd(cnt_neg_h, 1);
+    `checkd(cnt_neg_h0, 0);
+    `checkd(cnt_const_h0, 0);
   end
+
+  // The same at initialization, where the handle stays null
+  localparam logic ONE = 1'b1;
+  H h0;
+  int cnt_neg_h0 = 0;
+  int cnt_const_h0 = 0;
+  always @(negedge a iff h0.en) cnt_neg_h0 = cnt_neg_h0 + 1;
+  always @(ONE iff h0.en) cnt_const_h0 = cnt_const_h0 + 1;
 `endif
 
   always @(posedge clk) begin
