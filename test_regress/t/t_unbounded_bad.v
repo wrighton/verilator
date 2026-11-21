@@ -8,4 +8,10 @@ module t;
   initial begin
     if ($) $stop;
   end
+  sub u (.a($));  // '$' is only allowed as a parameter value
+endmodule
+
+module sub (
+    input int a
+);
 endmodule
