@@ -10,4 +10,14 @@ module t (
   logic a = 1'b1;
 
   assume property (@(posedge clk) strong (a ##1 a));
+
+  // Strong sequence as an operand
+  assert property (@(posedge clk) a |-> strong (##[1:$] a));
+  assume property (@(posedge clk) not strong (a ##1 a));
+
+  // Strong named sequence as an operand
+  sequence s_aa;
+    a ##1 a;
+  endsequence
+  assert property (@(posedge clk) a |-> strong (s_aa));
 endmodule
