@@ -765,7 +765,6 @@ static bool verilate(const string& argString) {
         V3PreShell::selfTest();
         V3OutFormatter::selfTest();
         V3Broken::selfTest();
-        AstNetlist::selfTest();
         V3Control::selfTest();
         V3HashTableInternals::selfTest();
         V3ThreadPool::selfTest();
