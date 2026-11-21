@@ -147,6 +147,7 @@ class WidthCommitVisitor final : public VNVisitor {
     bool m_inNba = false;  // In a non-blocking assignment or event trigger
     // In an assignment whose value is read after the enclosing subroutine returns
     bool m_contOutlivesCall = false;
+    bool m_forceValue = false;  // In the value of a force, not its target
     bool m_contReads = false;  // Check read continuous automatic variables
     bool m_dynsizedelem = false;  // Under an element of a dynamically sized variable, not itself
     VMemberMap m_memberMap;  // Member names cached for fast lookup
@@ -787,10 +788,12 @@ private:
             VL_RESTORER(m_contNbap);
             VL_RESTORER(m_contReads);
             VL_RESTORER(m_contOutlivesCall);
+            VL_RESTORER(m_forceValue);
             m_contNbap = "procedural continuous assignment";
             m_contReads = true;
             m_contOutlivesCall = true;
             iterateAndNextNull(nodep->lhsp());
+            m_forceValue = true;
             iterateAndNextNull(nodep->rhsp());
         }
         editDType(nodep);
@@ -895,6 +898,14 @@ private:
         if (varp->isClassMember()) {
             // A property lasts as long as its object, but only an NBA may update one
             if (!isRead && !varp->lifetime().isStatic()) varTypep = "Class non-static";
+            // Named directly, a property belongs to the object of the enclosing method, which
+            // the value, captured outside the class, cannot reach
+            if (isRead && !varp->lifetime().isStatic() && m_forceValue
+                && VN_IS(nodep, NodeVarRef)) {
+                nodep->v3warn(E_UNSUPPORTED,
+                              "Unsupported: Force value read through a non-static class property");
+                return;
+            }
         } else if (varp->isFuncLocal() && (varp->isRef() || varp->isConstRef())) {
             // Refers to a variable of the caller, which may be automatic
             varTypep = "Reference argument";

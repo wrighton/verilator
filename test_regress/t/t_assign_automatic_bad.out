@@ -35,6 +35,11 @@
                                         : ... note: In instance 't'
    93 |     force forced = r.m_prop;   
       |                    ^
+%Error-UNSUPPORTED: t/t_assign_automatic_bad.v:106:22: Unsupported: Force value read through a non-static class property
+                                                     : ... note: In instance 't'
+  106 |       force forced = m_prop;   
+      |                      ^~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: t/t_assign_automatic_bad.v:110:13: Class non-static variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'm_prop'
                                          : ... note: In instance 't'
   110 |       force m_prop = 1'b0;   
