@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_constraint_global_self_unsup.v:10:13: Unsupported: random member variable with the type of the containing class
+                                                            : ... note: In instance 't'
+   10 |   rand Node next;
+      |             ^~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_constraint_global_self_unsup.v:25:14: Unsupported: random member variable with the type of the containing class
+                                                            : ... note: In instance 't'
+   25 |   rand DNode d;
+      |              ^
+%Error-UNSUPPORTED: t/t_constraint_global_self_unsup.v:35:14: Unsupported: random member variable with the type of the containing class
+                                                            : ... note: In instance 't'
+   35 |   rand Inner next;
+      |              ^~~~
+%Error: Exiting due to
