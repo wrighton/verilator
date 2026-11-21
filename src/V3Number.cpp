@@ -413,6 +413,9 @@ bool V3Number::epsilonEqual(double a, double b) {
 }
 
 bool V3Number::epsilonIntegral(double a) {
+    // Converting a value outside the int64_t range [-2^63, 2^63), or NaN, is undefined
+    static constexpr double INT64_LIMIT = 9223372036854775808.0;  // 2^63, exact as a double
+    if (!(a >= -INT64_LIMIT && a < INT64_LIMIT)) return false;
     const double dint = static_cast<double>(static_cast<int64_t>(a));
     // Check all the rounding possibilities, as we did truncation above rather than rounding
     return epsilonEqual(a, dint) || epsilonEqual(a, dint - 1) || epsilonEqual(a, dint + 1);
@@ -2997,6 +3000,10 @@ void V3Number::selfTestThis() {
     UASSERT_SELFTEST(V3Number::epsilonIntegral(0.9999), false);
     UASSERT_SELFTEST(V3Number::epsilonIntegral(-1.0001), false);
     UASSERT_SELFTEST(V3Number::epsilonIntegral(-0.9999), false);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(-9223372036854775808.0), true);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(9223372036854775808.0), false);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(-1e30), false);
+    UASSERT_SELFTEST(V3Number::epsilonIntegral(std::numeric_limits<double>::quiet_NaN()), false);
 
     const char* const decimals[] = {
         "0",
