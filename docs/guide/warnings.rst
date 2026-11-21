@@ -1693,6 +1693,11 @@ List Of Warnings
    vector wider than 32 bits, which IEEE 1800-2023 35.5.5 does not allow.
    See :option:`import&32;"DPI-C"&32;function`.
 
+   Also warns on an inout port declared as a variable, such as ``inout var
+   logic y``, and on a variable connected to an inout port of an instance,
+   which IEEE 1800-2023 23.3.3.2 does not allow. Verilator simulates them as
+   if they were nets. Instead declare or connect a net, such as a ``wire``.
+
    Ignoring this warning will only suppress the lint check; it will
    simulate correctly.
 

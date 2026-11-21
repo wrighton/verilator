@@ -17,10 +17,10 @@ endmodule
 module t;
   p_struct_t p_i, p_o;
 
-  p_mh p_mh (
+  p_mh p_mh (  // verilator lint_off NONSTD
       p_i,
       p_o
-  );
+  );  // verilator lint_on NONSTD
 
   initial begin
     p_i.x = 1;
