@@ -676,15 +676,15 @@ void AstAlwaysReactive::selfTest() {
     AstAlwaysReactive* const plainp = new AstAlwaysReactive{flp, nullptr, nullptr};
     AstAlwaysReactive* const reportsp = new AstAlwaysReactive{flp, nullptr, nullptr};
     reportsp->deferredReports(true);
-    AstAlwaysReactive* const clonep = reportsp->cloneTree(false);
-    UASSERT_OBJ(plainp->sameNode(plainp) && clonep->sameNode(reportsp)
-                    && clonep->deferredReports(),
-                clonep, "Reactive always identity must survive cloning");
+    AstAlwaysReactive* const reportCopyp = reportsp->cloneTree(false);
+    UASSERT_OBJ(plainp->sameNode(plainp) && reportCopyp->sameNode(reportsp)
+                    && reportCopyp->deferredReports(),
+                reportCopyp, "Reactive always identity must survive cloning");
     UASSERT_OBJ(!plainp->sameNode(reportsp) && !reportsp->sameNode(plainp), plainp,
                 "Reactive always running deferred reports must differ");
     VL_DO_DANGLING(plainp->deleteTree(), plainp);
     VL_DO_DANGLING(reportsp->deleteTree(), reportsp);
-    VL_DO_DANGLING(clonep->deleteTree(), clonep);
+    VL_DO_DANGLING(reportCopyp->deleteTree(), reportCopyp);
 }
 const char* AstAnd::widthMismatch() const VL_MT_STABLE {
     BROKEN_RTN(lhsp()->widthMin() != rhsp()->widthMin());
@@ -708,17 +708,17 @@ void AstAssert::selfTest() {
     AstAssert* const bp = newp("b");
     AstAssert* const loweredp = newp("a");
     loweredp->nfaLowered(true);
-    AstAssert* const clonep = loweredp->cloneTree(false);
-    UASSERT_OBJ(ap->sameNode(ap) && ap->sameNode(a2p) && clonep->sameNode(loweredp)
-                    && clonep->nfaLowered(),
-                clonep, "Assertion identity must survive cloning");
+    AstAssert* const loweredCopyp = loweredp->cloneTree(false);
+    UASSERT_OBJ(ap->sameNode(ap) && ap->sameNode(a2p) && loweredCopyp->sameNode(loweredp)
+                    && loweredCopyp->nfaLowered(),
+                loweredCopyp, "Assertion identity must survive cloning");
     UASSERT_OBJ(!ap->sameNode(bp) && !ap->sameNode(loweredp) && !loweredp->sameNode(ap), ap,
                 "Assertions with a different name or lowering must differ");
     VL_DO_DANGLING(ap->deleteTree(), ap);
     VL_DO_DANGLING(a2p->deleteTree(), a2p);
     VL_DO_DANGLING(bp->deleteTree(), bp);
     VL_DO_DANGLING(loweredp->deleteTree(), loweredp);
-    VL_DO_DANGLING(clonep->deleteTree(), clonep);
+    VL_DO_DANGLING(loweredCopyp->deleteTree(), loweredCopyp);
 }
 AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assertType,
                            uint32_t directiveType, AstNodeExpr* levelp, AstNodeExpr* itemsp)
