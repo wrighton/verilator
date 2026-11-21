@@ -11,6 +11,12 @@ import vltest_bootstrap
 
 test.scenarios('linter')
 
-test.lint(fails=test.vlt_all, expect_filename=test.golden_filename)
+if test.vlt_all:
+    test.lint(fails=True,
+              verilator_flags2=['+define+PERMISSION_BAD'],
+              expect_filename=test.golden_filename.replace('.out', '_permission.out'))
+    test.lint(fails=True,
+              verilator_flags2=['+define+ASSIGNIN_CHECK'],
+              expect_filename=test.golden_filename.replace('.out', '_assignin.out'))
 
 test.passes()
