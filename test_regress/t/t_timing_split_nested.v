@@ -82,6 +82,24 @@ module t;
     endtask
   endclass
 
+  // A task inlined in a task that is not inlined is in a C++ scope there, whose statements
+  // are moved, with the variables of the call passed by reference
+  task automatic step_all(inout int acc);
+    automatic int sum = 0;
+    step(1, sum);
+    acc += sum;
+    step(2, sum);
+    if (sum > 8) acc += sum;
+    step(3, sum);
+    acc += sum * 2;
+  endtask
+
+  class ClsSteps;
+    task run(inout int acc);
+      step_all(acc);
+    endtask
+  endclass
+
   initial begin
     automatic int acc = 0;  // Live across the case items and loop iterations
     automatic int last = 0;
@@ -178,6 +196,12 @@ module t;
         cls.narrow(x, acc);
         `checkd(acc, 137 * x + 144);
       end
+    end
+    begin
+      automatic ClsSteps cls = new;
+      acc = 0;
+      cls.run(acc);
+      `checkd(acc, 75);
     end
     $write("*-* All Finished *-*\n");
     $finish;
