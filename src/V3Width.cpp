@@ -8766,6 +8766,23 @@ class WidthVisitor final : public VNVisitor {
                 nodep->exprp()->v3error("Streaming concatenation cannot be connected to '"
                                         << pinDirection.prettyName()
                                         << "' port (IEEE 1800-2023 11.4.14)");
+            } else if (VN_IS(nodep->exprp(), NodeStream)
+                       && nodep->modVarp()->dtypep()->skipRefp()->isDynamicallySized()) {
+                const AstNodeDType* const portDTypep = nodep->modVarp()->dtypep()->skipRefp();
+                if (VN_IS(portDTypep, AssocArrayDType) || VN_IS(portDTypep, WildcardArrayDType)) {
+                    // Not a bit-stream type (IEEE 1800-2023 6.24.3)
+                    nodep->exprp()->v3error("Streaming concatenation cannot be connected to "
+                                            "associative array port "
+                                            << nodep->modVarp()->prettyNameQ()
+                                            << " (IEEE 1800-2023 11.4.14)");
+                } else {
+                    nodep->exprp()->v3warn(E_UNSUPPORTED,
+                                           "Unsupported: Streaming concatenation connected to "
+                                           "dynamically sized port "
+                                               << nodep->modVarp()->prettyNameQ());
+                }
+                pushDeletep(nodep->exprp()->unlinkFrBack());
+                return;
             }
             if (pinDirection == VDirection::INOUT) {
                 nodep->exprp()->foreach([nodep](const AstNodeVarRef* refp) {
