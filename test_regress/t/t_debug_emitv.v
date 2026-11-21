@@ -891,6 +891,13 @@ endmodule
 
 package p;
   logic pkgvar;
+  function automatic int ident(int value);
+    return value;
+  endfunction
+  function automatic int uses_const_func();
+    logic [ident(2)-1:0] v;
+    return $bits(v);
+  endfunction
 endpackage
 
 class ClsParamExt extends ClsParam #(bit, 2);
