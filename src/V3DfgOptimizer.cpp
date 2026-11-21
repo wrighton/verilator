@@ -38,7 +38,7 @@ class DataflowOptimize final {
     // AstVarScope::user1 -> int, used as a bit-field
     // - bit0: Read via AstVarXRef (hierarchical reference)
     // - bit1: Written via AstVarXRef (hierarchical reference)
-    // - bit2: Read by logic in same module/netlist not represented in DFG
+    // - bit2: Written by a blocking assignment in clocked logic
     // - bit3: Written by logic in same module/netlist not represented in DFG
     // - bit4: Has READWRITE references
     // - bit5: Has DfgPrev instance
