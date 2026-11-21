@@ -223,21 +223,48 @@ class GraphAlgStrongly final : GraphAlg<> {
         }
     }
 
-    void vertexIterate(V3GraphVertex* vertexp) {
-        const uint32_t thisDfsNum = m_currentDfs++;
-        vertexp->user(thisDfsNum);
-        vertexp->color(0);
-        for (V3GraphEdge& edge : vertexp->outEdges()) {
+    // Color the components reachable from the given vertex
+    void vertexIterate(V3GraphVertex* startp) {
+        // Depth first with an explicit stack, as recursion overflows the stack on long paths
+        struct Frame final {
+            V3GraphVertex* vertexp;
+            uint32_t dfsNum;  // DFS number of vertexp
+            V3GraphEdge::OList::iterator edgeIt;  // Next out edge of vertexp to follow
+        };
+        std::vector<Frame> stack;
+        const auto enter = [&](V3GraphVertex* vertexp) {
+            const uint32_t dfsNum = m_currentDfs++;
+            vertexp->user(dfsNum);
+            vertexp->color(0);
+            V3GraphEdge::OList& edges = vertexp->outEdges();
+            stack.push_back({vertexp, dfsNum, edges.begin()});
+        };
+        enter(startp);
+        while (!stack.empty()) {
+            Frame& frame = stack.back();
+            V3GraphEdge::OList& edges = frame.vertexp->outEdges();
+            if (frame.edgeIt == edges.end()) {
+                vertexFinish(frame.vertexp, frame.dfsNum);
+                stack.pop_back();
+                continue;
+            }
+            V3GraphEdge& edge = *frame.edgeIt;
             if (followEdge(&edge)) {
-                V3GraphVertex* top = edge.top();
-                if (!top->user()) {  // Dest not computed yet
-                    vertexIterate(top);
+                V3GraphVertex* const top = edge.top();
+                if (!top->user()) {  // Dest not computed yet, follow this edge again after it
+                    enter(top);
+                    continue;
                 }
                 if (!top->color()) {  // Dest not in a component
-                    if (vertexp->user() > top->user()) vertexp->user(top->user());
+                    if (frame.vertexp->user() > top->user()) frame.vertexp->user(top->user());
                 }
             }
+            ++frame.edgeIt;
         }
+    }
+
+    // Make a component of the vertex once its edges are followed, if it is the head
+    void vertexFinish(V3GraphVertex* vertexp, uint32_t thisDfsNum) {
         if (vertexp->user() == thisDfsNum) {  // New head of subtree
             vertexp->color(thisDfsNum);  // Mark as component
             while (!m_callTrace.empty()) {
