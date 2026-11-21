@@ -7949,6 +7949,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
             if (nodep->targetp()) {
                 nodep->targetRefp()->unlinkFrBack()->deleteTree();
+                nodep->targetPath(targetPath);  // For V3EmitV to emit it as written
                 if (!hasPartSelect) {
                     const string instancePath = targetInstancePath(nodep->targetp(), targetPath);
                     if (!instancePath.empty()) {
