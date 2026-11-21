@@ -3267,6 +3267,66 @@ class ConstVisitor final : public VNVisitor {
         replaceWithSimulation(nodep);
         return true;
     }
+    // The value of the parameter that 'nodep' reads, if it is a constant associative array, so
+    // a select reads it in place, rather than a copy of it for each select as visit(AstVarRef)
+    AstConsAssoc* assocParamValuep(AstNodeExpr* nodep) {
+        const AstVarRef* const refp = VN_CAST(nodep, VarRef);
+        if (!m_params || !m_doV || m_attrp || !refp || !refp->access().isReadOnly()) {
+            return nullptr;
+        }
+        AstVar* const varp = refp->varp();
+        if (!varp->isParam() || varp->constPoolEntry() || !varp->valuep()) return nullptr;
+        // Otherwise visit(AstVarRef) folds the value, which later selects then read
+        AstConsAssoc* const consp = VN_CAST(varp->valuep(), ConsAssoc);
+        return consp && consp->isConstantTree() ? consp : nullptr;
+    }
+    void visit(AstAssocSel* nodep) override {
+        iterateAndNextNull(nodep->bitp());
+        AstConsAssoc* consp = assocParamValuep(nodep->fromp());
+        if (!consp) {
+            iterateAndNextNull(nodep->fromp());
+            // An associative array value is here only as the value of a parameter
+            consp = VN_CAST(nodep->fromp(), ConsAssoc);
+            if (!consp || !consp->isConstantTree()) return;
+        }
+        if (!nodep->bitp()->isConstantTree()) return;
+        // A dynamically sized value has more than one form, e.g. a keyed and a positional
+        // pattern for one dynamic array, so such keys are not compared here
+        if (nodep->bitp()->exists([](const AstNodeCons* keyConsp) {
+                return keyConsp->dtypep()->skipRefp()->isDynamicallySized();
+            })) {
+            if (m_required) {
+                nodep->v3warn(
+                    E_UNSUPPORTED,
+                    "Unsupported: Constant select of an associative array whose key type "
+                        << nodep->bitp()->dtypep()->prettyDTypeNameQ()
+                        << " contains a dynamically sized array.");
+            }
+            return;
+        }
+        // The key converts to the key type, as in an assignment, so loses the X bits of 2-state
+        // types. A key with X of a 4-state key type is an invalid index, so reads the default.
+        AstNodeDType* const keyDTypep
+            = VN_AS(consp->dtypep()->skipRefp(), AssocArrayDType)->keyDTypep();
+        SimulateVisitor::cleanTwoStateValue(nodep->bitp(), keyDTypep);
+        // Indexed, as each key of a parameter may be read. A key not in the array reads the
+        // default value (IEEE 1800-2023 7.8.6, 7.9.11).
+        AstConsAssocItem* const itemp = consp->itemByKeyp(nodep->bitp());
+        AstNodeExpr* const valuep = itemp ? itemp->valuep() : consp->defaultp();
+        AstNodeExpr* const newp
+            = valuep ? valuep->cloneTree(false)
+                     : SimulateVisitor::defaultOf(nodep->fileline(), nodep->dtypep());
+        if (!newp) {
+            if (m_required) {
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Constant read of a key not in an "
+                                             "associative array of element type "
+                                                 << nodep->dtypep()->prettyDTypeNameQ() << ".");
+            }
+            return;
+        }
+        nodep->replaceWithKeepDType(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
     int operandConcatMove(const AstConcat* nodep) {
         //    CONCAT under concat  (See moveConcat)
         // Return value: true indicates to do it; 2 means move to LHS
