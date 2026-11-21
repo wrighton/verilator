@@ -9,6 +9,12 @@
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%h exp=%h (%s !== %s)\n", `__FILE__, `__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
 // verilog_format: on
 
+package contassinit_pkg;
+  timeunit 1ns; timeprecision 1ps;
+  localparam int TILE = 0;
+  localparam int VISIBILITY = 1;
+endpackage
+
 interface trigger_sink (
     input clk,
     input triggers[3]
@@ -212,5 +218,58 @@ module t;
     $display("PASS original array and scalar-pattern inputs: %0d settled checks", checks);
     $write("*-* All Finished *-*\n");
     $finish;
+  end
+
+  // Test: parameter indices select disjoint elements, as literal indices do
+  localparam int RENDER = 2;
+  logic param_triggers[3];
+  assign param_triggers[contassinit_pkg::TILE] = end_of_tile;
+  initial
+    forever begin
+      param_triggers[contassinit_pkg::VISIBILITY] = 1'b1;
+      param_triggers[RENDER] = 1'b0;
+      @(posedge clk);
+    end
+  initial begin
+    // The source changes at time 1, so observe once its continuous value has settled
+    #2;
+    `checkh(param_triggers[0], end_of_tile);
+    `checkh(param_triggers[1], 1'b1);
+    `checkh(param_triggers[2], 1'b0);
+  end
+
+  // Test: parameter indices of nonzero-based ascending and descending ranges
+  localparam int FIRST = 7;
+  logic ascending_triggers[7:9];
+  assign ascending_triggers[FIRST] = end_of_tile;
+  initial begin
+    ascending_triggers[FIRST+1] = 1'b1;
+    ascending_triggers[FIRST+2] = 1'b0;
+    #2;
+    `checkh(ascending_triggers[7], end_of_tile);
+    `checkh(ascending_triggers[8], 1'b1);
+    `checkh(ascending_triggers[9], 1'b0);
+  end
+  logic descending_triggers[9:7];
+  assign descending_triggers[FIRST] = end_of_tile;
+  initial begin
+    descending_triggers[FIRST+1] = 1'b1;
+    descending_triggers[FIRST+2] = 1'b0;
+    #2;
+    `checkh(descending_triggers[7], end_of_tile);
+    `checkh(descending_triggers[8], 1'b1);
+    `checkh(descending_triggers[9], 1'b0);
+  end
+
+  // Test: unary and conditional operators of parameters fold as constants
+  localparam int NEG = -1;
+  localparam bit USE_LAST = 1'b1;
+  logic operator_triggers[3];
+  assign operator_triggers[USE_LAST ? 2 : 0] = end_of_tile;
+  initial begin
+    operator_triggers[-NEG] = 1'b1;
+    #2;
+    `checkh(operator_triggers[1], 1'b1);
+    `checkh(operator_triggers[2], end_of_tile);
   end
 endmodule
