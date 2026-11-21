@@ -124,6 +124,18 @@ module t;
       `checkh(ri.size, 3);
       ri = qi[2 : 10];  // 5 - 2 + 1 = 4
       `checkh(ri.size, 4);
+      ri = qi[6 : 7];  // Outside the queue
+      `checkh(ri.size, 0);
+      ri = qi[0 : -1];
+      `checkh(ri.size, 0);
+      ri = qi[0 : $ - 7];
+      `checkh(ri.size, 0);
+      ri = qi[$ - 8 : $ - 7];
+      `checkh(ri.size, 0);
+      qi.delete();
+      ri = qi[0 : 1];
+      `checkh(ri.size, 0);
+      qi = '{0, 1, 2, 3, 4, 5};
     end
 
     // Slices lying outside the queue are empty (#7355)
