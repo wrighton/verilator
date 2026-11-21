@@ -6,34 +6,37 @@
 %Warning-COVERIGN: t/t_cover_sequence_unsup.v:24:32: Ignoring unsupported: cover sequence with a sequence operand of 'or'
    24 |   cover sequence ((a [* 1: 3]) or 1'b0);
       |                                ^~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:27:21: Ignoring unsupported: cover sequence with this ranged cycle delay
-   27 |   cover sequence (a ##[1:2] (b ##1 c));
-      |                     ^~
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:27:26: Ignoring unsupported: cover sequence with a sequence operand of 'or'
+   27 |   cover sequence (a or b or (a ##1 b) or (b ##1 a) or (a ##2 b));
+      |                          ^~
 %Warning-COVERIGN: t/t_cover_sequence_unsup.v:30:21: Ignoring unsupported: cover sequence with this ranged cycle delay
-   30 |   cover sequence (a ##[1:300] (b ##1 c));
+   30 |   cover sequence (a ##[1:2] (b ##1 c));
       |                     ^~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:31:22: Ignoring unsupported: cover sequence with this ranged cycle delay
-   31 |   cover sequence ((a ##[1:300] b) ##1 c);
-      |                      ^~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:32:22: Ignoring unsupported: cover sequence with this ranged cycle delay
-   32 |   cover sequence ((a ##[1:2] b) ##1 c);
-      |                      ^~
 %Warning-COVERIGN: t/t_cover_sequence_unsup.v:33:21: Ignoring unsupported: cover sequence with this ranged cycle delay
-   33 |   cover sequence (a ##[1:2] b [*2]);
+   33 |   cover sequence (a ##[1:300] (b ##1 c));
       |                     ^~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:36:21: Ignoring unsupported: cover sequence with a goto repetition
-   36 |   cover sequence (a [-> 2]);
-      |                     ^~~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:37:21: Ignoring unsupported: cover sequence with a goto repetition
-   37 |   cover sequence (a [-> 2: 3]);
-      |                     ^~~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:39:21: Ignoring unsupported: cover sequence with a nonconsecutive repetition
-   39 |   cover sequence (a [= 2] ##1 b);
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:34:22: Ignoring unsupported: cover sequence with this ranged cycle delay
+   34 |   cover sequence ((a ##[1:300] b) ##1 c);
+      |                      ^~
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:35:22: Ignoring unsupported: cover sequence with this ranged cycle delay
+   35 |   cover sequence ((a ##[1:2] b) ##1 c);
+      |                      ^~
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:36:21: Ignoring unsupported: cover sequence with this ranged cycle delay
+   36 |   cover sequence (a ##[1:2] b [*2]);
       |                     ^~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:42:30: Ignoring unsupported: cover sequence with this ranged cycle delay
-   42 |   cover sequence ((a [*1:2]) ##[1:258] b);
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:39:21: Ignoring unsupported: cover sequence with a goto repetition
+   39 |   cover sequence (a [-> 2]);
+      |                     ^~~
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:40:21: Ignoring unsupported: cover sequence with a goto repetition
+   40 |   cover sequence (a [-> 2: 3]);
+      |                     ^~~
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:42:21: Ignoring unsupported: cover sequence with a nonconsecutive repetition
+   42 |   cover sequence (a [= 2] ##1 b);
+      |                     ^~
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:45:30: Ignoring unsupported: cover sequence with this ranged cycle delay
+   45 |   cover sequence ((a [*1:2]) ##[1:258] b);
       |                              ^~
-%Warning-COVERIGN: t/t_cover_sequence_unsup.v:43:30: Ignoring unsupported: cover sequence with this ranged cycle delay
-   43 |   cover sequence ((a [*1:2]) ##[1:3] b);
+%Warning-COVERIGN: t/t_cover_sequence_unsup.v:46:30: Ignoring unsupported: cover sequence with this ranged cycle delay
+   46 |   cover sequence ((a [*1:2]) ##[1:3] b);
       |                              ^~
 %Error: Exiting due to
