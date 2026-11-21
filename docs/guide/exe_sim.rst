@@ -136,7 +136,9 @@ Options:
    results according to the supplied seed. Verilator passes the seed with
    the SMT-LIB ``:random-seed`` option, so results only vary if the solver
    uses that seed to randomize its solutions. A solver that does not may
-   return the same solution for every ``randomize()`` call.
+   return the same solution for every ``randomize()`` call. Constraints that
+   the default would sample without the solver (see
+   :vlopt:`-fno-constraint-fast`) are also given to the solver.
 
    The default sampler can also be specified using the
    :option:`VERILATOR_RAND_SAMPLER` environment variable.
