@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2023 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__, `__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 class Foo;
   rand int x;
 endclass
@@ -60,12 +65,76 @@ class Qux extends Bar;
   endfunction
 endclass
 
+class SelectedSlot;
+  rand bit [6:0] x;
+  constraint c_ld {x < 10;}
+  constraint c_keep {x != 13;}
+endclass
+
+class SelectedOverride extends SelectedSlot;
+  constraint c_ld {x >= 20; x < 30;}
+endclass
+
+class SelectedCfg;
+  SelectedSlot slots[3];
+  bit allow_q[2];
+
+  function new;
+    SelectedOverride derived;
+    slots[0] = new;
+    derived = new;
+    slots[1] = derived;
+  endfunction
+
+  function void setup;
+    foreach (slots[s])
+      if (slots[s] != null) slots[s].c_ld.constraint_mode(!allow_q[0]);
+  endfunction
+
+  function int mode(int s);
+    return slots[s].c_ld.constraint_mode();
+  endfunction
+endclass
+
 module t;
   initial begin
     automatic logic[1:0] ok = 0;
     automatic int res;
     automatic Qux qux = new;
     automatic Bar bar = qux;
+
+    begin
+      SelectedCfg cfg;
+      SelectedSlot alias_slot;
+      bit enabled;
+      int result;
+      cfg = new;
+      alias_slot = cfg.slots[1];
+      cfg.slots[0].x = 17;
+      cfg.slots[1].x = 23;
+
+      cfg.slots[0].c_ld.constraint_mode(0);
+      `checkd(cfg.mode(0), 0)
+      for (int round = 0; round < 4; ++round) begin
+        cfg.allow_q[0] = bit'(round);
+        enabled = !cfg.allow_q[0];
+        cfg.setup();
+        foreach (cfg.slots[s]) begin
+          if (cfg.slots[s] == null) continue;
+          `checkd(cfg.mode(s), int'(enabled))
+          `checkd(cfg.slots[s].c_keep.constraint_mode(), 1)
+        end
+        `checkd(alias_slot.c_ld.constraint_mode(), int'(enabled))
+        result = cfg.slots[0].randomize(null);
+        `checkd(result, int'(!enabled))
+        result = cfg.slots[1].randomize(null);
+        `checkd(result, 1)
+        `checkd(cfg.slots[0].x, 17)
+        `checkd(cfg.slots[1].x, 23)
+        `checkd(cfg.slots[2] == null, 1)
+        `checkd(alias_slot == cfg.slots[1], 1)
+      end
+    end
 
     qux.test;
 
