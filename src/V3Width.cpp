@@ -382,6 +382,7 @@ class WidthVisitor final : public VNVisitor {
     using TypedFormalCopy = std::pair<std::vector<AstNodeDType*>, AstNodeSchema*>;
     std::map<const AstNodeSchema*, std::vector<TypedFormalCopy>> m_typedFormalCopies;
     std::vector<AstNodeSchema*> m_untypedFormalDecls;  // Such declarations, deleted at the end
+    std::unordered_set<const AstVar*> m_typedCopyFormals;  // Their formals typed in the copies
     WidthVP* m_vup = nullptr;  // Current node state
     bool m_underFork = false;  // Visiting under a fork
     bool m_underCast = false;  // Visiting the expression of a size or integral type cast
@@ -2423,6 +2424,22 @@ class WidthVisitor final : public VNVisitor {
             iterateCheck(nodep, "RHS", nodep->rhsp(), SELF, FINAL, expDTypep, EXTEND_EXP);
         }
     }
+    // Whether nodep is the actual argument of an untyped sequence or property formal
+    bool isUntypedSvaActual(const AstNodeExpr* nodep) const {
+        const AstArg* const argp = VN_CAST(nodep->backp(), Arg);
+        AstSchemaRef* const refp = argp ? VN_CAST(argp->aboveLoopp(), SchemaRef) : nullptr;
+        if (!refp || !(VN_IS(refp->schemap(), Sequence) || VN_IS(refp->schemap(), Property))) {
+            return false;
+        }
+        const AstVar* portp = nullptr;
+        // Already connected when its arguments are widthed, so this makes no changes
+        for (const auto& tconnect : V3Task::taskConnects(refp)) {
+            if (tconnect.second == argp) portp = tconnect.first;
+        }
+        UASSERT_OBJ(portp, nodep, "Argument without formal");
+        // Also in a copy typed by the actual arguments, see typeUntypedFormals
+        return (portp->basicp() && portp->basicp()->untyped()) || m_typedCopyFormals.count(portp);
+    }
     void visit(AstUnbounded* nodep) override {
         nodep->dtypeSetInt();  // Used in int context
         if (VN_IS(nodep->backp(), IsUnbounded)) return;  // Ok, leave
@@ -2442,6 +2459,7 @@ class WidthVisitor final : public VNVisitor {
         if (const auto* const varp = VN_CAST(nodep->backp(), Var)) {
             if (varp->isParam()) return;  // Ok, leave
         }
+        if (isUntypedSvaActual(nodep)) return;  // Ok, its uses are checked when substituted
         if (const auto* const pinp = VN_CAST(nodep->backp(), Pin)) {
             if (pinp->param()) return;  // Ok, leave
         }
@@ -9840,6 +9858,7 @@ class WidthVisitor final : public VNVisitor {
             AstVar* const varp = portps[i]->clonep();
             pushDeletep(varp->childDTypep()->unlinkFrBack());
             varp->dtypep(dtypeps[i]);
+            m_typedCopyFormals.insert(varp);
         }
         origp->addNextHere(copyp);
         copies.emplace_back(dtypeps, copyp);
