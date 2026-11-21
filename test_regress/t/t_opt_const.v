@@ -156,6 +156,7 @@ module Test(/*AUTOARG*/
   bug5993 i_bug5993(.clk(clk), .in(d[10]));
   bug6016 i_bug6016(.clk(clk), .in(d[10]));
   same_tree i_same_tree(.clk(clk), .in(d[11]), .w(d[19:12]));
+  wide_temp_msw i_wide_temp_msw(.clk(clk), .in(d));
 
 endmodule
 
@@ -661,5 +662,28 @@ module same_tree(input wire clk, input wire in, input wire [7:0] w);
     if (pow2_q != ~in_q) $stop;
     if (quot_q != {1'b0, in_q}) $stop;
     if (big_q != 8'd0) $stop;
+  end
+endmodule
+
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
+// '(a + b) >> 64' is held in a wide temporary without cleaning, so its most
+// significant word can have a carry above bit 64. V3Const assumed those bits
+// were zero and dropped the '& 1' that cleans the 1-bit result.
+module wide_temp_msw(input wire clk, input wire [31:0] in);
+  logic [64:0] a = '0;
+  logic [64:0] b = '0;
+  logic c = 1'b0;
+  wire o = 1'((a + b) >> 64) ^ c;
+  wire o2 = 1'((a - b) >> 64) ^ 1'((a - b) >> 63);
+  always @(posedge clk) begin
+    a <= {in[0], in, in[15:0], in[31:16]};
+    b <= {in[1], ~in, in};
+    c <= in[2];
+    `checkh(o, a[64] ^ b[64] ^ (a[63:0] + b[63:0] < a[63:0]) ^ c);
+    `checkh(o2, a[64] ^ b[64] ^ (a[63:0] < b[63:0]) ^ 1'((a[63:0] - b[63:0]) >> 63));
   end
 endmodule
