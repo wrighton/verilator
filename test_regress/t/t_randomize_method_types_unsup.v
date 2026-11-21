@@ -28,6 +28,16 @@ class Cls;
   }
 endclass
 
+class Elem;
+  rand bit [3:0] y;
+endclass
+
+class Calls;
+  rand Elem q[$];
+  // A field of a call result in a constraint is only ignored
+  constraint c_ignored { soft q.unique()[0].y == 4'h5; }
+endclass
+
 // IEEE 1800-2023 18.5.12 example
 class SList;
   rand int n;
@@ -38,6 +48,7 @@ endclass
 module t;
   Cls obj;
   SList head;
+  Calls calls;
   int res;
 
   initial begin
@@ -48,5 +59,7 @@ module t;
     head = new;
     head.next = new;
     res = head.randomize();
+    calls = new;
+    res = calls.randomize();
   end
 endmodule

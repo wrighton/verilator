@@ -19,8 +19,6 @@ class C;
     disable soft q.unique()[0].y;
     disable soft first().y;
   }
-  // A field of a call result in an ordinary constraint is only ignored
-  constraint c_ignored { soft q.unique()[0].y == 4'h5; }
   function new();
     Elem e = new;
     q.push_back(e);

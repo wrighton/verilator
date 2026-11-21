@@ -7,7 +7,10 @@
    15 |   rand Cls cls;
       |            ^~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:34:14: Unsupported: random member variable with the type of the containing class
-   34 |   rand SList next;
+%Warning-CONSTRAINTIGN: t/t_randomize_method_types_unsup.v:38:33: Unsupported: randomizing this expression, treating as state
+   38 |   constraint c_ignored { soft q.unique()[0].y == 4'h5; }
+      |                                 ^~~~~~
+%Error-UNSUPPORTED: t/t_randomize_method_types_unsup.v:44:14: Unsupported: random member variable with the type of the containing class
+   44 |   rand SList next;
       |              ^~~~
 %Error: Exiting due to
