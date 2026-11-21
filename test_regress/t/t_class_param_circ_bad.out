@@ -1,5 +1,4 @@
 %Error: t/t_class_param_circ_bad.v:18:3: Exceeded maximum --module-recursion-depth of 100
-                                       : ... note: In instance 't'
    18 |   ClsA #(PARAM + 1) a;
       |   ^~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
