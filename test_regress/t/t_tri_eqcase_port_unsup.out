@@ -1,6 +1,6 @@
-%Error-UNSUPPORTED: t/t_tri_eqcase_port_unsup.v:14:8: Unsupported: tristate in top-level IO: 'o'
+%Error-UNSUPPORTED: t/t_tri_eqcase_port_unsup.v:14:7: Unsupported: tristate enable on a port below the top-level module: 'o'
                                                     : ... note: In instance 't'
-   14 |       .o(o),
-      |        ^
+   14 |       o,
+      |       ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: Exiting due to
