@@ -15,17 +15,32 @@ test.compile(verilator_flags2=['--stats', '-Wno-UNOPTTHREADS'])
 
 test.execute()
 
-test.file_grep(test.stats, r'NBA, variables using FlagShared scheme\s+(\d+)', 1)
-test.file_grep(test.stats, r'NBA, variables using FlagArray scheme\s+(\d+)', 13)
+# Count model-member declarations, not uses or local temporaries. Each bounded size with flag
+# arrays uses at most two model members; later passes may localize the arrays, especially with
+# --threads.
+members = []
+for filename in test.glob_some(test.obj_dir + '/' + test.vm_prefix + '*.h'):
+    with open(filename, 'r', encoding='utf8') as fh:
+        members += re.findall(
+            r'^\s+(?:alignas\([^\n]+?\)\s+)?::[^;\n]+\s+(__Vdly_(?:Set|Val)__\w+);$',
+            fh.read(), re.MULTILINE)
+if len(members) > 100:
+    test.error('Too many NBA flag and value members: ' + str(len(members)))
+for instance in ['u_mixed16', 'u_mixed256']:
+    if len([name for name in members if '__DOT__' + instance + '__DOT__' in name]) > 2:
+        test.error('Too many NBA flag/value array members for ' + instance)
+# Shadow copies need no flag or value members
+for instance in ['u_dense16', 'u_dense64', 'u_dense256', 'u_dense16_copy']:
+    if [name for name in members if '__DOT__' + instance + '__DOT__' in name]:
+        test.error('Unexpected NBA flag/value array members for ' + instance)
 
-# The number of NBA flag and value variables does not scale with the array sizes, with a
-# variable per NBA there would be over 2000 for 'big' alone
-nDecls = 0
-for filename in (test.glob_some(test.obj_dir + "/" + test.vm_prefix + "*.h") +
-                 test.glob_some(test.obj_dir + "/" + test.vm_prefix + "*.cpp")):
-    with open(filename, 'r', encoding="utf8") as fh:
-        nDecls += len(re.findall(r'\b__Vdly_(?:Set|Val)__\w+;', fh.read()))
-if nDecls > 100:
-    test.error("Too many NBA flag and value variables: " + str(nDecls))
+# Dense targets use a shadow copy, or flag arrays with other writes or large elements
+test.file_grep(test.stats, r'NBA, variables using FlagArray scheme\s+(\d+)', 10)
+test.file_grep(test.stats, r'NBA, variables using ShadowVar scheme\s+(\d+)', 1)
+test.file_grep(test.stats, r'NBA, variables using ShadowVarSynced scheme\s+(\d+)', 13)
+# Synced shadow copies need no 'Pre' copy, leaving those of shared flags and of 'cyc'
+test.file_grep(test.stats, r'Node count, ALWAYSPRE\s+(\d+)', 13)
+test.file_grep(test.stats, r'NBA, variables using FlagShared scheme\s+(\d+)', 6)
+test.file_grep(test.stats, r'NBA, variables using GenericGlobal scheme\s+(\d+)', 1)
 
 test.passes()
