@@ -49,6 +49,29 @@ module Test (
   // Pass 1st cycle
   assert property (@(cyc) disable iff (cyc != $sampled(cyc)) cyc == 0);
 
+  // Clocking event by name, with disable iff (IEEE 1800-2023 16.12)
+  clocking cb @(posedge clk);
+  endclocking
+  logic dis = 0;
+  // Changes away from clk posedges, so its current value matches the sampled cyc
+  always @(negedge clk) dis <= cyc >= 3 && cyc < 6;
+  property p_named_clk(x, event ck);
+    @ck disable iff (dis) x;
+  endproperty
+  int npass = 0;
+  assert property (@cb disable iff (dis) !(cyc >= 3 && cyc < 6)) npass++;
+  else $stop;
+  assert property (disable iff (dis) @cb !(cyc >= 3 && cyc < 6)) npass++;
+  else $stop;
+  event ev;
+  always @(posedge clk) ->ev;
+  assert property (@ev disable iff (dis) !(cyc >= 3 && cyc < 6)) npass++;
+  else $stop;
+  assert property (p_named_clk(!(cyc >= 3 && cyc < 6), ev)) npass++;
+  else $stop;
+  // Each passed on cycles 0-2 and 6-8, disabled on 3-5
+  always @(posedge clk) if (cyc == 9 && npass != 4 * 6) $stop;
+
   //
   // Cover properties behave differently
   //
