@@ -788,6 +788,10 @@ class AstCell final : public AstNode {
     string m_name;  // Cell name
     string m_origName;  // Original name before dot addition
     string m_modName;  // Module the cell instances
+    // If from a bind to an instance path, module whose instances m_bindPath is from
+    string m_bindModName;
+    // If from a bind to an instance path, names of the instances and generate blocks on it
+    string m_bindPath;
     int m_arrayIdx = -1;  // Row-major position in instance array, from the left (V3Param-V3Width)
     bool m_fromBind : 1;  // Inserted into its module by a bind directive (IEEE 1800-2023 23.11)
     bool m_hasDriveStrength : 1;  // Drive strength given, legal only on a UDP instance
@@ -833,6 +837,14 @@ public:
     void fromBind(bool flag) { m_fromBind = flag; }
     bool hasDriveStrength() const { return m_hasDriveStrength; }
     void hasDriveStrength(bool flag) { m_hasDriveStrength = flag; }
+    // From a bind to an instance path, under a generate if enabling it
+    bool pathBind() const { return !m_bindModName.empty(); }
+    const string& bindModName() const { return m_bindModName; }
+    const string& bindPath() const { return m_bindPath; }
+    void bindTarget(const string& modName, const string& path) {
+        m_bindModName = modName;
+        m_bindPath = path;
+    }
     bool hasIfaceVar() const { return m_hasIfaceVar; }
     void hasIfaceVar(bool flag) { m_hasIfaceVar = flag; }
     void trace(bool flag) { m_trace = flag; }
@@ -1403,6 +1415,7 @@ class AstDefParam final : public AstNode {
     // @astgen op1 := rhsp : AstNode<AstNodeExpr|AstNodeDType> // Data type for a type parameter
     // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if own scope or after V3LinkDot
     // @astgen op3 := targetp : AstNodeExpr // After V3LinkDot, AstVarXRef from this scope
+    bool m_fromBind = false;  // From a bind to an instance path (see V3LinkCells)
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNode* rhsp)
         : ASTGEN_SUPER_DefParam(fl) {
@@ -1411,8 +1424,14 @@ public:
         this->targetp(targetp);
     }
     ASTGEN_MEMBERS_AstDefParam;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE;  // Name of the parameter set, from targetp
-    bool sameNode(const AstNode*) const override { return true; }
+    bool sameNode(const AstNode* samep) const override {
+        return m_fromBind == VN_DBG_AS(samep, DefParam)->m_fromBind;
+    }
+    bool fromBind() const { return m_fromBind; }
+    void fromBind(bool flag) { m_fromBind = flag; }
 };
 class AstDefaultClocking final : public AstNode {
     std::string m_name;  // Clocking block name
@@ -3355,6 +3374,8 @@ public:
     void dumpJson(std::ostream& str) const override;
     std::string name() const override VL_MT_STABLE { return m_name; }
     void name(const std::string& name) override { m_name = name; }
+    // Return if unnamed in the source, but a scope as it declares variables (see V3LinkDot)
+    bool unnamedScope() const;
     bool unnamed() const { return m_unnamed; }
     bool implied() const { return m_implied; }
     void implied(bool flag) { m_implied = flag; }

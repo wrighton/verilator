@@ -1,0 +1,20 @@
+%Error: t/t_bind_dot_bad.v:23:14: Bind target path has no instance or generate block named 'u_lef'.
+   23 | bind t.gen[0].u_lef probe_if u_probe ();   
+      |              ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_bind_dot_bad.v:24:12: Bind target path has no instance or generate block named 'nosuch'.
+   24 | bind nosuch.u_leaf probe_if u_probe ();   
+      |            ^
+%Error: t/t_bind_dot_bad.v:25:7: Bind target path names a generate block, not an instance.
+   25 | bind t.gen[0] probe_if u_probe ();   
+      |       ^
+%Error: t/t_bind_dot_bad.v:26:11: Bind target path needs an index to select an iteration of generate loop 'gen' (IEEE 1800-2023 27.4).
+   26 | bind t.gen.u_leaf probe_if u_probe ();   
+      |           ^
+%Error: t/t_bind_dot_bad.v:27:15: Bind target path selects an index of 'g_if', which is not a generate loop (IEEE 1800-2023 27.4).
+   27 | bind t.g_if[0].u_leaf probe_if u_probe ();   
+      |               ^
+%Error: t/t_bind_dot_bad.v:28:7: Bind target path selects an index of 'u_leaf', which is not a generate loop (IEEE 1800-2023 27.4).
+   28 | bind t.u_leaf[0] probe_if u_probe ();   
+      |       ^
+%Error: Exiting due to

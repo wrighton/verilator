@@ -1,0 +1,11 @@
+%Error-UNSUPPORTED: t/t_bind_dot_upward_unsup.v:54:8: Unsupported: bind target path in a module, not below it.
+   54 |   bind t.u_sub.u_leaf probe_if u_top_probe ();
+      |        ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_bind_dot_upward_unsup.v:30:8: Unsupported: bind target path in a module, not below it.
+   30 |   bind t.u_sub.u_leaf probe_if u_probe ();
+      |        ^
+%Error-UNSUPPORTED: t/t_bind_dot_upward_unsup.v:44:8: Unsupported: bind target path in a module, not below it.
+   44 |   bind t.u_sub.u_leaf probe_if u_probe ();
+      |        ^
+%Error: Exiting due to

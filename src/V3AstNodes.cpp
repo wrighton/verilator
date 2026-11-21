@@ -1093,6 +1093,7 @@ void AstCell::dump(std::ostream& str) const {
     Super::dump(str);
     if (fromBind()) str << " [FROMBIND]";
     if (hasDriveStrength()) str << " [DRIVESTRENGTH]";
+    if (pathBind()) str << " bindTarget=" << bindModName() << ":" << bindPath();
     if (recursive()) str << " [RECURSIVE]";
     if (arrayIdx() >= 0) str << " [ARRAYIDX=" << arrayIdx() << "]";
     if (modp()) {
@@ -1108,6 +1109,8 @@ void AstCell::dumpJson(std::ostream& str) const {
     dumpJsonStrFunc(str, verilogName);
     dumpJsonBoolFuncIf(str, fromBind);
     dumpJsonBoolFuncIf(str, hasDriveStrength);
+    if (pathBind()) dumpJsonStr(str, "bindModName", bindModName());
+    if (pathBind()) dumpJsonStr(str, "bindPath", bindPath());
     dumpJsonBoolFuncIf(str, recursive);
     if (arrayIdx() >= 0) dumpJsonNumFunc(str, arrayIdx);
     dumpJsonGen(str);
@@ -1927,6 +1930,14 @@ void AstCvtArrayToArray::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, srcElementBits);
     dumpJsonGen(str);
 }
+void AstDefParam::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (fromBind()) str << " [FROMBIND]";
+}
+void AstDefParam::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, fromBind);
+    dumpJsonGen(str);
+}
 string AstDefParam::name() const VL_MT_STABLE {
     const AstParseRef* const refp = VN_CAST(targetp(), ParseRef);
     return refp ? refp->name() : "";
@@ -2159,6 +2170,13 @@ void AstGenBlock::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, implied);
     dumpJsonBoolFuncIf(str, unnamed);
     dumpJsonGen(str);
+}
+bool AstGenBlock::unnamedScope() const {
+    if (!unnamed()) return false;
+    for (const AstNode* const itemp : itemspList()) {
+        if (VN_IS(itemp, Var) || VN_IS(itemp, Foreach)) return true;
+    }
+    return false;
 }
 AstNodeBiop* AstGte::newTyped(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
     if (lhsp->isString() && rhsp->isString()) {

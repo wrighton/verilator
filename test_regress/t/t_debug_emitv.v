@@ -800,6 +800,7 @@ module seq_event(input logic clk);
 endmodule
 
 bind t Iface bound_iface (.clk(clk));
+bind t.sub Iface path_bound_iface (.clk(clk));
 
 // In the compilation-unit package, unlike the variable \$unit in module escapes
 typedef enum {UNIT_A, UNIT_B} unit_e;
