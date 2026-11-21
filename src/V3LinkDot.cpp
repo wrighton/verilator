@@ -2645,16 +2645,22 @@ class LinkDotParamVisitor final : public VNVisitor {
         } else {
             // Path from the defparam's scope, if the instance is under it
             string belowPath;
+            size_t belowDepth = 0;
             const VSymEnt* symp = cellSymp;
-            for (; symp && symp != defSymp; symp = symp->parentp()) {
+            for (; symp && symp != defSymp; symp = symp->parentp(), ++belowDepth) {
                 belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
             }
             // Path of a named block, task or function in the instance; in the pin's name, so
             // V3Param keys the value apart from a parameter of the same name in another scope
             const string scopePath = cellSymp != foundp ? path.substr(cellPath.size() + 1) : "";
             // If under it, V3Param passes the value down from each instance of this module, so
-            // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
-            AstNodeExpr* const exprp = symp ? nullptr : nodep->rhsp()->unlinkFrBack();
+            // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1). Not
+            // if the path, e.g. from $root, only comes back into the scope from above it, as it
+            // then names one instance.
+            const bool below = symp
+                               && belowDepth >= static_cast<size_t>(
+                                      std::count(cellPath.begin(), cellPath.end(), '.'));
+            AstNodeExpr* const exprp = below ? nullptr : nodep->rhsp()->unlinkFrBack();
             UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                       << "  <= " << exprp);
             // Don't need to check the name of the defparam exists.  V3Param does.
@@ -2662,7 +2668,9 @@ class LinkDotParamVisitor final : public VNVisitor {
                                             -1,  // Pin# not relevant
                                             VString::dot(scopePath, ".", name), exprp};
             pinp->param(true);
-            pinp->paramPath(cellPath);
+            // V3Param matches the path against instance names, which start at the top module
+            pinp->paramPath(VString::startsWith(cellPath, "$root.") ? cellPath.substr(6)
+                                                                    : cellPath);
             pinp->modVarp(scopedVarp);
             cellp->addParamsp(pinp);
             if (!exprp) {
@@ -3688,7 +3696,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         auto& defParamPins = m_usedDefParamPins[refp];
         const auto defParamIt = defParamPins.find(nodep->paramPath());
         if (defParamIt != defParamPins.end()) {
-            duplicatePinError(nodep, defParamIt->second, whatp);
+            // IEEE 1800-2023 23.10.1: Last defparam in source text wins
+            AstPin* const prevp = defParamIt->second;
+            defParamIt->second = nodep;
+            if (pair.first->second == prevp) pair.first->second = nodep;
+            VL_DO_DANGLING(pushDeletep(prevp->unlinkFrBack()), prevp);
             return;
         }
         defParamPins.emplace(nodep->paramPath(), nodep);
