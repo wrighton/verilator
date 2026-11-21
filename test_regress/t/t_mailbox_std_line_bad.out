@@ -1,0 +1,5 @@
+%Error: .../verilated_std.sv:1:9: Redeclaring the 'std' package is not allowed
+    1 | package std;
+      |         ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

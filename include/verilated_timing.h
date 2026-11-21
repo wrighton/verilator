@@ -153,6 +153,10 @@ public:
     void* framep() const { return m_coro ? m_coro.address() : nullptr; }
     /// Process of the coroutine, nullptr if not needed
     VlProcess* processp() const { return m_process.get(); }
+    /// Reference to the process of the coroutine, null if not needed
+    const VlProcessRef& process() const { return m_process; }
+    /// True if the process of the coroutine was killed
+    bool killed() const { return m_process && m_process->state() == VlProcess::KILLED; }
     /// Set the slot of the handle on the event wait list the coroutine waits on
     void waitIndex(const size_t index) {
         if (m_process) m_process->waitIndex(index);
@@ -349,22 +353,103 @@ public:
 // co_await __VdynSched.eventTrigger(event) (IEEE 1800-2023 15.5). It is not resumed before the
 // event fires; the next evaluate() after that moves the waiters to the resumption step, in the
 // order they started waiting.
+// A std::mailbox waits on its wait queues the same way, via co_await
+// __VdynSched.queueWait(queue), but each wake resumes only the first waiter (see VlWaitQueue).
 
-/// Processes waiting on one named event. A wait list is live while 'm_eventp' is set. Only
-/// notify() is used in parallel MTasks (see VlEventWaitLink).
+class VlDynamicTriggerScheduler;
+class VlWaitQueue;
+
+/// Processes waiting on one named event, or on one wait queue. A wait list is live while
+/// 'm_eventp' or 'm_queuep' is set. Logic in parallel MTasks only uses notify() and
+/// notifyOne() (see VlEventWaitLink), and writes what a wait queue has available (see
+/// 'm_available').
 struct VlEventWaitList final : public VlEventWaitLink {
     std::shared_ptr<VlEvent> m_keepp;  // Keeps an assignable event's storage alive
     std::vector<VlCoroutineHandle> m_waiters;  // Waiting coroutines in order, or empty slots
-    size_t m_emptySlots = 0;  // Slots left empty by dropped killed waiters
+    size_t m_emptySlots = 0;  // Slots left empty by dropped killed or selected waiters
     uint64_t m_seq = 0;  // Order in which the list became live (see wakePending)
+    // Wait queue waited on, while the list is live; its waiters keep the class object owning
+    // it alive, and whichever of the two goes first unlinks the other (see ~VlWaitQueue)
+    const VlWaitQueue* m_queuep = nullptr;
+    VlDynamicTriggerScheduler* m_schedp = nullptr;  // Scheduler owning the list
+    size_t m_headSlot = 0;  // Slots before this one are empty, or have killed waiters
+    void* m_selectedFramep = nullptr;  // Frame of the waiter selected to resume, if any
+    size_t m_selectedSlot = 0;  // Slot the selected waiter takes back if it waits again
+    VlProcessRef m_selectedProcess;  // The selected waiter's process, unlinked when finishing
+    // Messages or room the wait queue has, as its mailbox last told, with 'm_availTag' and
+    // 'm_availAtEval'. Written by logic in parallel MTasks too, but for different mailboxes,
+    // with lists of their own, and read once the MTasks finished (see VlWaitQueue::wake).
+    IData m_available = 0;
+    // Of each slot of a wait queue, the trigger evaluation that started last before the waiter
+    // in it started waiting (see VlDynamicTriggerScheduler::queueEligible)
+    std::vector<uint64_t> m_enrolledAt;
+    uint64_t m_availTag = 0;  // Trigger evaluation that 'm_availAtEval' is for
+    bool m_availAtEval = false;  // If something was available at that trigger evaluation
+};
+
+/// A waiting queue of a std::mailbox, internal to the std package (see verilated_std.sv). Its
+/// processes wait their turn in arrival order on a wait list of the timing scheduler. A wake
+/// selects only the first waiter to resume, and no other until the selected one waits again or
+/// releases its turn, so the waiters keep their order, as the waiting queue of a mailbox is
+/// first-in first-out (IEEE 1800-2023 15.4.5). The wait list is runtime state of the
+/// scheduler, not of the design, so the methods are const. A copy has no waiters.
+class VlWaitQueue final {
+    friend class VlDynamicTriggerScheduler;
+    mutable VlEventWaitList* m_listp = nullptr;  // Wait list of the waiting processes, if any
+#ifdef VL_DEBUG
+    static std::atomic<size_t> s_maxSlotsForTest;  // See maxSlotsForTest()
+#endif
+
+public:
+    // CONSTRUCTORS
+    VlWaitQueue() = default;
+    VlWaitQueue(const VlWaitQueue&) {}
+    VlWaitQueue& operator=(const VlWaitQueue&) = delete;
+    ~VlWaitQueue() {
+        if (VL_UNLIKELY(m_listp)) m_listp->m_queuep = nullptr;
+    }
+
+    // METHODS
+    /// If the queue has a wait list, which then needs to be told what is available. It is
+    /// created when nothing is.
+    bool listed() const { return m_listp; }
+#ifdef VL_DEBUG
+    // Most slots that the wait list of any wait queue had, of the waiting processes and of the
+    // ones that took their turn and were not compacted yet, once a waiter was added, in any
+    // model of the process, which may run on other threads. For tests only.
+    static size_t maxSlotsForTest() { return s_maxSlotsForTest.load(std::memory_order_relaxed); }
+#endif
+    /// Wake the first waiter, for a message or room added, leaving 'available', unless one
+    /// selected before has not taken its turn yet. Called only if listed(), as take(). Logic
+    /// in parallel MTasks may call it, like VlEvent::fire(), as the scheduler then only reads
+    /// the state of the queue, apart from its availability bookkeeping, which is of the queue,
+    /// and calls notifyOne() of its list, which is thread safe (see
+    /// VlDynamicTriggerScheduler::queueWake). Concurrent accesses to one mailbox are not safe.
+    inline void wake(IData available) const;
+    /// Tell a message or room taken without waiting, leaving 'available'. Called like wake().
+    inline void take(IData available) const;
+    /// End the turn of the selected waiter, a process that waited, as it proceeds, and pass
+    /// it on to the next waiter if 'remaining' messages or room are left. Called only by that
+    /// waiter, so the queue has a wait list, while resuming, as no MTask runs in parallel.
+    inline void release(IData remaining) const;
 };
 
 class VlDynamicTriggerScheduler final {
+    friend class VlWaitQueue;
+
     // TYPES
     using VlCoroutineVec = std::vector<VlCoroutineHandle>;
 
     // MEMBERS
     bool m_anyTriggered = false;  // If true, at least one trigger was set
+    bool m_resuming = false;  // Resuming the coroutines whose triggers were set (see resume)
+    bool m_evaluating = false;  // Evaluating the triggers (see evaluate)
+    uint64_t m_evals = 0;  // Trigger evaluations, which tag the state of wait queues
+    // Waiters a turn was passed to in this resume(), and their lists, which resume right
+    // after the coroutine passing it, in order
+    std::deque<std::pair<VlCoroutineHandle, VlEventWaitList*>> m_passedTo;
+    // Index in 'm_triggered' of each waiter selected on a wait queue, and its list, in order
+    std::vector<std::pair<size_t, VlEventWaitList*>> m_selectedWaiters;
     VlCoroutineVec m_suspended;  // Suspended coroutines awaiting trigger evaluation
     VlCoroutineVec m_evaluated;  // Coroutines currently being evaluated (for evaluate())
     VlCoroutineVec m_triggered;  // Coroutines whose triggers were set, and are awaiting resumption
@@ -403,15 +488,47 @@ class VlDynamicTriggerScheduler final {
         };
         return Awaitable{process, queue, VlFileLineDebug{filename, lineno}};
     }
+    // Returns a free wait list, live for the next order
+    VlEventWaitList& takeWaitList();
     // Returns the live wait list new waiters of 'event' join, creating it if needed
     VlEventWaitList& waitListOf(VlEvent& event);
+    // Adds a coroutine to the waiters of 'queue', in the slot it had if it was selected last
+    void addQueueWaiter(const VlWaitQueue& queue, std::coroutine_handle<VlPromise> coro,
+                        VlProcessRef process, VlFileLineDebug fileline);
+    // Selects the first waiter of a wait queue to resume, if any. Returns if there was one.
+    bool selectFirst(VlEventWaitList& list);
+    // Wakes the first waiter of a wait queue (see VlWaitQueue::wake)
+    void queueWake(VlEventWaitList& list, IData available);
+    // Tells what a wait queue has available, noting what it had at the last trigger evaluation
+    // (see queueEligible)
+    void setAvailable(VlEventWaitList& list, IData available);
+    // Returns the slot of the first waiter of a wait queue, if any, else the number of slots
+    size_t firstWaiterSlot(VlEventWaitList& list);
+    // Returns if the first waiter of a wait queue may proceed in this resume()
+    bool queueEligible(const VlEventWaitList& list, size_t slot) const VL_MT_UNSAFE_ONE;
+    // Passes the turn on a wait queue to its first waiter, to resume right after the coroutine
+    // passing it, in this resume(), which runs while no MTask runs in parallel, if it may
+    // proceed in it and not finishing, else at the next trigger evaluation
+    void queuePassTurn(VlEventWaitList& list) VL_MT_UNSAFE_ONE;
+    // Ends the turn of the selected waiter of a wait queue (see VlWaitQueue::release)
+    void queueRelease(VlEventWaitList& list, IData remaining) VL_MT_UNSAFE_ONE;
+    // Resumes a coroutine selected from wait list 'listp', unless finishing
+    void resumeSelected(VlCoroutineHandle& coro, VlEventWaitList* listp);
+    // Ends the turn of a waiter selected on a wait queue that does not resume, as it was killed,
+    // or as $finish is pending, so it is destroyed instead
+    static void dropSelected(VlEventWaitList& list, VlCoroutineHandle& coro) VL_MT_UNSAFE_ONE;
+    // Detaches and frees a wait queue's list if it has no waiters, selected or not
+    void freeIfIdle(VlEventWaitList& list);
+    // Drops the killed waiters of a pending wait queue's list, and selects its first waiter to
+    // resume if woken. Returns if one was selected.
+    bool drainQueue(VlEventWaitList& list, VlCoroutineVec& killed);
     // Adds a coroutine to the waiters of 'event'
     void addWaiter(VlEvent& event, std::shared_ptr<VlEvent>&& keepp,
                    std::coroutine_handle<VlPromise> coro, VlProcessRef process,
                    VlFileLineDebug fileline);
     // Removes the empty slots of a wait list, keeping the order and slots of its waiters
     void compact(VlEventWaitList& list);
-    // Detaches a wait list from its event, while the event's storage is still alive
+    // Detaches a wait list from its event or wait queue, while its storage is still alive
     static void detach(VlEventWaitList& list);
     // Frees a detached wait list without waiters
     void recycle(VlEventWaitList& list);
@@ -439,6 +556,25 @@ class VlDynamicTriggerScheduler final {
         };
         return Awaitable{*this, event, std::move(keepp), process,
                          VlFileLineDebug{filename, lineno}};
+    }
+    auto queueAwaitable(const VlWaitQueue& queue, VlProcessRef process, const char* filename,
+                        int lineno) {
+        struct Awaitable final {
+            VlDynamicTriggerScheduler& sched;
+            const VlWaitQueue& queue;
+            VlProcessRef process;  // Data of the suspended process, null if not needed
+            VlFileLineDebug fileline;
+
+            bool await_ready() const { return false; }  // Always suspend
+            void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                sched.addQueueWaiter(queue, coro, process, fileline);
+            }
+            // A selected waiter is linked to the list until it resumes (see selectFirst)
+            void await_resume() const {
+                if (process) process->waitListp(nullptr);
+            }
+        };
+        return Awaitable{*this, queue, process, VlFileLineDebug{filename, lineno}};
     }
 
 public:
@@ -494,7 +630,24 @@ public:
                                 eventDescription, filename, lineno););
         return eventAwaitable(*event, std::shared_ptr<VlEvent>{event}, process, filename, lineno);
     }
+    // Used by coroutines of the std package for co_awaiting their turn on a wait queue
+    auto queueWait(const VlWaitQueue& queue, VlProcessRef process, const char* eventDescription,
+                   const char* filename, int lineno) {
+        VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
+                                eventDescription, filename, lineno););
+        return queueAwaitable(queue, process, filename, lineno);
+    }
 };
+
+void VlWaitQueue::wake(IData available) const {
+    m_listp->m_schedp->queueWake(*m_listp, available);
+}
+void VlWaitQueue::take(IData available) const {
+    m_listp->m_schedp->setAvailable(*m_listp, available);
+}
+void VlWaitQueue::release(IData remaining) const {
+    m_listp->m_schedp->queueRelease(*m_listp, remaining);
+}
 
 //=============================================================================
 // VlForkSync is used to manage fork..join and fork..join_any constructs.

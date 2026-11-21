@@ -3508,7 +3508,13 @@ class WidthVisitor final : public VNVisitor {
                 userIterateAndNext(nodep->typeofp(), WidthVP{SELF, BOTH}.p());
                 AstNode* const typeofp = nodep->typeofp();
                 nodep->refDTypep(typeofp->dtypep());
-                VL_DO_DANGLING(typeofp->unlinkFrBack()->deleteTree(), typeofp);
+                const AstBasicDType* const basicp = typeofp->dtypep()->basicp();
+                if (basicp && basicp->isWaitQueue()) {
+                    // Reported where the reference resolved (see mailboxInternalCheck), so give
+                    // the declared type, which no other declaration may have
+                    nodep->refDTypep(nodep->findBasicDType(VBasicDTypeKwd::CHANDLE));
+                }
+                VL_DO_DANGLING(pushDeletep(typeofp->unlinkFrBack()), typeofp);
             }
             // We had to use AstRefDType for this construct as pointers to this type
             // in type table are still correct (which they wouldn't be if we replaced the node)
@@ -4614,6 +4620,9 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->delayp(), WidthVP{nodep->dtypep(), PRELIM}.p());
         UINFO(4, "varWidthed " << nodep);
         // UINFOTREE(1, nodep, "", "InitOut");
+        // Only std::mailbox has wait queues, as type() of one is an error (see visit(AstRefDType))
+        UASSERT_OBJ(!nodep->basicp() || !nodep->basicp()->isWaitQueue() || nodep->isInternal(),
+                    nodep, "Wait queue outside std::mailbox");
         nodep->didWidth(true);
         nodep->doingWidth(false);
     }
@@ -4635,6 +4644,8 @@ class WidthVisitor final : public VNVisitor {
             // Var hasn't been widthed, so make it so.
             userIterate(nodep->varp(), nullptr);
         }
+        const bool mailboxInternal
+            = mailboxInternalCheck(nodep, nodep->varp(), VN_IS(nodep, VarRef));
         if (m_underDisableIff && m_propLocalVarps.count(nodep->varp())) {
             nodep->v3error("Disable iff condition references local variable "
                            << nodep->prettyNameQ() << " (IEEE 1800-2023 16.12)");
@@ -4650,6 +4661,7 @@ class WidthVisitor final : public VNVisitor {
         // UINFOTREE(9, nodep->varp(), "", "forvar");
         // Note genvar's are also entered as integers
         nodep->dtypeFrom(nodep->varp());
+        if (VL_UNLIKELY(mailboxInternal)) mailboxInternalRetype(nodep);
         if (VN_IS(nodep->backp(), NodeAssign) && nodep->access().isWriteOrRW()) {  // On LHS
             UASSERT_OBJ(nodep->dtypep(), nodep, "LHS var should be dtype completed");
         }
@@ -5508,6 +5520,38 @@ class WidthVisitor final : public VNVisitor {
             memberClassesRecurse(extp->classp(), classps);
         }
     }
+    // Reports a use of an internal member of std::mailbox, its waiting queues, anywhere but by
+    // name in a method of the class declaring it, whatever the warning settings, as it would
+    // not keep the waiting processes informed. Only those members are both internal and local
+    // (see V3Param::markStdMailboxInternals), and one not in a class is reported too. Checked
+    // where the reference resolves, before folding a type query or a method call removes it.
+    // Returns true if reported.
+    bool mailboxInternalCheck(AstNode* const refp, AstVar* const varp, const bool byName) {
+        if (VL_LIKELY(!varp->isInternal() || !varp->isHideLocal())) return false;
+        const AstClass* const ownerp = m_containingClassFinder.find(varp);
+        if (byName && ownerp && m_ftaskp && m_containingClassFinder.find(m_ftaskp) == ownerp) {
+            return false;
+        }
+        refp->v3error("Reference to " << varp->prettyNameQ()
+                                      << ", which is internal to the built-in mailbox class,"
+                                         " outside its methods (IEEE 1800-2023 8.18).\n"
+                                      << refp->warnMore() << "... Suggest using its methods");
+        return true;
+    }
+    // After the error of mailboxInternalCheck, gives a reference to a wait queue the type it is
+    // declared with, and marks it erroring, so that no other error follows, unless it is the
+    // object of one of its methods, which take it as it is
+    void mailboxInternalRetype(AstNodeExpr* const refp) {
+        FileLine* const flp = new FileLine{refp->fileline()};
+        flp->erroringOn(true);
+        refp->fileline(flp);
+        if (!refp->dtypep()->basicp() || !refp->dtypep()->basicp()->isWaitQueue()) return;
+        const AstMethodCall* const callp = VN_CAST(m_fromParentp, MethodCall);
+        if (callp && callp->fromp() == refp && waitQueueMethodOf(callp) != VCMethod::_ENUM_MAX) {
+            return;
+        }
+        refp->dtypep(refp->findBasicDType(VBasicDTypeKwd::CHANDLE));
+    }
     bool memberRefClass(AstMemberRef* nodep, AstClassRefDType* adtypep) {
         if (nodep->name() == "rand_mode" || nodep->name() == "randomize") {
             AstMethodCall* const newp = new AstMethodCall{
@@ -5545,6 +5589,7 @@ class WidthVisitor final : public VNVisitor {
                     }
                     checkConcAssertClassMember(nodep);
                     nodep->dtypep(foundp->dtypep());
+                    if (mailboxInternalCheck(nodep, varp, false)) mailboxInternalRetype(nodep);
                     nodep->varp(varp);
                     nodep->didWidth(true);
                     if (nodep->fromp()->sameTree(m_randomizeFromp) && varp->isRand())  // null-safe
@@ -5848,6 +5893,9 @@ class WidthVisitor final : public VNVisitor {
         AstBasicDType* const basicp = fromDtp ? fromDtp->basicp() : nullptr;
         UINFO(9, "     from dt " << fromDtp);
         userIterate(fromDtp, WidthVP{SELF, BOTH}.p());
+        // Other names fall through to the error for other method calls
+        const VCMethod::en waitQueueMethod
+            = basicp && basicp->isWaitQueue() ? waitQueueMethodOf(nodep) : VCMethod::_ENUM_MAX;
         if (nodep->name() == "rand_mode") {
             methodCallRandMode(nodep);
         } else if (nodep->name() == "constraint_mode") {
@@ -5872,8 +5920,13 @@ class WidthVisitor final : public VNVisitor {
             methodCallConstraint(nodep, adtypep);
         } else if (basicp && basicp->isEvent()) {
             methodCallEvent(nodep, basicp);
+        } else if (waitQueueMethod != VCMethod::_ENUM_MAX) {
+            methodCallWaitQueue(nodep, waitQueueMethod);
         } else if (basicp && basicp->isString()) {
             methodCallString(nodep, basicp);
+        } else if (nodep->fromp()->fileline()->erroringOn()) {
+            // No follow-on error for an object that reported an error
+            nodep->dtypeSetVoid();
         } else {
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Member call on object '"
@@ -6974,6 +7027,57 @@ class WidthVisitor final : public VNVisitor {
         } else {
             nodep->v3error("Unknown built-in event method " << nodep->prettyNameQ());
         }
+    }
+    // Returns the method of a wait queue of std::mailbox that a call names, else _ENUM_MAX
+    static VCMethod::en waitQueueMethodOf(const AstMethodCall* const nodep) {
+        // The parser encodes the underscores of these names, which prettyName() decodes
+        const std::string name = nodep->prettyName();
+        if (name == "__Vlisted") return VCMethod::WAIT_QUEUE_LISTED;
+        if (name == "__Vpolled") return VCMethod::WAIT_QUEUE_POLLED;
+        if (name == "__Vrelease") return VCMethod::WAIT_QUEUE_RELEASE;
+        if (name == "__Vtake") return VCMethod::WAIT_QUEUE_TAKE;
+        if (name == "__Vwake") return VCMethod::WAIT_QUEUE_WAKE;
+        return VCMethod::_ENUM_MAX;
+    }
+    void methodCallWaitQueue(AstMethodCall* nodep, const VCMethod method) {
+        // Method call on a wait queue of std::mailbox, which only its own code reaches (see
+        // mailboxInternalCheck and verilated_std.sv). The queue is only read: its wait list is
+        // runtime state of the scheduler, not of the design.
+        const bool query
+            = method == VCMethod::WAIT_QUEUE_LISTED || method == VCMethod::WAIT_QUEUE_POLLED;
+        const int argCount = query ? 0 : 1;
+        // Other code reaches this only after an error (see mailboxInternalCheck), so wrong or
+        // omitted arguments are then fixed up without another error
+        const bool erroring = nodep->fromp()->fileline()->erroringOn();
+        if (!erroring) methodOkArguments(nodep, argCount, argCount);
+        int argIndex = 0;
+        for (AstArg* argp = nodep->argsp(); argp;) {
+            AstArg* const nextp = VN_AS(argp->nextp(), Arg);
+            if (argIndex >= argCount) {
+                VL_DO_DANGLING(pushDeletep(argp->unlinkFrBack()), argp);
+            } else if (!argp->exprp()) {
+                UASSERT_OBJ(erroring, argp, "Omitted argument of a wait queue method");
+                argp->exprp(new AstConst{argp->fileline(), AstConst::BitFalseErroring{}});
+            }
+            argp = nextp;
+            ++argIndex;
+        }
+        for (; argIndex < argCount; ++argIndex) {
+            nodep->addArgsp(
+                new AstArg{nodep->fileline(), "",
+                           new AstConst{nodep->fileline(), AstConst::BitFalseErroring{}}});
+        }
+        if (argCount) iterateCheckSigned32(nodep, "argument", methodArg(nodep, 0), BOTH);
+        AstCMethodHard* const callp
+            = new AstCMethodHard{nodep->fileline(), nodep->fromp()->unlinkFrBack(), method,
+                                 argCount ? methodArg(nodep, 0)->unlinkFrBack() : nullptr};
+        if (query) {
+            callp->dtypeSetBit();
+        } else {
+            callp->dtypeSetVoid();
+        }
+        nodep->replaceWith(callp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
     void methodCallString(AstMethodCall* nodep, AstBasicDType*) {
         // Method call on string
@@ -10621,7 +10725,9 @@ class WidthVisitor final : public VNVisitor {
             if (schemaRefp && VN_IS(schemaRefp->schemap(), Sequence)) m_underSvaExpr = true;
             userIterateAndNext(nodep->sensp(), WidthVP{SELF, BOTH}.p());
             if (nodep->condp()) iterateCheckBool(nodep, "iff condition", nodep->condp(), BOTH);
-            if (nodep->sensp()->isCHandle()) {
+            if (nodep->sensp()->fileline()->erroringOn()) {
+                // No follow-on error for an operand that reported an error
+            } else if (nodep->sensp()->isCHandle()) {
                 nodep->sensp()->v3error(
                     "Event control not legal on chandle type (IEEE 1800-2023 6.14)");
             } else if (nodep->edgeType().anEdge()) {
