@@ -408,9 +408,15 @@ class LinkCellsVisitor final : public VNVisitor {
     }
 
     void assignParamNumbers(AstPin* const firstPinp) {
+        const bool firstOrdered = firstPinp && firstPinp->name() == "";
         for (AstPin* const pinp : VNList<AstPin>{firstPinp}) {
             pinp->param(true);
-            if (pinp->name() == "") pinp->name("__paramNumber" + cvtToStr(pinp->pinNum()));
+            const bool ordered = pinp->name() == "";
+            if (ordered != firstOrdered) {
+                pinp->v3error("Mixing ordered and named parameter value assignments"
+                              " (IEEE 1800-2023 23.10.2)");
+            }
+            if (ordered) pinp->name("__paramNumber" + cvtToStr(pinp->pinNum()));
         }
     }
 
@@ -733,6 +739,10 @@ class LinkCellsVisitor final : public VNVisitor {
         assignParamNumbers(nodep->paramsp());
         if (nodep->modp()) {
             nodep->modName(nodep->modp()->name());
+            if (VN_IS(nodep->modp(), Primitive) && (pinStar || pinDotName)) {
+                nodep->v3error("UDP instance ports must be connected by position, not by name"
+                               " (IEEE 1800-2023 29.8)");
+            }
             // Note what pins exist
             std::unordered_set<string> ports;  // Symbol table of all connected port names
             for (AstPin* const pinp : nodep->pinspList()) {
