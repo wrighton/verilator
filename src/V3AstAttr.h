@@ -1060,7 +1060,6 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(FORCE_READ_INDEX,                   "readIndex",              PURE,   CLEAN,  false,      "rr", "") \
     macro(FORCE_READ_SEL,                     "readSel",                PURE,   CLEAN,  false,      "TODO", "") \
     macro(FORCE_RELEASE,                      "release",                false,  CLEAN,  false,      "rr+", "") \
-    macro(FORCE_TOUCH,                        "touch",                  false,  CLEAN,  false,      "", "") \
     macro(FORK_DONE,                          "done",                   false,  CLEAN,  false,      "rr", "") \
     macro(FORK_INIT,                          "init",                   false,  CLEAN,  false,      "rr", "") \
     macro(FORK_JOIN,                          "join",                   false,  CLEAN,  AWAITABLE,  "rrr", "") \
