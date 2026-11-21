@@ -2731,9 +2731,7 @@ V3Number& V3Number::opSel(const V3Number& lhs, uint32_t msbval, uint32_t lsbval)
 
 V3Number& V3Number::opSelInto(const V3Number& lhs, const V3Number& lsb, int width) {
     if (lsb.isFourState()) return *this;
-    // Bits selected outside this number are not written (IEEE 1800-2023 11.5.1)
-    if (!lsb.fitsInUInt() || lsb.toUInt() >= static_cast<uint32_t>(this->width())) return *this;
-    return opSelInto(lhs, static_cast<int>(lsb.toUInt()), width);
+    return opSelInto(lhs, lsb.toSInt(), width);
 }
 
 V3Number& V3Number::opSelInto(const V3Number& lhs, int lsbval, int width) {

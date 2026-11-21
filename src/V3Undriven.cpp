@@ -938,11 +938,6 @@ class UndrivenVisitor final : public VNVisitorConst {
         AstConst* const constp = VN_CAST(nodep->lsbp(), Const);
         if (varrefp && constp && !constp->num().isFourState()) {
             warnWriteKind(varrefp);
-            // A position outside the variable accesses none of its bits (IEEE 1800-2023 11.5.1)
-            if (!constp->num().fitsInUInt()
-                || constp->toUInt() >= static_cast<uint32_t>(varrefp->width())) {
-                return;
-            }
             for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
                 UndrivenVarEntry* const entryp = getEntryp(varrefp->varp(), usr);
                 const int lsb = constp->toUInt();

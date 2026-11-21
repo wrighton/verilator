@@ -32,9 +32,6 @@ public:
     // Scale a delay in the given time unit to time precision ticks, rounding real delays; #1step
     // is one tick
     static AstNodeExpr* delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) VL_MT_DISABLED;
-    // Move the intra-assignment timing control of 'nodep' to a statement holding the assignment
-    // after it; return that statement, or nullptr if there is no timing control
-    static AstNodeStmt* factorOutTimingControl(AstNodeAssign* nodep) VL_MT_DISABLED;
 };
 
 #endif  // Guard
