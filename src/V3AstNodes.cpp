@@ -3228,7 +3228,8 @@ const AstNodeExpr* AstNodeExpr::getVAccessTargetRecurse() const {
         return anodep->lhsp()->getVAccessTargetRecurse();
     }
     if (const AstCMethodHard* const anodep = VN_CAST(this, CMethodHard)) {
-        if (anodep->method().isDynElementAccess()) {
+        if (anodep->method().isDynElementAccess()
+            || anodep->method() == VCMethod::ASSOC_AT_WRITE) {
             // Used for things like Queue/AssocArray/DynArray
             return anodep->fromp()->getVAccessTargetRecurse();
         }
