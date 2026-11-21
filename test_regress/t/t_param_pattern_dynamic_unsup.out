@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:12:29: Unsupported: Constant read of a key not in an associative array of element type 'class Cls'.
+                                                           : ... note: In instance 't'
+   12 |   localparam Cls MISSING = P[2];
+      |                             ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_param_pattern_dynamic_unsup.v:18:28: Unsupported: Constant select of an associative array whose key type 'int$[]' contains a dynamically sized array.
+                                                           : ... note: In instance 't'
+   18 |   localparam int ADENSE = A[DENSE];
+      |                            ^
+%Error: Exiting due to
