@@ -1502,6 +1502,12 @@ class SvaNfaBuilder final {
         }
         return false;
     }
+    // Whether an operand reports its own form in a negated property, by its top-level node only:
+    // an implication other than followed-by, or s_eventually, which is not a top-level step there
+    static bool reportsOwnNegated(const AstNodeExpr* nodep) {
+        const AstImplication* const implp = VN_CAST(nodep, Implication);
+        return (implp && !implp->isFollowedBy()) || VN_IS(nodep, SEventually);
+    }
     // Whether `lhsp or rhsp` is a sequence 'or' of mergeable operands, some multi-cycle, with
     // more operands than buildFixedSeqOrProp tracks
     static bool isMergeOr(AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
@@ -1569,6 +1575,16 @@ class SvaNfaBuilder final {
                     return BuildResult::failWithError();
                 }
             }
+        }
+        // Negated, each operand end the merge vertex below records fails the attempt again
+        // (IEEE 1800-2023 16.12.3), unless every operand ends on the same tick. Quadratic in the
+        // length of an 'or' chain, as each nesting level measures its operands.
+        if (m_isNegated && !m_noEosFailure && !m_inAntecedent && !reportsOwnNegated(lhsp)
+            && !reportsOwnNegated(rhsp)
+            && (fixedLength(lhsp) < 0 || fixedLength(lhsp) != fixedLength(rhsp))) {
+            flp->v3warn(E_UNSUPPORTED, "Unsupported: 'or' with operands of different or variable"
+                                       " lengths in a negated property (IEEE 1800-2023 16.12.3)");
+            return BuildResult::failWithError();
         }
         const BuildResult lhs = buildExpr(lhsp, entryVtxp);
         const BuildResult rhs = buildExpr(rhsp, entryVtxp);
@@ -2831,7 +2847,7 @@ public:
             return buildThroughout(throughoutp, entryVtxp, isTopLevelStep);
         }
         if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
-            m_atSeqEnd = atSeqEnd;
+            m_atSeqEnd = atSeqEnd && !isPropertyOperand(orp);
             return buildOrMerge(orp->lhsp(), orp->rhsp(), entryVtxp, orp->fileline(),
                                 wantBoolLeaf);
         }
