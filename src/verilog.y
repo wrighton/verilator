@@ -8439,6 +8439,9 @@ constraint_primary<nodeExprp>:  // ==IEEE: constraint_primary
         //                      // exprScope more general than:
         //                      // [ implicit_class_handle '.' | class_scope ] hierarchical_identifier select [ '(' ')' ]
                 exprScope                                       { $$ = $1; }
+        //                      // IEEE: ... select '(' ')', allowed only on an array built-in method.
+        //                      // More general here; V3Width reports what is not allowed.
+        |       expr '.' funcRef                        { $$ = new AstDot{$<fl>2, false, $1, $3}; }
         ;
 
 constraint_expressionList<nodeConstraintItemp>:  // ==IEEE: { constraint_expression }
