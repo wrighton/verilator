@@ -3,4 +3,62 @@
    19 |       .foo(foo)
       |        ^~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_inst_misarray_bad.v:27:8: Illegal input port connection 'foo', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                    : ... note: In instance 't'
+   27 |       .foo("ab")
+      |        ^~~
+%Warning-WIDTHTRUNC: t/t_inst_misarray_bad.v:27:8: Input port connection 'foo' expects 1 bits on the pin connection, but pin connection's CONST '16'h6162' generates 16 bits.
+                                                 : ... note: In instance 't'
+   27 |       .foo("ab")
+      |        ^~~
+                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
+                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
+%Error: t/t_inst_misarray_bad.v:30:20: Illegal input port connection 'p', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+   30 |   bytes_in u_num (.p(16'h6162));
+      |                    ^
+%Warning-WIDTHTRUNC: t/t_inst_misarray_bad.v:30:20: Input port connection 'p' expects 8 bits on the pin connection, but pin connection's CONST '16'h6162' generates 16 bits.
+                                                  : ... note: In instance 't'
+   30 |   bytes_in u_num (.p(16'h6162));
+      |                    ^
+%Error: t/t_inst_misarray_bad.v:31:20: Illegal input port connection 'p', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+   31 |   bytes_in u_str (.p(str));
+      |                    ^
+%Warning-WIDTHTRUNC: t/t_inst_misarray_bad.v:31:20: Input port connection 'p' expects 8 bits on the pin connection, but pin connection's VARREF 'str' generates 64 bits.
+                                                  : ... note: In instance 't'
+   31 |   bytes_in u_str (.p(str));
+      |                    ^
+%Error: t/t_inst_misarray_bad.v:32:25: Illegal input port connection 'p', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+   32 |   bytes_in u_typename (.p($typename(str)));
+      |                         ^
+%Warning-WIDTHTRUNC: t/t_inst_misarray_bad.v:32:25: Input port connection 'p' expects 8 bits on the pin connection, but pin connection's CONST '"string"' generates 64 bits.
+                                                  : ... note: In instance 't'
+   32 |   bytes_in u_typename (.p($typename(str)));
+      |                         ^
+%Error: t/t_inst_misarray_bad.v:33:24: Illegal input port connection 'p', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+   33 |   bytes2_in u_bytes2 (.p("ab"));
+      |                        ^
+%Warning-WIDTHTRUNC: t/t_inst_misarray_bad.v:33:24: Input port connection 'p' expects 8 bits on the pin connection, but pin connection's CONST '16'h6162' generates 16 bits.
+                                                  : ... note: In instance 't'
+   33 |   bytes2_in u_bytes2 (.p("ab"));
+      |                        ^
+%Error: t/t_inst_misarray_bad.v:34:21: Illegal output port connection 'p', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+   34 |   bytes_out u_out (.p("ab"));
+      |                     ^
+%Error: t/t_inst_misarray_bad.v:35:23: Ref port 'p' is connected to an expression, but must be connected to a variable (IEEE 1800-2023 23.3.3.2)
+                                     : ... note: In instance 't'
+   35 |   bytes_ref u_ref (.p("ab"));
+      |                       ^~~~
+%Error: t/t_inst_misarray_bad.v:35:21: Ref connection 'p' requires matching types; ref requires 'byte$[1:0]' data type but connection is 'bit[15:0]' data type.
+                                     : ... note: In instance 't'
+   35 |   bytes_ref u_ref (.p("ab"));
+      |                     ^
+%Error: t/t_inst_misarray_bad.v:35:21: Illegal ref port connection 'p', mismatch between port which is an array, and expression which is not an array. (IEEE 1800-2023 7.6)
+                                     : ... note: In instance 't'
+   35 |   bytes_ref u_ref (.p("ab"));
+      |                     ^
 %Error: Exiting due to
