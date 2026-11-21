@@ -23,6 +23,7 @@ import os
 import sys
 import glob
 import json
+import stat
 import time
 import fnmatch
 import logging
@@ -289,6 +290,67 @@ def getFilteredCoverageFiles(coverage_files, exclude):
 
 def globCoverageFiles(cwd, coverage_type):
     return glob.glob(os.path.join(os.path.abspath(cwd), "**/*" + coverage_type), recursive=True)
+
+# Verilator local change to vendored fastcov 1.17 (MIT): omitEmptyHeaderPchNotes.
+# A header-only precompile (-x c++-header) built with coverage writes a notes file
+# with no functions or lines. gcov (observed with GCC 11.5) omits
+# current_working_directory for such a file when it is the first of its run, which
+# gcovWorker reports as an error. Only these known header precompile producer
+# outputs are omitted, under the build's naming contract (verilated.mk *__pch.h
+# rules, src/Makefile_obj V3PchAst*.h.gch rules), when each is an empty regular
+# file with no data file and its producer companion is present. This does not
+# detect truncation: a truncated file of these names cannot be told apart from an
+# empty one. Any other input, and any input whose checks cannot be completed
+# (lookup errors other than ENOENT), is processed as before.
+PCH_MODEL_NOTES_RE = re.compile(r"(.+__pch\.h)\.(?:fast|slow)\.gcno")
+PCH_COMPILER_NOTES = ("V3PchAstMT.h.gcno", "V3PchAstNoMT.h.gcno")
+
+
+def isRegularFile(path):
+    # True for an existing regular file that is not a link; False only when absent
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except FileNotFoundError:
+        return False
+
+
+def isAbsent(path):
+    # True only when nothing exists at path (ENOENT); other lookup errors propagate
+    try:
+        os.lstat(path)
+        return False
+    except FileNotFoundError:
+        return True
+
+
+def isEmptyHeaderPchNotes(path, workdir):
+    if not os.path.isabs(path):
+        path = os.path.join(workdir, path)
+    dirname, base = os.path.split(path)
+    match = PCH_MODEL_NOTES_RE.fullmatch(base)
+    if match:
+        companions = [os.path.join(dirname, match.group(1))]
+    elif (base in PCH_COMPILER_NOTES and os.path.basename(dirname) in ("obj_opt", "obj_dbg")
+          and os.path.basename(os.path.dirname(dirname)) == "src"):
+        companions = [path[:-len(".gcno")] + ".gch",
+                      os.path.join(os.path.dirname(dirname), base[:-len(".gcno")])]
+    else:
+        return False
+    try:
+        st = os.lstat(path)
+        return (stat.S_ISREG(st.st_mode) and st.st_size == 0 and os.access(path, os.R_OK)
+                and isAbsent(path[:-len(".gcno")] + ".gcda")
+                and all(isRegularFile(c) for c in companions))
+    except OSError:
+        return False  # Not proven: processed as before
+
+
+def omitEmptyHeaderPchNotes(coverage_files, workdir):
+    kept = [f for f in coverage_files if not (f.endswith(".gcno") and isEmptyHeaderPchNotes(f, workdir))]
+    if len(kept) != len(coverage_files):
+        logging.info("Omitted {} empty header precompile notes files".format(len(coverage_files) - len(kept)))
+    return kept
+
 
 def findCoverageFiles(cwd, coverage_files, use_gcno):
     coverage_type = "user provided"
@@ -875,6 +937,8 @@ def getGcovCoverage(args):
 
     # Get list of gcda files to process
     coverage_files = findCoverageFiles(args.directory, args.coverage_files, args.use_gcno)
+    # Verilator local change: see omitEmptyHeaderPchNotes
+    coverage_files = omitEmptyHeaderPchNotes(coverage_files, args.cdirectory if args.cdirectory else ".")
 
     # If gcda/gcno filtering is enabled, filter them out now
     if args.excludepre:
