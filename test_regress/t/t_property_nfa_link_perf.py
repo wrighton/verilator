@@ -13,7 +13,7 @@ test.scenarios('vlt')
 
 test.lint(verilator_flags2=['--stats'])
 
-test.file_grep(test.stats, r'Assertions, NFA link resolves\s+(\d+)', 68)
+test.file_grep(test.stats, r'Assertions, NFA link edge visits\s+(\d+)', 69)
 test.file_grep(test.stats, r"Assertions, NFA 'or' operand set transitions\s+(\d+)", 2)
 test.file_grep(test.stats, r'Assertions, NFA state vertices\s+(\d+)', 139)
 
