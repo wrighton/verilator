@@ -162,6 +162,26 @@ module t
   assign dut_logic32_want_overriden = 32'h6789_2345 + 32'(cyc); // expected value i --> o
 
 
+  // 4. DUT instances connected to a variable with only a declaration initializer,
+  // the default value must not be used (IEEE 1800-2023 23.2.2.4)
+  logic [31:0] var_init_i = 32'h1111_2222;
+  logic [31:0] dut_logic32_o_var;
+  dut_default_input_logic32 u_dut_logic32_var
+    (.i(var_init_i),
+     .o(dut_logic32_o_var));
+
+  logic [31:0] dut_wire32_o_var;
+  dut_default_input_wire32 u_dut_wire32_var
+    (var_init_i,
+     dut_wire32_o_var);
+
+  if (1) begin : g_star
+    logic [31:0] i = 32'h3333_4444;
+    logic [31:0] o;
+    dut_default_input_logic32 u_dut_logic32_star (.*);
+  end
+
+
   always @(posedge clk) begin : main
     cyc <= cyc + 1;
 
@@ -194,6 +214,14 @@ module t
       if (dut0_o_overriden != 1) $error;
       if (dut1_o_overriden != 0) $error;
       if (dut_logic32_o_overriden != dut_logic32_want_overriden) $error;
+
+      $display("[%0t] %m: outputs  - variables got {%0x %0x %0x} want {11112222 11112222 33334444}",
+               $time,
+               dut_logic32_o_var, dut_wire32_o_var, g_star.o);
+
+      if (dut_logic32_o_var != 32'h1111_2222) $error;
+      if (dut_wire32_o_var != 32'h1111_2222) $error;
+      if (g_star.o != 32'h3333_4444) $error;
 
 
     end
