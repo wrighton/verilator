@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:13:43: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2)
+                                                          : ... note: In instance 't'
+   13 |   assert property (@(posedge clk) a [= 2] ##1 b);
+      |                                           ^~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:14:49: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2)
+                                                          : ... note: In instance 't'
+   14 |   assert property (@(posedge clk) c |-> a [= 2] ##1 b);
+      |                                                 ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:15:48: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2)
+                                                          : ... note: In instance 't'
+   15 |   assert property (@(posedge clk) not (a [= 2] ##1 b));
+      |                                                ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:16:56: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2)
+                                                          : ... note: In instance 't'
+   16 |   assert property (@(posedge clk) c |-> (a [= 2] or d) ##1 b);
+      |                                                        ^~
+%Error-UNSUPPORTED: t/t_assert_nonconsec_rep_unsup.v:17:50: Unsupported: nonconsecutive repetition followed by a later sequence element outside an implication antecedent (IEEE 1800-2023 16.9.2)
+                                                          : ... note: In instance 't'
+   17 |   assert property (@(posedge clk) c |-> (a [= 2] ##1 b) and d);
+      |                                                  ^~
+%Error: Exiting due to
