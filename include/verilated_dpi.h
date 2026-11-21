@@ -160,7 +160,17 @@ auto callExportFunction(Callable&& call, Args&&... args)
     // Direct C callers have no importing SV process, so create an independent process.
     VlProcessRef process = t_process;
     if (!process) process = std::make_shared<VlProcess>();
-    return call(std::move(process), std::forward<Args>(args)...);
+    if constexpr (std::is_same<decltype(call(process, std::forward<Args>(args)...)),
+                               VlCoroutine>::value) {
+        // The returned VlCoroutine makes the caller's process current again.
+        return call(std::move(process), std::forward<Args>(args)...);
+    } else {
+        // The export makes its process current, so make the caller's current again on return.
+        // The guard restores before the copy of the process is released, so the restore does
+        // not depend on that process's destructor.
+        const VlProcessCurrentGuard currentGuard{process.get()};
+        return call(process, std::forward<Args>(args)...);
+    }
 }
 #endif
 
@@ -195,6 +205,10 @@ VlCoroutine awaitImportTask(VlProcessRef process, Callable&& call, Args&&... arg
                                          std::forward<Args>(args)...);
                       }};
     dpiCall.handoffWorker();
+    // Once it returns, the caller continues in the process the worker had current: one the
+    // caller holds (m_process), or one an enclosing import holds, which dpiCall keeps alive
+    // while the caller runs from within this coroutine's final_suspend; if this frame releases
+    // its last reference, ~VlProcess makes its parent current
     co_await dpiCall;
 }
 
