@@ -70,35 +70,30 @@
    23 |   static protected task s_prot; endtask
       |                         ^~~~~~
 %Error-ENCAPSULATED: t/t_class_local_bad.v:48:16: 'm_loc' is hidden as 'local' within this context (IEEE 1800-2023 8.18)
-                                                : ... note: In instance 't'
    48 |     bad(); if (m_loc != 10) $stop;
       |                ^~~~~
                      t/t_class_local_bad.v:48:16: ... Location of definition
    16 |   local int m_loc = 2;
       |             ^~~~~
 %Error-ENCAPSULATED: t/t_class_local_bad.v:51:12: 'f_loc' is hidden as 'local' within this context (IEEE 1800-2023 8.18)
-                                                : ... note: In instance 't'
    51 |     bad(); f_loc();
       |            ^~~~~
                      t/t_class_local_bad.v:51:12: ... Location of definition
    19 |   local task f_loc; endtask
       |              ^~~~~
 %Error-ENCAPSULATED: t/t_class_local_bad.v:54:14: 'f_loc' is hidden as 'local' within this context (IEEE 1800-2023 8.18)
-                                                : ... note: In instance 't'
    54 |     bad(); o.f_loc();
       |              ^~~~~
                      t/t_class_local_bad.v:54:14: ... Location of definition
    19 |   local task f_loc; endtask
       |              ^~~~~
 %Error-ENCAPSULATED: t/t_class_local_bad.v:57:12: 's_loc' is hidden as 'local' within this context (IEEE 1800-2023 8.18)
-                                                : ... note: In instance 't'
    57 |     bad(); s_loc();
       |            ^~~~~
                      t/t_class_local_bad.v:57:12: ... Location of definition
    22 |   static local task s_loc; endtask
       |                     ^~~~~
 %Error-ENCAPSULATED: t/t_class_local_bad.v:60:17: 's_loc' is hidden as 'local' within this context (IEEE 1800-2023 8.18)
-                                                : ... note: In instance 't'
    60 |     bad(); Cls::s_loc();
       |                 ^~~~~
                      t/t_class_local_bad.v:60:17: ... Location of definition

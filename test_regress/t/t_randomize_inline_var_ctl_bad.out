@@ -1,5 +1,4 @@
 %Error: t/t_randomize_inline_var_ctl_bad.v:12:21: 'randomize()' argument must be a variable contained in 'Foo'
-                                                : ... note: In instance 't'
    12 |     void'(randomize(y));
       |                     ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
