@@ -45,6 +45,10 @@ module t (
       with_dflt = '{dflt, 32'hEE};  // Bad
       all_addrs = '{base_addrs[0:N-1], 32'hAA, 32'hBB};  // Bad
     end
+    begin
+      logic [3:0] vec;
+      vec = '{3: 1'b1, int: 1'b0};  // Bad, the data type key is not of the elements' type
+    end
   end
 
 endmodule
