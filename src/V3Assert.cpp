@@ -219,6 +219,16 @@ static void replaceSvaRepCount(AstNodeExpr* countp) {
 }
 
 void V3AssertCommon::checkSvaRepetition(AstSConsRep* nodep, AstNode* errp, bool emptyOk) {
+    if (VN_IS(nodep->maxCountp(), Unbounded)) {
+        // A '$' actual argument (IEEE 1800-2023 16.8), as [*N:$]
+        AstSConsRep* const newp
+            = new AstSConsRep{nodep->fileline(), nodep->exprp()->unlinkFrBack(),
+                              nodep->countp()->unlinkFrBack(), nullptr, true};
+        newp->dtypeFrom(nodep);
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(nodep->deleteTree(), nodep);
+        nodep = newp;
+    }
     // The counts must be valid elaboration-time constants.
     V3Const::constifyParamsEdit(nodep->countp());
     const AstConst* minConstp = VN_CAST(nodep->countp(), Const);
@@ -364,7 +374,11 @@ void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
     } else {
         valid = checkSvaValueLimit(loErrp, loConstp, "always range bound");
     }
-    if (hiUnbounded) {
+    if (hiUnbounded && nodep->isStrong()) {
+        // From a '$' actual argument (IEEE 1800-2023 16.8)
+        hiErrp->v3error("s_always range must be bounded (IEEE 1800-2023 16.12.11)");
+        valid = false;
+    } else if (hiUnbounded) {
         // Weak always [m:$]
     } else if (!hiConstp) {
         hiErrp->v3error("always range high bound must be a constant expression"
@@ -379,7 +393,7 @@ void V3AssertCommon::checkSvaAlwaysRange(AstPropAlways* nodep, AstNode* instp) {
     }
     if (valid) return;
     for (AstNodeExpr* const boundp : {nodep->loBoundp(), nodep->hiBoundp()}) {
-        if (VN_IS(boundp, Unbounded)) continue;
+        if (VN_IS(boundp, Unbounded) && !nodep->isStrong()) continue;
         boundp->replaceWith(new AstConst{boundp->fileline(), AstConst::BitFalseErroring{}});
         VL_DO_DANGLING(boundp->deleteTree(), boundp);
     }
@@ -422,6 +436,65 @@ AstSenItem* V3AssertCommon::inferredClock(const AstAlways* alwaysp) {
         });
     });
     return usedInBody ? nullptr : itemp;
+}
+
+AstNode* V3AssertCommon::checkSvaUnboundedActuals(
+    AstNode* nodep, const std::unordered_map<const AstVar*, AstNodeExpr*>& portMap,
+    AstNode* instp) {
+    // A formal argument with a '$' actual argument may only be referenced as the maximum of a
+    // cycle_delay_const_range_expression, of a cycle delay, an always, or a repetition, or as the
+    // actual argument of a nested instance, which is checked when that is substituted (IEEE
+    // 1800-2023 16.8). Run before the substitution, so that a '$' written in the body is not
+    // mistaken for one from an actual argument.
+    const bool anyUnbounded = std::any_of(portMap.begin(), portMap.end(), [](const auto& it) {
+        return VN_IS(it.second, Unbounded);
+    });
+    if (!anyUnbounded) return nodep;
+    std::unordered_set<const AstNode*> legalps;
+    nodep->foreach([&](const AstDelay* delayp) {
+        if (delayp->rhsp()) legalps.insert(delayp->rhsp());
+    });
+    nodep->foreach([&](const AstPropAlways* alwaysp) { legalps.insert(alwaysp->hiBoundp()); });
+    nodep->foreach([&](const AstSConsRep* repp) { legalps.insert(repp->maxCountp()); });
+    // Unlike a literal '$', which they do not support either
+    std::unordered_set<const AstNode*> unsupps;
+    nodep->foreach([&](const AstSGotoRep* repp) { unsupps.insert(repp->maxCountp()); });
+    nodep->foreach([&](const AstSNonConsRep* repp) { unsupps.insert(repp->maxCountp()); });
+    nodep->foreach([&](const AstSchemaRef* refp) {
+        for (const AstArg* const argp : refp->argspList()) legalps.insert(argp->exprp());
+    });
+    std::vector<AstVarRef*> badps;
+    nodep->foreach([&](AstVarRef* refp) {
+        const auto it = portMap.find(refp->varp());
+        if (it != portMap.end() && VN_IS(it->second, Unbounded) && !legalps.count(refp)) {
+            AstNodeExpr* newp;
+            if (unsupps.count(refp)) {
+                instp->v3warn(E_UNSUPPORTED, "Unsupported: formal argument "
+                                                 << refp->prettyNameQ()
+                                                 << " with '$' actual argument as the maximum of a"
+                                                    " goto or nonconsecutive repetition range");
+                // Make the range its minimum, so later steps do not fail
+                const AstSGotoRep* const gotop = VN_CAST(refp->backp(), SGotoRep);
+                newp = (gotop ? gotop->countp() : VN_AS(refp->backp(), SNonConsRep)->countp())
+                           ->cloneTreePure(false);
+            } else {
+                instp->v3error("Formal argument " << refp->prettyNameQ()
+                                                  << " with '$' actual argument is used other"
+                                                     " than as a range maximum (IEEE 1800-2023"
+                                                     " 16.8)");
+                newp = new AstConst{refp->fileline(), AstConst::BitFalseErroring{}};
+            }
+            // The body may be only the reference
+            if (refp == nodep) {
+                nodep = newp;
+            } else {
+                refp->replaceWith(newp);
+            }
+            badps.push_back(refp);
+        }
+    });
+    for (AstVarRef* const refp : badps) VL_DO_DANGLING(refp->deleteTree(), refp);
+    return nodep;
 }
 
 AstNode* V3AssertCommon::relinkSvaInstanceBody(AstNode* bodyp, const AstSchemaRef* instp) {
