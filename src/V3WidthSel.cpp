@@ -229,11 +229,15 @@ class WidthSelVisitor final : public VNVisitor {
         }
     }
 
-    void warnTri(AstNode* nodep) {
-        if (VN_IS(nodep, Const) && VN_AS(nodep, Const)->num().isFourState()) {
-            nodep->v3error(
-                "Selection index is constantly unknown or tristated: " << nodep->name());
-        }
+    // Report a selection index that is a constant with X or Z bits, and replace it with zero
+    AstNodeExpr* checkTri(AstNodeExpr* nodep) {
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (!constp || !constp->num().isFourState()) return nodep;
+        nodep->v3error("Selection index is constantly unknown or tristated: " << nodep->name());
+        AstNodeExpr* const newp
+            = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, nodep->width(), 0};
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return newp;
     }
 
     // VISITORS
@@ -554,9 +558,8 @@ class WidthSelVisitor final : public VNVisitor {
         UINFOTREE(9, nodep, "", "SELPM3");
         // Now replace it with an AstSel
         AstNodeExpr* const fromp = nodep->fromp()->unlinkFrBack();
-        AstNodeExpr* const rhsp = nodep->rhsp()->unlinkFrBack();
+        AstNodeExpr* const rhsp = checkTri(nodep->rhsp()->unlinkFrBack());
         AstNodeExpr* const widthp = nodep->thsp()->unlinkFrBack();
-        warnTri(rhsp);
         const int width = VN_AS(widthp, Const)->toSInt();
         if (width > (1 << 28)) {
             nodep->v3error("Width of :+ or :- is huge; vector of over 1 billion bits: "
