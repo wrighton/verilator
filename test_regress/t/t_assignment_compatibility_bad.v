@@ -122,9 +122,36 @@ module t;
   int portRows[2][2];
   sub u_sel (.p(portRows[0]));
   sub u_mem (.p(portHolder.m));
+
+  // Singular values assigned to unpacked arrays
+  int queueI[$] = 5;
+  int queueQ[$][$] = '{5};
+  typedef int queue_t[$];
+  queue_t queueT = 5;
+  initial begin
+    int dynI[];
+    int assocI[int];
+    int fixedI[3];
+    real queueR[$];
+    string queueS[$];
+    string str;
+    queueI = 5;
+    queueQ = '{queueI, nonAggregate};
+    dynI = nonAggregate;
+    assocI = 5;
+    fixedI = 5;
+    queueR = 1.5;
+    queueS = str;
+  end
+  sub_queue u_sub (.queueP(5));
 endmodule
 
 module sub (
     input logic [31:0] p[2]
+);
+endmodule
+
+module sub_queue (
+    input int queueP[$]
 );
 endmodule
