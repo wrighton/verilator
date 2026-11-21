@@ -134,6 +134,18 @@ class DistSignedWide;
   constraint c_w {w dist {[80'sd3 : 80'sd10] := 1};}
 endclass
 
+// Signed expression wider than 64 bits, with bounds that fit in 64 bits
+class DistSignedWide;
+  rand bit signed [79:0] w;
+  constraint c_w {w dist {[80'sd3 : 80'sd10] := 1};}
+endclass
+
+// A single-range draw has the same global RNG consumption at narrow and wide widths.
+class DistDrawOnce #(parameter int WIDTH = 32);
+  rand bit [WIDTH-1:0] x;
+  constraint c_x {x dist {[WIDTH'(3) : WIDTH'(10)] := 1};}
+endclass
+
 module t;
   parameter int N = 2000;  // randomize() calls per test
   parameter int TOL_PCT = 30;  // +-% tolerance on expected counts
@@ -325,6 +337,42 @@ module t;
         `checkd(randomize_result, 1);
         `check_range(obj.w, 3, 10)
       end
+    end
+
+    // --- T7: signed expression wider than 64 bits ---
+    begin
+      automatic DistSignedWide obj = new();
+      repeat (20) begin
+        randomize_result = obj.randomize();
+        `checkd(randomize_result, 1);
+        `check_range(obj.w, 3, 10)
+      end
+    end
+
+    // --- T8: a wide offset must not advance the global RNG twice ---
+    begin
+      automatic DistDrawOnce #(32) narrow = new();
+      automatic DistDrawOnce #(80) wide = new();
+      int narrow_seed;
+      int wide_seed;
+      int unsigned after_narrow;
+      int unsigned after_wide;
+      narrow.srandom(32'h31415926);
+      wide.srandom(32'h31415926);
+      narrow_seed = 32'h27182818;
+      wide_seed = narrow_seed;
+      void'($urandom(narrow_seed));
+      randomize_result = narrow.randomize();
+      `checkd(randomize_result, 1);
+      after_narrow = $urandom();
+      void'($urandom(wide_seed));
+      randomize_result = wide.randomize();
+      `checkd(randomize_result, 1);
+      after_wide = $urandom();
+      `check_range(narrow.x, 3, 10)
+      `check_range(wide.x, 3, 10)
+      `checkd(wide.x, 80'(narrow.x));
+      `checkd(after_wide, after_narrow);
     end
 
     $write("*-* All Finished *-*\n");
