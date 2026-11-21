@@ -96,6 +96,20 @@ void VlCoroutineHandle::resume() {
     }
 }
 
+void VlCoroutineHandle::dropKilled(std::vector<VlCoroutineHandle>& handles) {
+    size_t kept = 0;
+    for (VlCoroutineHandle& handle : handles) {
+        if (handle.m_process && handle.m_process->state() == VlProcess::KILLED) {
+            handle.resume();  // Destroys the coroutine
+        } else {
+            handles[kept++] = std::move(handle);
+        }
+    }
+    handles.erase(handles.begin() + kept, handles.end());
+    // Keep growth geometric when few were dropped, so repeated calls stay amortized O(1)
+    if (kept > handles.capacity() / 2) handles.reserve(2 * handles.capacity());
+}
+
 #ifdef VL_DEBUG
 void VlCoroutineHandle::dump() const {
     VL_PRINTF("Process waiting at %s:%d\n", m_fileline.filename(), m_fileline.lineno());
