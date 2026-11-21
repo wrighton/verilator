@@ -51,7 +51,7 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         puts("\n");
         for (uint64_t n = 0; n < size; ++n) {
             if (n) puts((n % tabMod) ? ", " : ",\n");
-            emitValue(nodep->valuep(n));
+            emitElement(nodep->valuep(n));
         }
         puts("\n");
         ofp()->putsNoTracking("}");
@@ -92,10 +92,30 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
         uint64_t n = 0;
         for (T_Item* const itemp : VNList<T_Item>{itemsp}) {
             if (n) puts((n % tabMod) ? ", " : ",\n");
-            emitValue(itemp->valuep());
+            emitElement(itemp->valuep());
             ++n;
         }
         puts("\n");
+    }
+
+    // Emit an element of an array or queue, or a member of a struct
+    void emitElement(AstNodeExpr* nodep) {
+        // A string as a C string, converted by the container or struct, which saves the
+        // std::string temporary and its destruction at each element, most of the code that
+        // builds constant containers of strings. Not for keyed items, as {"key", "value"} of a
+        // string-keyed array would match the iterator range constructor of std::string, nor for
+        // a string with a NUL, which needs the length.
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (constp && constp->num().isString()) {
+            const std::string str = constp->num().toString();
+            if (str.find('\0') == std::string::npos) {
+                putns(constp, "static_cast<const char*>(\""
+                                  + V3OutFormatter::quoteNameControls(str, V3OutFormatter::LA_C)
+                                  + "\")");
+                return;
+            }
+        }
+        emitValue(nodep);
     }
 
     // Emit a value
