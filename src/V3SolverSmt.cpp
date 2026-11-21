@@ -5167,7 +5167,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         callp->dtypeSetBit();
         callp->add(new AstVarRef{genp->fileline(), VN_CAST(genp->user2p(), NodeModule), genp,
                                  VAccess::READWRITE});
-        callp->add(".next(__Vm_rng)");
+        callp->add(sizeSolve ? ".next_size(__Vm_rng)" : ".next(__Vm_rng)");
         return callp;
     }
     // Solve for the element values if the size solve succeeded
@@ -5186,7 +5186,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         sizeOkVarp->funcLocal(true);
         randomizep->addDeclsp(sizeOkVarp);
         randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, sizeOkVarp, VAccess::WRITE},
-                                            newSolverCallp(genp)});
+                                            newSolverCallp(genp, true)});
         return sizeOkVarp;
     }
 
