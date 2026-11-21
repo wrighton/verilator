@@ -1620,6 +1620,8 @@ class WidthVisitor final : public VNVisitor {
             }
             iterateCheckTyped(nodep, "Associative select", nodep->bitp(), adtypep->keyDTypep(),
                               BOTH);
+            checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8)", nodep->bitp(),
+                             adtypep->keyDTypep());
             nodep->dtypeFrom(adtypep->subDTypep());
         }
     }
@@ -3088,6 +3090,14 @@ class WidthVisitor final : public VNVisitor {
             if (!elemDTypep->isIntegralOrPacked()) {
                 nodep->v3error("Unpacked data type " << elemDTypep->prettyDTypeNameQ()
                                                      << " in packed array (IEEE 1800-2023 7.4.1)");
+            } else if (const AstBasicDType* const basicp
+                       = VN_CAST(nodep->subDTypep()->skipRefToEnump(), BasicDType)) {
+                // Stop at enums, as packed arrays of enums are legal whatever their base type
+                if (!basicp->keyword().isBitLogic()) {
+                    nodep->v3error("Integer type with predefined width "
+                                   << basicp->prettyDTypeNameQ()
+                                   << " in packed array (IEEE 1800-2023 7.4.1)");
+                }
             }
             const int width = nodep->subDTypep()->width() * nodep->rangep()->elementsConst();
             nodep->widthForce(width, width);
@@ -5684,6 +5694,8 @@ class WidthVisitor final : public VNVisitor {
         iterateCheck(nodep, "index", index_exprp, CONTEXT_DET, FINAL, adtypep->keyDTypep(),
                      EXTEND_EXP);
         VL_DANGLING(index_exprp);  // May have been edited
+        checkClassAssign(nodep, "Associative array index (IEEE 1800-2023 7.8)",
+                         nodep->argsp()->exprp(), adtypep->keyDTypep());
         return nodep->argsp()->exprp();
     }
     AstNodeExpr* methodCallWildcardIndexExpr(AstMethodCall* nodep,
@@ -6485,6 +6497,16 @@ class WidthVisitor final : public VNVisitor {
 
             classp = refp->classp();
             UASSERT_OBJ(classp, nodep, "Unlinked");
+            if (classp->name() == "process") {
+                // Only process::self() may create std::process objects
+                const AstPackage* const packagep = getItemPackage(classp);
+                if (packagep && packagep->name() == "std"
+                    && (!m_ftaskp || m_containingClassFinder.find(m_ftaskp) != classp)) {
+                    nodep->v3error("Cannot create objects of class 'process' with new"
+                                   " (IEEE 1800-2023 9.7)\n"
+                                   << nodep->warnMore() << "... Suggest use process::self()");
+                }
+            }
             if (AstNodeFTask* const ftaskp
                 = VN_CAST(m_memberMap.findMember(classp, "new"), Func)) {
                 nodep->taskp(ftaskp);
@@ -8994,6 +9016,27 @@ class WidthVisitor final : public VNVisitor {
             }
         }
     }
+    // True if an argument is valid on the left-hand side of a procedural assignment
+    static bool isArgLvalue(const AstNodeExpr* nodep) {
+        // Checked as parsed, before its PRELIM visit
+        if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef) || VN_IS(nodep, Pattern)) {
+            return true;
+        }
+        if (const AstNodePreSel* const selp = VN_CAST(nodep, NodePreSel)) {
+            return isArgLvalue(selp->fromp());
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
+            return isArgLvalue(streamp->lhsp());
+        }
+        if (const AstConcat* const concatp = VN_CAST(nodep, Concat)) {
+            return isArgLvalue(concatp->lhsp()) && isArgLvalue(concatp->rhsp());
+        }
+        // The parser makes a concatenation a replication by one
+        if (const AstReplicate* const repp = VN_CAST(nodep, Replicate)) {
+            return repp->countp()->isOne() && isArgLvalue(repp->srcp());
+        }
+        return false;
+    }
     void processFTaskRefArgs(AstNodeFTaskRef* nodep) {
         VL_RESTORER(m_underCast);
         m_underCast = false;  // Arguments are checked independently of a cast of the result.
@@ -9016,6 +9059,25 @@ class WidthVisitor final : public VNVisitor {
                 AstArg* const argp = tconnect.second;
                 AstNodeExpr* pinp = argp->exprp();
                 if (!pinp) continue;  // Argument error we'll find later
+                // Before width and string conversion, as calls may then become other
+                // expressions. Other non-variables are found in V3Task, after which calls are
+                // already lifted into temporaries.
+                if ((portp->isRef() || portp->isConstRef())
+                    && VN_IS(pinp->baseFromp(true), NodeFTaskRef)) {
+                    pinp->v3error("Ref argument " << portp->prettyNameQ()
+                                                  << " requires a variable, but connection is"
+                                                     " from a function call result (IEEE"
+                                                     " 1800-2023 13.5.2)");
+                }
+                // A method call may be revisited, so check each argument once, as parsed
+                // A constant argument is reported later in V3Task
+                if (!argp->didWidthAndSet() && portp->isWritable() && !portp->isRef()
+                    && !VN_IS(pinp, Const) && !isArgLvalue(pinp)) {
+                    pinp->v3error("Function/task " << portp->direction().prettyName()
+                                                   << " argument " << portp->prettyNameQ()
+                                                   << " connected to an expression that cannot"
+                                                      " be assigned (IEEE 1800-2023 13.5)");
+                }
                 // Prelim may cause the node to get replaced; we've lost our
                 // pointer, so need to iterate separately later
                 if (portp->attrSFormat()
