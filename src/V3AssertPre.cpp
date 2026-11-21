@@ -247,9 +247,12 @@ private:
         return new AstIf{flp, new AstNot{flp, isTriggeredp}, waitp};
     }
 
-    static void checkSamplingFuncDType(AstNodeExpr* nodep, const AstNode* exprp) {
+    static void checkSamplingFuncDType(AstNodeExpr* nodep, const AstNode* exprp,
+                                       bool allowUnpacked = false) {
         const AstNodeDType* const dtypep = exprp->dtypep()->skipRefp();
-        if (!dtypep->isIntegralOrPacked() && !dtypep->isDouble()) {
+        if (!dtypep->isDouble()
+            && !(allowUnpacked ? V3AssertCommon::isSampledType(dtypep)
+                               : dtypep->isIntegralOrPacked())) {
             nodep->v3error("Expected numeric type, but got a " << dtypep->prettyDTypeNameQ()
                                                                << " data type");
         }
@@ -838,7 +841,7 @@ private:
         nodep->sentreep(newSenTree(nodep));
     }
     void visit(AstPast* nodep) override {
-        checkSamplingFuncDType(nodep, nodep->exprp());
+        checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
         if (nodep->sentreep()) return;  // Already processed
         iterateChildren(nodep);
         nodep->sentreep(newSenTree(nodep));
@@ -1042,7 +1045,7 @@ private:
     void visit(AstStable* nodep) override {
         if (nodep->user1SetOnce()) return;
         iterateChildren(nodep);
-        checkSamplingFuncDType(nodep, nodep->exprp());
+        checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* exprp = nodep->exprp()->unlinkFrBack();
         AstSenTree* sentreep = nodep->sentreep();
@@ -1070,7 +1073,9 @@ private:
     }
     void visit(AstSampled* nodep) override {
         iterateChildren(nodep);
-        if (!nodep->internal()) checkSamplingFuncDType(nodep, nodep->exprp());
+        if (!nodep->internal()) {
+            checkSamplingFuncDType(nodep, nodep->exprp(), /* allowUnpacked */ true);
+        }
     }
 
     // Validate repetition count: must be a non-negative elaboration-time constant.
