@@ -83,11 +83,11 @@ module t (
   property p_capture_inner(lv);
     s_capture(lv) |=> (cyc[0] != lv);
   endproperty
-  property p_capture_outer;
+  property p_capture_forward;
     bit prev;
     @(posedge clk) p_capture_inner(prev);
   endproperty
-  assert property (p_capture_outer);
+  assert property (p_capture_forward);
   // A typed formal passed on to the sequence instance also stands for the local variable
   sequence s_capture_typed(bit lv);
     s_capture(lv);
