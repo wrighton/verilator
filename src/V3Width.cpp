@@ -3623,10 +3623,24 @@ class WidthVisitor final : public VNVisitor {
                 || (toDtp->isDouble() && fromDtp->isString())) {
                 castable = VCastable::INCOMPATIBLE;
             }
+            // A dynamic array or unbounded queue is assignment compatible with another unpacked
+            // array kind of equivalent elements (IEEE 1800-2023 7.6), so the cast converts like
+            // the assignment (6.24.1). Not in computeCastable, as e.g. ?: does not convert.
+            // Bounded queues have another C++ type, not converted here.
+            const AstQueueDType* const toQueuep = VN_CAST(toDtp, QueueDType);
+            const AstQueueDType* const fromQueuep = VN_CAST(fromDtp, QueueDType);
+            const bool dynamicAssignable
+                = castable == VCastable::UNSUPPORTED
+                  && (VN_IS(toDtp, DynArrayDType) || (toQueuep && !toQueuep->boundp()))
+                  && (VN_IS(fromDtp, DynArrayDType) || (fromQueuep && !fromQueuep->boundp())
+                      || VN_IS(fromDtp, UnpackArrayDType))
+                  && AstNode::computeCastable(toDtp->subDTypep(), fromDtp->subDTypep(), nullptr)
+                         .isSameish();
+            if (dynamicAssignable) castable = VCastable::COMPATIBLE;
             // An equivalent array is assignment compatible, so cast as assigned
             // (IEEE 1800-2023 6.24.1), but otherwise casting an unpacked array or struct is a
             // bit-stream cast
-            const bool assignable = castable.isSameish()
+            const bool assignable = castable.isSameish() || dynamicAssignable
                                     || (castable.isCompatible() && VN_IS(toDtp, UnpackArrayDType));
             const bool bitstream
                 = !assignable
@@ -3654,6 +3668,17 @@ class WidthVisitor final : public VNVisitor {
                 // Assignment compatible, so the value as assigned, in left to right order, but of
                 // the cast type, e.g. with other bounds
                 newp = convertUnpackedOrder(nodep->fromp(), nodep->dtypep())->unlinkFrBack();
+                newp->dtypeFrom(nodep);
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                return;
+            } else if (dynamicAssignable) {
+                // Converted as assigned: a fixed-size array as to a queue, while a dynamic array
+                // and an unbounded queue share a representation
+                newp = nodep->fromp()->unlinkFrBack();
+                if (VN_IS(fromDtp, UnpackArrayDType)) {
+                    newp = new AstCvtUnpackToQueue{nodep->fileline(), newp, toDtp};
+                }
                 newp->dtypeFrom(nodep);
                 nodep->replaceWith(newp);
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -3730,7 +3755,9 @@ class WidthVisitor final : public VNVisitor {
                                                   dstElementBits,
                                                   srcElementBits};
                 }
-            } else if (VN_IS(toDtp, ClassRefDType) || castable.isSameish()) {
+            } else if (VN_IS(toDtp, DynArrayDType)) {
+                // Same representation as a queue, can just remove cast
+            } else if (VN_IS(toDtp, ClassRefDType)) {
                 // Can just remove cast
             } else {
                 nodep->v3fatalSrc("Unimplemented: Casting non-simple data type "
@@ -4052,7 +4079,6 @@ class WidthVisitor final : public VNVisitor {
         FileLine* const fl = valuep->fileline();
         AstVar* const varp = makeTempVarp(m_bitstreamTempNames.get(valuep), valuep,
                                           valuep->dtypep()->skipRefToEnump());
-        varp->noSubst(true);
         AstAssign* const assignp
             = new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, valuep};
         // Width the assignment under a holder, as iterating requires a node with a parent
@@ -10503,9 +10529,6 @@ class WidthVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     return;
                 }
-                // Finish the operands, which replaces casts
-                userIterateAndNext(nodep->lhsp(), WidthVP{nodep->lhsp()->dtypep(), FINAL}.p());
-                userIterateAndNext(nodep->rhsp(), WidthVP{nodep->rhsp()->dtypep(), FINAL}.p());
                 // Elements are compared by their left-to-right order, as when assigned (7.4.6)
                 convertUnpackedOrder(nodep->rhsp(), nodep->lhsp()->dtypep());
             } else if (nodep->lhsp()->isDouble() || nodep->rhsp()->isDouble()) {
