@@ -649,7 +649,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
             funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, stoppedVarp, VAccess::WRITE},
                                            new AstConst{fl, AstConst::BitTrue{}, stop}});
         }
-        // Function-local variables stay declared ahead of the guard
+        // Function-local variables, in the declarations, stay ahead of the guard
         AstIf* const ifp
             = new AstIf{fl, new AstNot{fl, new AstVarRef{fl, stoppedVarp, VAccess::READ}}};
         if (AstNodeStmt* const stmtsp = m_sampleFuncp->stmtsp()) {
@@ -725,8 +725,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         // Members not allowed, such as sample arguments, are reported by
         // CovergroupExprValidVisitor; other values by buildBinCondition.
         const auto notAllowed = [&](const AstNode* nodep) {
-            if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
-                return !selp->varp()->isConst();
+            if (const AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
+                return !memberRefp->varp()->isConst();
             }
             const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
             return refp && !refp->varp()->isConst()

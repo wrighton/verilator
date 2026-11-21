@@ -540,7 +540,6 @@ class UndrivenVisitor final : public VNVisitorConst {
     bool m_inInoutOrRefPin = false;  // Connected to pin that is inout
     const AstPin* m_drivingPinp = nullptr;  // In a pin of an output port, which drives its net
     bool m_contAssignZExempt = false;  // Current continuous assign RHS may be all-Z (open-drain)
-    bool m_inOutputPin = false;  // Connected to pin that is output
     bool m_inSelLhs = false;  // Iterating the fromp of an AstSel (a partial-bit write target)
     int m_memberSelLsb = 0;  // Bit offset through nested packed selections of a member
     int m_memberSelWidth = 0;  // Selected member width, or zero for a whole-member access
@@ -834,7 +833,7 @@ class UndrivenVisitor final : public VNVisitorConst {
         if (!isVariable || !nodep->dtypep()->skipRefp()->isIntegralOrPacked()) return;
         const AstNode* const otherContp
             = entryp->contAssignp() ? entryp->contAssignp() : entryp->outPinp();
-        if ((m_inContAssign || m_inOutputPin) && otherContp) {
+        if ((m_inContAssign || m_drivingPinp) && otherContp) {
             nodep->v3warn(MULTIDRIVEN,
                           "Variable driven by multiple continuous assignments or output ports"
                               << " (IEEE 1800-2023 6.5): " << nodep->prettyNameQ() << '\n'
@@ -842,7 +841,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                               << nodep->warnContextPrimary() << '\n'
                               << otherContp->warnOther() << "... Location of other driver\n"
                               << otherContp->warnContextSecondary());
-        } else if (m_inOutputPin && entryp->plainProcp()) {
+        } else if (m_drivingPinp && entryp->plainProcp()) {
             nodep->v3warn(MULTIDRIVEN,
                           "Variable driven by output port also written by procedural assignment"
                               << " (IEEE 1800-2023 23.3.3.2): " << nodep->prettyNameQ() << '\n'
@@ -1150,7 +1149,7 @@ class UndrivenVisitor final : public VNVisitorConst {
                         entryp->recordInitialCont(prefix, element ? nodep : nullptr, initial);
                     }
                 }
-                if (m_inOutputPin && !entryp->outPinp()) entryp->outPinp(nodep);
+                if (m_drivingPinp && !entryp->outPinp()) entryp->outPinp(nodep);
                 if (inPlainProcAssign() && !entryp->plainProcp()) entryp->plainProcp(nodep);
                 if (m_alwaysp && m_inProcAssign && !entryp->procWritep())
                     entryp->procWritep(nodep);
@@ -1334,12 +1333,10 @@ class UndrivenVisitor final : public VNVisitorConst {
     }
     void visit(AstPin* nodep) override {
         VL_RESTORER(m_inInoutOrRefPin);
-        VL_RESTORER(m_inOutputPin);
         m_inInoutOrRefPin = nodep->modVarp()->isInoutOrRef();
         // Only output pins count as drivers; inout pins are bus connections
         VL_RESTORER(m_drivingPinp);
         m_drivingPinp = nodep->modVarp()->direction().isOutput() ? nodep : nullptr;
-        m_inOutputPin = nodep->modVarp()->direction().isOutput();
         iterateChildrenConst(nodep);
     }
 
