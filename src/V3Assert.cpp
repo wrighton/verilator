@@ -1073,6 +1073,8 @@ class AssertVisitor final : public VNVisitor {
     bool m_inRestrict = false;  // True inside restrict assertion
     AstNodeStmt* m_passsp = nullptr;  // Current pass statement
     AstNodeStmt* m_failsp = nullptr;  // Current fail statement
+    // Pristine action clones for clauses that share the current assertion's action.
+    std::unordered_map<const AstPExprClause*, AstNodeStmt*> m_clauseActionsp;
     AstNodeCoverOrAssert* m_assertp = nullptr;  // Current assertion
     AstFinal* m_finalp = nullptr;  // Current final block
     VDouble0 m_statLiftedCaseExprs;  // Count of purified case expressions
@@ -2330,7 +2332,25 @@ class AssertVisitor final : public VNVisitor {
         m_passsp = passsp;
         m_failsp = failsp;
         m_assertp = nodep;
-        iterate(nodep->propp());
+        {
+            VL_RESTORER_CLEAR(m_clauseActionsp);
+            // Queue construction rewrites captured references. Make copies before any clause
+            // takes the original action, which owns the shared static declarations.
+            bool usedPass = false;
+            bool usedFail = false;
+            nodep->propp()->foreach([&](const AstPExprClause* const clausep) {
+                AstNodeStmt* const actionp = clausep->pass() ? passsp : failsp;
+                if (!actionp) return;
+                bool& used = clausep->pass() ? usedPass : usedFail;
+                if (used) {
+                    m_clauseActionsp.emplace(clausep,
+                                             V3AssertCommon::cloneAction(actionp, m_actionNames));
+                }
+                used = true;
+            });
+            iterate(nodep->propp());
+            for (const auto& entry : m_clauseActionsp) pushDeletep(entry.second);
+        }
 
         AstNode* propExprp;
         AstNodeExpr* disablep = nullptr;
@@ -2826,14 +2846,11 @@ class AssertVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstPExprClause* nodep) override {
-        AstNodeStmt* stmtsp = nullptr;
-        if (nodep->pass() && m_passsp) {
-            // The first clause takes the action; later ones clone it with shared statics.
-            stmtsp = m_passsp->backp() ? V3AssertCommon::cloneAction(m_passsp, m_actionNames)
-                                       : m_passsp;
-        } else if (!nodep->pass() && m_failsp) {
-            stmtsp = m_failsp->backp() ? V3AssertCommon::cloneAction(m_failsp, m_actionNames)
-                                       : m_failsp;
+        AstNodeStmt* stmtsp = nodep->pass() ? m_passsp : m_failsp;
+        const auto it = m_clauseActionsp.find(nodep);
+        if (it != m_clauseActionsp.end()) {
+            stmtsp = it->second;
+            m_clauseActionsp.erase(it);
         }
         if (stmtsp) {
             stmtsp->foreachAndNext([](AstNodeVarRef* const refp) {
