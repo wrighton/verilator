@@ -2266,6 +2266,15 @@ class SvaNfaBuilder final {
         andChecksr.nonvacuous = true;
         return true;
     }
+    // Whether all operands of an 'and', through nested ones, are implications, so it can be a
+    // vacuous success, which a conjunction of their checks cannot tell (IEEE 1800-2023 16.14.8)
+    static bool hasOnlyImplicationOperands(const AstNodeExpr* const nodep) {
+        if (const AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            return hasOnlyImplicationOperands(andp->lhsp())
+                   && hasOnlyImplicationOperands(andp->rhsp());
+        }
+        return VN_IS(nodep, Implication);
+    }
     // A nonvacuous 'and' of fixed-length sequences of boolean checks as one sequence checking
     // both, or null
     static AstNodeExpr* newConjoinedAndp(AstSAnd* const andp) {
@@ -2771,7 +2780,9 @@ public:
             // 'and' holds exactly when every check of both operands holds
             if (!andp->propertyControl()) {
                 AstNodeExpr* conjp = m_inAndCombiner ? nullptr : newConjoinedAndp(andp);
-                if (!conjp) conjp = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline());
+                if (!conjp && (m_inAndCombiner || !hasOnlyImplicationOperands(andp))) {
+                    conjp = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline());
+                }
                 if (conjp) return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
                 if (wantBoolLeaf) {
                     if (isPlainBoolean(andp->lhsp())) {
