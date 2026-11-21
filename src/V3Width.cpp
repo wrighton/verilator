@@ -370,8 +370,8 @@ class WidthVisitor final : public VNVisitor {
                                       // `inside` expressions
     V3UniqueNames m_bitstreamTempNames;  // Impure values in bit-stream casts
     VMemberMap m_memberMap;  // Member names cached for fast lookup
-    std::unordered_map<const AstModport*, std::unordered_set<string>>
-        m_modportNames;  // Names listed by each modport
+    std::unordered_map<const AstModport*, std::unordered_map<string, const AstNode*>>
+        m_modportItems;  // Items listed by each modport, by name
     std::unordered_map<const AstClass*, std::unordered_map<string, AstNodeFuncCovItem*>>
         m_coverItems;  // Coverpoints and crosses of each covergroup, by name
     V3TaskConnectState m_taskConnectState;  // State to cache V3Task::taskConnects
@@ -5594,6 +5594,18 @@ class WidthVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         return true;
     }
+    // Return the item named 'name' listed by the modport, or nullptr
+    const AstNode* findModportItem(const AstModport* modportp, const string& name) {
+        const auto pair
+            = m_modportItems.emplace(modportp, std::unordered_map<string, const AstNode*>{});
+        if (pair.second) {
+            for (const AstNode* const mpItemp : modportp->varspList()) {
+                pair.first->second.emplace(mpItemp->name(), mpItemp);
+            }
+        }
+        const auto it = pair.first->second.find(name);
+        return it == pair.first->second.end() ? nullptr : it->second;
+    }
     bool modportAllowsItem(AstNode* nodep, const AstIfaceRefDType* adtypep, const AstNode* itemp) {
         // Variables, tasks/functions and clocking blocks of an interface are only visible
         // through a modport when the modport lists them
@@ -5606,13 +5618,7 @@ class WidthVisitor final : public VNVisitor {
         } else if (!VN_IS(itemp, NodeFTask) && !VN_IS(itemp, Clocking)) {
             return true;
         }
-        auto pair = m_modportNames.emplace(modportp, std::unordered_set<string>{});
-        if (pair.second) {
-            for (const AstNode* const mpItemp : modportp->varspList()) {
-                pair.first->second.insert(mpItemp->name());
-            }
-        }
-        if (pair.first->second.count(itemp->name())) return true;
+        if (findModportItem(modportp, itemp->name())) return true;
         nodep->v3error("Member " << itemp->prettyNameQ() << " found in interface "
                                  << adtypep->ifaceViaCellp()->prettyNameQ()
                                  << " but not in modport " << modportp->prettyNameQ()
@@ -5626,6 +5632,24 @@ class WidthVisitor final : public VNVisitor {
         // by sub-interface selection, enabling chained access (e.g. vif.tx.Tx).
         AstNodeModule* const ifacep = adtypep->ifaceViaCellp();
         UASSERT_OBJ(ifacep, nodep, "Unlinked");
+        // A modport expression port is visible through its modport only, and hides an
+        // interface item of the same name (IEEE 1800-2023 25.5.4)
+        const AstModportVarRef* const mvarp
+            = adtypep->modportp()
+                  ? VN_CAST(findModportItem(adtypep->modportp(), nodep->name()), ModportVarRef)
+                  : nullptr;
+        if (mvarp && mvarp->exprp()) {
+            if (!VN_IS(mvarp->exprp(), VarRef)) {
+                nodep->v3warn(E_UNSUPPORTED, "Unsupported: Modport expression of another "
+                                             "interface's item, through a virtual interface: "
+                                                 << nodep->prettyNameQ());
+                return nullptr;  // Caller handles error
+            }
+            if (nodep->access().isWriteOrRW() && mvarp->direction().isReadOnly()) {
+                nodep->v3error("Attempt to drive input-only modport: " << nodep->prettyNameQ());
+            }
+            return mvarp->varp();
+        }
         VSpellCheck speller;
         for (AstNode* const itemp : ifacep->stmtspList()) {
             // An array of interface instances, split by V3Param, is found by its whole array
