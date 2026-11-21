@@ -23,6 +23,9 @@ module t (
   // Sequence operand of 'or' (consecutive repetition).
   cover sequence ((a [* 1: 3]) or 1'b0);
 
+  // Sequence operands of an 'or' with many operands.
+  cover sequence (a or b or (a ##1 b) or (b ##1 a) or (a ##2 b));
+
   // Ranged cycle delay before a multi-cycle sequence.
   cover sequence (a ##[1:2] (b ##1 c));
 
