@@ -166,6 +166,22 @@ module t;
     qwv = qwe.max;
     `checkp(qwv, "'{}");
 
+    begin  // item.index has the key type (IEEE 1800-2023 7.12.4)
+      int lq[bit [63:0]];
+      int sq[string];
+      bit [63:0] lqi[$];
+      lq = '{64'h1_0000_0000: 7, 5: 9, 64'h2_0000_0005: 8};
+      qv = lq.max with (item.index);
+      `checkp(qv, "'{'h8}");
+      qv = lq.min with (item.index);
+      `checkp(qv, "'{'h9}");
+      lqi = lq.unique_index with (item.index >> 32);
+      `checkp(lqi, "'{'h5, 'h100000000, 'h200000005}");
+      sq = '{"bb": 1, "a": 2, "ccc": 3};
+      qv = sq.max with (item.index.len());
+      `checkp(qv, "'{'h3}");
+    end
+
     // Reduction methods
     i = q.sum;
     `checkh(i, 32'hc);
