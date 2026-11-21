@@ -135,6 +135,17 @@ module m_strreal #(
 );
 endmodule
 
+module m_named #(
+    parameter string S[2] = '{"x", "y"},
+    parameter real R[1] = '{0.0},
+    parameter real ONE = 1.0,
+    parameter real ZERO = 0.0,
+    parameter real BIG = 4294967295.0,
+    parameter UNTYPED = 1.0
+);
+  localparam int UNTYPED_BITS = $bits(UNTYPED);
+endmodule
+
 module p_par #(  // Passes its own parameter into a pattern
     parameter int W = 4
 );
@@ -239,6 +250,39 @@ module t;
       .S('{"aa", "bb"}),
       .R('{1.5, 2.5})
   ) u_strreal ();
+  // A string resembling several elements is one element, and reals differ by their bits, so an
+  // override close to, or equal but for the sign of, the default is used. An integral override
+  // of a real converts by its signedness, and of an untyped parameter keeps its type.
+  localparam string S_SPLIT[2] = '{"a\",1:\"b", "c"};
+  localparam string S_JOIN[2] = '{"a", "b\",1:\"c"};
+  localparam real R_NAN1[1] = '{$bitstoreal(64'h7ff8_0000_0000_0001)};
+  localparam real R_NAN2[1] = '{$bitstoreal(64'h7ff8_0000_0000_0002)};
+  m_named #(.S(S_SPLIT)) u_named_split ();
+  m_named #(.S(S_JOIN)) u_named_join ();
+  m_named #(.R(R_NAN1)) u_named_nan1 ();
+  m_named #(.R(R_NAN2)) u_named_nan2 ();
+  m_named #(.ONE(1.0000000000000002)) u_named_one_next ();
+  m_named #(.ONE(1)) u_named_one_int ();
+  m_named #(.ZERO(-0.0)) u_named_negzero ();
+  m_named #(.BIG(32'shffff_ffff)) u_named_big_signed ();
+  m_named #(.BIG($signed(32'hffff_ffff))) u_named_big_cast ();
+  m_named #(.UNTYPED(1)) u_named_untyped_int ();
+  initial begin
+    `checks(u_named_split.S[1], "c");
+    `checks(u_named_join.S[1], "b\",1:\"c");
+    `checkd($realtobits(u_named_nan1.R[0]), 64'h7ff8_0000_0000_0001);
+    `checkd($realtobits(u_named_nan2.R[0]), 64'h7ff8_0000_0000_0002);
+    `checkd($realtobits(u_named_split.ONE), 64'h3ff0_0000_0000_0000);
+    `checkd($realtobits(u_named_one_next.ONE), 64'h3ff0_0000_0000_0001);
+    `checkd($realtobits(u_named_one_int.ONE), 64'h3ff0_0000_0000_0000);
+    `checkd($realtobits(u_named_split.ZERO), 64'h0);
+    `checkd($realtobits(u_named_negzero.ZERO), 64'h8000_0000_0000_0000);
+    `checkd($realtobits(u_named_split.BIG), $realtobits(4294967295.0));
+    `checkd($realtobits(u_named_big_signed.BIG), $realtobits(-1.0));
+    `checkd($realtobits(u_named_big_cast.BIG), $realtobits(-1.0));
+    `checkd(u_named_split.UNTYPED_BITS, 64);
+    `checkd(u_named_untyped_int.UNTYPED_BITS, 32);
+  end
   for (genvar i = 0; i < 3; i++) begin : gen
     m_hdr #(
         .W(5 + i),
