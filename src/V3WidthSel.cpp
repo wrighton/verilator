@@ -151,11 +151,10 @@ class WidthSelVisitor final : public VNVisitor {
         // wrap to a valid element. A narrower index is added at 32 bits, so cannot wrap.
         AstConst* const constp = VN_CAST(indexp, Const);
         if (!constp) return new AstExtend{indexp->fileline(), indexp, indexp->width() + 1};
-        // Still a constant, for the SELRANGE check
+        // Still a constant, for the SELRANGE check. The caller deletes the unlinked index.
         V3Number num{constp, constp->width() + 1};
         num.opAssign(constp->num());
-        VL_DO_DANGLING(constp->deleteTree(), constp);
-        return new AstConst{indexp->fileline(), num};
+        return new AstConst{constp->fileline(), num};
     }
     AstNodeExpr* newSubNeg(int32_t lhs, AstNodeExpr* rhsp) {
         // Return lhs-rhs
@@ -261,7 +260,12 @@ class WidthSelVisitor final : public VNVisitor {
                     subp = newIndexExtendp(subp);
                 }
                 // Signed for a signed index, as V3Width keeps the index's full value
+                AstNodeExpr* const extp = subp;
                 subp = newSubNeg(subp, fromRange.lo(), subp->isSigned());
+                // A constant is folded into a new one; the index itself is deleted below
+                if (extp != rhsp && extp != subp && !extp->backp()) {
+                    VL_DO_DANGLING(pushDeletep(extp), extp);
+                }
             }
             AstArraySel* const newp = new AstArraySel{nodep->fileline(), fromp, subp};
             newp->dtypeFrom(adtypep->subDTypep());  // Need to strip off array reference
