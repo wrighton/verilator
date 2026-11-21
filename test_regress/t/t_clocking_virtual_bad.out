@@ -1,4 +1,4 @@
-%Error: t/t_clocking_virtual_bad.v:22:17: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+%Error: t/t_clocking_virtual_bad.v:22:17: Illegal assignment between unpacked aggregate and integral type (IEEE 1800-2023 7.6)
                                         : ... note: In instance 't'
                                         : ... Left-hand data type: 'logic'
                                         : ... Right-hand data type: 'logic$[]'
