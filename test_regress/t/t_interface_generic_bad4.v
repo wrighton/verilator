@@ -36,6 +36,11 @@ module t;
       .b(inf_inst2),
       .lv(inf_inst2)
   );
+  virtual inf2 vinf;
+  GenericModule genericModule3 (
+      .a(vinf),
+      .b(inf_inst2)
+  );
   initial begin
     inf_inst.v = 7;
     inf_inst2.k = 9;
