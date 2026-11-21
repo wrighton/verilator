@@ -24,6 +24,12 @@ module t (  /*AUTOARG*/
 
   sub s (cyc);
 
+  wire [31:0] so;
+  sub_out s_out (
+      .cyc(cyc),
+      .o(so)
+  );
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     if (a != cyc) $stop;
@@ -34,6 +40,8 @@ module t (  /*AUTOARG*/
 
     if (s.a != cyc) $stop;
     if (s.b != cyc) $stop;
+
+    if (so != ~cyc) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
 
@@ -46,4 +54,13 @@ module sub (
   wire [31:0] a, b;
   assign a = cyc;
   alias a = b;
+endmodule
+
+module sub_out (
+    input integer cyc,
+    output [31:0] o  // Port kind omitted, so is a net (IEEE 1800-2023 23.2.2.3)
+);
+  wire [31:0] w;
+  alias o = w;
+  assign w = ~cyc;
 endmodule
