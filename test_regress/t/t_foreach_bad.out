@@ -1,8 +1,20 @@
-%Error: t/t_foreach_bad.v:14:5: Foreach missing bracketed loop variable is no-operation (IEEE 1800-2023 12.7.3)
-   14 |     foreach (array);   
+%Error: t/t_foreach_bad.v:19:5: Foreach missing bracketed loop variable is no-operation (IEEE 1800-2023 12.7.3)
+   19 |     foreach (array);   
       |     ^~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_foreach_bad.v:18:21: 'foreach' loop variable expects simple variable name
-   18 |     foreach (array[a.b]);   
+%Error: t/t_foreach_bad.v:9:30: Foreach loop variable has the same name as the array: 'q' (IEEE 1800-2023 12.7.3)
+    9 |   constraint c_q {foreach (q[q]) q[q] < 5;}   
+      |                              ^
+%Error: t/t_foreach_bad.v:23:21: 'foreach' loop variable expects simple variable name
+   23 |     foreach (array[a.b]);   
       |                     ^
+%Error: t/t_foreach_bad.v:25:20: Foreach loop variable has the same name as the array: 'array' (IEEE 1800-2023 12.7.3)
+   25 |     foreach (array[array]);   
+      |                    ^~~~~
+%Error: t/t_foreach_bad.v:27:23: Foreach loop variable has the same name as the array: 'array' (IEEE 1800-2023 12.7.3)
+   27 |     foreach (array[a, array]);   
+      |                       ^~~~~
+%Error: t/t_foreach_bad.v:29:23: Foreach loop variable has the same name as the array: 'array' (IEEE 1800-2023 12.7.3)
+   29 |     foreach (array[1][array]);   
+      |                       ^~~~~
 %Error: Exiting due to
