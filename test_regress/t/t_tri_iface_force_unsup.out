@@ -27,10 +27,10 @@
                                                       : ... note: In instance 't.class_queue'
   196 |     force tgt.value = held.field;
       |                            ^~~~~
-%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:197:29: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
+%Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:197:31: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
                                                       : ... note: In instance 't.class_queue'
-  197 |     force tgt.value = queued[0];
-      |                             ^
+  197 |     force tgt.value = held.arr[1];
+      |                               ^
 %Error-UNSUPPORTED: t/t_tri_iface_force_unsup.v:181:23: Unsupported: Force of interface strength net with a value that may be high impedance: 'value'
                                                       : ... note: In instance 't.func_driven'
   181 |     force tgt.value = fd(d);
