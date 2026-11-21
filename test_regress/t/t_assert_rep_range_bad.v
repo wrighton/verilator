@@ -42,6 +42,13 @@ module t;
   property p_nc_neg_min;
     @(posedge clk) a |-> b [= -1: 2];
   endproperty
+  // The min bound is checked with a '$' max bound.
+  property p_goto_min_nonconst_unbounded;
+    @(posedge clk) a |-> b [-> n:$];
+  endproperty
+  property p_nc_neg_min_unbounded;
+    @(posedge clk) a |-> b [= -1:$];
+  endproperty
 
   a1 :
   assert property (p_goto_nonconst);
@@ -59,5 +66,9 @@ module t;
   assert property (p_goto_neg_min);
   a8 :
   assert property (p_nc_neg_min);
+  a9 :
+  assert property (p_goto_min_nonconst_unbounded);
+  a10 :
+  assert property (p_nc_neg_min_unbounded);
 
 endmodule
