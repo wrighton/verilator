@@ -4479,10 +4479,8 @@ class ConstVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
         iterate(newp);
     }
-    void visit(AstConsArray* nodep) override { iterateChildren(nodep); }
-    void visit(AstConsStruct* nodep) override { iterateChildren(nodep); }
-    void visit(AstConsStructItem* nodep) override { iterateChildren(nodep); }
-    void visit(AstConsArrayItem* nodep) override { iterateChildren(nodep); }
+    void visit(AstNodeCons* nodep) override { iterateChildren(nodep); }
+    void visit(AstNodeConsItem* nodep) override { iterateChildren(nodep); }
     void visit(AstUnbounded* nodep) override { iterateChildren(nodep); }
     // These are converted by V3Param.  Don't constify as we don't want the
     // from() VARREF to disappear, if any.
