@@ -181,3 +181,20 @@ EMIT_ALL(SIG_ANNOTATED, TestClass::icm_test_caller_smethod, /**/, {
     TestClass* tcp = &tc;
     EMIT_ALL(CALL, tcp->icm, m, ;)
 })
+
+#ifdef T_DIST_ATTRIBUTES_RUNTIME
+// Callers of runtime helpers, checked with the Verilator root as the root
+// (definitions)
+
+// VL_APPENDN_NN updates its first argument
+std::string runtime_append_pure_caller(const std::string& s) VL_PURE {
+    std::string result;
+    VL_APPENDN_NN(result, s);
+    return result;
+}
+std::string runtime_append_mt_safe_caller(const std::string& s) VL_MT_SAFE {
+    std::string result;
+    VL_APPENDN_NN(result, s);
+    return result;
+}
+#endif
