@@ -54,10 +54,22 @@ class Phased;
   constraint rel_c {y > x;}
 endclass
 
-// Array element replies, which arrive as (select ...) terms
+// Array element replies, which arrive as (select ...) terms; a key wider than 32 bits
+// names its element in hex, and an array with no element is still a solver variable
 class Arr;
   rand bit [7:0] q[3];
-  constraint ac {foreach (q[i]) q[i] > 8'd20;}
+  rand bit [7:0] wide[bit [64:0]];
+  rand bit [7:0] z;
+  rand bit [7:0] e[];
+  constraint ac {
+    foreach (q[i]) q[i] > 8'd20;
+    foreach (wide[k]) wide[k] == 8'd77;
+    z != 8'd200;
+    foreach (e[i]) e[i] < 8'd50;
+  }
+  function new;
+    wide[65'h1_2345_6789_abcd_ef01] = 0;
+  endfunction
 endclass
 
 // Unsatisfiable, so the unsat core is queried
@@ -84,6 +96,16 @@ class Wide;
   rand bit [14:0] w;
   rand bit [16:0] v;
   constraint wc {w != v[14:0];}
+endclass
+
+// A variable whose rand_mode is off is still answered, but not written
+class Frozen;
+  rand bit [7:0] f;
+  rand bit [7:0] g;
+  constraint fc {
+    f != g;
+    soft f > 8'd10;
+  }
 endclass
 
 module t;
@@ -157,6 +179,25 @@ module t;
     end
   endtask
 
+  // t_randomize_solver_reply runs the +MODE=frozen rows alone, so TAMPER_AT counts the
+  // replies of these calls
+  task automatic frozen_rounds;
+    automatic Frozen fr = new;
+    automatic int npass = 0;
+    automatic int rc;
+    fr.g = 8'd9;
+    fr.g.rand_mode(0);
+    for (int i = 0; i < 4; ++i) begin
+      fr.f = 8'd5;
+      rc = fr.randomize();
+      // A randomize that failed must leave the variables alone
+      if (rc != 0) npass++;
+      else `checkd(fr.f, 8'd5);
+      `checkd(fr.g, 8'd9);
+    end
+    $write("NPASS=%0d\n", npass);
+  endtask
+
   initial begin : checks
     automatic Packet p = new;
     automatic Softy s = new;
@@ -184,12 +225,21 @@ module t;
       $finish;
       disable checks;
     end
+    if ($test$plusargs("MODE=frozen")) begin
+      frozen_rounds();
+      $write("*-* All Finished *-*\n");
+      $finish;
+      disable checks;
+    end
     for (int i = 0; i < 4; ++i) begin
       // Below the constraint, so any model the runtime applies overwrites it
       p.a = 8'd5;
       rc = p.randomize();
-      // A randomize that failed must leave the variable alone
-      if (rc != 0) npass++;
+      // A randomize that failed must leave the variable alone, one that passed must solve
+      if (rc != 0) begin
+        npass++;
+        `checkd(p.a > 8'd10, 1'b1);
+      end
       else `checkd(p.a, 8'd5);
       rc = s.randomize();
       if (rc != 0) npass++;
@@ -197,8 +247,12 @@ module t;
       if (rc != 0) npass++;
       ar.q[0] = 8'd7;
       rc = ar.randomize();
-      if (rc != 0) npass++;
+      if (rc != 0) begin
+        npass++;
+        `checkd(ar.wide[65'h1_2345_6789_abcd_ef01], 8'd77);
+      end
       else `checkd(ar.q[0], 8'd7);
+      `checkd(ar.e.size(), 0);
       rc = un.randomize();
       `checkd(rc, 0);  // zero-ok: constraints are unsatisfiable
     end
