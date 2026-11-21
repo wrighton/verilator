@@ -1,0 +1,30 @@
+%Error: t/t_interface_modport_conn_bad.v:28:23: Port 'p' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   28 |   sub u_bad7 (.p(p_in.s));
+      |                       ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_modport_conn_bad.v:44:20: Port 'p' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   44 |   sub u_bad1 (.p(i.s));
+      |                    ^
+%Error: t/t_interface_modport_conn_bad.v:45:17: Port 'p' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   45 |   sub u_bad2 (i.s);
+      |                 ^
+%Error: t/t_interface_modport_conn_bad.v:46:24: Port 'p' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   46 |   sub u_bad3 (.p(ia[1].s));
+      |                        ^
+%Error: t/t_interface_modport_conn_bad.v:47:20: Port 'g' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   47 |   gen u_bad4 (.g(i.s));
+      |                    ^
+%Error: t/t_interface_modport_conn_bad.v:50:24: Port 'p' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   50 |   sub u_bad8 (.p(u_h.i.s));
+      |                        ^
+%Error: t/t_interface_modport_conn_bad.v:51:28: Port 'p' declared with modport 'm' is connected to modport 's' (IEEE 1800-2023 25.5)
+   51 |   sub u_bad9 (.p(ia2[0][1].s));
+      |                            ^
+%Error-PINNOTFOUND: t/t_interface_modport_conn_bad.v:57:8: Pin not found: 'nope'
+   57 |       .nope(i.s)
+      |        ^~~~
+                                                         : ... Location of instance's module declaration
+   13 | module sub (
+      |        ^~~
+                    ... For error description see https://verilator.org/warn/PINNOTFOUND?v=latest
+%Error: Exiting due to
