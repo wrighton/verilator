@@ -367,12 +367,17 @@ public:
     // this trigger should be fired on the first evaluation (at initialization)
     std::pair<AstNodeExpr*, bool> build(const AstSenItem* senItemp) {
         auto term = createTerm(senItemp);
-        if (AstNodeExpr* const condp = senItemp->condp()) {
-            FileLine* const flp = senItemp->fileline();
-            term.first = new AstAnd{
-                flp, wrapExprWithNullCheck(flp, condp->cloneTreePure(false), condp), term.first};
+        if (senItemp->condp()) {
+            term.first = new AstAnd{senItemp->fileline(), newIffCondp(senItemp), term.first};
         }
         return term;
+    }
+
+    // Returns the 'iff' condition of an event, false while it would read through a null
+    // reference
+    static AstNodeExpr* newIffCondp(const AstSenItem* senItemp) {
+        AstNodeExpr* const condp = senItemp->condp();
+        return wrapExprWithNullCheck(senItemp->fileline(), condp->cloneTreePure(false), condp);
     }
 
     // Returns the trigger value at initialization with --x-initial-edge, or nullptr if none
