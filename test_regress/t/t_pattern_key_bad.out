@@ -188,4 +188,8 @@
                                    : ... note: In instance 't'
    80 |   int sx[s_t] = '{'{1, 4'bx} : 31};
       |                   ^~
+%Error: t/t_pattern_key_bad.v:86:30: Assignment pattern key cannot contain X or Z
+                                   : ... note: In instance 't'
+   86 |   int px[p_t] = '{p_t'{1'b1, 4'bx} : 32};
+      |                              ^~~~
 %Error: Exiting due to

@@ -78,5 +78,11 @@ module t;
   } s_t;
   int snonconst[s_t] = '{'{k, 1} : 30};
   int sx[s_t] = '{'{1, 4'bx} : 31};
+  // As are the 4-state members of a packed structure key
+  typedef struct packed {
+    bit a;
+    logic [3:0] b;
+  } p_t;
+  int px[p_t] = '{p_t'{1'b1, 4'bx} : 32};
 
 endmodule
