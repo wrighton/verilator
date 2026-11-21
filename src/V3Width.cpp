@@ -9007,10 +9007,45 @@ class WidthVisitor final : public VNVisitor {
         assertAtStatement(nodep);
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
     }
+    // Return why $readmem cannot load memory operand 'nodep' in place, or nullptr if it can. It
+    // must be a variable, or an unpacked array reached from one through fixed-size array elements
+    // and struct or class members, as other selections yield copies or other layouts.
+    static const char* readMemUnsupported(const AstNodeExpr* nodep) {
+        const AstNodeDType* const dtypep = nodep->dtypep()->skipRefp();
+        const bool isWhole = VN_IS(nodep, NodeVarRef);
+        while (true) {
+            if (const AstArraySel* const selp = VN_CAST(nodep, ArraySel)) {
+                nodep = selp->fromp();
+            } else if (const AstStructSel* const selp = VN_CAST(nodep, StructSel)) {
+                nodep = selp->fromp();
+            } else if (VN_IS(nodep, NodeVarRef) || VN_IS(nodep, MemberRef)) {
+                if (!isWhole && !VN_IS(dtypep, UnpackArrayDType)) {
+                    return "into a selected dynamic array, queue, or associative array";
+                }
+                return nullptr;
+            } else if (VN_IS(nodep, SliceSel)) {
+                return "into a slice of an unpacked array";
+            } else if (const AstCMethodHard* const methodp = VN_CAST(nodep, CMethodHard)) {
+                // Other than an element access, this is a queue slice
+                if (!methodp->method().isDynElementAccess()) {
+                    return "into a slice of an unpacked array";
+                }
+                return "through an element of a dynamic array or queue";
+            } else {
+                return "through an element of an associative array";
+            }
+        }
+    }
     void visit(AstNodeReadWriteMem* nodep) override {
         assertAtStatement(nodep);
         iterateCheckString(nodep, "filename", nodep->filenamep(), BOTH);
         userIterateAndNext(nodep->memp(), WidthVP{SELF, BOTH}.p());
+        if (VN_IS(nodep, ReadMem)) {
+            if (const char* const reasonp = readMemUnsupported(nodep->memp())) {
+                nodep->memp()->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: " << nodep->verilogKwd() << " " << reasonp);
+            }
+        }
         const AstNodeDType* subp = nullptr;
         if (const AstAssocArrayDType* adtypep
             = VN_CAST(nodep->memp()->dtypep()->skipRefp(), AssocArrayDType)) {

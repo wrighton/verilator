@@ -1173,30 +1173,26 @@ public:
         puts("N(");
         puts(nodep->isHex() ? "true" : "false");
         putbs(", ");
+        // The memory may be an element or member, not only a variable
+        const AstNodeDType* const dtypep = nodep->memp()->dtypep()->skipRefp();
         // Need real storage width
-        puts(cvtToStr(nodep->memp()->dtypep()->skipRefp()->subDTypep()->widthMin()));
+        puts(cvtToStr(dtypep->subDTypep()->widthMin()));
         uint32_t array_lo = 0;
         bool memUsePtr = true;
         {
-            const AstVarRef* const varrefp = VN_CAST(nodep->memp(), VarRef);
-            if (!varrefp) {
-                nodep->v3error(nodep->verilogKwd() << " loading non-variable");
-            } else if (VN_IS(varrefp->varp()->dtypeSkipRefp(), AssocArrayDType)
-                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), DynArrayDType)
-                       || VN_IS(varrefp->varp()->dtypeSkipRefp(), QueueDType)) {
+            if (VN_IS(dtypep, AssocArrayDType) || VN_IS(dtypep, DynArrayDType)
+                || VN_IS(dtypep, QueueDType)) {
                 // nodep->memp() below will when verilated code is compiled create a C++ template
                 memUsePtr = false;
             } else if (const AstUnpackArrayDType* const adtypep
-                       = VN_CAST(varrefp->varp()->dtypeSkipRefp(), UnpackArrayDType)) {
+                       = VN_CAST(dtypep, UnpackArrayDType)) {
                 putbs(", ");
-                puts(cvtToStr(varrefp->varp()->dtypep()->arrayUnpackedElements()));
+                puts(cvtToStr(adtypep->arrayUnpackedElements()));
                 array_lo = adtypep->lo();
                 putbs(", ");
                 puts(cvtToStr(array_lo));
             } else {
-                nodep->v3error(
-                    nodep->verilogKwd()
-                    << " loading other than unpacked/dynamic/associative-array variable");
+                nodep->v3fatalSrc("Unexpected memory data type (V3Width rejects it)");
             }
         }
         putbs(", ");
