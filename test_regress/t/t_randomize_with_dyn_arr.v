@@ -178,23 +178,86 @@ class Cls6;
   endtask
 endclass
 
+class address_window;
+  rand bit [36:0] lower_bound;
+endclass
+
+class access_request;
+  rand bit [36:0] offset;
+endclass
+
+class Cls10;
+  rand address_window windows[];
+  task body();
+    int ok;
+    access_request request;
+    request = new;
+    windows = new[1];
+    windows[0] = new;
+    windows[0].lower_bound = 37'h15_2468_ace0;
+    repeat (20) begin
+      ok = request.randomize() with {offset >= windows[0].lower_bound;};
+      `checkd(ok, 1);
+      `checkd(request.offset >= windows[0].lower_bound, 1);
+      ok = request.randomize() with {offset dist {windows[0].lower_bound := 1};};
+      `checkd(ok, 1);
+      `checkd(request.offset, windows[0].lower_bound);
+      ok = request.randomize() with {
+        offset == (windows[0].lower_bound > 0 ? windows[0].lower_bound : offset);
+      };
+      `checkd(ok, 1);
+      `checkd(request.offset, windows[0].lower_bound);
+      windows[0].lower_bound += 37'h02_0000_0000;
+    end
+  endtask
+endclass
+
+class ArrBase;
+  rand int_arr_t arr;
+endclass
+
+class ArrTarget extends ArrBase;
+  rand int x;
+endclass
+
+class Cls11 extends ArrBase;
+  task body();
+    int ok;
+    ArrTarget target;
+    target = new;
+    target.arr = new[1];
+    arr = new[1];
+    arr[0] = 123;
+    ok = target.randomize() with {x == local::arr[0];};
+    `checkd(ok, 1);
+    `checkd(target.x, 123);
+    `checkd(arr[0], 123);
+  endtask
+endclass
+
 module t;
   Cls c;
   Cls2 c2;
   Cls3 c3;
   Cls4 c4;
   Cls6 c6;
+  Cls10 c10;
+  Cls11 c11;
   initial begin
     c = new;
     c2 = new;
     c3 = new;
     c4 = new;
     c6 = new;
+    c10 = new;
+    c11 = new;
     c.body();
     c2.body();
     c3.body();
     c4.body();
     c6.body();
+    c10.body();
+    c11.body();
     $write("*-* All Finished *-*\n");
     $finish;
   end
