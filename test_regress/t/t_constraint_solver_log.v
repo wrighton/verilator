@@ -14,12 +14,6 @@ class Packet;
   constraint a {one > 0 && one < 2;}
 endclass
 
-// Its constraint and value are longer than a pipe buffer
-class Long;
-  rand bit [19999:0] w;
-  constraint c {w != 0;}
-endclass
-
 // Operators over the elements of a one-element container: SMT-LIB 2.6 has no
 // single-operand application of a bit-vector operator, so each is the element's term
 class Single;
@@ -57,6 +51,12 @@ class Single;
   }
 endclass
 
+// Long solver commands and replies, and many commands per randomize()
+class Long;
+  rand bit [19998:0] w;
+  constraint c {w != 0;}
+endclass
+
 module t;
 
   Packet p;
@@ -67,12 +67,15 @@ module t;
   initial begin
     p = new;
     v = p.randomize();
-    if (v != 1) $stop;
-    if (p.one != 1) $stop;
-    l = new;
-    v = l.randomize();
-    if (v != 1) $stop;
-    if (l.w == 0) $stop;
+    `checkd(v, 1);
+    `checkd(p.one, 1);
+    begin
+      Long l;
+      l = new;
+      v = l.randomize();
+      `checkd(v, 1);
+      `checkd(l.w != 0, 1);
+    end
 
     begin
       automatic Single s = new;

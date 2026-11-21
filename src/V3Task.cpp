@@ -2727,9 +2727,9 @@ class TaskAssocCreateVisitor final : public VNVisitor {
             }
         }
         AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef);
-        AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef);
+        AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef);
         if ((refp && refp->access().isReadOnly())
-            || (memberSelp && memberSelp->access().isReadOnly())) {
+            || (memberRefp && memberRefp->access().isReadOnly())) {
             for (AstCMethodHard* const atWritep : atWriteps) {
                 atWritep->method(VCMethod::ASSOC_AT_WRITE);
                 ++m_statCreatingSels;
@@ -2742,7 +2742,7 @@ class TaskAssocCreateVisitor final : public VNVisitor {
                 refp->access(VAccess::READWRITE);
                 ++m_statWrittenRefs;
             } else if (m_inProcess) {
-                memberSelp->access(VAccess::READWRITE);
+                memberRefp->access(VAccess::READWRITE);
                 ++m_statWrittenRefs;
             }
         }

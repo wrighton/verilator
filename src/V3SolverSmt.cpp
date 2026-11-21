@@ -194,9 +194,9 @@ static AstNodeExpr* selIndexp(AstNode* selp) {
 // SMT name of a variable reference or of a member select chain rooted at one
 static std::string buildMemberPath(const AstNodeExpr* const exprp) {
     if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) return refp->name();
-    const AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef);
-    UASSERT_OBJ(memberSelp, exprp, "Unexpected node type in MemberRef chain");
-    return buildMemberPath(memberSelp->fromp()) + "." + memberSelp->name();
+    const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef);
+    UASSERT_OBJ(memberRefp, exprp, "Unexpected node type in MemberRef chain");
+    return buildMemberPath(memberRefp->fromp()) + "." + memberRefp->name();
 }
 
 // Whether dtypep is an array of arrays whose elements are class handles
@@ -1518,8 +1518,8 @@ private:
     // before it is chosen by a random index or key
     static const AstNodeExpr* findSelCallp(const AstMemberRef* selp, bool& randIndex) {
         for (const AstNodeExpr* exprp = selp->fromp();;) {
-            if (const AstMemberRef* const memberSelp = VN_CAST(exprp, MemberRef)) {
-                exprp = memberSelp->fromp();
+            if (const AstMemberRef* const memberRefp = VN_CAST(exprp, MemberRef)) {
+                exprp = memberRefp->fromp();
             } else if (const AstStructSel* const structSelp = VN_CAST(exprp, StructSel)) {
                 exprp = structSelp->fromp();
             } else if (const AstNodeSel* const nodeSelp = VN_CAST(exprp, NodeSel)) {
@@ -1676,6 +1676,12 @@ private:
                     varp = varrefp->varp();
                 } else if (const AstMemberRef* const memberp
                            = VN_CAST(methodp->fromp(), MemberRef)) {
+                    // A member of an object selected from an array has no solver path.
+                    const AstNodeExpr* rootp = memberp;
+                    while (const AstMemberRef* const refp = VN_CAST(rootp, MemberRef)) {
+                        rootp = refp->fromp();
+                    }
+                    if (!VN_IS(rootp, VarRef)) return nullptr;
                     const std::string path = buildMemberPath(memberp);
                     return new AstConst{fl, AstConst::String{},
                                         path.substr(0, path.size() - memberp->name().size())
@@ -1686,7 +1692,11 @@ private:
                     // ignores the edge when no size variable is registered.
                     return new AstConst{fl, AstConst::String{}, SmtUtil::sizeVarName(varp)};
                 }
+                // The size of an array selected from another or from a struct.
+                return nullptr;
             }
+            // An element at an index from the back of a queue has no solver path.
+            if (methodp->method() != VCMethod::ARRAY_AT) return nullptr;
             return buildPathExpr(fl, exprp, "");
         }
         const AstNodeSel* selp = VN_CAST(exprp, ArraySel);
@@ -2717,14 +2727,14 @@ private:
                                               new AstVarRef{fl, iterVarp, VAccess::READ}};
             }
             atWritep->dtypep(elemClassRefDtp);
-            AstMemberRef* const memberSelp = new AstMemberRef{fl, atWritep, memberVarp};
+            AstMemberRef* const memberRefp = new AstMemberRef{fl, atWritep, memberVarp};
 
             AstCMethodHard* const writeVarp = new AstCMethodHard{
                 fl,
                 new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
                 VCMethod::RANDOMIZER_WRITE_VAR};
             writeVarp->dtypeSetVoid();
-            writeVarp->addPinsp(memberSelp);
+            writeVarp->addPinsp(memberRefp);
             writeVarp->addPinsp(
                 new AstConst{fl, AstConst::Unsized64{}, static_cast<uint64_t>(memberWidth)});
             AstSFormatF* const namep
@@ -6144,8 +6154,11 @@ private:
         VL_RESTORER(m_elemNamesp);
         m_elemNamesp = m_wantSingle ? &m_foldElemNames : &elemNames;
         if (nodep->isDisableSoft()) {
-            UASSERT_OBJ(!m_wantSingle, nodep, "Conditional disable soft was not hoisted");
-            nodep->replaceWith(buildDisableSoftCallStmt(nodep));
+            if (AstNodeStmt* const stmtp = buildDisableSoftCallStmt(nodep)) {
+                nodep->replaceWith(stmtp);
+            } else {
+                nodep->unlinkFrBack();
+            }
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
             return;
         }
@@ -6720,8 +6733,8 @@ private:
     }
 
     // Build the runtime statement that calls RANDOMIZER_DISABLE_SOFT on the
-    // variable referenced by the given AstConstraintExpr.  Parser enforces
-    // constraint_primary operand (verilog.y, IEEE 1800-2023 18.5.13).
+    // variable referenced by the given AstConstraintExpr, or nullptr if unsupported.
+    // V3Width enforces the constraint_primary operand (IEEE 1800-2023 18.5.13).
     AstNodeStmt* buildDisableSoftCallStmt(AstConstraintExpr* nodep) {
         FileLine* const fl = nodep->fileline();
         AstNodeExpr* keyp = nullptr;
@@ -6759,7 +6772,10 @@ private:
                 keyp = new AstConst{fl, AstConst::String{}, ""};  // Not run: compiling stops
             }
         } else {
-            nodep->v3fatalSrc("Unexpected expression type in disable soft");
+            nodep->v3warn(E_UNSUPPORTED, "Unsupported: disable soft of other than a variable, an"
+                                         " object member or the size() of a random dynamic"
+                                         " array or queue.");
+            return nullptr;
         }
         AstCMethodHard* const callp = new AstCMethodHard{
             fl, new AstVarRef{fl, VN_AS(m_genp->user2p(), NodeModule), m_genp, VAccess::READWRITE},
@@ -8617,18 +8633,18 @@ public:
             // The array is a member of this class, or of a rand member object (global
             // constraints, IEEE 1800-2023 18.5.8) reached through a member select chain
             AstNodeExpr* const arrayp = nodep->fromp();
-            AstMemberRef* const memberSelp = VN_CAST(arrayp, MemberRef);
+            AstMemberRef* const memberRefp = VN_CAST(arrayp, MemberRef);
             AstNodeExpr* rootp = arrayp;
             while (AstMemberRef* const selp = VN_CAST(rootp, MemberRef)) rootp = selp->fromp();
             // Warning from ConstraintExprVisitor will be thrown
             if (!VN_IS(rootp, VarRef)) return;
             AstVar* const queueVarp
-                = memberSelp ? memberSelp->varp() : VN_AS(arrayp, VarRef)->varp();
+                = memberRefp ? memberRefp->varp() : VN_AS(arrayp, VarRef)->varp();
             AstVar* const sizeVarp
-                = memberSelp ? createOrGetMemberSizeVar(queueVarp, fl, nodep->findIntDType())
+                = memberRefp ? createOrGetMemberSizeVar(queueVarp, fl, nodep->findIntDType())
                              : createOrGetSizeVar(queueVarp, fl, nodep->findIntDType());
             const auto newSizeRefp = [&]() -> AstNodeExpr* {
-                if (memberSelp) return buildMemberRefExprp(memberSelp, sizeVarp);
+                if (memberRefp) return buildMemberRefExprp(memberRefp, sizeVarp);
                 return new AstVarRef{fl, VN_AS(sizeVarp->user2p(), NodeModule), sizeVarp,
                                      VAccess::READ};
             };
@@ -8644,11 +8660,11 @@ public:
                     fl, arrayp->unlinkFrBack(), VCMethod::DYN_RESIZE, newSizeRefp()};
                 resizep->dtypep(nodep->findVoidDType());
                 resizerTaskp->addStmtsp(
-                    newIfNonNullp(fl, new AstStmtExpr{fl, resizep}, memberSelp));
+                    newIfNonNullp(fl, new AstStmtExpr{fl, resizep}, memberRefp));
 
                 // Since size variable is signed int, we need additional constraint
                 // to make sure it is always >= 0.
-                constrp->addItemsp(createSizeGteZeroConstraint(fl, sizeVarp, memberSelp));
+                constrp->addItemsp(createSizeGteZeroConstraint(fl, sizeVarp, memberRefp));
             }
             AstNodeExpr* const sizeRefp = newSizeRefp();
             sizeRefp->user1(true);
