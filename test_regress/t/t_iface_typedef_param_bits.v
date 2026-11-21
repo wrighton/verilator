@@ -1,7 +1,8 @@
 // DESCRIPTION: Verilator: Verilog Test module
 //
 // Sizes of a type from a parameterized interface must use the specialized
-// parameter, not the value the interface was declared with.
+// parameter, not the value the interface was declared with, also through an
+// interface port of a module specialized.
 //
 // This file ONLY is placed under the Creative Commons Public Domain.
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
@@ -39,6 +40,22 @@ module sub (
 );
 endmodule
 
+module sub_width #(
+    parameter int W = 1
+);
+endmodule
+
+// A size of a type through an interface port, in a module specialized, as a parameter value
+module sub_sized #(
+    parameter int K = 1
+) (
+    sub_if io
+);
+  typedef io.data_t data_t;
+  localparam int L = $bits(data_t) + K;
+  sub_width #(.W(L)) u_w ();
+endmodule
+
 module t ();
   parameter a_pkg::cfg_t cfg = '{p_a: 16};
 
@@ -47,6 +64,9 @@ module t ();
   sub_if default_io ();
 
   sub u_sub (.io(sub_io));
+  sub_sized u_sized (.io(sub_io));
+  sub_sized #(.K(2)) u_sized_wide (.io(wide_io));
+  sub_sized u_sized_default (.io(default_io));
 
   typedef sub_io.data2_t data2_t;
   typedef sub_io.data_t data_t;
@@ -90,6 +110,12 @@ module t ();
     `checkd(default_io.DRIGHT, 0);
     `checkd(default_io.DSIZE, 7);
     `checkd(default_io.DINCR, 1);
+    `checkd(u_sized.L, 17);
+    `checkd(u_sized.u_w.W, 17);
+    `checkd(u_sized_wide.L, 35);
+    `checkd(u_sized_wide.u_w.W, 35);
+    `checkd(u_sized_default.L, 8);
+    `checkd(u_sized_default.u_w.W, 8);
     $write("*-* All Finished *-*\n");
     $finish;
   end
