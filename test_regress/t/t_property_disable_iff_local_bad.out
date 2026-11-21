@@ -1,0 +1,10 @@
+%Error: t/t_property_disable_iff_local_bad.v:17:33: Disable iff condition references local variable 't' (IEEE 1800-2023 16.12)
+                                                  : ... note: In instance 't'
+   17 |     @(posedge clk) disable iff (t) (a, t = b) |=> c;   
+      |                                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_property_disable_iff_local_bad.v:23:41: Disable iff condition references local variable 't' (IEEE 1800-2023 16.12)
+                                                  : ... note: In instance 't'
+   23 |     @(posedge clk) disable iff (rst || !t) (a, t = b) |=> (c == t);   
+      |                                         ^
+%Error: Exiting due to
