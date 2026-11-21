@@ -314,6 +314,18 @@ Tristate drivers are not supported inside functions and tasks; an inout
 there will be considered a two-state variable that is read and written
 instead of a four-state variable.
 
+An input port of net kind that is driven inside its module, by a continuous
+assignment, an output port connection, or a clocking block output, is
+coerced to inout (IEEE 1800-2023 23.3.3.1), so its drivers also reach the
+connected net, and are resolved with the other drivers of that net. An input
+net port of the parent that such a port is connected to is coerced as well.
+The :option:`ASSIGNIN` warning is still reported on the driver. A port is
+not coerced if it is a port of the top-level module, has an unpacked type,
+or if any instance connects it to something other than nets, constant bit or
+part selects of them, and concatenations of those (e.g. to a variable, a
+constant, a narrower net, or an unpacked array element), or to an input port
+that is not coerced.
+
 
 Gate Primitives
 ---------------
