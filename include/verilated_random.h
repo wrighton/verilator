@@ -283,8 +283,9 @@ class VlRandomizer VL_NOT_FINAL {
     // Enum domain per variable: a Bool SMT term over '__Ve', asserted for each element.
     // A string literal from the generated code, so the pointer stays valid.
     std::map<std::string, const char*> m_enumDomains;
-    std::map<std::string, std::set<uint64_t>>
-        m_randcUsedValues;  // Previously used values per randc var (exclusion-based cycling)
+    // Previously used values per randc variable element, keyed by its solver term
+    // (exclusion-based cycling)
+    std::map<std::string, std::set<uint64_t>> m_randcUsedValues;
     size_t m_randcConstraintHash = 0;  // Hash of constraints when history was valid
     std::vector<std::pair<std::string, std::string>>
         m_solveBefore;  // Solve-before ordering pairs (beforeVar, afterVar)
