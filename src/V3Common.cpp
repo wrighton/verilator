@@ -49,7 +49,8 @@ string V3Common::makeToStringCall(AstNodeDType* nodep, const std::string& lhs) {
     } else {
         stmt += "VL_TO_STRING(";
     }
-    stmt += lhs;
+    const std::string reverseCall = EmitCUtil::unpackReverseCall(nodep);
+    stmt += reverseCall.empty() ? lhs : reverseCall + "(" + lhs + ")";
     stmt += ")";
     return stmt;
 }
