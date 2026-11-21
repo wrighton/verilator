@@ -1,8 +1,6 @@
-%Error-UNSUPPORTED: t/t_let_unsup.v:10:9: Unsupported: let typed ports
-   10 |   let G(int a) = 30 + a;
-      |         ^~~
+%Error-UNSUPPORTED: t/t_let_unsup.v:16:11: Unsupported: static cast to 'int$[]' from 'byte$[]'
+                                         : ... note: In instance 't'
+   16 |     if (H(dyn) != (30 + 1)) $stop;
+      |           ^~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_let_unsup.v:11:9: Unsupported: let typed ports
-   11 |   let H(signed a) = 30 + a;
-      |         ^~~~~~
 %Error: Exiting due to
