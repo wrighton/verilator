@@ -39,7 +39,8 @@
 //  3. Rewrite: each group moves into a new function, called in its place, with co_await if it
 //     suspends. Local variables of the function that the group references are passed by
 //     reference. This runs before V3Localize, while most variables are module variables, so
-//     only the arguments and locals of tasks that are not inlined need passing.
+//     only the arguments and locals of tasks that are not inlined, including the variables of
+//     calls inlined into them, need passing.
 //
 //*************************************************************************
 
@@ -188,6 +189,8 @@ class OutlineVisitor final : public VNVisitor {
             listps = {loopp->stmtsp()};
         } else if (AstJumpBlock* const blockp = VN_CAST(stmtp, JumpBlock)) {
             listps = {blockp->stmtsp()};
+        } else if (AstCLocalScope* const scopep = VN_CAST(stmtp, CLocalScope)) {
+            listps = {scopep->stmtsp()};
         }
         return reduceLists(m_info(stmtp).m_size, listps);
     }
