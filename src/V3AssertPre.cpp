@@ -101,6 +101,7 @@ private:
     AstIf* m_disableSeqIfp = nullptr;  // Used for handling disable iff in sequences
     AstPExpr* m_pexprp = nullptr;  // Last AstPExpr
     bool m_underCover = false;  // True if the enclosing assertion is a cover
+    bool m_hasNonConsRep = false;  // True if the enclosing property has a nonconsecutive rep
     // Other:
     V3UniqueNames m_cycleDlyNames{"__VcycleDly"};  // Cycle delay counter name generator
     V3UniqueNames m_consRepNames{"__VconsRep"};  // Consecutive repetition counter name generator
@@ -867,13 +868,64 @@ private:
         iterateAndNextNull(nodep->exprp());
         if (!nodep->sentreep()) nodep->sentreep(newSenTree(nodep));
     }
+    // V3AssertNfa lowers the forms below, but leaves a property with a nonconsecutive
+    // repetition to this pass, which has no lowering for them. Report them there, and leave
+    // other properties V3AssertNfa did not lower to the errors that made it decline them.
+    bool replaceUnsupportedSeq(AstNode* nodep, const string& what) {
+        if (!m_hasNonConsRep) return false;
+        nodep->v3warn(E_UNSUPPORTED,
+                      "Unsupported: " << what << " in a property with nonconsecutive repetition");
+        nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        return true;
+    }
+    // Whether an expression takes more than one cycle, including a repetition lowered into a
+    // procedural expression
+    static bool isMultiCycle(const AstNode* const nodep) {
+        return nodep->exists(
+            [](const AstNodeExpr* const np) { return VN_IS(np, PExpr) || np->isMultiCycleSva(); });
+    }
+    // Whether an operand of 'and' or 'or' is a property rather than a sequence (IEEE 1800-2023
+    // 16.12)
+    static bool isProperty(const AstNode* const nodep) {
+        return nodep->exists([](const AstNodeExpr* const np) {
+            return VN_IS(np, Implication) || VN_IS(np, Until) || VN_IS(np, PropAlways)
+                   || VN_IS(np, SEventually) || VN_IS(np, AbortOn);
+        });
+    }
+    void visit(AstSAnd* nodep) override {
+        const char* const whatp = nodep->propertyControl() ? "property 'if' or 'case'"
+                                  : isProperty(nodep->lhsp()) || isProperty(nodep->rhsp())
+                                      ? "property 'and'"
+                                      : "sequence 'and'";
+        if (!replaceUnsupportedSeq(nodep, whatp)) iterateChildren(nodep);
+    }
+    void visit(AstSIntersect* nodep) override {
+        if (!replaceUnsupportedSeq(nodep, "'intersect'")) iterateChildren(nodep);
+    }
+    void visit(AstSOr* nodep) override {
+        const char* const whatp = isProperty(nodep->lhsp()) || isProperty(nodep->rhsp())
+                                      ? "property 'or'"
+                                      : "sequence 'or'";
+        if (!replaceUnsupportedSeq(nodep, whatp)) iterateChildren(nodep);
+    }
+    void visit(AstSThroughout* nodep) override {
+        if (!replaceUnsupportedSeq(nodep, "'throughout'")) iterateChildren(nodep);
+    }
+    void visit(AstSWithin* nodep) override {
+        if (!replaceUnsupportedSeq(nodep, "'within'")) iterateChildren(nodep);
+    }
+    void visit(AstSExpr* nodep) override {
+        if (!replaceUnsupportedSeq(nodep, "cycle delay")) iterateChildren(nodep);
+    }
     void visit(AstSConsRep* nodep) override {
         // IEEE 1800-2023 16.9.2 -- Lower standalone exact [*N] (N >= 2) via saturating counter.
         // Range/unbounded forms and SExpr-contained forms are lowered by V3AssertNfa.
         iterateChildren(nodep);
-        // V3AssertNfa handles unbounded/ranged forms upstream, so this fast-path
-        // is effectively unreachable when NFA is enabled.
-        if (nodep->unbounded() || nodep->maxCountp()) return;  // LCOV_EXCL_LINE
+        if (nodep->unbounded() || nodep->maxCountp()) {
+            replaceUnsupportedSeq(nodep, "ranged consecutive repetition");
+            return;
+        }
         const AstConst* const constp = VN_CAST(nodep->countp(), Const);
         if (VL_UNLIKELY(!constp || constp->toSInt() < 1)) {
             nodep->v3fatalSrc("Consecutive repetition count must be a positive constant"
@@ -1303,6 +1355,10 @@ private:
         if (AstSGotoRep* const gotop = VN_CAST(nodep->lhsp(), SGotoRep)) {
             iterateChildren(gotop);
             iterateAndNextNull(nodep->rhsp());
+            if (isMultiCycle(nodep->rhsp())
+                && replaceUnsupportedSeq(nodep, "multi-cycle consequent of a repetition")) {
+                return;
+            }
             FileLine* const flp = nodep->fileline();
             AstNodeExpr* countp = gotop->countp()->unlinkFrBack();
             if (!validateRepCount(nodep, countp)) return;
@@ -1320,6 +1376,10 @@ private:
         if (AstSNonConsRep* const ncrp = VN_CAST(nodep->lhsp(), SNonConsRep)) {
             iterateChildren(ncrp);
             iterateAndNextNull(nodep->rhsp());
+            if (isMultiCycle(nodep->rhsp())
+                && replaceUnsupportedSeq(nodep, "multi-cycle consequent of a repetition")) {
+                return;
+            }
             if (rejectNonconsecRange(nodep, ncrp->maxCountp())) return;
             FileLine* const flp = nodep->fileline();
             AstNodeExpr* countp = ncrp->countp()->unlinkFrBack();
@@ -1634,6 +1694,8 @@ private:
         // implication antecedent must hold; assert passes vacuously instead.
         VL_RESTORER(m_underCover);
         m_underCover = VN_IS(nodep->backp(), Cover);
+        VL_RESTORER(m_hasNonConsRep);
+        m_hasNonConsRep = nodep->propp()->exists([](const AstSNonConsRep*) { return true; });
         iterate(nodep->propp());
         iterateNull(nodep->matchCountp());
     }
