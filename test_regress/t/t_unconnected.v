@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2020 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -19,6 +24,9 @@ module t (
   wire [32:0] o_p0_wide;
   wire [1:0][3:0] o_p1_packed;
   wire [1:0][3:0] o_p0_packed;
+  wire [2:0] od_omit;
+  wire [2:0] od_empty;
+  wire [2:0] od_blank;
 
   // verilator lint_off PINMISSING
   sub_0 sub_0 (.o_0);
@@ -33,6 +41,12 @@ module t (
   sub_p1_packed sub_p1_packed (.o(o_p1_packed));
   sub_p0_packed sub_p0_packed (.o(o_p0_packed));
   // verilator lint_on PINMISSING
+  sub_d sub_d_omit (.od(od_omit));
+  sub_d sub_d_empty (
+      .id(),
+      .od(od_empty)
+  );
+  sub_d sub_d_blank (, od_blank);
 
   always @(posedge clk) begin
     if (o_0 !== 1'b0) $stop;
@@ -46,6 +60,9 @@ module t (
     if (o_p0_wide !== {33{1'b0}}) $stop;
     if (o_p1_packed !== 8'hff) $stop;
     if (o_p0_packed !== 8'h00) $stop;
+    `checkh(od_omit, 3'h2);  // Default value, not pulled
+    `checkh(od_empty, 3'h7);  // Explicit empty connection, so no default value
+    `checkh(od_blank, 3'h2);  // Default value, not pulled
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -66,6 +83,13 @@ module sub_1 (
     output wire o_1
 );
   assign o_1 = i;
+endmodule
+
+module sub_d (
+    input [2:0] id = 3'h2,
+    output wire [2:0] od
+);
+  assign od = id;
 endmodule
 
 `nounconnected_drive
