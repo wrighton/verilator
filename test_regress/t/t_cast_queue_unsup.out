@@ -1,0 +1,18 @@
+%Error-UNSUPPORTED: t/t_cast_queue_unsup.v:22:20: Unsupported: static cast to 'string$[$]' from 'logic[39:0]'
+                                                : ... note: In instance 't'
+   22 |     sq = string_q_t'(w);
+      |                    ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_cast_queue_unsup.v:23:20: Unsupported: static cast to 'string$[$]' from 'logic[39:0]'
+                                                : ... note: In instance 't'
+   23 |     sq = string_q_t'({>>{w}});
+      |                    ^
+%Error-UNSUPPORTED: t/t_cast_queue_unsup.v:24:17: Unsupported: static cast to 'class Cls$[$]' from 'logic[39:0]'
+                                                : ... note: In instance 't'
+   24 |     cq = cls_q_t'(w);
+      |                 ^
+%Error-UNSUPPORTED: t/t_cast_queue_unsup.v:25:16: Unsupported: static cast to 'struct t.s_t$[$]' from 'logic[39:0]'
+                                                : ... note: In instance 't'
+   25 |     stq = s_q_t'(w);
+      |                ^
+%Error: Exiting due to
