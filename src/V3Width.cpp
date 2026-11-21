@@ -3860,10 +3860,8 @@ class WidthVisitor final : public VNVisitor {
             } else if (VN_IS(toDtp, ClassRefDType) || castable.isSameish()) {
                 // Can just remove cast
             } else {
-                // Neither assignment compatible nor both bit-stream types (IEEE 1800-2023 6.24)
-                nodep->v3error("Incompatible types to static cast to "
-                               << toDtp->prettyDTypeNameQ() << " from "
-                               << fromDtp->prettyDTypeNameQ() << '\n');
+                nodep->v3fatalSrc("Unimplemented: Casting non-simple data type "
+                                  << toDtp->prettyDTypeNameQ());
             }
             if (!newp) newp = nodep->fromp()->unlinkFrBack();
             if (toDtp->isAggregateType()
@@ -4376,8 +4374,8 @@ class WidthVisitor final : public VNVisitor {
             const AstVar* varp = nullptr;
             if (const AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef)) {
                 varp = refp->varp();
-            } else if (const AstMemberRef* const selp = VN_CAST(basep, MemberRef)) {
-                varp = selp->varp();
+            } else if (const AstMemberRef* const memberRefp = VN_CAST(basep, MemberRef)) {
+                varp = memberRefp->varp();
             }
             if (varp && !varp->isRand()) {
                 itemp->v3error("Non-random variable " << varp->prettyNameQ()
@@ -8397,6 +8395,9 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstPropSpec* nodep) override {
         VL_RESTORER(m_seqUnsupp);
         VL_RESTORER(m_hasSExpr);
+        VL_RESTORER(m_underSExpr);
+        // The operand of strong() or weak() is a sequence expression
+        if (nodep->propStrength() != VPropStrength::DEFAULT) m_underSExpr = true;
         VL_RESTORER(m_underSvaExpr);
         m_underSvaExpr = true;
         assertAtExpr(nodep);
@@ -8629,6 +8630,9 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstExprStmt* nodep) override {
         userIterateAndNext(nodep->stmtsp(), nullptr);
+        // The result is a sequence with match items or an expression, never a property
+        VL_RESTORER(m_underSExpr);
+        m_underSExpr = true;
         // expected result is same as parent's expected result
         userIterateAndNext(nodep->resultp(), m_vup);
         nodep->dtypeFrom(nodep->resultp());
@@ -8683,7 +8687,7 @@ class WidthVisitor final : public VNVisitor {
         if (!widthForeachHeader(nodep, nodep->headerp())) return;
         // The parser validates we don't have "foreach (array[,,,])"
         VL_RESTORER_COPY(m_foreachVars);
-        for (AstNode* argsp = nodep->headerp()->elementsp(); argsp; argsp = argsp->nextp()) {
+        for (AstNode* const argsp : nodep->headerp()->elementspList()) {
             if (const AstVar* const varp = VN_CAST(argsp, Var)) m_foreachVars.insert(varp);
         }
         userIterateAndNext(nodep->bodyp(), nullptr);
@@ -9292,7 +9296,12 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstCover* nodep) override {
         assertAtStatement(nodep);
         checkDeferredAction(nodep, nodep->passsp());
-        iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
+        {
+            // The operand of cover sequence is a sequence expression
+            VL_RESTORER(m_underSExpr);
+            if (nodep->isCoverSeq()) m_underSExpr = true;
+            iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // like an if() condition
+        }
         userIterateAndNext(nodep->passsp(), nullptr);
     }
     void visit(AstRestrict* nodep) override {
@@ -9307,8 +9316,8 @@ class WidthVisitor final : public VNVisitor {
         if (const AstNodePreSel* const selp = VN_CAST(nodep, NodePreSel)) {
             return isPinLvalue(selp->fromp());
         }
-        if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
-            return isPinLvalue(selp->fromp());
+        if (const AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
+            return isPinLvalue(memberRefp->fromp());
         }
         if (const AstNodeStream* const streamp = VN_CAST(nodep, NodeStream)) {
             return isPinLvalue(streamp->lhsp());
@@ -9318,9 +9327,8 @@ class WidthVisitor final : public VNVisitor {
         }
         if (const AstPattern* const patp = VN_CAST(nodep, Pattern)) {
             // Only positional items, as in an assignment_pattern_variable_lvalue (A.8.5)
-            for (const AstNode* itemp = patp->itemsp(); itemp; itemp = itemp->nextp()) {
-                const AstPatternItem* const memberp = VN_AS(itemp, PatternItem);
-                if (memberp->keyp() || memberp->repp() || !isPinLvalue(memberp->lhssp())) {
+            for (const AstPatternItem* const itemp : patp->itemspList()) {
+                if (itemp->keyp() || itemp->repp() || !isPinLvalue(itemp->lhssp())) {
                     return false;
                 }
             }
@@ -14031,13 +14039,13 @@ class WidthVisitor final : public VNVisitor {
                         "Missing element variable of interface array " << name);
             elemVarpr = VN_CAST(varp->nextp(), Var);
             AstNodeExpr* newp;
-            if (const AstMemberRef* const mselp = VN_CAST(refp, MemberRef)) {
+            if (const AstMemberRef* const memberRefp = VN_CAST(refp, MemberRef)) {
                 // The element of a member, e.g. 'vif.ifc', by the element's name. Each element
                 // has a copy of 'vif', of which a constant select keeps only one.
-                AstMemberRef* const newMselp = new AstMemberRef{
-                    flp, mselp->fromp()->cloneTree(false), VFlagChildDType{}, name};
-                newMselp->access(mselp->access());
-                newp = newMselp;
+                AstMemberRef* const newMemberRefp = new AstMemberRef{
+                    flp, memberRefp->fromp()->cloneTree(false), VFlagChildDType{}, name};
+                newMemberRefp->access(memberRefp->access());
+                newp = newMemberRefp;
             } else if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
                 newp = new AstVarXRef{flp, varp, xrefp->dotted(), xrefp->access()};
             } else {
