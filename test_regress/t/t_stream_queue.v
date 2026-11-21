@@ -380,10 +380,10 @@ module t;
 
     qdata_pkt = {>>{i_header, i_len, i_crc, i_data, i_header, i_len, i_crc}};
     vlwide_pkt_128 = {>>{qdata_pkt}};
-    `checks_w(256, {32'h0, i_header, i_len, i_crc, i_data, i_header, i_len, i_crc},
+    `checks_w(256, {i_header, i_len, i_crc, i_data, i_header, i_len, i_crc, 32'h0},
               {>>{vlwide_pkt_128}});
     `checks_w(256, {>>{vlwide_pkt_128}},
-              {>>{32'h0, i_header, i_len, i_crc, i_data, i_header, i_len, i_crc}});
+              {>>{i_header, i_len, i_crc, i_data, i_header, i_len, i_crc, 32'h0}});
 
     vlwide_pkt_128 = {>>{i_header, i_len, i_crc, i_data}};
     qdata_pkt = {>>{vlwide_pkt_128}};

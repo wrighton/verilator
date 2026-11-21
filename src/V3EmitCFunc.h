@@ -656,7 +656,8 @@ public:
         bool paren = true;
         bool decind = false;
         bool rhs = true;
-        std::string reverseUnpackCall;  // Set for CvtPackedToArray with descending dimensions
+        // Set for CvtPackedToArray/CvtArrayToArray with descending dimensions
+        std::string reverseUnpackCall;
         const AstUnpackArrayDType* const unpackDtp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (AstSel* const selp = VN_CAST(nodep->lhsp(), Sel)) {

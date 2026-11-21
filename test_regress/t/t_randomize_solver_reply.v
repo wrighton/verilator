@@ -47,13 +47,14 @@ class SoftUnknown;
 endclass
 
 // Phased solve...before replies. Random trial values almost never fit x, so its phase is
-// solved afresh and its value comes back in a phase value reply.
+// solved afresh and its value comes back in a phase value reply. x is a whole number of hex
+// digits wide, so a reply can write it in #h notation.
 class Phased;
-  rand bit [30:0] x;
+  rand bit [27:0] x;
   rand bit [3:0] y;
   constraint order_c {solve x before y;}
   constraint rel_c {
-    x < 31'd15;
+    x < 28'd15;
     y > x[3:0];
   }
 endclass
@@ -112,13 +113,6 @@ class Pinned;
   }
 endclass
 
-// A space large enough that every call must give a new value
-class Wide;
-  rand bit [14:0] w;
-  rand bit [16:0] v;
-  constraint wc {w != v[14:0];}
-endclass
-
 // A variable whose rand_mode is off is still answered, but not written
 class Frozen;
   rand bit [7:0] f;
@@ -127,6 +121,13 @@ class Frozen;
     f != g;
     soft f > 8'd10;
   }
+endclass
+
+// A space large enough that every call must give a new value
+class Wide;
+  rand bit [14:0] w;
+  rand bit [16:0] v;
+  constraint wc {w != v[14:0];}
 endclass
 
 module t;
@@ -185,21 +186,6 @@ module t;
     $write("NPASS=%0d\n", npass);
   endtask
 
-  // Every call gives a new value, also when the solver does not support assumption rounds
-  task automatic wide_rounds;
-    automatic Wide wd = new;
-    automatic int rc;
-    automatic bit [31:0] last;
-    wd.srandom(29);
-    for (int i = 0; i < 20; ++i) begin
-      rc = wd.randomize();
-      `checkd(rc, 1);
-      `checkd(wd.w != wd.v[14:0], 1);
-      if (i > 0) `checkd({wd.w, wd.v} != last, 1);
-      last = {wd.w, wd.v};
-    end
-  endtask
-
   // t_randomize_solver_reply runs the +MODE=frozen rows alone, so TAMPER_AT counts the
   // replies of these calls
   task automatic frozen_rounds;
@@ -241,6 +227,21 @@ module t;
       end
     end
     $write("NPASS=%0d\n", npass);
+  endtask
+
+  // Every call gives a new value, also when the solver does not support assumption rounds
+  task automatic wide_rounds;
+    automatic Wide wd = new;
+    automatic int rc;
+    automatic bit [31:0] last;
+    wd.srandom(29);
+    for (int i = 0; i < 20; ++i) begin
+      rc = wd.randomize();
+      `checkd(rc, 1);
+      `checkd(wd.w != wd.v[14:0], 1);
+      if (i > 0) `checkd({wd.w, wd.v} != last, 1);
+      last = {wd.w, wd.v};
+    end
   endtask
 
   initial begin : checks

@@ -105,6 +105,9 @@ module t;
             if ((| downto_32[60:54])) begin
                 $write("");
             end
+            if ((array[i1 +: 2] == array[1:2])) begin
+                $write("");
+            end
             if (the_ifaces[2].ifsig) begin
                 $write("");
             end
@@ -282,6 +285,8 @@ module t;
             $fflush(fd);
             $fscanf(fd, "%d", sum);
             ;
+            $fscanf(fd, str, sum);
+            ;
             $fdisplay("i = ", "%d", sum);
             $fwrite(fd, "hello");
             $readmemh(string'(fd), array);
@@ -370,6 +375,8 @@ module t;
                      $realtime, $time, $time);
             $sscanf("foo=5", "foo=%d", i);
             ;
+            $sscanf("foo=5", str, i);
+            ;
             $printtimescale;
             if ((i != 32'sh5)) begin
                 $stop;
@@ -440,7 +447,7 @@ module t;
                 $write("");
             end
             sum = dpi_exported(32'sh3);
-            if (((cls_arr[2'h0]) == null)) begin
+            if (((cls_arr[32'sh0]) == null)) begin
                 $write("");
             end
             if ((PP != 32'sh2)) begin
@@ -460,13 +467,13 @@ module t;
             if ((uns_int > 32'sh0)) begin
                 $write("");
             end
-            if (((usarr.marr[1'h0]) != 32'sh0)) begin
+            if (((usarr.marr[32'sh0]) != 32'sh0)) begin
                 $write("");
             end
-            if ((((arraymanyd[4'h0])[4'h0])[4'h0])[$unsigned(5'(
-                                                                (32'h4 
-                                                                 * 
-                                                                 32'sh1)))
+            if ((((arraymanyd[32'sh0])[32'sh0])[32'sh0])[$unsigned(5'(
+                                                                      (32'h4 
+                                                                       * 
+                                                                       32'sh1)))
                 +:4][$unsigned(4'((32'h2 * 32'sh1)))
                 +:2][2]) begin
                 $write("");
@@ -1874,6 +1881,20 @@ class ClsParamExt extends ClsParam__Tz7d09f080_P2;
         new();
     endfunction
 endclass
+function rand_reduce;
+    input Cls obj;
+    begin : label9
+        rand_reduce = obj.randomize() with (
+            ???? // CONSTRAINTEXPR
+            (__Vrandwith_obj.rarray.r_sum() with ((
+                                                   item 
+                                                   + 
+                                                   __Vrandwith_obj.rmember1))  
+             > 32'sh0)) ;
+        disable label9;
+    end
+endfunction
+process __VprocessQueue_named__0[$];
 package __Vconstpool;
     const string CONSARRAY_0[1:0] = '{0:"ZERO", 1:"ONE"};
 endpackage
@@ -1934,7 +1955,28 @@ module seq_event;
 endmodule
 package p;
     logic pkgvar;
+    function ident;
+        input int value;
+        begin : label11
+            ident = /*CRESET*/;
+            ident = value;
+            disable label11;
+        end
+    endfunction
+    function uses_const_func;
+        logic [1:0]  v;
+        begin : label12
+            uses_const_func = /*CRESET*/;
+            v = /*CRESET*/;
+            uses_const_func = 32'h2;
+            disable label12;
+        end
+    endfunction
 endpackage
+module defparam_gen__pie9c2606d;
+    /* generate */ begin : dpg
+    end : dpg
+endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
     input byte pin;
@@ -2164,4 +2206,22 @@ package Pkg;
         BAR = 32'h1,
         BAZ = 32'h2
     } enum_t;
+    task disable_named;
+        begin : named
+            fork
+            begin
+                __VprocessQueue_named__0.push_back(
+                                                   self());
+                #1;
+            end
+            join
+        end
+        killQueue(__VprocessQueue_named__0);
+    endtask
 endpackage
+module defparam_leaf;
+    parameter bit signed [31:0]  P = 32'sh1;
+endmodule
+module defparam_leaf__P2;
+    parameter bit signed [31:0]  P = 32'sh2;
+endmodule

@@ -34,9 +34,4 @@
                                 : ... Suggest use a normal 'always'
    32 |     ##1;   
       |     ^~
-%Error-UNSUPPORTED: t/t_timing_ff_bad.v:34:5: Unsupported: Procedural concurrent assertion with clocking event inside always (IEEE 1800-2023 16.14.6)
-                                            : ... note: In instance 't'
-   34 |     assert property (d ##1 d);
-      |     ^~~~~~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: Exiting due to

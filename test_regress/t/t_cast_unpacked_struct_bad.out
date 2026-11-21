@@ -67,16 +67,16 @@
                                             : ... note: In instance 't'
    67 |     i = int'(b4[2:5]);   
       |                ^
-%Error: t/t_cast_unpacked_struct_bad.v:68:27: Unpacked array concatenation has 2 elements, but its target has 4 (IEEE 1800-2023 10.10)
+%Error: t/t_cast_unpacked_struct_bad.v:68:19: Unpacked array concatenation has 2 elements, but its target has 4 (IEEE 1800-2023 10.10)
                                             : ... note: In instance 't'
    68 |     b4 = bytes_t'({i[15:8], i[7:0]});   
-      |                           ^
+      |                   ^
 %Error-UNSUPPORTED: t/t_cast_unpacked_struct_bad.v:72:20: Unsupported: Non-1 replication to form 'byte$[0:1]' data type
                                                         : ... note: In instance 't'
    72 |       b2 = b2_t'({2{i[7:0]}});   
       |                    ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error: t/t_cast_unpacked_struct_bad.v:72:20: Assignment pattern missed initializing elements: 1
+%Error: t/t_cast_unpacked_struct_bad.v:72:20: Unpacked array concatenation has 1 elements, but its target has 2 (IEEE 1800-2023 10.10)
                                             : ... note: In instance 't'
    72 |       b2 = b2_t'({2{i[7:0]}});   
       |                    ^

@@ -23,7 +23,8 @@ if os.name != 'posix' or not hasattr(signal, 'SIGPIPE'):
     test.skip("No POSIX SIGPIPE on this platform")
 
 test.compile(v_flags2=["t/t_randomize_solver_sigstate_c.cpp"] +
-             (["-LDFLAGS -ldl"] if platform.system() == "Linux" else []))
+             (["-LDFLAGS -ldl"] if platform.system() == "Linux" else []),
+             verilator_flags2=['-fno-constraint-fast'])
 
 # The fixture sets each SIGPIPE state before the model runs.
 wrapper = 'VERILATOR_SOLVER="' + sys.executable + ' ' + test.t_dir + '/randomize_solver_tamper.py" '

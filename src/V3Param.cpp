@@ -1232,16 +1232,9 @@ class ParamProcessor final {
         newModp->foreach([&](AstPin* pinp) {
             const AstNode* const formalp
                 = pinp->modVarp() ? static_cast<AstNode*>(pinp->modVarp()) : pinp->modPTypep();
-            UASSERT_OBJ(formalp, pinp, "Pin not linked");
-            if (!newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
+            // Not linked if not found in an instance in a generate block, see V3LinkDot
+            if (formalp && !newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
         });
-        // References to an interface itself are specialized from srcModp, as their pins keep
-        // srcModp's formals; specializing them from this clone would nest clones without bound
-        if (AstIface* const newIfacep = VN_CAST(newModp, Iface)) {
-            newIfacep->foreach([&](AstIfaceRefDType* refp) {
-                if (refp->ifacep() == newIfacep) refp->ifacep(VN_AS(srcModp, Iface));
-            });
-        }
         return newModp;
     }
 
@@ -1253,6 +1246,13 @@ class ParamProcessor final {
         // However links outside the module (like on the upper cells) will not.
         AstNodeModule* const newModp
             = cloneModule(srcModp->user3p() ? VN_AS(srcModp->user3p(), NodeModule) : srcModp);
+        // References to an interface itself are specialized from srcModp, as their pins keep
+        // srcModp's formals; specializing them from this clone would nest clones without bound
+        if (AstIface* const newIfacep = VN_CAST(newModp, Iface)) {
+            newIfacep->foreach([&](AstIfaceRefDType* refp) {
+                if (refp->ifacep() == newIfacep) refp->ifacep(VN_AS(srcModp, Iface));
+            });
+        }
 
         // Mark the source module as a parameterized template now that a specialized
         // clone exists.  This suppresses width/type errors on the unresolved template
@@ -1810,7 +1810,7 @@ class ParamProcessor final {
                 cloneVarp->foreach([&](AstVarRef* varrefp) {
                     AstVar* const targetp = varrefp->varp();
                     AstNode* replacep = nullptr;
-                    for (AstPin* const pp : VNList<AstPin>{paramsp}) {
+                    for (AstPin* pp = paramsp; pp; pp = VN_AS(pp->nextp(), Pin)) {
                         if (pp->modVarp() == targetp) {
                             // A pattern or array override names the value too
                             if (VN_IS(pp->exprp(), Const) || VN_IS(pp->exprp(), Pattern)
@@ -1843,7 +1843,7 @@ class ParamProcessor final {
                     AstParamTypeDType* const ptdp = VN_CAST(refp->refDTypep(), ParamTypeDType);
                     if (!ptdp) return;
                     AstPin* overridePinp = nullptr;
-                    for (AstPin* const pp : VNList<AstPin>{paramsp}) {
+                    for (AstPin* pp = paramsp; pp; pp = VN_AS(pp->nextp(), Pin)) {
                         if (pp->modPTypep() == ptdp) {
                             overridePinp = pp;
                             break;
@@ -2520,8 +2520,10 @@ class ParamProcessor final {
             any_overrides = true;
         }
         if (VN_IS(nodep, Cell) && !srcModp->hierBlock() && hasInstanceClasses(srcModp)) {
-            // A class referring to its module's instance needs a copy for each instance
-            if (const int count = m_instanceCounts[longname]++) {
+            // A class referring to its module's instance needs a copy for each instance. A copy
+            // of the instance for hierPinIfacep does not count, it is only resolving types.
+            int& countr = m_instanceCounts[longname];
+            if (const int count = m_copyOriginals.empty() ? countr++ : countr) {
                 longname += "__Vinst" + std::to_string(count);
                 any_overrides = true;
             }
@@ -3156,7 +3158,7 @@ public:
     // Keep a copy of modp, not specialized yet, to specialize it from, see deepCloneModule
     void keepOriginal(AstNodeModule* modp) {
         if (modp->user3p()) return;
-        AstNodeModule* const origp = modp->cloneTree(false);
+        AstNodeModule* const origp = cloneModule(modp);
         m_deleter.pushDeletep(origp);
         modp->user3p(origp);
         storeOriginalParams(origp);
@@ -5221,11 +5223,11 @@ class ParamVisitor final : public VNVisitor {
             nodep->addNextHere(forp->unlinkFrBack());
             VL_DO_DANGLING(m_unroller.unroll(forp, beginName), forp);
         } else {
-            m_processor.visitScopeItem(nodep, m_genBlockp);
             VL_RESTORER_COPY(m_generateHierName);
             VL_RESTORER(m_genBlockp);
             // An unnamed block that is not a generate scope has no name
             if (!nodep->name().empty()) {
+                m_processor.visitScopeItem(nodep, m_genBlockp);
                 m_generateHierName += "." + nodep->prettyName();
                 m_genBlockp = nodep;
             }

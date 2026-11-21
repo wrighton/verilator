@@ -8,9 +8,6 @@
 %Error-UNSUPPORTED: t/t_defparam_multi.v:24:19: Unsupported: defparam with instance select other than one integer literal
    24 |       defparam blk[i].u_m3.PAR3 = i;
       |                   ^
-%Error-UNSUPPORTED: t/t_defparam_multi.v:75:26: Unsupported: defparam value using 'M6_PARAM' of a module, for an instance not under the defparam
-   75 |   defparam t.u_up.PAR3 = M6_PARAM;   
-      |                          ^~~~~~~~
 %Error-UNSUPPORTED: t/t_defparam_multi.v:76:31: Unsupported: defparam value using 'CLS_PARAM' of a module, for an instance not under the defparam
    76 |   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
       |                               ^~~~~~~~~

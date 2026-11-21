@@ -31,44 +31,49 @@ module t (
   cover property (@(posedge clk) (val |-> val) throughout val);
   cover property (@(posedge clk) ((val |-> val) and val) ##1 val);
   cover property (@(posedge clk) (if (val) val) ##1 val);
-  cover property (@(posedge clk) (if (val) val else val) ##1 val);
-  cover property (@(posedge clk) (case (val) 1'b0: val; default: val; endcase) ##1 val);
-  cover property (@(posedge clk) (s_eventually val) [*2]);
-  cover property (@(posedge clk) (not val) [*2]);
-  // Property operators in an implication antecedent
-  cover property (@(posedge clk) (val |-> val) |-> val);
-  cover property (@(posedge clk) (val until val) #-# val);
-  cover property (@(posedge clk) (not val) |-> val);
-  cover property (@(posedge clk) ##1 (val until val) |-> val);
-  // Property operators as the operand of a cycle delay
-  cover property (@(posedge clk) ##1 (val until val));
-  cover property (@(posedge clk) ##1 (val |-> val) ##1 val);
+  // Only the direct operand of a leading cycle delay may be a property operator
+  cover property (@(posedge clk) ##1 (if (val) val else val));
 
-  // Property instances as sequence operands, declared before and after their use
-  property p_before;
+  // Property operators and instances as an implication antecedent
+  property p_impl;
     val |-> val;
   endproperty
-  cover property (@(posedge clk) p_before [*2]);
-  cover property (@(posedge clk) ##1 p_after);
-
-  // Property instances in sequence-only positions
-  sequence s_before;
-    p_before;
-  endsequence
-  cover property (@(posedge clk) s_before |-> val);
-  cover property (@(posedge clk) s_after |-> val);
-  cover sequence (@(posedge clk) p_before);
-  cover property (@(posedge clk) strong(p_before));
-  property p_match;
-    bit v;
-    (p_before, v = val);
+  property p_not;
+    not val;
   endproperty
-  cover property (@(posedge clk) p_match);
+  property p_until;
+    val until val;
+  endproperty
+  property p_always;
+    s_always [1:2] val;
+  endproperty
+  property p_abort;
+    accept_on (val) val;
+  endproperty
+  property p_nested;
+    p_impl;
+  endproperty
+  assert property (@(posedge clk) (val |-> val) |-> val);
+  assert property (@(posedge clk) (val until val) |=> val);
+  assert property (@(posedge clk) (not val) #-# val);
+  assert property (@(posedge clk) p_impl |-> val);
+  assert property (@(posedge clk) p_not |-> val);
+  assert property (@(posedge clk) p_until |-> val);
+  assert property (@(posedge clk) p_always |-> val);
+  assert property (@(posedge clk) p_abort |-> val);
+  assert property (@(posedge clk) p_nested |-> val);
+  // Property instance as a sequence operand or body
+  sequence s_prop;
+    p_impl;
+  endsequence
+  cover property (@(posedge clk) p_impl ##1 val);
+  // A property declared after its instance after a leading cycle delay is fine
+  cover property (@(posedge clk) ##1 p_later);
 
-  property p_after;
+  // Property if/else has lower precedence than a cycle delay, so this is fine
+  assert property (@(posedge clk) if (val) val ##1 val else val ##2 val);
+
+  property p_later;
     val |-> val;
   endproperty
-  sequence s_after;
-    p_after;
-  endsequence
 endmodule

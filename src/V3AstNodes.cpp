@@ -1927,6 +1927,10 @@ void AstCvtArrayToArray::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, srcElementBits);
     dumpJsonGen(str);
 }
+string AstDefParam::name() const VL_MT_STABLE {
+    const AstParseRef* const refp = VN_CAST(targetp(), ParseRef);
+    return refp ? refp->name() : "";
+}
 void AstDelay::dump(std::ostream& str) const {
     Super::dump(str);
     if (isCycleDelay()) str << " [CYCLE]";
@@ -2083,10 +2087,6 @@ const char* AstExecGraph::broken() const {
     return nullptr;
 }
 AstExecGraph::~AstExecGraph() { VL_DO_DANGLING(delete m_depGraphp, m_depGraphp); }
-bool AstExprStmt::isPure() {
-    if (AstNode::afterCommentp(stmtsp())) return false;
-    return resultp()->isPure();
-}
 void AstExprStmt::dump(std::ostream& str) const {
     Super::dump(str);
     if (matchItems()) str << " [MATCHITEMS]";
@@ -2094,6 +2094,10 @@ void AstExprStmt::dump(std::ostream& str) const {
 void AstExprStmt::dumpJson(std::ostream& str) const {
     dumpJsonBoolIf(str, "matchItems", matchItems());
     dumpJsonGen(str);
+}
+bool AstExprStmt::isPure() {
+    if (AstNode::afterCommentp(stmtsp())) return false;
+    return resultp()->isPure();
 }
 void AstFScanF::dump(std::ostream& str) const {
     Super::dump(str);
@@ -4290,7 +4294,6 @@ void AstSampled::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, internal);
     dumpJsonGen(str);
 }
-std::string AstSchemaRef::name() const { return schemap()->name(); }
 void AstSchemaRef::dump(std::ostream& str) const {
     Super::dump(str);
     if (dotted() != "") str << " .=" << dotted();
@@ -4299,6 +4302,7 @@ void AstSchemaRef::dumpJson(std::ostream& str) const {
     dumpJsonStrFunc(str, dotted);
     dumpJsonGen(str);
 }
+std::string AstSchemaRef::name() const { return schemap()->name(); }
 AstActive* AstScope::comboActivep(bool create) {
     // Use an existing one, but not the active of an AlwaysPostponed, which must stay alone
     for (AstNode* const nodep : blockspList()) {

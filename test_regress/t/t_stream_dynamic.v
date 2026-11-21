@@ -238,12 +238,12 @@ module t;
     `checkh(q8[0], w80[79:72]);
     `checkh(q8[9], w80[7:0]);
 
-    // Zero-filled to a whole number of elements, '>>' on the left, '<<' on the right
+    // Zero-filled on the right to a whole number of elements
     dyn12 = {>>{w40}};
     `checkh(dyn12.size(), 4);
-    `checkh(dyn12[0], {8'h0, w40[39:36]});
-    `checkh(dyn12[1], w40[35:24]);
-    `checkh(dyn12[3], w40[11:0]);
+    `checkh(dyn12[0], w40[39:28]);
+    `checkh(dyn12[1], w40[27:16]);
+    `checkh(dyn12[3], {w40[3:0], 8'h0});
     s40 = {<<3{w40}};
     dyn12 = {<<3{w40}};
     `checkh(dyn12.size(), 4);
@@ -256,8 +256,8 @@ module t;
     `checkh(q8[4], s40[7:0]);
     q70 = {>>{w80}};
     `checkh(q70.size(), 2);
-    `checkh(q70[0], {60'h0, w80[79:70]});
-    `checkh(q70[1], w80[69:0]);
+    `checkh(q70[0], w80[79:10]);
+    `checkh(q70[1], {w80[9:0], 60'h0});
     s80 = {<<5{w80}};
     q70 = {<<5{w80}};
     `checkh(q70.size(), 2);
@@ -316,62 +316,8 @@ module t;
     `checkh(up24[1], 24'h445566);
   endtask
 
-  task test6;
-    // Packed streams into dynamically sized arrays
-    logic [7:0] a;
-    logic [15:0] b;
-    logic [39:0] w40;
-    logic [79:0] w80;
-    byte dyn8[];
-    byte q8[$];
-    logic [11:0] dyn12[];
-    logic [69:0] q70[$];
-
-    a = 8'($urandom);
-    b = 16'($urandom);
-    w40 = {8'($urandom), 32'($urandom)};
-    w80 = {16'($urandom), 32'($urandom), 32'($urandom)};
-
-    dyn8 = {>>{a, b}};
-    `checkh(dyn8.size(), 3);
-    `checkh(dyn8[0], a);
-    `checkh(dyn8[1], b[15:8]);
-    `checkh(dyn8[2], b[7:0]);
-    dyn8 = {<<8{a, b}};
-    `checkh(dyn8.size(), 3);
-    `checkh(dyn8[0], b[7:0]);
-    `checkh(dyn8[1], b[15:8]);
-    `checkh(dyn8[2], a);
-    dyn8 = {>>{8'h12, 16'h3456}};
-    `checkp(dyn8, "'{'h12, 'h34, 'h56}");
-
-    q8 = {>>{b}};
-    `checkh(q8.size(), 2);
-    `checkh(q8[0], b[15:8]);
-    `checkh(q8[1], b[7:0]);
-    q8 = {<<8{w40}};
-    `checkh(q8.size(), 5);
-    `checkh(q8[0], w40[7:0]);
-    `checkh(q8[4], w40[39:32]);
-    q8 = {>>{w80}};
-    `checkh(q8.size(), 10);
-    `checkh(q8[0], w80[79:72]);
-    `checkh(q8[9], w80[7:0]);
-
-    // Zero extended to a whole number of elements
-    dyn12 = {>>{w40}};
-    `checkh(dyn12.size(), 4);
-    `checkh(dyn12[0], {8'h0, w40[39:36]});
-    `checkh(dyn12[1], w40[35:24]);
-    `checkh(dyn12[3], w40[11:0]);
-    q70 = {>>{w80}};
-    `checkh(q70.size(), 2);
-    `checkh(q70[0], {60'h0, w80[79:70]});
-    `checkh(q70[1], w80[69:0]);
-  endtask
-
   typedef logic [7:0] byte_t;
-  task test7;
+  task test6;
     byte_t tq[$];
     int dyn32[];
     byte dyn8[];
@@ -419,6 +365,52 @@ module t;
     {>>{a, w100}} = q100;
     `checkh(a, 32'h12345678);
     `checkh(w100, 100'h9abcdef0123456789fedcba98);
+  endtask
+
+  // A fixed-size unpacked array streamed into a dynamic array or queue
+  typedef struct {
+    logic [3:0] x;
+    logic [2:0] y;
+  } ustr_t;
+  typedef logic [6:0] elem7_t;
+  task test7;
+    logic [7:0] arr[4];
+    logic [7:0] arr2[2][2];
+    logic [10:0] arr11[3:1];
+    ustr_t sarr[2];
+    elem7_t earr[3:1];
+    elem7_t eq7[$];
+    elem7_t edyn7[];
+    logic [7:0] q8[$];
+    logic [7:0] dyn8[];
+    logic [15:0] q16[$];
+
+    arr = '{8'h11, 8'h22, 8'h33, 8'h44};
+    q8 = {>>{arr}};
+    `checkp(q8, "'{'h11, 'h22, 'h33, 'h44}");
+    q8 = {>>8{arr}};
+    `checkp(q8, "'{'h11, 'h22, 'h33, 'h44}");
+    dyn8 = {>>{arr}};
+    `checkp(dyn8, "'{'h11, 'h22, 'h33, 'h44}");
+    q8 = {<<8{arr}};
+    `checkp(q8, "'{'h44, 'h33, 'h22, 'h11}");
+    dyn8 = {<<16{arr}};
+    `checkp(dyn8, "'{'h33, 'h44, 'h11, 'h22}");
+    arr2 = '{'{8'h55, 8'h66}, '{8'h77, 8'h88}};
+    q8 = {>>{arr2}};
+    `checkp(q8, "'{'h55, 'h66, 'h77, 'h88}");
+    // Zero-filled on the right to a whole number of elements
+    arr11 = '{11'h5bc, 11'h7ef, 11'h123};
+    q16 = {>>{arr11}};
+    `checkp(q16, "'{'hb79f, 'hbc91, 'h8000}");
+    sarr = '{'{4'h9, 3'h5}, '{4'hb, 3'h2}};
+    q8 = {>>{sarr}};
+    `checkp(q8, "'{'h9b, 'h68}");
+    earr = '{7'h11, 7'h22, 7'h33};
+    eq7 = {>>{earr}};
+    `checkp(eq7, "'{'h11, 'h22, 'h33}");
+    edyn7 = {<<7{earr}};
+    `checkp(edyn7, "'{'h33, 'h22, 'h11}");
   endtask
 
   initial begin

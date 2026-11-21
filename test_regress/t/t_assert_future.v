@@ -17,6 +17,8 @@ module t (
   endclocking
 
   logic a;
+  sub_derived sub_derived (.clk);
+
   int cyc = 0;
 
   //PASSES:
@@ -47,8 +49,6 @@ module t (
   int count_not_steady_gclk;  // Counts changes
   assert property (@(posedge clk) $steady_gclk(a))
   else count_not_steady_gclk = count_not_steady_gclk + 1;
-
-  sub_derived sub_derived (.clk);
 
   // A value that does not start at zero, so the first tick is checked against a real value
   logic [6:0] x = 7'h55;

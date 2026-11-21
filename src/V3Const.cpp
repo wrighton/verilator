@@ -957,10 +957,10 @@ class ConstVisitor final : public VNVisitor {
     bool m_hasJumpDelay = false;  // JumpGo or Delay under this loop
     bool m_hasLoopTest = false;  // Contains AstLoopTest
     bool m_underRecFunc = false;  // Under a recursive function
+    const AstNodeBiop* m_bitwiseFromLogicp = nullptr;  // And/Or just converted from LogAnd/LogOr
     // Cond made by the last ifSameAssign transform. Its operands are simplified and its values
     // gate trees, which later edits keep. Deletes are deferred, so no other node gets its address.
     const AstCond* m_ifSameAssignCondp = nullptr;
-    const AstNodeBiop* m_bitwiseFromLogicp = nullptr;  // And/Or just converted from LogAnd/LogOr
     // Last And/Or converted from a pure LogAnd/LogOr, still pure while there was no edit since
     const AstNode* m_pureBitwisep = nullptr;
     uint64_t m_pureBitwiseEditCnt = 0;  // AstNode::editCountGbl() when m_pureBitwisep was made
@@ -3657,13 +3657,6 @@ class ConstVisitor final : public VNVisitor {
         }
     }
 
-    void visit(AstCond* nodep) override {
-        // The iterator revisits a Cond made by ifSameAssign next, with its statement. Its
-        // operands are already simplified, and walking them again on every level of an if/else
-        // chain would be quadratic.
-        visitGen(nodep, nodep != m_ifSameAssignCondp);
-    }
-
     // Iterate the operands of an And/Or, unless it was just converted from a LogAnd/LogOr
     void iterateBitwiseOperands(AstNodeBiop* nodep) {
         if (!m_bitwiseFromLogicp) {
@@ -3680,6 +3673,12 @@ class ConstVisitor final : public VNVisitor {
     void visit(AstOr* nodep) override {
         iterateBitwiseOperands(nodep);
         visitGen(nodep);
+    }
+    void visit(AstCond* nodep) override {
+        // The iterator revisits a Cond made by ifSameAssign next, with its statement. Its
+        // operands are already simplified, and walking them again on every level of an if/else
+        // chain would be quadratic.
+        visitGen(nodep, nodep != m_ifSameAssignCondp);
     }
 
     void visit(AstCAwait* nodep) override {
@@ -4592,7 +4591,7 @@ class ConstVisitor final : public VNVisitor {
         }
 
         // JumpGo as last statement in target JumpBlock (including last in a last sub-list of
-        // an 'if' when doing expensive, see visit(AstIf)), is a no-op, remove it.
+        // an 'if' when doing expensive, see visit(AstNodeIf)), is a no-op, remove it.
         // TODO: it would be enough if the sub-list was not a branch.
         if (!nodep->nextp()) {
             const AstNode* const abovep = nodep->abovep();
@@ -4642,9 +4641,9 @@ class ConstVisitor final : public VNVisitor {
     TREE_SKIP_VISIT("AssocSel");
     TREE_SKIP_VISIT("CAwait");
     TREE_SKIP_VISIT("Cond");
-    TREE_SKIP_VISIT("Or");
     TREE_SKIP_VISIT("Extend");
     TREE_SKIP_VISIT("ExtendS");
+    TREE_SKIP_VISIT("Or");
 
     //-----
     //  "AstNODETYPE {             # bracket not paren
@@ -4836,6 +4835,7 @@ class ConstVisitor final : public VNVisitor {
     TREEOP ("AstShiftL{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstShiftR{operandShiftShift(nodep)}",      "replaceShiftShift(nodep)");
     TREEOP ("AstWordSel{operandWordOOB(nodep)}",        "replaceZero(nodep)");
+    TREEOPV("AstCvtPackString{$lhsp.castNodeStream, packStreamOperand(VN_AS(nodep->lhsp(),, NodeStream))}", "DONE");
     TREEOPV("AstNodeStream{m_params, packStreamOperand(nodep)}", "DONE");
     // Compress out EXTENDs to appease loop unroller
     TREEOPV("AstEq    {$rhsp.castExtend,operandBiExtendConstShrink(nodep)}",    "DONE");
@@ -5197,8 +5197,10 @@ void V3Const::collectFixedAggregateTerms(VNDeleter& deleter, AstNodeExpr* const 
                 AstNodeExpr* const valuep = consp->valuep(index - adtypep->lo());
                 UASSERT_OBJ(valuep, consp, "Constant array element missing");
                 selp = valuep->cloneTree(false);
-            } else if (slicep) {
-                // Select from the sliced array, as a slice is a copy that cannot be written
+            } else if (slicep && VN_IS(slicep->lsbp(), Const)) {
+                // Select from the sliced array, as a slice is a copy that cannot be written.
+                // A variable slice is selected from in V3Slice, after V3Unknown checks that
+                // the whole slice is within the array.
                 const int offset = slicep->declRange().lo() + index - adtypep->lo();
                 selp = new AstArraySel{flp, slicep->fromp()->cloneTree(false, warnImpure), offset};
             } else {

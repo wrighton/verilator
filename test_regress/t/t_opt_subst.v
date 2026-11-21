@@ -21,7 +21,15 @@ class Cls;
   int d[];
   int m[int];
   pair_t s;
+  int aq[int][$];
+  function void filter(int v);
+    foreach (aq[k]) aq[k] = aq[k].find with (item != v);
+  endfunction
 endclass
+
+typedef struct {
+  int q[$];
+} qs_t;
 
 module t (
     input clk

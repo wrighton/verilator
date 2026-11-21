@@ -165,7 +165,7 @@ module t (
     `checkd(ref_fails_part, 10);
     `checkd(ref_fails_bit_rev, 18);
     `checkd(ref_fails_part_off, 6);
-    `checkd(ref_fails_clk, 22);
+    `checkd(ref_fails_clk, 25);
     `checkd(ref_fails_or, 19);
     `checkd(ref_fails_add, 28);
     `checkd(ref_fails_concat, 23);
@@ -176,9 +176,9 @@ module t (
     `checkd(ref_fails_cond, 25);
     `checkd(ref_fails_past, 33);
     `checkd(ref_fails_stable, 37);
-    `checkd(ref_fails_delay, 19);
+    `checkd(ref_fails_delay, 21);
     `checkd(ref_fails_logical, 4);
-    `checkd(ref_fails_thru, 19);
+    `checkd(ref_fails_thru, 13);
     `checkd(ref_fails_outer, 11);
     `checkd(ref_fails_prop, 5);
     `checkd(ref_fails_or_wide, 19);

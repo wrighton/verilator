@@ -4,8 +4,12 @@
       |                                     ^~~
                    ... For warning description see https://verilator.org/warn/COVERIGN?v=latest
                    ... Use "/* verilator lint_off COVERIGN */" and lint_on around source to disable this message.
-%Warning-COVERIGN: t/t_debug_emitv.v:649:12: Unsupported: Bin set_covergroup_expression.
+%Warning-COVERIGN: t/t_debug_emitv.v:638:12: Unsupported: Array of default cover bins 'remaining' (treated as one bin).
                                            : ... note: In instance 't'
-  649 |       bins selected[] = cg_set_values;
+  638 |       bins remaining[] = default;
+      |            ^~~~~~~~~
+%Warning-COVERIGN: t/t_debug_emitv.v:653:12: Unsupported: Bin set_covergroup_expression.
+                                           : ... note: In instance 't'
+  653 |       bins selected[] = cg_set_values;
       |            ^~~~~~~~
 %Error: Exiting due to
