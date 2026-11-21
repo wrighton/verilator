@@ -176,6 +176,7 @@ bool AstVar::sameNode(const AstNode* samep) const {
     if (isAssertLocal() != asamep->isAssertLocal()) return false;
     return m_name == asamep->m_name && varType() == asamep->varType()
            && covergroupRefMember() == asamep->covergroupRefMember()
+           && resolveWrittenInput() == asamep->resolveWrittenInput()
            && libInoutId() == asamep->libInoutId() && libInoutEnable() == asamep->libInoutEnable();
 }
 
