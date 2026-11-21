@@ -1119,7 +1119,9 @@ packageFront<nodeModulep>:
                 yPACKAGE lifetimeE idAny ';'
                         { $$ = new AstPackage{$<fl>3, *$3, PARSEP->libname()};
                           if ($$->name() == "std") {
-                              if ($$->fileline()->filename() != V3Options::getStdPackagePath()) {
+                              // Trust the std package input of Verilator, not a file name that a
+                              // line directive gives (IEEE 1800-2023 22.12)
+                              if (!PARSEP->stdPackageInput()) {
                                   $$->v3error("Redeclaring the 'std' package is not allowed");
                               } else {
                                   PARSEP->rootp()->stdPackagep(VN_AS($$, Package));
