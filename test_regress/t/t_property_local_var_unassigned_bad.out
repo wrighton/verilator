@@ -7,4 +7,16 @@
                                                      : ... note: In instance 't'
    27 |     a |=> (q == v) ##1 (d == v);
       |                 ^
+%Error: t/t_property_local_var_unassigned_bad.v:63:46: Local variable 'v' is referenced but never assigned (IEEE 1800-2023 16.10)
+                                                     : ... note: In instance 't'
+   63 |     @(posedge clk) ((1, a = u) ##1 1'b1, b = v) |=> (a == b);
+      |                                              ^
+%Error: t/t_property_local_var_unassigned_bad.v:63:29: Local variable 'u' is referenced but never assigned (IEEE 1800-2023 16.10)
+                                                     : ... note: In instance 't'
+   63 |     @(posedge clk) ((1, a = u) ##1 1'b1, b = v) |=> (a == b);
+      |                             ^
+%Error: t/t_property_local_var_unassigned_bad.v:68:38: Local variable 'u' is referenced but never assigned (IEEE 1800-2023 16.10)
+                                                     : ... note: In instance 't'
+   68 |     @(posedge clk) valid ##1 (cyc != u);
+      |                                      ^
 %Error: Exiting due to

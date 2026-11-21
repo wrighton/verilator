@@ -7,8 +7,4 @@
                                                             : ... note: In instance 't'
    23 |   assert property (p_noncons($));
       |                    ^~~~~~~~~
-%Error-UNSUPPORTED: t/t_property_arg_unbounded_unsup.v:19:28: Unsupported: [=M:N] nonconsecutive range repetition (IEEE 1800-2023 16.9.2)
-                                                            : ... note: In instance 't'
-   19 |     @(posedge clk) a |=> b [=1:r];
-      |                            ^~
 %Error: Exiting due to

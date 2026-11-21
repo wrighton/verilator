@@ -55,4 +55,17 @@ module t (
   endproperty
   assert property (@(posedge clk) p_formal(d));
 
+  // Bad: never assigned, also when read in values that match items assign
+  int cyc;
+  logic valid;
+  property p_nested_items;
+    int a, b, u, v;
+    @(posedge clk) ((1, a = u) ##1 1'b1, b = v) |=> (a == b);
+  endproperty
+  assert property (p_nested_items);
+  property p_never_assigned;
+    int u;
+    @(posedge clk) valid ##1 (cyc != u);
+  endproperty
+  assert property (p_never_assigned);
 endmodule
