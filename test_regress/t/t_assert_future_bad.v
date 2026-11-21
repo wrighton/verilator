@@ -53,6 +53,9 @@ module t (
 
   sub u_sub (.a(a), .clk(clk));
 
+  // An immediate assertion expression is not a property or sequence expression
+  always @(posedge clk) assert ($future_gclk(a));
+
   initial $stop;
 
 endmodule
