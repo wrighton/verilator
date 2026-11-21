@@ -104,7 +104,7 @@ class VlCoroutineHandle final {
     VlProcessRef m_process;  // Data of the suspended process, null if not needed
     VlFileLineDebug m_fileline;  // Source location, for debug
 
-    void destroy();  // Clean up a nonempty handle
+    void destroy();  // Clean up a nonempty handle, keeping the current process
 
 public:
     // CONSTRUCTORS
@@ -559,8 +559,17 @@ public:
 // Return value of a coroutine. Used for chaining coroutine suspension/resumption.
 
 class VlCoroutine final {
-public:
     // MEMBERS
+    // The coroutine may make its own process current, so make the caller's current again when
+    // the call returns to the caller (IEEE 1800-2023 18.14.1). Not owned, see
+    // VlProcess::currentp().
+    VlProcess* const m_callerProcessp = VlProcess::currentp();
+    // False once the caller awaits this coroutine and suspends with it: the caller is then
+    // resumed, or destroyed, later, when that process may not be the caller's to make current.
+    // Also false once moved from, so only one object restores.
+    bool m_restoreCaller = true;
+
+public:
     VlPromise* m_promisep;  // The promise created for this coroutine
 
     // TYPES
@@ -576,12 +585,15 @@ public:
     // Move. Update the pointers each time the return object is moved
     // cppcheck-suppress noExplicitConstructor
     VlCoroutine(VlCoroutine&& other)
-        : m_promisep{std::exchange(other.m_promisep, nullptr)} {
+        : m_callerProcessp{other.m_callerProcessp}
+        , m_restoreCaller{std::exchange(other.m_restoreCaller, false)}
+        , m_promisep{std::exchange(other.m_promisep, nullptr)} {
         if (m_promisep) m_promisep->m_corop = this;
     }
     ~VlCoroutine() {
         // Indicate to the promise that the return object is gone
         if (m_promisep) m_promisep->m_corop = nullptr;
+        if (m_restoreCaller) VlProcess::currentp(m_callerProcessp);
     }
 
     // METHODS
@@ -594,6 +606,7 @@ public:
     void await_suspend(std::coroutine_handle<VlPromise> awaiting_coro) {
         if (m_promisep->m_forever) awaiting_coro.promise().m_forever = true;
         m_promisep->m_continuation = awaiting_coro;
+        m_restoreCaller = false;
     }
     void await_resume() const noexcept {}
 };
