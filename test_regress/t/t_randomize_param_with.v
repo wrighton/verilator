@@ -53,9 +53,62 @@ endclass
 class BitDerived extends ParamBase #(bit);
 endclass
 
+// 'randomize()' target that is a member inherited from a parameterized class
+typedef class MemberLater;
+
+class MemberItem;
+  rand bit [6:0] x;
+  constraint x_c {x < 7'd50;}
+endclass
+
+class MemberBase #(
+    int W = 8
+);
+  MemberItem tr = new;
+endclass
+
+class MemberMid extends MemberBase #(16);
+endclass
+
+class MemberDerived extends MemberMid;
+endclass
+
+class MemberHolder extends MemberBase #(2);
+  MemberDerived d = new;
+  function int randomize_d(bit [6:0] v);
+    return d.tr.randomize() with {x == v;};
+  endfunction
+endclass
+
 typedef ParamGrandchild param_alias_t;
 
 module t;
+  bit [6:0] x;  // Must not capture the names in the 'with' clauses below
+
+  task automatic check_member_select();
+    MemberHolder holder = new;
+    MemberLater later = new;
+    int randomize_result;
+    for (int i = 0; i < 10; ++i) begin
+      x = 7'(i + 20);
+      randomize_result = holder.d.tr.randomize() with {x == local::x + 1;};
+      `checkd(randomize_result, 1)
+      `checkd(holder.d.tr.x, 7'(i + 21))
+      randomize_result = holder.tr.randomize() with {x == 7'(i);};
+      `checkd(randomize_result, 1)
+      `checkd(holder.tr.x, 7'(i))
+      randomize_result = later.tr.randomize() with {x == local::x;};
+      `checkd(randomize_result, 1)
+      `checkd(later.tr.x, 7'(i + 20))
+      randomize_result = holder.randomize_d(7'(i + 30));
+      `checkd(randomize_result, 1)
+      `checkd(holder.d.tr.x, 7'(i + 30))
+      holder.d.tr.x = 7'(i + 45);
+      randomize_result = holder.d.tr.randomize(null);
+      `checkd(randomize_result, int'(i < 5))
+    end
+  endtask
+
   initial begin
     automatic Cls #() cd = new;
     automatic Cls #(5) c5 = new;
@@ -66,6 +119,8 @@ module t;
     bit [6:0] own_value;
     bit [32:0] typed_value;
     int randomize_result;
+
+    check_member_select();
 
     `check_rand(cd, cd.x, x > 0, cd.x > 0 && cd.x <= 3);
     `check_rand(cd, cd.x, x > y, cd.x > -100 && cd.x <= 3);
@@ -109,3 +164,6 @@ module t;
     $finish;
   end
 endmodule
+
+class MemberLater extends MemberBase #(4);
+endclass
