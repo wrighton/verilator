@@ -8744,20 +8744,13 @@ class WidthVisitor final : public VNVisitor {
                 const AstNodeDType* const rhsDtp = nodep->rhsp()->dtypep()->skipRefp();
                 const bool declared
                     = hasDeclaredDType(nodep->lhsp()) && hasDeclaredDType(nodep->rhsp());
-                // Declared types get full element-type checks; avoid a second state error.
-                if (declared) {
-                    checkUnpackedArrayAssignmentCompatible(nodep, nodep->lhsp(), nodep->rhsp());
-                } else if (lhsDtp->isNonPackedArray() && rhsDtp->isNonPackedArray()
-                           && lhsDtp->elemDTypep()->isFourstate()
-                                  != rhsDtp->elemDTypep()->isFourstate()) {
-                    nodep->v3error("Assignment between 2-state and 4-state types requires "
-                                   "equivalent element types (IEEE 1800-2023 6.22.2, 7.6)"
-                                   << warnDTypes(nodep, lhsDtp, rhsDtp));
-                }
-                // Declared types were checked above, this catches e.g. method call results, but
-                // a stream target unpacks the value
+                const bool bothRefs = VN_IS(nodep->lhsp(), NodeVarRef)
+                                      && VN_IS(nodep->rhsp(), NodeVarRef);
+                // Other than between variable references, which get full element-type checks,
+                // an aggregate assigned to an integral is reported as such, but a stream target
+                // unpacks the value (IEEE 1800-2023 11.4.14)
                 if (lhsDtp->isIntegralOrPacked() && rhsDtp->isAggregateType()
-                    && !VN_IS(nodep->lhsp(), NodeStream) && !declared) {
+                    && !VN_IS(nodep->lhsp(), NodeStream) && !bothRefs) {
                     const bool needsIndex
                         = VN_IS(nodep->rhsp(), NodeVarRef) && VN_IS(rhsDtp, UnpackArrayDType);
                     const string hint = needsIndex ? "\n" + V3Error::warnMore()
@@ -8767,6 +8760,15 @@ class WidthVisitor final : public VNVisitor {
                         "Illegal assignment between unpacked aggregate and integral type "
                         "(IEEE 1800-2023 7.6)"
                         << hint << warnDTypes(nodep, lhsDtp, rhsDtp));
+                } else if (declared) {
+                    // Declared types get full element-type checks; avoid a second state error.
+                    checkUnpackedArrayAssignmentCompatible(nodep, nodep->lhsp(), nodep->rhsp());
+                } else if (lhsDtp->isNonPackedArray() && rhsDtp->isNonPackedArray()
+                           && lhsDtp->elemDTypep()->isFourstate()
+                                  != rhsDtp->elemDTypep()->isFourstate()) {
+                    nodep->v3error("Assignment between 2-state and 4-state types requires "
+                                   "equivalent element types (IEEE 1800-2023 6.22.2, 7.6)"
+                                   << warnDTypes(nodep, lhsDtp, rhsDtp));
                 }
             }
 
