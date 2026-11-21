@@ -31,9 +31,87 @@ module sub #(
   end
 endmodule
 
+// Read by the instantiating module, so instances differ only by these parameters
+module sel #(
+    parameter int M[string] = '{"x": 1},
+    parameter int N[$] = '{2},
+    parameter int P[] = '{3},
+    parameter int K = M["x"],
+    parameter string MS[string] = '{default: "missing"},
+    parameter string KS = MS["c"],
+    parameter real MR[int] = '{0: 0.0},
+    parameter bit [63:0] KR = $realtobits(MR[0])
+) ();
+  int n = N[$];
+  int nsize = N.size();
+  int p = P[P.size()-1];
+endmodule
+
 module t;
   sub u_default ();
   sub #(.M('{"x": 33, "y": 4}), .N('{5, 6}), .EXPM(33), .EXPN(6)) u_override ();
+
+  // Overridden by other parameters
+  localparam int MX7[string] = '{"x": 7};
+  localparam int MX8[string] = '{"x": 8};
+  localparam int MY7[string] = '{"y": 7};
+  localparam int MY7D[string] = '{"y": 7, default: 5};
+  localparam int N9[$] = '{8, 9};
+  localparam int P11[] = '{2: 11, default: 10};
+  sel u_sel ();
+  sel #(.M(MX7)) u_mx7 ();
+  sel #(.M(MX8)) u_mx8 ();
+  sel #(.M(MY7)) u_my7 ();
+  sel #(.M(MY7D)) u_my7d ();
+  sel #(.N(N9)) u_n9 ();
+  // A bounded queue operand is truncated before it is spliced (IEEE 1800-2023 7.10.5)
+  typedef int short_q_t[$:1];
+  typedef int long_q_t[$:2];
+  localparam int NSHORT[$] = {short_q_t'{1, 2, 3}, 9};
+  localparam int NLONG[$] = {long_q_t'{1, 2, 3}, 9};
+  sel #(.N(NSHORT)) u_nshort ();
+  sel #(.N(NLONG)) u_nlong ();
+  sel #(.P(P11)) u_p11 ();
+  // A string value resembling several entries is still one entry
+  localparam string ONE[string] = '{"a": "b\",\"c\":\"d", default: "missing"};
+  localparam string TWO[string] = '{"a": "b", "c": "d", default: "missing"};
+  sel #(.MS(ONE)) u_one ();
+  sel #(.MS(TWO)) u_two ();
+  sel #(.MS('{"a": "b\",\"c\":\"d", default: "missing"})) u_one_pattern ();
+  sel #(.MS('{"a": "b", "c": "d", default: "missing"})) u_two_pattern ();
+  // Real values are distinct by their bits, e.g. NaNs of different payloads
+  localparam bit [63:0] NAN1_BITS = 64'h7ff8_0000_0000_0001;
+  localparam bit [63:0] NAN2_BITS = 64'h7ff8_0000_0000_0002;
+  localparam real NAN1[int] = '{0: $bitstoreal(NAN1_BITS)};
+  localparam real NAN2[int] = '{0: $bitstoreal(NAN2_BITS)};
+  localparam real NEGZERO[int] = '{0: -0.0};
+  sel #(.MR(NAN1)) u_nan1 ();
+  sel #(.MR(NAN2)) u_nan2 ();
+  sel #(.MR(NEGZERO)) u_negzero ();
+  initial begin
+    `checkd(u_sel.K, 1);
+    `checkd(u_mx7.K, 7);
+    `checkd(u_mx8.K, 8);
+    `checkd(u_my7.K, 0);
+    `checkd(u_my7d.K, 5);
+    `checkd(u_sel.n, 2);
+    `checkd(u_sel.p, 3);
+    `checkd(u_n9.n, 9);
+    `checkd(u_n9.p, 3);
+    `checkd(u_p11.n, 2);
+    `checkd(u_p11.p, 11);
+    `checkd(u_nshort.nsize, 3);
+    `checkd(u_nlong.nsize, 4);
+    `checks(u_sel.KS, "missing");
+    `checks(u_one.KS, "missing");
+    `checks(u_two.KS, "d");
+    `checks(u_one_pattern.KS, "missing");
+    `checks(u_two_pattern.KS, "d");
+    `checkh(u_sel.KR, 64'h0);
+    `checkh(u_nan1.KR, NAN1_BITS);
+    `checkh(u_nan2.KR, NAN2_BITS);
+    `checkh(u_negzero.KR, 64'h8000_0000_0000_0000);
+  end
 
   initial begin
     string key;

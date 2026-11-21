@@ -529,11 +529,18 @@ class ParamProcessor final {
         return key + "}";
     }
 
+    static bool isAggregateParamValue(const AstNode* nodep) { return VN_IS(nodep, NodeCons); }
+
     string paramValueString(const AstNode* nodep) {
         if (const AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
             nodep = refp->skipRefToNonRefp();
         }
         string key = nodep->name();
+        // A value is named with its type, as the type of an operand, e.g. a queue bound, can
+        // change the value
+        if (VN_IS(nodep, NodeCons)) {
+            key = nodep->typeName() + "<"s + paramElemString(nodep->dtypep()) + ">";
+        }
         const AstConst* const constp = VN_CAST(nodep, Const);
         if (constp && constp->num().isString()) {
             // Escaped, so a string cannot imitate the separators of an aggregate value
@@ -617,12 +624,12 @@ class ParamProcessor final {
                 key += ",";
             }
             key += "}";
-        } else if (const AstConsDynArray* const consp = VN_CAST(nodep, ConsDynArray)) {
-            key += consItemsString(consp);
-        } else if (const AstConsQueue* const consp = VN_CAST(nodep, ConsQueue)) {
-            key += consItemsString(consp);
         } else if (const AstConsAssoc* const consp = VN_CAST(nodep, ConsAssoc)) {
-            key += consItemsString(consp);
+            key += paramItemsString(nullptr, consp->defaultp(), consp->itemsp());
+        } else if (const AstConsDynArray* const consp = VN_CAST(nodep, ConsDynArray)) {
+            key += paramItemsString(consp->sizep(), consp->defaultp(), consp->itemsp());
+        } else if (const AstConsQueue* const consp = VN_CAST(nodep, ConsQueue)) {
+            key += paramItemsString(consp->sizep(), consp->defaultp(), consp->itemsp());
         } else if (const AstConsWildcard* const consp = VN_CAST(nodep, ConsWildcard)) {
             key += consItemsString(consp);
         } else if (const AstClassRefDType* const classRefp = VN_CAST(nodep, ClassRefDType)) {
@@ -694,6 +701,19 @@ class ParamProcessor final {
         }
         UASSERT_OBJ(!key.empty(), nodep, "Parameter yielded no value string");
         return key;
+    }
+    // As paramValueString(), for the size, items, each with any key, and default of a container
+    template <typename T_Item>
+    string paramItemsString(const AstNodeExpr* sizep, const AstNodeExpr* defaultp,
+                            T_Item* itemsp) {
+        string key = "{";
+        if (sizep) key += "size:" + paramValueString(sizep) + ",";
+        for (const T_Item* const itemp : VNList<T_Item>{itemsp}) {
+            if (itemp->keyp()) key += paramValueString(itemp->keyp()) + ":";
+            key += paramValueString(itemp->valuep()) + ",";
+        }
+        if (defaultp) key += "default:" + paramValueString(defaultp) + ",";
+        return key + "}";
     }
     // As paramValueString(), for the element or key type of a container
     string paramElemString(const AstNodeDType* dtypep) {
@@ -1940,6 +1960,14 @@ class ParamProcessor final {
             if (!modvarp->isGParam()) {
                 pinp->v3fatalSrc("Attempted parameter setting of non-parameter: Param "
                                  << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
+            } else if (pinp->exprp()->exists([](const AstConsWildcard*) { return true; })) {
+                pinp->v3warn(E_UNSUPPORTED, "Unsupported: Parameter override value containing a "
+                                            "wildcard associative array: Param "
+                                                << pinp->prettyNameQ() << " of "
+                                                << nodep->prettyNameQ() << ".");
+                // Recover by keeping the default
+                AstNode* const exprp = pinp->exprp()->unlinkFrBack();
+                VL_DO_DANGLING(exprp->deleteTree(), exprp);
             } else if (VN_IS(pinp->exprp(), Pattern)
                        || (VN_IS(pinp->exprp(), ConsArray)
                            && arraySubDTypep(modvarp->subDTypep()))) {
