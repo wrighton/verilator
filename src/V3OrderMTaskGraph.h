@@ -358,12 +358,12 @@ public:
 
     // Add an edge to the graph, update impacted critical paths
     void addEdge(LogicMTask* fromp, LogicMTask* top);
-    // Add an edge to the graph being built, without updating critical paths, which
-    // 'initCriticalPaths' then computes for the whole graph at once. Updating them on each edge
-    // added is quadratic, e.g. along a long chain built from its start.
+    // Add an edge without updating critical paths; call 'initCriticalPaths' after the last one.
+    // Updating them on each edge added is quadratic, e.g. along a long chain built from its start.
     void addBuildEdge(LogicMTask* fromp, LogicMTask* top);
-    // Compute all critical paths, once all edges are added by 'addBuildEdge', before any
-    // 'addEdge' or 'mergeMTasks'
+    // Bring all critical paths, and those cached in the edge heaps, up to date, when each is at
+    // most its final value: after building the graph with 'addBuildEdge', or after only adding
+    // edges to a consistent graph (see 'addEdges')
     void initCriticalPaths() {
         initCriticalPaths<GraphWay::FORWARD>();
         initCriticalPaths<GraphWay::REVERSE>();
