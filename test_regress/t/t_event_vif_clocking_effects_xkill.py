@@ -16,11 +16,16 @@ test.pli_filename = "t/t_event_vif_clocking_effects_pub.cpp"
 test.compile(make_main=False,
              verilator_flags2=[
                  "--exe", "--timing", "--stats", "+define+T_XKILL", "-CFLAGS", "-DT_XKILL",
-                 test.pli_filename
+                 "--debugi-V3Timing", "4", test.pli_filename
              ])
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 2)
+test.file_grep(test.stats, r'Timing, event controls on interface events through handles\s+(\d+)',
+               0)
+test.file_grep(test.stats,
+               r'Timing, DPI export tasks that may suspend, keeping all polling\s+(\d+)', 1)
+test.file_grep(test.compile_log_filename,
+               r"Polled, the design has DPI export tasks that may suspend, wait at")
 
 test.passes()

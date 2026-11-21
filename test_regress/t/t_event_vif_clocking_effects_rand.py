@@ -12,11 +12,18 @@ import vltest_bootstrap
 test.scenarios('simulator')
 test.top_filename = "t/t_event_vif_clocking_effects.v"
 
-test.compile(verilator_flags2=["--binary", "--stats", "+define+T_RAND"])
+flags = ["--binary", "--stats", "+define+T_RAND"]
+if test.vlt_all:
+    flags += ["--debugi-V3Timing", "4"]
+test.compile(verilator_flags2=flags)
 
 test.execute()
 
 if test.vlt_all:
-    test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 0)
+    test.file_grep(test.stats,
+                   r'Timing, event controls on interface events through handles\s+(\d+)', 0)
+    test.file_grep(test.stats,
+                   r"Timing, event controls through handles with 'iff' effects\s+(\d+)", 2)
+    test.file_grep(test.compile_log_filename, r"Polled, 'iff' with effects, wait at")
 
 test.passes()

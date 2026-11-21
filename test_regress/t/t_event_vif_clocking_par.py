@@ -23,6 +23,10 @@ test.compile(verilator_flags2=flags, threads=(2 if test.vltmt else 1))
 test.execute()
 
 if test.vlt_all:
-    test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 1)
+    test.file_grep(test.stats,
+                   r'Timing, event controls on interface events through handles\s+(\d+)', 1)
+if test.vltmt:
+    # Only the MTask killing processes runs alone, not the one writing a handle
+    test.file_grep(test.stats, r'Scheduling, MTasks with process control\s+(\d+)', 1)
 
 test.passes()

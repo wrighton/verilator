@@ -12,14 +12,17 @@ import vltest_bootstrap
 test.scenarios('vlt')
 # All variables are public, so code outside the model may write the handles, and the waits
 # through them evaluate their triggers at every trigger evaluation
-test.top_filename = "t/t_event_vif_clocking_rebind.v"
+test.top_filename = "t/t_event_vif_clocking.v"
 
 test.compile(verilator_flags2=["--binary", "--stats", "--public-flat-rw"])
 
 test.execute()
 
-# No wait is listed, so the waits awaiting trigger evaluation are not ordered among listed ones
+test.file_grep(test.stats, r'Timing, event controls on interface events through handles\s+(\d+)',
+               0)
 
-test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 28)
+# No wait is listed, so the waits awaiting trigger evaluation are not ordered among listed ones
+for filename in test.glob_some(test.obj_dir + "/*.cpp"):
+    test.file_grep_not(filename, r"evaluationKeyed")
 
 test.passes()

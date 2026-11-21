@@ -16,6 +16,8 @@ test.compile(verilator_flags2=["--binary", "--stats", "+define+T_ORDER"])
 
 test.execute(all_run_flags=["+v1=1", "+v2=2", "+v3=3"])
 
-test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 1)
+test.file_grep(test.stats, r'Timing, event controls on interface events through handles\s+(\d+)',
+               1)
+test.file_grep(test.stats, r"Timing, event controls through handles with 'iff' effects\s+(\d+)", 0)
 
 test.passes()

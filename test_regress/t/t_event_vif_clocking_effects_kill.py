@@ -12,10 +12,16 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 test.top_filename = "t/t_event_vif_clocking_effects.v"
 
-test.compile(verilator_flags2=["--binary", "--stats", "+define+T_KILL"])
+test.compile(verilator_flags2=["--binary", "--stats", "+define+T_KILL", "--debugi-V3Timing", "4"])
 
 test.execute()
 
-test.file_grep(test.stats, r'Timing, event controls skipping trigger evaluations\s+(\d+)', 1)
+test.file_grep(test.stats, r'Timing, event controls on interface events through handles\s+(\d+)',
+               0)
+test.file_grep(test.stats,
+               r'Timing, triggers changing the order of evaluation, keeping all polling\s+(\d+)',
+               1)
+test.file_grep(test.compile_log_filename,
+               r"Polled, evaluating a trigger may start or end a process, wait at")
 
 test.passes()
