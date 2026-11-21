@@ -281,37 +281,18 @@ private:
             }
         }
     }
-    // Under a select only the value selected from keeps the exemption of its handle. Every
-    // other operand, an index, a bound or an argument, is a read of its own, as the index of
-    // a Sel is.
-    void iterateSelChildren(AstNode* nodep, const AstNode* basep) {
-        for (AstNode* const childp :
-             {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
-            if (!childp) continue;
-            VL_RESTORER(m_underSel);
-            if (childp != basep) m_underSel = !m_contReads;
-            iterateAndNextNull(childp);
-        }
-    }
-    void varLifetimeCheck(AstNode* nodep, AstVar* varp, bool isRead = false) {
+    void varLifetimeCheck(AstNode* nodep, AstVar* varp) {
         // Skip if we are under a member select (lhs of a dot)
         // We don't care about lifetime of anything else than rhs of a dot
         if (!m_underSel && m_contNbap) {
             std::string varType;
-            const char* clausep = "6.21";
             const AstNodeDType* const varDtp = varp->dtypep()->skipRefp();
-            if (varp->isClassMember() && !varp->lifetime().isStatic()) {
-                // Only an NBA may update a non-static class property. Reading one lasts as
-                // long as the object holding it, so a force may read it.
-                if (!m_inNba && !(isRead && m_contOutlivesCall)) varType = "Class non-static";
-            } else if (m_contOutlivesCall && varp->isFuncLocal()
-                       && (varp->isRef() || varp->isConstRef())) {
-                // A reference argument refers to a variable of the caller, which may be
-                // automatic, so only a 'ref static' argument is allowed here
-                varType = "Reference argument";
-                clausep = "13.5.2";
-            } else if (varp->lifetime().isAutomatic()
-                       && (!varp->isIO() || varp->user2() || m_contOutlivesCall)) {
+            if (m_contOutlivesCall) {
+                // Checked by outlivingRefCheck wherever the variable appears
+            } else if (varp->isClassMember() && !varp->lifetime().isStatic()) {
+                // Only an NBA may update a non-static class property
+                if (!m_inNba) varType = "Class non-static";
+            } else if (varp->lifetime().isAutomatic() && (!varp->isIO() || varp->user2())) {
                 // V3LinkParse may also make ports of static subroutines automatic, so check user2
                 varType = "Automatic lifetime";
             }
@@ -320,8 +301,7 @@ private:
             if (!varType.empty()) {
                 UINFO(1, "    Related var dtype: " << varDtp);
                 nodep->v3error(varType << " variable not allowed in " << m_contNbap
-                                       << " (IEEE 1800-2023 " << clausep
-                                       << "): " << varp->prettyNameQ());
+                                       << " (IEEE 1800-2023 6.21): " << varp->prettyNameQ());
             }
         }
     }
@@ -753,9 +733,8 @@ private:
         iterateChildren(nodep);
         editDType(nodep);
         classEncapCheck(nodep, nodep->varp(), VN_CAST(nodep->classOrPackagep(), Class));
-        if (nodep->access().isWriteOrRW() || m_contReads) {
-            varLifetimeCheck(nodep, nodep->varp(), nodep->access().isReadOnly());
-        }
+        outlivingRefCheck(nodep, nodep->varp(), m_underSel || nodep->access().isReadOnly());
+        if (nodep->access().isWriteOrRW() || m_contReads) varLifetimeCheck(nodep, nodep->varp());
         if (VN_IS(nodep, VarRef))
             nodep->name("");  // Clear to save memory; nodep->name() will work via nodep->varp()
     }
@@ -905,26 +884,34 @@ private:
             }
         }
     }
-    // An automatic handle naming a value read after the enclosing subroutine returns is gone
-    // by then. A property through the implicit 'this', a static handle and a variable of a
-    // module all last long enough.
-    void outlivingHandleCheck(AstNodeExpr* fromp) {
+    // In an assignment whose value is read after the enclosing subroutine returns, every
+    // variable naming the target or the value must live as long, wherever it appears: the
+    // value itself, the object of a member, or an index. A selected-from or object variable
+    // is read whatever its access says.
+    void outlivingRefCheck(AstNode* nodep, const AstVar* varp, bool isRead) {
         if (!m_contOutlivesCall) return;
-        // Through an element of an array of handles too, but not through another member,
-        // whose own handle this check sees in its turn
-        const AstVarRef* const refp = VN_CAST(fromp->baseFromp(false), VarRef);
-        if (!refp) return;
-        const AstVar* const varp = refp->varp();
-        if (!varp->lifetime().isAutomatic() || varp->isClassMember()) return;
-        refp->v3error("Automatic lifetime variable not allowed in "
-                      << m_contNbap << " (IEEE 1800-2023 6.21): " << varp->prettyNameQ());
+        const char* varTypep = nullptr;
+        const char* clausep = "6.21";
+        if (varp->isClassMember()) {
+            // A property lasts as long as its object, but only an NBA may update one
+            if (!isRead && !varp->lifetime().isStatic()) varTypep = "Class non-static";
+        } else if (varp->isFuncLocal() && (varp->isRef() || varp->isConstRef())) {
+            // Refers to a variable of the caller, which may be automatic
+            varTypep = "Reference argument";
+            clausep = "13.5.2";
+        } else if (varp->lifetime().isAutomatic()) {
+            varTypep = "Automatic lifetime";
+        }
+        if (!varTypep) return;
+        nodep->v3error(varTypep << " variable not allowed in " << m_contNbap << " (IEEE 1800-2023 "
+                                << clausep << "): " << varp->prettyNameQ());
     }
     void visit(AstMemberRef* nodep) override {
-        outlivingHandleCheck(nodep->fromp());
+        const int errors = V3Error::errorCount();
         {
             VL_RESTORER(m_underSel);
             m_underSel = true;
-            iterateSelChildren(nodep, nodep->fromp());
+            iterateChildren(nodep);
         }
         editDType(nodep);
         // V3Width reports these (see WidthVisitor::mailboxInternalCheck)
@@ -934,7 +921,11 @@ private:
         if (AstClassRefDType* const classrefp = VN_CAST(nodep->fromp()->dtypep(), ClassRefDType)) {
             classEncapCheck(nodep, nodep->varp(), classrefp->classp());
         }  // else might be struct, etc
-        varLifetimeCheck(nodep, nodep->varp(), nodep->access().isReadOnly());
+        // Once its object is reported, the member adds nothing
+        if (V3Error::errorCount() == errors) {
+            outlivingRefCheck(nodep, nodep->varp(), m_underSel || nodep->access().isReadOnly());
+        }
+        varLifetimeCheck(nodep, nodep->varp());
     }
     void visit(AstVar* nodep) override {
         iterateChildren(nodep);
@@ -956,23 +947,19 @@ private:
         if (nodep->method() == VCMethod::ARRAY_AT || nodep->method() == VCMethod::ARRAY_AT_WRITE
             || nodep->method() == VCMethod::DYN_AT_WRITE_APPEND)
             m_dynsizedelem = true;
-        iterateSelChildren(nodep, nodep->fromp());
+        iterateChildren(nodep);
         editDType(nodep);
     }
     void visit(AstAssocSel* nodep) override {
         VL_RESTORER(m_dynsizedelem);
         m_dynsizedelem = true;
-        iterateSelChildren(nodep, nodep->fromp());
+        iterateChildren(nodep);
         editDType(nodep);
     }
     void visit(AstWildcardSel* nodep) override {
         VL_RESTORER(m_dynsizedelem);
         m_dynsizedelem = true;
-        iterateSelChildren(nodep, nodep->fromp());
-        editDType(nodep);
-    }
-    void visit(AstSliceSel* nodep) override {
-        iterateSelChildren(nodep, nodep->fromp());
+        iterateChildren(nodep);
         editDType(nodep);
     }
     void visit(AstGetcN* nodep) override {
@@ -995,7 +982,13 @@ private:
         selLifetimeCheck(nodep, nodep);
     }
     void visit(AstArraySel* nodep) override {
-        iterateSelChildren(nodep, nodep->fromp());
+        iterateAndNextNull(nodep->fromp());
+        {
+            // The index is read, like the index of a Sel
+            VL_RESTORER(m_underSel);
+            if (!m_contReads) m_underSel = true;
+            iterateAndNextNull(nodep->bitp());
+        }
         editDType(nodep);
         selLifetimeCheck(nodep, nodep->baseFromp(/* overMembers: */ false));
     }
@@ -1003,7 +996,9 @@ private:
         {
             VL_RESTORER(m_underSel);
             if (!nodep->isLValue() && !m_contReads) m_underSel = true;
-            iterateSelChildren(nodep, nodep->fromp());
+            iterateAndNextNull(nodep->fromp());
+            if (!m_contReads) m_underSel = true;
+            iterateAndNextNull(nodep->lsbp());
         }
         editDType(nodep);
     }

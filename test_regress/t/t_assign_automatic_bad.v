@@ -83,6 +83,17 @@ module t (
     force forced = v;  // Error: force reads a constant reference argument
   endtask
 
+  class ForceObj;
+    bit m_prop;
+  endclass
+  task automatic ref_object(ref ForceObj r);
+    force forced = r.m_prop;  // Error: a reference argument names the value
+  endtask
+  task automatic cref_object(const ref ForceObj r);
+    force forced = r.m_prop;  // Error: a constant reference argument names the value
+  endtask
+  typedef struct {ForceObj obj; bit bits[2];} force_wrap_t;
+  typedef struct {force_wrap_t inner;} force_outer_t;
   class ForceCls;
     bit m_prop;
     static ForceCls s_self;
@@ -94,6 +105,9 @@ module t (
     task drive();
       force forced = m_prop;  // OK: a property lasts as long as its object
       force forced = s_self.m_prop;  // OK: property read through a static handle
+    endtask
+    task write_prop();
+      force m_prop = 1'b0;  // Error: only an NBA may update a non-static property
     endtask
     task auto_handle();
       automatic ForceCls lh = s_self;
@@ -125,6 +139,18 @@ module t (
     task auto_sel_bound();
       automatic int lo = 0;
       force forced = s_vec[lo];  // Error: an automatic index of a packed vector
+    endtask
+    task auto_struct();
+      automatic force_wrap_t w;
+      force forced = w.obj.m_prop;  // Error: an automatic struct holding the handle
+    endtask
+    task auto_struct_array();
+      automatic force_wrap_t w;
+      force forced = w.bits[0];  // Error: an automatic struct, array member
+    endtask
+    task auto_struct_nested();
+      automatic force_outer_t o;
+      force forced = o.inner.bits[1];  // Error: a nested member of an automatic struct
     endtask
   endclass
 

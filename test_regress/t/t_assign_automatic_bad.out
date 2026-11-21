@@ -27,64 +27,88 @@
                                         : ... note: In instance 't'
    83 |     force forced = v;   
       |                    ^
-%Error: t/t_assign_automatic_bad.v:100:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'lh'
+%Error: t/t_assign_automatic_bad.v:90:20: Reference argument variable not allowed in procedural continuous assignment (IEEE 1800-2023 13.5.2): 'r'
+                                        : ... note: In instance 't'
+   90 |     force forced = r.m_prop;   
+      |                    ^
+%Error: t/t_assign_automatic_bad.v:93:20: Reference argument variable not allowed in procedural continuous assignment (IEEE 1800-2023 13.5.2): 'r'
+                                        : ... note: In instance 't'
+   93 |     force forced = r.m_prop;   
+      |                    ^
+%Error: t/t_assign_automatic_bad.v:110:13: Class non-static variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'm_prop'
                                          : ... note: In instance 't'
-  100 |       force forced = lh.m_prop;   
+  110 |       force m_prop = 1'b0;   
+      |             ^~~~~~
+%Error: t/t_assign_automatic_bad.v:114:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'lh'
+                                         : ... note: In instance 't'
+  114 |       force forced = lh.m_prop;   
       |                      ^~
-%Error: t/t_assign_automatic_bad.v:103:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'h'
+%Error: t/t_assign_automatic_bad.v:117:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'h'
                                          : ... note: In instance 't'
-  103 |       force forced = h.m_prop;   
+  117 |       force forced = h.m_prop;   
       |                      ^
-%Error: t/t_assign_automatic_bad.v:107:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'la'
+%Error: t/t_assign_automatic_bad.v:121:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'la'
                                          : ... note: In instance 't'
-  107 |       force forced = la[0].m_prop;   
+  121 |       force forced = la[0].m_prop;   
       |                      ^~
-%Error: t/t_assign_automatic_bad.v:111:28: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'which'
+%Error: t/t_assign_automatic_bad.v:125:28: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'which'
                                          : ... note: In instance 't'
-  111 |       force forced = s_arr[which].m_prop;   
+  125 |       force forced = s_arr[which].m_prop;   
       |                            ^~~~~
-%Error: t/t_assign_automatic_bad.v:115:30: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'which'
+%Error: t/t_assign_automatic_bad.v:129:30: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'which'
                                          : ... note: In instance 't'
-  115 |       force forced = s_queue[which].m_prop;   
+  129 |       force forced = s_queue[which].m_prop;   
       |                              ^~~~~
-%Error: t/t_assign_automatic_bad.v:119:30: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'key'
+%Error: t/t_assign_automatic_bad.v:133:30: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'key'
                                          : ... note: In instance 't'
-  119 |       force forced = s_assoc[key].m_prop;   
+  133 |       force forced = s_assoc[key].m_prop;   
       |                              ^~~
-%Error: t/t_assign_automatic_bad.v:123:28: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'which'
+%Error: t/t_assign_automatic_bad.v:137:28: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'which'
                                          : ... note: In instance 't'
-  123 |       force forced = s_dyn[which].m_prop;   
+  137 |       force forced = s_dyn[which].m_prop;   
       |                            ^~~~~
-%Error: t/t_assign_automatic_bad.v:127:28: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'lo'
+%Error: t/t_assign_automatic_bad.v:141:28: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'lo'
                                          : ... note: In instance 't'
-  127 |       force forced = s_vec[lo];   
+  141 |       force forced = s_vec[lo];   
       |                            ^~
-%Error: t/t_assign_automatic_bad.v:137:17: Automatic lifetime variable not allowed in non-blocking timing control (IEEE 1800-2023 6.21): 'autom1'
+%Error: t/t_assign_automatic_bad.v:145:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'w'
                                          : ... note: In instance 't'
-  137 |       areg <= @(autom1) 0;   
-      |                 ^~~~~~
-%Error: t/t_assign_automatic_bad.v:138:17: Automatic lifetime variable not allowed in non-blocking timing control (IEEE 1800-2023 6.21): 'autom2'
+  145 |       force forced = w.obj.m_prop;   
+      |                      ^
+%Error: t/t_assign_automatic_bad.v:149:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'w'
                                          : ... note: In instance 't'
-  138 |       areg <= @(autom2) 0;   
+  149 |       force forced = w.bits[0];   
+      |                      ^
+%Error: t/t_assign_automatic_bad.v:153:22: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'o'
+                                         : ... note: In instance 't'
+  153 |       force forced = o.inner.bits[1];   
+      |                      ^
+%Error: t/t_assign_automatic_bad.v:163:17: Automatic lifetime variable not allowed in non-blocking timing control (IEEE 1800-2023 6.21): 'autom1'
+                                         : ... note: In instance 't'
+  163 |       areg <= @(autom1) 0;   
       |                 ^~~~~~
-%Error: t/t_assign_automatic_bad.v:162:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_a'
+%Error: t/t_assign_automatic_bad.v:164:17: Automatic lifetime variable not allowed in non-blocking timing control (IEEE 1800-2023 6.21): 'autom2'
+                                         : ... note: In instance 't'
+  164 |       areg <= @(autom2) 0;   
+      |                 ^~~~~~
+%Error: t/t_assign_automatic_bad.v:188:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_a'
                                         : ... note: In instance 't'
-  162 |     bad_a <= 1;   
+  188 |     bad_a <= 1;   
       |     ^~~~~
-%Error: t/t_assign_automatic_bad.v:163:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_o'
+%Error: t/t_assign_automatic_bad.v:189:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_o'
                                         : ... note: In instance 't'
-  163 |     bad_o <= 1;   
+  189 |     bad_o <= 1;   
       |     ^~~~~
-%Error: t/t_assign_automatic_bad.v:164:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_r'
+%Error: t/t_assign_automatic_bad.v:190:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_r'
                                         : ... note: In instance 't'
-  164 |     bad_r <= 1;   
+  190 |     bad_r <= 1;   
       |     ^~~~~
-%Error: t/t_assign_automatic_bad.v:169:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_m'
+%Error: t/t_assign_automatic_bad.v:195:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_m'
                                         : ... note: In instance 't'
-  169 |       bad_m <= 1;   
+  195 |       bad_m <= 1;   
       |       ^~~~~
-%Error: t/t_assign_automatic_bad.v:175:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'arg'
+%Error: t/t_assign_automatic_bad.v:201:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'arg'
                                         : ... note: In instance 't'
-  175 |     arg <= #1 5;
+  201 |     arg <= #1 5;
       |     ^~~
 %Error: Exiting due to
