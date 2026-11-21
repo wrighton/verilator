@@ -383,7 +383,7 @@ public:
 
 class ActiveDlyVisitor final : public VNVisitor {
 public:
-    enum CheckType : uint8_t { CT_COMB, CT_LATCH, CT_FINAL };
+    enum CheckType : uint8_t { CT_COMB, CT_CONT_ASSIGN, CT_LATCH, CT_FINAL };
 
 private:
     // MEMBERS
@@ -391,6 +391,12 @@ private:
 
     // METHODS
     void warnNonBlocking(AstNode* nodep, const char* what, const char* nbOp, const char* bOp) {
+        if (m_check == CT_CONT_ASSIGN) {
+            nodep->v3error("Non-blocking " << what << " '" << nbOp
+                                           << "' in a function called from a continuous assignment"
+                                              " (IEEE 1800-2023 13.4.4)");
+            return;
+        }
         const bool inFinal = m_check == CT_FINAL;
         const bool inLatch = m_check == CT_LATCH;
         nodep->v3warnCode(inFinal   ? V3ErrorCode::FINALDLY
@@ -557,6 +563,10 @@ class ActiveVisitor final : public VNVisitor {
         }
         if (nodep->keyword() == VAlwaysKwd::CONT_ASSIGN
             || nodep->keyword() == VAlwaysKwd::COVER_TOGGLE) {
+            // Functions inlined into a continuous assignment must not schedule events
+            if (nodep->keyword() == VAlwaysKwd::CONT_ASSIGN) {
+                ActiveDlyVisitor{nodep, ActiveDlyVisitor::CT_CONT_ASSIGN};
+            }
             moveUnderSpecial<AstSenItem::Combo>(nodep);
             return;
         }
