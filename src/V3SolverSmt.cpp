@@ -1704,11 +1704,16 @@ private:
         if (selp) return buildArraySelNameExpr(fl, selp);  // arr[i] -> dynamic name
         return nullptr;
     }
-    // Add the solver name, lsb and width (0 for all bits) of solve-before operand 'exprp'
-    void addSolveBeforePins(AstCMethodHard* const callp, AstNodeExpr* exprp) {
+    // Add the solver name, lsb and width (0 for all bits) of solve-before operand 'exprp'.
+    // Return false, adding nothing, if the operand has no solver name.
+    bool addSolveBeforePins(AstCMethodHard* const callp, AstNodeExpr* exprp) {
         // A packed struct member or another part of a variable or array element is a select,
         // possibly of a select
         FileLine* const fl = exprp->fileline();
+        AstNodeExpr* basep = exprp;
+        while (const AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
+        AstNodeExpr* const namep = buildSolveBeforeNameExpr(fl, basep);
+        if (!namep) return false;
         AstNodeExpr* lsbp = nullptr;
         AstNodeExpr* validp = nullptr;  // Whether each select of a select is in its range
         uint32_t width = 0;
@@ -1730,11 +1735,10 @@ private:
         }
         // An lsb past the end of any variable, which the runtime does not order
         if (validp) lsbp = new AstCond{fl, validp, lsbp, new AstConst{fl, ~0U}};
-        AstNodeExpr* const namep = buildSolveBeforeNameExpr(fl, exprp);
-        UASSERT_OBJ(namep, exprp, "Unexpected expression type in solve...before");
         callp->addPinsp(namep);
         callp->addPinsp(lsbp ? lsbp : new AstConst{fl, 0});
         callp->addPinsp(new AstConst{fl, width});
+        return true;
     }
 
     bool editFormat(AstNodeExpr* nodep) {
@@ -5626,6 +5630,7 @@ private:
                 // removes only those registered before it (IEEE 1800-2023 18.5.13.2)
                 hoistp = newGuardedDisableSoftp(condp, exprp);
                 VL_DO_DANGLING(pushDeletep(exprp), exprp);
+                if (!hoistp) continue;  // Reported unsupported
             } else if (foreachp) {
                 // 'if (c) foreach (...) body' is 'foreach (...) if (c) body'
                 foreachp->addBodyp(new AstConstraintIf{fl, condp->cloneTreePure(false),
@@ -5643,14 +5648,16 @@ private:
     // Setup statements applying a 'disable soft' under guard condp, which is sampled like a
     // constraint guard (IEEE 1800-2023 18.5.12): ERROR fails randomize(), TRUE applies the
     // directive and FALSE drops it. With random variables in the guard and neither proven, the
-    // guard is read before solving, as it was before its state parts were sampled.
+    // guard is read before solving, as it was before its state parts were sampled. Return
+    // nullptr if the directive is unsupported.
     AstBegin* newGuardedDisableSoftp(AstNodeExpr* const condp, AstConstraintExpr* const exprp) {
         FileLine* const fl = exprp->fileline();
+        AstNodeStmt* const disablep = buildDisableSoftCallStmt(exprp);
+        if (!disablep) return nullptr;
         AstBegin* const blockp
             = new AstBegin{fl, m_uniqueNames.get("__VguardDisable"), nullptr, true};
         GuardFlagsMap flags;
         GuardResult result = newGuardResult(condp, blockp, flags);
-        AstNodeStmt* const disablep = buildDisableSoftCallStmt(exprp);
         AstNodeStmt* stmtp = nullptr;
         if (condp->user1()) {
             stmtp = new AstIf{fl, newGuardResidualp(condp, flags), disablep->cloneTree(false)};
@@ -5869,8 +5876,19 @@ private:
                     fl, new AstVarRef{fl, genModp, m_genp, VAccess::READWRITE},
                     VCMethod::RANDOMIZER_SOLVE_BEFORE};
                 callp->dtypeSetVoid();
-                addSolveBeforePins(callp, lhsp);
-                addSolveBeforePins(callp, rhsp);
+                if (!addSolveBeforePins(callp, lhsp)) {
+                    lhsp->v3warn(E_UNSUPPORTED,
+                                 "Unsupported: solve...before of this selection of a"
+                                 " variable or its size.");
+                    VL_DO_DANGLING(callp->deleteTree(), callp);
+                    break;
+                }
+                if (!addSolveBeforePins(callp, rhsp)) {
+                    rhsp->v3warn(E_UNSUPPORTED, "Unsupported: solve...before of this selection"
+                                                " of a variable or its size.");
+                    VL_DO_DANGLING(callp->deleteTree(), callp);
+                    continue;
+                }
                 nodep->addHereThisAsNext(callp->makeStmt());
             }
         }
