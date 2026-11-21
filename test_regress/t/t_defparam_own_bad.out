@@ -1,0 +1,14 @@
+%Error: t/t_defparam_own_bad.v:11:17: In defparam, parameter 'NONE' never declared
+   11 |   defparam NONE = 2;   
+      |                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_own_bad.v:12:14: In defparam, 'L' is a local parameter (IEEE 1800-2023 6.20.4)
+   12 |   defparam L = 2;   
+      |              ^
+%Error: t/t_defparam_own_bad.v:13:14: In defparam, 'v' is not a parameter
+   13 |   defparam v = 2;   
+      |              ^
+%Error: t/t_defparam_own_bad.v:15:16: In defparam under generate block 'g', parameter 'P' is outside that generate block (IEEE 1800-2023 23.10.1)
+   15 |     defparam P = 2;   
+      |                ^
+%Error: Exiting due to
