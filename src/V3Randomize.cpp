@@ -2250,6 +2250,7 @@ class RandomizeVisitor final : public VNVisitor {
         if (taskp) return taskp;
         taskp = new AstTask{classp->fileline(), name};
         taskp->classMethod(true);
+        taskp->isVirtual(classp->isExtended());
         classp->addMembersp(taskp);
         m_memberMap.insert(classp, taskp);
         return taskp;
