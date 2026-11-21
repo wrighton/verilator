@@ -1,0 +1,23 @@
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:23:17: Unsupported: defparam with arrayed instance
+   23 |   defparam u_arr[1].P = 2;   
+      |                 ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:24:24: Unsupported: defparam with arrayed instance
+   24 |   defparam u_wrap.u_arr[0].P = 2;   
+      |                        ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:25:13: Unsupported: defparam with instance select other than one integer literal
+   25 |   defparam g[IDX].u.P = 3;   
+      |             ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:26:18: Unsupported: defparam with instance select other than one integer literal
+   26 |   defparam g[0].u[IDX].P = 3;   
+      |                  ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:27:21: Unsupported: defparam with instance select other than one integer literal
+   27 |   defparam u_arr2[1][0].P = 4;   
+      |                     ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:28:13: Unsupported: defparam with instance select other than one integer literal
+   28 |   defparam g[1'bx].u.P = 5;   
+      |             ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:29:13: Unsupported: defparam with instance select other than one integer literal
+   29 |   defparam g[2'sb11].u.P = 5;   
+      |             ^
+%Error: Exiting due to
