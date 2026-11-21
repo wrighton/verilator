@@ -1111,6 +1111,7 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_EVALUATION_KEYED,             "evaluationKeyed",        false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_EVENT_EVALUATION,             "eventEvaluation",        false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
     macro(SCHED_EVENT_TRIGGER,                "eventTrigger",           false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
+    macro(SCHED_EVENT_TRIGGER_REACTIVE,       "eventTriggerReactive",   false,  CLEAN,  AWAITABLE,  "rrrrrw", "") \
     macro(SCHED_HANDLES_WRITTEN,              "handlesWritten",         false,  CLEAN,  false,      "", "") \
     macro(SCHED_POST_UPDATE,                  "postUpdate",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_QUEUE_WAIT,                   "queueWait",              false,  CLEAN,  AWAITABLE,  "rrrrr", "") \
