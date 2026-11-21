@@ -2127,7 +2127,7 @@ class ParamProcessor final {
         }
         if (VN_IS(nodep, Cell) && nestedDefparamp(srcModp)) {
             // Defparams may give each instance different values (see nodeDeparam)
-            longname += "__Vdefparam" + V3Hash{srcModp->someInstanceName()}.toString();
+            longname += "__Vdefparam" + V3Hash{srcModp->someInstancePath()}.toString();
             any_overrides = true;
         }
 
@@ -2479,7 +2479,8 @@ public:
                 if (baseRefp->paramsp() && classp == m_visitModp && m_visitBaseQueued) break;
                 if (!m_inheritBaseps.emplace(baseRefp).second) break;
                 VL_RESTORER(m_modp);
-                nodeDeparam(baseRefp, baseRefp->classp(), classp, classp->someInstanceName());
+                nodeDeparam(baseRefp, baseRefp->classp(), classp, classp->someInstanceName(),
+                            classp->someInstancePath());
                 m_inheritBaseps.erase(baseRefp);
             }
             classp = baseRefp->classp();
@@ -2526,7 +2527,7 @@ public:
     }
 
     AstNodeModule* nodeDeparam(AstNode* nodep, AstNodeModule* srcModp, AstNodeModule* modp,
-                               const string& someInstanceName) {
+                               const string& someInstanceName, const string& someInstancePath) {
         // Return new or reused de-parameterized module
         m_modp = modp;
         // Cell: Check for parameters in the instantiation.
@@ -2548,6 +2549,8 @@ public:
         }
         const string instanceName
             = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
+        const string instancePath
+            = nodeName.empty() ? someInstancePath : (someInstancePath + "." + nodeName);
 
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             for (AstPin* const pinp : cellp->paramspList()) {
@@ -2562,8 +2565,12 @@ public:
                     // No value: the defparam sets another instance of this module, or is in a
                     // generate block not built. ParamVisitor::iterateDefParams registers values
                     // before specializing any instance they may set.
-                } else if (instanceName == pinp->paramPath()
-                           || VString::endsWith(instanceName, "." + pinp->paramPath())) {
+                } else if (pinp->paramPathFromTop()
+                               ? defparamPath(instancePath) == pinp->paramPath()
+                               : (instanceName == pinp->paramPath()
+                                  || VString::endsWith(instanceName, "." + pinp->paramPath()))) {
+                    // A path from a top module names one instance; other paths match any
+                    // instance whose path, as written, ends with them (see LinkDotParamVisitor)
                     continue;
                 }
                 VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
@@ -2586,6 +2593,7 @@ public:
         // If both are empty (interface port, not a cell), skip appending
         // to avoid double-dots in the path.
         srcModp->someInstanceName(instanceName);
+        srcModp->someInstancePath(instancePath);
         UINFO(9, "nodeDeparam SET-SRC-INST srcMod="
                      << srcModp->prettyNameQ() << " someInstanceName='"
                      << srcModp->someInstanceName() << "'" << " node=<" << AstNode::nodeAddr(nodep)
@@ -2608,6 +2616,7 @@ public:
 
         // Set name for later warnings
         newModp->someInstanceName(instanceName);
+        newModp->someInstancePath(instancePath);
 
         UINFO(9, "nodeDeparam EXIT  node=<"
                      << AstNode::nodeAddr(nodep) << ">" << " type=" << nodep->typeName()
@@ -2922,8 +2931,8 @@ class ParamVisitor final : public VNVisitor {
     string m_unlinkedTxt;  // Text for AstUnlinkedRef
     // Cells left to process (in current module), keyed by (!isIface, !inClassExtends)
     std::multimap<std::pair<bool, bool>, AstNode*> m_cellps;
-    std::unordered_map<const AstNode*, std::string>
-        m_genHierNames;  // Maps ast nodes to generated hierarchy names
+    // Maps ast nodes to generated hierarchy names, pretty and not (see m_generateHierPath)
+    std::unordered_map<const AstNode*, std::pair<std::string, std::string>> m_genHierNames;
     std::map<const AstRefDType*, bool>
         m_isCircular;  // Stores information whether `AstRefDType` is circular
     using VarsByName = std::unordered_map<std::string, AstVar*>;
@@ -2938,6 +2947,7 @@ class ParamVisitor final : public VNVisitor {
     VarsByName m_modIfaceRefs;  // Interface-ref Vars in current module, keyed by name
     bool m_modIfaceRefsDone = false;  // m_modIfaceRefs has been gathered for m_modp
     string m_generateHierName;  // Generate portion of hierarchy name
+    string m_generateHierPath;  // Generate portion of hierarchy name, as AstNodeModule's path
     bool m_inGenerateCond = false;  // Traversing a generate condition; see iterateGenerateCond
     bool m_inClassExtends = false;  // Traversing the base of a class
 
@@ -2960,6 +2970,7 @@ class ParamVisitor final : public VNVisitor {
         UASSERT(!m_iterateModule, "Should not nest");
         std::multimap<ParamState::WQKey, AstNodeModule*> workQueue;
         m_generateHierName = "";
+        m_generateHierPath = "";
         m_iterateModule = true;
 
         // Visit all cells under module, recursively
@@ -2991,6 +3002,7 @@ class ParamVisitor final : public VNVisitor {
                 // TODO: this really should be an assert, but classes and hier_blocks are
                 // special...
                 if (modp->someInstanceName().empty()) modp->someInstanceName(modp->origName());
+                if (modp->someInstancePath().empty()) modp->someInstancePath(modp->origName());
 
                 // Iterate the body
                 {
@@ -3017,7 +3029,7 @@ class ParamVisitor final : public VNVisitor {
                 m_cellps.erase(itim);
 
                 // Consume the generated hierarchy name for the node
-                string genHierName;
+                std::pair<string, string> genHierName;
                 const auto genHierIt = m_genHierNames.find(cellp);
                 if (genHierIt != m_genHierNames.end()) {
                     genHierName = std::move(genHierIt->second);
@@ -3041,11 +3053,12 @@ class ParamVisitor final : public VNVisitor {
                 if (!srcModp) continue;
 
                 // Update path
-                const string someInstanceName = modp->someInstanceName() + genHierName;
+                const string someInstanceName = modp->someInstanceName() + genHierName.first;
+                const string someInstancePath = modp->someInstancePath() + genHierName.second;
 
                 // Apply parameter specialization
-                if (AstNodeModule* const newModp
-                    = m_processor.nodeDeparam(cellp, srcModp, modp, someInstanceName)) {
+                if (AstNodeModule* const newModp = m_processor.nodeDeparam(
+                        cellp, srcModp, modp, someInstanceName, someInstancePath)) {
 
                     if (VN_IS(srcModp, Iface)) {
                         logTemplateLeakRefs(modp, srcModp, "after queued nodeDeparam", cellp);
@@ -3211,7 +3224,8 @@ class ParamVisitor final : public VNVisitor {
 
             AstNodeModule* const nestedSrcModp = nestedCellp->modp();
             if (AstNodeModule* const nestedNewModp = m_processor.nodeDeparam(
-                    nestedCellp, nestedSrcModp, ifaceModp, ifaceModp->someInstanceName())) {
+                    nestedCellp, nestedSrcModp, ifaceModp, ifaceModp->someInstanceName(),
+                    ifaceModp->someInstancePath())) {
                 if (nestedNewModp != nestedSrcModp) {
                     // Constify the nested clone's params so its types have correct widths.
                     for (AstNode* const sp : nestedNewModp->stmtspList()) {
@@ -3328,7 +3342,7 @@ class ParamVisitor final : public VNVisitor {
     // A generic visitor for cells and class refs
     void visitCellOrClassRef(AstNode* nodep, bool isIface) {
         // Must do ifaces first, so push to list and do in proper order
-        m_genHierNames.emplace(nodep, m_generateHierName);
+        m_genHierNames.emplace(nodep, std::make_pair(m_generateHierName, m_generateHierPath));
 
         // Deparameterize iface cells early so types are available for lparams.
         if (isIface && VN_CAST(nodep, Cell) && VN_CAST(nodep, Cell)->paramsp()) {
@@ -3336,7 +3350,8 @@ class ParamVisitor final : public VNVisitor {
             if (!cellParamsReferenceIfacePorts(cellp)) {
                 AstNodeModule* const srcModp = cellp->modp();
                 AstNodeModule* const newModp = m_processor.nodeDeparam(
-                    cellp, srcModp, m_modp, m_modp->someInstanceName() + m_generateHierName);
+                    cellp, srcModp, m_modp, m_modp->someInstanceName() + m_generateHierName,
+                    m_modp->someInstancePath() + m_generateHierPath);
                 // Retarget template REFDTYPEs to the clone's types.
                 if (V3LinkDotIfaceCapture::enabled() && cellp->modp() != srcModp) {
                     m_processor.retargetIfaceRefs(m_modp, cellp->name());
@@ -3659,8 +3674,8 @@ class ParamVisitor final : public VNVisitor {
         if (!cellp->paramsp()) return;
         if (!VN_IS(cellp->modp(), Iface)) return;
         AstNodeModule* const srcModp = cellp->modp();
-        AstNodeModule* const newModp
-            = m_processor.nodeDeparam(cellp, srcModp, m_modp, m_modp->someInstanceName());
+        AstNodeModule* const newModp = m_processor.nodeDeparam(
+            cellp, srcModp, m_modp, m_modp->someInstanceName(), m_modp->someInstancePath());
         if (newModp && newModp != srcModp) {
             if (V3LinkDotIfaceCapture::enabled()) {
                 m_processor.retargetIfaceRefs(m_modp, cellp->name());
@@ -3894,7 +3909,9 @@ class ParamVisitor final : public VNVisitor {
             VL_DO_DANGLING(m_unroller.unroll(forp, beginName), forp);
         } else {
             VL_RESTORER_COPY(m_generateHierName);
+            VL_RESTORER_COPY(m_generateHierPath);
             m_generateHierName += "." + nodep->prettyName();
+            m_generateHierPath += "." + nodep->name();
             iterateDefParams(nodep->itemsp());
             iterateChildren(nodep);
         }

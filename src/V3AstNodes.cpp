@@ -3670,6 +3670,7 @@ void AstPin::dump(std::ostream& str) const {
     }
     if (param()) str << " [PAR]";
     if (!paramPath().empty()) str << " paramPath=" << paramPath();
+    if (paramPathFromTop()) str << " [FROMTOP]";
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
 }
@@ -3677,6 +3678,7 @@ void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
+    dumpJsonBoolFuncIf(str, paramPathFromTop);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
     dumpJsonGen(str);
 }

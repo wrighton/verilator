@@ -205,6 +205,8 @@ private:
     VSymGraph m_mods;  // Symbol table of all module names
     VSymEnt* m_dunitEntp = nullptr;  // $unit entry
     VSymEnt* m_packageEntp = nullptr;  // Root of global package names
+    // Defparam -> scope of each instance of it, until LinkDotParamVisitor uses them
+    std::unordered_map<const AstDefParam*, std::vector<VSymEnt*>> m_defParamScopes;
     std::multimap<std::string, VSymEnt*>
         m_nameScopeSymMap;  // Map of scope referenced by non-pretty textual name
     std::set<std::pair<AstNodeModule*, std::string>>
@@ -330,6 +332,16 @@ public:
         }
     }
 
+    void defParamScope(const AstDefParam* nodep, VSymEnt* symp) {
+        m_defParamScopes[nodep].push_back(symp);
+    }
+    // Move the scopes of the defparam to scopesr, the last one found being the last
+    void takeDefParamScopes(const AstDefParam* nodep, std::vector<VSymEnt*>& scopesr) {
+        const auto it = m_defParamScopes.find(nodep);
+        UASSERT_OBJ(it != m_defParamScopes.end(), nodep, "Defparam not in any scope");
+        scopesr = std::move(it->second);
+        m_defParamScopes.erase(it);
+    }
     VSymEnt* rootEntp() const { return m_syms.rootp(); }
     VSymEnt* dunitEntp() const { return m_dunitEntp; }
     VSymEnt* packageEntp() const { return m_packageEntp; }
@@ -774,7 +786,7 @@ private:
 
 public:
     VSymEnt* findDotted(FileLine* refLocationp, VSymEnt* lookupSymp, const string& dotname,
-                        string& baddot, VSymEnt*& okSymp, bool firstId) {
+                        string& baddot, VSymEnt*& okSymp, bool firstId, bool report = true) {
         // Given a dotted hierarchy name, return where in scope it is
         // Note when dotname=="" we just fall through and return lookupSymp
         UINFO(8, "    dottedFind se" << cvtToHex(lookupSymp) << " '" << dotname << "'");
@@ -908,7 +920,8 @@ public:
                 }
             }
             if (lookupSymp) {
-                if (const AstCell* const cellp = VN_CAST(lookupSymp->nodep(), Cell)) {
+                const AstCell* const cellp = VN_CAST(lookupSymp->nodep(), Cell);
+                if (report && cellp) {
                     if (const AstNodeModule* const modp = cellp->modp()) {
                         if (modp->hierBlock() && !leftname.empty()) {
                             refLocationp->v3error("Cannot access scope inside hierarchical block");
@@ -1535,7 +1548,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         m_statep->insertInline(aboveSymp, m_modSymp, nodep, ident);
     }
     void visit(AstDefParam* nodep) override {  // FindVisitor::
-        nodep->user1p(m_curSymp);
+        m_statep->defParamScope(nodep, m_curSymp);
         iterateChildren(nodep);
     }
     void visit(AstRefDType* nodep) override {  // FindVisitor::
@@ -2577,7 +2590,15 @@ class LinkDotParamVisitor final : public VNVisitor {
             pinImplicitExprRecurse(nodep->exprp());
         }
     }
+    // Scope the defparam's path names, found from the scope; with no diagnostics unless report
+    VSymEnt* findPath(const AstDefParam* nodep, VSymEnt* symp, const string& path, bool report) {
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        return m_statep->findDotted(nodep->fileline(), symp, path, baddot, okSymp, true, report);
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
+        std::vector<VSymEnt*> instSyms;
+        m_statep->takeDefParamScopes(nodep, instSyms);
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
         UASSERT_OBJ(targetp, nodep, "verilog.y made defparam without parseref");
@@ -2595,11 +2616,8 @@ class LinkDotParamVisitor final : public VNVisitor {
         bool hasPartSelect = false;
         const string path = extractDottedPath(nodep->pathp(), hasPartSelect);
         UASSERT_OBJ(!hasPartSelect && !path.empty(), nodep, "Unexpected defparam path shape");
-        string baddot;
-        VSymEnt* okSymp = nullptr;
-        VSymEnt* const scopeSymp = m_statep->getNodeSym(nodep);
-        VSymEnt* const foundp
-            = m_statep->findDotted(nodep->fileline(), scopeSymp, path, baddot, okSymp, true);
+        VSymEnt* const scopeSymp = instSyms.back();
+        VSymEnt* const foundp = findPath(nodep, scopeSymp, path, true);
         AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
         if (!cellp) {
             nodep->v3error("In defparam, instance " << path << " never declared");
@@ -2613,6 +2631,23 @@ class LinkDotParamVisitor final : public VNVisitor {
             // If under it, V3Param passes the value down from each instance of this module, so
             // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
             AstNodeExpr* const exprp = symp ? nullptr : nodep->rhsp()->unlinkFrBack();
+            // A path from a top module, as written, naming the same instance from each
+            // instance of this module names one instance, so V3Param matches all of it, with
+            // the names of generate blocks as in the symbol table; others are found upwards
+            // from each instance
+            string symPath;
+            for (const VSymEnt* upSymp = foundp; !symp && upSymp != m_statep->rootEntp();
+                 upSymp = upSymp->parentp()) {
+                UASSERT_OBJ(upSymp, nodep, "Instance not under the root");
+                const AstNodeModule* const modp = VN_CAST(upSymp->nodep(), NodeModule);
+                symPath = VString::dot(modp ? modp->origName() : upSymp->nodep()->name(), ".",
+                                       symPath);
+            }
+            bool fromTop = !symp && symPath == path;
+            // From an instance in a generate block not built, the path may name nothing, or a
+            // missing module, so it falls back to matching others
+            for (VSymEnt* const instSymp : instSyms)
+                fromTop = fromTop && findPath(nodep, instSymp, path, false) == foundp;
             UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
                                       << "  <= " << exprp);
             // Don't need to check the name of the defparam exists.  V3Param does.
@@ -2621,6 +2656,7 @@ class LinkDotParamVisitor final : public VNVisitor {
                                             name, exprp};
             pinp->param(true);
             pinp->paramPath(path);
+            pinp->paramPathFromTop(fromTop);
             cellp->addParamsp(pinp);
             if (!exprp) {
                 pushDeletep(nodep->pathp()->unlinkFrBack());

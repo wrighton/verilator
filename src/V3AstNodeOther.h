@@ -341,6 +341,8 @@ class AstNodeModule VL_NOT_FINAL : public AstNode {
     const string m_origName;  // Name of the module, ignoring name() changes, for dot lookup
     // dist-ast-dump-suppress  // For some user errors messages only, visible where used
     string m_someInstanceName;  // Hierarchical name of some arbitrary instance of this module.
+    // dist-ast-dump-suppress  // For defparams only, visible where used
+    string m_someInstancePath;  // m_someInstanceName with the names of generate blocks, not pretty
     string m_libname;  // Work library
     int m_depth = 0;  // 1=top module, 2=cell off top, shared things low, for -depth options
     int m_level = 0;  // 1=top module, 2=cell off top, shared things have high number
@@ -404,6 +406,8 @@ public:
     string origName() const override { return m_origName; }
     string someInstanceName() const VL_MT_SAFE { return m_someInstanceName; }
     void someInstanceName(const string& name) { m_someInstanceName = name; }
+    const string& someInstancePath() const { return m_someInstancePath; }
+    void someInstancePath(const string& path) { m_someInstancePath = path; }
     AstDefaultDisable* defaultDisablep() const { return m_defaultDisablep; }
     void defaultDisablep(AstDefaultDisable* nodep) { m_defaultDisablep = nodep; }
     bool inLibrary() const { return m_inLibrary; }
@@ -1791,6 +1795,7 @@ class AstPin final : public AstNode {
     int m_pinNum;  // Pin number
     string m_name;  // Pin name, or "" for number based interconnect
     string m_paramPath;  // Original defparam cell path, if this pin came from a defparam
+    bool m_paramPathFromTop = false;  // m_paramPath is the whole path from a top module
     bool m_param = false;  // Pin connects to parameter
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
@@ -1819,6 +1824,8 @@ public:
     void param(bool flag) { m_param = flag; }
     const string& paramPath() const { return m_paramPath; }
     void paramPath(const string& path) { m_paramPath = path; }
+    bool paramPathFromTop() const { return m_paramPathFromTop; }
+    void paramPathFromTop(bool flag) { m_paramPathFromTop = flag; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }

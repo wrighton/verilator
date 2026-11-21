@@ -1835,28 +1835,6 @@ module sub;
     endfunction
     real r;
 endmodule
-module seq_event;
-    input logic clk;
-    bit a;
-    bit b;
-    bit c;
-    sequence sq;
-    @(posedge clk) a##1 b##1 c
-    endsequence
-    initial begin
-        begin
-
-            ???? // EVENTCONTROL
-            @( __VseqEvent_h9d9f741d__0)end
-    end
-    event __VseqEvent_h9d9f741d__0;
-    cover property (@() @(posedge clk) a##1 b##1 c
-
-    ) begin
-
-        ???? // FIREEVENT
-        __VseqEvent_h9d9f741d__0end
-endmodule
 package escapes;
     typedef enum int{
         ESC_A = 32'h0,
@@ -2010,6 +1988,29 @@ endmodule
 package p;
     logic pkgvar;
 endpackage
+module seq_event__Sz461fae86;
+    input logic clk;
+    parameter bit SET = 1'h1;
+    bit a;
+    bit b;
+    bit c;
+    sequence sq;
+    @(posedge clk) a##1 b##1 c
+    endsequence
+    initial begin
+        begin
+
+            ???? // EVENTCONTROL
+            @( __VseqEvent_h9d9f741d__0)end
+    end
+    event __VseqEvent_h9d9f741d__0;
+    cover property (@() @(posedge clk) a##1 b##1 c
+
+    ) begin
+
+        ???? // FIREEVENT
+        __VseqEvent_h9d9f741d__0end
+endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
     input byte pin;

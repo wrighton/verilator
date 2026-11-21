@@ -747,9 +747,11 @@ module sub(input logic clk);
     return {31'd0, v[2]} + 32'd1;
   endfunction
   real r;
+  defparam t.seq_event.SET = 1;
 endmodule
 
 module seq_event(input logic clk);
+  parameter bit SET = 0;
   bit a, b, c;
   sequence sq;
     @(posedge clk) a ##1 b ##1 c;
