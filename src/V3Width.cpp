@@ -386,6 +386,8 @@ class WidthVisitor final : public VNVisitor {
     AstNode* m_seqUnsupp = nullptr;  // Property has unsupported node
     const AstNode* m_emptyRepOkp = nullptr;  // Repetition reduced as an empty operand of SExpr
     bool m_hasSExpr = false;  // Property has a sequence expression
+    bool m_underDisableIff = false;  // Visiting under a disable iff condition
+    std::unordered_set<const AstVar*> m_propLocalVarps;  // Local variables of current property
     const AstCell* m_cellp = nullptr;  // Current cell, whose port connections are visited
     std::vector<AstVar*> m_splitIfaceArrayVarps;  // Interface arrays split by V3Param
     const AstEnumItem* m_enumItemp = nullptr;  // Current enum item
@@ -4334,6 +4336,10 @@ class WidthVisitor final : public VNVisitor {
             // Var hasn't been widthed, so make it so.
             userIterate(nodep->varp(), nullptr);
         }
+        if (m_underDisableIff && m_propLocalVarps.count(nodep->varp())) {
+            nodep->v3error("Disable iff condition references local variable "
+                           << nodep->prettyNameQ() << " (IEEE 1800-2023 16.12)");
+        }
         if (!m_paramsOnly && nodep->varp()->isIfaceArraySplit()) {
             replaceSplitIfaceArrayRef(nodep);
             return;
@@ -7766,6 +7772,8 @@ class WidthVisitor final : public VNVisitor {
             if (!m_propertyp) V3AssertCommon::reducePlainAlways(nodep);
             userIterateAndNext(nodep->sensesp(), nullptr);
             if (nodep->disablep()) {
+                VL_RESTORER(m_underDisableIff);
+                m_underDisableIff = true;
                 iterateCheckBool(nodep, "Disable", nodep->disablep(),
                                  BOTH);  // it's like an if() condition.
             }
@@ -9138,6 +9146,13 @@ class WidthVisitor final : public VNVisitor {
         m_propertyp = nodep;
         registerLocalVars(nodep, "property");
         m_underSvaExpr = true;
+        VL_RESTORER(m_underDisableIff);
+        m_underDisableIff = false;
+        VL_RESTORER_CLEAR(m_propLocalVarps);
+        for (const AstNode* const declp : nodep->declspList()) {
+            const AstVar* const varp = VN_CAST(declp, Var);
+            if (varp && !varp->isIO()) m_propLocalVarps.emplace(varp);
+        }
         userIterateAndNext(nodep->declsp(), nullptr);
         iterateCheckSelf(nodep, "PropSpec", nodep->specp(), SELF, BOTH);
         checkLocalVarsAssigned(nodep);
