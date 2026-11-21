@@ -87,6 +87,7 @@ class InlineModModuleVertex final : public InlineModEitherVertex {
     bool mutable m_flattenedSizeValid = false;  // Whether the flattened size is valid
     size_t mutable m_instanceCount = 0;  // The number of total instances of this module
     bool mutable m_instanceCountValid = false;  // Whether the instance count is valid
+    bool m_vpiVisible = false;  // VPI can reach a variable in this module, or below it
 
 public:
     InlineModModuleVertex(InlineModGraph& graph, AstNodeModule* modp)
@@ -113,6 +114,8 @@ public:
     }
     // Mark every instance below this module for inlining
     void setFlatten();
+    bool vpiVisible() const { return m_vpiVisible; }
+    void setVpiVisible() { m_vpiVisible = true; }
 
     // Total size of module, with all hierarchy below flattened
     size_t flattenedSize() const {
@@ -280,6 +283,13 @@ class InlineModGraphBuilder final : public VNVisitor {
         if (v3Global.opt.mtasks() && nodep->threadsGroup()) {
             vtxp->setNoInlineHard("threads_group");
         }
+        // Whether VPI can reach a variable of the module, see V3Scope
+        if (v3Global.opt.vpi()) {
+            for (const AstNode* const itemp : nodep->stmtspList()) {
+                const AstVar* const varp = VN_CAST(itemp, Var);
+                if (varp && varp->isVpiVisible()) vtxp->setVpiVisible();
+            }
+        }
 
         // Iterate children
         VL_RESTORER(m_modVtxp);
@@ -357,6 +367,13 @@ class InlineModGraphBuilder final : public VNVisitor {
         iterateConst(nodep);
         // Order vertices (any topological order is fine), can't be cyclic at this point
         m_graphp->order();
+        // A module is VPI visible if a module it instantiates is, so propagate bottom up
+        if (v3Global.opt.vpi()) {
+            for (const V3GraphVertex& vtx : vlstd::reverse_view(m_graphp->vertices())) {
+                const InlineModCellVertex* const cVtxp = vtx.cast<InlineModCellVertex>();
+                if (cVtxp && cVtxp->instanceOf().vpiVisible()) cVtxp->instanceIn().setVpiVisible();
+            }
+        }
         // Check that the first vertex is the top level module (everything, including packages,
         // have a corresponding AstCell under the top level at this point).
         UASSERT_OBJ(m_graphp->vertices().frontp()->as<InlineModModuleVertex>()->modp()->isTop(),
@@ -423,7 +440,7 @@ void renameScopes(AstScope* scopep, const std::string& oldPrefix, const std::str
 
 // Merge the given scope (instance) of the inlined cell into the scope above it
 void inlineScope(AstScope* scopep, AstCell* cellp, const std::string& prefix,
-                 ScopeChildren& children) {
+                 const bool vpiVisible, ScopeChildren& children) {
     AstScope* const parentScopep = scopep->aboveScopep();
     UASSERT_OBJ(parentScopep, scopep, "Inlined scope should have a scope above");
     UINFO(6, "  Inline Scope " << scopep);
@@ -473,8 +490,8 @@ void inlineScope(AstScope* scopep, AstCell* cellp, const std::string& prefix,
         cisp->name(prefix + cisp->name());
         parentScopep->addInlinesp(cisp);
     }
-    // ... and add one for the instance we are inlining now
-    if (v3Global.opt.vpi()) {
+    // ... and add one for the instance we are inlining now, if VPI can look it up
+    if (vpiVisible) {
         parentScopep->addInlinesp(
             new AstCellInlineScope{cellp->fileline(), cellp->name(), cellp->modp()->origName()});
     }
@@ -514,7 +531,7 @@ void inlineScope(AstScope* scopep, AstCell* cellp, const std::string& prefix,
 // Inline 'cellp' and its unlinked scopes 'scopeps' into 'modp'. 'last' indicates this is the
 // last instance of the inlined module
 void inlineCell(AstNodeModule* modp, AstCell* cellp, const std::vector<AstScope*>& scopeps,
-                bool last, InlineModGraph& graph, ScopeChildren& children) {
+                bool last, const bool vpiVisible, InlineModGraph& graph, ScopeChildren& children) {
     UINFO(5, " Inline Cell  " << cellp);
     UINFO(5, " into Module  " << modp);
 
@@ -605,7 +622,9 @@ void inlineCell(AstNodeModule* modp, AstCell* cellp, const std::vector<AstScope*
     }
 
     // Merge each scope (instance) of the inlined cell into the scope above it
-    for (AstScope* const scopep : scopeps) inlineScope(scopep, cellp, prefix, children);
+    for (AstScope* const scopep : scopeps) {
+        inlineScope(scopep, cellp, prefix, vpiVisible, children);
+    }
 }
 
 // Apply all inlining decisions
@@ -662,6 +681,7 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
         InlineModModuleVertex* const iVtxp = &cVtxp->instanceOf();
         AstCell* const cellp = cVtxp->cellp();
         const bool last = iVtxp->inSize1();
+        const bool vpiVisible = iVtxp->vpiVisible();
         UASSERT_OBJ(!iVtxp->noInlineHard(), cellp, "Should not be inlining if not possible");
 
         // Update
@@ -688,7 +708,7 @@ void process(AstNetlist* netlistp, InlineModGraph& graph) {
 
         // Do it
         const auto it = cellScopeps.find(cellp);
-        inlineCell(mVtx.modp(), cellp, it->second, last, graph, children);
+        inlineCell(mVtx.modp(), cellp, it->second, last, vpiVisible, graph, children);
         cellScopeps.erase(it);
         if (dumpGraphLevel() >= 9) graph.dumpDotFilePrefixed("inlinemod-cell");
     }
