@@ -702,6 +702,17 @@ class RandomizeMarkVisitor final : public VNVisitor {
         if (nodep->name() != "randomize") {
             // Propagate user1 from children (same pattern as visit(AstNodeExpr*))
             if (m_constraintExprGenp || m_inStdWith) {
+                for (AstNode* stmtp = nodep->taskp()->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    const AstVar* const portp = VN_CAST(stmtp, Var);
+                    if (portp && portp->isWritable()) {
+                        nodep->v3error("Function " << nodep->prettyNameQ()
+                                                   << " called in constraint has output or ref"
+                                                      " argument "
+                                                   << portp->prettyNameQ()
+                                                   << " (IEEE 1800-2023 18.5.11)");
+                        break;
+                    }
+                }
                 // Only the arguments decide whether a call depends on rand variables. The object
                 // it's called on doesn't count, so a.f() isn't marked just because 'a' is rand
                 for (AstNode* const argp : nodep->argspList()) {
