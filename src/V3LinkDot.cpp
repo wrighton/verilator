@@ -212,6 +212,8 @@ private:
     std::array<ScopeAliasMap, SAMN__MAX> m_scopeAliasMap;  // Map of <lhs,rhs> aliases
     std::vector<VSymEnt*> m_ifaceVarSyms;  // List of AstIfaceRefDType's to be imported
     IfaceModSyms m_ifaceModSyms;  // List of AstIface+Symbols to be processed
+    // Generate block -> earlier same-named alternative it replaced in the symbol table
+    std::unordered_map<const VSymEnt*, VSymEnt*> m_genAltPrev;
     const VLinkDotStep m_step;  // Operational step
 
 public:
@@ -493,6 +495,9 @@ public:
         nodep->user1p(symp);
         if (name != "") checkDuplicate(abovep, nodep, name);
         // Duplicates are possible, as until resolve generates might have 2 same cells under an if
+        if (VN_IS(nodep, GenBlock)) {
+            if (VSymEnt* const prevp = abovep->findIdFlat(name)) m_genAltPrev.emplace(symp, prevp);
+        }
         abovep->reinsert(name, symp);
         return symp;
     }
@@ -759,6 +764,19 @@ public:
         }
     }
 
+    // Find name under symp, or under the generate alternatives symp replaced
+    VSymEnt* findIdGenAlt(VSymEnt* symp, const string& name, bool fallback) const {
+        // Same-named alternative blocks of a generate if/case share one symbol, the last one,
+        // until V3Param selects one (IEEE 1800-2023 27.5)
+        while (true) {
+            VSymEnt* const foundp = fallback ? symp->findIdFallback(name) : symp->findIdFlat(name);
+            if (foundp) return foundp;
+            const auto it = m_genAltPrev.find(symp);
+            if (it == m_genAltPrev.end()) return nullptr;
+            symp = it->second;
+        }
+    }
+
 private:
     VSymEnt* findWithAltFallback(VSymEnt* symp, const string& name, const string& altname) {
         VSymEnt* findp = symp->findIdFallback(name);
@@ -771,8 +789,7 @@ private:
     }
 
     VSymEnt* findWithAltFlat(VSymEnt* symp, const string& name, const string& altname) {
-        // A scoped name, e.g. 'pkg::name', which does not import a wildcard candidate of pkg
-        VSymEnt* findp = symp->findIdFlatNoRef(name);
+        VSymEnt* findp = findIdGenAlt(symp, name, false);
         if (findp) return findp;
         if (altname != "") {
             UINFO(8, "     alt flat");
@@ -992,11 +1009,7 @@ public:
         string prefix = lookupSymp->symPrefix();
         VSymEnt* foundp = nullptr;
         while (!foundp) {
-            if (fallback) {
-                foundp = lookupSymp->findIdFallback(prefix + dotname);  // Might be nullptr
-            } else {
-                foundp = lookupSymp->findIdFlat(prefix + dotname);  // Might be nullptr
-            }
+            foundp = findIdGenAlt(lookupSymp, prefix + dotname, fallback);  // Might be nullptr
             if (prefix.empty()) break;
             const string nextPrefix = removeLastInlineScope(prefix);
             if (prefix == nextPrefix) break;
@@ -5215,8 +5228,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (first) {
                 foundp = m_ds.m_dotSymp->findIdFallback(nodep->name());
             } else {
-                // A scoped name, which does not import a wildcard candidate of its scope
-                foundp = m_ds.m_dotSymp->findIdFlatNoRef(nodep->name());
+                foundp = m_statep->findIdGenAlt(m_ds.m_dotSymp, nodep->name(), false);
             }
             // In a generate block, an implicit net is local to the block, even if an enclosing
             // scope declares the name later (IEEE 1800-2023 6.10)
