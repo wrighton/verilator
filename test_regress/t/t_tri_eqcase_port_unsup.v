@@ -9,10 +9,10 @@ module t (
     output o,
     output p
 );
-  sub sub (
-      .i(i),
-      .o(o),
-      .p(p)
+  sub sub (  // Positional, so the message names the port, not a pin number
+      i,
+      o,
+      p
   );
 endmodule
 
