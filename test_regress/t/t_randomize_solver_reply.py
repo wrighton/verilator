@@ -61,8 +61,8 @@ runs = [
     ('short_model', 1, 15),  # a model missing a requested variable is not a model
     ('success', 1, 16),  # print-success echo ahead of every reply
     ('unknown_once', 2, 15),  # unknown answers one check-sat
-    ('unknown_once', 9, 16),  # unknown answers a phase diversity round; the call still passes
-    ('unknown_twice', 2, 15),  # a second unknown must not warn again
+    ('unknown_once', 9, 16),  # unknown answers a spreading check
+    ('unknown_twice', 2, 14),  # both the Packet hard check and Softy soft check must fail
     ('unknown_var', 1, 15),  # a variable that was never requested
     ('unknown_var', 4, 16),  # a spreading query answered with too many values
     ('unsupported_once', 2, 15),  # command not supported, so no status ever comes
@@ -116,5 +116,21 @@ test.execute(logfile=test.obj_dir + '/sim_wide_csa.log',
              all_run_flags=['+MODE=wide'],
              run_env='VERILATOR_SOLVER="' + test.t_dir + '/randomize_solver_tamper.py" ' +
              'TAMPER=csa_unsupported ')
+
+# Check compatible soft constraints in both solve owners, also after a chunk was kept.
+for phased in (0, 1):
+    for kept in (0, 1):
+        soft_runs = [('none', 0, 1), ('unknown_once', 2, 0), ('unsupported_once', 2, 0)]
+        if kept:
+            # Status 3 kept the highest-priority soft; status 4 checks the next one.
+            soft_runs.append(('unknown_once', 4, 0))
+        for mode, at, expected in soft_runs:
+            tag = str(phased) + '_' + str(kept) + '_' + mode + '_' + str(at)
+            test.execute(logfile=test.obj_dir + '/sim_soft_' + tag + '.log',
+                         all_run_flags=['+MODE=soft_unknown', '+PHASED=' + str(phased),
+                                        '+KEPT=' + str(kept), '+EXPECT=' + str(expected)],
+                         run_env=('VERILATOR_SOLVER="' + test.t_dir +
+                                  '/randomize_solver_tamper.py" TAMPER=' + mode +
+                                  ' TAMPER_AT=' + str(at)) if mode != 'none' else '')
 
 test.passes()
