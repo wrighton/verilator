@@ -752,16 +752,20 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         for (AstNodeStmt* const nodep : senResults.m_preUpdates) fp->addStmtsp(nodep);
         fp->addStmtsp(trigStmtsp);
         for (AstNodeStmt* const nodep : senResults.m_postUpdates) fp->addStmtsp(nodep);
-        // Add the initialization time triggers
+        // Add the initialization time triggers. There can be one for every sensitivity, so they
+        // go in their own function to be split, which is cold as it runs only once.
         if (initialTrigsp) {
             AstVarScope* const initVscp = topScopep->createTemp("__V" + name + "DidInit", 1);
+            AstCFunc* const initialFuncp
+                = util::makeSubFunction(netlistp, "_eval_triggers_initial__" + name, true);
+            initialFuncp->addStmtsp(initialTrigsp);
+            util::splitCheck(initialFuncp);
             AstIf* const ifp = new AstIf{flp, new AstNot{flp, rd(initVscp)}};
             fp->addStmtsp(ifp);
             ifp->branchPred(VBranchPred::BP_UNLIKELY);
             ifp->addThensp(util::setVar(initVscp, 1));
-            ifp->addThensp(initialTrigsp);
+            ifp->addThensp(util::callVoidFunc(initialFuncp));
         }
-        util::splitCheck(fp);
     };
     // If there are 'pre' triggers, compute them
     if (kit.m_nPreWords) {
@@ -789,7 +793,6 @@ TriggerKit TriggerKit::create(AstNetlist* netlistp,  //
         loopp->addStmtsp(new AstLoopTest{flp, loopp, new AstLt{flp, rd(nVscp), limp}});
         util::splitCheck(fp);
     }
-    // Done with the trigger computation function, split as might be large
 
     // The debug code might leak signal names, so simply delete it when using --protect-ids
     if (v3Global.opt.protectIds()) kit.m_dumpp->stmtsp()->unlinkFrBackWithNext()->deleteTree();
