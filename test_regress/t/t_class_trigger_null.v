@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2026 Cameron Waite
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 // Test for null pointer dereference when sensitivity expressions reference
 // class members. Verilator evaluates trigger expressions at simulation start,
 // even for tasks that haven't been called yet. This caused null pointer
@@ -15,6 +20,7 @@
 
 interface my_if;
   logic sig;
+  logic [127:0] wide;
 endinterface
 
 package my_pkg;
@@ -22,6 +28,7 @@ package my_pkg;
   class my_driver;
     virtual my_if vif;
     event my_event;
+    int words[$];
 
     function new(virtual my_if vif_in);
       vif = vif_in;
@@ -68,8 +75,38 @@ endpackage
 
 module t;
   my_if intf ();
+  my_if forced_intf ();
+  initial begin
+    force forced_intf.sig = 1'b1;
+    force forced_intf.wide = '1;
+  end
   my_pkg::my_driver drv;
   virtual my_if vif;
+  int wide_count = 0;
+  int wide_offset = 0;
+  always @(vif.wide[wide_offset * 2 +: 15]) if ($time > 0) wide_count <= wide_count + 1;
+  initial begin
+    intf.wide = 0;
+    #10;
+    wide_offset = 1;
+    intf.wide = 128'(3) << 2;
+    #10;
+    wide_offset = 2;
+    intf.wide = 128'(5) << 4;
+    #10;
+    `checkd(wide_count, 2);
+  end
+
+  my_pkg::my_driver initialized_drv = new(intf);
+  int size_count = 0;
+  // An unrelated hard method keeps the original non-force nullable path unchanged.
+  always @(initialized_drv.words.size()) if ($time > 0) size_count <= size_count + 1;
+  initial begin
+    #10 initialized_drv.words.push_back(1);
+    #10 initialized_drv.words.push_back(2);
+    #10;
+    `checkd(size_count, 2);
+  end
 
   int event_count;
   int posedge_count;
