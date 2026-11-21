@@ -214,6 +214,7 @@ private:
     IfaceModSyms m_ifaceModSyms;  // List of AstIface+Symbols to be processed
     // Generate block -> earlier same-named alternative it replaced in the symbol table
     std::unordered_map<const VSymEnt*, VSymEnt*> m_genAltPrev;
+    std::set<const AstVar*> m_ownDefparamVars;  // Set by a defparam in their scope
     const VLinkDotStep m_step;  // Operational step
 
 public:
@@ -278,6 +279,8 @@ public:
     VSymGraph* symsp() { return &m_syms; }
     int stepNumber() const { return static_cast<int>(m_step); }
     bool forPrimary() const { return m_step == LDS_PRIMARY; }
+    void ownDefparamVarAdd(const AstVar* varp) { m_ownDefparamVars.emplace(varp); }
+    bool ownDefparamVar(const AstVar* varp) const { return m_ownDefparamVars.count(varp); }
     bool forParamed() const { return m_step == LDS_PARAMED; }
     bool forScopeCreation() const { return m_step == LDS_SCOPED; }
 
@@ -2810,6 +2813,32 @@ class LinkDotParamVisitor final : public VNVisitor {
                                     okSymp, true)
                != nullptr;
     }
+    // Apply a defparam to parameter 'name' of the scope containing it
+    void ownScopeDefParam(AstDefParam* nodep, const string& name) {
+        // The parameter takes the value in every instance; instances' parameter value
+        // assignments to it are dropped (IEEE 1800-2023 23.10)
+        VSymEnt* const defSymp = m_statep->getNodeSym(nodep);
+        const VSymEnt* const varSymp = defSymp->findIdFallback(name);
+        AstVar* const varp = varSymp ? VN_CAST(varSymp->nodep(), Var) : nullptr;
+        const string nameQ = AstNode::prettyNameQ(name);
+        if (!varp) {
+            nodep->v3error("In defparam, parameter " << nameQ << " never declared");
+        } else if (!varp->isGParam()) {
+            nodep->v3error("In defparam, "
+                           << nameQ
+                           << (varp->isParam() ? " is a local parameter (IEEE 1800-2023 6.20.4)"
+                                               : " is not a parameter"));
+        } else if (varSymp->parentp() != defSymp) {
+            nodep->v3error("In defparam under generate block "
+                           << defSymp->nodep()->prettyNameQ() << ", parameter " << nameQ
+                           << " is outside that generate block (IEEE 1800-2023 23.10.1)");
+        } else {
+            // IEEE 1800-2023 23.10.1: Last defparam in source text wins
+            if (varp->valuep()) pushDeletep(varp->valuep()->unlinkFrBack());
+            varp->valuep(nodep->rhsp()->unlinkFrBack());
+            m_statep->ownDefparamVarAdd(varp);
+        }
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
@@ -2819,6 +2848,11 @@ class LinkDotParamVisitor final : public VNVisitor {
                                     << nodep->warnMore()
                                     << "... Suggest use instantiation with '#(."
                                     << AstNode::prettyName(name) << "(...etc...))'");
+        if (!nodep->pathp()) {
+            ownScopeDefParam(nodep, name);
+            VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+            return;
+        }
         string lookupPath;
         const string path = defParamPath(nodep->pathp(), lookupPath);
         if (path.empty()) {
@@ -4842,6 +4876,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (varp->isIO() || varp->isParam() || varp->isIfaceRef()) {
                     refVarType = varp->varType();
                     nodep->modVarp(varp);
+                    if (nodep->paramPath().empty() && m_statep->ownDefparamVar(varp)) {
+                        // Overridden by the defparam in the parameter's scope (IEEE 1800-2023
+                        // 23.10)
+                        VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                        return;
+                    }
                 } else {
                     wrongPinType = true;
                 }
