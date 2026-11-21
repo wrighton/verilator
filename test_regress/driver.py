@@ -2902,7 +2902,7 @@ class VlTest:
         self.error(msg)
 
     def file_cache_clear(self) -> None:
-        self._file_contents_cache = {}
+        pass  # File contents are not cached
 
     def file_contents(self, filename: str) -> str:
         # Not cached, as a test may regenerate a file it already read
