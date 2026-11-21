@@ -4278,6 +4278,8 @@ class WidthVisitor final : public VNVisitor {
         }
         userIterateAndNext(nodep->lhssp(), WidthVP{SELF, BOTH}.p());
         userIterateAndNext(nodep->rhssp(), WidthVP{SELF, BOTH}.p());
+        for (const AstNodeExpr* const itemp : nodep->lhsspList()) checkPrimaryRoot(itemp, false);
+        for (const AstNodeExpr* const itemp : nodep->rhsspList()) checkPrimaryRoot(itemp, false);
         // Not checked in 'randomize() with', where arguments can make other variables random
         if (!m_constraintp) return;
         checkSolveBeforeRand(nodep->lhssp());
@@ -4300,8 +4302,6 @@ class WidthVisitor final : public VNVisitor {
                                                          " (IEEE 1800-2023 18.5.9)");
             }
         }
-        for (const AstNodeExpr* const itemp : nodep->lhsspList()) checkPrimaryRoot(itemp, false);
-        for (const AstNodeExpr* const itemp : nodep->rhsspList()) checkPrimaryRoot(itemp, false);
     }
     static void reportPrimaryError(const AstNode* const nodep, const bool disableSoft) {
         nodep->v3error("Expected a variable or an array's size() in "
@@ -8139,8 +8139,8 @@ class WidthVisitor final : public VNVisitor {
         AstWith* const withp = new AstWith{fl, indexArgp, valueArgp, valueArgp->cloneTree(false)};
         withp->dtypep(elemDtp);
         {
-            VL_RESTORER(m_withp);
-            m_withp = withp;
+            VL_RESTORER_COPY(m_withArgps);
+            m_withArgps[valueArgp->name()] = valueArgp;
             iterateCheckTyped(withp, "element", withp->exprp(), elemDtp, FINAL);
         }
         AstCMethodHard* const mapp = new AstCMethodHard{fl, valuep, VCMethod::ARRAY_MAP};
