@@ -257,7 +257,6 @@ class DynScopeVisitor final : public VNVisitor {
     const VNUser3InUse m_inuser3;
 
     // STATE
-    bool m_inFunc = false;  // True if in a function
     AstNodeModule* m_modp = nullptr;  // Module we are currently under
     AstNode* m_procp = nullptr;  // Function/task/block we are currently under
     std::deque<AstNode*> m_frameOrder;  // Ordered list of frames (for determinism)
@@ -268,6 +267,7 @@ class DynScopeVisitor final : public VNVisitor {
                                         // i.e. not immediately followed by 'disable fork'
     bool m_afterTimingControl = false;  // A timing control might've be executed in the current
                                         // process
+    bool m_inNbaLhs = false;  // Under the destination of an NBA, diagnosed by V3WidthCommit
     size_t m_id = 0;  // Unique ID for a frame
     size_t m_class_id = 0;  // Unique ID for a frame class
 
@@ -344,8 +344,6 @@ class DynScopeVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_procp);
         m_procp = nodep;
-        VL_RESTORER(m_inFunc);
-        m_inFunc = VN_IS(nodep, Func);
         if (hasAsyncFork(nodep)) pushDynScopeFrame(m_procp);
         iterateChildren(nodep);
     }
@@ -415,14 +413,27 @@ class DynScopeVisitor final : public VNVisitor {
                 v3Global.setAssignsEvents();
                 isEvent = dtypep->isEvent();
             }
-            if (!isEvent && m_afterTimingControl && m_survivingForkDepth > nodep->varp()->user3()
-                && nodep->varp()->isWritable() && nodep->access().isWriteOrRW()) {
-                // The output variable may not exist after a delay, so we can't just write to it
-                nodep->v3error(
-                    "Writing to an "
-                    << nodep->varp()->verilogKwd() << " automatic variable of a "
-                    << (m_inFunc ? "function" : "task")
-                    << " after a timing control is not allowed (IEEE 1800-2023 13.2.2)");
+            if (!isEvent && !m_inNbaLhs && m_afterTimingControl
+                && m_survivingForkDepth > nodep->varp()->user3()
+                && nodep->access().isWriteOrRW()) {
+                if (nodep->varp()->isRef()) {
+                    // Reference arguments can refer to caller storage that has already expired.
+                    nodep->v3error(
+                        "Writing 'ref' argument "
+                        << nodep->prettyNameQ()
+                        << " after a timing control in a fork that may outlive the"
+                           " subroutine is not allowed (IEEE 1800-2023 9.3.2).\n"
+                        << nodep->warnMore()
+                        << "... Suggest copying it into a variable declared in the fork");
+                } else if (nodep->varp()->isWritable()
+                           && VN_IS(nodep->varp()->dtypep()->skipRefp(), AssocArrayDType)) {
+                    nodep->v3warn(
+                        E_UNSUPPORTED,
+                        "Unsupported: Writing associative array argument or return variable "
+                            << nodep->prettyNameQ()
+                            << " after a timing control in a fork that may outlive the"
+                               " subroutine.");
+                }
             }
             if (!framep->instance().initialized()) framep->createInstancePrototype();
             framep->captureVarInsert(nodep->varp());
@@ -443,7 +454,14 @@ class DynScopeVisitor final : public VNVisitor {
             forkp->addForksp(new AstForkItem{flp, nodep});
             UINFO(9, "assign new fork " << forkp);
         } else {
-            visit(static_cast<AstNodeStmt*>(nodep));
+            if (nodep->isTimingControl()) m_afterTimingControl = true;
+            iterateAndNextNull(nodep->rhsp());
+            {
+                VL_RESTORER(m_inNbaLhs);
+                m_inNbaLhs = true;
+                iterateAndNextNull(nodep->lhsp());
+            }
+            iterateAndNextNull(nodep->timingControlp());
         }
     }
     void visit(AstNode* nodep) override {

@@ -24,11 +24,16 @@ module t;
     ->>ae;  // Error
   endtask
 
+  task automatic tk2(event pe);
+    ->>pe;  // Error: argument of an automatic task
+  endtask
+
   initial begin
     ->>me;  // OK
     ->>c.e;  // OK
     ->>Cls::s_e;  // OK
     c.trig();
     tk();
+    tk2(me);
   end
 endmodule
