@@ -69,10 +69,8 @@ test.file_grep(solver_log,
 test.file_grep(solver_log, r'^# Open: \S+\n  ; sampler: default$')
 test.file_grep(solver_log, r'^  \(assert .* w #b0{19999}\)+$')
 test.file_grep(solver_log, r'^< \(\(w #b[01]{19999}\)\)$')
-# One whole command per bit of w
-test.file_grep_count(solver_log,
-                     r'^  \(assert \(= __Va\d+ \(= \(\(_ extract \d+ \d+\) w\) #b[01]\)\)\)$',
-                     19999)
+# A diversity pin on all of w is one whole command
+test.file_grep(solver_log, r'^  \(assert \(= __Va\d+ \(= w #b[01]{19999}\)\)\)$')
 test.file_grep(solver_log, r'^  \(reset\)\n\Z')
 
 test.passes()
