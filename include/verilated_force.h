@@ -387,8 +387,6 @@ public:
         assert(bitLsb <= bitMsb);
         trimElementBitRange(lsb, bitLsb, bitMsb);
     }
-
-    void touch() {}
 };
 
 #endif  // guard
