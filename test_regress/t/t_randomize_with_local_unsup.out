@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_randomize_with_local_unsup.v:10:49: Unsupported: 'local::this' without member select
+   10 |     return other.randomize() with { h == local::this; };
+      |                                                 ^~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
