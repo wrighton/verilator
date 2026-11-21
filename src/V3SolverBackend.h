@@ -122,6 +122,8 @@ class RandomizeUtil final {
 public:
     // Look through unpacked array dimensions to the element type
     static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
+    // Look through unpacked array dimensions to the element type
+    static AstNodeDType* arrayElementDTypep(AstNodeDType* dtypep) VL_MT_DISABLED;
 };
 
 //######################################################################
