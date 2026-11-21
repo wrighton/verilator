@@ -10219,6 +10219,7 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         } else if (AstConcat* const concatp = VN_CAST(nodep->sensp(), Concat)) {
             AstNodeExpr* const rhsp = concatp->rhsp()->unlinkFrBack();
+            AstNodeExpr* const condp = nodep->condp() ? nodep->condp()->unlinkFrBack() : nullptr;
             if (nodep->edgeType() == VEdgeType::ET_CHANGED) {
                 // If it's ET_CHANGED, split concatenations into multiple senitems
                 AstNodeExpr* const lhsp = concatp->lhsp()->unlinkFrBack();
@@ -10233,7 +10234,8 @@ class WidthVisitor final : public VNVisitor {
             // A sequence event control (IEEE 1800-2023 9.4.2.4)
             const AstSchemaRef* const schemaRefp = VN_CAST(nodep->sensp(), SchemaRef);
             if (schemaRefp && VN_IS(schemaRefp->schemap(), Sequence)) m_underSvaExpr = true;
-            userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
+            userIterateAndNext(nodep->sensp(), WidthVP{SELF, BOTH}.p());
+            if (nodep->condp()) iterateCheckBool(nodep, "iff condition", nodep->condp(), BOTH);
             if (nodep->edgeType().anEdge()) {
                 AstNodeDType* const sensDtp = nodep->sensp()->dtypep()->skipRefp();
                 if (sensDtp->isDouble()) {
