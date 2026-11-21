@@ -12,6 +12,11 @@
                                             : ... note: In instance 't'
    21 |   m #(.V(1 ? '{1, 2} : ARR)) i ();
       |            ^
+%Error: t/t_param_cond_pattern_unsup.v:15:19: Illegal assignment: types are not assignment compatible (IEEE 1800-2023 7.6)
+                                            : ... Left-hand data type: 'int$[0:1]'
+                                            : ... Right-hand data type: 'bit'
+   15 |     parameter int V[2] = '{0, 0}
+      |                   ^
 %Warning-WIDTHEXPAND: t/t_param_cond_pattern_unsup.v:15:19: Operator VAR 'V' expects 32 bits on the Initial value, but Initial value's CONST '1'h0' generates 1 bits.
    15 |     parameter int V[2] = '{0, 0}
       |                   ^
