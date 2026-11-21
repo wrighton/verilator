@@ -416,6 +416,11 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
     AstNodeDType* const dtypep = instVscp->dtypep()->skipRefp();
 
     // Reject types that do not support value-change comparison
+    const AstNodeDType* elemDtp = dtypep;  // Element compared by (nested) dynamic containers
+    while (VN_IS(elemDtp, QueueDType) || VN_IS(elemDtp, DynArrayDType)
+           || VN_IS(elemDtp, AssocArrayDType) || VN_IS(elemDtp, WildcardArrayDType)) {
+        elemDtp = elemDtp->subDTypep()->skipRefp();
+    }
     if (const AstBasicDType* const bdtypep = VN_CAST(dtypep, BasicDType)) {
         if (bdtypep->isEvent() || bdtypep->isString()
             || bdtypep->keyword() == VBasicDTypeKwd::CHANDLE) {
@@ -423,12 +428,15 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
                                                 << dtypep->prettyDTypeNameQ() << " type");
             return;
         }
-    } else if (!VN_IS(dtypep, PackArrayDType) && !VN_IS(dtypep, UnpackArrayDType)
-               && !VN_IS(dtypep, NodeUOrStructDType) && !VN_IS(dtypep, ClassRefDType)) {
+    } else if (elemDtp == dtypep && !VN_IS(dtypep, PackArrayDType)
+               && !VN_IS(dtypep, UnpackArrayDType) && !VN_IS(dtypep, NodeUOrStructDType)
+               && !VN_IS(dtypep, ClassRefDType)) {
         instVscp->v3warn(E_UNSUPPORTED, "Unsupported: virtual interface trigger on "
                                             << dtypep->prettyDTypeNameQ() << " type");
         return;
     }
+    // Events in a container are compared as handles, so must be assignable (shared) events
+    if (elemDtp->isEvent()) v3Global.setAssignsEvents();
 
     const auto rdInst = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::READ}; };
     const auto wrPrev = [flp](AstVarScope* vp) { return new AstVarRef{flp, vp, VAccess::WRITE}; };
