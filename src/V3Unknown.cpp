@@ -48,6 +48,7 @@
 #include "V3MemberMap.h"
 #include "V3Stats.h"
 #include "V3Task.h"
+#include "V3Timing.h"
 #include "V3UniqueNames.h"
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -111,6 +112,28 @@ class UnknownVisitor final : public VNVisitor {
         }
     }
 
+    // Evaluate the value of blocking 'assignp' into a temporary before its intra-assignment
+    // timing control, which then holds the assignment, as V3Timing does. The target is selected
+    // when the wait ends (IEEE 1800-2023 9.4.5).
+    void factorOutTimingControl(AstAssign* assignp) {
+        FileLine* const fl = assignp->fileline();
+        AstNodeExpr* const rhsp = assignp->rhsp();
+        AstVar* const varp
+            = new AstVar{fl, VVarType::MODULETEMP, m_lvboundNames.get(rhsp), rhsp->dtypep()};
+        addVar(varp);
+        rhsp->replaceWith(new AstVarRef{fl, varp, VAccess::READ});
+        assignp->addHereThisAsNext(
+            new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, rhsp});
+        V3Timing::factorOutTimingControl(assignp);
+    }
+    // Whether 'nodep' is in the target of 'assignp'
+    static bool inTarget(const AstNode* nodep, const AstNodeAssign* assignp) {
+        for (; nodep != assignp; nodep = nodep->firstAbovep()) {
+            if (nodep == assignp->lhsp()) return true;
+        }
+        return false;
+    }
+
     void replaceBoundLvalue(AstNodeExpr* nodep, AstNodeExpr* condp) {
         // Spec says a out-of-range LHS SEL results in a NOP.
         // We wrap the expression into IF
@@ -122,6 +145,13 @@ class UnknownVisitor final : public VNVisitor {
             prep = VN_AS(prep->backp(), NodeExpr);
         }
         if (VN_IS(prep->backp(), AssignForce) || VN_IS(prep->backp(), Release)) {
+            if (condp->isZero()) {
+                // Forcing or releasing only bits out of range does nothing (IEEE 1800-2023 11.5.1)
+                AstNode* const stmtp = prep->backp()->unlinkFrBack();
+                VL_DO_DANGLING(pushDeletep(stmtp), stmtp);
+                VL_DO_DANGLING(condp->deleteTree(), condp);
+                return;
+            }
             // The conversion done in this function breaks force and release statements
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Force / release statement with complex select expression");
@@ -143,6 +173,13 @@ class UnknownVisitor final : public VNVisitor {
             AstNodeStmt* stmtp = nullptr;  // Grab above point before we replace 'prep'
             for (AstNode* abovep = prep->backp(); !stmtp; abovep = abovep->backp()) {
                 stmtp = VN_CAST(abovep, NodeStmt);
+            }
+            // A blocking assignment checks its target when its timing control ends; a select in
+            // its value guards the whole statement, as the value is evaluated before
+            if (AstAssign* const assignp = VN_CAST(stmtp, Assign)) {
+                if (assignp->timingControlp() && inTarget(prep, assignp)) {
+                    factorOutTimingControl(assignp);
+                }
             }
             VNRelinker replaceHandle;
             AstNodeStmt* const origStmtp = stmtp->unlinkFrBack(&replaceHandle);
@@ -197,19 +234,40 @@ class UnknownVisitor final : public VNVisitor {
         return varp;
     }
 
-    // Returns true if it is known at compile time that `msbConstp` is greater than or equal
-    // `exprp`
-    static bool isStaticlyGte(AstConst* const msbConstp, const AstNodeExpr* const exprp) {
-        if (msbConstp->width() >= exprp->width() && exprp->width() < 32
-            && msbConstp->num().toSInt() >= (1 << exprp->width()) - 1) {
-            return true;
-        }
+    // Return an upper bound of the unsigned value of 'exprp'
+    static uint64_t staticMax(const AstNodeExpr* exprp) {
+        static constexpr int QUAD_BITS = std::numeric_limits<uint64_t>::digits;
+        const uint64_t widthMax = exprp->width() < QUAD_BITS
+                                      ? (1ULL << exprp->width()) - 1
+                                      : std::numeric_limits<uint64_t>::max();
+        // Arithmetic that may exceed the width wraps, so only the width bounds it
+        const auto bounded = [widthMax](uint64_t value, bool overflow) {
+            return overflow ? widthMax : std::min(value, widthMax);
+        };
         if (const AstConst* const constp = VN_CAST(exprp, Const)) {
-            if (V3Number{msbConstp}.opGte(msbConstp->num(), constp->num()).isNeqZero()) {
-                return true;
-            }
+            const V3Number& num = constp->num();
+            if (!num.isFourState() && num.width() <= QUAD_BITS) return num.toUQuad();
+        } else if (const AstAnd* const andp = VN_CAST(exprp, And)) {
+            return std::min(staticMax(andp->lhsp()), staticMax(andp->rhsp()));
+        } else if (const AstCond* const condp = VN_CAST(exprp, Cond)) {
+            return std::max(staticMax(condp->thenp()), staticMax(condp->elsep()));
+        } else if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
+            return staticMax(extendp->lhsp());
+        } else if (const AstAdd* const addp = VN_CAST(exprp, Add)) {
+            const uint64_t lhs = staticMax(addp->lhsp());
+            const uint64_t rhs = staticMax(addp->rhsp());
+            return bounded(lhs + rhs, lhs + rhs < lhs);
+        } else if (const AstMul* const mulp = VN_CAST(exprp, Mul)) {
+            const uint64_t lhs = staticMax(mulp->lhsp());
+            const uint64_t rhs = staticMax(mulp->rhsp());
+            return bounded(lhs * rhs, lhs != 0 && rhs > widthMax / lhs);
+        } else if (const AstShiftL* const shiftp = VN_CAST(exprp, ShiftL)) {
+            const uint64_t lhs = staticMax(shiftp->lhsp());
+            const uint64_t shift = staticMax(shiftp->rhsp());
+            return bounded(shift < QUAD_BITS ? lhs << shift : 0,
+                           shift >= QUAD_BITS || lhs > (widthMax >> shift));
         }
-        return false;
+        return widthMax;
     }
 
     // Return array index 'bitp' truncated to the bits that address 'elements' elements
@@ -519,21 +577,28 @@ class UnknownVisitor final : public VNVisitor {
             AstConst* const maxmsbConstp = new AstConst{
                 nodep->fileline(), AstConst::WidthedValue{}, nodep->lsbp()->width(), maxmsb};
             AstNodeExpr* lsbp = V3Const::constifyEdit(nodep->lsbp()->unlinkFrBack());
-            if (isStaticlyGte(maxmsbConstp, lsbp)) {
-                // We don't need to add a conditional; we know the existing expression is ok
+            if (maxmsb + 1 >= static_cast<uint32_t>(nodep->widthConst())
+                && staticMax(lsbp) <= maxmsb + 1 - nodep->widthConst()) {
+                // We don't need to add a conditional; the whole selection is in range
                 VL_DO_DANGLING(maxmsbConstp->deleteTree(), maxmsbConstp);
-                nodep->lsbp(lsbp);
+                nodep->lsbp(newIndexTrunc(lsbp, maxmsb + 1));
                 return;
             }
-            nodep->lsbp(newExprStmtOrClone(lsbp));
+            nodep->lsbp(newIndexTrunc(newExprStmtOrClone(lsbp), maxmsb + 1));
             AstNodeExpr* condp
                 = V3Const::constifyEdit(new AstGte{nodep->fileline(), maxmsbConstp, lsbp});
+            if (condp->isNeqZero()) {
+                // The position is in range, which is all this checks
+                VL_DO_DANGLING(condp->deleteTree(), condp);
+                return;
+            }
             if (!lvalue) {
                 // SEL(...) -> COND(LTE(bit<=maxmsb), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
                 nodep->unlinkFrBack(&replaceHandle);
                 V3Number xnum{nodep, nodep->width()};
-                xnum.setAllBitsX();
+                // Bits of a 2-state vector read as zero (IEEE 1800-2023 11.5.1)
+                if (nodep->fromp()->dtypep()->isFourstate()) xnum.setAllBitsX();
                 AstNodeExpr* const xexprp = new AstConst{nodep->fileline(), xnum};
                 AstNodeExpr* const newp = [&]() -> AstNodeExpr* {
                     if (condp->isZero()) {
@@ -567,7 +632,7 @@ class UnknownVisitor final : public VNVisitor {
             static_cast<uint32_t>(adtypep->elementsConst() - nodep->declRange().elements())};
         AstNodeExpr* lsbp = V3Const::constifyEdit(nodep->lsbp()->unlinkFrBack());
         AstNodeExpr* condp = nullptr;
-        if (isStaticlyGte(maxLsbp, lsbp)) {
+        if (staticMax(lsbp) <= maxLsbp->num().toUQuad()) {
             VL_DO_DANGLING(maxLsbp->deleteTree(), maxLsbp);
         } else {
             AstNodeExpr* const indexp = newExprStmtOrClone(lsbp);
@@ -647,7 +712,7 @@ class UnknownVisitor final : public VNVisitor {
                 = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, nodep->bitp()->width(),
                                static_cast<uint32_t>(declElements - 1)};
             AstNodeExpr* bitp = V3Const::constifyEdit(nodep->bitp()->unlinkFrBack());
-            if (!xIndex && isStaticlyGte(declElementsp, bitp)) {
+            if (!xIndex && staticMax(bitp) <= static_cast<uint64_t>(declElements - 1)) {
                 // We don't need to add a conditional; we know the existing expression is ok
                 VL_DO_DANGLING(declElementsp->deleteTree(), declElementsp);
                 nodep->bitp(newIndexTrunc(bitp, declElements));
