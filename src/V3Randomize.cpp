@@ -279,11 +279,31 @@ static void checkRandTypeEligibility(AstNode* contextp, AstNodeDType* dtypep, bo
     }
 }
 
-// True if any operand is marked as random-dependent
+// True if opp depends on the value of a rand variable
+static bool dependsOnRandValue(const AstNode* opp) {
+    // A class handle is not a solver variable, only its rand members are (see
+    // visit(AstMemberRef)), so e.g. a 'handle != null' guard is evaluated as state. But a
+    // handle selected by a random index, from a random array or not, depends on the index.
+    if (!opp || !opp->user1()) return false;
+    if (!opp->isClassHandleValue()) return true;
+    for (const AstNode* curp = opp; curp; curp = curp->op1p()) {
+        if (const AstNodeSel* const selp = VN_CAST(curp, NodeSel)) {
+            if (selp->bitp()->user1()) return true;
+        } else if (const AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
+            if (methodp->method() == VCMethod::ARRAY_AT && methodp->pinsp()->user1()) {
+                return true;
+            }
+        } else if (!VN_IS(curp, MemberRef) && !VN_IS(curp, StructSel)) {
+            return false;
+        }
+    }
+    return false;
+}
+
+// True if any operand depends on the value of a rand variable
 static bool anyOpRandDependent(const AstNode* nodep) {
-    return (nodep->op1p() && nodep->op1p()->user1()) || (nodep->op2p() && nodep->op2p()->user1())
-           || (nodep->op3p() && nodep->op3p()->user1())
-           || (nodep->op4p() && nodep->op4p()->user1());
+    return dependsOnRandValue(nodep->op1p()) || dependsOnRandValue(nodep->op2p())
+           || dependsOnRandValue(nodep->op3p()) || dependsOnRandValue(nodep->op4p());
 }
 
 //######################################################################
@@ -1181,26 +1201,6 @@ class RandomizeMarkVisitor final : public VNVisitor {
         }
     }
 
-    // True if opp depends on the value of a rand variable
-    static bool dependsOnRandValue(AstNode* opp) {
-        // A class handle is not a solver variable, only its rand members are (see
-        // visit(AstMemberRef)), so e.g. a 'handle != null' guard is evaluated as state. But a
-        // handle selected by a random index, from a random array or not, depends on the index.
-        if (!opp || !opp->user1()) return false;
-        if (!opp->isClassHandleValue()) return true;
-        for (AstNode* curp = opp; curp; curp = curp->op1p()) {
-            if (const AstNodeSel* const selp = VN_CAST(curp, NodeSel)) {
-                if (selp->bitp()->user1()) return true;
-            } else if (const AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
-                if (methodp->method() == VCMethod::ARRAY_AT && methodp->pinsp()->user1()) {
-                    return true;
-                }
-            } else if (!VN_IS(curp, MemberRef) && !VN_IS(curp, StructSel)) {
-                return false;
-            }
-        }
-        return false;
-    }
     void visit(AstLambdaArgRef* nodep) override {
         if (!nodep->index()) {
             const auto it = m_withItems.find(nodep->name());
@@ -1493,8 +1493,11 @@ class CaptureVisitor final : public VNVisitor {
     void visit(AstMemberRef* nodep) override {
         if (!isReferenceToInnerMember(nodep)) {
             iterateChildren(nodep);
-            // Selecting from an object that is no longer random-dependent after capture
-            if (!nodep->fromp()->user1()) nodep->user1(false);
+            // Selecting from an object that is no longer random-dependent after capture. The
+            // 'item' of a 'with' over the randomized object's array is not captured.
+            if (!nodep->fromp()->user1() && !VN_IS(nodep->fromp(), LambdaArgRef)) {
+                nodep->user1(false);
+            }
             return;
         }
         AstVarRef* const varRefp
