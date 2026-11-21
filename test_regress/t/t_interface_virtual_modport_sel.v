@@ -17,6 +17,7 @@ interface my_if (
     input logic clk
 );
   logic [7:0] data;
+  logic [7:0] data2;
 
   clocking mon_cb @(posedge clk);
     input data;
@@ -25,6 +26,8 @@ interface my_if (
   modport passive_mp(clocking mon_cb);
   modport active_mp(output data);
   modport signal_mp(input data);
+  // Modport expressions, one hiding the interface item of the same name
+  modport expr_mp(output .wdata(data), input .data(data2));
 endinterface
 
 class Context;
@@ -68,6 +71,7 @@ module t;
   logic clk = 0;
   always #5 clk = ~clk;
   my_if vif (.clk(clk));
+  my_if vif2 (.clk(clk));
 
   initial begin
     automatic Context c = new;
@@ -102,6 +106,21 @@ module t;
 
     `checkh(m1.mp.mon_cb.data, 8'hCD);
     `checkh(r.sig.data, 8'hCD);
+
+    // Modport expressions through a virtual interface
+    begin
+      automatic virtual my_if.expr_mp e = vif;
+      e.wdata = 8'h12;
+      vif.data2 = 8'h34;
+      `checkh(vif.data, 8'h12);
+      `checkh(e.data, 8'h34);
+      e = vif2;
+      e.wdata = 8'h56;
+      vif2.data2 = 8'h78;
+      `checkh(vif2.data, 8'h56);
+      `checkh(e.data, 8'h78);
+      `checkh(vif.data, 8'h12);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
