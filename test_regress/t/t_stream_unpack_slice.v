@@ -59,6 +59,49 @@ module t (
     sl[2:3] <= src;
   end
 
+  // Queue source
+  bit [7:0] qs[4];
+  bit [7:0] q[$];
+  always @(posedge clk) begin
+    q = '{w[7:0], w[15:8]};
+    qs <= '{default: 0};
+    qs[1:2] <= q;
+  end
+
+  // Stream of a queue into a slice, of wider elements, reversed, and continuously assigned
+  logic [15:0] qsl[4];
+  logic [7:0] qdsc[3:0];
+  byte bq[$];
+  byte bq2[$];
+  logic [7:0] cq[4];
+  always @(posedge clk) begin
+    bq = '{w[7:0], w[15:8], w[23:16], w[31:24]};
+    qsl <= '{default: 0};
+    qsl[1:2] <= {>>{bq}};
+    bq2 <= '{w[7:0], w[15:8]};
+    qdsc <= '{default: 0};
+    qdsc[2:1] <= {<<8{bq[0:1]}};
+  end
+  assign cq[1:2] = {>>{bq2}};
+  assign cq[0] = 8'h0;
+  assign cq[3] = 8'h0;
+
+  // Slices of unpacked structure elements
+  typedef struct {
+    logic [3:0] a;
+    logic [3:0] b;
+  } s_t;
+  s_t sarr[4];
+  s_t sdsc[5:2];
+  logic [15:0] spacked;
+  always @(posedge clk) begin
+    sarr <= '{default: '{0, 0}};
+    {>>{sarr[1:2]}} <= w[15:0];
+    sdsc <= '{default: '{0, 0}};
+    {>>{sdsc[4:3]}} <= w[31:16];
+  end
+  always_comb spacked = {>>{sarr[1:2]}};
+
   logic [31:0] w_d;  // w of the previous cycle
   always @(posedge clk) begin
     w_d <= w;
@@ -83,6 +126,29 @@ module t (
       `checkh(sl[2], w_d[7:0]);
       `checkh(sl[3], w_d[15:8]);
       `checkh(packed_r, {arr[1], arr[2]});
+      `checkh(qs[0], 8'h0);
+      `checkh(qs[1], w_d[7:0]);
+      `checkh(qs[2], w_d[15:8]);
+      `checkh(qs[3], 8'h0);
+      `checkh(qsl[0], 16'h0);
+      `checkh(qsl[1], {w_d[7:0], w_d[15:8]});
+      `checkh(qsl[2], {w_d[23:16], w_d[31:24]});
+      `checkh(qsl[3], 16'h0);
+      `checkh(qdsc[3], 8'h0);
+      `checkh(qdsc[2], w_d[15:8]);
+      `checkh(qdsc[1], w_d[7:0]);
+      `checkh(qdsc[0], 8'h0);
+      `checkh(cq[1], w_d[7:0]);
+      `checkh(cq[2], w_d[15:8]);
+      `checkh({sarr[0].a, sarr[0].b}, 8'h0);
+      `checkh({sarr[1].a, sarr[1].b}, w_d[15:8]);
+      `checkh({sarr[2].a, sarr[2].b}, w_d[7:0]);
+      `checkh({sarr[3].a, sarr[3].b}, 8'h0);
+      `checkh({sdsc[5].a, sdsc[5].b}, 8'h0);
+      `checkh({sdsc[4].a, sdsc[4].b}, w_d[31:24]);
+      `checkh({sdsc[3].a, sdsc[3].b}, w_d[23:16]);
+      `checkh({sdsc[2].a, sdsc[2].b}, 8'h0);
+      `checkh(spacked, w_d[15:0]);
       `checkh(packed_l, {arr[2], arr[1]});
     end
     if (cyc == 10) begin
