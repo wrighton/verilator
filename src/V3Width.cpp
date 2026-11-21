@@ -3397,6 +3397,7 @@ class WidthVisitor final : public VNVisitor {
         nodep->refDTypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         nodep->keyDTypep(iterateEditMoveDTypep(nodep, nodep->keyDTypep()));
         nodep->dtypep(nodep);  // The array itself, not subDtype
+        checkEventElements(nodep);
         UINFO(4, "dtWidthed " << nodep);
     }
     void visit(AstBracketArrayDType* nodep) override {
@@ -3442,6 +3443,7 @@ class WidthVisitor final : public VNVisitor {
         // Iterate into subDTypep() to resolve that type and update pointer.
         nodep->refDTypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         nodep->dtypep(nodep);  // The array itself, not subDtype
+        checkEventElements(nodep);
         UINFO(4, "dtWidthed " << nodep);
     }
     void visit(AstQueueDType* nodep) override {
@@ -3449,6 +3451,7 @@ class WidthVisitor final : public VNVisitor {
         // Iterate into subDTypep() to resolve that type and update pointer.
         nodep->refDTypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         nodep->dtypep(nodep);  // The array itself, not subDtype
+        checkEventElements(nodep);
         userIterateAndNext(nodep->boundp(), WidthVP{SELF, BOTH}.p());
         if (VN_IS(nodep->boundp(), Unbounded)) {
             nodep->boundp()->unlinkFrBack()->deleteTree();  // nullptr will represent unbounded
@@ -3478,6 +3481,7 @@ class WidthVisitor final : public VNVisitor {
         nodep->refDTypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         // Cleanup array size
         nodep->dtypep(nodep);  // The array itself, not subDtype
+        checkEventElements(nodep);
         UINFO(4, "dtWidthed " << nodep);
     }
     void visit(AstBasicDType* nodep) override {
@@ -7964,6 +7968,11 @@ class WidthVisitor final : public VNVisitor {
         return valuep;
     }
 
+    // Note event assignments if dynamic array 'nodep' holds events
+    static void checkEventElements(const AstNodeDType* nodep) {
+        // Its elements are copies of other events, which merges them (IEEE 1800-2023 15.5.5.1)
+        if (nodep->subDTypep()->skipRefp()->isEvent()) v3Global.setAssignsEvents();
+    }
     static void checkEventAssignment(const AstNodeAssign* const asgnp) {
         string unsupEvtAsgn;
         if (!usesDynamicScheduler(asgnp->lhsp())) unsupEvtAsgn = "to";
