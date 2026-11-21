@@ -25,6 +25,13 @@ module t;
   localparam P0_ABOVE = f_desc_out_of_bounds(6);
   localparam P0_BELOW = f_desc_out_of_bounds(2);
   localparam P_LOOP = f_out_of_bounds_loop();
+  localparam P_REENTER = f_reenter(2);
+  localparam P_PAST_END = f_past_end();
+  typedef int five_t[5];
+  localparam five_t FIVE = '{1, 2, 3, 4, 5};
+  localparam P_PAST_END_PARAM = f_get5(FIVE, 3) * 100 + f_get5(FIVE, 6) * 10 + f_get5(FIVE, 3);
+  localparam P_RECURSE = f_recurse();
+  localparam P_MUTUAL = f_mutual_f(1);
 
   typedef struct packed {logic [7:0] data;} type_t;
   typedef type_t [1:0] flist;
@@ -60,6 +67,11 @@ module t;
     if (P0_ABOVE !== 0) $stop;
     if (P0_BELOW !== 0) $stop;
     if (P_LOOP !== 140) $stop;
+    if (P_REENTER !== 2000) $stop;
+    if (P_PAST_END !== 404) $stop;
+    if (P_PAST_END_PARAM !== 404) $stop;
+    if (P_RECURSE !== 150150) $stop;
+    if (P_MUTUAL !== 1000) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -88,6 +100,60 @@ module t;
     integer s = 0;
     for (int i = 3; i < 7; i++) s += a[i];
     return s + a[4];
+  endfunction
+
+  // A static variable passed by value, then changed by re-entering its function
+  typedef int four_t[4];
+  function automatic integer f_reenter(int n);
+    static four_t s;
+    integer r;
+    s[0] = n;
+    r = (n == 2) ? f_reentered(s) : 0;
+    return r;
+  endfunction
+  function automatic integer f_reentered(four_t p);
+    integer b;
+    b = f_reenter(1);
+    return p[0] * 1000 + b;
+  endfunction
+
+  // Reads past the end of a passed array leave the caller's array unchanged
+  function automatic integer f_get5(five_t tbl, int i);
+    return tbl[i];
+  endfunction
+  function automatic integer f_past_end();
+    five_t t;
+    foreach (t[i]) t[i] = i + 1;
+    return f_get5(t, 3) * 100 + f_get5(t, 6) * 10 + f_get5(t, 3);
+  endfunction
+
+  // A recursive function passing its array argument down
+  function automatic integer f_down(int n, five_t p);
+    if (n == 0) return p[0];
+    return p[n] + f_down(n - 1, p);
+  endfunction
+  function automatic integer f_recurse();
+    five_t a;
+    integer x;
+    foreach (a[i]) a[i] = (i + 1) * 10;
+    x = f_down(4, a);
+    return x * 1000 + a[0] + a[1] + a[2] + a[3] + a[4];
+  endfunction
+
+  // Mutually recursive functions, the caller changing its passed array after the call
+  function automatic integer f_mutual_g(int n, five_t p);
+    integer r;
+    r = 0;
+    if (n > 0) r = f_mutual_f(n - 1);
+    return p[0] * 100 + r;
+  endfunction
+  function automatic integer f_mutual_f(int n);
+    five_t b;
+    integer x;
+    b[0] = 5;
+    x = f_mutual_g(n, b);
+    b[0] = 9;
+    return x;
   endfunction
 
   // An out-of-bounds index wider than 32 bits, read and written; in a generate condition, where
