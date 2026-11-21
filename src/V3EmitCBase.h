@@ -87,6 +87,8 @@ public:
     }
     // Return a call reversing the descending dimensions of an unpacked array, "" if none
     static std::string unpackReverseCall(const AstNodeDType* dtypep);
+    // Return a call converting 'expr' to a %p string, "" if VL_TO_STRING(expr) does
+    static std::string toStringCall(const AstNodeDType* dtypep, const std::string& expr);
     // Split a pretty path below the model into the name it is below, as an index into the
     // run-time names (0 for the model, e.g. in a package, else AstNetlist::l2Names() index plus
     // one), and the rest of the path
