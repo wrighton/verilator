@@ -752,4 +752,20 @@ module t (
   end
   `signal(ARRAY_WHOLE_PREVIOUS, {array_whole_previous[1], array_whole_previous[0]});
 
+  // Loop with a single block body (self loop in the CFG)
+  logic [3:0] loop_self_a;
+  always_comb begin  // nosynth
+    loop_self_a = 4'd0;
+    do loop_self_a = loop_self_a + 4'd1; while (loop_self_a < rand_a[3:0]);
+  end
+  `signal(LOOP_SELF_A, loop_self_a);
+
+  logic [3:0] loop_self_b;
+  always_comb begin  // nosynth
+    loop_self_b = 4'd0;
+    for (int i = 0; i < 4; ++i) if (rand_b[i]) break;
+    do loop_self_b = loop_self_b + 4'd1; while (loop_self_b < 4'd2);
+  end
+  `signal(LOOP_SELF_B, loop_self_b);
+
 endmodule
