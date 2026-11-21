@@ -595,6 +595,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
     VDouble0 m_statIfacePairs;  // External rank pairs, not individual drivers
+    VDouble0 m_statSharedDrivers;  // Stat: continuous select drivers sharing variables
 
     // METHODS
     string dbgState() const {
@@ -1093,6 +1094,60 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
 
+    // Continuous drivers of disjoint constant part selects of a variable share one data and one
+    // enable variable, so the resolution logic is linear, not quadratic, in the drivers
+    struct SelDriverBin final {
+        AstVar* m_lhsp = nullptr;  // Shared data variable
+        AstVar* m_enLhsp = nullptr;  // Shared enable variable
+        std::map<int, AstNodeExpr*> m_enps;  // Enable of each driver, by LSB
+    };
+    static AstSel* sharedSelp(const RefStrength* refStrengthp) {
+        // Constant part select a continuous driver assigns, with its enable, or nullptr
+        AstSel* const selp = VN_CAST(refStrengthp->m_varrefp->backp(), Sel);
+        if (!selp || refStrengthp->m_delayp || !VN_IS(refStrengthp->m_varrefp, VarRef)
+            || selp != refStrengthp->m_assignp->lhsp() || !VN_IS(selp->lsbp(), Const)
+            || VN_AS(selp->lsbp(), Const)->toSInt() + selp->widthConst()
+                   > selp->fromp()->width()) {
+            return nullptr;
+        }
+        const AstShiftL* const depositp = VN_CAST(refStrengthp->m_varrefp->user1p(), ShiftL);
+        return depositp && VN_IS(depositp->lhsp(), Extend) ? selp : nullptr;
+    }
+    static size_t selDriverBin(std::vector<size_t>& nextBins, const AstSel* selp) {
+        // Index of a bin none of the select's bits are in yet: past the last bin using any of
+        // them. nextBins holds, per bit, one past the last bin using it, so the cost is linear
+        // in the selected bits.
+        const int lsb = VN_AS(selp->lsbp(), Const)->toSInt();
+        const auto beginIt = nextBins.begin() + lsb;
+        const auto endIt = beginIt + selp->widthConst();
+        const size_t bin = *std::max_element(beginIt, endIt);
+        std::fill(beginIt, endIt, bin + 1);
+        return bin;
+    }
+    static AstNodeExpr* newConcat(FileLine* fl, const std::vector<AstNodeExpr*>& partps, size_t lo,
+                                  size_t hi) {
+        // Concatenation of partps[lo, hi), LSB part first, balanced to limit its depth
+        if (hi - lo == 1) return partps[lo];
+        const size_t mid = (lo + hi) / 2;
+        return new AstConcat{fl, newConcat(fl, partps, mid, hi), newConcat(fl, partps, lo, mid)};
+    }
+    static AstNodeExpr* newBinEnable(FileLine* fl, const SelDriverBin& bin, int width) {
+        // Enable of a bin's drivers, zero for bits no driver selects
+        std::vector<AstNodeExpr*> partps;
+        int bit = 0;
+        const auto addZeros = [&](int upto) {
+            if (upto > bit)
+                partps.push_back(new AstConst{fl, AstConst::WidthedValue{}, upto - bit, 0});
+        };
+        for (const auto& lsbEnp : bin.m_enps) {
+            addZeros(lsbEnp.first);
+            partps.push_back(lsbEnp.second);
+            bit = lsbEnp.first + lsbEnp.second->width();
+        }
+        addZeros(width);
+        return newConcat(fl, partps, 0, partps.size());
+    }
+
     void aggregateTriSameStrength(AstNodeModule* nodep, AstVar* const varp, AstVar* const envarp,
                                   RefStrengthVec::iterator beginStrength,
                                   RefStrengthVec::iterator endStrength,
@@ -1119,21 +1174,39 @@ class TristateVisitor final : public TristateBaseVisitor {
 
         AstNodeExpr* orp = nullptr;
         AstNodeExpr* enp = nullptr;
+        std::vector<SelDriverBin> bins;
+        std::vector<size_t> nextBins;  // Per bit, one past the last bin with a driver of it
 
         for (DriverGroup& driver : drivers) {
+            AstSel* const selp = driver.m_procedurep ? nullptr : sharedSelp(driver.m_refsp[0]);
+            if (selp && nextBins.empty()) nextBins.resize(varp->width());
+            const size_t binIndex = selp ? selDriverBin(nextBins, selp) : 0;
+            if (selp && binIndex == bins.size()) bins.emplace_back();
+            SelDriverBin* const binp = selp ? &bins[binIndex] : nullptr;
+            const bool newVars = !binp || !binp->m_lhsp;
             // Create the new LHS data and enable variables for this driver.
-            AstVar* const newLhsp = new AstVar{varp->fileline(), VVarType::MODULETEMP,
-                                               varp->name() + "__out" + cvtToStr(m_unique),
-                                               varp};  // 2-state ok; sep enable
-            newLhsp->setDfgTriLowered();
-            UINFO(9, "       newout " << newLhsp);
-            nodep->addStmtsp(newLhsp);
+            AstVar* const newLhsp
+                = newVars ? new AstVar{varp->fileline(), VVarType::MODULETEMP,
+                                       varp->name() + "__out" + cvtToStr(m_unique), varp}
+                          // 2-state ok; sep enable
+                          : binp->m_lhsp;
             AstVar* const newEnLhsp
-                = new AstVar{varp->fileline(), VVarType::MODULETEMP,
-                             varp->name() + "__en" + cvtToStr(m_unique++), envarp};  // 2-state ok
-            newEnLhsp->setDfgTriLowered();
-            UINFO(9, "       newenlhsp " << newEnLhsp);
-            nodep->addStmtsp(newEnLhsp);
+                = newVars ? new AstVar{varp->fileline(), VVarType::MODULETEMP,
+                                       varp->name() + "__en" + cvtToStr(m_unique++), envarp}
+                          // 2-state ok
+                          : binp->m_enLhsp;
+            if (newVars) {
+                newLhsp->setDfgTriLowered();
+                UINFO(9, "       newout " << newLhsp);
+                nodep->addStmtsp(newLhsp);
+                newEnLhsp->setDfgTriLowered();
+                UINFO(9, "       newenlhsp " << newEnLhsp);
+                nodep->addStmtsp(newEnLhsp);
+            }
+            if (binp) {
+                binp->m_lhsp = newLhsp;
+                binp->m_enLhsp = newEnLhsp;
+            }
 
             for (RefStrength* const refStrengthp : driver.m_refsp) {
                 AstNodeVarRef* refp = refStrengthp->m_varrefp;
@@ -1183,6 +1256,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                     refStrengthp->m_enLhsp = nullptr;
                     refStrengthp->m_enVarrefp = nullptr;
                     refStrengthp->m_enRhsp = nullptr;
+                } else if (binp) {
+                    // The deposit of the select's enable into the whole variable
+                    const AstShiftL* const depositp = VN_AS(refp->user1p(), ShiftL);
+                    binp->m_enps.emplace(
+                        VN_AS(selp->lsbp(), Const)->toSInt(),
+                        VN_AS(depositp->lhsp(), Extend)->lhsp()->cloneTreePure(false));
                 } else {
                     AstAssignW* const enLhspAssignp = new AstAssignW{
                         refp->fileline(),
@@ -1201,6 +1280,10 @@ class TristateVisitor final : public TristateBaseVisitor {
                 collectIfaceDriver(*ifacep, *driver.m_refsp.front(), newLhsp, newEnLhsp);
                 continue;
             }
+            if (!newVars) {
+                ++m_statSharedDrivers;
+                continue;  // Already in the resolution logic
+            }
             // Append this driver to the resolution logic.
             FileLine* const fl = driver.m_refsp.front()->m_varrefp->fileline();
             AstNodeExpr* const ref1p = new AstVarRef{fl, newLhsp, VAccess::READ};
@@ -1214,6 +1297,12 @@ class TristateVisitor final : public TristateBaseVisitor {
             enp = (!enp) ? ref3p : new AstOr{ref3p->fileline(), enp, ref3p};
         }
         if (ifacep) return;  // Interface drivers already have separate rank contributions.
+        for (const SelDriverBin& bin : bins) {
+            FileLine* const fl = bin.m_enLhsp->fileline();
+            nodep->addStmtsp(
+                new AstAlways{new AstAssignW{fl, new AstVarRef{fl, bin.m_enLhsp, VAccess::WRITE},
+                                             newBinEnable(fl, bin, varp->width())}});
+        }
         AstAssignW* const assp = new AstAssignW{
             varp->fileline(), new AstVarRef{varp->fileline(), varp, VAccess::WRITE}, orp};
         UINFO(9, "       newassp " << assp);
@@ -2969,6 +3058,7 @@ public:
     ~TristateVisitor() override {
         V3Stats::addStat("Tristate, Tristate resolved nets", m_statTriSigs);
         V3Stats::addStat("Tristate, External interface rank pairs", m_statIfacePairs);
+        V3Stats::addStat("Tristate, Select drivers sharing variables", m_statSharedDrivers);
     }
 };
 
