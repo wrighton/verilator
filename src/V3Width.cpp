@@ -8958,7 +8958,7 @@ class WidthVisitor final : public VNVisitor {
             // An override pattern is left for the specialized module to type
             VL_RESTORER(m_inParamOverride);
             m_inParamOverride = isOverridePattern(nodep->exprp());
-            userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
+            userIterateChildren(nodep, WidthVP{SELF, BOTH, STREAM_USE_ASSIGN}.p());
         } else if (!m_paramsOnly) {
             // Very much like like an assignment, but which side is LH/RHS
             // depends on pin being a in/output/inout.
