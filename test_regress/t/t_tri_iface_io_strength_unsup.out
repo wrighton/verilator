@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_tri_iface_io_strength_unsup.v:22:33: Unsupported: Unable to resolve unequal strength specifier
+                                                           : ... note: In instance 't.output_io'
+   22 |   assign (weak0, strong1) value = data;
+      |                                 ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_tri_iface_io_strength_unsup.v:14:31: Unsupported: Unable to resolve unequal strength specifier
+                                                           : ... note: In instance 't.io'
+   14 |   assign (weak0, pull1) value = ea ? a : 1'bz;
+      |                               ^
+%Error: Exiting due to
