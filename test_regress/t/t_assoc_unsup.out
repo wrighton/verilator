@@ -75,4 +75,8 @@
                                            : ... note: In instance 't'
    45 |     qwv = qw.map(el) with (el / 100);
       |              ^~~
+%Error-UNSUPPORTED: t/t_assoc_unsup.v:55:22: Unsupported: Further select of an associative array element in a queue's '$' element passed to a const ref argument.
+                                           : ... note: In instance 't'
+   55 |       i = get_val(qxy[$][1].y);
+      |                      ^
 %Error: Exiting due to

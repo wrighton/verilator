@@ -6755,7 +6755,7 @@ class AstVarXRef final : public AstNodeVarRef {
     string m_inlinedDots;  // Dotted hierarchy flattened out
     string m_resolvedDotted;  // Resolved scope path relative to the module, from V3LinkDot
     bool m_containsGenBlock = false;  // Contains gen block reference
-    bool m_readOnlyModport = false;  // Linked via an input-only modport, until V3LinkLValue
+    bool m_readOnlyModport = false;  // Linked via an input-only modport
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)

@@ -1,0 +1,22 @@
+%Error: t/t_interface_modport_out_bad.v:41:13: Attempt to drive input-only modport: 'x'
+                                             : ... note: In instance 't.u'
+   41 |     c.set(p.x);
+      |             ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_interface_modport_out_bad.v:43:15: Attempt to drive input-only modport: 'h'
+                                             : ... note: In instance 't.u'
+   43 |     c.set_h(p.h);
+      |               ^
+%Error: t/t_interface_modport_out_bad.v:44:17: Attempt to drive input-only modport: 'h'
+                                             : ... note: In instance 't.u'
+   44 |     c.inout_h(p.h);
+      |                 ^
+%Error: t/t_interface_modport_out_bad.v:45:15: Attempt to drive input-only modport: 'h'
+                                             : ... note: In instance 't.u'
+   45 |     c.ref_h(p.h);
+      |               ^
+%Error: t/t_interface_modport_out_bad.v:47:28: Attempt to drive input-only modport: 'seed'
+                                             : ... note: In instance 't.u'
+   47 |     c.set(p.harr[$random(p.seed) & 1].v);
+      |                            ^~~~
+%Error: Exiting due to
