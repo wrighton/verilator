@@ -121,6 +121,17 @@ AstVar* ElemRandModes::modeVarp(AstVar* arrVarp) {
     return modeVarp;
 }
 
+AstNodeExpr* RandomizeUtil::newElemOffsetp(FileLine* const fl, const AstVar* const arrVarp,
+                                           AstNodeExpr* const idxp) {
+    const AstUnpackArrayDType* const unpackDtp
+        = VN_CAST(arrVarp->dtypep()->skipRefp(), UnpackArrayDType);
+    if (!unpackDtp) return idxp;
+    AstNodeExpr* const offsetp
+        = new AstSub{fl, idxp, new AstConst{fl, static_cast<uint32_t>(unpackDtp->lo())}};
+    offsetp->dtypeSetUInt32();
+    return offsetp;
+}
+
 //######################################################################
 // RandomizeUtil implementation
 
@@ -141,4 +152,29 @@ AstNodeExpr* RandomizeUtil::newMemberRefp(FileLine* const fl, AstNodeExpr* const
                                           AstVar* const varp) {
     if (objp) return new AstMemberRef{fl, objp->cloneTreePure(false), varp};
     return new AstVarRef{fl, VN_AS(varp->user2p(), Class), varp, VAccess::READ};
+}
+
+AstNodeExpr* RandomizeUtil::randIndexSelp(AstNodeExpr* exprp,
+                                          bool (*isRandIndexp)(const AstNodeExpr* indexp)) {
+    // exprp is the select itself, or reached from it through member and element selects and
+    // array methods, e.g. 'arr[idx].q.size()'. Each step is to the first operand, fromp.
+    for (AstNodeExpr* curp = exprp;;) {
+        AstNodeExpr* fromp;
+        AstNodeExpr* indexp = nullptr;
+        if (AstArraySel* const arraySelp = VN_CAST(curp, ArraySel)) {
+            fromp = arraySelp->fromp();
+            indexp = arraySelp->bitp();
+        } else if (AstCMethodHard* const methodp = VN_CAST(curp, CMethodHard)) {
+            fromp = methodp->fromp();
+            if (methodp->method() == VCMethod::ARRAY_AT) indexp = methodp->pinsp();
+        } else if (AstStructSel* const structSelp = VN_CAST(curp, StructSel)) {
+            fromp = structSelp->fromp();
+        } else if (AstMemberRef* const memberRefp = VN_CAST(curp, MemberRef)) {
+            fromp = memberRefp->fromp();
+        } else {
+            return nullptr;
+        }
+        if (indexp && !fromp->user1() && isRandIndexp(indexp)) return curp;
+        curp = fromp;
+    }
 }

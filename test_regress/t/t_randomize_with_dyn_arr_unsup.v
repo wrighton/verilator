@@ -4,44 +4,20 @@
 // SPDX-FileCopyrightText: 2026 Antmicro
 // SPDX-License-Identifier: CC0-1.0
 
-// verilog_format: off
-`define stop $stop
-`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
-// verilog_format: on
-
-typedef int int_arr_t[];
-
-class C;
-  rand int x;
-  rand bit [1:0] foo;
+class Obj;
 endclass
 
-class Cls4;
-  int_arr_t arr;
-  task body();
-    C c;
-    c = new;
-    arr = new[2];
-    arr[0] = 123;
-    arr[1] = 124;
-    repeat (40) begin
-      if (c.randomize() with {
-            solve foo before x;
-            x == arr[bit'(foo)];
-            foo <= 1;
-          } != 1)
-        $stop;
-      `checkd(c.x, arr[bit'(c.foo)]);
-    end
-  endtask
+class C;
+  rand int idx;
+  Obj objs[2];
+  Obj qobjs[$];
 endclass
 
 module t;
-  Cls4 c4;
+  C c;
   initial begin
-    c4 = new;
-    c4.body();
-    $write("*-* All Finished *-*\n");
-    $finish;
+    c = new;
+    void'(c.randomize() with {objs[idx] == null;});
+    void'(c.randomize() with {qobjs[idx] == null;});
   end
 endmodule
