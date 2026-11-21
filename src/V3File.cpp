@@ -734,9 +734,32 @@ int V3OutFormatter::endLevels(const char* strg) {
     return levels;
 }
 
+// True for characters with no special meaning to putns or putcNoTracking; '\0' ends a run.
+static bool isPlainChar(char chr) VL_PURE {
+    switch (chr) {
+    case '\0':
+    case '\t':
+    case '\n':
+    case ' ':
+    case '"':
+    case '&':
+    case '(':
+    case ')':
+    case '/':
+    case '<':
+    case '=':
+    case '>':
+    case '\\':
+    case '{':
+    case '|':
+    case '}': return false;
+    default: return true;
+    }
+}
+
 void V3OutFormatter::putns(const AstNode* nodep, const char* strg) {
     if (!v3Global.opt.decoration()) {
-        putsOutput(strg);
+        putsOutput(strg, std::strlen(strg));
         return;
     }
 
@@ -773,6 +796,19 @@ void V3OutFormatter::putns(const AstNode* nodep, const char* strg) {
             cp += len - 1;
             continue;
         }
+        // Copy a run of plain characters at once, applying their per-character effects. A
+        // Verilog word start takes the per-character path below to check for keywords.
+        if (isPlainChar(*cp) && !(wordstart && m_lang == LA_VERILOG)) {
+            const char* const runp = cp;
+            while (isPlainChar(cp[1])) ++cp;
+            const size_t len = static_cast<size_t>(cp + 1 - runp);
+            putsOutput(runp, len);
+            m_column += static_cast<int>(len);
+            m_nobreak = false;
+            m_inBackslash = false;
+            equalsForBracket = false;
+            continue;
+        }
         putcNoTracking(*cp);
         if (std::isalpha(*cp)) {
             if (wordstart && m_lang == LA_VERILOG && tokenNotStart(cp)) notstart = true;
@@ -781,7 +817,7 @@ void V3OutFormatter::putns(const AstNode* nodep, const char* strg) {
         }
         const bool wasInBackslash = m_inBackslash;
         m_inBackslash = false;
-        switch (*cp) {
+        switch (*cp) {  // Characters handled here must not be isPlainChar
         case '\n':
             ++m_lineno;
             wordstart = true;
@@ -903,7 +939,7 @@ void V3OutFormatter::putsQuoted(const string& strg) {
 }
 void V3OutFormatter::putsNoTracking(const string& strg) {
     if (!v3Global.opt.decoration()) {
-        putsOutput(strg.c_str());
+        putsOutput(strg.c_str(), std::strlen(strg.c_str()));
         return;
     }
     // Don't track {}'s, probably because it's a $display format string
@@ -915,7 +951,7 @@ void V3OutFormatter::putcNoTracking(char chr) {
         putcOutput(chr);
         return;
     }
-    switch (chr) {
+    switch (chr) {  // Characters handled here must not be isPlainChar
     case '\n':
         ++m_lineno;
         m_column = 0;
