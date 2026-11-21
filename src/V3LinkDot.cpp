@@ -5451,7 +5451,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                        || VN_IS(foundp->nodep(), Module)) {  // if top
                 if (allowScope) {
                     ok = true;
-                    m_ds.m_dotText = VString::dot(m_ds.m_dotText, ".", nodep->name());
+                    // Like a task used as scope (see below), a block in one is not in the text.
+                    // Only such a task leaves no text before a later component: 'pkg::' and
+                    // 'Cls::' also leave none, but no block follows them but through a task,
+                    // and what follows 'local::' is first.
+                    if (first || m_ds.m_dotPos != DP_SCOPE || !m_ds.m_dotText.empty()) {
+                        m_ds.m_dotText = VString::dot(m_ds.m_dotText, ".", nodep->name());
+                    }
                     m_ds.m_dotSymp = foundp;
                     m_ds.m_dotPos = DP_SCOPE;
                     if (m_ds.m_disablep && VN_IS(foundp->nodep(), NodeBlock)) {
@@ -5587,6 +5593,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 } else if (allowVar) {
+                    // Items of an automatic task or function cannot be referenced hierarchically
+                    // from outside of it
+                    VSymEnt* scopeSymp = m_ds.m_dotSymp;
+                    while (VN_IS(scopeSymp->nodep(), NodeBlock)) scopeSymp = scopeSymp->parentp();
+                    const AstNodeFTask* const ftaskp = VN_CAST(scopeSymp->nodep(), NodeFTask);
+                    if (!first && ftaskp && ftaskp != m_ftaskp && varp->lifetime().isAutomatic()) {
+                        if (varp->isIO() && !ftaskp->lifetime().isAutomatic()) {
+                            // Static task/function ports are static, though V3LinkParse marks
+                            // them automatic when not needed after the call
+                            varp->lifetime(VLifetime::STATIC_IMPLICIT);
+                        } else {
+                            nodep->v3error("Automatic variable cannot be referenced"
+                                           " hierarchically (IEEE 1800-2023 13.3.1, 13.4.2): "
+                                           << varp->prettyNameQ());
+                        }
+                    }
                     AstNode* newp;
                     if (m_ds.m_dotText != "") {
                         AstVarXRef* const refp
