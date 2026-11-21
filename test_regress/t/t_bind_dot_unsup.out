@@ -1,14 +1,35 @@
-%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:14:12: Unsupported: bind with dotted bind_target_scope
-   14 |   bind u_a1.u_b1 mycheck #(.CHECK('h11)) u_check ();
-      |            ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:64:18: Unsupported: bind to an instance path inside a generate construct.
+   64 |     bind t.gen[0].u_leaf probe_if u_probe ();
+      |                  ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:15:12: Unsupported: bind with dotted bind_target_scope
-   15 |   bind u_a1.u_b2 mycheck #(.CHECK('h12)) u_check ();
-      |            ^
-%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:16:12: Unsupported: bind with dotted bind_target_scope
-   16 |   bind u_a2.u_b1 mycheck #(.CHECK('h21)) u_check ();
-      |            ^
-%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:17:12: Unsupported: bind with dotted bind_target_scope
-   17 |   bind u_a2.u_b2 mycheck #(.CHECK('h22)) u_check ();
-      |            ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:68:9: Unsupported: bind target path starting at a module that is not a top module.
+   68 | bind sub.u_leaf probe_if u_probe ();
+      |         ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:21:8: Unsupported: binds of instances named 'u_mon2' of different modules into iterations of one generate loop.
+   21 |   bind gen[0].u_leaf sub u_mon2 ();
+      |        ^~~
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:54:16: Unsupported: bind target path index that is not made of literals.
+   54 |   bind gen[IDX].u_leaf probe_if u_probe ();
+      |                ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:55:17: Unsupported: bind target path with a range or multiple indices.
+   55 |   bind gen[0][0].u_leaf probe_if u_probe ();
+      |                 ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:56:13: Unsupported: bind to an arrayed instance.
+   56 |   bind u_arr[0] probe_if u_probe ();
+      |             ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:57:15: Unsupported: bind target path that may go through an unnamed generate block.
+   57 |   bind genblk2.u_leaf probe_if u_probe ();
+      |               ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:58:15: Unsupported: bind target path that may go through an unnamed generate block.
+   58 |   bind g_inner.u_leaf probe_if u_probe ();
+      |               ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:59:13: Unsupported: bind target path through generate blocks with the same name 'g_alt'.
+   59 |   bind g_alt.u_leaf probe_if u_probe ();
+      |             ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:60:9: Unsupported: bind target path that may go through an unnamed generate block.
+   60 |   bind t.u_in_decl probe_if u_probe ();
+      |         ^
+%Error-UNSUPPORTED: t/t_bind_dot_unsup.v:62:8: Unsupported: binds of instances named 'u_mon' of different modules into iterations of one generate loop.
+   62 |   bind gen[1].u_leaf leaf u_mon ();
+      |        ^~~
 %Error: Exiting due to

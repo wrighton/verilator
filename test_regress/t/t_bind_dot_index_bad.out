@@ -1,0 +1,8 @@
+%Error: t/t_bind_dot_index_bad.v:24:6: In defparam, the path names no instance
+   24 | bind t.u_sub.gen[5].u_leaf probe_if u_probe ();   
+      |      ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_bind_dot_index_bad.v:17:8: In defparam, the path names no instance
+   17 |   bind gen[2].u_leaf probe_if u_probe ();   
+      |        ^~~
+%Error: Exiting due to

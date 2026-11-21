@@ -21,6 +21,13 @@
 //          Cells:
 //              Read module if needed
 //              Link to module that instantiates it
+//          Bind to a module:
+//              Add the bound instances to the module
+//          Bind to an instance path, once all cells are linked:
+//              Add to the instance's module a parameter, '__Vbind<n>', enabling the bound
+//              instances under a generate if, and replace the bind with a defparam setting
+//              the parameter on that instance only. V3Param then specializes the instance,
+//              and the modules above it on the path.
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -29,6 +36,7 @@
 
 #include "V3Control.h"
 #include "V3Graph.h"
+#include "V3LinkDot.h"
 #include "V3Parse.h"
 #include "V3Stats.h"
 #include "V3SymTable.h"
@@ -214,6 +222,85 @@ public:
     }
 };
 
+//######################################################################
+// Instances and named generate blocks declared in the scope of a module or generate block
+
+struct LinkCellsScope final {
+    // Name -> instances and generate blocks of the name, more than one only for generate
+    // blocks in alternatives of generate ifs and cases (IEEE 1800-2023 27.5)
+    std::unordered_map<string, std::vector<AstNode*>> m_items;
+    bool m_hasUnnamed = false;  // Has generate blocks V3LinkParse names (IEEE 1800-2023 27.6)
+};
+
+// Component of the instance path of a bind, see LinkCellsVisitor::pathBindTarget
+struct LinkCellsPathStep final {
+    string m_name;  // Name of the instance or generate block
+    string m_index;  // Index selecting an iteration of the generate loop, if any
+    const AstNode* m_scopep;  // Module or generate block whose scope contains it
+};
+using LinkCellsPath = std::vector<LinkCellsPathStep>;
+
+// Instance bound into an instance path, see LinkCellsVisitor::linkPathBind
+struct LinkCellsPathBound final {
+    string m_name;  // Name of the bound instance
+    string m_modName;  // Module of the bound instance
+    LinkCellsPath m_path;  // Path to the instance it is bound into
+};
+
+class LinkCellsScopeVisitor final : public VNVisitorConst {
+    LinkCellsScope& m_scope;  // Scope being found
+    bool m_inCond = false;  // Under a generate if or case, so not directly in the scope
+    bool m_nestedOk = false;  // An if directly under is not a new scope (see V3LinkParse)
+
+    // VISITORS
+    void visit(AstCell* nodep) override {
+        if (!m_inCond) m_scope.m_items[nodep->name()].push_back(nodep);
+    }
+    void visit(AstGenBlock* nodep) override {
+        if (!nodep->name().empty()) {
+            m_scope.m_items[nodep->name()].push_back(nodep);
+        } else if (!nodep->genforp() && !nodep->unnamedScope()
+                   && (!m_inCond
+                       || (m_nestedOk && nodep->implied() && !nodep->nextp()
+                           && VN_IS(nodep->itemsp(), GenIf) && !nodep->itemsp()->nextp()))) {
+            iterateChildrenConst(nodep);
+        } else {
+            m_scope.m_hasUnnamed = true;
+        }
+    }
+    void visit(AstGenIf* nodep) override {
+        VL_RESTORER(m_inCond);
+        VL_RESTORER(m_nestedOk);
+        m_inCond = true;
+        m_nestedOk = false;
+        iterateAndNextConstNull(nodep->thensp());
+        m_nestedOk = true;
+        iterateAndNextConstNull(nodep->elsesp());
+    }
+    void visit(AstGenCase* nodep) override {
+        VL_RESTORER(m_inCond);
+        VL_RESTORER(m_nestedOk);
+        m_inCond = true;
+        m_nestedOk = true;
+        for (AstGenCaseItem* const itemp : nodep->itemspList()) {
+            iterateAndNextConstNull(itemp->itemsp());
+        }
+    }
+    void visit(AstNode*) override {}  // Nothing else declares a name in this scope
+
+    LinkCellsScopeVisitor(AstNode* stmtsp, LinkCellsScope& scope)
+        : m_scope{scope} {
+        iterateAndNextConstNull(stmtsp);
+    }
+
+public:
+    static void apply(AstNode* stmtsp, LinkCellsScope& scope) {
+        LinkCellsScopeVisitor{stmtsp, scope};
+    }
+};
+
+//######################################################################
+
 class LinkCellsVisitor final : public VNVisitor {
     // NODE STATE
     //  Entire netlist:
@@ -235,6 +322,13 @@ class LinkCellsVisitor final : public VNVisitor {
     AstPackage* m_pkgp = nullptr;  // Package being visited, which is or contains m_modp
     AstVar* m_varp = nullptr;  // Current variable
     bool m_fromBind = false;  // Visiting cells inserted by a bind directive
+    bool m_inGenerate = false;  // Visiting a generate construct
+    // Instance a path names -> instances bound into it
+    std::unordered_map<const AstCell*, std::vector<LinkCellsPathBound>> m_pathBounds;
+    // Binds to an instance path, each with the module or package containing it
+    std::vector<std::pair<AstBind*, AstNodeModule*>> m_pathBinds;
+    // Module or generate block -> names in its scope, for binds to an instance path
+    std::unordered_map<const AstNode*, LinkCellsScope> m_scopes;
     VSymGraph m_mods;  // Symbol table of all module names
     std::unordered_map<string, AstPackage*> m_packages;  // Packages table
     std::unordered_set<string> m_autoLoaded;  // Names already searched for on disk
@@ -407,6 +501,198 @@ class LinkCellsVisitor final : public VNVisitor {
         return finalEdgep->cellp();
     }
 
+    // Return if an instance of the module is linked, so it is not a top module
+    bool isInstantiated(AstNodeModule* modp) {
+        for (const V3GraphEdge& edge : vertex(modp)->inEdges()) {
+            if (edge.cast<CellEdge>()) return true;
+        }
+        return false;
+    }
+    const LinkCellsScope& scopeNames(const AstNode* ownerp, AstNode* stmtsp) {
+        const auto pair = m_scopes.emplace(ownerp, LinkCellsScope{});
+        if (pair.second) LinkCellsScopeVisitor::apply(stmtsp, pair.first->second);
+        return pair.first->second;
+    }
+    // Find the instance a bind's path names, or report why not. The path starts in the scope
+    // of the bind, at the module containing the bind, or at a top module. Set pathr to the
+    // path from instances of the module it starts in.
+    AstCell* pathBindTarget(AstBind* nodep, AstNodeModule* scopeModp, LinkCellsPath& pathr) {
+        AstNode* const targetp = nodep->targetp();
+        V3LinkDot::PathSegments segs;
+        if (!V3LinkDot::pathSegments(targetp, segs)) {
+            targetp->v3warn(E_UNSUPPORTED,
+                            "Unsupported: bind target path with a range or multiple indices.");
+            return nullptr;
+        }
+        const AstNode* ownerp = scopeModp;
+        AstNode* stmtsp = scopeModp->stmtsp();
+        AstCell* cellp = nullptr;
+        for (size_t i = 0; i < segs.size(); ++i) {
+            const string& name = segs[i].first;
+            const AstNodeExpr* const indexp = segs[i].second;
+            const LinkCellsScope& scope = scopeNames(ownerp, stmtsp);
+            const auto it = scope.m_items.find(name);
+            AstNodeModule* const rootModp = (it == scope.m_items.end() && i == 0)
+                                                ? findModuleSym(name, scopeModp->libname())
+                                                : nullptr;
+            if (rootModp && rootModp != scopeModp && isInstantiated(rootModp)) {
+                targetp->v3warn(E_UNSUPPORTED, "Unsupported: bind target path starting at a "
+                                               "module that is not a top module.");
+                return nullptr;
+            }
+            if (it == scope.m_items.end() && !rootModp) {
+                if (scope.m_hasUnnamed) {
+                    targetp->v3warn(E_UNSUPPORTED, "Unsupported: bind target path that may go "
+                                                   "through an unnamed generate block.");
+                } else {
+                    targetp->v3error("Bind target path has no instance or generate block named "
+                                     << AstNode::prettyNameQ(name) << ".");
+                }
+                return nullptr;
+            }
+            if (!rootModp && it->second.size() > 1) {
+                targetp->v3warn(E_UNSUPPORTED, "Unsupported: bind target path through generate "
+                                               "blocks with the same name "
+                                                   << AstNode::prettyNameQ(name) << ".");
+                return nullptr;
+            }
+            AstGenBlock* const blockp = rootModp ? nullptr : VN_CAST(it->second.front(), GenBlock);
+            cellp = rootModp ? nullptr : VN_CAST(it->second.front(), Cell);
+            const bool loop = blockp && blockp->genforp();
+            if (indexp && !loop) {
+                if (cellp && cellp->rangep()) {
+                    targetp->v3warn(E_UNSUPPORTED, "Unsupported: bind to an arrayed instance.");
+                } else {
+                    targetp->v3error("Bind target path selects an index of "
+                                     << AstNode::prettyNameQ(name)
+                                     << ", which is not a generate loop (IEEE 1800-2023 27.4).");
+                }
+                return nullptr;
+            }
+            if (!indexp && loop) {
+                targetp->v3error("Bind target path needs an index to select an iteration of "
+                                 "generate loop "
+                                 << AstNode::prettyNameQ(name) << " (IEEE 1800-2023 27.4).");
+                return nullptr;
+            }
+            if (indexp && !VN_IS(indexp, Const)) {
+                targetp->v3warn(E_UNSUPPORTED, "Unsupported: bind target path index that is not "
+                                               "made of literals.");
+                return nullptr;
+            }
+            if (!rootModp) {
+                pathr.push_back(
+                    {name, indexp ? cvtToStr(VN_AS(indexp, Const)->toSInt()) : "", ownerp});
+            }
+            if (rootModp) {
+                ownerp = rootModp;
+                stmtsp = rootModp->stmtsp();
+            } else if (loop) {
+                ownerp = blockp;
+                stmtsp = blockp->genforp()->itemsp();
+            } else if (blockp) {
+                ownerp = blockp;
+                stmtsp = blockp->itemsp();
+            } else {
+                AstNodeModule* const modp = cellp->modp();  // Null after a module error
+                ownerp = modp;
+                stmtsp = modp ? modp->stmtsp() : nullptr;
+            }
+        }
+        if (!cellp) {
+            targetp->v3error("Bind target path names a generate block, not an instance.");
+            return nullptr;
+        }
+        return cellp;
+    }
+
+    // Return if the paths, from instances of the modules they start in, name the same scopes
+    // before generate loops are unrolled; set sameIterations if they also select the same
+    // generate loop iterations, so name the same instance
+    static bool pathsOverlap(const LinkCellsPath& ap, const LinkCellsPath& bp,
+                             bool& sameIterations) {
+        const LinkCellsPath& shortp = ap.size() <= bp.size() ? ap : bp;
+        const LinkCellsPath& longp = ap.size() <= bp.size() ? bp : ap;
+        const size_t skip = longp.size() - shortp.size();
+        // The longer path goes through an instance of the module the shorter one starts in,
+        // directly in its scope, and on through the same scopes
+        sameIterations = true;
+        for (size_t i = 0; i < shortp.size(); ++i) {
+            if (shortp[i].m_scopep != longp[skip + i].m_scopep) return false;
+            if (shortp[i].m_name != longp[skip + i].m_name) return false;
+            if (shortp[i].m_index != longp[skip + i].m_index) sameIterations = false;
+        }
+        return true;
+    }
+
+    // Each specialization of the module copies the generate ifs of all binds to instances of
+    // it, so N binds to instances of one module make O(N^2) nodes until V3Param folds them; N
+    // is the number of bind statements, so this is acceptable
+    void linkPathBind(AstBind* nodep, AstNodeModule* scopeModp, size_t bindNum) {
+        LinkCellsPath path;
+        const AstCell* const targetCellp = pathBindTarget(nodep, scopeModp, path);
+        AstNodeModule* const modp = targetCellp ? targetCellp->modp() : nullptr;
+        if (!modp || modp->verilatorLib()) {
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            return;
+        }
+        // V3LinkDot first resolves names before generate loops are unrolled, so in all their
+        // iterations, which paths from different modules may name
+        std::vector<LinkCellsPathBound>& boundsr = m_pathBounds[targetCellp];
+        for (AstNode* cellp = nodep->cellsp(); cellp; cellp = cellp->nextp()) {
+            const AstCell* const bindCellp = VN_AS(cellp, Cell);
+            // Binds into one instance are few, so search them all. Binds into the same iteration
+            // of one instance are duplicates, which V3LinkDot reports once V3Param keeps them.
+            for (const LinkCellsPathBound& other : boundsr) {
+                bool sameIterations = false;
+                if (other.m_name == bindCellp->name() && other.m_modName != bindCellp->modName()
+                    && pathsOverlap(other.m_path, path, sameIterations) && !sameIterations) {
+                    nodep->v3warn(E_UNSUPPORTED, "Unsupported: binds of instances named "
+                                                     << bindCellp->prettyNameQ()
+                                                     << " of different modules into iterations "
+                                                        "of one generate loop.");
+                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                    return;
+                }
+            }
+            boundsr.push_back({bindCellp->name(), bindCellp->modName(), path});
+        }
+        // The parameter enabling the bound instances in the module
+        FileLine* const flp = nodep->cellsp()->fileline();
+        const string name = "__Vbind" + cvtToStr(bindNum);
+        AstVar* const varp = new AstVar{flp, VVarType::GPARAM, name, VFlagBitPacked{}, 1};
+        varp->ansi(true);  // Not made a localparam by a parameter port list, see V3LinkParse
+        varp->isInternal(true);
+        varp->valuep(new AstConst{flp, AstConst::BitFalse{}});
+        modp->addStmtsp(varp);
+        AstNode* const cellsp = nodep->cellsp()->unlinkFrBackWithNext();
+        string names;
+        for (const LinkCellsPathStep& step : path) names = VString::dot(names, ".", step.m_name);
+        for (AstNode* cellp = cellsp; cellp; cellp = cellp->nextp()) {
+            VN_AS(cellp, Cell)
+                ->bindTarget(VN_AS(path.front().m_scopep, NodeModule)->origName(), names);
+        }
+        modp->addStmtsp(new AstGenIf{flp, new AstParseRef{flp, name}, cellsp, nullptr});
+        {
+            // Under the module containing the bind, not the target module, in the graph, as
+            // the bound instances are only in the specialization of the target instance
+            VL_RESTORER(m_modp);
+            VL_RESTORER(m_fromBind);
+            m_modp = scopeModp;
+            m_fromBind = true;
+            iterateAndNextNull(cellsp);
+        }
+        // Set it on the instance only
+        FileLine* const defParamFlp = new FileLine{nodep->fileline()};
+        defParamFlp->warnOff(V3ErrorCode::DEFPARAM, true);
+        AstDefParam* const defParamp = new AstDefParam{
+            defParamFlp, VN_AS(nodep->targetp()->unlinkFrBack(), NodeExpr),
+            new AstParseRef{defParamFlp, name}, new AstConst{defParamFlp, AstConst::BitTrue{}}};
+        defParamp->fromBind(true);
+        nodep->replaceWith(defParamp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+
     void assignParamNumbers(AstPin* const firstPinp) {
         const bool firstOrdered = firstPinp && firstPinp->name() == "";
         for (AstPin* const pinp : VNList<AstPin>{firstPinp}) {
@@ -453,6 +739,17 @@ class LinkCellsVisitor final : public VNVisitor {
                 }
             }
         }
+
+        AstNode* lastModp = nodep->modulesp()->lastp();
+        for (size_t i = 0; i < m_pathBinds.size(); ++i) {
+            linkPathBind(m_pathBinds[i].first, m_pathBinds[i].second, i);
+            // Link modules read from the library for the bound instances, maybe with more binds
+            for (AstNode* modp = lastModp->nextp(); modp; modp = modp->nextp()) {
+                iterate(modp);
+                lastModp = modp;
+            }
+        }
+        m_scopes.clear();
 
         // Find levels in graph
         m_graph.removeRedundantEdgesMax(&V3GraphEdge::followAlwaysTrue);
@@ -602,18 +899,25 @@ class LinkCellsVisitor final : public VNVisitor {
         }
     }
 
+    void visit(AstNodeGen* nodep) override {
+        VL_RESTORER(m_inGenerate);
+        m_inGenerate = true;
+        iterateChildren(nodep);
+    }
     void visit(AstBind* nodep) override {
         // Bind: Has cells underneath that need to be put into the new
         // module, and cells which need resolution
-        // TODO this doesn't allow bind to dotted hier names, that would require
-        // this move to post param, which would mean we do not auto-read modules
-        // and means we cannot compute module levels until later.
         UINFO(4, "Link Bind: " << nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
         if (!targetp) {
-            nodep->targetp()->v3warn(E_UNSUPPORTED,
-                                     "Unsupported: bind with dotted bind_target_scope");
-            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            if (m_inGenerate) {
+                nodep->targetp()->v3warn(E_UNSUPPORTED, "Unsupported: bind to an instance path "
+                                                        "inside a generate construct.");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
+            }
+            // The path may go through instances not linked yet
+            m_pathBinds.emplace_back(nodep, m_modp);
             return;
         }
         const std::string name = targetp->name();
