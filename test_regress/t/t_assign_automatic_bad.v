@@ -61,6 +61,73 @@ module t (
     c.m_ok2[3:0] <= 2;  // OK: nonblocking class non-static, part of it
   end
 
+  // Nor reading them in a force, whose value is read after the subroutine returns
+  reg forced;
+  bit static_bit;
+  function automatic bit get_bit(bit x);
+    return x;
+  endfunction
+  task static_arg(bit v);
+    force forced = v;  // OK: argument of a static task is static
+  endtask
+  task automatic auto_arg(bit v);
+    bit lv;
+    force forced = v;  // Error: force reads an argument of an automatic task
+    force forced = lv;  // Error: force reads an automatic
+    force forced = get_bit(static_bit);  // OK: the call evaluates its own argument
+  endtask
+  task automatic ref_arg(ref bit v);
+    force forced = v;  // Error: force reads a reference argument
+  endtask
+  task automatic cref_arg(const ref bit v);
+    force forced = v;  // Error: force reads a constant reference argument
+  endtask
+
+  class ForceCls;
+    bit m_prop;
+    static ForceCls s_self;
+    static ForceCls s_arr[2];
+    static ForceCls s_queue[$];
+    static ForceCls s_assoc[string];
+    static ForceCls s_dyn[];
+    static bit [31:0] s_vec;
+    task drive();
+      force forced = m_prop;  // OK: a property lasts as long as its object
+      force forced = s_self.m_prop;  // OK: property read through a static handle
+    endtask
+    task auto_handle();
+      automatic ForceCls lh = s_self;
+      force forced = lh.m_prop;  // Error: an automatic handle names the value
+    endtask
+    task auto_handle_arg(ForceCls h);
+      force forced = h.m_prop;  // Error: an automatic argument names the value
+    endtask
+    task auto_handle_array();
+      automatic ForceCls la[2];
+      force forced = la[0].m_prop;  // Error: an element of an automatic array of handles
+    endtask
+    task auto_index();
+      automatic int which = 0;
+      force forced = s_arr[which].m_prop;  // Error: an automatic index of a static array
+    endtask
+    task auto_index_queue();
+      automatic int which = 0;
+      force forced = s_queue[which].m_prop;  // Error: an automatic index of a queue
+    endtask
+    task auto_index_assoc();
+      automatic string key = "a";
+      force forced = s_assoc[key].m_prop;  // Error: an automatic key of an associative array
+    endtask
+    task auto_index_dyn();
+      automatic int which = 0;
+      force forced = s_dyn[which].m_prop;  // Error: an automatic index of a dynamic array
+    endtask
+    task auto_sel_bound();
+      automatic int lo = 0;
+      force forced = s_vec[lo];  // Error: an automatic index of a packed vector
+    endtask
+  endclass
+
   // Nor reading automatic variables in the event control of a non-blocking assignment
   reg areg;
   task automatic ev_tsk;
