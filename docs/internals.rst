@@ -646,6 +646,37 @@ The coroutines get resumed at trigger evaluation time, evaluate their local
 triggers, optionally await the post update step, and if the trigger is set,
 await proper resumption in the 'act' eval step.
 
+A coroutine whose event control waits only on one event variable, referenced
+directly rather than through a class or virtual interface handle, without an
+``iff`` condition, and whose storage outlives the wait (a static event, a
+member of the class of the waiting method, or any event when events are
+assignable), does not evaluate a trigger. It awaits
+``eventTrigger(event)``, which adds it to the wait list of the event.
+Firing the event puts that list on the scheduler's chain of pending lists,
+and the next trigger evaluation moves the waiting coroutines to the
+resumption step; they resume in the order they started waiting. A wait
+list only holds coroutines that waited before the event fired
+(IEEE 1800-2023 15.5.2), so a later wait starts a new list, and only the
+newest list of an event refers to it. Killing a waiting process puts it on
+the killed chain of its wait list. In ordinary evaluation, the next trigger
+evaluation drops it from its slot, and compacts the list once half of its
+slots are empty. Named-event wait lists are not drained once ``$finish`` is
+pending, as for other named-event waits, and the waiters left on them are
+destroyed when the model finishes or is destroyed, after their wait lists
+are released. The lists drained together are drained in the order they
+became live, so their waiters resume in the same order on any number of
+threads.
+
+In a model with parallel MTasks, only firing an event may happen in
+parallel, and for the wait list it only puts the list on the pending chain,
+without a lock: waits start, and waiting processes are killed, only while
+no other MTask runs, as an MTask that controls processes runs alone (see
+``V3OrderMTaskFixHazards.cpp``). This does not cover the model's record of
+triggered events, which firing also updates, nor process control from user
+``$c`` code, which the ordering does not see. A shallow copy of a class
+object still gives the copy an event of its own, rather than sharing the
+event of the original (IEEE 1800-2023 8.12, 15.5.5).
+
 ``VlForkSync``
 ~~~~~~~~~~~~~~
 
@@ -694,7 +725,10 @@ clocked ``always`` as an event control at the start of the loop body.
   local trigger which it evaluates inline. It awaits a dynamic trigger
   scheduler multiple times: for trigger evaluation, updates, and
   resumption. The dynamic trigger scheduler is responsible for resuming the
-  coroutine at the correct point of evaluation.
+  coroutine at the correct point of evaluation. If it waits only on a named
+  event variable whose storage outlives the wait, not through a handle and
+  without ``iff``, it instead awaits the wait list of the event, and is
+  resumed after the event fires.
 
 - delays are turned into ``co_await`` on a delay scheduler's ``delay``
   method. The created ``AstCAwait`` nodes also reference a special sentree
