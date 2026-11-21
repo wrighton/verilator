@@ -74,6 +74,45 @@ class DistVarWeightRange;
   }
 endclass
 
+// A weight of zero is a constraint (IEEE 1800-2023 18.5.3), also when only known at runtime
+class DistVarZeroWeight;
+  rand bit [7:0] x;
+  int w0, w1;
+  constraint c {
+    x dist {
+      8'd0 := w0,
+      [8'd1 : 8'd15] :/ w1,
+      8'd16 := 1
+    };
+  }
+endclass
+
+// A random weight is solved together with the value
+class DistRandWeight;
+  rand bit [7:0] x;
+  rand bit [2:0] w;
+  constraint c {
+    x dist {
+      8'd0 := w,
+      8'd1 := 1
+    };
+  }
+endclass
+
+// A runtime weight per foreach element
+class DistForeachZeroWeight;
+  rand bit [3:0] a[3];
+  int wts[3];
+  constraint c {
+    foreach (a[i]) {
+      a[i] dist {
+        0 := wts[i],
+        [1 : 15] :/ 1
+      };
+    }
+  }
+endclass
+
 class DistVarWeightWithExclusion;
   rand bit [7:0] x;
   constraint c {
@@ -173,6 +212,60 @@ module t;
       end
     end
     `check_range(count_range_high, total * 60 / 100, total * 90 / 100);
+
+    begin
+      DistVarZeroWeight vzw;
+      vzw = new;
+      vzw.w0 = 0;
+      vzw.w1 = 1;
+      randomize_result = vzw.randomize() with {x == 0;};
+      `checkd(randomize_result, 0);
+      repeat (20) begin
+        randomize_result = vzw.randomize() with {x < 16;};
+        `checkd(randomize_result, 1);
+        `check_range(vzw.x, 1, 15);
+      end
+      vzw.w0 = 1;
+      vzw.w1 = 0;
+      randomize_result = vzw.randomize() with {x inside {[1 : 15]};};
+      `checkd(randomize_result, 0);
+      repeat (20) begin
+        randomize_result = vzw.randomize() with {x < 16;};
+        `checkd(randomize_result, 1);
+        `checkd(vzw.x, 0);
+      end
+    end
+
+    // All weights zero at runtime: no value is allowed
+    vw.w1 = 0;
+    vw.w2 = 0;
+    randomize_result = vw.randomize();
+    `checkd(randomize_result, 0);
+
+    begin
+      DistForeachZeroWeight dfz;
+      dfz = new;
+      dfz.wts = '{0, 1, 0};
+      randomize_result = dfz.randomize() with {a[0] == 0;};
+      `checkd(randomize_result, 0);
+      randomize_result = dfz.randomize() with {a[1] == 0;};
+      `checkd(randomize_result, 1);
+      `checkd(dfz.a[1], 0);
+      `check_range(dfz.a[0], 1, 15);
+      `check_range(dfz.a[2], 1, 15);
+    end
+
+    begin
+      DistRandWeight drw;
+      drw = new;
+      repeat (20) begin
+        randomize_result = drw.randomize() with {x == 0;};
+        `checkd(randomize_result, 1);
+        `check_range(drw.w, 1, 7);
+      end
+      randomize_result = drw.randomize() with {x == 0; w == 0;};
+      `checkd(randomize_result, 0);
+    end
 
     vwwe = new;
     repeat (total) begin
