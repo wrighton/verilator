@@ -8827,7 +8827,9 @@ class WidthVisitor final : public VNVisitor {
         nodep->dtypeFrom(m_vup->dtypep());
     }
     void visit(AstCReturn* nodep) override { nodep->v3fatalSrc("Should not exist yet"); }
-    void visit(AstConstraintRef* nodep) override { userIterateChildren(nodep, nullptr); }
+    void visit(AstConstraintRef* nodep) override {
+        userIterateChildren(nodep, WidthVP{SELF, BOTH}.p());
+    }
     void visit(AstDisplay* nodep) override {
         assertAtStatement(nodep);
         if (nodep->filep()) iterateCheckFileDesc(nodep, nodep->filep(), BOTH);
