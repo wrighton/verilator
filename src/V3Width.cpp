@@ -9515,7 +9515,9 @@ class WidthVisitor final : public VNVisitor {
             AstVar* const varp = VN_AS(declp, Var);
             if (varp->isIO()) continue;
             m_assertLocalVars.emplace(varp);
-            // A local variable initializer is not lowered
+            // A sequence local variable initializer is not lowered; V3AssertElab lowers a property
+            // one where the property is inlined
+            if (VN_IS(nodep, Property)) continue;
             if (AstNode* const valuep = varp->valuep()) {
                 valuep->v3warn(E_UNSUPPORTED, "Unsupported: initializer of a "
                                                   << kindp
