@@ -4,14 +4,18 @@
 // SPDX-FileCopyrightText: 2017 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
+class Obj;
+endclass
+
 interface dummy_if ();
   logic signal;
+  Obj h;
 
   modport slave
     (output signal);
 
   modport master
-    (input signal);
+    (input signal, input h);
 endinterface: dummy_if
 
 module sub
@@ -24,6 +28,7 @@ module sub
   );
 
   assign dummy_in.signal = signal_i;
+  initial dummy_in.h = new;
   assign signal_o = dummy_out.signal;
 endmodule
 
