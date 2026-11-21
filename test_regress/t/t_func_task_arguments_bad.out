@@ -71,12 +71,6 @@
                                            : ... note: In instance 't'
    70 |     bytes_const_ref_task("ab");
       |                          ^~~~
-%Warning-WIDTHTRUNC: t/t_func_task_arguments_bad.v:71:23: Function output argument 'data' requires 8 bits, but connection's CONST '16'h6162' generates 16 bits.
-                                                        : ... note: In instance 't'
-   71 |     bytes_output_task("ab");
-      |                       ^~~~
-                     ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
-                     ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
 %Error: t/t_func_task_arguments_bad.v:71:23: Function Argument expects 'byte$[1:0]', got 'bit[15:0]'
                                            : ... note: In instance 't'
    71 |     bytes_output_task("ab");
