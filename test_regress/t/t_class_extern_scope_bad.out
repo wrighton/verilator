@@ -1,0 +1,20 @@
+%Error: t/t_class_extern_scope_bad.v:12:17: Extern declaration's scope is not a defined class
+   12 |   function pkg::new();   
+      |                 ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_class_extern_scope_bad.v:17:26: Package/class for 'External definition :: reference' not found: 'NoSub'
+   17 |   function int pkg::Cls::NoSub::f();   
+      |                          ^~~~~
+%Error: t/t_class_extern_scope_bad.v:17:16: Extern declaration's scope is not a defined class
+   17 |   function int pkg::Cls::NoSub::f();   
+      |                ^~~
+%Error: t/t_class_extern_scope_bad.v:21:16: Package/class for 'External definition :: reference' not found: 'nosuch'
+   21 |   function int nosuch::Cls::f();   
+      |                ^~~~~~
+%Error: t/t_class_extern_scope_bad.v:21:16: Extern declaration's scope is not a defined class
+   21 |   function int nosuch::Cls::f();   
+      |                ^~~~~~
+%Error: t/t_class_extern_scope_bad.v:25:19: Extern declaration's scope is not a defined class
+   25 |   constraint pkg::cx { 1; }   
+      |                   ^~
+%Error: Exiting due to
