@@ -64,6 +64,17 @@ module t (
   assert property (@(posedge clk) cyc == 3 |-> always[2: $] a_dip3)
   else impl2_fail_q.push_back(cyc);
 
+  // Unranged always is always [0:$], also under other property operators
+  int bare_impl_fail_q[$];
+  int bare_nonovl_fail_q[$];
+  int bare_if_fail_q[$];
+  assert property (@(posedge clk) cyc == 3 |-> always a_dip)
+  else bare_impl_fail_q.push_back(cyc);
+  assert property (@(posedge clk) cyc == 3 |=> always a_dip)
+  else bare_nonovl_fail_q.push_back(cyc);
+  assert property (@(posedge clk) if (cyc == 3) always a_dip)
+  else bare_if_fail_q.push_back(cyc);
+
   always @(posedge clk) begin
     cyc <= cyc + 1;
     a_dip <= cyc != 6;
@@ -88,6 +99,12 @@ module t (
       `checkd(impl0_twice_fail_q[0], 7);
       `checkd(impl2_fail_q.size(), 1);
       `checkd(impl2_fail_q[0], 8);
+      `checkd(bare_impl_fail_q.size(), 1);
+      `checkd(bare_impl_fail_q[0], 7);
+      `checkd(bare_nonovl_fail_q.size(), 1);
+      `checkd(bare_nonovl_fail_q[0], 7);
+      `checkd(bare_if_fail_q.size(), 1);
+      `checkd(bare_if_fail_q[0], 7);
       $write("*-* All Finished *-*\n");
       $finish;
     end
