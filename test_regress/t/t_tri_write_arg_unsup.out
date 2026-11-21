@@ -1,0 +1,30 @@
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:38:13: Unsupported: Tristate variable written by subroutine argument or system function: 'v'
+                                                   : ... note: In instance 't'
+   38 |     t_inout(v);   
+      |             ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:39:18: Unsupported: Tristate variable written by subroutine argument or system function: 'v'
+                                                   : ... note: In instance 't'
+   39 |     r = f_output(v);   
+      |                  ^
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:40:17: Unsupported: Tristate variable written by subroutine argument or system function: 'v'
+                                                   : ... note: In instance 't'
+   40 |     r = f_inout(v);   
+      |                 ^
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:41:15: Unsupported: Tristate variable written by subroutine argument or system function: 'v'
+                                                   : ... note: In instance 't'
+   41 |     r = f_ref(v);   
+      |               ^
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:42:28: Unsupported: Tristate variable written by subroutine argument or system function: 'v'
+                                                   : ... note: In instance 't'
+   42 |     r = $sscanf("2", "%d", v);   
+      |                            ^
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:44:11: Unsupported tristate construct (not in propagation graph): VARREF 'v'
+                                                   : ... note: In instance 't'
+   44 |     t_out(v);   
+      |           ^
+%Error-UNSUPPORTED: t/t_tri_write_arg_unsup.v:45:30: Unsupported tristate construct (not in propagation graph): VARREF 'v'
+                                                   : ... note: In instance 't'
+   45 |     void'($sscanf("2", "%d", v));   
+      |                              ^
+%Error: Exiting due to
