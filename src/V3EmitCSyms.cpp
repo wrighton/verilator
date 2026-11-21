@@ -30,6 +30,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -120,7 +121,6 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     // STATE
     AstCFunc* m_cfuncp = nullptr;  // Current function
     AstNodeModule* m_modp = nullptr;  // Current module
-    const AstScope* m_scopep = nullptr;  // Current scope
     std::vector<ScopeModPair> m_scopes;  // Every scope by module
     std::vector<AstCFunc*> m_dpis;  // DPI functions
     std::vector<ModVarPair> m_modVars;  // Each public {mod,var}
@@ -132,7 +132,15 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     ScopeNames m_dpiScopeNames;  // Each unique AstScopeName for a DPI context import or export
     ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
     int m_scopeArraySize = 0;  // Number of scopes held in __Vscopesp
-    ScopeNames m_vpiScopeCandidates;  // All scopes for VPI
+    ScopeNames m_vpiScopeCandidates;  // Scopes for VPI
+    // Only the ancestors of public variables are looked up as VPI scopes, so inlined scopes are
+    // collected on demand, and become candidates only when looked up.
+    // Scopes whose inlined scopes are not collected yet:
+    std::unordered_set<const AstScope*> m_pendingScopeps;
+    // Collected inlined scopes and the scope holding each, by symbol name
+    std::unordered_map<std::string, std::pair<const AstScope*, const AstCellInlineScope*>>
+        m_inlinedScopes;
+    VDouble0 m_statInlinedScopes;  // Statistic tracking
     std::vector<IfaceRefData> m_ifaceRefs;  // Each interface reference, for VPI
     // The actual hierarchy of scopes
     std::map<const std::string, std::vector<std::string>> m_vpiScopeHierarchy;
@@ -709,7 +717,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         std::string::size_type dot_pos = scp.rfind("__DOT__");
 
         while (!scp.empty()) {
-            const auto scpit = m_vpiScopeCandidates.find(scopeSymString(scp));
+            const std::string symName = scopeSymString(scp);
+            auto scpit = m_vpiScopeCandidates.find(symName);
+            if (scpit == m_vpiScopeCandidates.end()) scpit = addInlinedScopeCandidate(symName);
             if ((scpit != m_vpiScopeCandidates.end())
                 && (m_scopeNames.find(scp) == m_scopeNames.end())) {
                 // If not in m_scopeNames, add it, otherwise just update m_type
@@ -727,6 +737,39 @@ class EmitCSyms final : EmitCBaseVisitorConst {
                 prd_pos = scp.rfind('.');
             }
         }
+    }
+
+    /// Collect the inlined scopes of 'scopep' and of the scopes above it into m_inlinedScopes.
+    /// These are the inlined scopes that can be ancestors of a variable of 'scopep'.
+    void collectInlinedScopes(const AstScope* scopep) {
+        for (; scopep; scopep = scopep->aboveScopep()) {
+            // Once a scope is collected, so are the scopes above it
+            if (!m_pendingScopeps.erase(scopep)) break;
+            for (const AstCellInlineScope* const cellp : scopep->inlinespList()) {
+                const std::string name = scopep->shortName() + "__DOT__" + cellp->name();
+                m_inlinedScopes.emplace(scopeSymString(name), std::make_pair(scopep, cellp));
+            }
+        }
+    }
+
+    /// Make the collected inlined scope named 'symName' a VPI scope candidate, if there is one.
+    ScopeNames::iterator addInlinedScopeCandidate(const std::string& symName) {
+        const auto it = m_inlinedScopes.find(symName);
+        if (it == m_inlinedScopes.end()) return m_vpiScopeCandidates.end();
+        ++m_statInlinedScopes;
+        const AstScope* const scopep = it->second.first;
+        const AstCellInlineScope* const cellp = it->second.second;
+        const std::string type
+            = (cellp->origModName() == "__BEGIN__") ? "SCOPE_OTHER" : "SCOPE_MODULE";
+        const std::string name = scopep->shortName() + "__DOT__" + cellp->name();
+        return m_vpiScopeCandidates
+            .emplace(
+                std::piecewise_construct,  //
+                std::forward_as_tuple(symName),  //
+                std::forward_as_tuple(cellp, symName, AstNode::vpiName(name),
+                                      type == "SCOPE_MODULE" ? cellp->origModName() : "<null>",
+                                      scopep->modp()->timeunit().powerOfTen(), type))
+            .first;
     }
 
     void addScopeVarEntry(const AstScope* const scopep, const AstNodeModule* const modp,
@@ -748,7 +791,10 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         const std::string scpSym = scopeSymString(VName::dehash(scpName));
         // UINFO(9, " scnameins sp " << scpName << " sp " << scpPretty << " ss "
         // << scpSym);
-        if (v3Global.opt.vpi()) varHierarchyScopes(scpName);
+        if (v3Global.opt.vpi()) {
+            collectInlinedScopes(scopep);
+            varHierarchyScopes(scpName);
+        }
 
         m_scopeNames.emplace(  //
             std::piecewise_construct,  //
@@ -860,6 +906,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         // Collect list of scopes
         iterateChildrenConst(nodep);
         varsExpand();
+        if (v3Global.opt.vpi()) {
+            V3Stats::addStat("VPI, Inlined scope candidates", m_statInlinedScopes);
+        }
         collectForceControls();
 
         if (v3Global.opt.vpi()) buildVpiHierarchy();
@@ -910,18 +959,6 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         m_modCoverBins = 0;
         iterateChildrenConst(nodep);
     }
-    void visit(AstCellInlineScope* nodep) override {
-        const std::string type = (nodep->origModName() == "__BEGIN__") ? "SCOPE_OTHER"  //
-                                                                       : "SCOPE_MODULE";
-        const std::string name = m_scopep->shortName() + "__DOT__" + nodep->name();
-        const int timeunit = m_modp->timeunit().powerOfTen();
-        m_vpiScopeCandidates.emplace(  //
-            std::piecewise_construct,  //
-            std::forward_as_tuple(scopeSymString(name)),  //
-            std::forward_as_tuple(nodep, scopeSymString(name), AstNode::vpiName(name),
-                                  type == "SCOPE_MODULE" ? nodep->origModName() : "<null>",
-                                  timeunit, type));
-    }
     void visit(AstScope* nodep) override {
         if (VN_IS(m_modp, Class)) return;  // The ClassPackage is what is visible
         nameCheck(nodep);
@@ -929,6 +966,7 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         if (!nodep->protect() || nodep->modp()->verilatorLib()) m_origTopNames = true;
 
         m_scopes.emplace_back(nodep, m_modp);
+        if (v3Global.opt.vpi()) m_pendingScopeps.emplace(nodep);
 
         // The scopes of the instance of a library are its own, so register none for its stub
         if (v3Global.opt.vpi() && !nodep->isTop() && !nodep->modp()->verilatorLib()) {
@@ -944,8 +982,6 @@ class EmitCSyms final : EmitCBaseVisitorConst {
                                       nodep->modp()->origName(), timeunit, type));
             collectIfaceRefs(nodep);
         }
-        VL_RESTORER(m_scopep);
-        m_scopep = nodep;
         iterateChildrenConst(nodep);
     }
     void visit(AstScopeName* nodep) override {
