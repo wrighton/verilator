@@ -952,13 +952,26 @@ size_t VlRandomizer::hashConstraints(const std::vector<std::string>& extras,
     return h;
 }
 
+// The solver term of element j of var, which keys the used values of a randc variable, as
+// each element of a randc array cycles on its own (IEEE 1800-2023 18.4)
+static std::string randcElementTerm(const VlRandomVar& var, int j) {
+    std::ostringstream termOs;
+    var.emitElement(termOs, j);
+    return termOs.str();
+}
+
 void VlRandomizer::emitRandcExclusions(std::ostream& os) const {
     for (const auto& name : m_randcVarNames) {
-        const auto usedIt = m_randcUsedValues.find(name);
-        if (usedIt != m_randcUsedValues.end()) {
-            const int w = m_vars.at(name)->width();
+        const auto varIt = m_vars.find(name);
+        if (varIt == m_vars.end()) continue;
+        const VlRandomVar& var = *varIt->second;
+        for (int j = 0; j < var.totalWidth() / var.width(); ++j) {
+            const std::string term = randcElementTerm(var, j);
+            const auto usedIt = m_randcUsedValues.find(term);
+            if (usedIt == m_randcUsedValues.end()) continue;
             for (const uint64_t val : usedIt->second) {
-                os << "(assert (not (= " << name << " (_ bv" << val << " " << w << "))))\n";
+                os << "(assert (not (=" << term << " (_ bv" << val << " " << var.width()
+                   << "))))\n";
             }
         }
     }
@@ -979,7 +992,10 @@ void VlRandomizer::recordRandcValues() {
         const auto varIt = m_vars.find(name);
         if (varIt == m_vars.end()) continue;
         const VlRandomVar& var = *varIt->second;
-        m_randcUsedValues[name].insert(readVarValueU64(var.datap(0), var.width()));
+        for (int j = 0; j < var.totalWidth() / var.width(); ++j) {
+            m_randcUsedValues[randcElementTerm(var, j)].insert(
+                readVarValueU64(var.datap(j), var.width()));
+        }
     }
 }
 
