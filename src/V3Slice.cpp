@@ -267,15 +267,14 @@ class SliceVisitor final : public VNVisitor {
         if (VN_IS(stp, CvtQueueToUnpack) && !lhsSlice) return false;
         if (VN_IS(stp, CReset)) return false;
 
-        // Any isSc variables must be expanded regardless of --fno-slice. So must an array
-        // constructor target (e.g. an output port connected to '{a, b}), as it has no whole
-        // array representation that could be assigned.
+        // Any isSc variables must be expanded regardless of --fno-slice, as must an array
+        // pattern lvalue (e.g. an output port connection), which is not an lvalue in C++
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
         const bool consLhs = VN_IS(nodep->lhsp(), ConsArray);
-        // Slicing would evaluate an impure side once per element, so copy the whole array,
-        // unless writing a slice, which is only done element by element
-        const bool impure = !nodep->lhsp()->isPure() || !nodep->rhsp()->isPure();
+        // Slicing would evaluate a side that is not repeatable once per element, so copy the
+        // whole array, unless writing a slice, which is only done element by element
+        const bool impure = !nodep->lhsp()->isRepeatable() || !nodep->rhsp()->isRepeatable();
         if (!hasSc && !lhsSlice && !consLhs && (!v3Global.opt.fSlice() || impure)) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
@@ -361,6 +360,7 @@ class SliceVisitor final : public VNVisitor {
         m_scopep = nodep;
         iterateChildren(nodep);
     }
+
     void visit(AstNodeAssign* nodep) override {
         // Called recursively on newly created assignments
         if (nodep->user1SetOnce()) return;  // Process once

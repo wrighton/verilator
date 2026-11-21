@@ -116,7 +116,7 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
                 anonBegin = std::stable_partition(trivs.begin(), trivs.end(), isNameableTrivial);
                 UASSERT_OBJ(static_cast<size_t>(anonBegin - trivs.begin())
                                 == EmitCParentModule::data(modp).trivialCount,
-                            modp, "Inconsistent member count");
+                            modp, "Inconsistent member count.");
             }
             emitGroupedVarDecls({trivs.begin(), anonBegin}, true);
             emitGroupedVarDecls({anonBegin, trivs.end()}, false);
@@ -144,8 +144,7 @@ class EmitCHeader final : public EmitCBaseVisitorConst {
     // Emit variables nested in structs, named '__Vg<index>' if 'named'
     void emitGroupedVarDecls(const std::vector<const AstVar*>& vars, const bool named) {
         // GCC does not allow non-trivially constructible members in anonymous structs, so
-        // these need named structs, and EmitCBaseVisitorConst::varName gives the path to members
-        // of named structs
+        // these need named structs, and EmitCBaseVisitorConst::varName gives their path
         const size_t n = vars.size();
         const EmitCMemberGroups groups{n};
         if (groups.l1s() != 1) {

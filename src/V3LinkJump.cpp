@@ -676,16 +676,16 @@ class LinkJumpVisitor final : public VNVisitor {
                 } else {
                     // Disable inside a fork branch of this named block must also kill the
                     // process running the block, so the block needs a process of its own
-                    AstNode* const branchp = innerForkItemEndp(beginp);
-                    if (branchp) needBeginDisableProcess(beginp, nodep->fileline());
+                    AstNode* const branchEndp = innerForkItemEndp(beginp);
+                    if (branchEndp) needBeginDisableProcess(beginp, nodep->fileline());
                     AstVar* const processQueuep
                         = getOrCreateBeginDisableQueuep(beginp, nodep->fileline());
                     AstStmtExpr* const killStmtp = insertKillStmtp(nodep, processQueuep);
 
                     // process::kill does not terminate the currently running process immediately.
-                    // Jump to the end of the fork branch or block it runs to prevent statements
+                    // Jump to the end of the fork item or block it runs to prevent statements
                     // after disable from executing.
-                    addJumpAfterKill(killStmtp, branchp ? branchp : beginp);
+                    addJumpAfterKill(killStmtp, branchEndp ? branchEndp : beginp);
                 }
             } else if (inFunction() || maySuspend(beginp)) {  // As for a task target
                 needBeginDisableProcess(beginp, nodep->fileline());

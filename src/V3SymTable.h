@@ -428,9 +428,7 @@ public:
             if (idNameMap().count("extern " + itr.first)) haveExterns.emplace(itr.first);
         }
         for (const auto& itr : srcp->idNameMap()) {
-            if (!haveExterns.count(itr.first)) {
-                importOneSymbol(itr.first, itr.second, srcp, false);
-            }
+            if (!haveExterns.count(itr.first)) importOneSymbol(itr.first, itr.second, srcp, false);
         }
     }
     void importFromPackage(const VSymEnt* srcp, const string& id_or_star,

@@ -655,6 +655,10 @@ class UnknownVisitor final : public VNVisitor {
             }
             nodep->bitp(newIndexTrunc(newExprStmtOrClone(bitp), declElements));
             AstNodeExpr* condp = new AstGte{nodep->fileline(), declElementsp, bitp};
+            if (xIndex) {
+                VL_DO_DANGLING(condp->deleteTree(), condp);
+                condp = new AstConst{nodep->fileline(), AstConst::BitFalse{}};
+            }
             // The value read: this element, or for an element of an outer dimension, the
             // element, or struct member or bits of it, selected. Not a class member, which is
             // not part of the array's value.

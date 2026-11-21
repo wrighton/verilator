@@ -2318,7 +2318,7 @@ class TaskVisitor final : public VNVisitor {
     static AstVarRef* getterVarRefp(AstNodeFTask* taskp) {
         // Only the return variable is declared, so no arguments or locals
         const AstVar* const fvarp = taskp->fvarp();
-        if (taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
+        if (!fvarp || taskp->declsp() != fvarp || fvarp->nextp()) return nullptr;
         AstNode* stmtp = taskp->stmtsp();
         // Skip the default initialization of the function's return value
         if (const AstAssign* const initp = VN_CAST(stmtp, Assign)) {
@@ -2561,7 +2561,6 @@ class TaskVisitor final : public VNVisitor {
                 AstNode* const impurep = m_statep->checkImpure(nodep);
                 for (AstNode *stmtp = nodep->stmtsp(), *nextp; stmtp; stmtp = nextp) {
                     nextp = stmtp->nextp();
-                    if (VN_IS(stmtp, Var)) continue;
                     // Keep the impure reference, IMPURE warnings on callers may show it
                     if (impurep
                         && stmtp->exists([&](const AstVarRef* refp) { return refp == impurep; })) {

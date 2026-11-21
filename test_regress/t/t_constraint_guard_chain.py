@@ -18,7 +18,7 @@ test.compile(verilator_flags2=['--stats'])
 
 if test.vlt_all:
     # Receiver prefixes must be moved into locals, not cloned at every selection depth.
-    test.file_grep(test.stats, r'Node count, MEMBERSEL\s+43\s+(\d+)', 73)
+    test.file_grep(test.stats, r'Node count, MEMBERREF\s+43\s+(\d+)', 73)
 
 test.execute()
 

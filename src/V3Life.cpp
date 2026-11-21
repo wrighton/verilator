@@ -45,15 +45,15 @@ class LifeState final {
 public:
     VDouble0 m_statAssnDel;  // Statistic tracking
     VDouble0 m_statAssnCon;  // Statistic tracking
-    uint64_t m_lastGeneration = 0;  // Generation of the last LifeBlock made
     // Variables also accessed through a class handle or virtual interface, so possibly
     // through another of their AstVarScopes than referenced
     std::unordered_set<const AstVar*> m_memberSelVarps;
+    uint64_t m_lastGeneration = 0;  // Generation of the last LifeBlock made
 
     // CONSTRUCTORS
     explicit LifeState(AstNetlist* netlistp) {
         netlistp->foreach(
-            [&](const AstMemberRef* memberRefp) { m_memberSelVarps.insert(memberRefp->varp()); });
+            [&](const AstMemberRef* selp) { m_memberSelVarps.insert(selp->varp()); });
     }
     ~LifeState() {
         V3Stats::addStatSum("Optimizations, Lifetime assign deletions", m_statAssnDel);

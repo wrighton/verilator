@@ -7,11 +7,16 @@
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
+import re
+
 import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-test.compile(verilator_flags2=['--stats', '-Wno-UNOPTTHREADS'])
+# Shared arrays can serialize model accesses; exercise MT correctness even if there is
+# insufficient independent work for two workers. UNOPTTHREADS has no source-local location.
+test.compile(threads=2 if test.vltmt else 1,
+             verilator_flags2=['--stats', '--x-initial unique', '-Wno-UNOPTTHREADS'])
 
 test.execute()
 

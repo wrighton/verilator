@@ -66,7 +66,7 @@ module t (
     `checkd(fails_strong, ref_fails_strong);
     `checkd(fails_strong_named, ref_fails_strong);
     `checkd(covers, ref_covers);
-    `checkd(ref_fails_weak, 16);
+    `checkd(ref_fails_weak, 22);
     `checkd(ref_fails_not, 10);
     `checkd(ref_fails_strong, 14);
     `checkd(ref_covers, 20);

@@ -1535,13 +1535,13 @@ public:
     }
     ASTGEN_MEMBERS_AstExprStmt;
     // METHODS
-    void dump(std::ostream& str) const override;
-    void dumpJson(std::ostream& str) const override;
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
     bool isPure() override;
     bool sameNode(const AstNode*) const override { return true; }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     bool matchItems() const { return m_matchItems; }
     void matchItems(bool flag) { m_matchItems = flag; }
 };
@@ -6780,10 +6780,11 @@ public:
     bool cleanOut() const override { return true; }
     int instrCount() const override { return widthInstrs(); }
     bool sameNode(const AstNode* samep) const override {
-        const AstVarXRef* asamep = VN_DBG_AS(samep, VarXRef);
+        const AstVarXRef* const asamep = VN_DBG_AS(samep, VarXRef);
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
                 && name() == asamep->name() && dotted() == asamep->dotted()
-                && inlinedDots() == asamep->inlinedDots());
+                && inlinedDots() == asamep->inlinedDots()
+                && readOnlyModport() == asamep->readOnlyModport());
     }
 };
 

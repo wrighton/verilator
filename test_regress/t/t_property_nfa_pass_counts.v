@@ -39,6 +39,7 @@ module t (
   int pass_impl = 0, pass_impl_else = 0, ref_impl = 0;
   int fail_impl_else = 0, ref_fail_impl = 0;
   assert property (@(posedge clk) a |-> b ##1 c) pass_impl++;
+  else;
   assert property (@(posedge clk) a |-> b ##1 c) pass_impl_else++;
   else fail_impl_else++;
   always @(posedge clk) ref_impl += int'(!a) + int'(a1 && b1 && c);
@@ -56,11 +57,13 @@ module t (
   // Followed-by has no vacuous pass
   int pass_followed = 0, ref_followed = 0;
   assert property (@(posedge clk) a #-# b ##1 c) pass_followed++;
+  else;
   always @(posedge clk) ref_followed += int'(a1 && b1 && c);
 
   // Sequence property without a fail action
   int pass_seq = 0, ref_seq = 0;
   assert property (@(posedge clk) a ##1 b) pass_seq++;
+  else;
   always @(posedge clk) ref_seq += int'(a1 && b);
 
   always @(negedge clk) begin

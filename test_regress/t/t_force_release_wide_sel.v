@@ -9,6 +9,8 @@
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
 // verilog_format: on
 
+// Forcing a select of a variable is a Verilator extension (IEEE 1800-2023 10.6.2
+// allows only a net select); a procedural assign is to a whole variable (10.6.1).
 module t (
     input clk
 );
@@ -40,7 +42,7 @@ module t (
       force s.f = 7'h55;
       force s.lo[20:13] = 8'h3c;  // Nested selection
       // verilator lint_off IEEEMAYDEPRECATE
-      assign a[97:65] = asrc;
+      assign a = {102'b0, asrc, 65'b0};
       // verilator lint_on IEEEMAYDEPRECATE
     end
     else if (cyc == 2) begin
@@ -60,7 +62,7 @@ module t (
       release s.f;
       release s.lo[20:13];
       // verilator lint_off IEEEMAYDEPRECATE
-      deassign a[97:65];
+      deassign a;
       // verilator lint_on IEEEMAYDEPRECATE
       src <= '0;
       asrc <= '0;

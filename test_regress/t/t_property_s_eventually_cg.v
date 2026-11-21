@@ -37,7 +37,9 @@ module t;
 
 `ifndef T_NO_S_EVENTUALLY
   int passed = 0;
+  // The attempt pending at $finish fails (IEEE 1800-2023 16.12.13)
   assert property (@(negedge clk) cyc[0] |-> s_eventually !cyc[0]) ++passed;
+  else;
 `endif
 
   int disabled = 1;

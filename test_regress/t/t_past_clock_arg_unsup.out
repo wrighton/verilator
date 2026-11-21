@@ -15,4 +15,8 @@
                                                    : ... note: In instance 't'
    22 |     if ($stable_gclk($past(d))) $stop;   
       |         ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_past_clock_arg_unsup.v:27:28: Unsupported: sampled value function clocked by a clocking block or sequence event, of an expression with a nested sampled value function
+                                                    : ... note: In instance 't'
+   27 |   always @(posedge clk iff $stable_gclk($rose_gclk(i.cb.v[0])))++nested_stables;
+      |                            ^~~~~~~~~~~~
 %Error: Exiting due to

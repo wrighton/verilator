@@ -42,6 +42,50 @@ class RandDynIndexCastTest;
   }
 endclass
 
+// A rand index wider than the array's select width that is out of range reads the
+// default value rather than a valid element (IEEE 1800-2023 7.4.6)
+class OutOfRangeIndexTest;
+  rand int idx;
+  rand bit [39:0] widx;
+  rand int unsigned arr[3];
+  rand int unsigned arr53[5:3];
+  rand bit [1:0] bidx;
+  bit [1:0] nidx = 1;
+  rand int ni;
+  rand int nj;
+  rand int unsigned narr[2][3];
+  constraint values_c {
+    foreach (narr[a, b]) narr[a][b] == a * 10 + b;
+    arr[0] == 0;
+    arr[1] == 7;
+    arr[2] == 0;
+    arr53[3] == 0;
+    arr53[4] == 9;
+    arr53[5] == 0;
+  }
+  // verilator lint_off WIDTHTRUNC
+  constraint select_c {
+    arr[idx] == 7;
+    arr[widx] == 7;
+    arr53[idx + 3] == 9;
+    arr[bidx] == 7;
+    arr[nidx] == 7;
+    narr[ni][nj] == 12;
+    narr[ni][1] == 11;
+  }
+  // verilator lint_on WIDTHTRUNC
+endclass
+
+class OutOfRangeUnsatTest;
+  rand int idx;
+  rand int unsigned arr[3];
+  constraint c {
+    idx == 5;
+    arr[1] == 7;
+    arr[idx] == 7;
+  }
+endclass
+
 // Indices of other widths than the 32-bit index of a dynamic array or queue
 class RandDynIndexTest;
   rand bit [1:0] uidx;
@@ -86,94 +130,6 @@ class RandDynOobTest;
     widx == 64'h1_0000_0001;
     wval == q[widx];
     wval != 2;  // q[1]
-  }
-endclass
-
-// A rand index wider than the array's select width that is out of range reads the
-// default value rather than a valid element (IEEE 1800-2023 7.4.6)
-class OutOfRangeIndexTest;
-  rand int idx;
-  rand bit [39:0] widx;
-  rand int unsigned arr[3];
-  rand int unsigned arr53[5:3];
-  rand bit [1:0] bidx;
-  bit [1:0] nidx = 1;
-  rand int ni;
-  rand int nj;
-  rand int unsigned narr[2][3];
-  constraint values_c {
-    foreach (narr[a, b]) narr[a][b] == a * 10 + b;
-    arr[0] == 0;
-    arr[1] == 7;
-    arr[2] == 0;
-    arr53[3] == 0;
-    arr53[4] == 9;
-    arr53[5] == 0;
-  }
-  // verilator lint_off WIDTHTRUNC
-  constraint select_c {
-    arr[idx] == 7;
-    arr[widx] == 7;
-    arr53[idx + 3] == 9;
-    arr[bidx] == 7;
-    arr[nidx] == 7;
-    narr[ni][nj] == 12;
-    narr[ni][1] == 11;
-  }
-  // verilator lint_on WIDTHTRUNC
-endclass
-
-class OutOfRangeUnsatTest;
-  rand int idx;
-  rand int unsigned arr[3];
-  constraint c {
-    idx == 5;
-    arr[1] == 7;
-    arr[idx] == 7;
-  }
-endclass
-
-// A rand index wider than the array's select width that is out of range reads the
-// default value rather than a valid element (IEEE 1800-2023 7.4.6)
-class OutOfRangeIndexTest;
-  rand int idx;
-  rand bit [39:0] widx;
-  rand int unsigned arr[3];
-  rand int unsigned arr53[5:3];
-  rand bit [1:0] bidx;
-  bit [1:0] nidx = 1;
-  rand int ni;
-  rand int nj;
-  rand int unsigned narr[2][3];
-  constraint values_c {
-    foreach (narr[a, b]) narr[a][b] == a * 10 + b;
-    arr[0] == 0;
-    arr[1] == 7;
-    arr[2] == 0;
-    arr53[3] == 0;
-    arr53[4] == 9;
-    arr53[5] == 0;
-  }
-  // verilator lint_off WIDTHTRUNC
-  constraint select_c {
-    arr[idx] == 7;
-    arr[widx] == 7;
-    arr53[idx + 3] == 9;
-    arr[bidx] == 7;
-    arr[nidx] == 7;
-    narr[ni][nj] == 12;
-    narr[ni][1] == 11;
-  }
-  // verilator lint_on WIDTHTRUNC
-endclass
-
-class OutOfRangeUnsatTest;
-  rand int idx;
-  rand int unsigned arr[3];
-  constraint c {
-    idx == 5;
-    arr[1] == 7;
-    arr[idx] == 7;
   }
 endclass
 

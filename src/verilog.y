@@ -3755,7 +3755,7 @@ statement_item<nodeStmtp>:          // IEEE: statement_item
                           newfl->warnOff(V3ErrorCode::IGNOREDRETURN, true);
                           callp->fileline(newfl);
                           $$ = exprp->makeStmt(); }
-        |       yVOID yP_TICK '(' expr '.' task_method_call_body ')' ';'
+        |       yVOID yP_TICK '(' expr '.' task_subroutine_callNoMethod ')' ';'
                         { AstNodeExpr* const exprp = new AstDot{$5, false, $4, $6};
                           FileLine* const newfl = new FileLine{$6->fileline()};
                           newfl->warnOff(V3ErrorCode::IGNOREDRETURN, true);
@@ -4265,7 +4265,7 @@ task_subroutine_callNoSemi<nodeStmtp>:  // similar to IEEE task_subroutine_call 
         //                      // Expr included here to resolve our not knowing what is a method call
         //                      // Expr here must result in a subroutine_call
                 task_subroutine_callNoMethod            { $$ = $1->makeStmt(); }
-        |       fexpr '.' task_method_call_body         { $$ = (new AstDot{$<fl>2, false, $1, $3})->makeStmt(); }
+        |       fexpr '.' task_subroutine_callNoMethod  { $$ = (new AstDot{$<fl>2, false, $1, $3})->makeStmt(); }
         |       system_t_stmt_call                      { $$ = $1; }
         //                      // Any system function as a task
         |       system_f_or_t_expr_call                 { $$ = new AstStmtExpr{$<fl>1, $1}; }
@@ -4274,12 +4274,6 @@ task_subroutine_callNoSemi<nodeStmtp>:  // similar to IEEE task_subroutine_call 
         //                      // Way over-permissive;
         //                      // IEEE: [ ySUPER '.' yNEW [ '(' list_of_arguments ')' ] ';' ]
         |       fexpr '.' class_newNoScope              { $$ = (new AstDot{$<fl>2, false, $1, $3})->makeStmt(); }
-        ;
-
-task_method_call_body<nodeExprp>:  // IEEE: method_call_body (as task)
-                task_subroutine_callNoMethod            { $$ = $1; }
-        //                      // IEEE: randomize_call
-        |       randomize_callNoParen                   { $$ = $1; }
         ;
 
 task_subroutine_callNoMethod<nodeExprp>:    // function_subroutine_callNoMethod (as task)
@@ -4295,6 +4289,7 @@ task_subroutine_callNoMethod<nodeExprp>:    // function_subroutine_callNoMethod 
         //                      // We implement randomize as a normal funcRef, since randomize isn't a keyword
         //                      // Note yNULL is already part of expressions, so they come for free
         |       funcRef randomize_callWith              { $$ = GRAMMARP->scrubWithParse($1, $2); }
+        |       randomize_callNoParen                   { $$ = $1; }
         ;
 
 function_subroutine_callNoMethod<nodeExprp>:        // IEEE: function_subroutine_call (as function)
@@ -4316,12 +4311,14 @@ function_subroutine_callNoMethodNoWith<nodeExprp>:  // IEEE: part of function_su
         //                      // We implement randomize as a normal funcRef, since randomize isn't a keyword
         //                      // Note yNULL is already part of expressions, so they come for free
         |       funcRef randomize_callWith              { $$ = GRAMMARP->scrubWithParse($1, $2); }
+        |       randomize_callNoParen                   { $$ = $1; }
         ;
 
 randomize_callNoParen<nodeExprp>:  // IEEE: part of randomize_call
-        //                      // Method call with a 'with' clause but no argument parentheses.
-        //                      // Scope randomize requires the parentheses (IEEE 1800-2023 18.12
-        //                      // Syntax 18-11) and the parser cannot tell a bare call from one.
+        //                      // Call with a 'with' clause but no argument parentheses.
+        //                      // Scope randomize requires the parentheses
+        //                      // (IEEE 1800-2023 18.12 Syntax 18-11), which the parser
+        //                      // does not check.
                 idRandomize randomize_callWith
                         { $$ = GRAMMARP->scrubWithParse(new AstFuncRef{$<fl>1, *$1}, $2); }
         ;
@@ -5306,9 +5303,6 @@ expr<nodeExprp>:                // IEEE: part of expression/constant_expression/
                         { $$ = new AstDot{$2, false, $1, $3}; }
         |       ~l~expr '.' function_subroutine_callNoMethod part_select_rangeList
                         { $$ = GRAMMARP->scrubSel(new AstDot{$2, false, $1, $3}, $4); }
-        //                      // method_call: randomize_call
-        |       ~l~expr '.' randomize_callNoParen
-                        { $$ = new AstDot{$2, false, $1, $3}; }
         //                      // method_call:array_method requires a '.'
         |       ~l~expr '.' array_methodWith
                         { $$ = new AstDot{$2, false, $1, $3}; }
@@ -6797,10 +6791,11 @@ property_port_itemAssignment<varp>:  // IEEE: part of property_port_item/sequenc
                           $$ = VARDONEA($<fl>1, *$1, $2, nullptr); }
         |       id variable_dimensionListE '=' property_actual_arg
                         { VARDECL(VAR);
-                          $$ = VARDONEA($<fl>1, *$1, $2, nullptr);
-                          $$->valuep($4);
+                          AstVar* const varp = VARDONEA($<fl>1, *$1, $2, nullptr);
+                          varp->valuep($4);
                           if ($4->exists([](const AstNodeExpr* np) { return np->isMultiCycleSva(); }))
-                              BBUNSUP($3, "Unsupported: sequence expression as formal argument default"); }
+                              BBUNSUP($3, "Unsupported: sequence expression as formal argument default");
+                          $$ = varp; }
         ;
 
 property_port_itemDirE:
@@ -7155,7 +7150,7 @@ sexpr<nodeExprp>:  // ==IEEE: sequence_expr  (The name sexpr is important as reg
         //                      // IEEE: '(' sequence_expr ')' with sequence_expr ::= clocking_event sequence_expr
         //                      // and through the pexpr copy, the same for property_expr
         //                      // Clocking event as supported by property_spec
-        |       '(' '@' '(' senitem ')' ~p~sexpr ')'    { $$ = new AstSClocked{$<fl>2, $4, $6}; }
+        |       '(' '@' '(' event_expression ')' ~p~sexpr ')'   { $$ = new AstSClocked{$<fl>2, $4, $6}; }
         |       '(' '@' senitemVar ~p~sexpr ')'         { $$ = new AstSClocked{$<fl>2, $3, $4}; }
         |       '(' ~p~sexpr ',' sequence_match_itemList ')'
                         { AstExprStmt* const newp = new AstExprStmt{$3, $4, $2};
@@ -8441,9 +8436,6 @@ constraint_primary<nodeExprp>:  // ==IEEE: constraint_primary
         //                      // exprScope more general than:
         //                      // [ implicit_class_handle '.' | class_scope ] hierarchical_identifier select [ '(' ')' ]
                 exprScope                                       { $$ = $1; }
-        //                      // IEEE: ... select '(' ')', allowed only on an array built-in method.
-        //                      // More general here; V3Width reports what is not allowed.
-        |       expr '.' funcRef                        { $$ = new AstDot{$<fl>2, false, $1, $3}; }
         ;
 
 constraint_expressionList<nodeConstraintItemp>:  // ==IEEE: { constraint_expression }

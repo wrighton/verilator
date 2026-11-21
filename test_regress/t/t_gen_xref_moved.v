@@ -24,11 +24,11 @@
     C c = new; \
     covergroup cg @(posedge t.clk); cp : coverpoint X {bins b[] = {[0 : 7]};} endgroup \
     cg cov = new; \
-    always @(negedge t.clk) ncov <= int'(cov.get_coverage()); \
+    always @(negedge t.clk) ncov <= int'(cov.get_inst_coverage()); \
     always @(posedge t.clk) if (t.cyc > 1 && $past(X) != X) npast++; \
     always @(posedge t.clk) if ($rose(X[0])) nrose++; \
     always @(posedge t.clk) if (c.get() == 2) ncls++; \
-    assert property (@(posedge t.clk) t.cyc > 1 && $stable(X)) nstable++; \
+    assert property (@(posedge t.clk) t.cyc > 1 && $stable(X)) nstable++; else; \
     assert property (@(posedge t.clk) X[0] |=> X[1]) nimpl++; else; \
     assert property (@(posedge t.clk) X[0] |-> ##1 X[1]) ndelay++; else; \
     assert property (@(posedge t.clk) X[1] [*2] |-> 1) nrep++; \

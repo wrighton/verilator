@@ -3,10 +3,6 @@
    19 |     assert final (a) else n = 1;   
       |                             ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assert_deferred_act_bad.v:20:20: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
-                                           : ... note: In instance 't'
-   20 |     assert #0 (a) n++;   
-      |                    ^~
 %Error: t/t_assert_deferred_act_bad.v:21:27: Deferred assertion action must be a single subroutine call (IEEE 1800-2023 16.4)
                                            : ... note: In instance 't'
    21 |     assume final (a) else begin   

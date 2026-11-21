@@ -649,7 +649,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
             funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, stoppedVarp, VAccess::WRITE},
                                            new AstConst{fl, AstConst::BitTrue{}, stop}});
         }
-        // Function-local variables, in the declarations, stay ahead of the guard
+        // Function-local variables stay declared ahead of the guard
         AstIf* const ifp
             = new AstIf{fl, new AstNot{fl, new AstVarRef{fl, stoppedVarp, VAccess::READ}}};
         if (AstNodeStmt* const stmtsp = m_sampleFuncp->stmtsp()) {
@@ -725,8 +725,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         // Members not allowed, such as sample arguments, are reported by
         // CovergroupExprValidVisitor; other values by buildBinCondition.
         const auto notAllowed = [&](const AstNode* nodep) {
-            if (const AstMemberRef* const memberRefp = VN_CAST(nodep, MemberRef)) {
-                return !memberRefp->varp()->isConst();
+            if (const AstMemberRef* const selp = VN_CAST(nodep, MemberRef)) {
+                return !selp->varp()->isConst();
             }
             const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef);
             return refp && !refp->varp()->isConst()
@@ -774,7 +774,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     void checkBinValues(AstCoverpoint* coverpointp) {
         for (AstNode* const nodep : coverpointp->binspList()) {
             AstCoverBin* const binp = VN_AS(nodep, CoverBin);
-            for (AstNode* const rangep : VNList<AstNode>{binRangesp(binp)}) {
+            for (AstNode* rangep = binRangesp(binp); rangep; rangep = rangep->nextp()) {
                 if (!VN_IS(rangep, Unbounded)) continue;
                 binp->v3error("Bins value may not be '$', which may only bound a range "
                               "(IEEE 1800-2023 6.20.7)");
@@ -1242,9 +1242,6 @@ class FunctionalCoverageVisitor final : public VNVisitor {
             // The values of constructed bins are known at construction; see emitSizedSample, and
             // binCondition for those of ignore and illegal bins
             if (isConstructedBins(cbinp)) continue;
-            // A transition bin is not a value bin, so excludes no value from a default bin
-            // (IEEE 1800-2023 19.5)
-            if (cbinp->transp()) continue;
             if (isAutoBins(cbinp)) {
                 // Automatic bins partition the whole domain, leaving no default value
                 if (anyBinMatchp) VL_DO_DANGLING(pushDeletep(anyBinMatchp), anyBinMatchp);
@@ -4441,7 +4438,8 @@ class FunctionalCoverageVisitor final : public VNVisitor {
     static std::pair<AstVar*, AstVar*> binArgs(AstFunc* funcp) {
         std::vector<AstVar*> argps;
         for (AstNode* const declp : funcp->declspList()) {
-            if (AstVar* const argp = VN_CAST(declp, Var)) argps.push_back(argp);
+            AstVar* const argp = VN_CAST(declp, Var);
+            if (argp && !argp->isFuncReturn()) argps.push_back(argp);
         }
         UASSERT_OBJ(argps.size() == 2, funcp, "Coverage method without its two arguments");
         return {argps[0], argps[1]};
