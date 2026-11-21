@@ -280,11 +280,6 @@ class BeginVisitor final : public VNVisitor {
                 = staticVarName(m_ftaskp->name(), m_unnamedScope, nodep->name());
             m_staticVarScopes.emplace(nodep, m_unnamedScope);
             if (nodep->isIO()) {
-                if (nodep->direction().isRef()) {
-                    nodep->v3error(
-                        "It is illegal to use argument passing by reference for subroutines with "
-                        "a lifetime of static (IEEE 1800-2023 13.5.2)");
-                }
                 // Create a port that is used for passing value between argument and static
                 // variable
                 AstVar* const portp = nodep->cloneTreePure(false);
