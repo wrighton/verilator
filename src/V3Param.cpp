@@ -2571,7 +2571,7 @@ public:
                 if (pinp->paramPath().empty()) continue;
                 if (!pinp->exprp()) {  // Value from the instance of the defparam's module
                     const auto it
-                        = m_defparamValues.find(defparamPath(instanceName) + "." + pinp->name());
+                        = m_defparamValues.find(defparamPath(instancePath) + "." + pinp->name());
                     if (it != m_defparamValues.end()) {
                         pinp->exprp(it->second->cloneTree(false));
                         continue;
@@ -3938,9 +3938,9 @@ class ParamVisitor final : public VNVisitor {
         // above expanded, so nodeDeparam can give the value (IEEE 1800-2023 23.10.1)
         checkParamNotHierRecurse(nodep->rhsp());
         const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
-        const string instanceName
-            = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
-        m_processor.defparamValue(defparamPath(instanceName) + "." + targetp->name(),
+        const string instancePath
+            = m_modp->someInstancePath() + m_generateHierPath + "." + targetp->dotted();
+        m_processor.defparamValue(defparamPath(instancePath) + "." + targetp->name(),
                                   nodep->rhsp()->unlinkFrBack());
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }

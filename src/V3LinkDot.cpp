@@ -2596,6 +2596,25 @@ class LinkDotParamVisitor final : public VNVisitor {
         VSymEnt* okSymp = nullptr;
         return m_statep->findDotted(nodep->fileline(), symp, path, baddot, okSymp, true, report);
     }
+    // Find exactly the scope a defparam's path names from the scope, the first component
+    // upwards, as the name of an instance, generate block or top module, else the module name of
+    // an instance (IEEE 1800-2023 23.8)
+    static const VSymEnt* exactPath(VSymEnt* symp, const string& path) {
+        const std::deque<string> names = VString::split(path, '.');
+        for (; symp; symp = symp->parentp()) {
+            VSymEnt* const childp = symp->findIdFlat(names.front());
+            if (childp
+                && (VN_IS(childp->nodep(), Cell) || VN_IS(childp->nodep(), GenBlock)
+                    || VN_IS(childp->nodep(), NodeModule))) {
+                symp = childp;
+                break;
+            }
+            const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
+            if (cellp && cellp->modp()->origName() == names.front()) break;
+        }
+        for (size_t i = 1; symp && i < names.size(); ++i) symp = symp->findIdFlat(names[i]);
+        return symp;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         std::vector<VSymEnt*> instSyms;
         m_statep->takeDefParamScopes(nodep, instSyms);
@@ -2627,6 +2646,18 @@ class LinkDotParamVisitor final : public VNVisitor {
             const VSymEnt* symp = foundp;
             for (; symp && symp != scopeSymp; symp = symp->parentp()) {
                 belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
+            }
+            // Before generate blocks are built, only the last of blocks sharing a name is found.
+            // When it lacks the rest of the path, the rest is found upwards from it, and under the
+            // scope V3Param would give the value to the instance found there.
+            if (symp && exactPath(scopeSymp, path) != foundp) {
+                targetp->v3warn(E_UNSUPPORTED, "Unsupported: defparam path "
+                                                   << AstNode::prettyNameQ(path)
+                                                   << " under the defparam's scope, found as "
+                                                   << AstNode::prettyNameQ(belowPath)
+                                                   << " before generate blocks are built.");
+                VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+                return;
             }
             // If under it, V3Param passes the value down from each instance of this module, so
             // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)

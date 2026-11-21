@@ -112,6 +112,19 @@ module M14;
   defparam top.y.PRMTR = 34;
 endmodule
 
+// Under the scope, through an escaped generate block
+module M17;
+  if (1) begin : \e.f
+    M0 m0 (.value());
+    M0 m1 (.value());
+    M0 m2 (.value());
+    M0 m3 (.value());
+  end
+  defparam \e.f .m0.PRMTR = 36;
+  defparam M17.\e.f .m1.PRMTR = 41;
+  defparam top.esc_under.\e.f .m3.PRMTR = 43;
+endmodule
+
 package pkg;
   localparam PKG_PRMTR = 6;
   class Cls;
@@ -165,6 +178,19 @@ module top;
     esc_decoy_prmtr = decoy.\h.esc .u.dut.PRMTR;
     `checkh(esc_inst_prmtr, 30);
     `checkh(esc_decoy_prmtr, 1);
+  end
+  M17 esc_under ();
+  defparam top.esc_under.\e.f .m2.PRMTR = 42;
+  initial begin
+    int esc_under_prmtr[4];
+    esc_under_prmtr[0] = esc_under.\e.f .m0.PRMTR;
+    esc_under_prmtr[1] = esc_under.\e.f .m1.PRMTR;
+    esc_under_prmtr[2] = esc_under.\e.f .m2.PRMTR;
+    esc_under_prmtr[3] = esc_under.\e.f .m3.PRMTR;
+    `checkh(esc_under_prmtr[0], 36);
+    `checkh(esc_under_prmtr[1], 41);
+    `checkh(esc_under_prmtr[2], 42);
+    `checkh(esc_under_prmtr[3], 43);
   end
   if (0) begin : g_no
   end else if (1) begin : g_yes

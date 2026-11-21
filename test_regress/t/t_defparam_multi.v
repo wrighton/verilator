@@ -25,6 +25,16 @@ module t;
     end
   endgenerate
 
+  // Under the scope, through blocks with the same name, missing the rest of the path in the last
+  if (1) begin : sh
+    m3 u_m3 ();
+    if (1) begin : arm
+      m3 u_m3 ();
+    end else begin : arm
+    end
+  end
+  defparam sh.arm.u_m3.PAR3 = 1;
+
   m3 u_up ();
   m6 #(.M6_PARAM(7)) m6 ();
 
