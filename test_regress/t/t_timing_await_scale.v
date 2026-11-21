@@ -33,6 +33,30 @@ module t;
   int falls = 0;
   always @(negedge c[0]) ++falls;
 
+  // Each process awaits its own event, which shares an edge with half of the others
+  logic tick = 0;
+  int wakes[Size];
+  for (genvar i = 0; i < Size; ++i) begin : s
+    if (i % 2 == 0) begin : rise
+      initial forever begin
+        @(posedge tick or negedge c[i]);
+        ++wakes[i];
+      end
+    end
+    else begin : fall
+      initial forever begin
+        @(negedge tick or negedge c[i]);
+        ++wakes[i];
+      end
+    end
+  end
+  // The shared edge made just before awaiting wakes all the processes awaiting it
+  initial begin
+    #5 tick = 1;
+    @(posedge tick);
+    `stop;
+  end
+
   initial begin
     #2 c = '0;
     #1 for (int i = 0; i < Size; ++i) c[i] = i % 3 == 0;
@@ -40,8 +64,14 @@ module t;
     for (int i = 0; i < Size; ++i) begin
       `checkd(rises[i], i % 3 == 0 ? 2 : 1);
       `checkd(ownRises[i], i % 3 == 0 ? 1 : 0);
+      `checkd(wakes[i], 1);
     end
     `checkd(falls, 1);
+    #2;
+    for (int i = 0; i < Size; ++i) `checkd(wakes[i], i % 2 == 0 ? 2 : 1);
+    tick = 0;
+    #1;
+    for (int i = 0; i < Size; ++i) `checkd(wakes[i], 2);
     $write("*-* All Finished *-*\n");
     $finish;
   end
