@@ -22,10 +22,15 @@ test.execute()
 
 test.file_grep(test.stats, r'ConstPool, CONST emitted\s+(\d+)', 2)
 test.file_grep(test.stats, r'ConstPool, CONSARRAY emitted\s+(\d+)', 3)
-test.file_grep(test.stats, r'ConstPool, CONSASSOC emitted\s+(\d+)', 3)
+test.file_grep(test.stats, r'ConstPool, CONSASSOC emitted\s+(\d+)', 4)
 test.file_grep(test.stats, r'ConstPool, CONSDYNARRAY emitted\s+(\d+)', 3)
-test.file_grep(test.stats, r'ConstPool, CONSQUEUE emitted\s+(\d+)', 5)
+test.file_grep(test.stats, r'ConstPool, CONSQUEUE emitted\s+(\d+)', 7)
 test.file_grep(test.stats, r'ConstPool, CONSSTRUCT emitted\s+(\d+)', 7)
 test.file_grep(test.stats, r'ConstPool, CONSWILDCARD emitted\s+(\d+)', 1)
+
+# String elements are C strings, but keyed items keep std::string literals
+const_pool = test.glob_one(test.obj_dir + "/" + test.vm_prefix + "__ConstPool__*.cpp")
+test.file_grep(const_pool, r'static_cast<const char\*>\("tagA"\)')
+test.file_grep(const_pool, r'\{"key"s, "value"s\}')
 
 test.passes()
