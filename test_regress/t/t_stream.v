@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: 2014 Glen Gibb
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
 module t (
     input clk
 );
@@ -224,6 +229,36 @@ module t (
       .din({>>{din_i}}),
       .dout({<<{dout_pin_rl}})
   );
+
+  // Right stream casts used as operands
+  typedef logic [31:0] w32_t;
+  typedef logic [94:0] w95_t;
+  function automatic logic [31:0] stream_add(logic [31:0] a, logic [31:0] b);
+    /*verilator no_inline_task*/
+    return a + b;
+  endfunction
+  wire [31:0] stream_ones = $countones(w32_t'({>>{din_i}}));
+  wire [31:0] stream_ones_w = $countones(w95_t'({>>{din_w[94:0]}}));
+  wire [31:0] stream_cond = din_i[9] ? 32'h5 : w32_t'({>>8{din_i}});
+  wire [31:0] stream_arg = stream_add(32'h10, w32_t'({>>8{din_i}}));
+  logic [7:0] stream_q[$] = '{8'h01, 8'h02, 8'h03, 8'h04};
+  wire [31:0] stream_arg_q = stream_add(32'h10, w32_t'({>>8{stream_q}}));
+  always @(posedge clk) begin
+    if (cyc == 2) begin
+      `checkh(stream_ones, 32'd1);
+      `checkh(stream_ones_w, 32'd1);
+      `checkh(stream_cond, 32'h1);
+      `checkh(stream_arg, 32'h11);
+      `checkh(stream_arg_q, 32'h01020314);
+    end
+    if (cyc == 3) begin
+      `checkh(stream_ones, 32'd5);
+      `checkh(stream_ones_w, 32'd22);
+      `checkh(stream_cond, 32'h5);
+      `checkh(stream_arg, 32'h04030211);
+      `checkh(stream_arg_q, 32'h01020314);
+    end
+  end
 
   always @(posedge clk) begin
     if (cyc != 0) begin
