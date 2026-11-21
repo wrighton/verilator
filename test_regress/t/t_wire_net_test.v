@@ -143,6 +143,7 @@ clk
   wire [6:0] s_wand_exp = {x & y, tri_x_dat[2:0]};
   wire [5:0] u_wor_exp = {x[1:0], y} | {tri_x_dat[2:0], 3'b0};
   wire [6:0] a_wor0_exp = {3'b0, x} | {1'b1, y, 2'b0};
+  wire [6:0] a_wor1_exp = {3'b0, tri_x_dat};
   wire [3:0] a_wand12_exp = x & y;
   wire [3:0] a_wand01_exp = {2'b11, tri_x_dat[1:0]} & tri_y_dat & x;
   always @ (posedge clk) begin
@@ -171,7 +172,7 @@ clk
     `checkb(s_wand, s_wand_exp);
     `checkb(u_wor, u_wor_exp);
     `checkb(a_wor[0], a_wor0_exp);
-    `checkb(a_wor[1], {3'b0, tri_x_dat});
+    `checkb(a_wor[1], a_wor1_exp);
     `checkb(a_wand[1][2], a_wand12_exp);
     `checkb(a_wand[0][1], a_wand01_exp);
     if (cyc == 20) begin
