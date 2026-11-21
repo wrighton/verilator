@@ -6827,11 +6827,20 @@ sequence_declarationBodyExpr<nodeExprp>:  // IEEE: part of sequence_declaration
         ;
 
 property_spec<propSpecp>:               // IEEE: property_spec
-        //                      // A clocking_event before a plain property_expr parses via pexpr
-                property_exprSpec                       { $$ = $1; }
-        |       clocking_eventE yDISABLE yIFF '(' expr ')' property_exprSpec
-                        { $$ = $7; $$->fileline($1 ? $<fl>1 : $5->fileline());
-                          $$->addSensesp($1); $$->disablep($5); }
+        //UNSUP: This rule has been super-specialized to what is supported now
+        //UNSUP remove below
+                '@' '(' event_expression ')' yDISABLE yIFF '(' expr ')' property_exprSpec
+                        { $$ = $10; $$->fileline($1); $$->addSensesp($3); $$->disablep($8); }
+        |       '@' '(' event_expression ')' property_exprSpec
+                        { $$ = $5; $$->fileline($1); $$->addSensesp($3); }
+        |       '@' senitemVar property_exprSpec
+                        { $$ = $3; $$->fileline($1); $$->addSensesp($2); }
+        |       yDISABLE yIFF '(' expr ')' '@' '(' event_expression ')' property_exprSpec
+                        { $$ = $10; $$->fileline($1); $$->addSensesp($8); $$->disablep($4); }
+        //UNSUP remove above
+        |       yDISABLE yIFF '(' expr ')' property_exprSpec
+                        { $$ = $6; $$->fileline($4->fileline()); $$->disablep($4); }
+        |       property_exprSpec                       { $$ = $1; }
         ;
 
 property_exprSpec<propSpecp>:  // A property expression plus explicit weak/strong strength
