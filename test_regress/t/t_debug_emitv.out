@@ -1914,38 +1914,6 @@ process __VprocessQueue_named__0[$];
 package __Vconstpool;
     const string CONSARRAY_0[1:0] = '{0:"ZERO", 1:"ONE"};
 endpackage
-interface Iface;
-    input logic clk;
-    logic ifsig;
-    modport mp (
-        input logic ifsig
-    );
-endinterface
-module sub;
-    input logic clk;
-    logic [7:0]  xr_vec;
-    /* generate */ begin : sub_gen
-        typedef enum logic [1:0] {
-            SUB_A = 2'h0,
-            SUB_B = 2'h1
-        } sub_e;
-    end : sub_gen
-    task inc(input int i, output int o);
-        o = /*CRESET*/;
-        o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
-    endtask
-    function int f(input int v);
-        begin : label11
-            if ((v == 32'sh0)) begin
-                f = 32'sh21;
-                disable label11;
-            end
-            f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
-            disable label11;
-        end
-    endfunction
-    real r;
-endmodule
 module seq_event;
     input logic clk;
     bit a;
@@ -2121,22 +2089,50 @@ endmodule
 package p;
     logic pkgvar;
     function int ident(input int value);
-        begin : label12
+        begin : label11
             ident = /*CRESET*/;
             ident = value;
-            disable label12;
+            disable label11;
         end
     endfunction
     function int uses_const_func();
         logic [1:0]  v;
-        begin : label13
+        begin : label12
             uses_const_func = /*CRESET*/;
             v = /*CRESET*/;
             uses_const_func = 32'h2;
-            disable label13;
+            disable label12;
         end
     endfunction
 endpackage
+module sub__Zz461fae86;
+    input logic clk;
+    logic [7:0]  xr_vec;
+    logic \xr.esc ;
+    /* generate */ begin : sub_gen
+        typedef enum logic [1:0] {
+            SUB_A = 2'h0,
+            SUB_B = 2'h1
+        } sub_e;
+    end : sub_gen
+    task inc(input int i, output int o);
+        o = /*CRESET*/;
+        o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
+    endtask
+    function int f(input int v);
+        begin : label13
+            if ((v == 32'sh0)) begin
+                f = 32'sh21;
+                disable label13;
+            end
+            f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
+            disable label13;
+        end
+    endfunction
+    real r;
+    parameter bit __Vbind0 = 1'h1;
+    Iface path_bound_iface ();
+endmodule
 module defparam_gen__pie9c2606d;
     /* generate */ begin : dpg
     end : dpg
@@ -2383,6 +2379,13 @@ package Pkg;
         killQueue(__VprocessQueue_named__0);
     endtask
 endpackage
+interface Iface;
+    input logic clk;
+    logic ifsig;
+    modport mp (
+        input logic ifsig
+    );
+endinterface
 module defparam_leaf;
     parameter bit signed [31:0]  P = 32'sh1;
 endmodule

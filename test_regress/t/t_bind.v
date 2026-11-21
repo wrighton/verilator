@@ -64,6 +64,7 @@ module LibraryBound #(
 endmodule
 
 bind LibraryModule LibraryBound #(.ENABLE(1'b1)) bound_instance ();
+bind t.library_inst LibraryBound #(.ENABLE(1'b1)) bound_path_instance ();
 
 program Prog (
     input si

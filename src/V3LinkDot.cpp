@@ -66,6 +66,7 @@
 #include "V3LinkDot.h"
 
 #include "V3Assert.h"
+#include "V3Const.h"
 #include "V3Global.h"
 #include "V3Graph.h"
 #include "V3LinkDotIfaceCapture.h"
@@ -176,7 +177,9 @@ class LinkDotState final {
     // Cleared on Netlist
     //  AstNodeModule::user1p()         // VSymEnt*.      Last symbol created for this node
     //  AstPin::user1p()                // VSymEnt*.      Scope of a defparam, for its value
-    //  AstNodeModule::user2()          // bool.          Currently processing for recursion check
+    //  AstNodeModule::user2()          // uint64_t.      Currently processing for recursion
+    //                                                    check, PROCESSING_PATH_BOUND if within
+    //                                                    a path-bound instance
     //  ...  Note maybe more than one, as can be multiple hierarchy places
     //  AstVarScope::user2p()           // AstVarScope*.  Base alias for AstInline of this signal
     //  AstAssignW::user2()             // bool.          Created for aliases handling.
@@ -342,6 +345,17 @@ public:
     VSymEnt* rootEntp() const { return m_syms.rootp(); }
     VSymEnt* dunitEntp() const { return m_dunitEntp; }
     VSymEnt* packageEntp() const { return m_packageEntp; }
+    // Return if an instance, or the variable of an interface instance, is from a bind to an
+    // instance path
+    static bool isPathBound(const AstNode* nodep) {
+        const AstVar* const varp = VN_CAST(nodep, Var);
+        const AstIfaceRefDType* const dtypep
+            = varp && varp->isIfaceParent()
+                  ? VN_CAST(varp->childDTypep()->elemDTypep(), IfaceRefDType)
+                  : nullptr;
+        const AstCell* const cellp = dtypep ? dtypep->cellp() : VN_CAST(nodep, Cell);
+        return cellp && cellp->pathBind();
+    }
     void checkDuplicate(VSymEnt* lookupSymp, AstNode* nodep, const string& name) {
         // Lookup the given name under current symbol table
         // Insert if not found
@@ -374,6 +388,10 @@ public:
                    && (VN_IS(fnodep, Begin) || VN_IS(fnodep, GenBlock))) {
             // Begin: ... blocks often replicate under genif/genfor, so
             // suppress duplicate checks.  See t_gen_forif.v for an example.
+        } else if (forPrimary() && isPathBound(nodep) && isPathBound(fnodep)) {
+            // Instances bound with one name into iterations of a generate loop, which is not
+            // unrolled yet, are under exclusive generate ifs (see V3LinkCells), so only check
+            // those V3Param keeps
         } else {
             UINFO(4, "name " << name);  // Not always same as nodep->name
             UINFO(4, "Var1 " << nodep);
@@ -1171,6 +1189,10 @@ class LinkDotFindVisitor final : public VNVisitor {
     string m_scope;  // Scope text
     const AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     bool m_inRecursion = false;  // Inside a recursive module
+    bool m_inPathBind = false;  // Inside an instance from a bind to an instance path
+    // Values of AstNodeModule::user2 while processing the module
+    static constexpr uint64_t PROCESSING = 1;
+    static constexpr uint64_t PROCESSING_PATH_BOUND = 2;  // Within a path-bound instance
     int m_paramNum = 0;  // Parameter number, for position based connection
     bool m_explicitNew = false;  // Hit a "new" function
     int m_modBlockNum = 0;  // Begin block number in module, 0=none seen
@@ -1410,7 +1432,10 @@ class LinkDotFindVisitor final : public VNVisitor {
         VL_RESTORER(m_modBlockNum);
         VL_RESTORER(m_modWithNum);
         VL_RESTORER(m_modArgNum);
-        if (doit && nodep->user2()) {
+        // A module within an instance bound to an instance path may instantiate a module it
+        // is bound into, as within it the bound instances are skipped (see visit(AstCell))
+        const uint64_t processing = m_inPathBind ? PROCESSING_PATH_BOUND : PROCESSING;
+        if (doit && nodep->user2() == processing) {
             nodep->v3warn(E_UNSUPPORTED,
                           "Unsupported: Identically recursive module (module instantiates "
                           "itself, without changing parameters): "
@@ -1440,10 +1465,11 @@ class LinkDotFindVisitor final : public VNVisitor {
             // m_modSymp/m_curSymp for non-packages set by AstCell above this module
             // Iterate
             VL_RESTORER_CLEAR(m_ifaceMethodDefs);
-            nodep->user2(true);
+            const uint64_t wasProcessing = nodep->user2();
+            nodep->user2(processing);
             iterateChildren(nodep);
             if (pkgp) doExports();
-            nodep->user2(false);
+            nodep->user2(wasProcessing);
             if (m_statep->forPrimary()) {
                 // Out-of-block definitions are moved on the first visit, so check only then
                 if (!nodep->user4()) checkModportExports(nodep);
@@ -1538,10 +1564,25 @@ class LinkDotFindVisitor final : public VNVisitor {
             m_scopes.push_back(nodep);
         }
     }
+    // Return if the instance, from a bind to an instance path, is in the instance it names
+    bool isBindTarget(const AstCell* nodep) const {
+        const VSymEnt* symp = m_curSymp;
+        const std::deque<string> names = VString::split(nodep->bindPath(), '.');
+        for (auto it = names.crbegin(); it != names.crend(); ++it, symp = symp->parentp()) {
+            if (symp->nodep()->name() != *it) return false;
+        }
+        const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
+        const AstNodeModule* const modp
+            = cellp ? cellp->modp() : VN_CAST(symp->nodep(), NodeModule);
+        return modp && modp->origName() == nodep->bindModName();
+    }
     void visit(AstCell* nodep) override {  // FindVisitor::
         UINFO(5, "   CELL under " << m_scope << " is " << nodep);
         // Process XREFs/etc inside pins
         if (nodep->recursive() && m_inRecursion) return;
+        // An instance from a bind to an instance path is only in the instances on the path,
+        // which, as generate loops are not unrolled yet, are all their iterations
+        if (nodep->pathBind() && m_statep->forPrimary() && !isBindTarget(nodep)) return;
         iterateChildren(nodep);
         // Recurse in, preserving state
         VL_RESTORER_COPY(m_scope);
@@ -1549,6 +1590,7 @@ class LinkDotFindVisitor final : public VNVisitor {
         VL_RESTORER(m_curSymp);
         VL_RESTORER(m_paramNum);
         VL_RESTORER(m_inRecursion);
+        VL_RESTORER(m_inPathBind);
         // Where do we add it?
         VSymEnt* aboveSymp = m_curSymp;
         const string origname = AstNode::dedotName(nodep->name());
@@ -1568,6 +1610,7 @@ class LinkDotFindVisitor final : public VNVisitor {
             m_scope = m_scope + "." + nodep->name();
             m_curSymp = m_modSymp = m_statep->insertCell(aboveSymp, m_modSymp, nodep, m_scope);
             m_inRecursion = nodep->recursive();
+            m_inPathBind = m_inPathBind || nodep->pathBind();
             // We don't report NotFoundModule, as may be a unused module in a generate
             if (nodep->modp()) iterate(nodep->modp());
         }
@@ -1607,27 +1650,21 @@ class LinkDotFindVisitor final : public VNVisitor {
     }
     void visit(AstGenBlock* nodep) override {  // FindVisitor::
         UINFO(5, "   " << nodep);
-        if (nodep->name() == "" && nodep->unnamed()) {
+        if (nodep->name() == "" && nodep->unnamedScope()) {
             // Unnamed blocks are only important when they contain var
             // decls, so search for them. (Otherwise adding all the
             // unnamed#'s would just confuse tracing variables in
             // places such as tasks, where "task ...; begin ... end"
             // are common.
-            for (AstNode* const itemp : nodep->itemspList()) {
-                if (VN_IS(itemp, Var) || VN_IS(itemp, Foreach)) {
-                    std::string name;
-                    const std::string stepStr = m_statep->forPrimary()
-                                                    ? ""
-                                                    : std::to_string(m_statep->stepNumber()) + "_";
-                    do {
-                        ++m_modBlockNum;
-                        name = "unnamedblk" + stepStr + cvtToStr(m_modBlockNum);
-                        // Increment again if earlier pass of V3LinkDot claimed this name
-                    } while (m_curSymp->findIdFlat(name));
-                    nodep->name(name);
-                    break;
-                }
-            }
+            std::string name;
+            const std::string stepStr
+                = m_statep->forPrimary() ? "" : std::to_string(m_statep->stepNumber()) + "_";
+            do {
+                ++m_modBlockNum;
+                name = "unnamedblk" + stepStr + cvtToStr(m_modBlockNum);
+                // Increment again if earlier pass of V3LinkDot claimed this name
+            } while (m_curSymp->findIdFlat(name));
+            nodep->name(name);
         }
         if (nodep->name() == "") {
             iterateChildren(nodep);
@@ -2044,6 +2081,9 @@ class LinkDotFindVisitor final : public VNVisitor {
                 nodep->v3error("Unsupported in C: Variable has same name as "
                                << LinkDotState::nodeTextType(foundp->nodep()) << ": "
                                << nodep->prettyNameQ());
+            } else if (m_statep->forPrimary() && LinkDotState::isPathBound(findvarp)
+                       && LinkDotState::isPathBound(nodep)) {
+                ins = true;  // See LinkDotState::checkDuplicate
             } else if (findvarp != nodep) {
                 UINFO(4, "DupVar: " << nodep << " ;; " << foundp->nodep());
                 UINFO(4, "    found  cur=se" << cvtToHex(m_curSymp) << " ;; parent=se"
@@ -2155,7 +2195,7 @@ class LinkDotFindVisitor final : public VNVisitor {
                     }
                 }
                 m_statep->insertSym(m_curSymp, nodep->name(), nodep, m_classOrPackagep);
-                if (m_statep->forPrimary() && nodep->isGParam()) {
+                if (m_statep->forPrimary() && nodep->isGParam() && !nodep->isInternal()) {
                     ++m_paramNum;
                     VSymEnt* const symp
                         = m_statep->insertSym(m_curSymp, "__paramNumber" + cvtToStr(m_paramNum),
@@ -2800,6 +2840,17 @@ class LinkDotParamVisitor final : public VNVisitor {
         return (cellp ? cellp->modp() : VN_AS(symp->nodep(), NodeModule))->origName() + "."
                + anchoredPath;
     }
+    // Symbol of the instance, or top module, whose scope contains the symbol, if any, else it
+    // is in the compilation unit
+    static const VSymEnt* instanceSym(const VSymEnt* symp) {
+        for (; symp; symp = symp->parentp()) {
+            if (VN_IS(symp->nodep(), Cell)) return symp;
+            if (VN_IS(symp->nodep(), NodeModule)) {
+                return VN_IS(symp->nodep(), Package) ? nullptr : symp;
+            }
+        }
+        return nullptr;
+    }
     // Return if a symbol is the given symbol or one of its parents
     static bool isAboveSym(const VSymEnt* symp, const VSymEnt* belowSymp) {
         for (; belowSymp; belowSymp = belowSymp->parentp()) {
@@ -2915,6 +2966,12 @@ class LinkDotParamVisitor final : public VNVisitor {
                           "Unsupported: defparam to "
                               << varPathQ
                               << " in the instance containing the defparam or above it");
+        } else if (nodep->fromBind() && instanceSym(defSymp)
+                   && !isAboveSym(instanceSym(defSymp), cellSymp)) {
+            // V3LinkCells found a bind's path from the module containing it; found upwards
+            // from each instance it may name others (IEEE 1800-2023 23.8)
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: bind target path in a module, not below it.");
         } else if (VN_IS(defSymp->nodep(), GenBlock) && !isAboveSym(defSymp, cellSymp)) {
             // The defparam's symbol is its innermost generate block, else its module
             nodep->v3error("In defparam under generate block "
@@ -4782,8 +4839,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     "Instance has unlinked module");  // V3LinkCell should have errored out
         VL_RESTORER(m_cellp);
         VL_RESTORER(m_pinSymp);
+        VL_RESTORER(m_curSymp);
         {
             m_cellp = nodep;
+            // An instance from a bind to an instance path is only in the scopes of the instances
+            // on the path (see LinkDotFindVisitor::visit(AstCell)), so resolve its pins there
+            if (nodep->pathBind() && m_statep->forPrimary() && m_statep->existsNodeSym(nodep)) {
+                m_curSymp = m_statep->getNodeSym(nodep)->parentp();
+            }
             if (VN_IS(nodep->modp(), NotFoundModule)) {
                 // Prevent warnings about missing pin connects
                 if (nodep->pinsp()) nodep->pinsp()->unlinkFrBackWithNext()->deleteTree();
@@ -8067,6 +8130,27 @@ void V3LinkDot::dumpSubstep(const string& name) {
     } else if (debug() >= 5) {  // on high dbg level, dump even if not explicitly told to
         v3Global.rootp()->dumpTreeFile(v3Global.debugFilename(name + ".tree"));
     }
+}
+
+bool V3LinkDot::pathSegments(AstNode* pathp, PathSegments& segs) {
+    if (const AstDot* const dotp = VN_CAST(pathp, Dot)) {
+        return pathSegments(dotp->lhsp(), segs) && pathSegments(dotp->rhsp(), segs);
+    }
+    if (const AstParseRef* const refp = VN_CAST(pathp, ParseRef)) {
+        segs.emplace_back(refp->name(), nullptr);
+        return true;
+    }
+    AstSelBit* const selp = VN_CAST(pathp, SelBit);
+    const AstParseRef* const fromp = selp ? VN_CAST(selp->fromp(), ParseRef) : nullptr;
+    if (!fromp) return false;
+    // An index of constants only is known before V3Param, so is folded here
+    const bool constants = !selp->bitp()->exists([](const AstNode* nodep) {
+        return !VN_IS(nodep, Const) && !VN_IS(nodep, NodeUniop) && !VN_IS(nodep, NodeBiop)
+               && !VN_IS(nodep, NodeTriop);
+    });
+    if (constants) V3Const::constifyParamsEdit(selp->bitp());  // bitp may change
+    segs.emplace_back(fromp->name(), selp->bitp());
+    return true;
 }
 
 void V3LinkDot::linkDotGuts(AstNetlist* rootp, VLinkDotStep step) {

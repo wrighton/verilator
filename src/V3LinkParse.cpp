@@ -594,9 +594,9 @@ class LinkParseVisitor final : public VNVisitor {
         // Maybe this variable has a signal attribute
         V3Control::applyVarAttr(m_modp, m_ftaskp, nodep);
 
-        // The function return variable is not user visible
+        // The function return variable and internal variables are not user visible
         if (v3Global.opt.anyPublicFlat() && nodep->varType().isVPIAccessible()
-            && !nodep->isFuncReturn()) {
+            && !nodep->isFuncReturn() && !nodep->isInternal()) {
             if (v3Global.opt.publicFlatRW()) {
                 nodep->sigUserRWPublic(true);
             } else if (v3Global.opt.publicParams() && nodep->isParam()) {

@@ -39,19 +39,23 @@
                                                           : ... note: In instance 't.f0'
    29 |   defparam f0.child.N = 2;
       |                       ^
-%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:86:20: Unsupported: defparam inside hierarchical block 'nested'
-   86 |   defparam child.N = 3;
+%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:88:6: Unsupported: bind to an instance path into hierarchical block 'bind_target'.
+                                                         : ... note: In instance 't.b0'
+   88 | bind t.b0.child bound u_bound ();
+      |      ^
+%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:98:20: Unsupported: defparam inside hierarchical block 'nested'
+   98 |   defparam child.N = 3;
       |                    ^
-%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:94:22: Unsupported: defparam inside hierarchical block 'generated'
-                                                          : ... note: In instance 't.g0'
-   94 |     defparam child.N = 4;
+%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:106:22: Unsupported: defparam inside hierarchical block 'generated'
+                                                           : ... note: In instance 't.g0'
+  106 |     defparam child.N = 4;
       |                      ^
-%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:34:21: Unsupported: defparam to a parameter in a named block, task or function of hierarchical block 'scoped'
+%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:35:21: Unsupported: defparam to a parameter in a named block, task or function of hierarchical block 'scoped'
                                                           : ... note: In instance 't'
-   34 |   defparam c0.blk.P = 2;
+   35 |   defparam c0.blk.P = 2;
       |                     ^
-%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:64:12: Unsupported: Setting type parameter 'T' of hierarchical block 'typed'
+%Error-UNSUPPORTED: t/t_hier_block_param_lib_unsup.v:65:12: Unsupported: Setting type parameter 'T' of hierarchical block 'typed'
                                                           : ... note: In instance 't.o0'
-   64 |   typed #(.T(T)) inner ();
+   65 |   typed #(.T(T)) inner ();
       |            ^
 %Error: Exiting due to

@@ -965,8 +965,17 @@ class ParamProcessor final {
         if (pair.second) {  // Not cached yet, so check parameters
             // A separately compiled library cannot receive defparams aimed into its body
             if (const AstPin* const defparamp = nestedDefparamp(modp)) {
-                defparamp->v3warn(E_UNSUPPORTED, "Unsupported: defparam inside hierarchical block "
-                                                     << AstNode::prettyNameQ(modp->origName()));
+                // An internal parameter enables a bind to an instance path (see V3LinkCells)
+                if (defparamp->modVarp() && defparamp->modVarp()->isInternal()) {
+                    defparamp->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: bind to an instance path into hierarchical "
+                                      "block "
+                                          << AstNode::prettyNameQ(modp->origName()) << ".");
+                } else {
+                    defparamp->v3warn(E_UNSUPPORTED,
+                                      "Unsupported: defparam inside hierarchical block "
+                                          << AstNode::prettyNameQ(modp->origName()));
+                }
             }
             // Using map with key=string so that we can scan it in deterministic order
             DefaultValueMap params;

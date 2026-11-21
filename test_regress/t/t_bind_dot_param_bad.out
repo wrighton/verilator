@@ -1,0 +1,8 @@
+%Error-PINNOTFOUND: t/t_bind_dot_param_bad.v:15:10: Parameter not found: '__paramNumber1'
+   15 |   leaf #(1) u_leaf2 ();   
+      |          ^
+                                                  : ... Location of instance's module declaration
+    7 | module leaf;
+      |        ^~~~
+                    ... For error description see https://verilator.org/warn/PINNOTFOUND?v=latest
+%Error: Exiting due to
