@@ -511,16 +511,30 @@ class ParamProcessor final {
         return st;
     }
 
-    static bool isAggregateParamValue(const AstNode* nodep) {
-        return VN_IS(nodep, ConsArray) || VN_IS(nodep, ConsStruct);
-    }
+    static bool isAggregateParamValue(const AstNode* nodep) { return VN_IS(nodep, NodeCons); }
 
     string paramValueString(const AstNode* nodep) {
         if (const AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
             nodep = refp->skipRefToNonRefp();
         }
         string key = nodep->name();
-        if (const AstIfaceRefDType* const ifrtp = VN_CAST(nodep, IfaceRefDType)) {
+        // A value is named with its type, as the type of an operand, e.g. a queue bound, can
+        // change the value
+        if (VN_IS(nodep, NodeCons)) {
+            key = nodep->typeName() + "<"s + paramElemString(nodep->dtypep()) + ">";
+        }
+        const AstConst* const constp = VN_CAST(nodep, Const);
+        if (constp && constp->num().isString()) {
+            // Escaped, so a string cannot imitate the separators of an aggregate value
+            key = '"'
+                  + VString::quoteAny(VString::quoteBackslash(constp->num().toString()), '"', '\\')
+                  + '"';
+        } else if (constp && constp->num().isDouble()) {
+            // By its bits, as distinct values, e.g. NaNs, can have the same text
+            V3Number bits{&constp->num(), 64};
+            bits.opRealToBits(constp->num());
+            key = "real:" + bits.ascii();
+        } else if (const AstIfaceRefDType* const ifrtp = VN_CAST(nodep, IfaceRefDType)) {
             if (ifrtp->cellp() && ifrtp->cellp()->modp()) {
                 key = ifrtp->cellp()->modp()->name();
             } else if (ifrtp->ifacep()) {
@@ -592,6 +606,12 @@ class ParamProcessor final {
                 key += ",";
             }
             key += "}";
+        } else if (const AstConsAssoc* const consp = VN_CAST(nodep, ConsAssoc)) {
+            key += paramItemsString(nullptr, consp->defaultp(), consp->itemsp());
+        } else if (const AstConsDynArray* const consp = VN_CAST(nodep, ConsDynArray)) {
+            key += paramItemsString(consp->sizep(), consp->defaultp(), consp->itemsp());
+        } else if (const AstConsQueue* const consp = VN_CAST(nodep, ConsQueue)) {
+            key += paramItemsString(consp->sizep(), consp->defaultp(), consp->itemsp());
         } else if (const AstClassRefDType* const classRefp = VN_CAST(nodep, ClassRefDType)) {
             if (classRefp->classp()) {
                 const string& className = classRefp->classp()->name();
@@ -661,6 +681,19 @@ class ParamProcessor final {
         }
         UASSERT_OBJ(!key.empty(), nodep, "Parameter yielded no value string");
         return key;
+    }
+    // As paramValueString(), for the size, items, each with any key, and default of a container
+    template <typename T_Item>
+    string paramItemsString(const AstNodeExpr* sizep, const AstNodeExpr* defaultp,
+                            T_Item* itemsp) {
+        string key = "{";
+        if (sizep) key += "size:" + paramValueString(sizep) + ",";
+        for (const T_Item* const itemp : VNList<T_Item>{itemsp}) {
+            if (itemp->keyp()) key += paramValueString(itemp->keyp()) + ":";
+            key += paramValueString(itemp->valuep()) + ",";
+        }
+        if (defaultp) key += "default:" + paramValueString(defaultp) + ",";
+        return key + "}";
     }
     // As paramValueString(), for the element or key type of a container
     string paramElemString(const AstNodeDType* dtypep) {
@@ -1665,6 +1698,30 @@ class ParamProcessor final {
         return match;
     }
 
+    // Whether the constant pin value 'exprp' is the default 'origp' of its parameter 'modvarp',
+    // so need not specialize. A real is compared by its bits, as it names a specialization so.
+    static bool isDefaultParamValue(const AstVar* modvarp, AstConst* exprp, AstConst* origp) {
+        if (origp->num().isDouble()) {
+            // An untyped parameter is of the type of its value, so not real for another value
+            if (modvarp->untypedParam() && !exprp->num().isDouble()) return false;
+            V3Number pinNum{exprp, V3Number::Double{}, 0.0};
+            if (exprp->num().isDouble()) {
+                pinNum.opAssign(exprp->num());
+            } else {
+                pinNum.opIToRD(exprp->num(), exprp->isSigned());
+            }
+            V3Number pinBits{exprp, 64};
+            pinBits.opRealToBits(pinNum);
+            V3Number origBits{origp, 64};
+            origBits.opRealToBits(origp->num());
+            return pinBits.isCaseEq(origBits);
+        }
+        return exprp->sameTree(origp)
+               || (!modvarp->untypedParam()
+                   && ((exprp->num().width() == origp->num().width()
+                        && ParameterizedHierBlocks::areSame(exprp, origp))
+                       || paramConstsEqualAtMaxWidth(exprp, origp)));
+    }
     static bool paramConstsEqualAtMaxWidth(AstConst* exprp, AstConst* origp) {
         // Return true if two integer constants are equal after sign-extending
         // both to max(width).  A typed parameter default (e.g. byte) is
@@ -1883,6 +1940,14 @@ class ParamProcessor final {
             if (!modvarp->isGParam()) {
                 pinp->v3fatalSrc("Attempted parameter setting of non-parameter: Param "
                                  << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
+            } else if (pinp->exprp()->exists([](const AstConsWildcard*) { return true; })) {
+                pinp->v3warn(E_UNSUPPORTED, "Unsupported: Parameter override value containing a "
+                                            "wildcard associative array: Param "
+                                                << pinp->prettyNameQ() << " of "
+                                                << nodep->prettyNameQ() << ".");
+                // Recover by keeping the default
+                AstNode* const exprp = pinp->exprp()->unlinkFrBack();
+                VL_DO_DANGLING(exprp->deleteTree(), exprp);
             } else if (VN_IS(pinp->exprp(), Pattern)
                        || (VN_IS(pinp->exprp(), ConsArray)
                            && arraySubDTypep(modvarp->subDTypep()))) {
@@ -1949,15 +2014,8 @@ class ParamProcessor final {
                     pinExprp->replaceWith(new AstConst{pinp->fileline(), AstConst::WidthedValue{},
                                                        modvarp->width(), 0});
                     VL_DO_DANGLING(pinExprp->deleteTree(), pinExprp);
-                } else if (defaultp
-                               ? normedNamep->num().isCaseEq(defaultp->num())
-                               : origp
-                                     && (exprp->sameTree(origp)
-                                         || (!modvarp->untypedParam()
-                                             && ((exprp->num().width() == origp->num().width()
-                                                  && ParameterizedHierBlocks::areSame(exprp,
-                                                                                      origp))
-                                                 || paramConstsEqualAtMaxWidth(exprp, origp))))) {
+                } else if (defaultp ? normedNamep->num().isCaseEq(defaultp->num())
+                                    : origp && isDefaultParamValue(modvarp, exprp, origp)) {
                     // Setting parameter to its default value.  Just ignore it.
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
