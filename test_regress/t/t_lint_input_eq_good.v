@@ -6,7 +6,7 @@
 
 module t (
     input wire i,
-    input wire i2 = i  // Good under IEEE 1800-2009
+    input wire i2 = 1'b1  // Good under IEEE 1800-2009, constant default (23.2.2.4)
 );
 
 endmodule
