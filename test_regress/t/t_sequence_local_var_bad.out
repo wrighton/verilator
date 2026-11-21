@@ -7,65 +7,70 @@
                                                   : ... note: In instance 't'
    19 |     (1, in = 1);
       |         ^~
-%Error: t/t_sequence_local_var_bad.v:39:15: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:36:44: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   39 |     s_capture(m) |=> 1;
-      |               ^
+   36 |   assert property (@(posedge clk) s_assign(static_var) |=> static_var);
+      |                                            ^~~~~~~~~~
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_sequence_local_var_bad.v:44:15: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:52:15: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   44 |     s_forward(m) |=> 1;
+   52 |     s_capture(m) |=> 1;
       |               ^
-%Error: t/t_sequence_local_var_bad.v:52:16: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:57:15: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   52 |     p_property(m);
+   57 |     s_forward(m) |=> 1;
+      |               ^
+%Error: t/t_sequence_local_var_bad.v:65:16: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+                                          : ... note: In instance 't'
+                                          : ... Suggest passing a local variable of the enclosing property or sequence.
+   65 |     p_property(m);
       |                ^
-%Error: t/t_sequence_local_var_bad.v:58:17: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:71:17: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   58 |     s_capture(mw[2]) |=> 1;
+   71 |     s_capture(mw[2]) |=> 1;
       |                 ^
-%Error: t/t_sequence_local_var_bad.v:63:15: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:76:15: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   63 |     s_capture(1'b1) |=> 1;
+   76 |     s_capture(1'b1) |=> 1;
       |               ^~~~
-%Error: t/t_sequence_local_var_bad.v:69:15: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:82:15: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   69 |     s_capture(!t) |=> 1;
+   82 |     s_capture(!t) |=> 1;
       |               ^
-%Error: t/t_sequence_local_var_bad.v:75:16: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:88:18: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   75 |     s_capture(1'(t)) |=> 1;
-      |                ^
-%Error: t/t_sequence_local_var_bad.v:84:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+   88 |     s_capture(1'(t)) |=> 1;
+      |                  ^
+%Error: t/t_sequence_local_var_bad.v:97:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                           : ... note: In instance 't'
                                           : ... Suggest passing a local variable of the enclosing property or sequence.
-   84 |     s_typed_forward(m) |=> 1;
+   97 |     s_typed_forward(m) |=> 1;
       |                     ^
-%Error: t/t_sequence_local_var_bad.v:88:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
-                                          : ... note: In instance 't'
-                                          : ... Suggest passing a local variable of the enclosing property or sequence.
-   88 |     s_typed_forward(1'b1) |=> 1;
-      |                     ^~~~
-%Error: t/t_sequence_local_var_bad.v:96:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
-                                          : ... note: In instance 't'
-                                          : ... Suggest passing a local variable of the enclosing property or sequence.
-   96 |     p_typed_forward(m);
-      |                     ^
-%Error: t/t_sequence_local_var_bad.v:100:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:101:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                            : ... note: In instance 't'
                                            : ... Suggest passing a local variable of the enclosing property or sequence.
-  100 |     p_typed_forward(1'b1);
+  101 |     s_typed_forward(1'b1) |=> 1;
       |                     ^~~~
-%Error: t/t_sequence_local_var_bad.v:104:45: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+%Error: t/t_sequence_local_var_bad.v:109:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
                                            : ... note: In instance 't'
                                            : ... Suggest passing a local variable of the enclosing property or sequence.
-  104 |   assert property (@(posedge clk) s_capture(m));
+  109 |     p_typed_forward(m);
+      |                     ^
+%Error: t/t_sequence_local_var_bad.v:113:21: Formal argument 'w' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+                                           : ... note: In instance 't'
+                                           : ... Suggest passing a local variable of the enclosing property or sequence.
+  113 |     p_typed_forward(1'b1);
+      |                     ^~~~
+%Error: t/t_sequence_local_var_bad.v:117:45: Formal argument 'lv' may be assigned through a sequence, so its actual argument must be an entire local variable (IEEE 1800-2023 16.10).
+                                           : ... note: In instance 't'
+                                           : ... Suggest passing a local variable of the enclosing property or sequence.
+  117 |   assert property (@(posedge clk) s_capture(m));
       |                                             ^
 %Error: Exiting due to
