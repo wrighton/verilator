@@ -172,6 +172,27 @@ module t (
       `checkh(w95a["out"], {32'h7, 63'h1});
       `checkh(w95a.num(), 1);
     end
+    begin
+      // Elements wider than 64 bits (IEEE 1800-2023 7.8.1)
+      bit [64:0] wa[*];
+      bit [127:0] wb[*];
+      bit [64:0] x;
+      bit [127:0] y;
+      int key;
+
+      key = cyc + 2;  // Not constant
+      wa = '{default: {1'b1, 64'h77}};
+      wa[key] = {1'b1, 64'h3};
+      x = wa[key];
+      `checkh(x, {1'b1, 64'h3});
+      `checkh(wa[key], {1'b1, 64'h3});
+      x = wa["missing"];
+      `checkh(x, {1'b1, 64'h77});
+
+      wb[key] = {64'h1234, 64'h5678};
+      y = wb[key];
+      `checkh(y, {64'h1234, 64'h5678});
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
