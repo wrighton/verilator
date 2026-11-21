@@ -62,15 +62,19 @@ module t;
     // verilator lint_on SELRANGE
     `checkh(a12[3'd7], 7);
     `checkh(an[65'sd3], 103);
+    // verilator lint_off SELRANGE
     `checkh(arr8[3'bx01], 0);  // An index with X selects no element
     `checkh(an[3'bx01], 0);
+    // verilator lint_on SELRANGE
     // Adding the offset of the low bound -2 must not wrap these to a valid element
     `checkh(an[uidx], idx >= 2 ? 98 + idx : 0);
     `checkh(an[uidx40], idx >= 2 ? 98 + idx : 0);
     if (idx < 2) an[uidx] = 1;
     `checkh(an[-2], 98);
     `checkh(an[-1], 99);
+    // verilator lint_off SELRANGE
     wr8[2'bx1] = 4;
+    // verilator lint_on SELRANGE
     `checkh(wr8[1], 0);
     `checkh(wr8[3], 0);
     `checkh(an[-64'sd1], 99);
