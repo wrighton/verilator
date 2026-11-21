@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_lib_port_inst_name_unsup.v:12:24: Unsupported: --lib-create or hierarchical block input/output with the same name as its module or a package: 'pkg'
+                                                        : ... note: In instance 't'
+   12 |     input [pkg::W-1:0] pkg,
+      |                        ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_lib_port_inst_name_unsup.v:13:25: Unsupported: --lib-create or hierarchical block input/output with the same name as its module or a package: 't'
+                                                        : ... note: In instance 't'
+   13 |     output [pkg::W-1:0] t
+      |                         ^
+%Error: Exiting due to

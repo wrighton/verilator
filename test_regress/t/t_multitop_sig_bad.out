@@ -11,4 +11,7 @@
                                           : ... Top module 'c'
    29 | module c (
       |        ^
+                                          : ... Top module 'd'
+   45 | module d (
+      |        ^
 %Error: Exiting due to
