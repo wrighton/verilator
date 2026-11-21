@@ -1107,8 +1107,10 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(SCHED_DO_POST_UPDATES,              "doPostUpdates",          false,  CLEAN,  false,      "", "") \
     macro(SCHED_EVALUATE,                     "evaluate",               false,  CLEAN,  false,      "", "") \
     macro(SCHED_EVALUATION,                   "evaluation",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
+    macro(SCHED_EVALUATION_SKIPPABLE,         "evaluationSkippable",    false,  CLEAN,  AWAITABLE,  "r+", "") \
     macro(SCHED_POST_UPDATE,                  "postUpdate",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_RESUME,                       "resume",                 false,  CLEAN,  false,      "TODO", "") \
+    macro(SCHED_RESUMED_SKIPPED,              "resumedSkipped",         false,  CLEAN,  false,      "", "") \
     macro(SCHED_RESUME_ZERO_DELAY,            "resumeZeroDelay",        false,  CLEAN,  false,      "", "") \
     macro(SCHED_RESUMPTION,                   "resumption",             false,  CLEAN,  AWAITABLE,  "rrrr", "") \
     macro(SCHED_TRIGGER,                      "trigger",                false,  CLEAN,  AWAITABLE,  "rrrrr", "") \

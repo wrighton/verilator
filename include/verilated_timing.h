@@ -75,11 +75,46 @@ void resumeAborted() VL_MT_UNSAFE_ONE;
 
 class VlCoroutine;
 
+/// A wait that may skip evaluating its trigger (see
+/// VlDynamicTriggerScheduler::evaluationSkippable)
+class VlSkippableWait VL_NOT_FINAL {
+public:
+    VlEventBase& m_event;  ///< The event waited on, reached through handles
+    explicit VlSkippableWait(VlEventBase& event)
+        : m_event{event} {}
+    /// If the handles on the way to the event still have their values from when the wait started
+    virtual bool linksUnchanged() const = 0;
+
+protected:
+    ~VlSkippableWait() = default;
+};
+
+/// Handle variables, each with its value when a skippable wait started, which keeps an object it
+/// refers to alive, so the next handle, a member of that object, can be read
+template <typename... T_Links>
+struct VlSkippableLinks final {
+    bool unchanged() const { return true; }
+};
+template <typename T_Link, typename... T_Links>
+struct VlSkippableLinks<T_Link, T_Links...> final {
+    T_Link* const m_linkp;  ///< The handle variable
+    const T_Link m_value;  ///< Its value when the wait started
+    const VlSkippableLinks<T_Links...> m_rest;  ///< The next handles
+    explicit VlSkippableLinks(T_Link& link, T_Links&... links)
+        : m_linkp{&link}
+        , m_value{link}
+        , m_rest{links...} {}
+    /// If the handles still have their values, checking each only if those before it do
+    bool unchanged() const { return *m_linkp == m_value && m_rest.unchanged(); }
+};
+
 struct VlPromise final {
     std::coroutine_handle<VlPromise>
         m_continuation;  // Coroutine to resume after this one finishes
     VlCoroutine* m_corop = nullptr;  // Pointer to the coroutine return object
     bool m_forever = false;  // Coroutine suspended forever
+    // The wait the coroutine awaits trigger evaluation for, if it may skip that, else nullptr
+    VlSkippableWait* m_skipWaitp = nullptr;
 
     ~VlPromise();
 
@@ -134,6 +169,10 @@ public:
         if (VL_UNLIKELY(m_coro)) destroy();
     }
     // METHODS
+    // The wait the coroutine awaits trigger evaluation for, if it may skip that, else nullptr
+    VlSkippableWait* skipWaitp() const { return m_coro.promise().m_skipWaitp; }
+    // If its process, if any, is waiting, as evaluating a trigger leaves it
+    bool waiting() const { return !m_process || m_process->state() == VlProcess::WAITING; }
     // Move the handle, leaving a null handle
     auto& operator=(VlCoroutineHandle&& moved) {
         m_coro = std::exchange(moved.m_coro, nullptr);
@@ -339,6 +378,8 @@ class VlDynamicTriggerScheduler final {
     VlCoroutineVec m_triggered;  // Coroutines whose triggers were set, and are awaiting resumption
     VlCoroutineVec m_post;  // Coroutines awaiting the post update step (only relevant for triggers
                             // with destructive post updates, e.g. named events)
+    bool m_skippable = false;  // A coroutine awaited evaluationSkippable()
+    bool m_resumedSkipped = false;  // Resuming a coroutine that skipped evaluating its trigger
 
     // METHODS
     auto awaitable(VlProcessRef process, VlCoroutineVec& queue, const char* filename, int lineno) {
@@ -356,9 +397,52 @@ class VlDynamicTriggerScheduler final {
         return Awaitable{process, queue, VlFileLineDebug{filename, lineno}};
     }
 
+    // Resumes the coroutines awaiting trigger evaluation, but those that may skip it while it can
+    // only find their trigger not set
+    void evaluateSkipping();
+
 public:
     // Evaluates all dynamic triggers (resumed coroutines that co_await evaluation())
     bool evaluate();
+    /// If the coroutine being resumed skipped evaluating its trigger, so it only does its post
+    /// updates (see evaluationSkippable)
+    bool resumedSkipped() const { return m_resumedSkipped; }
+    /// Used by coroutines for co_awaiting trigger evaluation for a wait only on 'event', reached
+    /// through the handle variables 'links', from the first one, which may skip it while neither
+    /// the event fired nor a handle changed (see docs/internals.rst)
+    template <typename... T_Links>
+    auto evaluationSkippable(VlEventBase& event, VlProcessRef process,
+                             const char* eventDescription, const char* filename, int lineno,
+                             T_Links&... links) {
+        VL_DEBUG_IF(VL_DBG_MSGF("         Suspending process waiting for %s at %s:%d\n",
+                                eventDescription, filename, lineno););
+        class Awaitable final : public VlSkippableWait {
+            VlDynamicTriggerScheduler& m_sched;  // The scheduler to suspend the coroutine in
+            VlProcessRef m_process;  // Data of the suspended process, null if not needed
+            VlFileLineDebug m_fileline;  // Location of the wait
+            const VlSkippableLinks<T_Links...> m_links;  // The handles on the way to the event
+            VlPromise* m_promisep = nullptr;  // Of the awaiting coroutine
+
+        public:
+            Awaitable(VlDynamicTriggerScheduler& sched, VlEventBase& event, VlProcessRef process,
+                      VlFileLineDebug fileline, T_Links&... links)
+                : VlSkippableWait{event}
+                , m_sched{sched}
+                , m_process{process}
+                , m_fileline{fileline}
+                , m_links{links...} {}
+            bool linksUnchanged() const override { return m_links.unchanged(); }
+            bool await_ready() const { return false; }  // Always suspend
+            void await_suspend(std::coroutine_handle<VlPromise> coro) {
+                m_promisep = &coro.promise();
+                m_promisep->m_skipWaitp = this;
+                m_sched.m_skippable = true;
+                m_sched.m_suspended.emplace_back(coro, m_process, m_fileline);
+            }
+            void await_resume() const { m_promisep->m_skipWaitp = nullptr; }
+        };
+        return Awaitable{*this, event, process, VlFileLineDebug{filename, lineno}, links...};
+    }
     // Called by coroutines that evaluate triggers to notify the scheduler if any triggers were set
     void anyTriggered(bool triggered) { m_anyTriggered = m_anyTriggered || triggered; }
     // Runs post updates for all dynamic triggers (resumes coroutines that co_await postUpdate())

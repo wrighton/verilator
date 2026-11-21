@@ -48,6 +48,9 @@
 // - for each event control:
 //     - if there is no corresponding trigger scheduler (see verilated_timing.{h,cpp}), create it
 //     - replace with a CAwait statement waiting on the corresponding trigger scheduler
+//     - a wait only on an event reached through up to 4 class or virtual interface handles,
+//       with an 'iff' only reading variables if any, awaits evaluationSkippable() instead of
+//       evaluation() while the handles are set, which may skip evaluating its trigger
 // - for each wait(cond) statement:
 //     - replace it with a loop like: while (!cond) @(<vars from cond>)
 // - for each fork:
@@ -504,6 +507,46 @@ public:
 };
 
 // ######################################################################
+//  Check whether evaluating an 'iff' less often than at each trigger evaluation is not observable
+
+class TimingSkippableIffVisitor final : public VNVisitorConst {
+    // STATE
+    const std::vector<AstNodeExpr*>& m_linkps;  // The handles on the way to the event
+    bool m_skippable = true;  // Whether the 'iff' only reads variables, through operators
+
+    // VISITORS
+    void visit(AstNodeVarRef* nodep) override {
+        if (!nodep->access().isReadOnly()) m_skippable = false;
+    }
+    void visit(AstMemberRef* nodep) override {
+        // A member through a handle on the way, which is set while skipping. That handle is not
+        // visited: it is a read-only variable or member chain of handles, as the wait's own.
+        bool throughLink = false;
+        for (const AstNodeExpr* const linkp : m_linkps) {
+            if (linkp->sameTree(nodep->fromp())) throughLink = true;
+        }
+        if (!nodep->access().isReadOnly() || !throughLink) m_skippable = false;
+    }
+    void visit(AstConst*) override {}
+    void visit(AstNodeUniop* nodep) override { visitOperator(nodep); }
+    void visit(AstNodeBiop* nodep) override { visitOperator(nodep); }
+    void visit(AstNodeTriop* nodep) override { visitOperator(nodep); }
+    void visit(AstNode*) override { m_skippable = false; }
+    void visitOperator(AstNodeExpr* nodep) {
+        if (!nodep->isPure()) m_skippable = false;
+        iterateChildrenConst(nodep);
+    }
+
+public:
+    // CONSTRUCTORS
+    TimingSkippableIffVisitor(AstNodeExpr* condp, const std::vector<AstNodeExpr*>& linkps)
+        : m_linkps{linkps} {
+        iterateConst(condp);
+    }
+    bool skippable() const { return m_skippable; }
+};
+
+// ######################################################################
 //  Transform nodes affected by timing
 
 class TimingControlVisitor final : public VNVisitor {
@@ -555,6 +598,10 @@ class TimingControlVisitor final : public VNVisitor {
     AstBasicDType* m_forkDtp = nullptr;  // Fork variable type
     AstBasicDType* m_trigSchedDtp = nullptr;  // Trigger scheduler type
 
+    // Most handles, the variable included, on the way to the event of an event control that may
+    // skip trigger evaluation, as in '@(m_env.m_agent.m_cfg.m_vif.cb)'
+    static constexpr size_t MAX_HANDLE_LINKS = 4;
+
     // Timing-related globals
     AstVarScope* m_delaySchedp = nullptr;  // Global delay scheduler
     AstVarScope* m_dynamicSchedp = nullptr;  // Global dynamic trigger scheduler
@@ -570,6 +617,7 @@ class TimingControlVisitor final : public VNVisitor {
     size_t m_statConstDelays = 0;  // Number of statically known #const (non-zero) delays
     size_t m_statVariableDelays = 0;  // Number of delays with value unknown at compile time
     size_t m_statSuspendableProcs = 0;  // Number of suspendable processes
+    size_t m_statSkippableWaits = 0;  // Number of event controls that may skip trigger evaluation
 
     // METHODS
     // Transform an assignment with an intra timing control into a timing control with the
@@ -666,6 +714,68 @@ class TimingControlVisitor final : public VNVisitor {
             }
             return !nodep->isPure();
         });
+    }
+    // Return the event if the sentree waits only on an event reached through up to 4 class or
+    // virtual interface handles, with an 'iff' only reading variables if any, else nullptr. Its
+    // trigger can only become set after the event fires or a handle on the way to it changes, so
+    // its evaluation may be skipped while neither happened (see
+    // VlDynamicTriggerScheduler::evaluationSkippable). On success, 'linkpsr' is set to each
+    // handle on the way, the variable last.
+    static AstMemberRef* skippableEventp(const AstSenTree* const sentreep,
+                                         std::vector<AstNodeExpr*>& linkpsr) {
+        const AstSenItem* const itemp = sentreep->sensesp();
+        if (itemp->nextp() || itemp->edgeType() != VEdgeType::ET_EVENT) return nullptr;
+        AstMemberRef* const eventp = VN_CAST(itemp->sensp(), MemberRef);
+        if (!eventp) return nullptr;
+        // Each handle is a variable or member holding a class or virtual interface reference,
+        // which the scheduler compares with its value when the wait started
+        AstNodeExpr* linkp = eventp->fromp();
+        while (true) {
+            UASSERT_OBJ(VN_IS(linkp->dtypep()->skipRefp(), ClassRefDType)
+                            || VN_IS(linkp->dtypep()->skipRefp(), IfaceRefDType),
+                        linkp, "Member selected from a value other than a handle");
+            // Checking the handles clones each prefix of the chain (see createSkippableWait)
+            if (linkpsr.size() == MAX_HANDLE_LINKS) return nullptr;
+            linkpsr.push_back(linkp);
+            if (VN_IS(linkp, VarRef)) break;
+            AstMemberRef* const memberp = VN_CAST(linkp, MemberRef);
+            if (!memberp) return nullptr;
+            linkp = memberp->fromp();
+        }
+        if (itemp->condp() && !TimingSkippableIffVisitor{itemp->condp(), linkpsr}.skippable()) {
+            return nullptr;
+        }
+        return eventp;
+    }
+    // Await trigger evaluation for an event control that may skip it, while the handles to its
+    // event ('linkps', see skippableEventp) are set, else as usual. The scheduler is given each
+    // handle on the way, from the first one, to compare it with its value when the wait started.
+    AstIf* createSkippableWait(AstSenTree* const sentreep, AstMemberRef* const eventp,
+                               const std::vector<AstNodeExpr*>& linkps,
+                               AstCAwait* const evalAwaitp) {
+        FileLine* const flp = sentreep->fileline();
+        ++m_statSkippableWaits;
+        // Only read, though a sentree from a cycle delay of a synchronous drive may write them
+        const auto readCopy = [](AstNodeExpr* const exprp) {
+            AstNodeExpr* const copyp = exprp->cloneTree(false);
+            copyp->foreach([](AstNodeVarRef* const refp) { refp->access(VAccess::READ); });
+            return copyp;
+        };
+        AstCMethodHard* const methodp = new AstCMethodHard{
+            flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE},
+            VCMethod::SCHED_EVALUATION_SKIPPABLE, readCopy(eventp)};
+        methodp->dtypeSetVoid();
+        addProcessInfo(methodp);
+        addEventDebugInfo(methodp, sentreep);
+        AstNodeExpr* setp = nullptr;
+        for (auto it = linkps.rbegin(); it != linkps.rend(); ++it) {
+            methodp->addPinsp(readCopy(*it));
+            AstNodeExpr* const notNullp
+                = new AstNeq{flp, readCopy(*it), new AstConst{flp, AstConst::Null{}}};
+            setp = setp ? new AstLogAnd{flp, setp, notNullp} : notNullp;
+        }
+        return new AstIf{flp, setp, new AstCAwait{flp, methodp, getCreateDynamicTriggerSenTree()},
+                         evalAwaitp};
     }
     // Creates a trigger scheduler variable
     AstVarScope* getCreateTriggerSchedulerp(AstSenTree* const sentreep) {
@@ -1155,24 +1265,49 @@ class TimingControlVisitor final : public VNVisitor {
                 = new AstLogNot{flp, new AstVarRef{flp, trigvscp, VAccess::READ}};
             AstLoop* const loopp = new AstLoop{flp};
             loopp->addStmtsp(new AstLoopTest{flp, loopp, condp});
-            loopp->addStmtsp(awaitEvalp);
+            std::vector<AstNodeExpr*> linkps;
+            AstMemberRef* const skipEventp = skippableEventp(sentreep, linkps);
+            AstIf* evalIfp = nullptr;  // Evaluates the trigger, if the wait may skip that
+            if (skipEventp) {
+                // A coroutine that skipped evaluating its trigger is only resumed, if at all, for
+                // its post updates. The scheduler may do them itself, as the event's clear.
+                UASSERT_OBJ(senResults.m_preUpdates.empty() && senResults.m_postUpdates.size() == 1
+                                && senResults.m_destructivePostUpdates.size() == 1,
+                            nodep, "Event wait updates other than clearing the event");
+                loopp->addStmtsp(createSkippableWait(sentreep, skipEventp, linkps, awaitEvalp));
+                AstCMethodHard* const skippedp = new AstCMethodHard{
+                    flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE},
+                    VCMethod::SCHED_RESUMED_SKIPPED};
+                skippedp->dtypeSetBit();
+                evalIfp = new AstIf{flp, new AstLogNot{flp, skippedp}};
+                loopp->addStmtsp(evalIfp);
+            } else {
+                loopp->addStmtsp(awaitEvalp);
+            }
+            const auto addEvalp = [&](AstNodeStmt* const stmtp) {
+                if (evalIfp) {
+                    evalIfp->addThensp(stmtp);
+                } else {
+                    loopp->addStmtsp(stmtp);
+                }
+            };
             // Put pre updates before the trigger check and assignment
-            for (AstNodeStmt* const stmtp : senResults.m_preUpdates) loopp->addStmtsp(stmtp);
+            for (AstNodeStmt* const stmtp : senResults.m_preUpdates) addEvalp(stmtp);
             // Then the trigger check and assignment
-            loopp->addStmtsp(assignp);
+            addEvalp(assignp);
             // Let the dynamic trigger scheduler know if this trigger was set
             // If it was, a call to the scheduler's evaluate() will return true
             AstCMethodHard* const anyTriggeredMethodp = new AstCMethodHard{
                 flp, new AstVarRef{flp, getCreateDynamicTriggerScheduler(), VAccess::WRITE},
                 VCMethod::SCHED_ANY_TRIGGERED, new AstVarRef{flp, trigvscp, VAccess::READ}};
             anyTriggeredMethodp->dtypeSetVoid();
-            loopp->addStmtsp(anyTriggeredMethodp->makeStmt());
+            addEvalp(anyTriggeredMethodp->makeStmt());
             // If the post update is destructive (e.g. event vars are cleared), create an await for
             // the post update step
             if (hasDestructivePostUpdates) {
                 AstCAwait* const awaitPostUpdatep = awaitEvalp->cloneTree(false);
                 VN_AS(awaitPostUpdatep->exprp(), CMethodHard)->method(VCMethod::SCHED_POST_UPDATE);
-                loopp->addStmtsp(awaitPostUpdatep);
+                addEvalp(awaitPostUpdatep);
             }
             // Put the post updates at the end of the loop
             for (AstNodeStmt* const stmtp : senResults.m_postUpdates) loopp->addStmtsp(stmtp);
@@ -1541,6 +1676,8 @@ public:
         V3Stats::addStat("Timing, known #const delays", m_statConstDelays);
         V3Stats::addStat("Timing, unknown #variable delays", m_statVariableDelays);
         V3Stats::addStat("Timing, suspendable processes", m_statSuspendableProcs);
+        V3Stats::addStat("Timing, event controls skipping trigger evaluations",
+                         m_statSkippableWaits);
     }
 };
 
