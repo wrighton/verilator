@@ -164,6 +164,7 @@ class V3ParseImp final {
 
     bool m_inLibrary = false;  // Currently reading a library vs. regular file
     bool m_inLibMap = false;  // Currently reading a libmap file
+    bool m_stdPackageInput = false;  // Currently reading the std package of Verilator
     string m_libname;  // Config library name (or --work)
     int m_lexKwdDepth = 0;  // Inside a `begin_keywords
     int m_lexKwdLast;  // Last LEX state in `begin_keywords
@@ -282,6 +283,7 @@ public:
     AstNetlist* rootp() const { return m_rootp; }
     bool inLibMap() const { return m_inLibMap; }
     bool inLibrary() const { return m_inLibrary; }
+    bool stdPackageInput() const { return m_stdPackageInput; }
     string libname() const { return m_libname; }
     VOptionBool unconnectedDrive() const { return m_unconnectedDrive; }
     void unconnectedDrive(const VOptionBool flag) { m_unconnectedDrive = flag; }
