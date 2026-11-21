@@ -81,6 +81,18 @@ class Bar extends Foo;
   endfunction
 endclass
 
+class SeedBase;
+  rand bit [31:0] value;
+endclass
+
+class SeedFirst extends SeedBase;
+  rand bit [6:0] extra;
+endclass
+
+class SeedSecond extends SeedBase;
+  rand bit [14:0] extra;
+endclass
+
 module t;
 
   Cls ca;
@@ -149,6 +161,58 @@ module t;
     sa = ca.test3(3);
     sb = cb.test3(3);
     `checkeq(sa, sb);
+
+    // Two sibling receiver types must reuse the one method declared in their common base.
+    begin
+      automatic SeedFirst first = new;
+      automatic SeedSecond second = new;
+      automatic SeedBase base_handle;
+      bit [31:0] first_value, second_value;
+      bit [6:0] first_extra;
+      bit [14:0] second_extra;
+      int ok;
+      first.srandom(19);
+      second.srandom(19);
+      ok = first.randomize();
+      `checkeq(ok, 1);
+      first_value = first.value;
+      first_extra = first.extra;
+      ok = second.randomize();
+      `checkeq(ok, 1);
+      second_value = second.value;
+      second_extra = second.extra;
+      `checkeq(first.value, first_value);
+      `checkeq(first.extra, first_extra);
+      repeat (3) begin
+        first.srandom(19);
+        second.srandom(19);
+        ok = first.randomize();
+        `checkeq(ok, 1);
+        `checkeq(first.value, first_value);
+        `checkeq(first.extra, first_extra);
+        ok = second.randomize();
+        `checkeq(ok, 1);
+        `checkeq(second.value, second_value);
+        `checkeq(second.extra, second_extra);
+      end
+      base_handle = first;
+      base_handle.srandom(19);
+      ok = first.randomize();
+      `checkeq(ok, 1);
+      `checkeq(first.value, first_value);
+      `checkeq(first.extra, first_extra);
+      first.value.rand_mode(0);
+      first.srandom(19);
+      ok = first.randomize();
+      `checkeq(ok, 1);
+      `checkeq(first.value, first_value);
+      first.value.rand_mode(1);
+      first.srandom(19);
+      ok = first.randomize();
+      `checkeq(ok, 1);
+      `checkeq(first.value, first_value);
+      `checkeq(first.extra, first_extra);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;
