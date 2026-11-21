@@ -1088,6 +1088,11 @@ static constexpr bool validateArgsDescriptor(const char* descrp) {
     macro(RANDOMIZER_CLEAR_VAR,               "clear_var",              false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_DISABLE_SOFT,            "disable_soft",           false,  CLEAN,  false,      "r", "") \
     macro(RANDOMIZER_ENUM_DOMAIN,             "enum_domain",            false,  CLEAN,  false,      "rr", "") \
+    macro(RANDOMIZER_FUNC_ARGS_READY,         "func_args_ready",        false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_FUNC_ROUND_END,          "func_round_end",         false,  CLEAN,  false,      "", "") \
+    macro(RANDOMIZER_FUNC_ROUND_FINAL,        "func_round_final",       false,  CLEAN,  false,      "", "") \
+    macro(RANDOMIZER_FUNC_ROUND_NEXT,         "func_round_next",        false,  CLEAN,  false,      "r", "") \
+    macro(RANDOMIZER_FUNC_ROUND_START,        "func_round_start",       false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_HARD,                    "hard",                   false,  CLEAN,  false,      "r+", "") \
     macro(RANDOMIZER_PIN_FROZEN,              "pin_frozen",             false,  CLEAN,  false,      "rr", "") \
     macro(RANDOMIZER_SOFT,                    "soft",                   false,  CLEAN,  false,      "rrrr", "") \
