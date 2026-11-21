@@ -8,6 +8,10 @@
                                                 : ... note: In instance 't'
    21 |   wire [7:0] wide_index = inwires[64'h1_0000_000b];   
       |                                  ^
+%Warning-SELRANGE: t/t_select_bad_range3.v:22:31: Selection index out of range: 32'bx outside 12:10
+                                                : ... note: In instance 't'
+   22 |   wire [7:0] x_index = inwires[2'bx1];   
+      |                               ^
 %Warning-SELRANGE: t/t_select_bad_range3.v:23:38: Selection index out of range: 13 outside 12:10
                                                 : ... note: In instance 't'
    23 |   wire [7:0] wide_fit_index = inwires[64'd13];   
