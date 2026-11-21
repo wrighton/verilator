@@ -6,14 +6,14 @@
 
 module t;
 
-  let F(untyped a) = 30 + a;
-  let G(int a) = 30 + a;
-  let H(signed a) = 30 + a;
+  typedef int da_t[];
+  // Typed formal of an aggregate type, of another type than the actual
+  let H(da_t a) = 30 + a[0];
+
+  byte dyn[] = '{1, 2};
 
   initial begin
-    if (F(1) != (30 + 1)) $stop;
-    if (G(1) != (30 + 1)) $stop;
-    if (H(1) != (30 + 1)) $stop;
+    if (H(dyn) != (30 + 1)) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
