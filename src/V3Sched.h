@@ -337,9 +337,10 @@ public:
         }
         uint32_t size() const { return m_descriptions.size(); }
     };
-    // Generates list of assignments that fills
+    // Generates list of assignments that fills the words of 'targetp' from 'firstWord' on
     static AstAssign* createSenTrigVecAssignment(AstVarScope* const targetp,
-                                                 std::vector<AstNodeExpr*>& trigps);
+                                                 std::vector<AstNodeExpr*>& trigps,
+                                                 const size_t firstWord = 0);
 
     // Create a TriggerKit for the given AstSenTree vector. The trigger computation function is
     // not split, as the caller might add to it, so the caller splits it when it is complete.
