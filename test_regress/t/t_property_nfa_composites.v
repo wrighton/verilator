@@ -92,6 +92,16 @@ module t (
   assert property (@(posedge clk) always (oa |-> (##1 ob) or (##2 oc) or (ob ##1 oc)
       or (##1 !ob) or (oc ##2 oa) or (##3 ob) or (oa ##1 oc ##1 ob) or (##2 !oc)))
   else ++or8always_fail;
+  // Negated, a sequence 'or' of operands of one length fails once when any operand matches
+  int ornot5_fail = 0, ornot5_exp = 0;
+  assert property (@(posedge clk) not ((oa ##1 ob) or (ob ##1 oc) or (oc ##1 oa) or (oa ##1 !ob)
+      or (!oc ##1 ob)))
+  else ++ornot5_fail;
+  // Negated, a cover property and a boolean antecedent keep their lowering
+  cover property (@(posedge clk) not ((oa ##1 ob) or oc));
+  int ornotimpl_fail = 0, ornotimpl_exp = 0;
+  assert property (@(posedge clk) not ((oa || ob) |-> oc))
+  else ++ornotimpl_fail;
   // Repetitions of booleans and a nested 'or' are operands of the same kind
   int or6rep_fail = 0;
   assert property (@(posedge clk) oa |-> (ob[->1]) or (oc[*1:2]) or (od ##1 (ob or (##1 oc)))
@@ -134,6 +144,11 @@ module t (
     if (oa && !ob) ++orpre_exp;
     if (oa && !od) ++or5pre_exp;
     if (oa && !od) ++or5bool_exp;
+    if (!(oa || ob) || oc) ++ornotimpl_exp;
+    if (or_cyc > 1
+        && ((oa_q[0] && ob) || (ob_q[0] && oc) || (oc_q[0] && oa) || (oa_q[0] && !ob)
+            || (!oc_q[0] && ob)))
+      ++ornot5_exp;
     if (oa_q[1] && !ob_q[1] && !(oc_q[1] && ob_q[0]) && !oa && !od_q[0]) ++or5tail_exp;
     if (oa_q[0] && od_q[0] && !oa && !ob && !oc && !od) ++or5bool_exp;
     if (oa_q[1] && ob_q[1] && !oc && !oa) ++orpre_exp;
@@ -162,6 +177,8 @@ module t (
     `checkd(or8_fail, 0);
     `checkd(or6rep_fail, 0);
     `checkd(or8always_fail, 0);
+    `checkd(ornot5_fail, ornot5_exp);
+    `checkd(ornotimpl_fail, ornotimpl_exp);
     `checkd(or5pre_fail, or5pre_exp);
     `checkd(or5bool_fail, or5bool_exp);
     `checkd(or5tail_fail, or5tail_exp);
