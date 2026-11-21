@@ -37,6 +37,10 @@ package p4;
   import p3::y;
 endpackage
 
+package x;
+  int v = 4;
+endpackage
+
 // Bad: name wildcard imported from two packages and referenced
 module amb;
   import p1::*;
@@ -48,6 +52,8 @@ module amb;
   int e = RED;
   // OK: only one package defines it
   int c = only1;
+  // OK: package x, not the name x, which is in another name space (IEEE 1800-2023 3.13)
+  int g = x::v;
 endmodule
 
 // Bad: explicit import of a name explicitly imported from another package, or declared in
