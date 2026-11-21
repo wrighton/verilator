@@ -24,6 +24,7 @@ module t;
   localparam P1 = f_desc_out_of_bounds(5);
   localparam P0_ABOVE = f_desc_out_of_bounds(6);
   localparam P0_BELOW = f_desc_out_of_bounds(2);
+  localparam P_LOOP = f_out_of_bounds_loop();
 
   typedef struct packed {logic [7:0] data;} type_t;
   typedef type_t [1:0] flist;
@@ -58,6 +59,7 @@ module t;
     if (P1 !== 1) $stop;
     if (P0_ABOVE !== 0) $stop;
     if (P0_BELOW !== 0) $stop;
+    if (P_LOOP !== 140) $stop;
     $write("*-* All Finished *-*\n");
     $finish;
   end
@@ -78,6 +80,14 @@ module t;
     desc_t a;
     a[5] = 1;
     return a[i];
+  endfunction
+
+  // Reads past the end through the same select leave the elements unchanged
+  function automatic integer f_out_of_bounds_loop();
+    int a[5] = '{10, 20, 30, 40, 50};
+    integer s = 0;
+    for (int i = 3; i < 7; i++) s += a[i];
+    return s + a[4];
   endfunction
 
   // An out-of-bounds index wider than 32 bits, read and written; in a generate condition, where
