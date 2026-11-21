@@ -357,6 +357,7 @@ class SvaNfaBuilder final {
     // (IEEE 1800-2023 16.12.14 outer-wraps-inner).
     std::vector<AstNodeExpr*> m_outerAbortStack;
     bool m_inUnboundedScope = false;  // Sticky: nodes created after inherit liveness
+    bool m_inAndCombiner = false;  // Building an operand of buildAndCombiner
     bool m_markStrongPending = false;  // Mark new vertices as of a strong s_always attempt
     bool m_isCover = false;  // Cover directives do not fail at end-of-simulation
     // Negated: a strong obligation pending at end-of-simulation makes the property hold
@@ -1588,6 +1589,10 @@ class SvaNfaBuilder final {
     // Build done-latch combiner for SAnd/SIntersect (IEEE 1800-2023 16.9.5).
     BuildResult buildAndCombiner(AstNodeExpr* lhsExprp, AstNodeExpr* rhsExprp,
                                  SvaStateVertex* entryVtxp, FileLine* flp) {
+        // An 'and' in an operand is built by the combiner too: one lowered by newConjoinedAndp
+        // would change which failures the combiner reports
+        VL_RESTORER(m_inAndCombiner);
+        m_inAndCombiner = true;
         // Snapshot-restore scope so LHS liveness does not leak into RHS.
         const bool savedScope = m_inUnboundedScope;
         const BuildResult lhs = buildExpr(lhsExprp, entryVtxp);
@@ -2113,6 +2118,11 @@ class SvaNfaBuilder final {
         // of equal lengths (16.9.6). Null if an operand is not a fixed sequence of boolean leaves.
         std::map<int, std::vector<AstNodeExpr*>> checks;
         if (!flattenFixedSeq(lhsp, 0, checks) || !flattenFixedSeq(rhsp, 0, checks)) return nullptr;
+        return newCheckSeqp(checks, flp);
+    }
+    // A sequence of the boolean checks at each clock offset, or null if none
+    static AstNodeExpr* newCheckSeqp(const std::map<int, std::vector<AstNodeExpr*>>& checks,
+                                     FileLine* const flp) {
         if (checks.empty()) return nullptr;
         AstNodeExpr* resultp = nullptr;
         int prevOffset = 0;
@@ -2148,6 +2158,81 @@ class SvaNfaBuilder final {
             prevOffset = offset;
         }
         return resultp;
+    }
+
+    // A boolean equal to a single-cycle operand of 'and', or null
+    static AstNodeExpr* newSingleCycleBoolp(AstNodeExpr* const nodep) {
+        if (isPlainBoolean(nodep)) return nodep->cloneTreePure(false);
+        FileLine* const flp = nodep->fileline();
+        AstNodeExpr* resultp = nullptr;
+        if (const AstSThroughout* const throughp = VN_CAST(nodep, SThroughout)) {
+            // Over a single tick both conditions hold at it, the left one being a boolean
+            // (IEEE 1800-2023 16.9.9)
+            AstNodeExpr* const rhsp = newSingleCycleBoolp(throughp->rhsp());
+            if (!rhsp) return nullptr;
+            resultp = new AstLogAnd{flp, throughp->lhsp()->cloneTreePure(false), rhsp};
+        } else if (const AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            // Holds unless the antecedent holds and the consequent does not (16.12.7). Not an
+            // OR, which a sequence prefix would build as a sequence 'or'.
+            if (!implp->isOverlapped() || implp->isFollowedBy()) return nullptr;
+            AstNodeExpr* const lhsp = newSingleCycleBoolp(implp->lhsp());
+            AstNodeExpr* const rhsp = lhsp ? newSingleCycleBoolp(implp->rhsp()) : nullptr;
+            if (!rhsp) {
+                if (lhsp) VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
+                return nullptr;
+            }
+            AstNodeExpr* const notRhsp = new AstLogNot{flp, rhsp};
+            notRhsp->dtypeSetBit();
+            AstNodeExpr* const failp = new AstLogAnd{flp, lhsp, notRhsp};
+            failp->dtypeSetBit();
+            resultp = new AstLogNot{flp, failp};
+        } else {
+            return nullptr;
+        }
+        resultp->dtypeSetBit();
+        return resultp;
+    }
+    // Checks of the operands of an 'and' of fixed-length sequences of boolean checks
+    struct AndChecks final {
+        std::map<int, std::vector<AstNodeExpr*>> checks;  // Boolean checks by clock offset
+        std::vector<AstNodeExpr*> ownedps;  // Checks made here, to delete after use
+        // An operand is a sequence, so the 'and' is never a vacuous success, which an
+        // implication operand made a boolean cannot tell (IEEE 1800-2023 16.12.5, 16.14.8)
+        bool nonvacuous = false;
+    };
+    // Add the checks of an operand of 'and', false if it is not such a fixed-length sequence
+    static bool addAndChecks(AstNodeExpr* const nodep, AndChecks& andChecksr) {
+        if (const AstSAnd* const andp = VN_CAST(nodep, SAnd)) {
+            return !andp->propertyControl() && addAndChecks(andp->lhsp(), andChecksr)
+                   && addAndChecks(andp->rhsp(), andChecksr);
+        }
+        if (AstNodeExpr* const boolp = newSingleCycleBoolp(nodep)) {
+            andChecksr.ownedps.push_back(boolp);
+            andChecksr.checks[0].push_back(boolp);
+            andChecksr.nonvacuous |= !VN_IS(nodep, Implication);
+            return true;
+        }
+        if (!flattenFixedSeq(nodep, 0, andChecksr.checks)) return false;
+        andChecksr.nonvacuous = true;
+        return true;
+    }
+    // A nonvacuous 'and' of fixed-length sequences of boolean checks as one sequence checking
+    // both, or null
+    static AstNodeExpr* newConjoinedAndp(AstSAnd* const andp) {
+        // It matches at the later end of its operands (IEEE 1800-2023 16.9.5), and as a
+        // property fails once per attempt, at its first failing check (16.12.5). A side effect
+        // is left where the combiner evaluates it.
+        if (andp->exists([](AstNodeExpr* np) { return !np->isPure(); })) return nullptr;
+        AndChecks andChecks;
+        AstNodeExpr* conjp = nullptr;
+        if (addAndChecks(andp->lhsp(), andChecks) && addAndChecks(andp->rhsp(), andChecks)
+            && andChecks.nonvacuous) {
+            conjp = newCheckSeqp(andChecks.checks, andp->fileline());
+        }
+        for (AstNodeExpr* const ownedp : andChecks.ownedps) {
+            VL_DO_DANGLING(ownedp->deleteTree(), ownedp);
+        }
+        return conjp;
     }
 
     // `seq` is a simple ranged sequence `start ##[m:n] end` (start/end boolean,
@@ -2634,10 +2719,9 @@ public:
             // Both operands start together (IEEE 1800-2023 16.9.5): with fixed lengths the
             // 'and' holds exactly when every check of both operands holds
             if (!andp->propertyControl()) {
-                if (AstNodeExpr* const conjp
-                    = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline())) {
-                    return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
-                }
+                AstNodeExpr* conjp = m_inAndCombiner ? nullptr : newConjoinedAndp(andp);
+                if (!conjp) conjp = conjoinFixedSeqs(andp->lhsp(), andp->rhsp(), andp->fileline());
+                if (conjp) return buildFromLoweringTree(conjp, entryVtxp, isTopLevelStep);
                 if (wantBoolLeaf) {
                     if (isPlainBoolean(andp->lhsp())) {
                         return buildBoolAndProp(andp->lhsp(), andp->rhsp(), entryVtxp,
