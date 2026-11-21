@@ -69,12 +69,17 @@ class Cls;
   rand int x = 1;
 endclass
 
+class Cls2D;  // Only used as element of a multi-dimensional array
+  rand int x = 1;
+endclass
+
 class unconstrained_dynamic_array_test;
 
   rand int dynamic_array_1d[];
   rand int dynamic_array_2d[][];
   rand Cls class_dynamic_array[];
   rand Cls class_dynamic_array_null[];
+  rand Cls2D class_array_2d[2][];
 
   function new();
     // Initialize 1D dynamic array
@@ -99,6 +104,11 @@ class unconstrained_dynamic_array_test;
 
     class_dynamic_array_null = new[2];
 
+    foreach (class_array_2d[i]) begin
+      class_array_2d[i] = new[3];
+      foreach (class_array_2d[i][j]) class_array_2d[i][j] = new;
+    end
+
   endfunction
 
   function void check_randomization();
@@ -115,6 +125,10 @@ class unconstrained_dynamic_array_test;
     end
     foreach (class_dynamic_array_null[i]) begin
       if (class_dynamic_array_null[i] != null) $stop;
+    end
+    if (randomize() != 1) $stop;
+    foreach (class_array_2d[i, j]) begin
+      `check_rand(this, class_array_2d[i][j].x)
     end
   endfunction
 
