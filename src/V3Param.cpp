@@ -1137,6 +1137,13 @@ class ParamProcessor final {
             UASSERT_OBJ(formalp, pinp, "Pin not linked");
             if (!newStmtps.count(formalp->clonep())) pinp->cloneRelinkGen();
         });
+        // References to an interface itself are specialized from srcModp, as their pins keep
+        // srcModp's formals; specializing them from this clone would nest clones without bound
+        if (AstIface* const newIfacep = VN_CAST(newModp, Iface)) {
+            newIfacep->foreach([&](AstIfaceRefDType* refp) {
+                if (refp->ifacep() == newIfacep) refp->ifacep(VN_AS(srcModp, Iface));
+            });
+        }
 
         // Mark the source module as a parameterized template now that a specialized
         // clone exists.  This suppresses width/type errors on the unresolved template
@@ -2418,22 +2425,11 @@ class ParamProcessor final {
                 bool allOwnParams = true;
                 for (AstPin* pinp = nodep->paramsp(); pinp && allOwnParams;
                      pinp = VN_AS(pinp->nextp(), Pin)) {
-                    if (AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType)) {
-                        if (AstParamTypeDType* const ptdp
-                            = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
-                            AstNodeModule* const ptdOwnerp
-                                = V3LinkDotIfaceCapture::findOwnerModule(ptdp);
-                            if (ptdOwnerp != m_modp) allOwnParams = false;
-                        } else {
-                            pinp->v3error(  // LCOV_EXCL_LINE
-                                "Self-referencing interface typedef "
-                                "parameter is not a type parameter of "
-                                "the enclosing interface");
-                        }
-                    } else {
-                        pinp->v3error(  // LCOV_EXCL_LINE
-                            "Self-referencing interface typedef "
-                            "parameter is not a type reference");
+                    const AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType);
+                    AstParamTypeDType* const ptdp
+                        = refp ? VN_CAST(refp->refDTypep(), ParamTypeDType) : nullptr;
+                    if (!ptdp || V3LinkDotIfaceCapture::findOwnerModule(ptdp) != m_modp) {
+                        allOwnParams = false;
                     }
                 }
                 if (allOwnParams) {
