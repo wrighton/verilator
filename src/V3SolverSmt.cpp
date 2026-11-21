@@ -1746,7 +1746,20 @@ class ConstraintExprVisitor final : public VNVisitor {
         return new AstSFormatF{fl, fmt.str(), false, exprsp};
     }
 
-    static AstNodeExpr* newSel(FileLine* fl, AstNodeExpr* arrayp, AstNodeExpr* idxp) {
+    // Index, as in ArraySel, of the element of arrayp at loop variable idxVarp of a foreach over
+    // it: the offset from the low bound for a fixed-size array, whose loop goes over the declared
+    // indices. A negative low bound wraps around in the 32-bit index as ArraySel's does.
+    static AstNodeExpr* newForeachOffsetp(FileLine* const fl, const AstNodeExpr* const arrayp,
+                                          AstVar* const idxVarp) {
+        AstNodeExpr* const refp = new AstVarRef{fl, idxVarp, VAccess::READ};
+        const AstUnpackArrayDType* const adtypep
+            = VN_CAST(arrayp->dtypep()->skipRefp(), UnpackArrayDType);
+        // A zero-based index stays the loop variable, which a nested access path names
+        if (!adtypep || !adtypep->lo()) return refp;
+        return new AstSub{fl, refp, new AstConst{fl, static_cast<uint32_t>(adtypep->lo())}};
+    }
+
+    AstNodeExpr* newSel(FileLine* fl, AstNodeExpr* arrayp, AstNodeExpr* idxp) {
         // similar to V3WidthSel.cpp
         // skipRefp() unwraps typedef wrappers (AstRefDType) so the dtype kind
         // checks below recognize types spelled as `typedef <scalar> <name>[$]`.
@@ -4431,7 +4444,7 @@ class ConstraintExprVisitor final : public VNVisitor {
                 idxDtp = nodep->findIntDType();
             }
             AstVar* const newVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vinside", idxDtp};
-            AstNodeExpr* const idxRefp = new AstVarRef{nodep->fileline(), newVarp, VAccess::READ};
+            AstNodeExpr* const idxRefp = newForeachOffsetp(fl, nodep->fromp(), newVarp);
             AstForeachHeader* const headerp
                 = new AstForeachHeader{fl, nodep->fromp()->cloneTreePure(false), newVarp};
             AstNodeExpr* const selp
@@ -4537,20 +4550,16 @@ class ConstraintExprVisitor final : public VNVisitor {
             AstVar* const textVarp = newTextVarp(nodep);
             AstVar* const countVarp = withp ? nullptr : newTermCountVarp(nodep);
             AstNodeStmt* bodyp;
-            if (perElem) {
-                // Per element: evaluate the 'with' expression or the element
-                // The loop variable is the declared index, ArraySel and the lambda's index
-                // argument use the storage index
-                AstNodeExpr* idxRefp = new AstVarRef{fl, loopVarp, VAccess::READ};
-                const AstUnpackArrayDType* const unpackp
-                    = VN_CAST(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType);
-                if (unpackp && unpackp->lo()) {
-                    idxRefp = new AstSub{fl, idxRefp,
-                                         new AstConst{fl, AstConst::WidthedValue{}, 32,
-                                                      static_cast<uint32_t>(unpackp->lo())}};
-                    idxRefp->dtypeSetInt();
-                }
+            if (withp) {
+                // With 'with' clause: evaluate expression for each element
+                const bool randArr = nodep->fromp()->user1();
+                AstNodeExpr* const idxRefp = newForeachOffsetp(fl, nodep->fromp(), loopVarp);
                 AstNodeExpr* const elemSelp = newSel(fl, nodep->fromp(), idxRefp);
+                elemSelp->user1(randArr);
+
+                // Get the result width for the reduction
+                const int resultWidth = nodep->dtypep()->width();
+                const VSigning resultSigning = nodep->dtypep()->numeric();
 
                 AstNode* perElemExprp = withp ? withp->exprp()->cloneTreePure(false)
                                               : elemSelp->cloneTreePure(false);

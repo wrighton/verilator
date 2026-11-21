@@ -366,6 +366,24 @@ class inherited_sum_items extends sum_item;
   endfunction
 endclass
 
+// Reductions of fixed-size arrays with a nonzero low bound
+class test_low_bound;
+  rand bit [6:0] desc[3:1];
+  rand bit [6:0] asc[1:3];
+  rand bit [6:0] only[3:1];
+  constraint c {
+    foreach (desc[i]) desc[i] == 7'(i);
+    foreach (asc[i]) asc[i] == 7'(i * 2);
+    desc.sum() with (int'(item)) == 6;
+    desc.sum() with (item.index == 3 ? int'(item) : 0) == 3;
+    asc.sum() with (int'(item)) == 12;
+    // Only the sum constrains the element at the low bound
+    only[2] == 7'd0;
+    only[3] == 7'd0;
+    only.sum() with (int'(item)) == 5;
+  }
+endclass
+
 module t;
   test_sum sum_inst;
   test_product product_inst;
@@ -556,6 +574,18 @@ module t;
     begin
       automatic test_value_carriers carrier = new;
       for (int turn = 0; turn < 8; ++turn) carrier.verify(turn);
+    end
+
+    begin
+      automatic test_low_bound low_bound_inst = new();
+      int ok;
+      repeat (20) begin
+        ok = low_bound_inst.randomize();
+        `checkd(ok, 1);
+        `checkd(low_bound_inst.desc[3], 3);
+        `checkd(low_bound_inst.asc[3], 6);
+        `checkd(low_bound_inst.only[1], 5);
+      end
     end
 
     $write("*-* All Finished *-*\n");
