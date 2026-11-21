@@ -193,8 +193,7 @@ private:
                            << m_alwaysCombp->keyword().ascii() << " (IEEE 1800-2023 9.2.2.2.2)\n"
                            << nodep->warnMore() << "... Suggest use a normal 'always'");
         }
-        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl()
-            && !(forkp && forkp->disableWrap())) {
+        if (m_inFinal && m_taskRefWarn && nodep->isTimingControl() && !disableFork) {
             nodep->v3error("Timing controls and fork-join are not legal in final blocks"
                            " (IEEE 1800-2023 9.2.3)");
         }
