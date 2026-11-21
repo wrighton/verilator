@@ -8,4 +8,7 @@
 %Error: t/t_class_super_bad3.v:12:10: Syntax error: 'super' must be first name component, or after 'this.'
    12 |     i = i.i.super.i;   
       |          ^
+%Error: t/t_class_super_bad3.v:13:5: Syntax error: 'super' must be first name component, or after 'this.'
+   13 |     \this .super.i = 1;   
+      |     ^~~~~
 %Error: Exiting due to
