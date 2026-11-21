@@ -16,7 +16,7 @@ class MyInt;
   endfunction
 endclass
 
-function int get_val_set_5(ref int x);
+function automatic int get_val_set_5(ref int x);
   automatic int y = x;
   x = 5;
   return y;
@@ -30,7 +30,7 @@ module t;
   task update_inout(inout int flag, input bit upflag);
     flag = upflag ? 1 + flag : flag;
   endtask
-  task update_ref(ref int flag, input bit upflag);
+  task automatic update_ref(ref int flag, input bit upflag);
     flag = upflag ? 1 + flag : flag;
   endtask
 
