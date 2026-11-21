@@ -1,0 +1,22 @@
+%Error: t/t_var_port_inout_default_bad.v:9:34: Default value on port 'x', but it is inout, not input (IEEE 1800-2023 23.2.2.4)
+                                             : ... Suggest declare the port as input, or remove the default
+    9 | module inout_default (inout wire x = 1'b0);
+      |                                  ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_var_port_inout_default_bad.v:12:29: Default value on port 'x', but it is ref, not input (IEEE 1800-2023 23.2.2.4)
+                                              : ... Suggest declare the port as input, or remove the default
+   12 | module ref_default (ref int x = 1);
+      |                             ^
+%Error: t/t_var_port_inout_default_bad.v:16:27: Default value on port 'x', but it is inout, not input (IEEE 1800-2023 23.2.2.4)
+                                              : ... Suggest declare the port as input, or remove the default
+   16 | module wire_default (wire x = 1'b0);
+      |                           ^
+%Error: t/t_var_port_inout_default_bad.v:19:31: Default value on port 'x', but it is inout, not input (IEEE 1800-2023 23.2.2.4)
+                                              : ... Suggest declare the port as input, or remove the default
+   19 | module signed_default (signed x = 1'b0);
+      |                               ^
+%Error: t/t_var_port_inout_default_bad.v:22:29: Default value on port 'x', but it is inout, not input (IEEE 1800-2023 23.2.2.4)
+                                              : ... Suggest declare the port as input, or remove the default
+   22 | module range_default ([1:0] x = 2'b0);
+      |                             ^
+%Error: Exiting due to
