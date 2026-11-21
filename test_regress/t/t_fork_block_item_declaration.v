@@ -48,6 +48,21 @@ class Foo;
       end
     join_none
   endtask
+
+  // Scope name inside forks with declarations in a class method
+  static string base;
+  static task scopes();
+    base = $sformatf("%m");
+    fork : cj
+      automatic int a = 1;
+      #1 `checks($sformatf("%m"), {base, ".cj"});
+    join
+    fork : cn
+      automatic int a = 1;
+      #1 `checks($sformatf("%m"), {base, ".cn"});
+    join_none
+    #2;
+  endtask
 endclass
 
 module t;
@@ -129,6 +144,71 @@ module t;
     join_none
     `checks($sformatf("%m"), "t.scope_names");
   endtask
+
+  // Scope name inside forks with automatic declarations
+  function automatic string scope_up(string s);
+    for (int i = s.len() - 1; i >= 0; --i) if (s[i] == ".") return s.substr(0, i - 1);
+    return "";
+  endfunction
+  task automatic auto_scopes();
+    fork : tn
+      automatic int a = 1;
+      #1 `checks($sformatf("%m"), "t.auto_scopes.tn");
+    join_none
+    fork
+      automatic int a = 1;
+      #1 `checks(scope_up($sformatf("%m")), "t.auto_scopes");
+    join_any
+    #2;
+  endtask
+  initial begin : wrapped
+    int o;
+    fork : fj
+      automatic int a = 1;
+      begin
+        #1 o = a;
+        `checks($sformatf("%m"), "t.wrapped.fj");
+      end
+    join
+    `checkd(o, 1);
+    fork : fa
+      automatic int a = 2;
+      #1 `checks($sformatf("%m"), "t.wrapped.fa");
+    join_any
+    fork : fn
+      automatic int a = 3;
+      #1 `checks($sformatf("%m"), "t.wrapped.fn");
+    join_none
+    #2;
+    fork
+      automatic int a = 4;
+      begin
+        #1 o = a;
+        `checks(scope_up($sformatf("%m")), "t.wrapped");
+      end
+    join
+    `checkd(o, 4);
+    fork : no
+      automatic int a = 5;
+      fork : ni
+        automatic int b = 6;
+        begin
+          #1 o = a + b;
+          `checks($sformatf("%m"), "t.wrapped.no.ni");
+        end
+      join
+    join
+    `checkd(o, 11);
+    fork : sf
+      automatic int a = 7;
+      static int cs = 8;
+      #1 cs = cs + a;
+    join
+    `checkd(wrapped.sf.cs, 15);
+    `checks($sformatf("%m"), "t.wrapped");
+    auto_scopes();
+    Foo::scopes();
+  end
 
   initial begin : main
     automatic int desired_counts[10] = '{10{1}};
