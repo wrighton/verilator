@@ -1,0 +1,7 @@
+%Error: t/t_gen_alt_same_name_bad.v:15:13: Can't find definition of 'm' in dotted signal: 's.m'
+                                         : ... note: In instance 't'
+   15 |   int w = s.m;   
+      |             ^
+        ... Known scopes under 'm': <no instances found>
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to
