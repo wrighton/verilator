@@ -15,12 +15,12 @@ endclass
 
 class Cls;
   rand int idx;
-  int unsigned state[int];
+  Item state[int];
   rand s_t sa[int];
   rand Item items[int];
   rand Item objs[int];
 
-  constraint c_state {state[idx] > 0;}
+  constraint c_state {state[idx] != null;}
   constraint c_struct {sa[idx].a == 7;}
   constraint c_handle {items[idx].x == 7;}
   constraint c_object {objs[idx] != null;}
@@ -30,10 +30,5 @@ module t;
   initial begin
     automatic Cls c = new;
     void'(c.randomize());
-  end
-  initial begin
-    automatic int unsigned local_state[int] = '{1: 1};
-    automatic int key;
-    void'(std::randomize(key) with {local_state[key] > 0;});
   end
 endmodule
