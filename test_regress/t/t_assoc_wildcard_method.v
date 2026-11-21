@@ -155,6 +155,20 @@ module t;
     qv = q.map(el) with (el / 100);
     `checkp(qv, "'{'h1, 'h2, 'h3}");
 
+    begin
+      // Keys are ordered numerically, not as strings
+      int o[*];
+      o[16'h0102] = 3;
+      o[2] = 1;
+      o["AB"] = 2;
+      o[8'h80] = 5;
+      o[8'h7f] = 4;
+      qv = o.find with (item > 0);
+      `checkp(qv, "'{'h1, 'h4, 'h5, 'h3, 'h2}");
+      qv = o.find_last with (item > 0);
+      `checkp(qv, "'{'h2}");
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
