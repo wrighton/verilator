@@ -3616,7 +3616,13 @@ class WidthVisitor final : public VNVisitor {
             UINFOTREE(9, nodep, "", "CastDit");
             AstNodeDType* const toDtp = nodep->dtypep()->skipRefToEnump();
             AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefToEnump();
-            const auto castable = AstNode::computeCastable(toDtp, fromDtp, nodep->fromp());
+            VCastable castable = AstNode::computeCastable(toDtp, fromDtp, nodep->fromp());
+            // A string and a real are neither assignment compatible nor both bit-stream types
+            // (IEEE 1800-2023 6.24.1, 6.24.3), and a class handle does not convert to a string
+            if ((toDtp->isString() && (fromDtp->isDouble() || VN_IS(fromDtp, ClassRefDType)))
+                || (toDtp->isDouble() && fromDtp->isString())) {
+                castable = VCastable::INCOMPATIBLE;
+            }
             // An equivalent array is assignment compatible, so cast as assigned
             // (IEEE 1800-2023 6.24.1), but otherwise casting an unpacked array or struct is a
             // bit-stream cast
@@ -3662,6 +3668,11 @@ class WidthVisitor final : public VNVisitor {
                                         new AstNToI{nodep->fileline(), fromp, intDtp}};
                 } else if (!basicp->isString() && fromDtp->isString()) {
                     newp = new AstNToI{nodep->fileline(), nodep->fromp()->unlinkFrBack(), toDtp};
+                } else if (basicp->isString()) {
+                    if (!fromDtp->isString()) {
+                        newp = new AstCvtPackString{nodep->fileline(),
+                                                    nodep->fromp()->unlinkFrBack()};
+                    }
                 } else if (!basicp->isDouble() && !fromDtp->isDouble()) {
                     AstNodeDType* const origDTypep = nodep->dtypep();
                     if (!VN_IS(fromDtp, StreamDType)) {
@@ -3719,7 +3730,7 @@ class WidthVisitor final : public VNVisitor {
                                                   dstElementBits,
                                                   srcElementBits};
                 }
-            } else if (VN_IS(toDtp, ClassRefDType)) {
+            } else if (VN_IS(toDtp, ClassRefDType) || castable.isSameish()) {
                 // Can just remove cast
             } else {
                 nodep->v3fatalSrc("Unimplemented: Casting non-simple data type "
@@ -4041,6 +4052,7 @@ class WidthVisitor final : public VNVisitor {
         FileLine* const fl = valuep->fileline();
         AstVar* const varp = makeTempVarp(m_bitstreamTempNames.get(valuep), valuep,
                                           valuep->dtypep()->skipRefToEnump());
+        varp->noSubst(true);
         AstAssign* const assignp
             = new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, valuep};
         // Width the assignment under a holder, as iterating requires a node with a parent
@@ -10491,6 +10503,9 @@ class WidthVisitor final : public VNVisitor {
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     return;
                 }
+                // Finish the operands, which replaces casts
+                userIterateAndNext(nodep->lhsp(), WidthVP{nodep->lhsp()->dtypep(), FINAL}.p());
+                userIterateAndNext(nodep->rhsp(), WidthVP{nodep->rhsp()->dtypep(), FINAL}.p());
                 // Elements are compared by their left-to-right order, as when assigned (7.4.6)
                 convertUnpackedOrder(nodep->rhsp(), nodep->lhsp()->dtypep());
             } else if (nodep->lhsp()->isDouble() || nodep->rhsp()->isDouble()) {
