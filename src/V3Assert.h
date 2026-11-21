@@ -31,6 +31,8 @@ public:
     static AstClocking* moduleDefaultClockingp(const AstNodeModule* modp) VL_MT_DISABLED;
     static string assertCtlGetCall(const char* query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;
+    // True if $past, $sampled and $stable can store and compare values of the type
+    static bool isSampledType(const AstNodeDType* dtypep) VL_MT_DISABLED;
     // Check an SVA value is within the implementation limit, else report it on nodep
     static bool checkSvaValueLimit(AstNode* nodep, const AstConst* constp,
                                    const char* what) VL_MT_DISABLED;
