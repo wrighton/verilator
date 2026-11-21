@@ -200,6 +200,38 @@ class SliceVisitor final : public VNVisitor {
         return newp;
     }
 
+    // The variable read or written by a reference, or nullptr. A class member is the same
+    // variable through any handle.
+    static const AstVar* refVarp(const AstNode* nodep) {
+        if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) return refp->varp();
+        if (const AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) return refp->varp();
+        return nullptr;
+    }
+    // Whether a variable may be the storage of another, as a 'ref' argument
+    static bool isAlias(const AstVar* varp) {
+        return varp->direction().isRef() || varp->direction().isConstRef();
+    }
+    // Whether the right side of the assignment may read storage its left side writes,
+    // conservatively, as also for disjoint parts of the same variable
+    static bool readsTarget(const AstNodeAssign* const nodep) {
+        std::unordered_set<const AstVar*> writtenps;
+        bool writesAlias = false;
+        nodep->lhsp()->foreach([&](const AstNode* const np) {
+            const AstVarRef* const refp = VN_CAST(np, VarRef);
+            if (refp && !refp->access().isWriteOrRW()) return;  // E.g. an index
+            if (const AstVar* const varp = refVarp(np)) {
+                writtenps.emplace(varp);
+                writesAlias |= isAlias(varp);
+            }
+        });
+        return nodep->rhsp()->exists([&](const AstNode* const np) {
+            const AstVar* const varp = refVarp(np);
+            return varp
+                   && (writtenps.count(varp)
+                       || ((writesAlias || isAlias(varp)) && !writtenps.empty()));
+        });
+    }
+
     bool assignOptimize(AstNodeAssign* nodep) {
         // Return true if did optimization
         AstNodeDType* const dtp = nodep->lhsp()->dtypep()->skipRefp();
@@ -266,6 +298,17 @@ class SliceVisitor final : public VNVisitor {
                     return false;
                 }
             }
+        }
+
+        // A blocking assignment evaluates its right side before writing (IEEE 1800-2023 10.4.1),
+        // but writing element by element can change an element the right side reads later,
+        // e.g. in 'a[1:3] = a[0:2]', so then copy the array whole. A nonblocking assignment
+        // reads before any write, and continuous assignments of the elements settle to the
+        // values of the whole assignment, so they are expanded.
+        if (VN_IS(nodep, Assign) && !hasSc && !VN_IS(nodep->lhsp(), ConsArray)
+            && readsTarget(nodep)) {
+            m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
+            return false;
         }
 
         UINFO(4, "Slice optimizing " << nodep);
