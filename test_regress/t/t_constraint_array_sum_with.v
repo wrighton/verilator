@@ -182,12 +182,37 @@ class test_xor;
   endfunction
 endclass
 
+class test_nested;
+  rand int x;
+  int a[2];
+  byte b[3];
+
+  constraint c {
+    // The inner 'with' uses the outer one's argument, which keeps the outer element type
+    x == a.sum(p) with (b.sum(q) with (p + int'(q)));
+  }
+
+  function void verify();
+    int expected = 0;
+    int i;
+
+    foreach (a[idx]) a[idx] = $urandom_range(100000, 1000);
+    foreach (b[idx]) b[idx] = byte'($urandom);
+    foreach (a[ai]) foreach (b[bi]) expected += a[ai] + int'(b[bi]);
+
+    i = randomize();
+    `checkd(i, 1);
+    `checkd(x, expected);
+  endfunction
+endclass
+
 module t;
   test_sum sum_inst;
   test_product product_inst;
   test_and and_inst;
   test_or or_inst;
   test_xor xor_inst;
+  test_nested nested_inst;
 
   initial begin
     // Test sum
@@ -214,6 +239,11 @@ module t;
     xor_inst = new();
     repeat (20) xor_inst.verify();
     $display("xor test PASSED");
+
+    // Test nested 'with'
+    nested_inst = new();
+    repeat (20) nested_inst.verify();
+    $display("nested test PASSED");
 
     $write("*-* All Finished *-*\n");
     $finish;
