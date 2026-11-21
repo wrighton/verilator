@@ -12207,24 +12207,27 @@ class WidthVisitor final : public VNVisitor {
             if (const AstUnpackArrayDType* const arrayp
                 = VN_CAST(lhsDTypep->skipRefp(), UnpackArrayDType)) {
                 if (AstBasicDType* basicp = VN_CAST(arrayp->subDTypep()->skipRefp(), BasicDType)) {
-                    if (basicp->width() == 8 && constp->num().isFromString()) {
+                    // A string-typed constant such as $typename is not a string literal
+                    if (basicp->width() == 8 && constp->num().isFromString()
+                        && !constp->num().isString()) {
+                        // Left justified: the first character goes to the left element, a
+                        // shorter string is padded with zeros, a longer string loses its last
+                        // characters
                         AstConsArray* newp = new AstConsArray{
                             constp->fileline(), lhsDTypep,
                             new AstConst{constp->fileline(), AstConst::WidthedValue{}, 8, 0}};
-                        for (const int aindex : arrayp->declRange().seqLoToHi()) {
-                            int cindex = arrayp->declRange().ascending() ? (arrayp->hi() - aindex)
-                                                                         : (aindex - arrayp->lo());
+                        const int chars = constp->num().width() / 8;
+                        const int elements = arrayp->elementsConst();
+                        const bool ascending = arrayp->declRange().ascending();
+                        for (int n = 0; n < std::min(chars, elements); ++n) {
+                            // Character 'n' from the left is the 'n'th most significant byte
+                            const int lsb = (chars - 1 - n) * 8;
                             V3Number selected{constp, 8};
-                            selected.opSel(constp->num(), cindex * 8 + 7, cindex * 8);
-                            UINFO(0, "   aindex=" << aindex << "  cindex=" << cindex
-                                                  << "  c=" << selected);
-                            if (!selected.isFourState()) {
-                                if (const uint32_t c = selected.toUInt()) {
-                                    newp->valuep(aindex,
-                                                 new AstConst{constp->fileline(),
-                                                              AstConst::WidthedValue{}, 8, c});
-                                }
-                            }
+                            selected.opSel(constp->num(), lsb + 7, lsb);
+                            // Element 'n' from the left, indexed from lo
+                            newp->valuep(ascending ? n : elements - 1 - n,
+                                         new AstConst{constp->fileline(), AstConst::WidthedValue{},
+                                                      8, selected.toUInt()});
                         }
                         UINFO(6, "   unpackFromString: " << parentp);
                         rhsp->replaceWith(newp);
