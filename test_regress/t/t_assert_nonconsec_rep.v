@@ -38,6 +38,8 @@ module t (
   int count_fail11 = 0;
   int count_fail12;
   int count_fail13;
+  int count_pass14 = 0;
+  int count_fail14 = 0;
 
   // Test: a[=2] |-> b (overlapping implication, 2 non-consecutive occurrences)
   assert property (@(posedge clk) a [= 2] |-> b)
@@ -64,6 +66,10 @@ module t (
   // Test: nonconsec rep as consequent of a non-overlapping implication
   assert property (@(posedge clk) cyc >= 0 |=> d [= 2]) count_pass6++;
   else count_fail6 <= count_fail6 + 1;
+
+  // Test 14: as test 5, repeated once
+  assert property (@(posedge clk) cyc >= 0 |-> (b [= 2]) [* 1]) count_pass14++;
+  else count_fail14 <= count_fail14 + 1;
 
   // Tests 7-12 have a cycle delay. Their action blocks run at each failing match, not once per
   // failing attempt, and the NBAs count the ticks with one.
@@ -130,6 +136,8 @@ module t (
       `checkd(count_fail11, count_fail7);
       `checkd(count_fail12, count_fail7);
       `checkd(count_fail13, count_fail1);
+      `checkd(count_pass14, count_pass5);
+      `checkd(count_fail14, count_fail5);
       $write("*-* All Finished *-*\n");
       $finish;
     end
