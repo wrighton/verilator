@@ -43,6 +43,10 @@
 class VlDpiCall final {
     // MEMBERS
     const VlProcessRef m_process;  // SV process executing the imported task
+    // Process current on the worker: m_process, else the one current on the calling side if the
+    // enclosing import holds it as the process of its worker (IEEE 1800-2023 18.14.1), else
+    // none. This holds it, as the worker may run after the calling side has released it.
+    const VlProcessRef m_workerProcess;
     const std::function<void()> m_fn;  // Function executed on the pool thread
     VerilatedContext* const m_contextp;  // Owning context, whose pool can be recreated on clone
     VlWorkerThread* const m_threadp;  // Worker retained until m_fn returns
@@ -55,7 +59,7 @@ class VlDpiCall final {
     // because the handoff() forces one side to be suspended and waiting for resumption.
     // This orders the copies despite their changes outside the lock.
     Verilated::ThreadLocal m_verilatedTls;  // State passed to the side that runs
-    VlProcess* m_currentProcessp = nullptr;  // Current process passed at handoff
+    VlProcess* m_currentProcessp = nullptr;  // Current process the worker passes at handoff
     VlRNG m_rng{0};  // Explicit seed: the default constructor draws from the current RNG
 
     bool m_done = false;  // Set once m_fn returns
@@ -77,6 +81,7 @@ public:
     // VlDpiCall running on this thread (nullptr if not a DPI thread)
     static VlDpiCall* current() noexcept VL_MT_SAFE { return t_currentp; }
     const VlProcessRef& process() const noexcept VL_MT_SAFE { return m_process; }
+    const VlProcessRef& workerProcess() const noexcept VL_MT_SAFE { return m_workerProcess; }
     // Mark this VlDpiCall as aborted due to process::kill()
     void markAborted() VL_MT_UNSAFE_ONE;
     bool exportAborted() const noexcept VL_MT_UNSAFE_ONE {
@@ -91,7 +96,7 @@ public:
 
 private:
     void saveThreadLocals() VL_MT_UNSAFE_ONE;
-    void restoreThreadLocals() VL_MT_UNSAFE_ONE;
+    void restoreThreadLocals(bool onWorker) VL_MT_UNSAFE_ONE;
     void handoff(bool workerTurn) VL_MT_UNSAFE_ONE;
     void run() VL_MT_UNSAFE_ONE;
 };
