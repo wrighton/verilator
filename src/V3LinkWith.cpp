@@ -109,8 +109,9 @@ class LinkWithVisitor final : public VNVisitor {
             // constrained variables are referred using that object
             // Name it as the 'with' argument, as V3Width finds the type by name
             AstNodeExpr* const prevFromp = nodep->fromp();
-            AstNodeExpr* const newp
+            AstLambdaArgRef* const newp
                 = new AstLambdaArgRef{prevFromp->fileline(), "__Vrandwith_obj", false};
+            newp->randomizeTarget(true);
             prevFromp->replaceWith(newp);
             VL_DO_DANGLING(pushDeletep(prevFromp), prevFromp);
         }
