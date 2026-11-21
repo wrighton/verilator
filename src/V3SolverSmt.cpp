@@ -1689,8 +1689,8 @@ class ConstraintExprVisitor final : public VNVisitor {
             // held by its own class, is applied on each call
             AstNodeModule* const classp
                 = foreignStatic ? m_classp : getLeftmostVarModulep(memberRefp, varp);
-            AstBegin* const initp
-                = getInitp(varp, memberRefp || structSelOrCMeth || foreignStatic, classp);
+            const bool inRandomize = memberRefp || structSelOrCMeth || foreignStatic;
+            AstBegin* const initp = getInitp(varp, inRandomize, classp);
             if (m_nestedAccessp) {
                 AstStmtExpr* const writeVarStmtp = m_nestedAccessp->makeWriteVarStmt(varp, m_genp);
                 addMemberRefRegistration(writeVarStmtp, varp, memberRefp, smtName,
@@ -1701,6 +1701,17 @@ class ConstraintExprVisitor final : public VNVisitor {
                 createSolverVarHandle(varp, structSelOrCMeth, isGlobalConstrained, foreignStatic,
                                       randMode, memberRefp, smtName, classOrPackagep, classp,
                                       initp);
+                AstNodeDType* dtp = varp->dtypep()->skipRefp();
+                while (VN_IS(dtp, UnpackArrayDType)) dtp = dtp->subDTypep()->skipRefp();
+                if (VN_IS(dtp, AssocArrayDType) && !inRandomize && !m_inlineInitBlockp) {
+                    // Keys can be added to an associative array (also one in a fixed-size array)
+                    // after new(), so randomize() registers it again for its current elements.
+                    // new() still registers it for a randomize() of a base class, which does not
+                    // run this one.
+                    createSolverVarHandle(varp, false, isGlobalConstrained, false, randMode,
+                                          nullptr, smtName, classOrPackagep, classp,
+                                          getInitp(varp, true, classp));
+                }
             }
         } else {
             // Variable already written, clean up cloned memberRefp if any
