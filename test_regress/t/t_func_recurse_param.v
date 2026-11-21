@@ -39,16 +39,44 @@ module t;
     return x;
   endfunction
 
+  // Mutually recursive functions, of which only one is marked recursive; g's argument must
+  // survive its nested call
+  function automatic int mutual_g(int n, int p);
+    int r;
+    r = 0;
+    if (n > 0) r = mutual_f(n - 1);
+    return p * 100 + r;
+  endfunction
+  function automatic int mutual_f(int n);
+    return mutual_g(n, n + 1);
+  endfunction
+  typedef int five_t[5];
+  function automatic int mutual_ga(int n, five_t p);
+    int r;
+    r = 0;
+    if (n > 0) r = mutual_fa(n - 1);
+    return p[0] * 100 + r;
+  endfunction
+  function automatic int mutual_fa(int n);
+    five_t b;
+    b[0] = n + 1;
+    return mutual_ga(n, b);
+  endfunction
+
   localparam int F0 = recurse_self(0);
   localparam int F3 = recurse_self(3);
   localparam int F4 = recurse_self(4);
   localparam logic [7:0] SET_TOP_BIT = set_top_bit(8'h03);
+  localparam int MUTUAL = mutual_f(2);
+  localparam int MUTUAL_ARRAY = mutual_fa(2);
 
   initial begin
     `checkd(F0, 0);
     `checkd(F3, 348);
     `checkd(F4, 1754);
     `checkd(SET_TOP_BIT, 8'h83);
+    `checkd(MUTUAL, 300 + 200 + 100);
+    `checkd(MUTUAL_ARRAY, 300 + 200 + 100);
     $write("*-* All Finished *-*\n");
     $finish;
   end
