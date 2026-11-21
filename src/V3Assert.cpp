@@ -2182,13 +2182,13 @@ class AssertVisitor final : public VNVisitor {
                 return VN_IS(np, LambdaArgRef) || (refp && localps.count(refp->varp()));
             });
             if (m_procedurep && !nodep->immediate() && !local) {
-                FileLine* const flp = castp->fileline();
+                FileLine* const castFlp = castp->fileline();
                 AstVar* const varp
-                    = newModuleTemp(flp, m_actionNames.get("Const"), exprp->dtypep(), m_modp);
+                    = newModuleTemp(castFlp, m_actionNames.get("Const"), exprp->dtypep(), m_modp);
                 varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
                 nodep->addHereThisAsNext(
-                    new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, exprp});
-                castp->replaceWith(new AstVarRef{flp, varp, VAccess::READ});
+                    new AstAssign{castFlp, new AstVarRef{castFlp, varp, VAccess::WRITE}, exprp});
+                castp->replaceWith(new AstVarRef{castFlp, varp, VAccess::READ});
             } else {
                 castp->replaceWith(exprp);
             }
