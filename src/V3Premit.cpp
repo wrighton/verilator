@@ -76,6 +76,7 @@ class PremitVisitor final : public VNVisitor {
         uint64_t width = 0;
         bool hasData = false;
         bool hasDynamic = false;
+        bool hasDefault = false;  // An array default, which stands for each element not given
         // Must be a tree of constants (see AstNodeExpr::isConstantTree), which can be emitted
         const bool emittable = nodep->forall([&](const AstNodeExpr* exprp) {
             if (VN_IS(exprp, NodeCons)) {
@@ -85,6 +86,8 @@ class PremitVisitor final : public VNVisitor {
                 const AstQueueDType* const queueDtypep = VN_CAST(dtypep, QueueDType);
                 if (queueDtypep && queueDtypep->boundp()) return false;
                 hasDynamic |= dtypep->isDynamicallySized();
+                const AstConsArray* const consp = VN_CAST(exprp, ConsArray);
+                hasDefault |= consp && consp->defaultp();
                 return true;
             }
             const AstConst* const constp = VN_CAST(exprp, Const);
@@ -96,6 +99,10 @@ class PremitVisitor final : public VNVisitor {
         if (!emittable) return false;
         // Dynamically sized values allocate when built with data, so use the pool for them
         if (hasDynamic) return hasData;
+        // With a default, the size of the value built at each use is that of its whole type
+        if (hasDefault) {
+            width = std::max(width, static_cast<uint64_t>(nodep->dtypep()->widthTotalBytes()) * 8);
+        }
         return width >= static_cast<uint64_t>(STATIC_CONST_MIN_WIDTH);
     }
 
