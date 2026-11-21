@@ -91,7 +91,7 @@ module t;
     b11 <= #1 a;
   end
   always_comb begin : blk_disabled
-    b15 = a;
+    t_no_timing(b15);  // A task call, so the disable makes a process of the block
   end
   initial #1 disable blk_disabled;
 
