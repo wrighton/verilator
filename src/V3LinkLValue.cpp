@@ -70,7 +70,19 @@ class LinkLValueVisitor final : public VNVisitor {
                 nodep->varp()->isContinuously(true);
                 // Strength may only be specified in continuous assignment,
                 // so it is needed to check only if m_setContinuously is true
-                if (m_setStrengthSpecified) nodep->varp()->hasStrengthAssignment(true);
+                if (m_setStrengthSpecified) {
+                    AstVar* const varp = nodep->varp();
+                    varp->hasStrengthAssignment(true);
+                    // An output port with an explicit data type but no net type is a
+                    // variable (IEEE 1800-2023 23.2.2.3)
+                    if (varp->varType() == VVarType::VAR
+                        || (varp->varType() == VVarType::PORT
+                            && varp->direction() == VDirection::OUTPUT && varp->isDeclTyped())) {
+                        nodep->v3error("Drive strength specified for a variable, but drive "
+                                       "strengths only apply to nets (IEEE 1800-2023 10.3.4): "
+                                       << nodep->prettyNameQ());
+                    }
+                }
             }
             if (const AstClockingItem* const itemp
                 = VN_CAST(nodep->varp()->backp(), ClockingItem)) {
