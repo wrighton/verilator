@@ -183,7 +183,11 @@ class SliceVisitor final : public VNVisitor {
         // array representation that could be assigned.
         const bool hasSc
             = nodep->exists([&](const AstVarRef* refp) -> bool { return refp->varp()->isSc(); });
-        if (!hasSc && !lhsSlice && !VN_IS(nodep->lhsp(), ConsArray) && !v3Global.opt.fSlice()) {
+        // Slicing would evaluate an impure side once per element, so copy the whole array,
+        // unless writing a slice, which is only done element by element
+        const bool impure = !nodep->lhsp()->isPure() || !nodep->rhsp()->isPure();
+        if (!hasSc && !lhsSlice && !VN_IS(nodep->lhsp(), ConsArray)
+            && (!v3Global.opt.fSlice() || impure)) {
             m_okConsArray = true;  // VL_RESTORER in visit(AstNodeAssign)
             return false;
         }
