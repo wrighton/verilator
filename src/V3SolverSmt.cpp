@@ -346,6 +346,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     VInsertionSet<AstVar*>* m_sizeConstrainedArraysp = nullptr;  // Arrays with size constraints
     AstNodeExpr* m_conditionp = nullptr;  // Condition under which current expression is defined
                                           // (nullptr == always defined)
+    const AstArraySel* m_inRangeSelp = nullptr;  // Select already guarded by its range check
     AstNodeFTask* m_prepareConstrainedArraysp = nullptr;  // Grow arrays for indexed struct access
     uint32_t* m_uniqueConstraintIdp = nullptr;  // Current ID of unique call
     V3UniqueNames& m_uniqueNames;  // Unique names of temporaries, and of blocks holding them
@@ -2325,14 +2326,63 @@ class ConstraintExprVisitor final : public VNVisitor {
             newp->exprsp()->nextp()->name(objectElem ? "%0x" : "%x");
         }
     }
+    // Return SMT condition that the rand indices of select chain 'nodep' are in range, or nullptr
+    static AstNodeExpr* newIndexInRangep(const AstArraySel* nodep) {
+        AstNodeExpr* condp = nullptr;
+        for (const AstArraySel* selp = nodep; selp; selp = VN_CAST(selp->fromp(), ArraySel)) {
+            const uint32_t elements
+                = VN_AS(selp->fromp()->dtypep()->skipRefp(), UnpackArrayDType)->elementsConst();
+            const int width = selp->bitp()->width();
+            if (!isRandIndex(selp->bitp()) || (width < 32 && (1U << width) <= elements)) continue;
+            FileLine* const fl = selp->fileline();
+            AstNodeExpr* const gtep
+                = new AstGte{fl, new AstConst{fl, AstConst::WidthedValue{}, width, elements - 1},
+                             selp->bitp()->cloneTreePure(false)};
+            gtep->user1(true);
+            condp = condp ? new AstLogAnd{fl, condp, gtep} : gtep;
+            condp->user1(true);
+        }
+        return condp;
+    }
     void visit(AstArraySel* nodep) override {
         if (editFormat(nodep)) return;
         FileLine* const fl = nodep->fileline();
+        // An element selected by an out-of-range index reads the default value
+        // (IEEE 1800-2023 7.4.6); only an integral element has one to read instead
+        if (nodep != m_inRangeSelp && nodep->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            if (AstNodeExpr* const inRangep = newIndexInRangep(nodep)) {
+                VNRelinker condHandle;
+                nodep->unlinkFrBack(&condHandle);
+                AstCond* const condp
+                    = new AstCond{fl, inRangep, nodep,
+                                  new AstConst{fl, AstConst::WidthedValue{}, nodep->width(), 0}};
+                condp->user1(true);
+                condHandle.relink(condp);
+                VL_RESTORER(m_inRangeSelp);
+                m_inRangeSelp = nodep;
+                iterate(condp);
+                return;
+            }
+        }
         // Of an array of objects, or of arrays of them
         const bool objectElem
             = VN_IS(RandomizeUtil::arrayElementDTypep(nodep->dtypep()), ClassRefDType);
         VNRelinker handle;
         const bool indexIsRand = isRandIndex(nodep->bitp());
+        if (!indexIsRand) {
+            // V3Width keeps all index bits; truncate as it did before, as the names of struct
+            // and class array elements depend on the index width
+            const int selWidth
+                = V3Number::log2b(VN_AS(nodep->fromp()->dtypep()->skipRefp(), UnpackArrayDType)
+                                      ->declRange()
+                                      .hiMaxSelect())
+                  + 1;
+            if (nodep->bitp()->width() > selWidth) {
+                VNRelinker indexHandle;
+                AstNodeExpr* const bitp = nodep->bitp()->unlinkFrBack(&indexHandle);
+                indexHandle.relink(new AstSel{bitp->fileline(), bitp, 0, selWidth});
+            }
+        }
         if (m_nestedAccessp) {
             AstNodeExpr* const bitp = nodep->bitp()->cloneTreePure(false);
             AstNodeExpr* const bitFormatp
