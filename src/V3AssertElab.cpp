@@ -238,17 +238,19 @@ class AssertElabVisitor final : public VNVisitor {
         return localVarMap;
     }
     // Clone the body of a property instance, with the actual arguments substituted
-    AstPropSpec* cloneProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
+    AstPropSpec* cloneProperty(AstSchemaRef* schemaRefp, AstProperty* propp) {
         AstPropSpec* const specp = VN_AS(
             V3AssertCommon::relinkSvaInstanceBody(propp->specp()->cloneTree(false), schemaRefp),
             PropSpec);
         coverageOff(specp);
-        substituteArgs(specp, schemaRefp, promoteLocalVars(propp));
+        const std::unordered_map<const AstVar*, AstVar*> localVarMap = promoteLocalVars(propp);
+        substituteArgs(specp, schemaRefp, localVarMap);
+        V3AssertCommon::lowerSvaLocalVarInits(propp, specp, localVarMap);
         ++m_statPropInlined;
         return specp;
     }
     void inlineProperty(AstPropSpec* outerSpecp, AstSchemaRef* schemaRefp,
-                        const AstProperty* propp) {
+                        AstProperty* propp) {
         AstPropSpec* const propSpecp = cloneProperty(schemaRefp, propp);
         if (outerSpecp->fromInstanceChain() || instancedProperty(propSpecp)) {
             propSpecp->fromInstanceChain(true);
@@ -321,7 +323,7 @@ class AssertElabVisitor final : public VNVisitor {
                    || VN_IS(np, Until) || VN_IS(np, PropSpec);
         });
     }
-    void inlineNestedProperty(AstSchemaRef* schemaRefp, const AstProperty* propp) {
+    void inlineNestedProperty(AstSchemaRef* schemaRefp, AstProperty* propp) {
         AstPropSpec* const specp = cloneProperty(schemaRefp, propp);
         AstNode* replp = nullptr;
         if (specp->disablep()) {
@@ -367,7 +369,7 @@ class AssertElabVisitor final : public VNVisitor {
     }
     void visit(AstPropSpec* nodep) override {
         if (AstSchemaRef* const schemaRefp = VN_CAST(nodep->propp(), SchemaRef)) {
-            if (const AstProperty* const propp = VN_CAST(schemaRefp->schemap(), Property)) {
+            if (AstProperty* const propp = VN_CAST(schemaRefp->schemap(), Property)) {
                 // The replacement is iterated next, which inlines a property instance in its body
                 inlineProperty(nodep, schemaRefp, propp);
                 return;
