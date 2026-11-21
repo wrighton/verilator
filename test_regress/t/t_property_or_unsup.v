@@ -50,6 +50,15 @@ module t (
   assert property (@(posedge clk) not ((a |=> b) or (b ##1 c)));
   assert property (@(posedge clk) not (((a ##1 b) or (c ##2 a)) |-> b));
   assert property (@(posedge clk) not ((##1 a) or (##2 b) or (##3 c) or (##4 a) or (##5 b)));
+  // A property operand that rejects on its own would fail the 'or' while the other one holds
+  assert property (@(posedge clk) (a |-> ((b ##2 !b) or (a ##2 a))) or (always [0:2] c));
+  assert property (@(posedge clk) (reject_on(c) (a ##1 b)) or (b ##1 c));
+  assert property (@(posedge clk) (sync_reject_on(b) (a |-> ((b ##2 !b) or (a ##2 a))))
+      or (always [0:2] c));
+  assert property (@(posedge clk) (reject_on(a) (b ##1 c)) or (reject_on(b) (c ##1 a)));
+  assert property (@(posedge clk) a |-> ((always [0:1] b) or (always [0:2] c)));
+  assert property (@(posedge clk) (always [0:1] a) or (b ##1 c));
+  assert property (@(posedge clk) (always [0:0] a) or (s_always [2:2] b));
   // An operand holding another operator would count every end inside it
   assert property (@(posedge clk) a |-> ((c throughout ((##2 a) or (##3 b) or (##4 c) or (##5 a)
       or (##6 b))) or (b ##2 a) or (c ##3 b) or (a ##4 c) or (b ##5 a)));
