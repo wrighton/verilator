@@ -200,6 +200,15 @@ module t (
   `signal(REPLACE_OR_OF_CONCAT_LHS_ZERO_AND_CONCAT_ZERO_RHS, {rand_a[1:0], 2'd0} | {2'd0, rand_b[1:0]});
   `signal(REPLACE_OR_OF_CONST_AND_CONST, const_a | const_b);
   `signal(REPLACE_OR_WITH_ONES, -64'd1 | rand_a);
+  `signal(REPLACE_OR_WITH_AND_OF_NOT, (rand_a >> 20) | (~(rand_a >> 20) & rand_b));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_B, (~(rand_a >> 21) & rand_b) | (rand_a >> 21));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_C, (rand_a >> 22) | (64'h1234 & ~(rand_a >> 22)));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_D, ((rand_a >> 23) | rand_b) | (~(rand_a >> 23) & srand_a));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_D_SHARED, (rand_a >> 23) | rand_b);
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_E, (rand_b | (rand_a >> 24)) | (~(rand_a >> 24) & srand_a));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_E_SHARED, rand_b | (rand_a >> 24));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_NO, ((rand_a >> 25) | rand_b) | (~(rand_a >> 26) & srand_a));
+  `signal(REPLACE_OR_WITH_AND_OF_NOT_NO_SHARED, (rand_a >> 25) | rand_b);
   `signal(REMOVE_OR_WITH_SELF, ~rand_a | ~rand_a);
   `signal(REMOVE_OR_WITH_ZERO, 64'd0 | rand_a);
   `signal(REPLACE_TAUTOLOGICAL_OR, rand_a | ~rand_a);
