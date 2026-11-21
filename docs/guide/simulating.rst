@@ -228,6 +228,17 @@ A bin whose ``option.at_least`` is not 1 records it as the bin's threshold,
 which :command:`verilator_coverage` uses to decide whether the bin is
 covered.
 
+The optional arguments of a coverpoint's or cross's ``get_inst_coverage()``
+receive its number of covered bins and its number of bins (IEEE 1800-2023
+19.8). A covergroup's coverage is a weighted average of its coverpoints and
+crosses, so it has no such numbers, and the arguments of a covergroup's
+``get_inst_coverage()`` and ``get_coverage()`` receive the sums over its
+coverpoints and crosses, including those of weight zero. For
+``get_coverage()`` these are the sums over every instance, including
+instances that have died, or over the merged bins with
+``type_option.merge_instances``, as also for ``get_inst_coverage()`` when
+it gives the merged coverage.
+
 
 .. _fsm coverage:
 
