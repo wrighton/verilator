@@ -2075,6 +2075,17 @@ void AstGenBlock::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, unnamed);
     dumpJsonGen(str);
 }
+AstNodeBiop* AstGte::newTyped(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+    if (lhsp->isString() && rhsp->isString()) {
+        return new AstGteN{fl, lhsp, rhsp};
+    } else if (lhsp->isDouble() && rhsp->isDouble()) {
+        return new AstGteD{fl, lhsp, rhsp};
+    } else if (lhsp->isSigned() && rhsp->isSigned()) {
+        return new AstGteS{fl, lhsp, rhsp};
+    } else {
+        return new AstGte{fl, lhsp, rhsp};
+    }
+}
 void AstIf::dump(std::ostream& str) const {
     Super::dump(str);
     if (isBoundsCheck()) str << " [BOUNDS]";
@@ -2197,26 +2208,26 @@ AstNodeExpr* AstInsideRange::newAndFromInside(AstNodeExpr* exprp, AstNodeExpr* l
         // [$:N] - only check expr <= rhs
         // Use exprp directly (not cloned) so ExprStmt side effects are preserved
         VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
-        AstNodeExpr* const bp = new AstLte{fileline(), exprp, rhsp};
+        AstNodeExpr* const bp = AstLte::newTyped(fileline(), exprp, rhsp);
         bp->fileline()->modifyWarnOff(V3ErrorCode::CMPCONST, true);
         return bp;
     } else if (rhsUnbounded) {
         // [N:$] - only check expr >= lhs
         VL_DO_DANGLING(rhsp->deleteTree(), rhsp);
-        AstNodeExpr* const ap = new AstGte{fileline(), exprp, lhsp};
+        AstNodeExpr* const ap = AstGte::newTyped(fileline(), exprp, lhsp);
         ap->fileline()->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
         return ap;
     }
 
     // Normal case: [N:M] - check expr >= lhs && expr <= rhs
-    AstNodeExpr* const ap = new AstGte{fileline(), exprp, lhsp};
+    AstNodeExpr* const ap = AstGte::newTyped(fileline(), exprp, lhsp);
     AstNodeExpr* lteLhsp;
     if (const AstExprStmt* const exprStmtp = VN_CAST(exprp, ExprStmt)) {
         lteLhsp = exprStmtp->resultp()->cloneTreePure(true);
     } else {
         lteLhsp = exprp->cloneTreePure(true);
     }
-    AstNodeExpr* const bp = new AstLte{fileline(), lteLhsp, rhsp};
+    AstNodeExpr* const bp = AstLte::newTyped(fileline(), lteLhsp, rhsp);
     ap->fileline()->modifyWarnOff(V3ErrorCode::UNSIGNED, true);
     bp->fileline()->modifyWarnOff(V3ErrorCode::CMPCONST, true);
     return new AstLogAnd{fileline(), ap, bp};
@@ -2323,6 +2334,17 @@ void AstLoopTest::dump(std::ostream& str) const {
     Super::dump(str);
     str << " -> ";
     loopp()->dump(str);
+}
+AstNodeBiop* AstLte::newTyped(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+    if (lhsp->isString() && rhsp->isString()) {
+        return new AstLteN{fl, lhsp, rhsp};
+    } else if (lhsp->isDouble() && rhsp->isDouble()) {
+        return new AstLteD{fl, lhsp, rhsp};
+    } else if (lhsp->isSigned() && rhsp->isSigned()) {
+        return new AstLteS{fl, lhsp, rhsp};
+    } else {
+        return new AstLte{fl, lhsp, rhsp};
+    }
 }
 uint32_t AstMatchMasked::fold(const V3Number& lhs, AstVar* matchVarp) {
     const V3Number& numTable = VN_AS(matchVarp->valuep(), Const)->num();
