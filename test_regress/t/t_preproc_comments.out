@@ -1138,3 +1138,14 @@ ja32 p q
 // coverage
 
 `line 796 "t/t_preproc.v" 0
+// Escaped define name, white space then formal arguments
+ 
+EXP: $display(1,,0,,"C");
+$display(1,,0,,"C");
+EXP: $display(5,,0,,"C");
+$display(5,,0,,"C");
+ 
+EXP: (a)
+(a)
+
+`line 806 "t/t_preproc.v" 0
