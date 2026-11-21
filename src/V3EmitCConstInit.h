@@ -40,7 +40,16 @@ class EmitCConstInit VL_NOT_FINAL : public EmitCBaseVisitorConst {
     void emitConsArray(AstConsArray* nodep) {
         const AstUnpackArrayDType* const dtypep
             = VN_AS(nodep->dtypep()->skipRefp(), UnpackArrayDType);
-        const uint64_t size = dtypep->elementsConst();
+        uint64_t size = dtypep->elementsConst();
+        // Elements after the last given one that default to zero are zero-initialized by C++
+        const AstConst* const defaultConstp = VN_CAST(nodep->defaultp(), Const);
+        if (defaultConstp && !defaultConstp->num().isOpaque() && defaultConstp->num().isEqZero()) {
+            size = 0;
+            for (const AstConsArrayItem* itemp = nodep->itemsp(); itemp;
+                 itemp = VN_AS(itemp->nextp(), ConsArrayItem)) {
+                size = itemp->index() + 1;
+            }
+        }
         uint32_t tabMod = tabModulus(dtypep->subDTypep());
         if (nodep->defaultp() && !VN_IS(nodep->defaultp(), Const)) tabMod = 1;
         for (const AstConsArrayItem* itemp = nodep->itemsp(); itemp;
