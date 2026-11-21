@@ -1,0 +1,22 @@
+%Error: t/t_defparam_index_bad.v:12:35: Instance path 'u_sub2.gen[4].u_leaf' from 't' does not name an instance: a generate loop on it does not have the iteration selected, or a generate block on it is not built (IEEE 1800-2023 23.6).
+                                      : ... note: In instance 't'
+   12 |   defparam u_sub2.gen[4].u_leaf.P = 1;   
+      |                                   ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_index_bad.v:30:37: Instance path 't.u_sub3.gen[3].u_leaf' does not name an instance: a generate loop on it does not have the iteration selected, or a generate block on it is not built (IEEE 1800-2023 23.6).
+                                      : ... note: In instance 't.u_other'
+   30 |   defparam t.u_sub3.gen[3].u_leaf.P = 1;   
+      |                                     ^
+%Error: t/t_defparam_index_bad.v:31:37: Instance path 't.u_sub0.gen[0].u_leaf' does not name an instance: a generate loop on it does not have the iteration selected, or a generate block on it is not built (IEEE 1800-2023 23.6).
+                                      : ... note: In instance 't.u_other'
+   31 |   defparam t.u_sub0.gen[0].u_leaf.P = 1;   
+      |                                     ^
+%Error: t/t_defparam_index_bad.v:22:28: Instance path 'gen[2].u_leaf' from 't.u_sub2' does not name an instance: a generate loop on it does not have the iteration selected, or a generate block on it is not built (IEEE 1800-2023 23.6).
+                                      : ... note: In instance 't.u_sub2'
+   22 |   defparam gen[2].u_leaf.P = 1;   
+      |                            ^
+%Error: t/t_defparam_index_bad.v:22:28: Instance path 'gen[2].u_leaf' from 't.u_sub0' does not name an instance: a generate loop on it does not have the iteration selected, or a generate block on it is not built (IEEE 1800-2023 23.6).
+                                      : ... note: In instance 't.u_sub0'
+   22 |   defparam gen[2].u_leaf.P = 1;   
+      |                            ^
+%Error: Exiting due to

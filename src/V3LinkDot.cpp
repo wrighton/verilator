@@ -77,6 +77,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -205,6 +206,8 @@ private:
     VSymGraph m_mods;  // Symbol table of all module names
     VSymEnt* m_dunitEntp = nullptr;  // $unit entry
     VSymEnt* m_packageEntp = nullptr;  // Root of global package names
+    // See sharedNameBlock; for this run of V3LinkDot, which deletes no generate block
+    std::unordered_set<const AstNode*> m_sharedNameBlocks;
     // Defparam -> scope of each instance of it, until LinkDotParamVisitor uses them
     std::unordered_map<const AstDefParam*, std::vector<VSymEnt*>> m_defParamScopes;
     std::multimap<std::string, VSymEnt*>
@@ -341,6 +344,12 @@ public:
         UASSERT_OBJ(it != m_defParamScopes.end(), nodep, "Defparam not in any scope");
         scopesr = std::move(it->second);
         m_defParamScopes.erase(it);
+    }
+    // Generate blocks sharing a name with another in their scope, so only the last one
+    // inserted is found
+    void sharedNameBlock(const AstNode* nodep) { m_sharedNameBlocks.emplace(nodep); }
+    bool isSharedNameBlock(const AstNode* nodep) const {
+        return m_sharedNameBlocks.find(nodep) != m_sharedNameBlocks.end();
     }
     VSymEnt* rootEntp() const { return m_syms.rootp(); }
     VSymEnt* dunitEntp() const { return m_dunitEntp; }
@@ -1582,6 +1591,13 @@ class LinkDotFindVisitor final : public VNVisitor {
         if (nodep->name() == "") {
             iterateChildren(nodep);
         } else {
+            // Blocks of exclusive generate alternatives may share a name (IEEE 1800-2023 27.5)
+            if (const VSymEnt* const otherp = m_curSymp->findIdFlat(nodep->name())) {
+                if (otherp->nodep() != nodep && VN_IS(otherp->nodep(), GenBlock)) {
+                    m_statep->sharedNameBlock(otherp->nodep());
+                    m_statep->sharedNameBlock(nodep);
+                }
+            }
             VL_RESTORER(m_curSymp);
             {
                 m_curSymp
@@ -2529,7 +2545,29 @@ public:
 
 //======================================================================
 
+// Components of a defparam's path, each with the index selecting a generate loop iteration, if any
+using PathSegments = std::vector<std::pair<std::string, AstNodeExpr*>>;
+
+// Append the components of a defparam's path to segs; return false if a component has other
+// than one index
+static bool pathSegments(AstNode* pathp, PathSegments& segs) {
+    if (const AstDot* const dotp = VN_CAST(pathp, Dot)) {
+        return pathSegments(dotp->lhsp(), segs) && pathSegments(dotp->rhsp(), segs);
+    }
+    if (const AstParseRef* const refp = VN_CAST(pathp, ParseRef)) {
+        segs.emplace_back(refp->name(), nullptr);
+        return true;
+    }
+    AstSelBit* const selp = VN_CAST(pathp, SelBit);
+    const AstParseRef* const fromp = selp ? VN_CAST(selp->fromp(), ParseRef) : nullptr;
+    if (!fromp) return false;
+    segs.emplace_back(fromp->name(), selp->bitp());
+    return true;
+}
+
 class LinkDotParamVisitor final : public VNVisitor {
+    // Prefix of the path of a defparam kept with its value, which names its target from $root
+    static constexpr const char* ROOT_PREFIX = "$root.";
     // NODE STATE
     //  *::user1p()             -> See LinkDotState
     //  *::user2p()             -> See LinkDotState
@@ -2615,16 +2653,162 @@ class LinkDotParamVisitor final : public VNVisitor {
         for (size_t i = 1; symp && i < names.size(); ++i) symp = symp->findIdFlat(names[i]);
         return symp;
     }
+    void defParamUnsupported(AstDefParam* nodep, AstNode* errp, const string& msg) {
+        errp->v3warn(E_UNSUPPORTED, msg);
+        VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+    }
+    // V3Param built the generate blocks, so check that the defparam's path names an instance
+    // from each instance of its module (IEEE 1800-2023 23.6)
+    void checkDefParamPath(AstDefParam* nodep, const std::vector<VSymEnt*>& instSyms) {
+        const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
+        // A path from $root names the same instance from each, else it is below each
+        const bool fromRoot = VString::startsWith(targetp->dotted(), ROOT_PREFIX);
+        const string path
+            = fromRoot ? targetp->dotted().substr(std::strlen(ROOT_PREFIX)) : targetp->dotted();
+        const std::deque<string> names = VString::split(path, '.');
+        for (VSymEnt* const symp : instSyms) {
+            VSymEnt* foundp = fromRoot ? m_statep->rootEntp() : symp;
+            for (const string& name : names) {
+                if (!foundp) break;
+                foundp = foundp->findIdFlat(name);
+            }
+            if (foundp && VN_IS(foundp->nodep(), Cell)) continue;
+            nodep->v3error("Instance path "
+                           << AstNode::prettyNameQ(path)
+                           << (fromRoot ? "" : " from " + AstNode::prettyNameQ(symPath(symp)))
+                           << " does not name an instance: a generate loop on it does not have"
+                              " the iteration selected, or a generate block on it is not built "
+                              "(IEEE 1800-2023 23.6).");
+            if (fromRoot) break;  // Once, as the same from each
+        }
+        VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+    }
+    // Instance path of a symbol
+    string symPath(const VSymEnt* symp) const {
+        string path;
+        for (; symp != m_statep->rootEntp(); symp = symp->parentp()) {
+            const AstNodeModule* const modp = VN_CAST(symp->nodep(), NodeModule);
+            path = VString::dot(modp ? modp->origName() : symp->nodep()->name(), ".", path);
+        }
+        return path;
+    }
+    // Paths naming a defparam's target, see defParamPaths
+    struct DefParamPaths final {
+        string written;  // As written, generate loop iterations named as once built
+        string top;  // From the top module, with the names in the symbol table
+        string below;  // From the defparam's scope, if the target is under it
+        bool underScope = false;  // The target is under the defparam's scope
+        bool selectsIteration = false;  // The path selects a generate loop iteration
+    };
+    // Set valuer to the genvar value a generate loop index selects: a genvar is a 32-bit integer
+    // (IEEE 1800-2023 27.4), so an index of no more bits converts to one, and a wider index's own
+    // value must be one; else return false
+    static bool genvarValue(const V3Number& num, int32_t& valuer) {
+        static constexpr int GENVAR_WIDTH = 32;
+        if (num.width() <= GENVAR_WIDTH) {
+            valuer = num.toSInt();
+            return true;
+        }
+        const bool negative = num.isSigned() && num.isNegative();
+        for (int bit = GENVAR_WIDTH - 1; bit < num.width(); ++bit) {
+            if (num.bitIs1(bit) != negative) return false;
+        }
+        valuer = static_cast<int32_t>(num.edataWord(0));
+        return true;
+    }
+    // Set valuer to the genvar value of a defparam path's index of symp, the generate loop block
+    // it selects an iteration of; else delete nodep and return false
+    bool defParamIndex(AstDefParam* nodep, AstParseRef* targetp, const VSymEnt* symp,
+                       AstNodeExpr* indexp, bool underScope, int32_t& valuer) {
+        const AstGenBlock* const blockp = VN_CAST(symp->nodep(), GenBlock);
+        const AstConst* const constp = VN_CAST(indexp, Const);
+        if (VN_IS(symp->nodep(), Cell)) {
+            defParamUnsupported(nodep, targetp,
+                                "Unsupported: defparam path with arrayed instance");
+        } else if (!blockp || !blockp->genforp()) {
+            indexp->v3error("In defparam, path selects an index of "
+                            << symp->nodep()->prettyNameQ()
+                            << ", which is not a generate loop (IEEE 1800-2023 27.4).");
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        } else if (underScope) {
+            defParamUnsupported(nodep, indexp,
+                                "Unsupported: defparam path selecting an iteration of a generate "
+                                "loop containing the defparam.");
+        } else if (!constp || constp->num().isFourState() || constp->num().isOpaque()
+                   || constp->num().isNull()) {
+            defParamUnsupported(
+                nodep, indexp, "Unsupported: defparam path index that is not an integer literal.");
+        } else if (!genvarValue(constp->num(), valuer)) {
+            defParamUnsupported(nodep, indexp,
+                                "Unsupported: defparam path index " + constp->num().ascii()
+                                    + " of " + blockp->prettyNameQ()
+                                    + ", outside the 32-bit integer range of a genvar.");
+        } else {
+            return true;
+        }
+        return false;
+    }
+    // Set pathsr to the paths naming foundp, the target the defparam's path names from
+    // scopeSymp; else delete nodep and return false
+    bool defParamPaths(AstDefParam* nodep, AstParseRef* targetp, const PathSegments& segs,
+                       const VSymEnt* foundp, const VSymEnt* scopeSymp, DefParamPaths& pathsr) {
+        const AstNode* sharedNameBlockp = nullptr;  // On the path, see sharedNameBlock
+        // Names of the components; the symbols of the last ones are those walked up from the
+        // target, unless the path was found upwards from a component after the first
+        std::vector<string> segNames;
+        segNames.reserve(segs.size());
+        for (const PathSegments::value_type& seg : segs) segNames.push_back(seg.first);
+        size_t segi = segs.size();
+        for (const VSymEnt* symp = foundp; symp != m_statep->rootEntp(); symp = symp->parentp()) {
+            UASSERT_OBJ(symp, nodep, "Instance not under the root");
+            if (symp == scopeSymp) pathsr.underScope = true;
+            const AstNodeModule* const modp = VN_CAST(symp->nodep(), NodeModule);
+            string symName = modp ? modp->origName() : symp->nodep()->name();
+            if (segi) {
+                --segi;
+                if (AstNodeExpr* const indexp = segs[segi].second) {
+                    int32_t index;
+                    if (!defParamIndex(nodep, targetp, symp, indexp, pathsr.underScope, index)) {
+                        return false;
+                    }
+                    pathsr.selectsIteration = true;
+                    segNames[segi] = AstGenBlock::iterationName(segNames[segi], index);
+                    symName = AstGenBlock::iterationName(symName, index);
+                }
+                if (m_statep->isSharedNameBlock(symp->nodep())) sharedNameBlockp = symp->nodep();
+            }
+            pathsr.top = VString::dot(symName, ".", pathsr.top);
+            if (!pathsr.underScope) pathsr.below = VString::dot(symName, ".", pathsr.below);
+        }
+        for (const string& segName : segNames) {
+            pathsr.written = VString::dot(pathsr.written, ".", segName);
+        }
+        // The path was found through the last of the blocks sharing a name, which may not be
+        // the one built in the iteration selected
+        if (pathsr.selectsIteration && sharedNameBlockp) {
+            defParamUnsupported(nodep, targetp,
+                                "Unsupported: defparam path selecting a generate loop iteration "
+                                "through generate blocks with the same name "
+                                    + sharedNameBlockp->prettyNameQ() + ".");
+            return false;
+        }
+        return true;
+    }
     void visit(AstDefParam* nodep) override {  // ParamVisitor::
         std::vector<VSymEnt*> instSyms;
         m_statep->takeDefParamScopes(nodep, instSyms);
+        if (!m_statep->forPrimary()) {
+            checkDefParamPath(nodep, instSyms);
+            return;
+        }
         iterateChildren(nodep);
         AstParseRef* const targetp = VN_CAST(nodep->targetp(), ParseRef);
         UASSERT_OBJ(targetp, nodep, "verilog.y made defparam without parseref");
-        if (nodep->pathp()->exists([](const AstNodePreSel*) { return true; })) {
-            nodep->targetp()->v3warn(E_UNSUPPORTED,
-                                     "Unsupported: defparam path with arrayed instance");
-            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        PathSegments segs;
+        if (!pathSegments(nodep->pathp(), segs)) {
+            defParamUnsupported(nodep, targetp,
+                                "Unsupported: defparam path component with more than one index, "
+                                "or a range.");
             return;
         }
         const std::string name = targetp->name();
@@ -2632,73 +2816,88 @@ class LinkDotParamVisitor final : public VNVisitor {
                                     << nodep->warnMore()
                                     << "... Suggest use instantiation with '#(."
                                     << AstNode::prettyName(name) << "(...etc...))'");
-        bool hasPartSelect = false;
-        const string path = extractDottedPath(nodep->pathp(), hasPartSelect);
-        UASSERT_OBJ(!hasPartSelect && !path.empty(), nodep, "Unexpected defparam path shape");
+        string path;
+        bool indexed = false;
+        for (const PathSegments::value_type& seg : segs) {
+            path = VString::dot(path, ".", seg.first);
+            indexed = indexed || seg.second;
+        }
         VSymEnt* const scopeSymp = instSyms.back();
         VSymEnt* const foundp = findPath(nodep, scopeSymp, path, true);
-        AstCell* const cellp = foundp ? VN_AS(foundp->nodep(), Cell) : nullptr;
-        if (!cellp) {
+        // Before generate blocks are built, only the last of blocks sharing a name is found, and
+        // when it lacks the rest of the path, the rest is found upwards from it. The path is also
+        // found from one instance of this module only.
+        const bool exact = foundp && exactPath(scopeSymp, path) == foundp;
+        // An indexed path may be found as a generate block, which is unsupported below
+        AstCell* const cellp = !foundp   ? nullptr
+                               : indexed ? VN_CAST(foundp->nodep(), Cell)
+                                         : VN_AS(foundp->nodep(), Cell);
+        // So an indexed path may not be found as written, or be found as a generate block
+        if (indexed && (!cellp || !exact)) {
+            defParamUnsupported(nodep, targetp,
+                                "Unsupported: defparam path selecting a generate loop iteration, "
+                                "not found as written before generate blocks are built.");
+            return;
+        } else if (!cellp) {
             nodep->v3error("In defparam, instance " << path << " never declared");
-        } else {
-            // Path from the defparam's scope, if the instance is under it
-            string belowPath;
-            const VSymEnt* symp = foundp;
-            for (; symp && symp != scopeSymp; symp = symp->parentp()) {
-                belowPath = VString::dot(symp->nodep()->name(), ".", belowPath);
-            }
-            // Before generate blocks are built, only the last of blocks sharing a name is found.
-            // When it lacks the rest of the path, the rest is found upwards from it, and under the
-            // scope V3Param would give the value to the instance found there.
-            if (symp && exactPath(scopeSymp, path) != foundp) {
-                targetp->v3warn(E_UNSUPPORTED, "Unsupported: defparam path "
-                                                   << AstNode::prettyNameQ(path)
-                                                   << " under the defparam's scope, found as "
-                                                   << AstNode::prettyNameQ(belowPath)
-                                                   << " before generate blocks are built.");
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            return;
+        }
+        DefParamPaths paths;
+        if (!defParamPaths(nodep, targetp, segs, foundp, scopeSymp, paths)) return;
+        // Under the scope, V3Param would give the value to the instance found
+        if (paths.underScope && !exact) {
+            defParamUnsupported(nodep, targetp,
+                                "Unsupported: defparam path " + AstNode::prettyNameQ(path)
+                                    + " under the defparam's scope, found as "
+                                    + AstNode::prettyNameQ(paths.below)
+                                    + " before generate blocks are built.");
+            return;
+        }
+        // A path from a top module, as written, naming the same instance from each instance of
+        // this module names one instance, so V3Param matches all of it; others are found upwards
+        // from each instance. From an instance in a generate block not built, the path may name
+        // nothing, or a missing module, so it falls back to those.
+        bool fromTop = !paths.underScope && paths.top == paths.written;
+        for (VSymEnt* const instSymp : instSyms) {
+            fromTop = fromTop && findPath(nodep, instSymp, path, false) == foundp;
+        }
+        // A path found upwards may also match other instances whose path ends the same
+        if (!paths.underScope && !fromTop && paths.selectsIteration) {
+            defParamUnsupported(nodep, targetp,
+                                "Unsupported: defparam path selecting a generate loop iteration, "
+                                "found upwards from the defparam.");
+            return;
+        }
+        // If under it, V3Param passes the value down from each instance of this module, so it
+        // uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
+        AstNodeExpr* const exprp = paths.underScope ? nullptr : nodep->rhsp()->unlinkFrBack();
+        UINFO(9, "Defparam cell " << paths.written << "." << name << " attach-to " << cellp
+                                  << "  <= " << exprp);
+        // Don't need to check the name of the defparam exists.  V3Param does.
+        AstPin* const pinp = new AstPin{nodep->fileline(),
+                                        -1,  // Pin# not relevant
+                                        name, exprp};
+        pinp->param(true);
+        pinp->paramPath(paths.written);
+        pinp->paramPathFromTop(fromTop);
+        cellp->addParamsp(pinp);
+        // A path selecting generate loop iterations may not name an instance
+        if (paths.selectsIteration) nodep->checkTarget(true);
+        if (exprp) {
+            pinp->user1p(scopeSymp);  // For the value, see ResolveVisitor::visit(AstPin)
+            if (!nodep->checkTarget()) {
                 VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
                 return;
             }
-            // If under it, V3Param passes the value down from each instance of this module, so
-            // it uses the parameters of the module declaring it (IEEE 1800-2023 23.10.1)
-            AstNodeExpr* const exprp = symp ? nullptr : nodep->rhsp()->unlinkFrBack();
-            // A path from a top module, as written, naming the same instance from each
-            // instance of this module names one instance, so V3Param matches all of it, with
-            // the names of generate blocks as in the symbol table; others are found upwards
-            // from each instance
-            string symPath;
-            for (const VSymEnt* upSymp = foundp; !symp && upSymp != m_statep->rootEntp();
-                 upSymp = upSymp->parentp()) {
-                UASSERT_OBJ(upSymp, nodep, "Instance not under the root");
-                const AstNodeModule* const modp = VN_CAST(upSymp->nodep(), NodeModule);
-                symPath = VString::dot(modp ? modp->origName() : upSymp->nodep()->name(), ".",
-                                       symPath);
-            }
-            bool fromTop = !symp && symPath == path;
-            // From an instance in a generate block not built, the path may name nothing, or a
-            // missing module, so it falls back to matching others
-            for (VSymEnt* const instSymp : instSyms)
-                fromTop = fromTop && findPath(nodep, instSymp, path, false) == foundp;
-            UINFO(9, "Defparam cell " << path << "." << name << " attach-to " << cellp
-                                      << "  <= " << exprp);
-            // Don't need to check the name of the defparam exists.  V3Param does.
-            AstPin* const pinp = new AstPin{nodep->fileline(),
-                                            -1,  // Pin# not relevant
-                                            name, exprp};
-            pinp->param(true);
-            pinp->paramPath(path);
-            pinp->paramPathFromTop(fromTop);
-            cellp->addParamsp(pinp);
-            if (!exprp) {
-                pushDeletep(nodep->pathp()->unlinkFrBack());
-                targetp->replaceWith(
-                    new AstVarXRef{targetp->fileline(), name, belowPath, VAccess::WRITE});
-                VL_DO_DANGLING(pushDeletep(targetp), targetp);
-                return;
-            }
-            pinp->user1p(scopeSymp);  // For the value, see ResolveVisitor::visit(AstPin)
         }
-        VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+        // Kept for V3Param to take the value, if under the scope, and to check its target from
+        // each instance of this module (see checkDefParamPath)
+        pushDeletep(nodep->pathp()->unlinkFrBack());
+        targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
+                                            exprp ? ROOT_PREFIX + paths.top : paths.below,
+                                            VAccess::WRITE});
+        VL_DO_DANGLING(pushDeletep(targetp), targetp);
     }
     void visit(AstPort* nodep) override {  // ParamVisitor::
         // Port: Stash the pin number
@@ -4337,7 +4536,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Not the target, as the pin LinkDotParamVisitor added for it is linked instead, and
         // V3Param finds the target in each instance of this module
         LINKDOT_VISIT_START();
-        iterate(nodep->rhsp());
+        iterateAndNextNull(nodep->rhsp());
     }
     void visit(AstPin* nodep) override {
         // Pin: Link to submodule's port

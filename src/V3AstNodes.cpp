@@ -1784,6 +1784,14 @@ void AstCvtArrayToPacked::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, packedWidth);
     dumpJsonGen(str);
 }
+void AstDefParam::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (checkTarget()) str << " [CHECKTARGET]";
+}
+void AstDefParam::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, checkTarget);
+    dumpJsonGen(str);
+}
 void AstDelay::dump(std::ostream& str) const {
     Super::dump(str);
     if (isCycleDelay()) str << " [CYCLE]";
@@ -2003,6 +2011,9 @@ void AstGenBlock::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, implied);
     dumpJsonBoolFuncIf(str, unnamed);
     dumpJsonGen(str);
+}
+string AstGenBlock::iterationName(const string& name, int64_t index) {
+    return name + "__BRA__" + encodeNumber(index) + "__KET__";
 }
 void AstIf::dump(std::ostream& str) const {
     Super::dump(str);

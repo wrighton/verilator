@@ -747,6 +747,7 @@ module param_mod #(
   pt_alias_t pt_var;
   assign pt_var = pin;
   assign pout = PW'(pt_var);
+  defparam t.sub.sub_loop[1].ev.SET = 1;
 endmodule
 
 module sub(input logic clk);
@@ -763,6 +764,10 @@ module sub(input logic clk);
   endfunction
   real r;
   defparam t.seq_event.SET = 1;
+  for (genvar i = 0; i < 2; ++i) begin : sub_loop
+    seq_event ev (.clk);
+  end
+  defparam sub_loop[0].ev.SET = 1;
 endmodule
 
 module seq_event(input logic clk);

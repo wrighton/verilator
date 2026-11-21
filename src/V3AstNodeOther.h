@@ -1386,9 +1386,12 @@ public:
 class AstDefParam final : public AstNode {
     // A defparam assignment
     // Parents: MODULE
-    // @astgen op1 := rhsp : AstNodeExpr
+    // @astgen op1 := rhsp : Optional[AstNodeExpr] // Null if kept only to check targetp
     // @astgen op2 := pathp : Optional[AstNodeExpr] // Null after V3LinkDot
     // @astgen op3 := targetp : AstNodeExpr // After V3LinkDot, AstVarXRef from this scope
+    // After V3LinkDot, check targetp names an instance once generate blocks are built
+    bool m_checkTarget = false;
+
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNodeExpr* rhsp)
         : ASTGEN_SUPER_DefParam(fl) {
@@ -1397,7 +1400,11 @@ public:
         this->targetp(targetp);
     }
     ASTGEN_MEMBERS_AstDefParam;
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode*) const override { return true; }
+    bool checkTarget() const { return m_checkTarget; }
+    void checkTarget(bool flag) { m_checkTarget = flag; }
 };
 class AstDefaultClocking final : public AstNode {
     std::string m_name;  // Clocking block name
@@ -3328,6 +3335,8 @@ public:
     void dumpJson(std::ostream& str) const override;
     std::string name() const override VL_MT_STABLE { return m_name; }
     void name(const std::string& name) override { m_name = name; }
+    // Name of the block of an iteration of the generate loop block named 'name'
+    static std::string iterationName(const std::string& name, int64_t index);
     bool unnamed() const { return m_unnamed; }
     bool implied() const { return m_implied; }
     void implied(bool flag) { m_implied = flag; }

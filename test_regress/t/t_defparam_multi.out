@@ -5,23 +5,59 @@
 %Error-UNSUPPORTED: t/t_defparam_multi.v:16:20: Unsupported: defparam path with arrayed instance
    16 |   defparam u_m3[1].PAR3 = 200;
       |                    ^~~~
-%Error-UNSUPPORTED: t/t_defparam_multi.v:24:28: Unsupported: defparam path with arrayed instance
+%Error-UNSUPPORTED: t/t_defparam_multi.v:24:20: Unsupported: defparam path selecting an iteration of a generate loop containing the defparam.
    24 |       defparam blk[i].u_m3.PAR3 = i;
+      |                    ^
+%Error-UNSUPPORTED: t/t_defparam_multi.v:28:33: Unsupported: defparam path component with more than one index, or a range.
+   28 |   defparam m1a.gblk[0][1].w0.m2.PAR2 = 1;   
+      |                                 ^~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:29:27: Unsupported: defparam path component with more than one index, or a range.
+   29 |   defparam blk[0][1].u_m3.PAR3 = 1;   
+      |                           ^~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:31:17: Unsupported: defparam path index that is not an integer literal.
+   31 |   defparam blk[3-2].u_m3.PAR3 = 1;
+      |                 ^
+%Error-UNSUPPORTED: t/t_defparam_multi.v:32:16: Unsupported: defparam path index that is not an integer literal.
+   32 |   defparam blk[1'bx].u_m3.PAR3 = 1;
+      |                ^~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:33:16: Unsupported: defparam path index that is not an integer literal.
+   33 |   defparam blk[1.0].u_m3.PAR3 = 1;
+      |                ^~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:34:16: Unsupported: defparam path index that is not an integer literal.
+   34 |   defparam blk[null].u_m3.PAR3 = 1;
+      |                ^~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:35:16: Unsupported: defparam path index 64'hffffffff of 'blk', outside the 32-bit integer range of a genvar.
+   35 |   defparam blk[64'hffff_ffff].u_m3.PAR3 = 1;   
+      |                ^~~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:44:28: Unsupported: defparam path selecting a generate loop iteration, not found as written before generate blocks are built.
+   44 |   defparam alt[0].arm.u_m3.PAR3 = 1;   
       |                            ^~~~
-%Error-UNSUPPORTED: t/t_defparam_multi.v:36:24: Unsupported: defparam path 'sh.arm.u_m3' under the defparam's scope, found as 'sh.u_m3' before generate blocks are built.
-   36 |   defparam sh.arm.u_m3.PAR3 = 1;
+%Error-UNSUPPORTED: t/t_defparam_multi.v:52:29: Unsupported: defparam path selecting a generate loop iteration through generate blocks with the same name 'arm'.
+   52 |   defparam alt2[0].arm.u_m3.PAR3 = 1;   
+      |                             ^~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:61:24: Unsupported: defparam path 'sh.arm.u_m3' under the defparam's scope, found as 'sh.u_m3' before generate blocks are built.
+   61 |   defparam sh.arm.u_m3.PAR3 = 1;
       |                        ^~~~
-%Error: t/t_defparam_multi.v:65:49: Duplicate parameter connection: 'PAR3'
-   65 |       defparam m2.PAR2 = 4; defparam m2.m3.PAR3 = 40;
+%Error-UNSUPPORTED: t/t_defparam_multi.v:72:22: Unsupported: defparam path selecting a generate loop iteration, not found as written before generate blocks are built.
+   72 |   defparam gp[0].g.u.PAR3 = 1;   
+      |                      ^~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:124:18: Unsupported: defparam path index that is not an integer literal.
+  124 |   defparam t.blk[M6_PARAM].u_m3.PAR3 = 1;   
+      |                  ^~~~~~~~
+%Error-UNSUPPORTED: t/t_defparam_multi.v:125:24: Unsupported: defparam path selecting a generate loop iteration, found upwards from the defparam.
+  125 |   defparam blk[1].u_m3.PAR3 = 1;   
+      |                        ^~~~
+%Error: t/t_defparam_multi.v:101:49: Duplicate parameter connection: 'PAR3'
+  101 |       defparam m2.PAR2 = 4; defparam m2.m3.PAR3 = 40;
       |                                                 ^
-        t/t_defparam_multi.v:61:49: ... Location of original parameter connection
-   61 |       defparam m2.PAR2 = 8; defparam m2.m3.PAR3 = 80;
+        t/t_defparam_multi.v:97:49: ... Location of original parameter connection
+   97 |       defparam m2.PAR2 = 8; defparam m2.m3.PAR3 = 80;
       |                                                 ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error-UNSUPPORTED: t/t_defparam_multi.v:85:26: Unsupported: defparam value using 'M6_PARAM' of a module, for an instance not under the defparam
-   85 |   defparam t.u_up.PAR3 = M6_PARAM;   
+%Error-UNSUPPORTED: t/t_defparam_multi.v:122:26: Unsupported: defparam value using 'M6_PARAM' of a module, for an instance not under the defparam
+  122 |   defparam t.u_up.PAR3 = M6_PARAM;   
       |                          ^~~~~~~~
-%Error-UNSUPPORTED: t/t_defparam_multi.v:86:31: Unsupported: defparam value using 'CLS_PARAM' of a module, for an instance not under the defparam
-   86 |   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
+%Error-UNSUPPORTED: t/t_defparam_multi.v:123:31: Unsupported: defparam value using 'CLS_PARAM' of a module, for an instance not under the defparam
+  123 |   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
       |                               ^~~~~~~~~
 %Error: Exiting due to

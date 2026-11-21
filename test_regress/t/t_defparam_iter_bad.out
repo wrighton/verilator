@@ -1,0 +1,8 @@
+%Error: t/t_defparam_iter_bad.v:14:17: In defparam, path selects an index of 'gblk', which is not a generate loop (IEEE 1800-2023 27.4).
+   14 |   defparam gblk[0].u.P = 1;   
+      |                 ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_defparam_iter_bad.v:15:14: In defparam, path selects an index of 't', which is not a generate loop (IEEE 1800-2023 27.4).
+   15 |   defparam t[0].blk[0].u.P = 1;   
+      |              ^
+%Error: Exiting due to

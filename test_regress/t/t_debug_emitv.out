@@ -1823,31 +1823,6 @@ interface Iface;
         input logic ifsig
     );
 endinterface
-module sub;
-    input logic clk;
-    logic [7:0]  xr_vec;
-    /* generate */ begin : sub_gen
-        typedef enum logic [1:0] {
-            SUB_A = 2'h0,
-            SUB_B = 2'h1
-        } sub_e;
-    end : sub_gen
-    task inc(input int i, output int o);
-        o = /*CRESET*/;
-        o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
-    endtask
-    function int f(input int v);
-        begin : label10
-            if ((v == 32'sh0)) begin
-                f = 32'sh21;
-                disable label10;
-            end
-            f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
-            disable label10;
-        end
-    endfunction
-    real r;
-endmodule
 package escapes;
     typedef enum int{
         ESC_A = 32'h0,
@@ -2001,28 +1976,37 @@ endmodule
 package p;
     logic pkgvar;
 endpackage
-module seq_event__Sz461fae86;
+module sub___Vdefparamh2f8fc640;
     input logic clk;
-    parameter bit SET = 1'h1;
-    bit a;
-    bit b;
-    bit c;
-    sequence sq;
-    @(posedge clk) a##1 b##1 c
-    endsequence
-    initial begin
-        begin
-
-            ???? // EVENTCONTROL
-            @( __VseqEvent_h9d9f741d__0)end
-    end
-    event __VseqEvent_h9d9f741d__0;
-    cover property (@() @(posedge clk) a##1 b##1 c
-
-    ) begin
-
-        ???? // FIREEVENT
-        __VseqEvent_h9d9f741d__0end
+    logic [7:0]  xr_vec;
+    /* generate */ begin : sub_gen
+        typedef enum logic [1:0] {
+            SUB_A = 2'h0,
+            SUB_B = 2'h1
+        } sub_e;
+    end : sub_gen
+    task inc(input int i, output int o);
+        o = /*CRESET*/;
+        o = ({32'h1{{1'h0, i[31:1]}}} + 32'h1);
+    endtask
+    function int f(input int v);
+        begin : label10
+            if ((v == 32'sh0)) begin
+                f = 32'sh21;
+                disable label10;
+            end
+            f = ({32'h1{{31'h0, v[2]}}} + 32'h1);
+            disable label10;
+        end
+    endfunction
+    real r;
+    /* generate */ begin : sub_loop
+        integer i;
+    end : sub_loop
+    /* generate */ begin : sub_loop[0]
+    end : sub_loop[0]
+    /* generate */ begin : sub_loop[1]
+    end : sub_loop[1]
 endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
@@ -2270,6 +2254,29 @@ module \esc.sub ;
     assign \sub.sig  = \port.p .\sig.i ;
     task \t.s ();
     endtask
+endmodule
+module seq_event__Sz461fae86;
+    input logic clk;
+    parameter bit SET = 1'h1;
+    bit a;
+    bit b;
+    bit c;
+    sequence sq;
+    @(posedge clk) a##1 b##1 c
+    endsequence
+    initial begin
+        begin
+
+            ???? // EVENTCONTROL
+            @( __VseqEvent_h9d9f741d__0)end
+    end
+    event __VseqEvent_h9d9f741d__0;
+    cover property (@() @(posedge clk) a##1 b##1 c
+
+    ) begin
+
+        ???? // FIREEVENT
+        __VseqEvent_h9d9f741d__0end
 endmodule
 interface \esc.ifc ;
     logic \sig.i ;

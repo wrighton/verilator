@@ -25,6 +25,31 @@ module t;
     end
   endgenerate
 
+  defparam m1a.gblk[0][1].w0.m2.PAR2 = 1;  // Bad: two indices, after the first component
+  defparam blk[0][1].u_m3.PAR3 = 1;  // Bad: two indices
+  // Indices that are not integer literals
+  defparam blk[3-2].u_m3.PAR3 = 1;
+  defparam blk[1'bx].u_m3.PAR3 = 1;
+  defparam blk[1.0].u_m3.PAR3 = 1;
+  defparam blk[null].u_m3.PAR3 = 1;
+  defparam blk[64'hffff_ffff].u_m3.PAR3 = 1;  // Wider than 32 bits, outside the 32-bit range
+
+  // Generate blocks sharing a name, the built one first
+  for (genvar i = 0; i < 2; ++i) begin : alt
+    if (i == 0) begin : arm
+      m3 u_m3 ();
+    end else begin : arm
+    end
+  end
+  defparam alt[0].arm.u_m3.PAR3 = 1;  // Through blocks with the same name, missing in the last
+  for (genvar i = 0; i < 2; ++i) begin : alt2
+    if (i == 0) begin : arm
+      m3 u_m3 ();
+    end else begin : arm
+      m3 u_m3 ();
+    end
+  end
+  defparam alt2[0].arm.u_m3.PAR3 = 1;  // Through blocks with the same name
   // Under the scope, through blocks with the same name, missing the rest of the path in the last
   if (1) begin : sh
     m3 u_m3 ();
@@ -34,6 +59,17 @@ module t;
     end
   end
   defparam sh.arm.u_m3.PAR3 = 1;
+
+  // Found as a generate block
+  for (genvar i = 0; i < 2; ++i) begin : gp
+    if (i == 0) begin : g
+      m3 u ();
+    end else begin : g
+      if (1) begin : u
+      end
+    end
+  end
+  defparam gp[0].g.u.PAR3 = 1;  // An instance in the block built, a generate block in the other
 
   m3 u_up ();
   m6 #(.M6_PARAM(7)) m6 ();
@@ -76,6 +112,7 @@ module m3 ();
   parameter PAR3 = 40;
 endmodule
 
+// The path names an instance in one instance, not the other
 module m6 #(
     parameter M6_PARAM = 6
 );
@@ -84,4 +121,6 @@ module m6 #(
   endclass
   defparam t.u_up.PAR3 = M6_PARAM;  // Instance not under the defparam
   defparam t.u_up.PAR3 = Cls::CLS_PARAM;
+  defparam t.blk[M6_PARAM].u_m3.PAR3 = 1;  // Index using a parameter
+  defparam blk[1].u_m3.PAR3 = 1;  // Found upwards
 endmodule

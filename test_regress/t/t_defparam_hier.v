@@ -68,6 +68,10 @@ module M4 #(parameter PRMTR = 4);
     defparam m1y.m0a.PRMTR = LOCAL;
     defparam i0.PRMTR = LOCAL;
   end
+  // Iteration of a generate loop, from outside the loop
+  defparam gen[0].m1y.m0b.PRMTR = PRMTR + 50;
+  // From the module name of this instance (IEEE 1800-2023 23.8)
+  defparam M4.gen[1].m1y.m0b.PRMTR = PRMTR + 60;
 endmodule
 
 module M5;
@@ -112,6 +116,47 @@ module M14;
   defparam top.y.PRMTR = 34;
 endmodule
 
+module M15;
+  for (genvar i = 0; i < 2; ++i) begin : gen
+    M8 u ();
+  end
+endmodule
+
+// An instance named as the module containing the defparam starts its path (IEEE 1800-2023 23.8)
+module M16;
+  M15 M16 ();
+  for (genvar i = 0; i < 2; ++i) begin : gen
+    M8 u ();
+  end
+  defparam M16.gen[1].u.dut.PRMTR = 35;
+endmodule
+
+// Found upwards, through blocks with the same name, the last of which lacks the rest of the path
+module M18;
+  defparam m19a.g.k.b.m0.PRMTR = 37;
+endmodule
+
+module M19;
+  M20 b ();
+  if (1) begin : g
+    if (1) begin : k
+      M20 b ();
+    end else begin : k
+    end
+  end
+endmodule
+
+module M20;
+  M0 m0 (.value());
+endmodule
+
+// Negative iterations
+module M21;
+  for (genvar i = -2; i < 2; ++i) begin : gen
+    M0 m0 (.value());
+  end
+endmodule
+
 // Under the scope, through an escaped generate block
 module M17;
   if (1) begin : \e.f
@@ -148,6 +193,7 @@ module M6;
   defparam top.\j.k .u.dut.PRMTR = 31;
   defparam top.\m.n .u.dut.PRMTR = 32;
   defparam top.m.n.u.dut.PRMTR = 33;
+  defparam top.m4d.gen[1].m1y.i0.PRMTR = PKG_PRMTR + 2;
 endmodule
 
 module top;
@@ -178,6 +224,39 @@ module top;
     esc_decoy_prmtr = decoy.\h.esc .u.dut.PRMTR;
     `checkh(esc_inst_prmtr, 30);
     `checkh(esc_decoy_prmtr, 1);
+  end
+  M16 own_name ();
+  // Indices of up to 32 bits convert to a genvar's 32-bit integer; wider ones keep their value
+  M21 neg ();
+  defparam neg.gen[32'hffff_ffff].m0.PRMTR = 38;
+  defparam neg.gen[65'sh1_ffff_ffff_ffff_fffe].m0.PRMTR = 40;
+  defparam neg.gen[65'sd1].m0.PRMTR = 39;
+  initial begin
+    `checkh(neg.gen[-2].m0.PRMTR, 40);
+    `checkh(neg.gen[-1].m0.PRMTR, 38);
+    `checkh(neg.gen[0].m0.PRMTR, 1);
+    `checkh(neg.gen[1].m0.PRMTR, 39);
+  end
+  // Iterations of nested loops
+  for (genvar i = 0; i < 2; ++i) begin : outer
+    for (genvar j = 0; j < 2; ++j) begin : inner
+      M0 m0 (.value());
+    end
+  end
+  defparam outer[1].inner[0].m0.PRMTR = 44;
+  initial begin
+    `checkh(outer[0].inner[0].m0.PRMTR, 1);
+    `checkh(outer[0].inner[1].m0.PRMTR, 1);
+    `checkh(outer[1].inner[0].m0.PRMTR, 44);
+    `checkh(outer[1].inner[1].m0.PRMTR, 1);
+  end
+  M18 up_shared ();
+  M19 m19a ();
+  M19 m19b ();
+  initial begin
+    `checkh(m19a.g.k.b.m0.PRMTR, 37);
+    `checkh(m19a.b.m0.PRMTR, 1);
+    `checkh(m19b.g.k.b.m0.PRMTR, 1);
   end
   M17 esc_under ();
   defparam top.esc_under.\e.f .m2.PRMTR = 42;
@@ -268,6 +347,8 @@ module top;
 
   defparam m3.PRMTR = 10;
 
+  defparam m4.gen[1'b1].m1y.i0.PRMTR = 77;
+
   initial begin
     `checkh(m3.m2a.m1.m0a.PRMTR, 2);
     `checkh(m3.m2a.m1.m0b.PRMTR, 3);
@@ -315,6 +396,17 @@ module top;
     `checkh(esc_prmtr, 26);
     `checkh(gen_up[0].x.PRMTR, 29);
     `checkh(gen_up[1].x.PRMTR, 29);
+    `checkh(own_name.M16.gen[1].u.dut.PRMTR, 35);
+    `checkh(own_name.M16.gen[0].u.dut.PRMTR, 1);
+    `checkh(own_name.gen[1].u.dut.PRMTR, 1);
+    `checkh(m4.gen[0].m1y.m0b.PRMTR, 53);
+    `checkh(m4.gen[1].m1y.m0b.PRMTR, 63);
+    `checkh(m4d.gen[0].m1y.m0b.PRMTR, 54);
+    `checkh(m4d.gen[1].m1y.m0b.PRMTR, 64);
+    `checkh(m4.gen[0].m1y.i0.PRMTR, 1);
+    `checkh(m4.gen[1].m1y.i0.PRMTR, 77);
+    `checkh(m4d.gen[0].m1y.i0.PRMTR, 1);
+    `checkh(m4d.gen[1].m1y.i0.PRMTR, 8);
 
     #1;
     `checkh(value, 45);  // (2+3) * (4+5)

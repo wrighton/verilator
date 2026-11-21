@@ -223,8 +223,8 @@ class UnrollGenVisitor final : public VNVisitor {
                         oneloopp = tempp->declsp()->unlinkFrBackWithNext();
                         VL_DO_DANGLING(tempp->deleteTree(), tempp);
                     }
-                    const string index = AstNode::encodeNumber(varValuep->toSInt());
-                    const string nname = m_beginName + "__BRA__" + index + "__KET__";
+                    const string nname
+                        = AstGenBlock::iterationName(m_beginName, varValuep->toSInt());
                     oneloopp = new AstGenBlock{oneloopp->fileline(), nname, oneloopp, false};
                     VL_DO_DANGLING(pushDeletep(varValuep), varValuep);
                     newbodysp = AstNode::addNextNull(newbodysp, oneloopp);

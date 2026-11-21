@@ -3934,6 +3934,7 @@ class ParamVisitor final : public VNVisitor {
         nodep->v3fatalSrc("GENFOR should have been wrapped in BEGIN");
     }
     void visit(AstDefParam* nodep) override {
+        if (!nodep->rhsp()) return;  // Kept only for LinkDot to check its path
         // The parameters of this instance of the module are known, and the generate blocks
         // above expanded, so nodeDeparam can give the value (IEEE 1800-2023 23.10.1)
         checkParamNotHierRecurse(nodep->rhsp());
@@ -3942,7 +3943,8 @@ class ParamVisitor final : public VNVisitor {
             = m_modp->someInstancePath() + m_generateHierPath + "." + targetp->dotted();
         m_processor.defparamValue(defparamPath(instancePath) + "." + targetp->name(),
                                   nodep->rhsp()->unlinkFrBack());
-        VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+        // Else LinkDot checks its path from each instance of this module
+        if (!nodep->checkTarget()) VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
     void visit(AstGenCase* nodep) override {
         UINFO(9, "  GENCASE " << nodep);
