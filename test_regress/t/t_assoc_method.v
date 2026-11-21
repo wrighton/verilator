@@ -301,6 +301,54 @@ module t;
     qv = q.map(el) with (el.index * 10);
     `checkp(qv, "'{'ha, 'h14, 'h1e}");
 
+    begin  // Signed keys are ordered as signed numbers (IEEE 1800-2023 7.8.4)
+      int sq[int];
+      typedef shortint key_t;
+      typedef enum {NEG = -2, ZERO = 0, POS = 2} enum_t;
+      int bq[byte];
+      int tq[key_t];
+      int eq[enum_t];
+      int nq[bit signed [4:0]];
+      int wq[bit signed [69:0]];
+      int k;
+      bit signed [69:0] wk;
+      sq = '{1: 1, -1: 2, -5: 3};
+      `checkp(sq, "'{'hfffffffb:'h3, 'hffffffff:'h2, 'h1:'h1}");
+      qi = sq.find_index with (1);
+      `checkp(qi, "'{'hfffffffb, 'hffffffff, 'h1}");
+      `checkh(sq.first(k), 1);
+      `checkh(k, -5);
+      `checkh(sq.next(k), 1);
+      `checkh(k, -1);
+      `checkh(sq.last(k), 1);
+      `checkh(k, 1);
+      `checkh(sq.prev(k), 1);
+      `checkh(k, -1);
+      bq[1] = 1;
+      bq[-1] = 2;
+      bq[-128] = 3;
+      `checkp(bq, "'{'h80:'h3, 'hff:'h2, 'h1:'h1}");
+      tq[1] = 1;
+      tq[-1] = 2;
+      `checkp(tq, "'{'hffff:'h2, 'h1:'h1}");
+      eq[POS] = 1;
+      eq[NEG] = 2;
+      eq[ZERO] = 3;
+      qv = eq.find with (1);
+      `checkp(qv, "'{'h2, 'h3, 'h1}");
+      nq[5'sd15] = 1;
+      nq[-5'sd16] = 2;
+      nq[5'sd0] = 3;
+      `checkp(nq, "'{'h10:'h2, 'h0:'h3, 'hf:'h1}");
+      wq[70'sd3] = 1;
+      wq[-70'sd2] = 2;
+      wq[70'sd0] = 3;
+      `checkh(wq.first(wk), 1);
+      `checkh(wk, -70'sd2);
+      `checkh(wq.last(wk), 1);
+      `checkh(wk, 70'sd3);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
