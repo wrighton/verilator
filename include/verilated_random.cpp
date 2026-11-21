@@ -126,8 +126,8 @@ class VlRProcess final : private std::streambuf, public std::iostream {
     bool m_logTried = false;  // Log file name looked up, at the first start
     std::unique_ptr<std::ofstream> m_logfp;  // Log file stream
     uint64_t m_logLastTime = ~0ULL;  // Last timestamp for logfile
-    std::string m_logLinePrefix;  // Prefix of the last log line, unfinished if m_logLineOpen
-    bool m_logLineOpen = false;  // Last logged text did not end its line
+    std::string m_logLinePrefix;  // Prefix of the last logged line
+    bool m_logLineOpen = false;  // Last logged line has no newline yet
 
 public:
     typedef std::streambuf::traits_type traits_type;
@@ -272,6 +272,7 @@ public:
             m_logTried = true;
             logOpen();
         }
+        log("", "# Open: "s + cmd[0]);
 #ifdef _VL_SOLVER_PIPE_UNIX
 #if !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE)
         errno = ENOTSUP;
@@ -318,7 +319,6 @@ public:
             return false;
         }
 
-        log("", "# Open: "s + cmd[0] + "\n");
         const pid_t pid = fork();
         if (VL_UNLIKELY(pid < 0)) {
             perror("VlRProcess::open: fork");
@@ -402,7 +402,6 @@ public:
         si.hStdError = stderrInheritable ? stderrInheritable : fd_stdout_wr;
         PROCESS_INFORMATION pi;
         ZeroMemory(&pi, sizeof(pi));
-        log("", "# Open: "s + cmd[0] + "\n");
         const BOOL procOk
             = CreateProcessA(nullptr, &cmdline[0], nullptr, nullptr, TRUE /* inherit */,
                              CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
@@ -456,27 +455,27 @@ private:
         }
         *m_logfp << "# Verilator solver log\n";
     }
+    // Commands and replies are logged one I/O buffer at a time, and a buffer may end within
+    // a line, so a logged line ends only at its own newline, or where text with a different
+    // prefix follows
     void log(const std::string& prefix, const std::string& text) {
         if (VL_LIKELY(!m_logfp.get()) || text.empty()) return;
-        // Pipe buffers end anywhere, so continue an unfinished line of the same direction
-        // rather than breaking it (inside a token, unreadable by a solver)
         if (m_logLineOpen && prefix != m_logLinePrefix) {
             *m_logfp << '\n';
             m_logLineOpen = false;
         }
-        if (!m_logLineOpen && m_logLastTime != Verilated::threadContextp()->time()) {
-            m_logLastTime = Verilated::threadContextp()->time();
-            *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString() << "]\n";
-        }
         m_logLinePrefix = prefix;
-        std::size_t startPos = 0;
-        while (startPos < text.length()) {
-            if (!m_logLineOpen) *m_logfp << prefix;
-            const std::size_t endPos = text.find('\n', startPos);
-            m_logLineOpen = endPos == std::string::npos;
-            const std::size_t lineEnd = m_logLineOpen ? text.length() : endPos + 1;
-            *m_logfp << text.substr(startPos, lineEnd - startPos);
-            startPos = lineEnd;
+        for (const char c : text) {
+            if (!m_logLineOpen) {
+                if (m_logLastTime != Verilated::threadContextp()->time()) {
+                    m_logLastTime = Verilated::threadContextp()->time();
+                    *m_logfp << "# [" << Verilated::threadContextp()->timeWithUnitString()
+                             << "]\n";
+                }
+                *m_logfp << prefix;
+            }
+            m_logfp->put(c);
+            m_logLineOpen = c != '\n';
         }
     }
 };

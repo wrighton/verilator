@@ -96,24 +96,44 @@
                                          : ... note: In instance 't'
   164 |       areg <= @(autom2) 0;   
       |                 ^~~~~~
-%Error: t/t_assign_automatic_bad.v:95:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_a'
+%Error: t/t_assign_automatic_bad.v:96:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_a'
                                        : ... note: In instance 't'
-   95 |     bad_a <= 1;   
+   96 |     bad_a <= 1;   
       |     ^~~~~
-%Error: t/t_assign_automatic_bad.v:96:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_o'
+%Error: t/t_assign_automatic_bad.v:97:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_o'
                                        : ... note: In instance 't'
-   96 |     bad_o <= 1;   
+   97 |     bad_o <= 1;   
       |     ^~~~~
-%Error: t/t_assign_automatic_bad.v:97:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_r'
+%Error: t/t_assign_automatic_bad.v:98:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_r'
                                        : ... note: In instance 't'
-   97 |     bad_r <= 1;   
+   98 |     bad_r <= 1;   
       |     ^~~~~
-%Error: t/t_assign_automatic_bad.v:102:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_m'
+%Error: t/t_assign_automatic_bad.v:101:15: Automatic lifetime variable not allowed in non-blocking timing control (IEEE 1800-2023 6.21): 'bad_e'
+                                         : ... note: In instance 't'
+  101 |     areg <= @(bad_e) 0;   
+      |               ^~~~~
+%Error: t/t_assign_automatic_bad.v:103:16: Automatic lifetime variable not allowed in procedural continuous assignment (IEEE 1800-2023 6.21): 'bad_e'
+                                         : ... note: In instance 't'
+  103 |     assign g = bad_e;   
+      |                ^~~~~
+%Error: t/t_assign_automatic_bad.v:107:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'fret'
                                         : ... note: In instance 't'
-  102 |       bad_m <= 1;   
+  107 |     fret <= 1;   
+      |     ^~~~
+%Error: t/t_assign_automatic_bad.v:112:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_m'
+                                        : ... note: In instance 't'
+  112 |       bad_m <= 1;   
       |       ^~~~~
-%Error: t/t_assign_automatic_bad.v:108:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'arg'
+%Error: t/t_assign_automatic_bad.v:115:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'mret'
                                         : ... note: In instance 't'
-  108 |     arg <= #1 5;
+  115 |       mret <= 1;   
+      |       ^~~~
+%Error: t/t_assign_automatic_bad.v:118:7: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'bad_s'
+                                        : ... note: In instance 't'
+  118 |       bad_s <= 1;   
+      |       ^~~~~
+%Error: t/t_assign_automatic_bad.v:123:5: Automatic lifetime variable not allowed in non-blocking assignment (IEEE 1800-2023 6.21): 'arg'
+                                        : ... note: In instance 't'
+  123 |     arg <= #1 5;   
       |     ^~~
 %Error: Exiting due to

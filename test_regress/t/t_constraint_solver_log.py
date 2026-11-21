@@ -18,7 +18,8 @@ test.compile()
 
 solver_log = test.obj_dir + "/solver.log"
 
-test.execute(all_run_flags=['+verilator+solver+file+' + solver_log])
+test.execute(
+    all_run_flags=['+verilator+rand+sampler+default', '+verilator+solver+file+' + solver_log])
 
 test.file_grep(solver_log, '# Verilator solver log')
 # Without array variables the solver gets QF_BV, which z3 solves incrementally faster
@@ -63,5 +64,15 @@ ite = r'\(ite \(__Vbool sel\) +\(__Vbv \(= '
 test.file_grep(solver_log, ite + r'\(select fixed #x00000000\) #b0000101\)\) #b1\)')
 test.file_grep(solver_log,
                ite + r'\(select \(select grid #x00000000\) #x00000000\) #b0000110\)\) #b1\)')
+
+# The solver log is the output under test: each command and reply is one whole line
+test.file_grep(solver_log, r'^# Open: \S+\n  ; sampler: default$')
+test.file_grep(solver_log, r'^  \(assert .* w #b0{19999}\)+$')
+test.file_grep(solver_log, r'^< \(\(w #b[01]{19999}\)\)$')
+# One whole command per bit of w
+test.file_grep_count(solver_log,
+                     r'^  \(assert \(= __Va\d+ \(= \(\(_ extract \d+ \d+\) w\) #b[01]\)\)\)$',
+                     19999)
+test.file_grep(solver_log, r'^  \(reset\)\n\Z')
 
 test.passes()
