@@ -63,4 +63,28 @@ module t;
     void'(by_int.first(unsigned_value));  // Bad: unsigned
     void'(by_int.first(four_state_value));  // Bad: 4-state
   end
+
+  initial begin
+    int mm[int];
+    int result;
+
+    // Ordering methods exclude associative arrays (IEEE 1800-2023 7.12.2).
+    // Rejected expression calls must not leave an untyped node.
+    result = mm.sort();
+    result = mm.rsort();
+    result = mm.reverse();
+    result = mm.shuffle();
+  end
+
+  initial begin
+    typedef int wildcard_t[*];
+    wildcard_t mm;
+    int result;
+
+    // Exercise typedef-wrapped wildcard expression calls.
+    result = mm.sort();
+    result = mm.rsort();
+    result = mm.reverse();
+    result = mm.shuffle();
+  end
 endmodule
