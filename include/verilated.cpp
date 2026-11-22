@@ -3301,7 +3301,7 @@ void VlAssertControl::control(uint32_t controlType) VL_MT_SAFE {
     case 9: m_flags &= ~FAIL; break;
     case 10: m_flags |= PASS_NONVACUOUS; break;
     case 11: m_flags &= ~PASS_VACUOUS; break;
-    default: break;  // Context validates the effect before applying it
+    default: VL_FATAL_MT(__FILE__, __LINE__, "", "Internal: Invalid assertion control type");
     }
 }
 
@@ -3380,7 +3380,7 @@ void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t typ
     case 11:  // VacuousOff
         m_s.m_assertPassOnVacuous &= ~lockedMask;
         break;
-    default: break;  // Validated before any state update
+    default: VL_FATAL_MT(__FILE__, __LINE__, "", "Internal: Invalid assertion control type");
     }
 }
 void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t types,
