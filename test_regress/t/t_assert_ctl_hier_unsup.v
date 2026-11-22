@@ -25,5 +25,8 @@ module t (
   initial begin
     $assertoff(0, u);
     $assertoff(0, u.checking.check_good);
+    $assertoff(0, t);
+    $assertoff(1, t);  // Does not reach the partition below this scope.
+    $assertoff(0);  // Global, including partitions sharing this context.
   end
 endmodule
