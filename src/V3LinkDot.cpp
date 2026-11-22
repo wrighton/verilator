@@ -8956,8 +8956,9 @@ void V3LinkDot::linkDotScope(AstNetlist* nodep) {
     linkDotGuts(nodep, LDS_SCOPED);
     // Every assertion control site of possibly another elaboration is now kept or removed
     if (s_assertCtlOptionalMade) {
-        UASSERT_OBJ(!nodep->exists([](const AstVarXRef* refp) { return refp->assertCtlOptional(); }),
-                    nodep, "Assertion control site left unresolved");
+        UASSERT_OBJ(
+            !nodep->exists([](const AstVarXRef* refp) { return refp->assertCtlOptional(); }),
+            nodep, "Assertion control site left unresolved");
     }
     V3Global::dumpCheckGlobalTree("linkdot", 0, dumpTreeEitherLevel() >= 3);
 }
