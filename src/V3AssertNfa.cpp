@@ -247,26 +247,26 @@ static AstNodeExpr* sampled(AstNodeExpr* exprp) {
     return new AstSampled{exprp->fileline(), exprp, exprp->dtypep(), true};
 }
 
-static const char* assertPassOnQuery(bool vacuous) {
-    static constexpr const char* queries[2]
-        = {"ASSERT_CTL_PASS_ON_NONVACUOUS", "ASSERT_CTL_PASS_ON_VACUOUS"};
-    return queries[vacuous];
+static VAssertCtlQuery assertPassOnQuery(bool vacuous) {
+    return vacuous ? VAssertCtlQuery::PASS_VACUOUS : VAssertCtlQuery::PASS_NONVACUOUS;
 }
 
 static AstNodeExpr* assertOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                  VAssertDirectiveType directiveType) {
     if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
-    return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_ON", type, directiveType, statep);
+    return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::ON, type, directiveType, statep);
 }
 
 static AstNodeExpr* assertKillGet(AstVar* statep, FileLine* flp, VAssertType type,
                                   VAssertDirectiveType directiveType) {
-    return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_KILL", type, directiveType, statep);
+    return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::KILL, type, directiveType,
+                                            statep);
 }
 
 static AstNodeExpr* assertPassOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                      VAssertDirectiveType directiveType, bool vacuous) {
-    if (!(static_cast<int>(directiveType) & 7)) return new AstConst{flp, AstConst::BitTrue{}};
+    if (!(static_cast<int>(directiveType) & VAssertDirectiveType::SV_MASK))
+        return new AstConst{flp, AstConst::BitTrue{}};
     if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
     return V3AssertCommon::newAssertCtlGetp(flp, assertPassOnQuery(vacuous), type, directiveType,
                                             statep);
@@ -274,9 +274,10 @@ static AstNodeExpr* assertPassOnCond(AstVar* statep, FileLine* flp, VAssertType 
 
 static AstNodeExpr* assertFailOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                      VAssertDirectiveType directiveType) {
-    if (!(static_cast<int>(directiveType) & 7)) return new AstConst{flp, AstConst::BitTrue{}};
+    if (!(static_cast<int>(directiveType) & VAssertDirectiveType::SV_MASK))
+        return new AstConst{flp, AstConst::BitTrue{}};
     if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
-    return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_FAIL_ON", type, directiveType,
+    return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::FAIL_ON, type, directiveType,
                                             statep);
 }
 

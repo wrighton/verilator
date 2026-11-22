@@ -2540,8 +2540,8 @@ class AstVar final : public AstNode {
     bool m_globalConstrained : 1;  // Global constraint per IEEE 1800-2023 18.5.8
     bool m_isStdRandomizeArg : 1;  // Argument variable created for std::randomize (__Varg*)
     bool m_processQueue : 1;  // Process queue variable
-    uint32_t m_assertCtlMask = 0;  // Type/directive bit of per-instance assertion control state
     bool m_mtaskCacheLineAlign : 1;  // Start MTask affinity group on a cache line
+    uint32_t m_assertCtlMask = 0;  // Type/directive bit of per-instance assertion control state
     void init() {
         m_libInoutEnable = false;
         m_ansi = false;

@@ -6,12 +6,14 @@
 # or the Perl Artistic License Version 2.0.
 # SPDX-FileCopyrightText: 2026 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+
 import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-test.compile(verilator_flags2=['--binary', '--assert'], threads=2 if test.vltmt else 1)
-
+test.compile(verilator_flags2=['--binary', '--assert', '--stats', '-fno-inline'],
+             threads=2 if test.vltmt else 1)
 test.execute()
+test.file_grep(test.stats, r'Assertions, Scoped state instances\s+(\d+)', 1)
 
 test.passes()

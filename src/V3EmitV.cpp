@@ -950,6 +950,48 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         emitNodesWithText(nodep->nodesp(), true, "");
         puts(");\n");
     }
+    void visit(AstAssertCtl* nodep) override {
+        AstAssertCtlArgs* const argsp = nodep->argsp();
+        const bool resolvedScope = argsp && argsp->scoped() && !argsp->itemsp();
+        putfs(nodep, resolvedScope ? "$_SCOPED_ASSERTCONTROL(" : "$assertcontrol(");
+        iterateConst(nodep->controlTypep());
+        if (nodep->assertTypesp() || nodep->directiveTypesp() || argsp) {
+            puts(", ");
+            iterateAndNextConstNull(nodep->assertTypesp());
+        }
+        if (nodep->directiveTypesp() || argsp) {
+            puts(", ");
+            iterateAndNextConstNull(nodep->directiveTypesp());
+        }
+        if (argsp) iterateConst(argsp);
+        puts(");\n");
+    }
+    void visit(AstAssertCtlArgs* nodep) override {
+        puts(", ");
+        iterateAndNextConstNull(nodep->levelp());
+        for (AstNodeExpr* const itemp : nodep->itemspList()) {
+            puts(", ");
+            iterateConst(itemp);
+        }
+    }
+    void visit(AstAssertCtlTarget* nodep) override {
+        putfs(nodep,
+              "/* assertion control target at depth " + std::to_string(nodep->depth()) + " */");
+    }
+    void visit(AstAssertCtlApply* nodep) override {
+        putfs(nodep, "$_ASSERT_CTL_APPLY(");
+        iterateConst(nodep->effectp());
+        puts(", ");
+        iterateConst(nodep->typesp());
+        puts(", " + std::to_string(nodep->directives()) + ", ");
+        iterateConst(nodep->limitp());
+        puts(");\n");
+    }
+    void visit(AstAssertCtlRead* nodep) override {
+        putfs(nodep, "$_ASSERT_CTL_READ(");
+        iterateConst(nodep->statep());
+        puts(", "s + assertCtlQueryName(nodep->query()) + ")");
+    }
     void visit(AstCExpr* nodep) override {
         putfs(nodep, "$_CEXPR(");
         emitNodesWithText(nodep->nodesp(), true, "");
