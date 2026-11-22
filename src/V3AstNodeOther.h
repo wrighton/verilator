@@ -784,6 +784,8 @@ class AstCell final : public AstNode {
     // @astgen op4 := intfRefsp : List[AstIntfRef] // List of interface references, for VPI
     //
     // @astgen ptr := m_modp : Optional[AstNodeModule]  // [AfterLink] Pointer to module instanced
+    // @astgen ptr := m_assertCtlIfaceOriginp : Optional[AstVar]  // Port of a wrapped top
+    // interface
     FileLine* m_modNameFileline;  // Where module the cell instances token was
     string m_name;  // Cell name
     string m_origName;  // Original name before dot addition
@@ -831,6 +833,8 @@ public:
     FileLine* modNameFileline() const { return m_modNameFileline; }
     AstNodeModule* modp() const { return m_modp; }  // [AfterLink] = Pointer to module instantiated
     void modp(AstNodeModule* nodep) { m_modp = nodep; }
+    AstVar* assertCtlIfaceOriginp() const { return m_assertCtlIfaceOriginp; }
+    void assertCtlIfaceOriginp(AstVar* varp) { m_assertCtlIfaceOriginp = varp; }
     int arrayIdx() const { return m_arrayIdx; }
     void arrayIdx(int idx) { m_arrayIdx = idx; }
     bool fromBind() const { return m_fromBind; }

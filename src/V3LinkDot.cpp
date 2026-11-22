@@ -117,6 +117,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     std::vector<AstNodeStmt*> m_boundSites;
     std::vector<AstAssertCtlArgs*> m_selectors;
     std::unordered_set<const AstAssertCtlArgs*> m_wholeModel;
+    // Interned structural occurrences, independent of lexical blocks and flattened names.
+    std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
     AstModule* m_standaloneTopp = nullptr;
 
     void addSite(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
@@ -191,6 +193,23 @@ public:
         iterate(rootp);
     }
     AstModule* standaloneTopp() const { return m_standaloneTopp; }
+    AstAssertCtlCaller* callerp(const VSymEnt* symp) {
+        if (!symp) return nullptr;
+        AstNode* const nodep = symp->nodep();
+        AstCell* const cellp = VN_CAST(nodep, Cell);
+        if (!cellp && !VN_IS(nodep, Module)) return callerp(symp->parentp());
+        auto found = m_callers.find(symp);
+        if (found != m_callers.end()) return found->second;
+        AstAssertCtlCaller* const parentp = callerp(symp->parentp());
+        AstNode* const anchorp = cellp && cellp->assertCtlIfaceOriginp()
+                                     ? static_cast<AstNode*>(cellp->assertCtlIfaceOriginp())
+                                     : nodep;
+        AstAssertCtlCaller* const resultp
+            = new AstAssertCtlCaller{nodep->fileline(), parentp, anchorp};
+        m_rootp->addMiscsp(resultp);
+        m_callers.emplace(symp, resultp);
+        return resultp;
+    }
     void markWholeModel(AstAssertCtlArgs* argsp) { m_wholeModel.emplace(argsp); }
     // Delay inserting declarations until LinkDot's current traversal has finished.
     void attach() {
@@ -1706,6 +1725,7 @@ class LinkDotFindVisitor final : public VNVisitor {
                                                   nullptr,
                                                   nullptr};
                                 ifacecellp->modp(ifacerefp->ifacep());
+                                ifacecellp->assertCtlIfaceOriginp(varp);
                                 m_curSymp = m_modSymp
                                     = m_statep->insertTopIface(ifacecellp, m_scope);
                                 iterate(ifacecellp);
@@ -8344,17 +8364,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
         AstNode* targetp = nullptr;
         string instancePath;
         string childPath;
+        std::vector<const VSymEnt*> callers{};  // Concrete callers reaching this route
     };
-    using AssertCtlReachKeys = std::unordered_map<const AstNode*, std::unordered_set<string>>;
+    using AssertCtlReachKeys
+        = std::unordered_map<const AstNode*, std::unordered_map<string, size_t>>;
     static void addAssertCtlReach(std::vector<AssertCtlReach>& reaches, AssertCtlReachKeys& seen,
-                                  AssertCtlReach reach) {
-        // A body may be reached through several paths. Preserve the order in which
-        // the distinct routes are first encountered, not the hash iteration order.
-        if (seen[assertControlTargetBody(reach.targetp)]
-                .emplace(reach.instancePath + '\0' + reach.childPath)
-                .second) {
-            reaches.push_back(std::move(reach));
-        }
+                                  AssertCtlReach reach, const VSymEnt* callerp) {
+        // Preserve first encounter order while recording which callers use each route.
+        const auto entry = seen[assertControlTargetBody(reach.targetp)].emplace(
+            reach.instancePath + '\0' + reach.childPath, reaches.size());
+        if (entry.second) reaches.push_back(std::move(reach));
+        reaches[entry.first->second].callers.push_back(callerp);
     }
     static void assertCtlBadReach(AstNodeExpr* itemp, const VSymEnt* callerp, const string& path) {
         itemp->v3error("Assertion control target is not a scope or assertion from '"
@@ -8403,13 +8423,45 @@ class LinkDotResolveVisitor final : public VNVisitor {
                  VString::dot(firstName, ".", childPath)};
         return true;
     }
+    static AstAssertCtlTargetSet*
+    flushAssertCtlTargets(AstAssertCtlArgs* argsp,
+                          std::unordered_map<string, AstAssertCtlTarget*>& targets) {
+        if (!argsp->targetsp()) return nullptr;
+        AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
+            argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
+        targets.clear();
+        argsp->addSetsp(setp);
+        return setp;
+    }
     void addAssertCtlTargets(const std::vector<AssertCtlReach>& reaches, AstAssertCtlArgs* argsp,
                              std::unordered_map<string, AstAssertCtlTarget*>& targets,
                              bool absolute = false) {
+        const bool sparse = reaches.size() > 1;
+        if (sparse) flushAssertCtlTargets(argsp, targets);
         for (const AssertCtlReach& reach : reaches) {
-            AssertControlTargetVisitor{m_statep->assertCtlSites(), reach.targetp,   argsp,
-                                       reach.instancePath,         reach.childPath, targets,
-                                       reaches.size() > 1,         absolute};
+            AssertControlTargetVisitor{m_statep->assertCtlSites(),
+                                       reach.targetp,
+                                       argsp,
+                                       reach.instancePath,
+                                       reach.childPath,
+                                       targets,
+                                       sparse,
+                                       absolute};
+            if (!sparse) continue;
+            AstAssertCtlTargetSet* setp = flushAssertCtlTargets(argsp, targets);
+            if (!setp) {
+                // An empty route still identifies its callers for concrete scoping.
+                setp = new AstAssertCtlTargetSet{argsp->fileline(), nullptr};
+                argsp->addSetsp(setp);
+            }
+            std::unordered_set<const AstAssertCtlCaller*> seen;
+            for (const VSymEnt* const symp : reach.callers) {
+                AstAssertCtlCaller* const callerp = m_statep->assertCtlSites().callerp(symp);
+                UASSERT_OBJ(callerp, argsp, "No concrete caller for assertion selector");
+                if (seen.emplace(callerp).second) {
+                    setp->addCallersp(new AstAssertCtlCallerRef{argsp->fileline(), callerp});
+                }
+            }
         }
     }
     // Upward names can reach different elaborated bodies. The scoped pass binds
@@ -8423,8 +8475,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         AssertCtlReachKeys seen;
         for (VSymEnt* const callerp : instanceSyms) {
             AssertCtlReach reach;
-            if (!assertControlPlainReach(itemp, callerp, path, firstName, false, reach)) return;
-            addAssertCtlReach(reaches, seen, std::move(reach));
+            if (!assertControlPlainReach(itemp, assertControlCallerScope(callerp), path, firstName,
+                                         false, reach)) {
+                return;
+            }
+            addAssertCtlReach(reaches, seen, std::move(reach), callerp);
         }
         addAssertCtlTargets(reaches, argsp, targets);
     }
@@ -8629,19 +8684,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
         AssertCtlReachKeys seen;
         for (size_t idx = 0; idx < scopes.size(); ++idx) {
             const AssertCtlPortCrossing& crossing = crossings[idx];
-            if (!crossing.components) {
-                AssertCtlReach reach;
-                if (!assertControlPlainReach(itemp, scopes[idx], path, names.front(), absolute,
-                                             reach))
-                    return true;
-                addAssertCtlReach(reaches, seen, std::move(reach));
-                continue;
-            }
+            const VSymEnt* const callerp = callerSyms.empty() ? m_modSymp : callerSyms[idx];
             AssertCtlReach reach;
-            if (!assertControlPortReach(itemp, scopes[idx], path, names, crossing, reach)) {
+            if (!crossing.components) {
+                if (!assertControlPlainReach(itemp, scopes[idx], path, names.front(), absolute,
+                                             reach)) {
+                    return true;
+                }
+            } else if (!assertControlPortReach(itemp, scopes[idx], path, names, crossing, reach)) {
                 return true;
             }
-            addAssertCtlReach(reaches, seen, std::move(reach));
+            addAssertCtlReach(reaches, seen, std::move(reach), callerp);
         }
         addAssertCtlTargets(reaches, argsp, targets, absolute);
         return true;
@@ -8845,6 +8898,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         for (AstNodeExpr* const itemp : nodep->itemspList()) {
             resolveAssertCtlItem(itemp, nodep, targets);
         }
+        if (nodep->setsp()) flushAssertCtlTargets(nodep, targets);
         if (nodep->itemsp()) {
             AstNode* itemsp = nodep->itemsp()->unlinkFrBackWithNext();
             VL_DO_DANGLING(pushDeletep(itemsp), itemsp);

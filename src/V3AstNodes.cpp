@@ -633,6 +633,8 @@ static const AstNode* instanceStateRefp(const AstNode* nodep,
             // An assertion control scope resolves like a hierarchical reference, before
             // linkDotParamed resolves it; linkDotPrimary found which depend on the instance
             found = argsp->instanceDependent();
+        } else if (const AstAssertCtlApply* const applyp = VN_CAST(refp, AssertCtlApply)) {
+            found = applyp->planp() != nullptr;
         } else if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
             // A hierarchical reference is relative to the instance, unless absolute
             found = !xrefp->assertCtlAbsolute();
@@ -1223,6 +1225,7 @@ void AstCell::dump(std::ostream& str) const {
     if (pathBind()) str << " bindTarget=" << bindModName() << ":" << bindPath();
     if (recursive()) str << " [RECURSIVE]";
     if (arrayIdx() >= 0) str << " [ARRAYIDX=" << arrayIdx() << "]";
+    if (assertCtlIfaceOriginp()) str << " assertCtlOrigin=" << cvtToHex(assertCtlIfaceOriginp());
     if (modp()) {
         str << " -> ";
         modp()->dump(str);
