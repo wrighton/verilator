@@ -29,10 +29,13 @@ module t;
   mid a ();
   mid b ();
   leaf neg[-1:-2] ();
+  function automatic int selected_index();
+    return -1;
+  endfunction
   initial begin
     // An omitted levels argument selects every level below the scope (IEEE 1800-2023 20.11)
     $assertcontrol(4, 15, 7,, t.a);
-    $assertoff(0, neg[-1].check);
+    $assertoff(0, neg[selected_index()].check);
     #2;
     `checkd(a.l.failures, 0);
     `checkd(b.l.failures, 1);
