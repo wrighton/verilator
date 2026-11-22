@@ -4328,7 +4328,11 @@ public:
         if (bit.isFourState()) {
             out.setAllBitsX();
         } else {
-            out.opSel(from, bit.toUInt() + widthConst() - 1, bit.toUInt());
+            // A position beyond 32 bits selects no bit
+            constexpr uint32_t maxPos = std::numeric_limits<uint32_t>::max();
+            const uint32_t lsb = bit.fitsInUInt() ? bit.toUInt() : maxPos;
+            const uint64_t msb = uint64_t{lsb} + widthConst() - 1;
+            out.opSel(from, static_cast<uint32_t>(std::min<uint64_t>(msb, maxPos)), lsb);
         }
         out.opCleanTwoStateNumber(dtypep());
     }
@@ -4355,6 +4359,11 @@ public:
     int lsbConst() const { return VN_AS(lsbp(), Const)->toSInt(); }
     // Wider than int, as a position may be near the integer limit
     int64_t msbConst() const { return static_cast<int64_t>(lsbConst()) + widthConst() - 1; }
+    // Whether the constant lsbp() selects a bit below zero or above 'maxBit'
+    bool lsbConstOutOfRange(int maxBit) const;
+    // Constant lsbp() plus 'offset', divided by 'scale', as text, negative only for a negative
+    // signed lsbp()
+    string lsbConstStr(int offset, int scale = 1) const;
     VNumRange& declRange() VL_MT_STABLE { return m_declRange; }
     const VNumRange& declRange() const VL_MT_STABLE { return m_declRange; }
     void declRange(const VNumRange& flag) { m_declRange = flag; }
