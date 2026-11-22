@@ -114,9 +114,31 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     int m_number = 0;
     std::unordered_map<const AstNodeStmt*, Site> m_sites;
     std::vector<std::pair<AstNodeModule*, AstVar*>> m_declarations;
+    std::vector<AstNodeStmt*> m_boundSites;
+    std::vector<AstAssertCtlArgs*> m_selectors;
+    std::unordered_set<const AstAssertCtlArgs*> m_wholeModel;
+    AstModule* m_standaloneTopp = nullptr;
 
     void addSite(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
-        if (type != VAssertType::INTERNAL) m_sites.emplace(nodep, Site{m_modp, type, directive});
+        if (type == VAssertType::INTERNAL) return;
+        m_sites.emplace(nodep, Site{m_modp, type, directive});
+        if (VN_IS(m_modp, Package) || VN_IS(m_modp, Class)) m_standaloneTopp = nullptr;
+    }
+    void visit(AstAssertCtl* nodep) override {
+        if (AstAssertCtlArgs* const argsp = nodep->argsp()) m_selectors.push_back(argsp);
+        iterateChildren(nodep);
+    }
+    void visit(AstNodeFTask* nodep) override {
+        if (nodep->dpiImport() || nodep->dpiExport()) m_standaloneTopp = nullptr;
+        iterateChildren(nodep);
+    }
+    void visit(AstCStmtUser* nodep) override {
+        m_standaloneTopp = nullptr;
+        iterateChildren(nodep);
+    }
+    void visit(AstCExprUser* nodep) override {
+        m_standaloneTopp = nullptr;
+        iterateChildren(nodep);
     }
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
@@ -151,10 +173,37 @@ class LinkDotAssertCtlSites final : public VNVisitor {
 public:
     explicit LinkDotAssertCtlSites(AstNetlist* rootp)
         : m_rootp{rootp} {
+        // A library model can share its context with other models, whose state
+        // an explicit top-level selector must not change.
+        if (v3Global.opt.main() && v3Global.opt.cppFiles().empty() && !v3Global.opt.vpi()
+            && !v3Global.opt.systemC() && !v3Global.opt.hierarchical()
+            && !v3Global.opt.hierChild() && v3Global.opt.libCreate().empty()) {
+            for (AstNodeModule* const modp : rootp->modulespList()) {
+                if (!modp->isTop() || !VN_IS(modp, Module)) continue;
+                if (m_standaloneTopp) {
+                    m_standaloneTopp = nullptr;
+                    break;
+                }
+                m_standaloneTopp = VN_AS(modp, Module);
+            }
+        }
         iterate(rootp);
     }
+    AstModule* standaloneTopp() const { return m_standaloneTopp; }
+    void markWholeModel(AstAssertCtlArgs* argsp) { m_wholeModel.emplace(argsp); }
     // Delay inserting declarations until LinkDot's current traversal has finished.
     void attach() {
+        // Competing scoped selectors may give sites different control histories.
+        // Only use the context path when every selector selects the whole model.
+        if (m_standaloneTopp && !m_selectors.empty() && m_wholeModel.size() == m_selectors.size()) {
+            VNDeleter deleter;
+            for (AstAssertCtlArgs* const argsp : m_selectors) {
+                VL_DO_DANGLING(deleter.pushDeletep(argsp->unlinkFrBack()), argsp);
+            }
+            for (AstNodeStmt* const sitep : m_boundSites) sitep->controlVarp(nullptr);
+            for (const auto& declaration : m_declarations) deleter.pushDeletep(declaration.second);
+            m_declarations.clear();
+        }
         for (const auto& declaration : m_declarations) {
             declaration.first->addStmtsp(declaration.second);
         }
@@ -182,6 +231,7 @@ public:
         varp->assertCtlMask(static_cast<uint32_t>(site.directive)
                             << (VAssertDirectiveType::MASK_WIDTH * typeBit));
         m_declarations.emplace_back(site.ownerp, varp);
+        m_boundSites.push_back(nodep);
         nodep->controlVarp(varp);
         return varp;
     }
@@ -8730,6 +8780,26 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Scope names must not resolve as ordinary value expressions. Resolve them after
         // parameter and generate expansion, but before assertion lowering removes labels.
         if (!m_statep->forParamed()) return;
+        // Confirm the top name from this lexical scope; a nearer declaration can shadow it.
+        if (AstModule* const topp = m_statep->assertCtlSites().standaloneTopp()) {
+            AstNodeExpr* const itemp = nodep->itemsp();
+            const AstConst* const levelp = VN_CAST(nodep->levelp(), Const);
+            if (nodep->scoped() && itemp && !itemp->nextp()
+                && (!nodep->levelp()
+                    || (levelp && !levelp->num().isOpaque() && levelp->num().isEqZero()))) {
+                const string path = assertControlPath(itemp);
+                if (path == "$root." + topp->origName()
+                    || (m_modp == topp && path == topp->origName())) {
+                    string baddot;
+                    VSymEnt* okp = nullptr;
+                    const VSymEnt* const foundp = m_statep->findDotted(
+                        itemp->fileline(), m_curSymp, path, baddot, okp, true);
+                    if (foundp && foundp->nodep() == topp) {
+                        m_statep->assertCtlSites().markWholeModel(nodep);
+                    }
+                }
+            }
+        }
         std::unordered_map<string, AstAssertCtlTarget*> targets;
         if (!nodep->scoped()) {
             for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
