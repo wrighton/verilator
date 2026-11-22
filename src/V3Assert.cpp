@@ -383,6 +383,10 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         applyp->replaceWith(tables.newCallp(applyp, rebind));
         VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
     }
+    UASSERT_OBJ(!rootp->exists([](const AstNode* nodep) {
+        return VN_IS(nodep, AssertCtlApply) || VN_IS(nodep, AssertCtlRead);
+    }),
+                rootp, "Assertion control binding left unresolved operations");
     if (v3Global.opt.stats()) {
         V3Stats::addStatSum("Assertions, Scoped selected sites", selected.size());
         V3Stats::addStatSum("Assertions, Scoped state instances", representatives.size());
