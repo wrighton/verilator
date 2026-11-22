@@ -185,6 +185,7 @@ class AstAssertCtlArgs final : public AstNode {
     // @astgen op2 := itemsp : List[AstNodeExpr]
     // @astgen op3 := targetsp : List[AstAssertCtlTarget]
     // @astgen op4 := setsp : List[AstAssertCtlTargetSet]  // Ordered route buckets
+    // @astgen ptr := m_sharedp : Optional[AstAssertCtlTargetSet]  // Shared whole-model targets
     const bool m_scoped;  // Explicit scope list, including a resolved empty selection
     bool m_instanceDependent = true;  // A scope name resolves from the holding instance
 public:
@@ -198,9 +199,12 @@ public:
     bool scoped() const { return m_scoped; }
     bool instanceDependent() const { return m_instanceDependent; }
     void instanceDependent(bool flag) { m_instanceDependent = flag; }
+    AstAssertCtlTargetSet* sharedp() const { return m_sharedp; }
+    void sharedp(AstAssertCtlTargetSet* setp) { m_sharedp = setp; }
     bool sameNode(const AstNode* samep) const override {
         const AstAssertCtlArgs* const asamep = VN_DBG_AS(samep, AssertCtlArgs);
-        return scoped() == asamep->scoped() && instanceDependent() == asamep->instanceDependent();
+        return scoped() == asamep->scoped() && instanceDependent() == asamep->instanceDependent()
+               && sharedp() == asamep->sharedp();
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;

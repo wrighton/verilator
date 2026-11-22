@@ -61,7 +61,8 @@ module t;
     #2;
     `checkd(a.failures, 0);
     `checkd(b.failures, 1);
-    // $root.t names the top module, including every instance below it
+    // Equivalent whole-model calls share targets even with a narrower selector elsewhere.
+    $assertoff(0, $root.t);
     $assertoff(0, $root.t);
     #2;
     top_check :
