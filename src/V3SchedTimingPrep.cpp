@@ -45,7 +45,7 @@ namespace V3Sched {
 
 class ResumeProcessBuilder final {
     // NODE STATE
-    //  AstSenTree::user1()  -> bool.  Set true if the sentree has been visited.
+    //  AstVarScope::user1()  -> bool.  Set true if the scheduler has been visited.
     const VNUser1InUse m_inuser1;
 
     // STATE
@@ -75,9 +75,12 @@ class ResumeProcessBuilder final {
             UASSERT_OBJ(!m_postUpdatesp, awaitp, "Multiple dynamic trigger schedulers");
             m_postUpdatesp = postp->makeStmt();
         }
-        // Put it in a process
-        AstAlways* const procp
-            = new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, resumep->makeStmt()};
+        // Reactive twins have their own resumption process.
+        AstNodeProcedure* const procp
+            = awaitp->reactive()
+                  ? static_cast<AstNodeProcedure*>(
+                        new AstAlwaysReactive{flp, nullptr, resumep->makeStmt()})
+                  : new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, resumep->makeStmt()};
         m_procList.add({m_scopeTopp, sentreep, procp, {}});
     }
 
@@ -85,8 +88,11 @@ class ResumeProcessBuilder final {
     explicit ResumeProcessBuilder(AstNetlist* netlistp)
         : m_scopeTopp{netlistp->topScopep()->scopep()} {
         netlistp->foreach([&](AstCAwait* awaitp) {
-            AstSenTree* const sentreep = awaitp->sentreep();
-            if (sentreep && !sentreep->user1SetOnce()) createResumeProcess(awaitp);
+            if (!awaitp->sentreep()) return;
+            AstCMethodHard* const methodp = VN_AS(awaitp->exprp(), CMethodHard);
+            if (!VN_AS(methodp->fromp(), VarRef)->varScopep()->user1SetOnce()) {
+                createResumeProcess(awaitp);
+            }
         });
     }
 

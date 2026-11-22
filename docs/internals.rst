@@ -557,10 +557,23 @@ runs, and which on the high level has the form:
 
 The remaining regions ('inact', 'obs' and 'react') nest around these in the
 same manner, each iterating the loops of all regions that precede it in the
-SystemVerilog scheduling order. The runtime event loop calls every region
-unconditionally, so scheduling emits an entry point for each one even when
-the design has no logic in it. Such an entry point immediately returns
-false, ending its loop after a single iteration.
+SystemVerilog scheduling order. The exception is the 'react' region, which
+iterates until it has no more work before the other regions run again, like
+the reactive region set (IEEE 1800-2023 4.5). Each 'react' iteration first
+resumes the processes continuing in the Reactive region: those woken
+outside the reactive region set, and those triggered while waiting in it.
+Only an iteration with no such work, nor 'react' region logic to run,
+resumes instead those that waited for #0, as for the Re-Inactive region. It
+then runs the 'react' region logic, and computes the triggers of what it
+changed. Those of 'react' region logic trigger its next iteration, and all
+of them are kept for the next 'act' iteration. Only an iteration without
+other work arms the commit of the Re-NBAs, the NBAs executed in the
+reactive region set, which the next iteration runs. A process started by
+'react' region logic, such as a concurrent assertion action, continues in
+the reactive region set when resumed (see V3Timing). The runtime event loop
+calls every region unconditionally, so scheduling emits an entry point for
+each one even when the design has no logic in it. Such an entry point
+immediately returns false, ending its loop after a single iteration.
 
 Timing
 ------

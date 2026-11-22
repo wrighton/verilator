@@ -830,6 +830,8 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     AstNetlist* const m_netlistp;
     // Trigger kit - for accessing trigger vectors and mapping senItems to thier indexes
     const TriggerKit& m_trigKit;
+    // Timing kit - for the schedulers of the reactive region set
+    const TimingKit& m_timingKit;
     // Expression builder - for building expressions from SenItems
     SenExprBuilder& m_senExprBuilder;
     // Generator of unique names for before-trigger function
@@ -841,6 +843,10 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     std::unordered_map<size_t, std::vector<AstNodeExpr*>> m_trigIdxToScheds;
     // Map from trigger index to the function readying its schedulers, if it has several
     std::unordered_map<size_t, AstCFunc*> m_trigIdxToReadyFunc;
+    // Other schedulers awaiting one of these, e.g. that of the reactive region set (see V3Timing)
+    std::vector<BeforeTrig> m_otherSchedulers;
+    // The schedulers awaiting each SenTree
+    std::unordered_map<const AstSenTree*, std::unordered_set<const AstVarScope*>> m_schedulerps;
     // Map containing vectors of SenItems that share the same prevValue variable
     std::unordered_map<VNRef<AstNode>, std::vector<const AstSenItem*>> m_senExprToSenItem;
 
@@ -891,9 +897,8 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     }
 
     // Returns statements calling ready() on each of 'schedps', with event description 'descVscp'
-    static AstNodeStmt* newReadyCalls(FileLine* const flp,
-                                      const std::vector<AstNodeExpr*>& schedps,
-                                      AstVarScope* const descVscp) {
+    AstNodeStmt* newReadyCalls(FileLine* const flp, const std::vector<AstNodeExpr*>& schedps,
+                               AstVarScope* const descVscp) const {
         AstNodeStmt* stmtsp = nullptr;
         for (AstNodeExpr* const schedp : schedps) {
             AstCMethodHard* const callp
@@ -901,6 +906,16 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
             callp->dtypeSetVoid();
             callp->addPinsp(new AstVarRef{flp, descVscp, VAccess::READ});
             stmtsp = AstNode::addNext(stmtsp, callp->makeStmt());
+            // The reactive region set resumes these schedulers (see V3Sched).
+            const AstVarScope* const vscp = VN_AS(schedp, VarRef)->varScopep();
+            if (m_timingKit.m_reactSchedps.count(vscp)) {
+                AstCMethodHard* const emptyp
+                    = new AstCMethodHard{flp, schedp->cloneTree(false), VCMethod::SCHED_EMPTY};
+                emptyp->dtypeSetBit();
+                stmtsp = AstNode::addNext(stmtsp,
+                                          new AstIf{flp, new AstLogNot{flp, emptyp},
+                                                    util::setVar(m_timingKit.m_reactReadyp, 1)});
+            }
         }
         return stmtsp;
     }
@@ -931,7 +946,11 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     // 'schedp'. Constructs such a function if it doesn't exist yet
     AstCCall* getBeforeTriggerStmt(AstSenTree* const senTreep, AstNodeExpr* const schedp) {
         FileLine* const flp = senTreep->fileline();
-        if (!senTreep->user1p()) {
+        const bool newSched
+            = m_schedulerps[senTreep].insert(VN_AS(schedp, VarRef)->varScopep()).second;
+        if (newSched && senTreep->user1p()) {
+            m_otherSchedulers.push_back({senTreep, schedp, nullptr});
+        } else if (!senTreep->user1p()) {
             AstCFunc* const funcp = util::makeSubFunction(
                 m_netlistp, m_beforeTriggerFuncUniqueName.get(senTreep), false);
             senTreep->user1p(funcp);
@@ -961,9 +980,9 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
     void visit(AstCAwait* const nodep) override {
         if (nodep->user1SetOnce()) return;
 
-        // Check whether it is a CAwait for a VCMethod::SCHED_TRIGGER
+        // Check whether it is a CAwait for a VCMethod::SCHED_TRIGGER, waiting for its trigger
         if (const AstCMethodHard* const cMethodHardp = VN_CAST(nodep->exprp(), CMethodHard)) {
-            if (cMethodHardp->method() == VCMethod::SCHED_TRIGGER) {
+            if (cMethodHardp->method() == VCMethod::SCHED_TRIGGER && nodep->sentreep()) {
                 AstCCall* const beforeTrigp
                     = getBeforeTriggerStmt(nodep->sentreep(), cMethodHardp->fromp());
 
@@ -984,16 +1003,18 @@ class AwaitBeforeTrigVisitor final : public VNVisitor {
 
 public:
     AwaitBeforeTrigVisitor(AstNetlist* netlistp, SenExprBuilder& senExprBuilder,
-                           const TriggerKit& trigKit)
+                           const TriggerKit& trigKit, const TimingKit& timingKit)
         : m_netlistp{netlistp}
         , m_trigKit{trigKit}
+        , m_timingKit{timingKit}
         , m_senExprBuilder{senExprBuilder}
         , m_beforeTriggerFuncUniqueName{"__VbeforeTrig"} {
         iterate(netlistp);
 
         fillSenExprToSenItem();
-        // Index schedulers by trigger, so each function looks up only the triggers it uses
-        for (const BeforeTrig& beforeTrig : m_beforeTrigs) {
+        // Index normal and reactive schedulers by trigger without generating another
+        // before-trigger function for the same SenTree.
+        const auto indexScheduler = [this](const BeforeTrig& beforeTrig) {
             for (const AstSenItem* const senItemp : beforeTrig.m_senTreep->sensespList()) {
                 std::vector<AstNodeExpr*>& schedps
                     = m_trigIdxToScheds[m_trigKit.senItem2TrigIdx(senItemp)];
@@ -1001,7 +1022,9 @@ public:
                             "There is a SenTree with two SenItems indicating to the same bit");
                 schedps.push_back(beforeTrig.m_schedp);
             }
-        }
+        };
+        for (const BeforeTrig& beforeTrig : m_beforeTrigs) indexScheduler(beforeTrig);
+        for (const BeforeTrig& beforeTrig : m_otherSchedulers) indexScheduler(beforeTrig);
 
         // Trigger expressions of each word a function computes, ordered by word index. Only words
         // that hold a used trigger are computed, so the cost does not grow with trigger indices.
@@ -1107,8 +1130,8 @@ public:
 };
 
 void beforeTrigVisitor(AstNetlist* netlistp, SenExprBuilder& senExprBuilder,
-                       const TriggerKit& trigKit) {
-    AwaitBeforeTrigVisitor{netlistp, senExprBuilder, trigKit};
+                       const TriggerKit& trigKit, const TimingKit& timingKit) {
+    AwaitBeforeTrigVisitor{netlistp, senExprBuilder, trigKit, timingKit};
 }
 
 }  // namespace V3Sched
