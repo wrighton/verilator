@@ -1,6 +1,10 @@
-%Error: t/t_assert_ctl_scope_select_bad.v:15:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:18:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   15 |     $assertoff(0, g[i]);
+   18 |     $assertoff(0, g[i]);
       |                    ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_ctl_scope_select_bad.v:19:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   19 |     $assertoff(0, scalar[0]);
+      |                         ^
 %Error: Exiting due to
