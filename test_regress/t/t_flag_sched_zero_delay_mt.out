@@ -1,0 +1,7 @@
+-Info: t/t_flag_sched_zero_delay_mt.v:24:5: Supporting static #0 delays moves logic out of the 'nba' region, where '--threads' can run it in parallel, into the single-threaded 'act' region.
+                                          : ... If no #0 delay is executed at runtime,
+                                          : ... use '--no-sched-zero-delay' for improved performance.
+                                          : ... If a real #0 is expected at runtime,
+                                          : ... use '--sched-zero-delay' to suppress this message.
+   24 |     #0 x = 1'b1;
+      |     ^
