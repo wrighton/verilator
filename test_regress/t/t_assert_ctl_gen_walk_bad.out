@@ -2,7 +2,7 @@
                                             : ... note: In instance 't.missing_case.p.m'
   109 |   initial $assertoff(0, gb.inner);
       |                           ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=5.055 for more assistance.
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_assert_ctl_gen_walk_bad.v:85:27: Assertion control target is not a scope or assertion from 't.pkg_case.q.m': 'gb.inner' (IEEE 1800-2023 20.11).
                                            : ... note: In instance 't.pkg_case.p.m'
    85 |   initial $assertoff(0, gb.inner);
@@ -19,4 +19,4 @@
                                            : ... note: In instance 't.import_case.p.m'
    14 |   initial $assertoff(0, pk);
       |                         ^~
-%Error: Exiting due to 5 error(s)
+%Error: Exiting due to
