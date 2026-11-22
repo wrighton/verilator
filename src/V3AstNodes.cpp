@@ -812,6 +812,7 @@ void AstAssertCtlArgs::dump(std::ostream& str) const {
     Super::dump(str);
     if (scoped()) str << " [SCOPED]";
     if (instanceDependent()) str << " [INSTDEP]";
+    if (sharedp()) str << " [SHARED]";
 }
 void AstAssertCtlArgs::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, scoped);

@@ -293,7 +293,12 @@ class ScopeVisitor final : public VNVisitor {
         // Capture the live operations before changing their tree ownership.
         std::vector<AstAssertCtlApply*> applies;
         rootp->foreach([&](AstAssertCtlApply* applyp) { applies.push_back(applyp); });
+        std::unordered_set<AstAssertCtlTargetSet*> sourceSets;
         for (AstAssertCtlApply* const applyp : applies) {
+            if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
+                if (sourceSets.emplace(setp).second) sets.push_back(setp);
+                continue;
+            }
             AstAssertCtlPlan* const planp = applyp->planp();
             if (planp && m_assertCtlPlans[planp].sourceUses++) continue;
             if (!planp && !applyp->targetsp()) continue;
