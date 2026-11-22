@@ -249,9 +249,9 @@ static void warnAssertControlHierarchy(AstNode* locationp, const AstCell* cellp,
 // Assertion selection is done before V3Begin removes lexical scopes. The emitted
 // references use normal VarXRef/VarScope identity, never runtime path matching.
 class AssertControlTargetVisitor final : public VNVisitor {
-    LinkDotAssertCtlSites& m_sites;
-    AstAssertCtlArgs* const m_argsp;
-    std::unordered_map<string, AstAssertCtlTarget*>& m_targets;
+    LinkDotAssertCtlSites& m_sites;  // Indexed assertion declarations
+    AstAssertCtlArgs* const m_argsp;  // Selector receiving the resolved targets
+    std::unordered_map<string, AstAssertCtlTarget*>& m_targets;  // Targets by concrete name
     string m_instancePath;  // Current module-instance path
     string m_childPath;  // Path including lexical/generate scopes for child traversal
     int m_depth = 0;  // Module-instance depth relative to the selected scope
@@ -510,7 +510,7 @@ private:
     std::set<const AstVar*> m_ownDefparamVars;  // Set by a defparam in their scope
     std::vector<AstCell*> m_topIfaceCellps;  // Dummy cells of top level interfaces
     const VLinkDotStep m_step;  // Operational step
-    std::unique_ptr<LinkDotAssertCtlSites> m_assertCtlSitesp;
+    std::unique_ptr<LinkDotAssertCtlSites> m_assertCtlSitesp;  // Parameter-elaborated sites
 
 public:
     // METHODS
@@ -8661,7 +8661,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (!constp || constp->num().isFourState()) {
                 if (nonconstantp) *nonconstantp = true;
             } else if (!base.empty()) {
-                path = base + "__BRA__" + cvtToStr(constp->toSInt()) + "__KET__";
+                path = base + "__BRA__" + AstNode::encodeNumber(constp->toSInt()) + "__KET__";
             }
             VL_DO_DANGLING(pushDeletep(indexp), indexp);
             return path;
@@ -8771,7 +8771,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 && (firstSymp != m_modSymp || firstName == m_modp->origName());
         if (firstLocal && assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
             && assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
-            // Within the calling instance
+            // Preserve an explicit module qualifier: a closer lexical scope may also
+            // contain an instance with the relative name.
+            if (firstSymp == m_modSymp) {
+                instancePath = VString::dot(firstName, ".", instancePath);
+                childPath = VString::dot(firstName, ".", childPath);
+            }
         } else if (!firstLocal && firstSymp
                    && (VN_IS(firstSymp->nodep(), Cell) || upwardScopeInstance(firstSymp)
                        || assertControlFirstVaries(itemp->fileline(), firstName, firstSymp))) {
