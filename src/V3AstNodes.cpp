@@ -829,9 +829,11 @@ void AstAssertCtlRead::dumpJson(std::ostream& str) const {
 void AstAssertCtlTarget::dump(std::ostream& str) const {
     Super::dump(str);
     str << " depth=" << depth();
+    if (moduleRelative()) str << " [MODULE_RELATIVE]";
 }
 void AstAssertCtlTarget::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, depth);
+    dumpJsonBoolFuncIf(str, moduleRelative);
     dumpJsonGen(str);
 }
 void AstAssignW::dump(std::ostream& str) const {
