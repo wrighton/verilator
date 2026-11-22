@@ -192,11 +192,12 @@ struct AssertCtlSignatureHash final {
 
 // Each identical concrete selection shares one cache and one cold pointer binder.
 class AssertCtlTableBindings final {
-    AstNetlist* const m_rootp;
-    AstScope* const m_topScopep;
-    V3SharedTmps m_tables{"__VassertCtlTable", VVarType::MODULETEMP};
-    AstCDType* m_tableDtp = nullptr;
-    size_t m_entries = 0;
+    AstNetlist* const m_rootp;  // Netlist owning the generated table type
+    AstScope* const m_topScopep;  // Model scope storing all concrete table caches
+    V3SharedTmps m_tables{"__VassertCtlTable", VVarType::MODULETEMP};  // Cache variables
+    AstCDType* m_tableDtp = nullptr;  // Created with the first nonempty selection
+    size_t m_entries = 0;  // Number of concrete targets in the unique tables
+    // Concrete target sequence to its shared cache and binder.
     std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> m_bound;
 
 public:
@@ -3493,9 +3494,12 @@ class AssertVisitor final : public VNVisitor {
         AstNodeExpr* levelExprp
             = argsp->levelp() ? argsp->levelp()->unlinkFrBack() : new AstConst{flp, 0};
         if (levelExprp->width() < 32) {
-            levelExprp = levelExprp->isSigned()
-                             ? static_cast<AstNodeExpr*>(new AstExtendS{flp, levelExprp, 32})
-                             : static_cast<AstNodeExpr*>(new AstExtend{flp, levelExprp, 32});
+            if (levelExprp->isSigned()) {
+                levelExprp = new AstExtendS{flp, levelExprp, 32};
+                levelExprp->dtypeSetBitSized(32, VSigning::SIGNED);
+            } else {
+                levelExprp = new AstExtend{flp, levelExprp, 32};
+            }
         }
         AstVar* const levelp = newControlArgp(levelExprp, beginp);
         AstAssertCtlApply* const applyp = new AstAssertCtlApply{
