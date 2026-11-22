@@ -9,17 +9,41 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__, `__LINE__, (gotv), (expv)); `stop; end while (0);
 // verilog_format: on
 
+`ifdef VIA_PORT
+interface bank_leaf (input bit clk, input bit good, output int reports);
+`else
 module bank_leaf (input bit clk, input bit good, output int reports);
+`endif
   always @(posedge clk) begin
     bank_check : assert (good) else reports++;
   end
+`ifdef VIA_PORT
+endinterface
+`else
 endmodule
+`endif
 
-module caller (input bit clk, input bit good, input bit off, output int reports);
+`ifdef VIA_PORT
+interface bank_group (input bit clk, input bit good, output wire [31:0] reports [4]);
+  for (genvar i = 0; i < 4; ++i) begin : slots
+    bank_leaf u (.clk, .good, .reports(reports[i]));
+  end
+endinterface
+`endif
+
+module caller (input bit clk, input bit good, input bit off, output int reports
+`ifdef VIA_PORT
+               , bank_group port_bank
+`endif
+);
   always @(posedge clk) begin
     local_check : assert (good) else reports++;
   end
+`ifdef VIA_PORT
+  always @(posedge off) $assertoff(0, port_bank, local_check);
+`else
   always @(posedge off) $assertoff(0, $root.t.bank, local_check);
+`endif
 endmodule
 
 module t;
@@ -28,13 +52,21 @@ module t;
   bit [3:0] off;
   wire [31:0] local_reports [4];
   wire [31:0] bank_reports [4];
+`ifdef VIA_PORT
+  bank_group bank (.clk, .good, .reports(bank_reports));
+`else
   if (1) begin : bank
     for (genvar i = 0; i < 4; ++i) begin : slots
       bank_leaf u (.clk, .good, .reports(bank_reports[i]));
     end
   end
+`endif
   for (genvar i = 0; i < 4; ++i) begin : callers
-    caller u (.clk, .good, .off(off[i]), .reports(local_reports[i]));
+    caller u (.clk, .good, .off(off[i]), .reports(local_reports[i])
+`ifdef VIA_PORT
+              , .port_bank(bank)
+`endif
+    );
   end
   initial begin
     #1 off = 4'b0001;
