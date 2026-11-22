@@ -176,15 +176,16 @@ public:
         // A library model can share its context with other models, whose state
         // an explicit top-level selector must not change.
         if (v3Global.opt.main() && v3Global.opt.cppFiles().empty() && !v3Global.opt.vpi()
-            && !v3Global.opt.systemC() && !v3Global.opt.hierarchical()
-            && !v3Global.opt.hierChild() && v3Global.opt.libCreate().empty()) {
+            && !v3Global.opt.systemC() && !v3Global.opt.hierarchical() && !v3Global.opt.hierChild()
+            && v3Global.opt.libCreate().empty()) {
             for (AstNodeModule* const modp : rootp->modulespList()) {
-                if (!modp->isTop() || !VN_IS(modp, Module)) continue;
-                if (m_standaloneTopp) {
+                if (!modp->isTop()) continue;
+                AstModule* const modulep = VN_CAST(modp, Module);
+                if (m_standaloneTopp || !modulep) {
                     m_standaloneTopp = nullptr;
                     break;
                 }
-                m_standaloneTopp = VN_AS(modp, Module);
+                m_standaloneTopp = modulep;
             }
         }
         iterate(rootp);
