@@ -177,8 +177,8 @@ bool AstVar::sameNode(const AstNode* samep) const {
     return m_name == asamep->m_name && varType() == asamep->varType()
            && covergroupRefMember() == asamep->covergroupRefMember()
            && resolveWrittenInput() == asamep->resolveWrittenInput()
-           && assertCtlMask() == asamep->assertCtlMask()
-           && libInoutId() == asamep->libInoutId() && libInoutEnable() == asamep->libInoutEnable();
+           && assertCtlMask() == asamep->assertCtlMask() && libInoutId() == asamep->libInoutId()
+           && libInoutEnable() == asamep->libInoutEnable();
 }
 
 AstMatchMasked::AstMatchMasked(FileLine* fl, AstNodeExpr* lhsp, AstVarRef* matchp)
