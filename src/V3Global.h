@@ -113,6 +113,8 @@ class V3Global final {
     bool m_usesTiming = false;  // Design uses timing constructs
     bool m_usesForce = false;  // Design uses force/release statements
     bool m_usesZeroDelay = false;  // Design uses #0 delay (or non-constant delay)
+    // A static #0 delay, if one decided to support #0 delays without an option saying to
+    FileLine* m_zeroDelayFlp = nullptr;
     bool m_hasForceableSignals = false;  // Need to apply V3Force pass
     bool m_hasAssignDeassign = false;  // Need to apply V3Force pass for assign/deassign statements
     bool m_useParallelBuild = false;  // Use parallel build for model
@@ -202,6 +204,8 @@ public:
     void setUsesTiming() { m_usesTiming = true; }
     bool usesZeroDelay() const { return m_usesZeroDelay; }
     void setUsesZeroDelay() { m_usesZeroDelay = true; }
+    FileLine* zeroDelayFlp() const { return m_zeroDelayFlp; }
+    void zeroDelayFlp(FileLine* flp) { m_zeroDelayFlp = flp; }
     bool hasForceableSignals() const { return m_hasForceableSignals; }
     void setHasForceableSignals() { m_hasForceableSignals = true; }
     bool hasAssignDeassign() const { return m_hasAssignDeassign; }
