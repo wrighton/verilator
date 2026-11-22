@@ -2096,6 +2096,12 @@ Summary:
    ``#0`` delays, but they are known to be not executed at runtime. This can
    improve simulation performance.
 
+   Supporting ``#0`` delays moves logic that :vlopt:`--threads` can
+   otherwise run in parallel into the single-threaded part of the model. If
+   neither option is given, :vlopt:`--threads` is greater than one, and a
+   ``#0`` delay in the input moves logic this way, Verilator prints an
+   informational message naming one such ``#0`` delay.
+
 .. option:: --skip-identical
 
 .. option:: --no-skip-identical

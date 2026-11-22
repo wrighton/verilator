@@ -1702,6 +1702,7 @@ class TimingControlVisitor final : public VNVisitor {
             if (valuep->isZero()) {
                 // Statically known #0 delay exists, schedule for #0 support
                 v3Global.setUsesZeroDelay();
+                if (!v3Global.zeroDelayFlp()) v3Global.zeroDelayFlp(flp);
                 m_hasStaticZeroDelay = true;
                 // Don't warn on variable delays, as no point
                 m_unknownDelayFlps.clear();
