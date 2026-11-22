@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <vector>
 
 static void require(bool condition, const char* message) {
     if (!condition) {
@@ -34,12 +35,19 @@ int main(int argc, char** argv) {
     {
         VlAssertControl state;
         state.configure(contextp.get(), 8);  // Simple immediate assert
-        for (uint32_t effect : {3U, 6U, 8U}) contextp->assertCtl(effect, 2, 1, state);
+        VlAssertCtlTable table;
+        unsigned bindings = 0;
+        const auto bind = [&](std::vector<VlAssertCtlTable::Target>& targets) {
+            ++bindings;
+            targets.push_back({&state, 0});
+        };
+        for (uint32_t effect : {3U, 6U, 8U}) contextp->assertCtlTable(effect, 2, 1, 1, table, bind);
         require(observe(state) == std::array<uint32_t, 5>{{1, 0, 1, 1, 1}},
                 "On/PassOn/FailOn state failed");
-        for (uint32_t effect : {11U, 5U}) contextp->assertCtl(effect, 2, 1, state);
+        for (uint32_t effect : {11U, 5U}) contextp->assertCtlTable(effect, 2, 1, 1, table, bind);
         require(observe(state) == std::array<uint32_t, 5>{{0, 1, 0, 1, 1}},
                 "VacuousOff/Kill state failed");
+        require(bindings == 1, "Assertion control table was not cached");
     }
     topp->final();
     std::puts("*-* All Finished *-*");
