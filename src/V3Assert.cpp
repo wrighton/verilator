@@ -1665,12 +1665,11 @@ class AssertVisitor final : public VNVisitor {
         return varpr;
     }
     // The Kill count of the current assertion
-    AstNodeExpr* newKillCountp(FileLine* flp) const {
-        return new AstCExpr{flp, AstCExpr::Pure{},
-                            V3AssertCommon::assertCtlGetCall(
-                                "ASSERT_CTL_KILL", m_assertp->userType(), m_assertp->directive()),
-                            32};
+    static AstNodeExpr* newKillCountp(FileLine* flp, const AstNodeCoverOrAssert* assertp) {
+        return V3AssertCommon::newAssertCtlGetp(flp, "ASSERT_CTL_KILL", assertp->userType(),
+                                                assertp->directive(), assertp->controlVarp());
     }
+    AstNodeExpr* newKillCountp(FileLine* flp) const { return newKillCountp(flp, m_assertp); }
     // A Kill aborts an executing attempt (IEEE 1800-2023 20.11): after each wait of the attempt
     // of 'nodep' (marked by user3), end it if killed since its start, so it evaluates nothing
     // further.
