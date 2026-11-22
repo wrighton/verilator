@@ -2494,10 +2494,10 @@ class AssertVisitor final : public VNVisitor {
         if (mature) {
             bodysp = newMatureInstance(nodep, bodysp, procClockp);
             procClockp = nullptr;
-        } else if (!seqEvent && !(nodep->controlVarp() && nodep->nfaLowered())) {
-            // Add assertOn check last, for better combining
+        } else if (!seqEvent && !nodep->nfaLowered()) {
+            // NFA entry is already gated. Off does not suppress an in-flight outcome.
             bodysp = newIfAssertOn(nodep->controlVarp(), bodysp, nodep->directive(),
-                                     nodep->userType());
+                                   nodep->userType());
         }
         if (procClockp) VL_DO_DANGLING(pushDeletep(procClockp), procClockp);
         bodysp->foreach([](AstNodeVarRef* nodep) {
