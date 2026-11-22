@@ -317,6 +317,12 @@ inline VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VlAssertContro
     return os;
 }
 
+// Cached target pointers belong to the constructed model, not to the saved state.
+inline VerilatedSerialize& operator<<(VerilatedSerialize& os, const VlAssertCtlTable&) {
+    return os;
+}
+inline VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VlAssertCtlTable&) { return os; }
+
 VerilatedSerialize& operator<<(VerilatedSerialize& os, VerilatedContext* rhsp);
 VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VerilatedContext* rhsp);
 

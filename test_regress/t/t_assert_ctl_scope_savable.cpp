@@ -41,7 +41,11 @@ int main(int argc, char** argv) {
 
     VlAssertControl sourceState;
     sourceState.configure(sourcep.get(), 8);
-    for (uint32_t effect : {6U, 11U, 9U, 5U, 1U}) sourcep->assertCtl(effect, 2, 1, sourceState);
+    VlAssertCtlTable table;
+    const auto bind
+        = [&](std::vector<VlAssertCtlTable::Target>& targets) { targets = {{&sourceState, 0}}; };
+    for (uint32_t effect : {6U, 11U, 9U, 5U, 1U})
+        sourcep->assertCtlTable(effect, 2, 1, 1, table, bind);
     const auto expected = queries(sourceState);
     require(expected == std::array<uint32_t, 5>{{0, 1, 0, 1, 0}},
             "Source action/Kill state failed");
@@ -64,11 +68,9 @@ int main(int argc, char** argv) {
     input >> destination >> destinationState;
     input.close();
     require(queries(destinationState) == expected, "Restored flags/actions/Kill differ");
-    destinationp->assertCtl(3, 2, 1, destinationState);
+    destinationp->assertCtl(3, 2, 1);
     require(!destinationState.get(VerilatedAssertCtlQuery::ASSERT_CTL_ON),
             "Restored Lock was lost");
-
-    destinationp->assertCtl(3, 2, 1);
     pulse(destination);
     require(destination.afails == 0 && destination.bfails == 2,
             "Restored model OFF/Lock/failure state failed");

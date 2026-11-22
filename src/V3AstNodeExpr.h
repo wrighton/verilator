@@ -747,6 +747,32 @@ public:
     bool cleanOut() const override { return true; }
     AstCFunc* funcp() const { return m_funcp; }
 };
+class AstAssertCtlRead final : public AstNodeExpr {
+    // A control query whose per-instance binding is decided after scoped linking.
+    // @astgen op1 := globalp : AstNodeExpr
+    // @astgen op2 := statep : AstVarRef
+    const VAssertCtlQuery m_query;  // Runtime query enumerator
+
+public:
+    AstAssertCtlRead(FileLine* fl, AstNodeExpr* globalp, AstVarRef* statep, VAssertCtlQuery query)
+        : ASTGEN_SUPER_AssertCtlRead(fl)
+        , m_query{query} {
+        dtypeFrom(globalp);
+        this->globalp(globalp);
+        this->statep(statep);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlRead;
+    VAssertCtlQuery query() const { return m_query; }
+    bool sameNode(const AstNode* samep) const override {
+        return query() == VN_DBG_AS(samep, AssertCtlRead)->query();
+    }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { return true; }
+    bool isPure() override { return true; }
+};
 class AstAttrOf final : public AstNodeExpr {
     // Return a value of a attribute, for example a LSB or array LSB of a signal
     // @astgen op1 := fromp : Optional[AstNode<AstNodeExpr|AstNodeDType>]
