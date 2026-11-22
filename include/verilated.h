@@ -233,7 +233,6 @@ class VerilatedMutex;
 /// Registration is construction-time only; the context must outlive the model.
 class VlAssertControl final {
     friend class VerilatedContext;
-    friend class VerilatedContextImp;
     friend VerilatedSerialize& operator<<(VerilatedSerialize&, const VlAssertControl&);
     friend VerilatedDeserialize& operator>>(VerilatedDeserialize&, VlAssertControl&);
     static constexpr uint32_t ON = 1;
@@ -241,11 +240,15 @@ class VlAssertControl final {
     static constexpr uint32_t PASS_NONVACUOUS = 4;
     static constexpr uint32_t FAIL = 8;
     static constexpr uint32_t LOCK = 16;
+    static constexpr uint32_t KILL = 32;
+    static constexpr uint32_t BOOL_FLAGS = ON | PASS_VACUOUS | PASS_NONVACUOUS | FAIL | LOCK;
+    static constexpr uint32_t OWN_SHIFT = 8;  // One ownership bit per field, including Kill
     VerilatedContext* m_contextp = nullptr;  // Owning context; null before registration
     uint32_t m_mask = 0;  // One known assertion-type/directive bit
-    std::atomic<uint32_t> m_flags{0};  // On, action, and lock state
+    std::atomic<uint32_t> m_flags{0};  // Boolean values and per-field ownership
     std::atomic<uint32_t> m_kill{0};  // Generation aborting this assertion's active attempts
-    void control(uint32_t controlType, VerilatedMutex& mutex) VL_REQUIRES(mutex);
+    void control(uint32_t controlType, bool contextApplies, VerilatedMutex& mutex)
+        VL_REQUIRES(mutex);
     VL_UNCOPYABLE(VlAssertControl);
 
 public:
@@ -642,8 +645,11 @@ protected:
     } m_s;
 
     friend class VlAssertControl;
+    friend VerilatedDeserialize& operator>>(VerilatedDeserialize&, VerilatedContext*);
     mutable VerilatedMutex m_assertCtlMutex;  // Protect assertion control registration and updates
     std::unordered_set<VlAssertControl*> m_assertControls VL_GUARDED_BY(m_assertCtlMutex);
+    void assertCtlRefresh(VlAssertControl& state) VL_REQUIRES(m_assertCtlMutex);
+    void assertOnForce(bool flag) VL_MT_SAFE_EXCLUDES(m_assertCtlMutex);
     void assertCtlApplyTable(uint32_t effect, VerilatedAssertType_t types,
                              VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
                              const VlAssertCtlTable& table) VL_REQUIRES(m_assertCtlMutex);
