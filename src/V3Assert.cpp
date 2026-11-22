@@ -144,8 +144,8 @@ AstNodeExpr* V3AssertCommon::newAssertCtlGetp(FileLine* flp, VAssertCtlQuery que
                                               VAssertType type, VAssertDirectiveType directiveType,
                                               AstVar* statep) {
     const int width = query == VAssertCtlQuery::KILL ? 32 : 1;
-    AstCExpr* const globalp = new AstCExpr{
-        flp, AstCExpr::Pure{}, assertCtlGetCall(query, type, directiveType), width};
+    AstCExpr* const globalp
+        = new AstCExpr{flp, AstCExpr::Pure{}, assertCtlGetCall(query, type, directiveType), width};
     if (!statep) return globalp;
     v3Global.setHasAssertCtlReads();
     return new AstAssertCtlRead{flp, globalp, new AstVarRef{flp, statep, VAccess::READ}, query};
