@@ -1668,6 +1668,41 @@ class AssertVisitor final : public VNVisitor {
     AstNodeStmt* addObservedReportMaturity(FileLine* flp, AstVar* pendingp, AstVar* readyp,
                                           DeferredReportQueues& queues) {
         AstNodeDType* const u32p = pendingp->dtypep();
+        if (!queues.maturep) {
+            // With no arguments to move, a count and its generation describe all pending
+            // reports. Start a new batch on Kill, even if the process has not yielded yet.
+            AstVar* const epochp = newModuleTemp(flp, m_obsNames.get("KillEpoch"), u32p, m_modp);
+            epochp->setIgnoreSchedWrite();
+            AstVar* const enqueuedp
+                = newModuleTemp(flp, m_obsNames.get("EnqueuedEpoch"), u32p, m_modp);
+            enqueuedp->setIgnoreSchedWrite();
+            const auto newChangedp = [&](AstNodeExpr* generationp) {
+                return new AstNeq{flp, new AstVarRef{flp, epochp, VAccess::READ}, generationp};
+            };
+            const auto newClearp = [&]() {
+                return new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
+                                     new AstConst{flp, 0}};
+            };
+            AstNodeStmt* const batchp
+                = new AstAssign{flp, new AstVarRef{flp, enqueuedp, VAccess::WRITE},
+                                newKillCountp(flp, queues.assertp)};
+            AstIf* const newBatchp = new AstIf{
+                flp, newChangedp(new AstVarRef{flp, enqueuedp, VAccess::READ}), newClearp()};
+            newBatchp->addThensp(new AstAssign{flp, new AstVarRef{flp, epochp, VAccess::WRITE},
+                                               new AstVarRef{flp, enqueuedp, VAccess::READ}});
+            batchp->addNext(newBatchp);
+            AstNodeStmt* const maturep = new AstIf{
+                flp, newChangedp(newKillCountp(flp, queues.assertp)), nullptr,
+                new AstAssign{flp, new AstVarRef{flp, readyp, VAccess::WRITE},
+                              new AstAdd{flp, new AstVarRef{flp, readyp, VAccess::READ},
+                                         new AstVarRef{flp, pendingp, VAccess::READ}}}};
+            maturep->addNext(newClearp());
+            AstSenTree* const senp = new AstSenTree{
+                flp, new AstSenItem{flp, VEdgeType::ET_EVENT,
+                                    new AstVarRef{flp, m_obsEventp, VAccess::READ}}};
+            m_modp->addStmtsp(new AstAlwaysObserved{flp, senp, maturep});
+            return batchp;
+        }
         AstVar* const killQp
             = newModuleTemp(flp, m_obsNames.get("KillQueue"), newQueueDTypep(flp, u32p), m_modp);
         killQp->setIgnoreSchedWrite();
