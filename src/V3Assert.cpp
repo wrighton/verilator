@@ -1370,18 +1370,20 @@ class AssertVisitor final : public VNVisitor {
         newp->user2(true);  // Mark as an assertOn() check
         return newp;
     }
-    static AstNodeStmt* newIfAssertPassOn(AstVar* statep, AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
-                                          VAssertType type, bool vacuous) {
+    static AstNodeStmt* newIfAssertPassOn(AstVar* statep, AstNodeStmt* bodyp,
+                                          VAssertDirectiveType directiveType, VAssertType type,
+                                          bool vacuous) {
         // Add an internal if to check assertion passOn is enabled.
         // Don't make this an AND term, as it's unlikely to need to test this.
-        return newIfControl(assertPassOnCond(statep, bodyp->fileline(), type, directiveType, vacuous),
-                            bodyp);
+        return newIfControl(
+            assertPassOnCond(statep, bodyp->fileline(), type, directiveType, vacuous), bodyp);
     }
-    static AstNodeStmt* newIfAssertFailOn(AstVar* statep, AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
-                                          VAssertType type) {
+    static AstNodeStmt* newIfAssertFailOn(AstVar* statep, AstNodeStmt* bodyp,
+                                          VAssertDirectiveType directiveType, VAssertType type) {
         // Add an internal if to check assertion failOn is enabled.
         // Don't make this an AND term, as it's unlikely to need to test this.
-        return newIfControl(assertFailOnCond(statep, bodyp->fileline(), type, directiveType), bodyp);
+        return newIfControl(assertFailOnCond(statep, bodyp->fileline(), type, directiveType),
+                            bodyp);
     }
 
     static AstIf* assertCond(const AstNodeCoverOrAssert* nodep, AstNodeExpr* propp,
@@ -1676,8 +1678,9 @@ class AssertVisitor final : public VNVisitor {
         const auto newInc = [&](AstVar* varp, bool add) {
             AstNodeExpr* const rhsp = new AstVarRef{flp, varp, VAccess::READ};
             AstConst* const onep = new AstConst{flp, 1};
-            AstNodeExpr* const valuep = add ? static_cast<AstNodeExpr*>(new AstAdd{flp, rhsp, onep})
-                                           : new AstSub{flp, rhsp, onep};
+            AstNodeExpr* const valuep
+                = add ? static_cast<AstNodeExpr*>(new AstAdd{flp, rhsp, onep})
+                      : new AstSub{flp, rhsp, onep};
             return new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, valuep};
         };
         AstLoop* const loopp = new AstLoop{flp};
@@ -1685,8 +1688,8 @@ class AssertVisitor final : public VNVisitor {
         loopp->addStmtsp(newInc(pendingp, false));
         AstNodeExpr* const keep = new AstEq{flp, newQueuePop(flp, killQp, u32p),
                                            newKillCountp(flp, queues.assertp)};
-        loopp->addStmtsp(new AstIf{flp, keep, AstNode::addNext(queues.maturep, newInc(readyp, true)),
-                                   queues.discardp});
+        loopp->addStmtsp(new AstIf{
+            flp, keep, AstNode::addNext(queues.maturep, newInc(readyp, true)), queues.discardp});
         AstSenTree* const senp = new AstSenTree{
             flp, new AstSenItem{flp, VEdgeType::ET_EVENT,
                                new AstVarRef{flp, m_obsEventp, VAccess::READ}}};
@@ -1795,10 +1798,10 @@ class AssertVisitor final : public VNVisitor {
         // and retires them
         const VAssertDirectiveType directive = m_assertp->directive();
         const VAssertType type = m_assertp->userType();
-        AstVar* const passStartp
-            = getPExprStartVarp("pass0", assertPassOnCond(m_assertp->controlVarp(), flp, type, directive, false));
-        AstVar* const failStartp
-            = getPExprStartVarp("fail", assertFailOnCond(m_assertp->controlVarp(), flp, type, directive));
+        AstVar* const passStartp = getPExprStartVarp(
+            "pass0", assertPassOnCond(m_assertp->controlVarp(), flp, type, directive, false));
+        AstVar* const failStartp = getPExprStartVarp(
+            "fail", assertFailOnCond(m_assertp->controlVarp(), flp, type, directive));
         const auto newCountp = [&](bool inc) {
             AstNodeStmt* stmtsp = nullptr;
             for (AstVar* const countp : {m_strongPassOnp, m_strongFailOnp}) {
@@ -2945,11 +2948,12 @@ class AssertVisitor final : public VNVisitor {
             // The end-of-simulation check runs in a final block, and the attempts of a sequence
             // event control are not assertion attempts, so both keep the controls applying now
             if (nodep->pass()) {
-                stmtsp = newIfAssertPassOn(m_assertp->controlVarp(), stmtsp, m_assertp->directive(),
-                                           m_assertp->userType(), nodep->vacuous());
+                stmtsp
+                    = newIfAssertPassOn(m_assertp->controlVarp(), stmtsp, m_assertp->directive(),
+                                        m_assertp->userType(), nodep->vacuous());
             } else {
-                stmtsp = newIfAssertFailOn(m_assertp->controlVarp(), stmtsp, m_assertp->directive(),
-                                           m_assertp->userType());
+                stmtsp = newIfAssertFailOn(m_assertp->controlVarp(), stmtsp,
+                                           m_assertp->directive(), m_assertp->userType());
             }
         } else if (stmtsp) {
             // The controls apply to attempts starting after them; one already executing is not
@@ -2965,15 +2969,18 @@ class AssertVisitor final : public VNVisitor {
                     pushDeletep(ifp->condp()->unlinkFrBack());
                     ifp->condp(new AstVarRef{
                         flp,
-                        getPExprStartVarp("pass0", assertPassOnCond(m_assertp->controlVarp(), flp, type, directive, false)),
+                        getPExprStartVarp("pass0", assertPassOnCond(m_assertp->controlVarp(), flp,
+                                                                    type, directive, false)),
                         VAccess::READ});
                 }
             }
             AstVar* const enablep
                 = nodep->pass()
                       ? getPExprStartVarp(nodep->vacuous() ? "pass1" : "pass0",
-                                          assertPassOnCond(m_assertp->controlVarp(), flp, type, directive, nodep->vacuous()))
-                      : getPExprStartVarp("fail", assertFailOnCond(m_assertp->controlVarp(), flp, type, directive));
+                                          assertPassOnCond(m_assertp->controlVarp(), flp, type,
+                                                           directive, nodep->vacuous()))
+                      : getPExprStartVarp("fail", assertFailOnCond(m_assertp->controlVarp(), flp,
+                                                                   type, directive));
             AstVar* const killp = getPExprStartVarp("kill", newKillCountp(flp));
             stmtsp = newQueuedAction(flp, stmtsp);
             stmtsp = newIfControl(new AstVarRef{flp, enablep, VAccess::READ}, stmtsp);
