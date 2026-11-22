@@ -2060,8 +2060,8 @@ class TimingControlVisitor final : public VNVisitor {
             = new AstVarRef{flp, m_netlistp->stlFirstIterationp(), VAccess::READ};
         AstNodeExpr* const schedCondp
             = new AstLogOr{flp,
-                           new AstNeq{flp, preAssignp->rhsp()->cloneTree(false),
-                                      new AstVarRef{flp, tmpVarp, VAccess::READ}},
+                           SenExprBuilder::newChangedp(flp, preAssignp->rhsp()->cloneTree(false),
+                                                       new AstVarRef{flp, tmpVarp, VAccess::READ}),
                            new AstLogAnd{flp, didNotInitp, firstIterp}};
         alwaysp->addStmtsp(new AstIf{flp, schedCondp, forkp->unlinkFrBack()});
     }
