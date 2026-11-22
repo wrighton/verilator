@@ -343,6 +343,7 @@ void V3LinkLevel::wrapTopCell(AstNetlist* rootp) {
                                                               nullptr,
                                                               nullptr};
                             ifacecellp->modp(ifacerefp->ifacep());
+                            ifacecellp->assertCtlIfaceOriginp(oldvarp);
                             newmodp->addStmtsp(ifacecellp);
 
                             AstIfaceRefDType* const idtypep = new AstIfaceRefDType{

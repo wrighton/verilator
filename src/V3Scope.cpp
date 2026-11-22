@@ -81,7 +81,53 @@ class ScopeVisitor final : public VNVisitor {
     // Initial procedures of program instances, with the program instance's scope
     std::vector<std::pair<AstInitial*, const AstScope*>> m_programInitials;
 
+    using AssertCtlRoutes = std::vector<std::pair<size_t, AstAssertCtlTargetSet*>>;
+    struct AssertCtlPlanIndex final {
+        AssertCtlRoutes common;  // Routes used by every caller
+        std::unordered_map<const AstAssertCtlCaller*, AssertCtlRoutes> byCaller;
+    };
+    // Lookup of the structural child occurrence by (parent occurrence, declaration).
+    std::unordered_map<const AstAssertCtlCaller*,
+                       std::unordered_map<const AstNode*, AstAssertCtlCaller*>>
+        m_assertCtlCallers;
+    std::unordered_map<const AstAssertCtlPlan*, AssertCtlPlanIndex>
+        m_assertCtlPlans;  // Applicable routes in source order
+    const AstAssertCtlCaller* m_assertCtlCallerp = nullptr;  // Current concrete occurrence
+
     // METHODS
+
+    void indexAssertionPlans(AstNetlist* rootp) {
+        for (AstNode* const miscp : rootp->miscspList()) {
+            if (AstAssertCtlCaller* const callerp = VN_CAST(miscp, AssertCtlCaller)) {
+                m_assertCtlCallers[callerp->parentp()].emplace(callerp->anchorp(), callerp);
+            } else if (AstAssertCtlPlan* const planp = VN_CAST(miscp, AssertCtlPlan)) {
+                AssertCtlPlanIndex& index = m_assertCtlPlans[planp];
+                size_t ordinal = 0;
+                for (AstAssertCtlTargetSet* const setp : planp->setspList()) {
+                    if (!setp->callersp()) index.common.emplace_back(ordinal, setp);
+                    for (const AstAssertCtlCallerRef* const refp : setp->callerspList()) {
+                        index.byCaller[refp->callerp()].emplace_back(ordinal, setp);
+                    }
+                    ++ordinal;
+                }
+            }
+        }
+    }
+    AstAssertCtlCaller* assertCtlChildp(const AstCell* cellp, const AstScope* parentp) const {
+        if (!cellp) return nullptr;
+        const auto children = m_assertCtlCallers.find(m_assertCtlCallerp);
+        if (children == m_assertCtlCallers.end()) return nullptr;
+        const AstNode* anchorp = cellp;
+        if (parentp->isTop()) {
+            if (cellp->assertCtlIfaceOriginp()) {
+                anchorp = cellp->assertCtlIfaceOriginp();
+            } else {
+                anchorp = cellp->modp();
+            }
+        }
+        const auto found = children->second.find(anchorp);
+        return found == children->second.end() ? nullptr : found->second;
+    }
 
     // Count module instantiations, visiting cells the same way the traversal below does
     static void countInstantiations(AstNodeModule* modp) {
@@ -242,6 +288,7 @@ class ScopeVisitor final : public VNVisitor {
             nodep->v3error("No top level module found");
             return;
         }
+        if (v3Global.hasAssertCtlReads()) indexAssertionPlans(nodep);
         const std::vector<AstAssertCtlTargetSet*> sharedTargets = shareAbsoluteTargets(nodep);
         // Operate starting at the top of the hierarchy
         m_aboveCellp = nullptr;
@@ -265,6 +312,8 @@ class ScopeVisitor final : public VNVisitor {
     }
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_vpiBlocksp);
+        VL_RESTORER(m_assertCtlCallerp);
+        m_assertCtlCallerp = assertCtlChildp(m_aboveCellp, m_aboveScopep);
         // Create required blocks and add to module
         string scopename;
         if (!m_aboveScopep) {
@@ -304,6 +353,8 @@ class ScopeVisitor final : public VNVisitor {
                 AstNodeModule* const modp = cellp->modp();
                 UASSERT_OBJ(modp, cellp, "Unlinked mod");
                 iterate(modp);  // Recursive call to visit(AstNodeModule)
+                // The top interface's structural identity is no longer needed.
+                if (cellp->assertCtlIfaceOriginp()) cellp->assertCtlIfaceOriginp(nullptr);
                 // Remember newly created scope
                 cellp->user2p(m_scopep);
             }
@@ -340,7 +391,8 @@ class ScopeVisitor final : public VNVisitor {
             // interface, as a virtual interface may refer to any instance
             if (const AstNode* const refp = nodep->instanceStateRefp()) {
                 const AstNodeVarRef* const varrefp = VN_CAST(refp, NodeVarRef);
-                if (varrefp && varrefp->varp() && varrefp->varp()->assertCtlMask()) {
+                if (VN_IS(refp, AssertCtlApply)
+                    || (varrefp && varrefp->varp() && varrefp->varp()->assertCtlMask())) {
                     refp->v3warn(E_UNSUPPORTED,
                                  "Unsupported: Instance-dependent assertion control in a class of "
                                      << m_modp->verilogKwd() << " " << m_modp->prettyNameQ()
@@ -391,6 +443,27 @@ class ScopeVisitor final : public VNVisitor {
     }
     void visit(AstActive* nodep) override {  // LCOV_EXCL_LINE
         nodep->v3fatalSrc("Actives now made after scoping");
+    }
+    void visit(AstAssertCtlApply* nodep) override {
+        if (const AstAssertCtlPlan* const planp = nodep->planp()) {
+            UASSERT_OBJ(m_assertCtlCallerp, nodep, "Assertion selector lost its caller scope");
+            const AssertCtlPlanIndex& index = m_assertCtlPlans.at(planp);
+            const auto found = index.byCaller.find(m_assertCtlCallerp);
+            const AssertCtlRoutes empty;
+            const AssertCtlRoutes& local = found == index.byCaller.end() ? empty : found->second;
+            auto a = index.common.begin();
+            auto b = local.begin();
+            while (a != index.common.end() || b != local.end()) {
+                const bool common
+                    = b == local.end() || (a != index.common.end() && a->first < b->first);
+                const AstAssertCtlTargetSet* const setp = common ? (a++)->second : (b++)->second;
+                if (AstAssertCtlTarget* const targetsp = setp->targetsp()) {
+                    nodep->addTargetsp(targetsp->cloneTree(true));
+                }
+            }
+            nodep->planp(nullptr);
+        }
+        iterateChildren(nodep);
     }
     void visit(AstNodeProcedure* nodep) override {
         // Add to list of blocks under this scope
@@ -564,6 +637,8 @@ class ScopeCleanupVisitor final : public VNVisitor {
         }
     }
 
+    void visit(AstAssertCtlCaller*) override {}  // Structural selector identity
+    void visit(AstAssertCtlPlan*) override {}  // Prototype targets are not scoped code
     void visit(AstNodeProcedure* nodep) override { movedDeleteOrIterate(nodep); }
     void visit(AstAlias* nodep) override { movedDeleteOrIterate(nodep); }
     void visit(AstAliasScope* nodep) override { movedDeleteOrIterate(nodep); }
@@ -618,6 +693,14 @@ void V3Scope::scopeAll(AstNetlist* nodep) {
         const ScopeVisitor visitor{nodep};
         ScopeCleanupVisitor{nodep};
     }  // Destruct before checking
+    if (v3Global.hasAssertCtlReads()) {
+        VNDeleter metadata;
+        for (AstNode* const miscp : nodep->miscspList()) {
+            if (VN_IS(miscp, AssertCtlCaller) || VN_IS(miscp, AssertCtlPlan)) {
+                VL_DO_DANGLING(metadata.pushDeletep(miscp->unlinkFrBack()), miscp);
+            }
+        }
+    }
     V3ConstPool::setScoped();
     V3Global::dumpCheckGlobalTree("scope", 0, dumpTreeEitherLevel() >= 3);
 }

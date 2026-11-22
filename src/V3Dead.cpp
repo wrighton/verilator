@@ -389,10 +389,15 @@ class DeadVisitor final : public VNVisitor {
             m_scopesp.push_back(nodep);
         }
     }
+    void visit(AstAssertCtlCaller* nodep) override {
+        // Caller identity is needed until concrete scopes consume the selection plan.
+        nodep->anchorp()->user1Inc();
+    }
     void visit(AstCell* nodep) override {
         iterateChildren(nodep);
         checkAll(nodep);
         m_cellsp.push_back(nodep);
+        if (AstVar* const originp = nodep->assertCtlIfaceOriginp()) originp->user1Inc();
         nodep->modp()->user1Inc();
     }
 
