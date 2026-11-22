@@ -423,12 +423,15 @@ VDTypeNameScopes::VDTypeNameScopes(AstNetlist* nodep)
     s_currentp = this;
 }
 VDTypeNameScopes::~VDTypeNameScopes() { s_currentp = m_prevp; }
+// Whether 'nodep' is a declaration a SearchCache keeps
+static bool dtypeNameCachedDecl(const AstNode* nodep) {
+    return VN_IS(nodep, NodeModule) || VN_IS(nodep, GenBlock) || VN_IS(nodep, Typedef);
+}
 AstNode* VDTypeNameScopes::declaringScopep(const AstNode* nodep, SearchCache* cachep) {
     AstNode* scopep = nullptr;
     if (s_currentp && s_currentp->outerp(nodep, scopep)) return scopep;
     // As AstNode::aboveLoopp(), searching back over the earlier statements in each list, but
     // stopping at a declaration a cached search passed
-    std::vector<const AstNode*> passedps;
     while (true) {
         if (cachep) {
             const auto it = cachep->m_outerps.find(nodep);
@@ -436,9 +439,7 @@ AstNode* VDTypeNameScopes::declaringScopep(const AstNode* nodep, SearchCache* ca
                 scopep = it->second;
                 break;
             }
-            if (VN_IS(nodep, NodeModule) || VN_IS(nodep, GenBlock) || VN_IS(nodep, Typedef)) {
-                passedps.push_back(nodep);
-            }
+            if (dtypeNameCachedDecl(nodep)) cachep->m_passedps.push_back(nodep);
         }
         AstNode* const backp = nodep->backp();
         if (!backp) break;  // At the top
@@ -448,8 +449,19 @@ AstNode* VDTypeNameScopes::declaringScopep(const AstNode* nodep, SearchCache* ca
         }
         nodep = backp;
     }
-    for (const AstNode* const passedp : passedps) cachep->m_outerps.emplace(passedp, scopep);
+    if (cachep) {
+        for (const AstNode* const passedp : cachep->m_passedps) {
+            cachep->m_outerps.emplace(passedp, scopep);
+        }
+        cachep->m_passedps.clear();
+    }
     return scopep;
+}
+void VDTypeNameScopes::SearchCache::forget(const AstNode* nodep) {
+    if (m_outerps.empty()) return;
+    nodep->foreach([this](const AstNode* subp) {
+        if (dtypeNameCachedDecl(subp)) m_outerps.erase(subp);
+    });
 }
 void VDTypeNameScopes::index(AstNode* nodesp, AstNode* scopep) {
     for (AstNode* const nodep : VNList<AstNode>{nodesp}) {
@@ -2013,12 +2025,17 @@ const char* AstDisable::broken() const {
 }
 void AstDisable::dump(std::ostream& str) const {
     Super::dump(str);
+    if (!targetPath().empty()) str << " " << targetPath();
     str << " -> ";
     if (targetp()) {
         targetp()->dump(str);
     } else {
         str << "UNLINKED";
     }
+}
+void AstDisable::dumpJson(std::ostream& str) const {
+    dumpJsonStrFunc(str, targetPath);
+    dumpJsonGen(str);
 }
 void AstDisplay::dump(std::ostream& str) const {
     Super::dump(str);
@@ -4012,12 +4029,14 @@ void AstPin::dump(std::ostream& str) const {
     if (defparamGenAlt()) str << " [GENALT]";
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
+    if (returnWrittenInput()) str << " [RETURNWRITTENINPUT]";
 }
 void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
     dumpJsonBoolFuncIf(str, defparamGenAlt);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
+    dumpJsonBoolFuncIf(str, returnWrittenInput);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
     dumpJsonGen(str);
 }
@@ -4156,6 +4175,14 @@ void AstRefDType::dumpSmall(std::ostream& str) const {
 AstNodeDType* AstRefDType::subDTypep() const VL_MT_STABLE {
     if (typedefp()) return typedefp()->subDTypep();
     return refDTypep();  // Maybe nullptr
+}
+void AstReplicate::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (sourceReplication()) str << " [SRCREPL]";
+}
+void AstReplicate::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, sourceReplication);
+    dumpJsonGen(str);
 }
 void AstRtmdDTAtom::dump(std::ostream& str) const {
     Super::dump(str);
@@ -5123,6 +5150,7 @@ void AstVar::dump(std::ostream& str) const {
     }
     if (hasUserInit()) str << " [UINIT]";
     if (icoMaybeWritten()) str << " [ICOMAYBEWRITTEN]";
+    if (resolveWrittenInput()) str << " [RESOLVEWRITTENINPUT]";
     if (isDpiOpenArray()) str << " [DPIOPENA]";
     if (ignorePostWrite()) str << " [IGNPWR]";
     if (ignoreSchedWrite()) str << " [IGNWR]";
@@ -5165,6 +5193,7 @@ void AstVar::dumpJson(std::ostream& str) const {
     }
     dumpJsonBoolFuncIf(str, attrFileDescr);
     dumpJsonBoolFuncIf(str, icoMaybeWritten);
+    dumpJsonBoolFuncIf(str, resolveWrittenInput);
     dumpJsonBoolFuncIf(str, isDpiOpenArray);
     dumpJsonBoolFuncIf(str, isFuncReturn);
     dumpJsonBoolFuncIf(str, isFuncLocal);

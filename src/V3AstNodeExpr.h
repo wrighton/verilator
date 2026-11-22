@@ -4111,9 +4111,12 @@ class AstReplicate final : public AstNodeBiop {
     // Verilog {rhs{lhs}} - Note rhsp() is the replicate value, not the lhsp()
     // @astgen alias op1 := srcp
     // @astgen alias op2 := countp
+    bool m_sourceReplication;  // Parsed multiple concatenation, not an ordinary concatenation
 public:
-    AstReplicate(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp)
-        : ASTGEN_SUPER_Replicate(fl, lhsp, rhsp) {
+    AstReplicate(FileLine* fl, AstNodeExpr* lhsp, AstNodeExpr* rhsp,
+                 bool sourceReplication = false)
+        : ASTGEN_SUPER_Replicate(fl, lhsp, rhsp)
+        , m_sourceReplication{sourceReplication} {
         if (lhsp) {
             if (const AstConst* const constp = VN_CAST(rhsp, Const)) {
                 if (constp->num().isFourState()
@@ -4130,6 +4133,10 @@ public:
     AstReplicate(FileLine* fl, AstNodeExpr* lhsp, uint32_t repCount)
         : AstReplicate{fl, lhsp, new AstConst{fl, repCount}} {}
     ASTGEN_MEMBERS_AstReplicate;
+    // Only for classifying a connection as written, so not compared by sameNode
+    bool sourceReplication() const { return m_sourceReplication; }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
     void numberOperate(V3Number& out, const V3Number& lhs, const V3Number& rhs) override {
         out.opRepl(lhs, rhs);
     }
