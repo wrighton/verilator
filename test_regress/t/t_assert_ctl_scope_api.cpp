@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     contextp->commandArgs(argc, argv);
     const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{contextp.get()}};
     topp->clk = 0;
+    topp->off_whole = 0;
     topp->eval();
     pulse(*topp);
     require(topp->afails == 0 && topp->bfails == 1, "Selected off/lock reached b");
@@ -48,6 +49,18 @@ int main(int argc, char** argv) {
     pulse(*topp);
     require(topp->afails == 2 && topp->bfails == 3, "assertOn(true) after noassert failed");
 
+    // A scoped operation on one top must not change another model in the same context.
+    const std::unique_ptr<VM_PREFIX> peerp{new VM_PREFIX{contextp.get(), "peer"}};
+    peerp->off_whole = 0;
+    pulse(*peerp);
+    require(peerp->bfails == 1, "Peer did not start with assertions enabled");
+    topp->off_whole = 1;
+    topp->eval();
+    pulse(*topp);
+    pulse(*peerp);
+    require(topp->bfails == 3 && peerp->bfails == 2, "Scoped top Off escaped its model");
+
+    peerp->final();
     topp->final();
     std::puts("*-* All Finished *-*");
     return 0;
