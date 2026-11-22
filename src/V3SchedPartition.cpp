@@ -328,6 +328,7 @@ LogicRegions partition(LogicClasses& logicClasses) {
     result.m_obs = std::move(logicClasses.m_observed);
     result.m_react = std::move(logicClasses.m_reactive);
 
+    bool movedToAct = false;  // Whether logic that could go to 'nba' went to 'act' for #0
     for (V3GraphVertex& vtx : graphp->vertices()) {
         if (const auto lvtxp = vtx.cast<SchedLogicVertex>()) {
             // Move to 'act'/'nba' based on coloring by default ...
@@ -336,9 +337,29 @@ LogicRegions partition(LogicClasses& logicClasses) {
             // in which case **EVERYTHING** that is not a Post block needs to go to 'act'.
             // This severely limits downstream optimizations (e.g. V3LifePost), and severely
             // reduces available parallelism in 'nba' for multi-threaded execution.
-            if (v3Global.usesZeroDelay() && !VN_IS(lvtxp->procp(), AlwaysPost)) toAct = true;
+            if (v3Global.usesZeroDelay() && !VN_IS(lvtxp->procp(), AlwaysPost) && !toAct) {
+                toAct = true;
+                movedToAct = true;
+            }
             ProcessList& procList = toAct ? result.m_act : result.m_nba;
             procList.add(lvtxp->process());
+        }
+    }
+    // Only 'nba' logic runs in parallel, so say why it lost its parallelism. Informational,
+    // as the design is correct as it is.
+    if (movedToAct && v3Global.opt.mtasks()) {
+        if (FileLine* const flp = v3Global.zeroDelayFlp()) {
+            flp->v3info("Supporting static #0 delays moves logic out of the 'nba' region,"
+                        " where '--threads' can run it in parallel, into the single-threaded"
+                        " 'act' region.\n"
+                        << flp->warnMore()  //
+                        << "... If no #0 delay is executed at runtime,\n"
+                        << flp->warnMore()  //
+                        << "... use '--no-sched-zero-delay' for improved performance.\n"
+                        << flp->warnMore()  //
+                        << "... If a real #0 is expected at runtime,\n"
+                        << flp->warnMore()  //
+                        << "... use '--sched-zero-delay' to suppress this message.");
         }
     }
 
