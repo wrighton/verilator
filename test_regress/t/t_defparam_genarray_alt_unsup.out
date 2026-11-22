@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:19:25: Unsupported: defparam with instance select through generate blocks of the same name, naming no instance built
+   19 |   defparam g[0].alt.u.P = 2;   
+      |                         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

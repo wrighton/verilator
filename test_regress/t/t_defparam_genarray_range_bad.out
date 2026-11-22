@@ -1,8 +1,20 @@
-%Error: t/t_defparam_genarray_range_bad.v:15:21: In defparam, the path names no instance
-   15 |   defparam g[2].u.P = 2;   
+%Error: t/t_defparam_genarray_range_bad.v:36:21: In defparam, the path names no instance from instance 't.l1' (IEEE 1800-2023 23.6)
+   36 |   defparam g[1].u.P = 4;   
       |                     ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_defparam_genarray_range_bad.v:16:35: In defparam, the path names no instance
-   16 |   defparam g[40'h1_0000_0001].u.P = 2;   
-      |                                   ^
+%Error: t/t_defparam_genarray_range_bad.v:61:21: In defparam, the path names no instance
+   61 |   defparam g[2].u.P = 2;   
+      |                     ^
+%Error: t/t_defparam_genarray_range_bad.v:41:31: In defparam, the path names no instance (IEEE 1800-2023 23.6)
+                                               : ... note: In instance 't.rc2'
+   41 |   defparam $root.t.a.g[2].u.P = 5;
+      |                               ^
+%Error: t/t_defparam_genarray_range_bad.v:46:25: In defparam, the path names no instance (IEEE 1800-2023 23.6)
+                                               : ... note: In instance 't.tc2'
+   46 |   defparam t.a.g[3].u.P = 6;
+      |                         ^
+%Error: t/t_defparam_genarray_range_bad.v:13:21: In defparam, the path names no instance from instance 't.b.c' (IEEE 1800-2023 23.6)
+                                               : ... note: In instance 't.b.c'
+   13 |   defparam g[1].u.P = 3;
+      |                     ^
 %Error: Exiting due to
