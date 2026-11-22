@@ -1,6 +1,0 @@
-%Error: t/t_assert_ctl_scope_upward_gen_pkg_bad.v:16:27: Assertion control target is not a scope or assertion from 't.q.m': 'gb.inner' (IEEE 1800-2023 20.11).
-                                                       : ... note: In instance 't.p.m'
-   16 |   initial $assertoff(0, gb.inner);
-      |                           ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: Exiting due to
