@@ -8869,7 +8869,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         bool nonconstant = false;
         const string path = assertControlPath(itemp, &nonconstant);
         if (path.empty()) {
-            if (nonconstant && itemp->exists([](const AstFuncRef*) { return true; })) {
+            const bool runtimeIndex = itemp->exists([](const AstNodeVarRef* refp) {
+                return !refp->varp() || !refp->varp()->isParam();
+            });
+            if (nonconstant && !runtimeIndex
+                && itemp->exists([](const AstFuncRef*) { return true; })) {
                 itemp->v3warn(E_UNSUPPORTED,
                               "Unsupported: Function call in assertion control scope index.");
             } else if (nonconstant) {
