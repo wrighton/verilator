@@ -177,7 +177,27 @@ endmodule
 module up_types_mid (
     input bit off
 );
-  initial if (off) $assertoff(0, gb.inner);
+  int local_failures = 0;
+  int outer_failures = 0;
+  if (1) begin : local_target
+    initial begin
+      #1;
+      check : assert (1'b0) else outer_failures++;
+    end
+  end
+  // Begin a plain upward lookup in the lexical scope of the statement (IEEE 1800-2023 23.8).
+  if (1) begin : control_scope
+    if (1) begin : local_target
+      initial begin
+        #1;
+        check : assert (1'b0) else local_failures++;
+      end
+    end
+    initial if (off) begin
+      $assertoff(0, gb.inner);
+      $assertoff(0, local_target.check);
+    end
+  end
 endmodule
 
 module up_types_par #(
@@ -225,6 +245,14 @@ module up_types(output bit done);
     `checkd(p1.failures, 1);
     `checkd(q0.failures, 0);
     `checkd(q1.failures, 1);
+    `checkd(p0.m.local_failures, 0);
+    `checkd(p1.m.local_failures, 1);
+    `checkd(q0.m.local_failures, 0);
+    `checkd(q1.m.local_failures, 1);
+    `checkd(p0.m.outer_failures, 1);
+    `checkd(p1.m.outer_failures, 1);
+    `checkd(q0.m.outer_failures, 1);
+    `checkd(q1.m.outer_failures, 1);
     done = 1;
   end
 endmodule
