@@ -271,10 +271,12 @@ public:
     struct Target final {
         VlAssertControl* statep;
         uint32_t depth;
+        uint32_t ordinal = 0;  // Position in the original selector target order
     };
 
 private:
     std::vector<Target> m_targets;
+    std::vector<uint32_t> m_skipShared;  // Slots replaced by this caller's mixed targets
 };
 
 // Type trait: whether T is a user-defined custom struct
@@ -645,6 +647,10 @@ protected:
     void assertCtlApplyTable(uint32_t effect, VerilatedAssertType_t types,
                              VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
                              const VlAssertCtlTable& table) VL_REQUIRES(m_assertCtlMutex);
+    void assertCtlApplyMixedTable(uint32_t effect, VerilatedAssertType_t types,
+                                  VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                                  const VlAssertCtlTable& shared, const VlAssertCtlTable& local)
+        VL_REQUIRES(m_assertCtlMutex);
     mutable VerilatedMutex m_timeDumpMutex;  // Protect misc slow strings
     std::string m_timeFormatSuffix VL_GUARDED_BY(m_timeDumpMutex);  // $timeformat printf format
     std::string m_dumpfile VL_GUARDED_BY(m_timeDumpMutex);  // $dumpfile setting
@@ -754,6 +760,19 @@ public:
         const VerilatedLockGuard lock{m_assertCtlMutex};
         if (table.m_targets.empty()) bind(table.m_targets);
         assertCtlApplyTable(effect, types, directives, depthLimit, table);
+    }
+    // Apply the caller-independent part and sparse caller-local entries as one selection.
+    template <typename T_Bind, typename T_BindLocal>
+    void assertCtlMixedTable(uint32_t effect, VerilatedAssertType_t types,
+                             VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                             VlAssertCtlTable& shared, const T_Bind& bindShared,
+                             VlAssertCtlTable& local, const T_BindLocal& bindLocal)
+        VL_MT_SAFE_EXCLUDES(m_assertCtlMutex) {
+        if (!assertCtlValid(effect) || !depthLimit) return;
+        const VerilatedLockGuard lock{m_assertCtlMutex};
+        if (shared.m_targets.empty()) bindShared(shared.m_targets);
+        if (local.m_targets.empty()) bindLocal(local.m_targets, local.m_skipShared);
+        assertCtlApplyMixedTable(effect, types, directives, depthLimit, shared, local);
     }
     /// Return if calculating of unused signals (for traces)
     bool calcUnusedSigs() const VL_MT_SAFE { return m_s.m_calcUnusedSigs; }
