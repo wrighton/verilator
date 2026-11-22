@@ -19,6 +19,8 @@
 #include "V3Assert.h"
 
 #include "V3Const.h"
+#include "V3EmitCBase.h"
+#include "V3Hash.h"
 #include "V3SharedTmps.h"
 #include "V3Stats.h"
 #include "V3Task.h"
@@ -149,6 +151,46 @@ AstNodeExpr* V3AssertCommon::newAssertCtlGetp(FileLine* flp, VAssertCtlQuery que
     return new AstAssertCtlRead{flp, globalp, new AstVarRef{flp, statep, VAccess::READ}, query};
 }
 
+namespace {
+// Ordered selector ordinals and minimum depths encode every scoped update to a
+// state. States in the same concrete scope with equal masks and histories agree.
+using AssertCtlHistory = std::vector<std::pair<size_t, int>>;
+struct AssertCtlSignature final {
+    const AstScope* scopep;
+    uint32_t mask;
+    AssertCtlHistory history;
+    bool operator==(const AssertCtlSignature& other) const {
+        return scopep == other.scopep && mask == other.mask && history == other.history;
+    }
+};
+using AssertCtlTableKey = std::vector<std::pair<const AstVarScope*, int>>;
+struct AssertCtlTableKeyHash final {
+    size_t operator()(const AssertCtlTableKey& key) const {
+        V3Hash hash;
+        for (const auto& target : key) {
+            hash += target.first;
+            hash += target.second;
+        }
+        return hash.value();
+    }
+};
+struct AssertCtlBoundTable final {
+    AstVarScope* cachep = nullptr;
+    AstCFunc* bindp = nullptr;
+};
+struct AssertCtlSignatureHash final {
+    size_t operator()(const AssertCtlSignature& sig) const {
+        V3Hash hash{sig.scopep};
+        hash += sig.mask;
+        for (const auto& entry : sig.history) {
+            hash += static_cast<uint64_t>(entry.first);
+            hash += entry.second;
+        }
+        return hash.value();
+    }
+};
+}  // namespace
+
 void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     // Scoped target writes identify the concrete states that a selector can reach.
     std::unordered_set<const AstVarScope*> selected;
@@ -181,6 +223,23 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         });
     });
     rootp->foreach([&](AstAssertCtlRead* readp) { reads.push_back(readp); });
+    std::unordered_map<const AstVarScope*, AssertCtlHistory> histories;
+    for (size_t i = 0; i < applies.size(); ++i) {
+        for (const AstAssertCtlTarget* const targetp : applies[i].second->targetspList()) {
+            histories[targetp->statep()->varScopep()].emplace_back(i, targetp->depth());
+        }
+    }
+    std::unordered_map<AssertCtlSignature, AstVarScope*, AssertCtlSignatureHash> groups;
+    std::unordered_map<const AstVarScope*, AstVarScope*> canonical;
+    std::vector<AstVarScope*> representatives;
+    for (AstVarScope* const statep : selectedInOrder) {
+        auto result = groups.emplace(AssertCtlSignature{statep->scopep(),
+                                                        statep->varp()->assertCtlMask(),
+                                                        std::move(histories.at(statep))},
+                                     statep);
+        canonical.emplace(statep, result.first->second);
+        if (result.second) representatives.push_back(statep);
+    }
     // If only some instances use a declaration, allocate their state once in the
     // root rather than adding a dead object to every instance of its module.
     struct StateCounts final {
@@ -191,11 +250,11 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     rootp->foreach([&](const AstVarScope* statep) {
         if (statep->varp()->assertCtlMask()) ++stateCounts[statep->varp()].declared;
     });
-    for (const AstVarScope* const statep : selectedInOrder) ++stateCounts[statep->varp()].selected;
+    for (const AstVarScope* const statep : representatives) ++stateCounts[statep->varp()].selected;
     V3SharedTmps concreteStates{"__VassertCtlState", VVarType::MODULETEMP};
     std::unordered_map<const AstVarScope*, AstVarScope*> replacements;
     AstScope* const topScopep = rootp->topScopep()->scopep();
-    for (AstVarScope* const oldp : selectedInOrder) {
+    for (AstVarScope* const oldp : representatives) {
         AstVar* const varp = oldp->varp();
         const StateCounts& counts = stateCounts.at(varp);
         if (counts.declared == counts.selected) continue;
@@ -207,10 +266,11 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         replacements.emplace(oldp, newp);
     }
     const auto rebind = [&](AstNodeVarRef* refp) {
-        const auto it = replacements.find(refp->varScopep());
-        if (it == replacements.end()) return;
-        refp->varp(it->second->varp());
-        refp->varScopep(it->second);
+        AstVarScope* statep = canonical.at(refp->varScopep());
+        const auto it = replacements.find(statep);
+        if (it != replacements.end()) statep = it->second;
+        refp->varp(statep->varp());
+        refp->varScopep(statep);
     };
     // The assertion and violation nodes no longer own the state after query lowering.
     rootp->foreach([](AstNodeStmt* stmtp) { stmtp->controlVarp(nullptr); });
@@ -236,6 +296,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     V3SharedTmps tables{"__VassertCtlTable", VVarType::MODULETEMP};
     AstCDType* tableDtp = nullptr;
     size_t entries = 0;
+    std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> bound;
     for (const auto& apply : applies) {
         AstAssertCtlApply* const applyp = apply.second;
         FileLine* const flp = applyp->fileline();
@@ -249,13 +310,43 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
                 tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
                 rootp->typeTablep()->addTypesp(tableDtp);
             }
-            // Class methods can execute without a model-owned class object. Keep their
-            // statically resolved tables in the owning model, not in the C++ class.
-            AstScope* const storagep = VN_IS(apply.first->modp(), Class) ? topScopep : apply.first;
-            AstVarScope* const tablep = tables.make(flp, storagep, tableDtp);
-            tablep->varp()->noReset(true);
-            tablep->varp()->isInternal(true);
-            tablep->varp()->setIgnoreSchedWrite();
+            AssertCtlTableKey key;
+            std::vector<AstNodeVarRef*> refs;
+            std::unordered_set<const AstVarScope*> emitted;
+            for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
+                AstNodeVarRef* const statep = targetp->statep();
+                rebind(statep);
+                if (!emitted.emplace(statep->varScopep()).second) continue;
+                key.emplace_back(statep->varScopep(), targetp->depth());
+                refs.push_back(statep);
+            }
+            const auto table = bound.try_emplace(key);
+            AssertCtlBoundTable& binding = table.first->second;
+            if (table.second) {
+                // The cache belongs to the model even if the selector is called
+                // from a class method with no model-owned class object.
+                binding.cachep = tables.make(flp, topScopep, tableDtp);
+                binding.cachep->varp()->noReset(true);
+                binding.cachep->varp()->isInternal(true);
+                binding.cachep->varp()->setIgnoreSchedWrite();
+                binding.bindp = new AstCFunc{
+                    flp, "__VbindAssertCtlTable_" + std::to_string(bound.size()), topScopep};
+                binding.bindp->isStatic(true);
+                binding.bindp->isLoose(true);
+                binding.bindp->slow(true);
+                binding.bindp->argTypes(EmitCUtil::symClassVar()
+                                        + ", std::vector<VlAssertCtlTable::Target>& targets");
+                topScopep->addBlocksp(binding.bindp);
+                AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
+                for (size_t i = 0; i < refs.size(); ++i) {
+                    initp->add("{&");
+                    initp->add(refs[i]->unlinkFrBack());
+                    initp->add(", " + std::to_string(key[i].second) + "},\n");
+                }
+                initp->add("};\n");
+                binding.bindp->addStmtsp(initp);
+                entries += key.size();
+            }
             callp->add("assertCtlTable(");
             callp->add(applyp->effectp()->unlinkFrBack());
             callp->add(", ");
@@ -263,23 +354,18 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
             callp->add(", " + std::to_string(applyp->directives()) + ", ");
             callp->add(applyp->limitp()->unlinkFrBack());
             callp->add(", ");
-            callp->add(new AstVarRef{flp, tablep, VAccess::READWRITE});
-            callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { targets = {\n");
-            for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
-                AstNodeVarRef* const statep = targetp->statep();
-                rebind(statep);
-                callp->add("{&");
-                callp->add(statep->unlinkFrBack());
-                callp->add(", " + std::to_string(targetp->depth()) + "},\n");
-                ++entries;
-            }
-            callp->add("}; });\n");
+            callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
+            callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { (");
+            callp->add(new AstAddrOfCFunc{flp, binding.bindp});
+            callp->add(")(vlSymsp, targets); });\n");
         }
         applyp->replaceWith(callp);
         VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
     }
     if (v3Global.opt.stats()) {
-        V3Stats::addStatSum("Assertions, Scoped state instances", selected.size());
+        V3Stats::addStatSum("Assertions, Scoped selected sites", selected.size());
+        V3Stats::addStatSum("Assertions, Scoped state instances", representatives.size());
+        V3Stats::addStatSum("Assertions, Scoped tables", bound.size());
         V3Stats::addStatSum("Assertions, Scoped table entries", entries);
     }
 }
