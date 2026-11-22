@@ -12,9 +12,13 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 
 test.top_filename = 't/t_assert_ctl_parity.v'
-test.compile(verilator_flags2=['--binary', '--assert', '+define+SEED_CONTROL'],
+test.compile(verilator_flags2=['--binary', '--assert', '--no-stop-fail', '+define+SEED_CONTROL'],
              threads=2 if test.vltmt else 1)
 
-test.execute()
+report = test.obj_dir + '/reports.log'
+test.execute(logfile=report)
+test.file_grep_count(report, r'Assertion failed in .*check_violation: priority case,', 2)
+test.file_grep_count(report, r'Assertion failed in .*check_violation: unique case,', 4)
+test.file_grep_count(report, r'Assertion failed in .*check_violation: unique0 case,', 2)
 
 test.passes()
