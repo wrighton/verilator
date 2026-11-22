@@ -188,6 +188,29 @@ void V3LinkLevel::wrapTop(AstNetlist* rootp) {
     // the rest must be done after data type resolution
     wrapTopCell(rootp);
 
+    if (!v3Global.opt.l2Name().empty()) {
+        // Absolute selector paths were resolved before the wrapper named its cells.
+        std::unordered_map<string, string> wrappedNames;
+        for (AstNode* const stmtp : newmodp->stmtspList()) {
+            const AstCell* const cellp = VN_CAST(stmtp, Cell);
+            if (cellp && !cellp->assertCtlIfaceOriginp()) {
+                wrappedNames.emplace(cellp->modp()->name(), cellp->name());
+            }
+        }
+        rootp->foreach([&](AstVarXRef* refp) {
+            if (!refp->assertCtlAbsolute()) return;
+            const string path = refp->dotted();
+            const string prefix = "$root.";
+            if (!VString::startsWith(path, prefix)) return;
+            const size_t end = path.find('.', prefix.size());
+            const auto found = wrappedNames.find(path.substr(prefix.size(), end - prefix.size()));
+            if (found != wrappedNames.end()) {
+                refp->dotted(prefix + found->second
+                             + (end == string::npos ? "" : path.substr(end)));
+            }
+        });
+    }
+
     // Instantiate all packages under the top wrapper
     // This way all later SCOPE based optimizations can ignore packages
     for (AstNodeModule* const modp : rootp->modulespList()) {
