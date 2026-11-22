@@ -674,10 +674,63 @@ void AstAlways::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "keyword", keyword().ascii());
     dumpJsonGen(str);
 }
+void AstAlwaysReactive::dump(std::ostream& str) const {
+    Super::dump(str);
+    if (deferredReports()) str << " [DEFERREDREPORTS]";
+}
+void AstAlwaysReactive::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, deferredReports);
+    dumpJsonGen(str);
+}
+void AstAlwaysReactive::selfTest() {
+    // The always running observed deferred assertion reports is not the same as another
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    AstAlwaysReactive* const plainp = new AstAlwaysReactive{flp, nullptr, nullptr};
+    AstAlwaysReactive* const reportsp = new AstAlwaysReactive{flp, nullptr, nullptr};
+    reportsp->deferredReports(true);
+    AstAlwaysReactive* const reportCopyp = reportsp->cloneTree(false);
+    UASSERT_OBJ(plainp->sameNode(plainp) && reportCopyp->sameNode(reportsp)
+                    && reportCopyp->deferredReports(),
+                reportCopyp, "Reactive always identity must survive cloning");
+    UASSERT_OBJ(!plainp->sameNode(reportsp) && !reportsp->sameNode(plainp), plainp,
+                "Reactive always running deferred reports must differ");
+    VL_DO_DANGLING(plainp->deleteTree(), plainp);
+    VL_DO_DANGLING(reportsp->deleteTree(), reportsp);
+    VL_DO_DANGLING(reportCopyp->deleteTree(), reportCopyp);
+}
 const char* AstAnd::widthMismatch() const VL_MT_STABLE {
     BROKEN_RTN(lhsp()->widthMin() != rhsp()->widthMin());
     BROKEN_RTN(lhsp()->widthMin() != widthMin());
     return nullptr;
+}
+void AstAssert::selfTest() {
+    // Assertions differing in name, or in whether V3AssertNfa lowered them, are not the same
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    const auto newp = [&](const string& name) {
+        return new AstAssert{flp,
+                             new AstConst{flp, AstConst::BitTrue{}},
+                             nullptr,
+                             nullptr,
+                             VAssertType::CONCURRENT,
+                             VAssertDirectiveType::ASSERT,
+                             name};
+    };
+    AstAssert* const ap = newp("a");
+    AstAssert* const a2p = newp("a");
+    AstAssert* const bp = newp("b");
+    AstAssert* const loweredp = newp("a");
+    loweredp->nfaLowered(true);
+    AstAssert* const loweredCopyp = loweredp->cloneTree(false);
+    UASSERT_OBJ(ap->sameNode(ap) && ap->sameNode(a2p) && loweredCopyp->sameNode(loweredp)
+                    && loweredCopyp->nfaLowered(),
+                loweredCopyp, "Assertion identity must survive cloning");
+    UASSERT_OBJ(!ap->sameNode(bp) && !ap->sameNode(loweredp) && !loweredp->sameNode(ap), ap,
+                "Assertions with a different name or lowering must differ");
+    VL_DO_DANGLING(ap->deleteTree(), ap);
+    VL_DO_DANGLING(a2p->deleteTree(), a2p);
+    VL_DO_DANGLING(bp->deleteTree(), bp);
+    VL_DO_DANGLING(loweredp->deleteTree(), loweredp);
+    VL_DO_DANGLING(loweredCopyp->deleteTree(), loweredCopyp);
 }
 AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assertType,
                            uint32_t directiveType, AstNodeExpr* levelp, AstNodeExpr* itemsp)
@@ -895,12 +948,16 @@ const char* AstCAwait::broken() const {
 }
 void AstCAwait::dump(std::ostream& str) const {
     Super::dump(str);
+    if (reactive()) str << " [REACTIVE]";
     if (sentreep()) {
         str << " => ";
         sentreep()->dump(str);
     }
 }
-void AstCAwait::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
+void AstCAwait::dumpJson(std::ostream& str) const {
+    dumpJsonBoolFuncIf(str, reactive);
+    dumpJsonGen(str);
+}
 void AstCCast::dump(std::ostream& str) const {
     Super::dump(str);
     str << " sz" << size();
@@ -2694,6 +2751,10 @@ void AstNetlist::deleteContents() {
     m_dpiExportTriggerp = nullptr;
     m_delaySchedulerp = nullptr;
     m_nbaQueuep = nullptr;
+    m_reNbaQueuep = nullptr;
+    m_inReactivep = nullptr;
+    m_reactSchedp = nullptr;
+    m_reInactSchedp = nullptr;
     m_topScopep = nullptr;
     m_evalFuncps.fill(nullptr);
     m_dumpTriggersFuncps.fill(nullptr);
@@ -2905,6 +2966,7 @@ void AstNodeCoverOrAssert::dump(std::ostream& str) const {
     str << " ["s + this->userType().ascii() + "]";
     if (immediate()) str << " [IMMEDIATE]";
     if (senFromAlways()) str << " [SENALW]";
+    if (nfaLowered()) str << " [NFALOWERED]";
 }
 void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "directive", this->directive().ascii());
@@ -2912,6 +2974,7 @@ void AstNodeCoverOrAssert::dumpJson(std::ostream& str) const {
     dumpJsonGen(str);
     dumpJsonBoolFuncIf(str, immediate);
     dumpJsonBoolFuncIf(str, senFromAlways);
+    dumpJsonBoolFuncIf(str, nfaLowered);
 }
 uint32_t AstNodeDType::arrayUnpackedElements() const {
     uint32_t entries = 1;

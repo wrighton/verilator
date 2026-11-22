@@ -102,6 +102,7 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     const VAssertDirectiveType m_directive;  // Assertion directive type
     bool m_senFromAlways = false;  // Sensitivity list copied from upper always
     bool m_immediate = false;  // Immediate assert (may differ from userType being immediate)
+    bool m_nfaLowered = false;  // V3AssertNfa lowered its property to a Boolean output
 
 public:
     AstNodeCoverOrAssert(VNType t, FileLine* fl, AstNode* propp, AstNodeStmt* passsp,
@@ -120,7 +121,10 @@ public:
     }
     ASTGEN_MEMBERS_AstNodeCoverOrAssert;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
-    bool sameNode(const AstNode* samep) const override { return samep->name() == name(); }
+    bool sameNode(const AstNode* samep) const override {
+        return samep->name() == name()
+               && m_nfaLowered == VN_DBG_AS(samep, NodeCoverOrAssert)->m_nfaLowered;
+    }
     void name(const string& name) override { m_name = name; }
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
@@ -131,6 +135,8 @@ public:
     void immediate(bool flag) { m_immediate = flag; }
     bool senFromAlways() const VL_MT_STABLE { return m_senFromAlways; }
     void senFromAlways(bool flag) { m_senFromAlways = flag; }
+    bool nfaLowered() const { return m_nfaLowered; }
+    void nfaLowered(bool flag) { m_nfaLowered = flag; }
 };
 class AstNodeReadWriteMem VL_NOT_FINAL : public AstNodeStmt {
     // @astgen op1 := filenamep : AstNodeExpr
@@ -275,6 +281,7 @@ class AstCAwait final : public AstNodeStmt {
     // @astgen op1 := exprp : AstNodeExpr<AstNodeCCall|AstCFuncHard|AstCMethodHard>
     //
     // @astgen ptr := m_sentreep : Optional[AstSenTree]  // Sentree related to this await
+    bool m_reactive = false;  // Resumed in the reactive region set (see V3Timing)
 public:
     AstCAwait(FileLine* fl, AstNodeExpr* exprp, AstSenTree* sentreep = nullptr)
         : ASTGEN_SUPER_CAwait(fl)
@@ -282,6 +289,11 @@ public:
         this->exprp(exprp);
     }
     ASTGEN_MEMBERS_AstCAwait;
+    bool sameNode(const AstNode* samep) const override {
+        return m_reactive == VN_DBG_AS(samep, CAwait)->m_reactive;
+    }
+    bool reactive() const { return m_reactive; }
+    void reactive(bool flag) { m_reactive = flag; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     const char* broken() const override;
@@ -1544,6 +1556,7 @@ public:
     string verilogKwd() const override {
         return directive() == VAssertDirectiveType::ASSERT ? "assert" : "assume";
     }
+    static void selfTest();
 };
 class AstAssertIntrinsic final : public AstNodeCoverOrAssert {
     // A $cast or other compiler inserted assert, that must run even without --assert option

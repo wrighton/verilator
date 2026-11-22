@@ -390,6 +390,7 @@ class WidthVisitor final : public VNVisitor {
     bool m_underSExpr = false;  // Visiting a sequence or boolean operand, not a property
     const AstNodeExpr* m_cycleDelayPropp = nullptr;  // Operand of unary cycle delay
     bool m_underSvaExpr = false;  // Under a property spec, property, sequence, or sequence event
+    bool m_inConcurrentAssert = false;  // Under a concurrent assertion, including its actions
     bool m_underPackedArray = false;  // Visiting under a AstPackArrayDType
     bool m_underMemberRef = false;  // Viting under a MemberRef
     AstNodeExpr* m_fromParentp = nullptr;  // Method call or member select iterating its fromp()
@@ -2183,6 +2184,24 @@ class WidthVisitor final : public VNVisitor {
         }
     }
 
+    void visit(AstConstCast* nodep) override {
+        // Only V3Assert needs it, for a procedural concurrent assertion (IEEE 1800-2023 16.14.6.1)
+        if (!m_inConcurrentAssert) {
+            AstNodeExpr* const lhsp = nodep->lhsp()->unlinkFrBack();
+            nodep->replaceWith(lhsp);
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            userIterate(lhsp, m_vup);
+            return;
+        }
+        // Like the expression, as it is elsewhere
+        userIterateAndNext(nodep->lhsp(), m_vup);
+        nodep->dtypeFrom(nodep->lhsp());
+        // A constant has its value already, and may need to fold, e.g. as a delay
+        if (VN_IS(nodep->lhsp(), Const)) {
+            nodep->replaceWith(nodep->lhsp()->unlinkFrBack());
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+        }
+    }
     void visit(AstSampled* nodep) override {
         assertAtExpr(nodep);
         if (m_vup->prelim()) {
@@ -9299,6 +9318,8 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstAssert* nodep) override {
         assertAtStatement(nodep);
+        VL_RESTORER(m_inConcurrentAssert);
+        m_inConcurrentAssert = m_inConcurrentAssert || !nodep->immediate();
         checkDeferredAction(nodep, nodep->passsp());
         checkDeferredAction(nodep, nodep->failsp());
         iterateCheckBool(nodep, "Property", nodep->propp(), BOTH);  // it's like an if() condition.
@@ -9317,6 +9338,8 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstCover* nodep) override {
         assertAtStatement(nodep);
+        VL_RESTORER(m_inConcurrentAssert);
+        m_inConcurrentAssert = m_inConcurrentAssert || !nodep->immediate();
         checkDeferredAction(nodep, nodep->passsp());
         {
             // The operand of cover sequence is a sequence expression
@@ -9771,6 +9794,8 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstNodeFTask* nodep) override {
         VL_RESTORER(m_underCast);
         m_underCast = false;  // A called function's body is outside the cast expression.
+        VL_RESTORER(m_inConcurrentAssert);
+        m_inConcurrentAssert = false;  // And outside the assertion
         // Grab width from the output variable (if it's a function)
         if (nodep->didWidth()) return;
         if (nodep->doingWidth()) {
@@ -9956,12 +9981,14 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_underSExpr);
         VL_RESTORER(m_cycleDelayPropp);
         VL_RESTORER(m_underSvaExpr);
+        VL_RESTORER(m_inConcurrentAssert);
         m_propertyp = nodep;
         registerLocalVars(nodep, "property");
         // The body is not in the context of the instance that may be widthing it
         m_underSExpr = false;
         m_cycleDelayPropp = nullptr;
         m_underSvaExpr = true;
+        m_inConcurrentAssert = true;  // Keep const casts, for wherever it is used
         VL_RESTORER(m_underDisableIff);
         m_underDisableIff = false;
         VL_RESTORER(m_underSampledArg);
@@ -10038,9 +10065,11 @@ class WidthVisitor final : public VNVisitor {
         VL_RESTORER(m_underSExpr);
         VL_RESTORER(m_underSvaExpr);
         VL_RESTORER(m_underConcAssert);
+        VL_RESTORER(m_inConcurrentAssert);
         m_underSExpr = true;
         m_underSvaExpr = true;
         m_underConcAssert = true;
+        m_inConcurrentAssert = true;  // Keep const casts, for wherever it is used
         VL_RESTORER(m_underDisableIff);
         m_underDisableIff = false;
         VL_RESTORER(m_underSampledArg);

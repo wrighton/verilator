@@ -5336,7 +5336,7 @@ expr<nodeExprp>:                // IEEE: part of expression/constant_expression/
         |       ySTRING yP_TICK '(' expr ')'
                         { $$ = new AstCast{$2, $4, VFlagChildDType{},
                                            new AstBasicDType{$1, VBasicDTypeKwd::STRING}}; }
-        |       yCONST__ETC yP_TICK '(' expr ')'        { $$ = $4; }  // Not linting const presently
+        |       yCONST__ETC yP_TICK '(' expr ')'        { $$ = new AstConstCast{$1, $4}; }
         //                      // Spec only allows primary with addition of a type reference
         //                      // We'll be more general, and later assert LHS was a type.
         |       ~l~expr yP_TICK '(' expr ')'            { $$ = new AstCastParse{$2, $4, $1}; }

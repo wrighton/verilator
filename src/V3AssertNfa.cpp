@@ -5577,6 +5577,8 @@ class AssertNfaVisitor final : public VNVisitor {
         AstNode* const innerPropp = propp->propp();
         innerPropp->replaceWith(outputExprp);
         VL_DO_DANGLING(pushDeletep(innerPropp), innerPropp);
+        // V3Assert keeps the evaluation of such a procedural assertion at its statement
+        assertp->nfaLowered(true);
     }
 
     // Outcome counts for a property if/case are wrong in an outcome-multiplying

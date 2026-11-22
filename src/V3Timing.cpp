@@ -92,6 +92,7 @@
 
 #include "V3Timing.h"
 
+#include "V3CallTargets.h"
 #include "V3Const.h"
 #include "V3EmitV.h"
 #include "V3File.h"
@@ -106,6 +107,8 @@
 
 #include <limits>
 #include <queue>
+#include <unordered_map>
+#include <unordered_set>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -2357,6 +2360,350 @@ public:
 };
 
 //######################################################################
+// Keep the processes of reactive logic in the reactive region set
+
+class TimingReactiveVisitor final : public VNVisitor {
+    // A process started by reactive logic, such as a concurrent assertion action, is in the
+    // reactive region set (IEEE 1800-2023 4.4.2.6), also after it suspends. V3Sched sets
+    // __VinReactive while running the reactive region set. Before each await in reactive logic,
+    // or in a function it may call, note whether the process runs in it, and if so make it
+    // continue there: an event wait waits in a twin of its trigger scheduler, which V3Sched
+    // resumes in the reactive region set, a #0 waits for the next pass of the reactive region
+    // set, as for the Re-Inactive region (IEEE 1800-2023 4.4.2.7), and after other waits, the
+    // process waits in a scheduler V3Sched resumes in the reactive region set, before any of
+    // its statements run.
+
+    // STATE
+    AstNetlist* const m_netlistp;  // The netlist
+    AstTopScope* const m_topScopep;  // The top scope
+    std::unordered_set<const AstCFunc*> m_reactiveFuncps;  // Functions reactive logic may call
+    AstNode* m_ownerp = nullptr;  // Current process, function or fork branch, owning the process
+    AstCFunc* m_funcp = nullptr;  // Current function reactive logic may call
+    bool m_inReactiveProc = false;  // In reactive logic, only running in the reactive region set
+    AstScope* m_scopep = nullptr;  // Current scope
+    size_t m_delayCount = 0;  // Delay values held
+    struct Await final {
+        AstCAwait* m_awaitp;  // The await
+        AstCFunc* m_funcp;  // Its function, or nullptr in reactive logic
+        const AstNode* m_ownerp;  // Owner of its process
+        AstScope* m_scopep;  // Its scope
+    };
+    std::vector<Await> m_awaits;  // The awaits to keep in the reactive region set
+    std::unordered_map<AstCFunc*, AstVarScope*> m_wasReactiveps;  // Origin before an await
+    // Trigger scheduler -> its twin, for processes waiting in the reactive region set
+    std::unordered_map<AstVarScope*, AstVarScope*> m_reactiveSchedps;
+
+    // METHODS
+    AstBasicDType* schedDTypep() const {
+        return m_netlistp->typeTablep()->findBasicDType(m_netlistp->fileline(),
+                                                        VBasicDTypeKwd::TRIGGER_SCHEDULER);
+    }
+    // The scheduler of the processes continuing in the next pass of the reactive region set,
+    // for the Re-Inactive region, or else resumed outside it
+    AstVarScope* getCreateSchedp(bool reInactive) {
+        AstVarScope* vscp = reInactive ? m_netlistp->reInactSchedp() : m_netlistp->reactSchedp();
+        if (vscp) return vscp;
+        vscp = m_topScopep->createTemp(reInactive ? "__VreInactSched" : "__VreactSched",
+                                       schedDTypep());
+        if (reInactive) {
+            m_netlistp->reInactSchedp(vscp);
+        } else {
+            m_netlistp->reactSchedp(vscp);
+        }
+        return vscp;
+    }
+    // The flag V3Sched sets while running the reactive region set
+    AstVarScope* getCreateInReactivep() {
+        if (!m_netlistp->inReactivep()) {
+            m_netlistp->inReactivep(m_topScopep->createTemp("__VinReactive", 1));
+        }
+        return m_netlistp->inReactivep();
+    }
+    static bool hasProcess(const AstNode* ownerp) {
+        if (const AstCFunc* const funcp = VN_CAST(ownerp, CFunc)) return funcp->needsVlProcess();
+        if (const AstForkItem* const itemp = VN_CAST(ownerp, ForkItem)) {
+            return itemp->needsVlProcess();
+        }
+        return VN_AS(ownerp, NodeProcedure)->needsVlProcess();
+    }
+    // An await resuming in the next pass of the reactive region set
+    AstCAwait* newResumeAwaitp(FileLine* flp, bool reInactive, const AstNode* ownerp) {
+        AstCMethodHard* const methodp = new AstCMethodHard{
+            flp, new AstVarRef{flp, getCreateSchedp(reInactive), VAccess::WRITE},
+            VCMethod::SCHED_TRIGGER};
+        methodp->dtypeSetVoid();
+        methodp->addPinsp(new AstConst{flp, AstConst::BitTrue{}});  // Ready at once
+        methodp->addPinsp(new AstCExpr{flp, hasProcess(ownerp) ? "vlProcess" : "nullptr"});
+        const bool protectIds = v3Global.opt.protectIds();
+        AstCExpr* const descp
+            = new AstCExpr{flp, protectIds ? "VL_UNKNOWN_FILENAME" : "\"reactive region set\""};
+        descp->dtypeSetString();
+        methodp->addPinsp(descp);
+        AstCExpr* const filep = new AstCExpr{flp, protectIds ? "VL_UNKNOWN_FILENAME"
+                                                             : '"' + flp->filenameEsc() + '"'};
+        filep->dtypeSetString();
+        methodp->addPinsp(filep);
+        AstCExpr* const linep = new AstCExpr{flp, protectIds ? "0" : cvtToStr(flp->lineno())};
+        linep->dtypeSetString();
+        methodp->addPinsp(linep);
+        return new AstCAwait{flp, methodp};
+    }
+    // A function can run in either region. Save the caller's region in its coroutine frame.
+    AstVarScope* entryReactivep(FileLine* const flp, AstCFunc* const funcp) {
+        AstVarScope*& vscp = m_wasReactiveps[funcp];
+        if (vscp) return vscp;
+        AstVar* const varp
+            = new AstVar{flp, VVarType::BLOCKTEMP, "__VwasReactive", m_netlistp->findBitDType()};
+        varp->funcLocal(true);
+        varp->noReset(true);
+        funcp->addVarsp(varp);
+        vscp = new AstVarScope{flp, funcp->scopep(), varp};
+        funcp->scopep()->addVarsp(vscp);
+        AstAssign* const initp
+            = new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE},
+                            new AstVarRef{flp, getCreateInReactivep(), VAccess::READ}};
+        AstNodeStmt* const stmtsp = funcp->stmtsp();
+        UASSERT_OBJ(stmtsp, funcp, "Function with a continuation but no statements");
+        stmtsp->addHereThisAsNext(initp);
+        return vscp;
+    }
+    AstIf* newRestoreReactivep(FileLine* const flp, AstCFunc* const funcp,
+                               const AstNode* const ownerp) {
+        return new AstIf{
+            flp,
+            new AstLogAnd{
+                flp, new AstVarRef{flp, entryReactivep(flp, funcp), VAccess::READ},
+                new AstLogNot{flp, new AstVarRef{flp, getCreateInReactivep(), VAccess::READ}}},
+            newResumeAwaitp(flp, false, ownerp)};
+    }
+    // Mailbox get/peek must release the queue turn in the dynamic scheduler, but must not
+    // assign through the user's ref there. Keep the message in the coroutine frame until all
+    // queue bookkeeping has finished, then restore the region and publish it to the ref.
+    void deferMailboxResult(AstCFunc* const funcp) {
+        if (!funcp->exists([](const AstCMethodHard* const methodp) {
+                return methodp->method() == VCMethod::WAIT_QUEUE_RELEASE;
+            })) {
+            return;
+        }
+        AstVar* resultp = nullptr;
+        for (AstVar* const argp : funcp->argspList()) {
+            if (!argp->isRef()) continue;
+            UASSERT_OBJ(!resultp, funcp, "Mailbox method has more than one ref result");
+            resultp = argp;
+        }
+        if (!resultp) return;  // put has no ref result
+        std::vector<AstVarRef*> resultRefps;
+        funcp->foreach([&](AstVarRef* const refp) {
+            if (refp->varp() == resultp) resultRefps.push_back(refp);
+        });
+        UASSERT_OBJ(!resultRefps.empty(), funcp, "Mailbox method does not write its result");
+        FileLine* const flp = funcp->fileline();
+        AstVar* const varp
+            = new AstVar{flp, VVarType::BLOCKTEMP, "__VmailboxMessage", resultp->dtypep()};
+        varp->funcLocal(true);
+        varp->noReset(true);
+        funcp->addVarsp(varp);
+        AstVarScope* const vscp = new AstVarScope{flp, funcp->scopep(), varp};
+        funcp->scopep()->addVarsp(vscp);
+        AstVarRef* const outp = resultRefps.front()->cloneTree(false);
+        for (AstVarRef* refp : resultRefps) {
+            UASSERT_OBJ(refp->access().isWriteOnly(), refp, "Mailbox method reads its result");
+            refp->replaceWith(new AstVarRef{refp->fileline(), vscp, VAccess::WRITE});
+            VL_DO_DANGLING(pushDeletep(refp), refp);
+        }
+        funcp->addStmtsp(newRestoreReactivep(flp, funcp, funcp));
+        funcp->addStmtsp(new AstAssign{flp, outp, new AstVarRef{flp, vscp, VAccess::READ}});
+    }
+    // Make the continuation of 'awaitp' in 'funcp', or in reactive logic if null, stay in the
+    // reactive region set
+    void keepReactive(AstCAwait* awaitp, AstCFunc* funcp, const AstNode* ownerp,
+                      AstScope* scopeOfp) {
+        FileLine* const flp = awaitp->fileline();
+        AstVarScope* const inReactivep = getCreateInReactivep();
+        AstCMethodHard* const methodp = VN_CAST(awaitp->exprp(), CMethodHard);
+        const AstConst* const delayp = methodp && methodp->method() == VCMethod::SCHED_DELAY
+                                           ? VN_CAST(methodp->pinsp(), Const)
+                                           : nullptr;
+        if (delayp && delayp->toUQuad() == std::numeric_limits<uint64_t>::max()) {
+            // The start of a forked process (see V3Fork), which starts in the Reactive region
+            VNRelinker handle;
+            awaitp->unlinkFrBack(&handle);
+            handle.relink(new AstIf{flp, new AstVarRef{flp, inReactivep, VAccess::READ},
+                                    newResumeAwaitp(flp, false, ownerp), awaitp});
+            return;
+        }
+        if (delayp && delayp->isZero()) {
+            // Re-Inactive, if waiting in the reactive region set
+            VNRelinker handle;
+            awaitp->unlinkFrBack(&handle);
+            handle.relink(new AstIf{flp, new AstVarRef{flp, inReactivep, VAccess::READ},
+                                    newResumeAwaitp(flp, true, ownerp), awaitp});
+            return;
+        }
+        AstNodeExpr* const valuep
+            = methodp && methodp->method() == VCMethod::SCHED_DELAY ? methodp->pinsp() : nullptr;
+        if (valuep && !delayp) {
+            // Also for a delay that is zero when run: evaluate it once, into a local; otherwise
+            // continue as below
+            AstScope* const scopep = funcp ? funcp->scopep() : scopeOfp;
+            AstVar* const varp = new AstVar{flp, VVarType::BLOCKTEMP,
+                                            "__VreactiveDelay" + std::to_string(m_delayCount++),
+                                            valuep->dtypep()};
+            varp->funcLocal(true);
+            AstVarScope* const vscp = new AstVarScope{flp, scopep, varp};
+            scopep->addVarsp(vscp);
+            VNRelinker handle;
+            awaitp->unlinkFrBack(&handle);
+            valuep->replaceWith(new AstVarRef{flp, vscp, VAccess::READ});
+            AstCLocalScope* const cscopep = new AstCLocalScope{
+                flp, new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, valuep}};
+            cscopep->addVarsp(varp);
+            AstNodeExpr* const zerop
+                = new AstEq{flp, new AstVarRef{flp, vscp, VAccess::READ},
+                            new AstConst{flp, AstConst::WidthedValue{}, valuep->width(), 0}};
+            cscopep->addStmtsp(new AstIf{
+                flp, new AstLogAnd{flp, new AstVarRef{flp, inReactivep, VAccess::READ}, zerop},
+                newResumeAwaitp(flp, true, ownerp), awaitp});
+            handle.relink(cscopep);
+        }
+        if (methodp && methodp->method() == VCMethod::SCHED_TRIGGER) {
+            // Wait in the twin of the scheduler, which V3Sched resumes in the reactive region
+            // set, also for a trigger the reactive region set fires
+            AstVarScope* const schedp = VN_AS(methodp->fromp(), VarRef)->varScopep();
+            AstVarScope*& twinpr = m_reactiveSchedps[schedp];
+            if (!twinpr) {
+                twinpr = m_topScopep->createTemp(schedp->varp()->name() + "__Vreactive",
+                                                 schedp->dtypep());
+            }
+            AstCAwait* const twinp = awaitp->cloneTree(false);
+            twinp->reactive(true);
+            AstVarRef* const twinRefp = VN_AS(VN_AS(twinp->exprp(), CMethodHard)->fromp(), VarRef);
+            twinRefp->varScopep(twinpr);
+            twinRefp->varp(twinpr->varp());
+            VNRelinker handle;
+            awaitp->unlinkFrBack(&handle);
+            handle.relink(
+                new AstIf{flp, new AstVarRef{flp, inReactivep, VAccess::READ}, twinp, awaitp});
+            return;
+        }
+        if (methodp && methodp->method() == VCMethod::SCHED_EVENT_TRIGGER) {
+            // A listed event can fire in Reactive. Route the waiter to its region at drain
+            // time, before Re-NBA, rather than resuming in Active and hopping back afterward.
+            AstCAwait* const reactAwaitp = funcp ? awaitp->cloneTree(false) : awaitp;
+            AstCMethodHard* const reactMethodp = VN_AS(reactAwaitp->exprp(), CMethodHard);
+            reactMethodp->method(VCMethod::SCHED_EVENT_TRIGGER_REACTIVE);
+            reactMethodp->addPinsp(new AstVarRef{flp, getCreateSchedp(false), VAccess::WRITE});
+            if (funcp) {
+                // The same method can also be called from Active; keep ordinary registrations.
+                VNRelinker handle;
+                awaitp->unlinkFrBack(&handle);
+                handle.relink(new AstIf{flp, new AstVarRef{flp, inReactivep, VAccess::READ},
+                                        reactAwaitp, awaitp});
+            }
+            return;
+        }
+        // A dynamic trigger found set when evaluated, also in the reactive region set, resumes
+        // the process from the 'act' region; one of the reactive region set is resumed in it
+        // instead (see V3Sched)
+        const bool resumption = methodp && methodp->method() == VCMethod::SCHED_RESUMPTION;
+        if (!funcp) {
+            // Reactive logic only runs in the reactive region set
+            if (resumption) {
+                awaitp->replaceWith(newResumeAwaitp(flp, false, ownerp));
+                VL_DO_DANGLING(pushDeletep(awaitp), awaitp);
+                return;
+            }
+            awaitp->addNextHere(
+                new AstIf{flp, new AstLogNot{flp, new AstVarRef{flp, inReactivep, VAccess::READ}},
+                          newResumeAwaitp(flp, false, ownerp)});
+            return;
+        }
+        if (resumption) {
+            AstVarScope* const wasp = entryReactivep(flp, funcp);
+            VNRelinker handle;
+            awaitp->unlinkFrBack(&handle);
+            handle.relink(new AstIf{flp, new AstVarRef{flp, wasp, VAccess::READ},
+                                    newResumeAwaitp(flp, false, ownerp), awaitp});
+            return;
+        }
+        awaitp->addNextHere(newRestoreReactivep(flp, funcp, ownerp));
+    }
+
+    // VISITORS
+    void visit(AstCFunc* nodep) override {
+        if (!m_reactiveFuncps.count(nodep)) return;
+        VL_RESTORER(m_ownerp);
+        VL_RESTORER(m_funcp);
+        m_ownerp = nodep;
+        m_funcp = nodep;
+        iterateChildren(nodep);
+        deferMailboxResult(nodep);
+    }
+    void visit(AstScope* nodep) override {
+        VL_RESTORER(m_scopep);
+        m_scopep = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstAlwaysReactive* nodep) override {
+        VL_RESTORER(m_ownerp);
+        VL_RESTORER(m_inReactiveProc);
+        m_ownerp = nodep;
+        m_inReactiveProc = true;
+        iterateChildren(nodep);
+    }
+    void visit(AstForkItem* nodep) override {
+        VL_RESTORER(m_ownerp);
+        m_ownerp = nodep;
+        iterateChildren(nodep);
+    }
+    void visit(AstCAwait* nodep) override {
+        if (!m_funcp && !m_inReactiveProc) return;
+        if (const AstCMethodHard* const methodp = VN_CAST(nodep->exprp(), CMethodHard)) {
+            // Restore the region only at a continuation. Internal evaluation and post-updates
+            // must stay in the dynamic scheduler's own steps. Queue waits stay there through
+            // release of the selected turn; get/peek restore the region before writing the ref.
+            const VCMethod method = methodp->method();
+            if (method != VCMethod::SCHED_DELAY && method != VCMethod::SCHED_TRIGGER
+                && method != VCMethod::SCHED_RESUMPTION && method != VCMethod::SCHED_EVENT_TRIGGER
+                && method != VCMethod::FORK_JOIN) {
+                return;
+            }
+        }
+        m_awaits.push_back({nodep, m_funcp, m_ownerp, m_scopep});
+    }
+    void visit(AstNodeExpr*) override {}  // Accelerate
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+public:
+    // CONSTRUCTORS
+    explicit TimingReactiveVisitor(AstNetlist* netlistp)
+        : m_netlistp{netlistp}
+        , m_topScopep{netlistp->topScopep()} {
+        // Find the functions reactive logic may call
+        const std::unique_ptr<V3CallTargets> callTargetsp = V3CallTargets::build();
+        std::vector<AstCFunc*> todo;
+        const auto addCalls = [&](AstNode* nodep) {
+            nodep->foreach([&](AstNodeCCall* callp) {
+                for (AstCFunc* const funcp : callTargetsp->getTargets(callp)) {
+                    if (m_reactiveFuncps.insert(funcp).second) todo.push_back(funcp);
+                }
+            });
+        };
+        netlistp->foreach([&](AstAlwaysReactive* procp) { addCalls(procp); });
+        while (!todo.empty()) {
+            AstCFunc* const funcp = todo.back();
+            todo.pop_back();
+            addCalls(funcp);
+        }
+        iterate(netlistp);
+        for (const Await& await : m_awaits) {
+            keepReactive(await.m_awaitp, await.m_funcp, await.m_ownerp, await.m_scopep);
+        }
+    }
+    ~TimingReactiveVisitor() override = default;
+};
+
+//######################################################################
 // Timing class functions
 
 AstNodeExpr* V3Timing::delayToTicks(AstNodeExpr* valuep, VTimescale timeunit) {
@@ -2412,6 +2759,9 @@ void V3Timing::timingAll(AstNetlist* nodep) {
         const VNUser2InUse m_user2InUse;
         { TimingSuspendableVisitor{nodep}; }
         if (v3Global.usesTiming()) TimingControlVisitor{nodep};
+    }
+    if (v3Global.usesTiming() && nodep->exists([](const AstAlwaysReactive*) { return true; })) {
+        TimingReactiveVisitor{nodep};
     }
     V3Global::dumpCheckGlobalTree("timing", 0, dumpTreeEitherLevel() >= 3);
 }
