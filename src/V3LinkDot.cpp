@@ -196,7 +196,8 @@ public:
     void attach() {
         // Competing scoped selectors may give sites different control histories.
         // Only use the context path when every selector selects the whole model.
-        if (m_standaloneTopp && !m_selectors.empty() && m_wholeModel.size() == m_selectors.size()) {
+        if (m_standaloneTopp && !m_selectors.empty()
+            && m_wholeModel.size() == m_selectors.size()) {
             VNDeleter deleter;
             for (AstAssertCtlArgs* const argsp : m_selectors) {
                 VL_DO_DANGLING(deleter.pushDeletep(argsp->unlinkFrBack()), argsp);
@@ -238,6 +239,13 @@ public:
     }
 };
 
+static void warnAssertControlHierarchy(AstNode* locationp, const AstCell* cellp,
+                                       const string& path) {
+    locationp->v3warn(E_UNSUPPORTED, "Unsupported: Assertion control across hierarchical instance "
+                                         << cellp->prettyNameQ() << ": '"
+                                         << AstNode::prettyName(path) << "'.");
+}
+
 // Assertion selection is done before V3Begin removes lexical scopes. The emitted
 // references use normal VarXRef/VarScope identity, never runtime path matching.
 class AssertControlTargetVisitor final : public VNVisitor {
@@ -250,8 +258,23 @@ class AssertControlTargetVisitor final : public VNVisitor {
     const bool m_optional;  // Sites of one of several elaborations reached by an upward name
     const bool m_absolute;  // Sites named by an absolute path, the same from every instance
     const AstNodeModule* m_classp = nullptr;  // Class whose code references the state
+    // A dynamic level may include the partition. Zero includes all depths.
+    bool reachesDepth(int depth) const {
+        const AstConst* const levelp = VN_CAST(m_argsp->levelp(), Const);
+        if (!levelp || levelp->num().isOpaque() || levelp->num().isFourState()) return true;
+        if (levelp->isSigned() && levelp->num().isNegative()) return false;
+        return levelp->num().isEqZero() || !levelp->num().fitsInUInt()
+               || levelp->toUInt() > static_cast<uint32_t>(depth);
+    }
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
+        if (v3Global.opt.hierarchical() && nodep->modp()->hierBlock()) {
+            if (reachesDepth(m_depth + 1)) {
+                warnAssertControlHierarchy(m_argsp, nodep,
+                                           VString::dot(m_childPath, ".", nodep->name()));
+            }
+            return;
+        }
         VL_RESTORER_COPY(m_instancePath);
         VL_RESTORER_COPY(m_childPath);
         VL_RESTORER(m_depth);
@@ -1255,7 +1278,8 @@ public:
             if (lookupSymp) {
                 if (const AstCell* const cellp = VN_CAST(lookupSymp->nodep(), Cell)) {
                     if (const AstNodeModule* const modp = cellp->modp()) {
-                        if (assertCtlBoundarypp && v3Global.opt.hierarchical() && modp->hierBlock()) {
+                        if (assertCtlBoundarypp && v3Global.opt.hierarchical()
+                            && modp->hierBlock()) {
                             *assertCtlBoundarypp = cellp;
                             return nullptr;
                         }
@@ -8564,10 +8588,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             crossings.push_back(assertControlPortCrossing(flp, scopep, names));
             const AssertCtlPortCrossing& crossing = crossings.back();
             if (const AstCell* const boundaryp = crossing.boundaryp) {
-                itemp->v3warn(E_UNSUPPORTED,
-                              "Unsupported: Assertion control across hierarchical instance "
-                                  << boundaryp->prettyNameQ() << ": '" << AstNode::prettyName(path)
-                                  << "'.");
+                warnAssertControlHierarchy(itemp, boundaryp, path);
                 return true;
             }
             if (crossing.isVirtual) {
