@@ -8450,7 +8450,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             VSymEnt* okSymp = nullptr;
             // Past a port, only names within the interface instance (or modport) reached
             const VSymEnt* const symp = m_statep->findDotted(flp, basep, rest, baddot, okSymp,
-                                                              baseIndex == 0, &crossing.boundaryp);
+                                                             baseIndex == 0, &crossing.boundaryp);
             if (!symp) break;
             if (i + 1 == names.size()) crossing.foundp = symp;
             const AstVar* const varp = VN_CAST(symp->nodep(), Var);
