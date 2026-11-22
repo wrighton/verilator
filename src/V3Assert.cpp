@@ -1193,8 +1193,9 @@ class AssertVisitor final : public VNVisitor {
     }
     AstVarRef* newMonitorNumVarRefp(const AstNode* nodep, VAccess access) {
         if (!m_monitorNumVarp) {
+            // As wide as the 32-bit constants compared with it
             m_monitorNumVarp = new AstVar{nodep->fileline(), VVarType::MODULETEMP, "__VmonitorNum",
-                                          nodep->findUInt64DType()};
+                                          nodep->findUInt32DType()};
             v3Global.rootp()->dollarUnitPkgp()->addStmtsp(m_monitorNumVarp);
         }
         AstVarRef* const varrefp = new AstVarRef{nodep->fileline(), m_monitorNumVarp, access};
