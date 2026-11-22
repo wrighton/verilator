@@ -25,8 +25,10 @@ endmodule
 
 `ifdef VIA_PORT
 interface bank_group (input bit clk, input bit good, output wire [31:0] reports [4]);
-  for (genvar i = 0; i < 4; ++i) begin : slots
-    bank_leaf u (.clk, .good, .reports(reports[i]));
+  if (1) begin : payload
+    for (genvar i = 0; i < 4; ++i) begin : slots
+      bank_leaf u (.clk, .good, .reports(reports[i]));
+    end
   end
 endinterface
 `endif
@@ -40,7 +42,7 @@ module caller (input bit clk, input bit good, input bit off, output int reports
     local_check : assert (good) else reports++;
   end
 `ifdef VIA_PORT
-  always @(posedge off) $assertoff(0, port_bank, local_check);
+  always @(posedge off) $assertoff(0, port_bank.payload, local_check);
 `else
   always @(posedge off) $assertoff(0, $root.t.bank, local_check);
 `endif
