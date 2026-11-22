@@ -37,6 +37,9 @@ module t;
   sub b ();
 `ifdef WHOLE_MODEL
   localparam int ZERO = 0;
+  for (genvar i = 0; i < 4; ++i) begin : whole
+    initial $assertoff(0, $root.t);
+  end
   initial begin
     $assertoff(0);
     $asserton(ZERO + 0);
