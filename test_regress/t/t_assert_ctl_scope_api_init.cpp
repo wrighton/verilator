@@ -33,6 +33,7 @@ int main(int argc, char** argv) {
     const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{contextp.get()}};
     // Instance b carries the checks: a's own code also turns off and locks a
     topp->clk = 0;
+    topp->off_whole = 0;
     topp->eval();
     pulse(*topp);
     require(topp->bfails == 0, "Off and FailOff before construction not applied");
