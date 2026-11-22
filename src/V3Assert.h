@@ -38,12 +38,13 @@ public:
     // nullptr
     static AstVar* newSequenceEvent(FileLine* flp, AstNodeModule* modp, const string& name,
                                     AstSchemaRef* schemaRefp) VL_MT_DISABLED;
-    static string assertCtlGetCall(const char* query, VAssertType type,
+    static string assertCtlGetCall(VAssertCtlQuery query, VAssertType type,
                                    VAssertDirectiveType directiveType) VL_MT_DISABLED;
     // Direct per-instance query retaining its state reference as structured AST.
-    static AstNodeExpr* newAssertCtlGetp(FileLine* flp, const char* query, VAssertType type,
+    static AstNodeExpr* newAssertCtlGetp(FileLine* flp, VAssertCtlQuery query, VAssertType type,
                                          VAssertDirectiveType directiveType,
                                          AstVar* statep = nullptr) VL_MT_DISABLED;
+    static void bindControlQueries(AstNetlist* rootp) VL_MT_DISABLED;
     // True if $past, $sampled and $stable can store and compare values of the type
     static bool isSampledType(const AstNodeDType* dtypep) VL_MT_DISABLED;
     // Check an SVA value is within the implementation limit, else report it on nodep
