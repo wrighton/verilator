@@ -533,7 +533,8 @@ class UnknownVisitor final : public VNVisitor {
                 VNRelinker replaceHandle;
                 nodep->unlinkFrBack(&replaceHandle);
                 V3Number xnum{nodep, nodep->width()};
-                xnum.setAllBitsX();
+                // Bits of a 2-state vector read as zero (IEEE 1800-2023 11.5.1)
+                if (nodep->fromp()->dtypep()->isFourstate()) xnum.setAllBitsX();
                 AstNodeExpr* const xexprp = new AstConst{nodep->fileline(), xnum};
                 AstNodeExpr* const newp = [&]() -> AstNodeExpr* {
                     if (condp->isZero()) {
