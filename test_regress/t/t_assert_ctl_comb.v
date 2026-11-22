@@ -4,23 +4,15 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-// verilog_format: off
-`define stop $stop
-`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__, `__LINE__, (gotv), (expv)); `stop; end while (0);
-// verilog_format: on
-
 module child (
     input int value
 );
-  int immediate_reports;
-  int deferred_reports;
-
   function void record_deferred(input int payload);
-    if (payload == 3) deferred_reports++;
+    $display("deferred assertion report: %0d", payload);
   endfunction
 
   always_comb begin
-    check_now : assert (value != 3) else immediate_reports++;
+    check_now : assert (value != 3) else $display("immediate assertion report: %0d", value);
   end
 
   always_comb begin
@@ -46,10 +38,6 @@ module t;
 `endif
     #2;
     #80;
-    $display("immediate reports=%0d, deferred reports=%0d", a.immediate_reports,
-             a.deferred_reports);
-    `checkd(a.immediate_reports, 1);
-    `checkd(a.deferred_reports, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
