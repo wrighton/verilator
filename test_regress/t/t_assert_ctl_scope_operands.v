@@ -78,6 +78,11 @@ module t (
           check_deltas(0, 0, 1, 1);
           $asserton;
         end
+        10: begin
+          check_deltas(1, 1, 1, 1);
+          lvl = byte'(-cyc);
+          $assertoff(lvl, a);  // A signed negative level selects no sites.
+        end
         default: begin
           check_deltas(1, 1, 1, 1);
           $write("*-* All Finished *-*\n");
