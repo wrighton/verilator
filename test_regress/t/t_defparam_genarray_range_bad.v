@@ -10,7 +10,8 @@ endmodule
 
 // The same path from each instance of the module containing the defparam (IEEE 1800-2023 23.6)
 module cfg;
-  defparam g[1].u.P = 3;
+  defparam g[1].u.P = 30;
+  defparam g[1].u.P = 3;  // The same, so reported once
 endmodule
 
 module has2;

@@ -29,7 +29,4 @@
 %Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:41:26: Unsupported: defparam with instance select through generate blocks of the same name
    41 |   defparam gp[0].alt.u.P = 6;
       |                          ^
-%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:54:28: Unsupported: defparam with instance select through generate blocks of the same name, from outside its scope
-   54 |   defparam t.g2[0].alt.u.P = 3;
-      |                            ^
 %Error: Exiting due to

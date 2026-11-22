@@ -1,5 +1,51 @@
-%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:19:25: Unsupported: defparam with instance select through generate blocks of the same name, naming no instance built
-   19 |   defparam g[0].alt.u.P = 2;   
-      |                         ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:208:30: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                            : ... note: In instance 't'
+  208 |   defparam $root.t.g6[0].u.P = 9;
+      |                              ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:157:30: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                            : ... note: In instance 't'
+  157 |   defparam $root.t.g8[0].u.P = 7;
+      |                              ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:181:30: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                            : ... note: In instance 't'
+  181 |   defparam $root.t.g9[0].u.P = 7;
+      |                              ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:135:29: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                            : ... note: In instance 't.oh1'
+  135 |   defparam opthost.g[0].u.P = 9;
+      |                             ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:45:34: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+   45 |   defparam $root.t.g3[0].alt.u.P = 9;
+      |                                  ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:55:38: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+   55 |   defparam $root.t.g5[0].alt.u.blk.Q = 9;
+      |                                      ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:212:28: Unsupported: defparam with instance select through generate blocks of the same name, naming no instance built
+  212 |   defparam t.g2[0].alt.u.P = 3;   
+      |                            ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:213:34: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+  213 |   defparam $root.t.g4[0].alt.u.P = 5;   
+      |                                  ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:10:36: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+   10 |   defparam $root.t.lm.g[0].alt.u.P = 9;
+      |                                    ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:105:23: Unsupported: defparam with instance select naming different instances from different instances of its module
+  105 |   defparam a.g[0].u.P = 4;
+      |                       ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:161:24: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+  161 |   defparam t.g8[0].u.P = 9;
+      |                        ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:185:24: Unsupported: defparam with instance select naming different instances from different instances of its module
+  185 |   defparam t.g9[0].u.P = 9;
+      |                        ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:208:30: Unsupported: defparam in code not built, setting a parameter of an instance that is built
+  208 |   defparam $root.t.g6[0].u.P = 9;
+      |                              ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:200:30: Unsupported: defparam in code not built, setting a parameter of an instance that is built
+  200 |   defparam $root.t.g7[0].u.P = 9;
+      |                              ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_alt_unsup.v:25:25: Unsupported: defparam with instance select through generate blocks of the same name, naming no instance built
+   25 |   defparam g[0].alt.u.P = 2;   
+      |                         ^
 %Error: Exiting due to

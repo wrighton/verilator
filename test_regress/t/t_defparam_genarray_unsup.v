@@ -39,17 +39,4 @@ module t;
     end
   end
   defparam gp[0].alt.u.P = 6;
-  // Through generate blocks of the same name, from outside the scope
-  for (genvar i = 0; i < 2; ++i) begin : g2
-    if (i == 0) begin : alt
-      sub u ();
-    end else begin : alt
-      sub u ();
-    end
-  end
-  cfg c ();
-endmodule
-
-module cfg;
-  defparam t.g2[0].alt.u.P = 3;
 endmodule
