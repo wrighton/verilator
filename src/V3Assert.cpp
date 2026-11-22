@@ -333,6 +333,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
                     flp, "__VbindAssertCtlTable_" + std::to_string(bound.size()), topScopep};
                 binding.bindp->isStatic(true);
                 binding.bindp->isLoose(true);
+                binding.bindp->dontCombine(true);  // The table call takes its address.
                 binding.bindp->slow(true);
                 binding.bindp->argTypes(EmitCUtil::symClassVar()
                                         + ", std::vector<VlAssertCtlTable::Target>& targets");
