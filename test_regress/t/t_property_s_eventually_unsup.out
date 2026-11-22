@@ -48,4 +48,7 @@
 %Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:37:5: Unsupported: Timing control in action block of a strong property, which also runs at end of simulation
    37 |     wait (n == 0);
       |     ^~~~
+%Error-UNSUPPORTED: t/t_property_s_eventually_unsup.v:40:57: Unsupported: Timing control in action block of a strong property, which also runs at end of simulation
+   40 |   assert property (@(posedge clk) s_eventually (a [= 2] |-> b)) ++n;
+      |                                                         ^~~
 %Error: Exiting due to
