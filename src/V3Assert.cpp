@@ -189,6 +189,92 @@ struct AssertCtlSignatureHash final {
         return hash.value();
     }
 };
+
+// Each identical concrete selection shares one cache and one cold pointer binder.
+class AssertCtlTableBindings final {
+    AstNetlist* const m_rootp;
+    AstScope* const m_topScopep;
+    V3SharedTmps m_tables{"__VassertCtlTable", VVarType::MODULETEMP};
+    AstCDType* m_tableDtp = nullptr;
+    size_t m_entries = 0;
+    std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> m_bound;
+
+public:
+    AssertCtlTableBindings(AstNetlist* rootp, AstScope* topScopep)
+        : m_rootp{rootp}
+        , m_topScopep{topScopep} {}
+
+    size_t size() const { return m_bound.size(); }
+    size_t entries() const { return m_entries; }
+
+    template <typename T_Rebind>
+    AstCStmt* newCallp(AstAssertCtlApply* applyp, const T_Rebind& rebind) {
+        FileLine* const flp = applyp->fileline();
+        AstCStmt* const callp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->"};
+        if (!applyp->targetsp()) {
+            callp->add("assertCtlValid(");
+            callp->add(applyp->effectp()->unlinkFrBack());
+            callp->add(");\n");
+            return callp;
+        }
+        if (!m_tableDtp) {
+            m_tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
+            m_rootp->typeTablep()->addTypesp(m_tableDtp);
+        }
+        AssertCtlTableKey key;
+        std::vector<AstNodeVarRef*> refs;
+        std::unordered_set<const AstVarScope*> emitted;
+        for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
+            AstNodeVarRef* const statep = targetp->statep();
+            rebind(statep);
+            if (!emitted.emplace(statep->varScopep()).second) continue;
+            key.emplace_back(statep->varScopep(), targetp->depth());
+            refs.push_back(statep);
+        }
+        const auto table = m_bound.try_emplace(key);
+        AssertCtlBoundTable& binding = table.first->second;
+        if (table.second) {
+            // The cache belongs to the model even if the selector is called
+            // from a class method with no model-owned class object.
+            binding.cachep = m_tables.make(flp, m_topScopep, m_tableDtp);
+            binding.cachep->varp()->noReset(true);
+            binding.cachep->varp()->isInternal(true);
+            binding.cachep->varp()->setIgnoreSchedWrite();
+            binding.bindp = new AstCFunc{
+                flp, "__VbindAssertCtlTable_" + std::to_string(m_bound.size()), m_topScopep};
+            binding.bindp->isStatic(true);
+            binding.bindp->isLoose(true);
+            binding.bindp->slow(true);
+            binding.bindp->argTypes(EmitCUtil::symClassVar()
+                                    + ", std::vector<VlAssertCtlTable::Target>& targets");
+            m_topScopep->addBlocksp(binding.bindp);
+            AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
+            for (size_t i = 0; i < refs.size(); ++i) {
+                initp->add("{&");
+                initp->add(refs[i]->unlinkFrBack());
+                initp->add(", " + std::to_string(key[i].second) + "},\n");
+            }
+            initp->add("};\n");
+            binding.bindp->addStmtsp(initp);
+            m_entries += key.size();
+        }
+        callp->add("assertCtlTable(");
+        callp->add(applyp->effectp()->unlinkFrBack());
+        callp->add(", ");
+        callp->add(applyp->typesp()->unlinkFrBack());
+        callp->add(", " + std::to_string(applyp->directives()) + ", ");
+        callp->add(applyp->limitp()->unlinkFrBack());
+        callp->add(", ");
+        callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
+        callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { ");
+        AstCCall* const bindCallp = new AstCCall{flp, binding.bindp};
+        bindCallp->dtypeSetVoid();
+        bindCallp->argTypes("vlSymsp, targets");
+        callp->add(bindCallp);
+        callp->add("; });\n");
+        return callp;
+    }
+};
 }  // namespace
 
 void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
@@ -196,11 +282,11 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     std::unordered_set<const AstVarScope*> selected;
     std::vector<AstVarScope*> selectedInOrder;
     std::vector<AstAssertCtlRead*> reads;
-    std::vector<std::pair<AstScope*, AstAssertCtlApply*>> applies;
+    std::vector<AstAssertCtlApply*> applies;
     rootp->foreach([&](AstScope* scopep) {
         if (!scopep->blocksp()) return;
         scopep->blocksp()->foreachAndNext([&](AstAssertCtlApply* applyp) {
-            applies.emplace_back(scopep, applyp);
+            applies.push_back(applyp);
             std::unordered_map<const AstVarScope*, AstAssertCtlTarget*> seen;
             std::vector<AstAssertCtlTarget*> duplicates;
             for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
@@ -225,7 +311,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     rootp->foreach([&](AstAssertCtlRead* readp) { reads.push_back(readp); });
     std::unordered_map<const AstVarScope*, AssertCtlHistory> histories;
     for (size_t i = 0; i < applies.size(); ++i) {
-        for (const AstAssertCtlTarget* const targetp : applies[i].second->targetspList()) {
+        for (const AstAssertCtlTarget* const targetp : applies[i]->targetspList()) {
             histories[targetp->statep()->varScopep()].emplace_back(i, targetp->depth());
         }
     }
@@ -233,10 +319,9 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     std::unordered_map<const AstVarScope*, AstVarScope*> canonical;
     std::vector<AstVarScope*> representatives;
     for (AstVarScope* const statep : selectedInOrder) {
-        auto result = groups.emplace(AssertCtlSignature{statep->scopep(),
-                                                        statep->varp()->assertCtlMask(),
-                                                        std::move(histories.at(statep))},
-                                     statep);
+        AssertCtlSignature signature{statep->scopep(), statep->varp()->assertCtlMask(),
+                                     std::move(histories.at(statep))};
+        const auto result = groups.emplace(std::move(signature), statep);
         canonical.emplace(statep, result.first->second);
         if (result.second) representatives.push_back(statep);
     }
@@ -293,83 +378,16 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         VL_DO_DANGLING(deleter.pushDeletep(readp), readp);
     }
 
-    V3SharedTmps tables{"__VassertCtlTable", VVarType::MODULETEMP};
-    AstCDType* tableDtp = nullptr;
-    size_t entries = 0;
-    std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> bound;
-    for (const auto& apply : applies) {
-        AstAssertCtlApply* const applyp = apply.second;
-        FileLine* const flp = applyp->fileline();
-        AstCStmt* const callp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->"};
-        if (!applyp->targetsp()) {
-            callp->add("assertCtlValid(");
-            callp->add(applyp->effectp()->unlinkFrBack());
-            callp->add(");\n");
-        } else {
-            if (!tableDtp) {
-                tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
-                rootp->typeTablep()->addTypesp(tableDtp);
-            }
-            AssertCtlTableKey key;
-            std::vector<AstNodeVarRef*> refs;
-            std::unordered_set<const AstVarScope*> emitted;
-            for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
-                AstNodeVarRef* const statep = targetp->statep();
-                rebind(statep);
-                if (!emitted.emplace(statep->varScopep()).second) continue;
-                key.emplace_back(statep->varScopep(), targetp->depth());
-                refs.push_back(statep);
-            }
-            const auto table = bound.try_emplace(key);
-            AssertCtlBoundTable& binding = table.first->second;
-            if (table.second) {
-                // The cache belongs to the model even if the selector is called
-                // from a class method with no model-owned class object.
-                binding.cachep = tables.make(flp, topScopep, tableDtp);
-                binding.cachep->varp()->noReset(true);
-                binding.cachep->varp()->isInternal(true);
-                binding.cachep->varp()->setIgnoreSchedWrite();
-                binding.bindp = new AstCFunc{
-                    flp, "__VbindAssertCtlTable_" + std::to_string(bound.size()), topScopep};
-                binding.bindp->isStatic(true);
-                binding.bindp->isLoose(true);
-                binding.bindp->slow(true);
-                binding.bindp->argTypes(EmitCUtil::symClassVar()
-                                        + ", std::vector<VlAssertCtlTable::Target>& targets");
-                topScopep->addBlocksp(binding.bindp);
-                AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
-                for (size_t i = 0; i < refs.size(); ++i) {
-                    initp->add("{&");
-                    initp->add(refs[i]->unlinkFrBack());
-                    initp->add(", " + std::to_string(key[i].second) + "},\n");
-                }
-                initp->add("};\n");
-                binding.bindp->addStmtsp(initp);
-                entries += key.size();
-            }
-            callp->add("assertCtlTable(");
-            callp->add(applyp->effectp()->unlinkFrBack());
-            callp->add(", ");
-            callp->add(applyp->typesp()->unlinkFrBack());
-            callp->add(", " + std::to_string(applyp->directives()) + ", ");
-            callp->add(applyp->limitp()->unlinkFrBack());
-            callp->add(", ");
-            callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
-            callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { ");
-            AstCCall* const bindCallp = new AstCCall{flp, binding.bindp};
-            bindCallp->dtypeSetVoid();
-            bindCallp->argTypes("vlSymsp, targets");
-            callp->add(bindCallp);
-            callp->add("; });\n");
-        }
-        applyp->replaceWith(callp);
+    AssertCtlTableBindings tables{rootp, topScopep};
+    for (AstAssertCtlApply* const applyp : applies) {
+        applyp->replaceWith(tables.newCallp(applyp, rebind));
         VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
     }
     if (v3Global.opt.stats()) {
         V3Stats::addStatSum("Assertions, Scoped selected sites", selected.size());
         V3Stats::addStatSum("Assertions, Scoped state instances", representatives.size());
-        V3Stats::addStatSum("Assertions, Scoped tables", bound.size());
-        V3Stats::addStatSum("Assertions, Scoped table entries", entries);
+        V3Stats::addStatSum("Assertions, Scoped tables", tables.size());
+        V3Stats::addStatSum("Assertions, Scoped table entries", tables.entries());
     }
 }
 
