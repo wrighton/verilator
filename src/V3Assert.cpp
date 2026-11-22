@@ -2437,8 +2437,8 @@ class AssertVisitor final : public VNVisitor {
         if (mature) {
             bodysp = newMatureInstance(nodep, bodysp, procClockp);
             procClockp = nullptr;
-        } else if (!seqEvent && !nodep->nfaLowered()) {
-            // NFA entry is already gated. Off does not suppress an in-flight outcome.
+        } else if (!seqEvent) {
+            // The outcome gate applies the same control policy to global and scoped sites.
             bodysp = newIfAssertOn(nodep->controlVarp(), bodysp, nodep->directive(),
                                    nodep->userType());
         }
