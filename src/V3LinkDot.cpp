@@ -117,6 +117,8 @@ class AssertControlSeedVisitor final : public VNVisitor {
                                         "__VassertControl" + std::to_string(m_number++), dtypep};
         varp->lifetime(VLifetime::STATIC_EXPLICIT);
         varp->isInternal(true);
+        // Control changes affect evaluation only when the assertion is otherwise triggered.
+        varp->setIgnoreSchedWrite();
         const int typeBit = V3Number::log2bQuad(static_cast<uint32_t>(type));
         varp->assertCtlMask(static_cast<uint32_t>(directive) << (3 * typeBit));
         m_modp->addStmtsp(varp);
