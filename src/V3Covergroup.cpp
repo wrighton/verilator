@@ -30,6 +30,7 @@
 #include "V3Error.h"
 #include "V3File.h"
 #include "V3MemberMap.h"
+#include "V3SenExprBuilder.h"
 #include "V3Stats.h"
 #include "V3UniqueNames.h"
 
@@ -4706,7 +4707,7 @@ class FunctionalCoverageVisitor final : public VNVisitor {
         } else if (trigger.edgeType == VEdgeType::ET_BOTHEDGE) {
             edgep = new AstSel{fl, new AstXor{fl, curp, prevp}, 0, 1};
         } else {
-            edgep = new AstNeq{fl, curp, prevp};
+            edgep = SenExprBuilder::newChangedp(fl, curp, prevp);
         }
         if (trigger.condp) {
             edgep = new AstLogAnd{fl, edgep, trigger.condp->cloneTree(false)};
