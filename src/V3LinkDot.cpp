@@ -8606,7 +8606,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     }
     bool assertControlPortReach(AstNodeExpr* itemp, const VSymEnt* callerp, const string& path,
                                 const std::vector<string>& names,
-                                const AssertCtlPortCrossing& crossing, AssertCtlReach& reach) {
+                                const AssertCtlPortCrossing& crossing, AssertCtlReach& reach,
+                                bool absolute = false) {
         const VSymEnt* const foundp = crossing.foundp;
         const bool portTarget = crossing.components == names.size();
         AstNode* const targetp = portTarget ? crossing.anchorp->nodep()
@@ -8645,6 +8646,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             || !assertionRelativeScopePath(targetSymp, crossing.anchorp, childRest)) {
             assertCtlBadReach(itemp, callerp, path);
             return false;
+        }
+        if (absolute) {
+            reach = {targetp, assertionScopePath(instanceSymp), assertionScopePath(targetSymp)};
+            return true;
         }
         string prefix;
         for (size_t i = names.front() == "$root" ? 1 : 0; i < crossing.components; ++i) {
@@ -8728,19 +8733,36 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         if (!crossingCount) return false;
-        if (names.size() == 1 && scopes.size() > 1 && crossingCount == scopes.size()
-            && !VN_IS(m_modp, Class)) {
+        if (scopes.size() > 1 && crossingCount == scopes.size() && !VN_IS(m_modp, Class)) {
             VSymEnt* const sharedp = assertCtlDirectIface(flp, scopes.front(), names.front());
             bool shared = sharedp != nullptr;
             for (size_t i = 0; shared && i < scopes.size(); ++i) {
-                shared = !crossings[i].modport
+                shared = crossings[i].components == 1 && !crossings[i].modport
                          && (i == 0
                              || assertCtlDirectIface(flp, scopes[i], names.front()) == sharedp);
             }
             if (shared) {
-                const string targetPath = assertionScopePath(sharedp);
-                addAssertCtlTargets({{sharedp->nodep(), targetPath, targetPath}}, argsp, targets,
-                                    true);
+                AssertCtlPortCrossing concrete = crossings.front();
+                concrete.anchorp = sharedp;
+                if (names.size() > 1) {
+                    string suffix;
+                    for (size_t i = 1; i < names.size(); ++i) {
+                        suffix = VString::dot(suffix, ".", names[i]);
+                    }
+                    string baddot;
+                    VSymEnt* okp = nullptr;
+                    concrete.foundp = m_statep->findAssertCtlDotted(
+                        flp, sharedp, suffix, baddot, okp, false, &concrete.boundaryp);
+                }
+                if (concrete.boundaryp) {
+                    warnAssertControlHierarchy(itemp, concrete.boundaryp, path);
+                    return true;
+                }
+                AssertCtlReach reach;
+                if (assertControlPortReach(itemp, scopes.front(), path, names, concrete, reach,
+                                           true)) {
+                    addAssertCtlTargets({std::move(reach)}, argsp, targets, true);
+                }
                 return true;
             }
         }
@@ -8792,8 +8814,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
             symIterateNull(selp->bitp(), m_curSymp);
-            AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
-            const AstConst* const constp = VN_CAST(indexp, Const);
+            AstNodeExpr* const clonep
+                = m_statep->forParamed() ? nullptr
+                                         : V3Const::constifyEdit(selp->bitp()->cloneTree(false));
+            if (!clonep) V3Const::constifyParamsNoWarnEdit(selp->bitp());
+            const AstConst* const constp = VN_CAST(clonep ? clonep : selp->bitp(), Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
             if (!constp || constp->num().isFourState()) {
@@ -8801,7 +8826,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (!base.empty()) {
                 path = base + "__BRA__" + AstNode::encodeNumber(constp->toSInt()) + "__KET__";
             }
-            VL_DO_DANGLING(pushDeletep(indexp), indexp);
+            if (clonep) VL_DO_DANGLING(pushDeletep(clonep), clonep);
             return path;
         }
         return "";
