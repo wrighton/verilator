@@ -3350,7 +3350,7 @@ class AssertVisitor final : public VNVisitor {
             const uint32_t types = typesp ? typesp->toUInt() : ALL_ASSERT_TYPES;
             mask = 0;
             for (unsigned bit = 0; bit < std::numeric_limits<uint8_t>::digits; ++bit) {
-                if (VL_BITISSET_I(types, bit)) {
+                if (types & (uint32_t{1} << bit)) {
                     mask |= static_cast<uint32_t>(nodep->directiveTypes())
                             << (VAssertDirectiveType::MASK_WIDTH * bit);
                 }
