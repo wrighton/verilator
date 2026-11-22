@@ -1,0 +1,75 @@
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:120:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  120 |   defparam $root.t.gfill[0].u.P = '1;
+      |                                 ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:140:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  140 |   defparam $root.t.gconv[0].u.I = 8'hff;
+      |                                 ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:141:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  141 |   defparam $root.t.gconv[0].u.S = "A";
+      |                                 ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:145:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  145 |   defparam $root.t.gconv[0].u.R = 32'd7;
+      |                                 ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:190:36: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  190 |   defparam $root.t.geq[0].u_leaf.P = 2 + 3;
+      |                                    ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:161:32: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  161 |   defparam $root.t.gone[0].u.P = '1;
+      |                                ^
+%Warning-WIDTHEXPAND: t/t_defparam_differ_unsup.v:111:27: Operator VAR 'P' expects 8 bits on the Initial value, but Initial value's CONST '1'h1' generates 1 bits.
+  111 |     parameter logic [7:0] P = 8'hff
+      |                           ^
+                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
+                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:178:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  178 |   defparam $root.t.gzero[0].u.P = $bitstoreal(64'h0000_0000_0000_0000);
+      |                                 ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:75:31: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                     : ... note: In instance 't'
+   75 |   defparam $root.t.gun[0].u.P = 3'd5;
+      |                               ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:83:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                     : ... note: In instance 't'
+   83 |   defparam $root.t.gcast[0].u.P = integer'(5);
+      |                                 ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:107:33: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                      : ... note: In instance 't'
+  107 |   defparam $root.t.gsign[0].u.P = $unsigned(32'hffff_ffff);
+      |                                 ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:98:32: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                     : ... note: In instance 't'
+   98 |   defparam $root.t.gpat[0].u.P = '{8'hff};
+      |                                ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:99:32: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                     : ... note: In instance 't'
+   99 |   defparam $root.t.gpat[0].u.R = '{-0.0};
+      |                                ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:30:37: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                     : ... note: In instance 't'
+   30 |   defparam $root.t.gord[0].u_leaf.P = 5;
+      |                                     ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:26:38: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+                                                     : ... note: In instance 't'
+   26 |   defparam $root.t.gdead[0].u_leaf.P = 7;
+      |                                      ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:62:43: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+   62 |   defparam $root.t.glocal[0].alt.u_leaf.P = 5;
+      |                                           ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:34:45: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+   34 |   defparam $root.t.gblk[0].alt.u_leaf.blk.Q = 5;
+      |                                             ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:38:39: Unsupported: defparam with instance select to a parameter that another defparam sets to a different value
+   38 |   defparam namehost.g[0].alt.u_leaf.P = 5;
+      |                                       ^
+%Error-UNSUPPORTED: t/t_defparam_differ_unsup.v:22:38: Unsupported: defparam in code not built, setting a parameter of an instance that is built
+   22 |   defparam $root.t.gdead[0].u_leaf.P = 9;
+      |                                      ^
+%Error: Exiting due to

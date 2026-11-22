@@ -78,6 +78,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <memory>
@@ -100,6 +101,16 @@ static AstClassRefDType* classRefDTypeOfNode(AstNode* nodep) {
     while (AstTypedef* const tdp = VN_CAST(nodep, Typedef)) nodep = tdp->subDTypep();
     AstNodeDType* const dtp = VN_CAST(nodep, NodeDType);
     return dtp ? VN_CAST(dtp->skipRefOrNullp(), ClassRefDType) : nullptr;
+}
+
+// Name of a generate block as V3LinkDot writes it in a defparam path: as declared, so an
+// escaped name containing '.' is one component, with the index of a loop iteration in brackets
+static string defparamBlockName(const string& name) {
+    const size_t braPos = name.find("__BRA__");
+    if (braPos == string::npos) return name;
+    string index = name.substr(braPos + 7, name.size() - braPos - 14);
+    if (VString::startsWith(index, "__02D")) index = "-" + index.substr(5);  // See encodeNumber
+    return name.substr(0, braPos) + "[" + index + "]";
 }
 
 // Instance path without the empty names of unnamed generate blocks, as V3LinkDot has no scope
@@ -436,6 +447,51 @@ class ParamProcessor final {
     // Module name before per-instance copying -> number of instances seen so far
     std::map<std::string, int> m_instanceCounts;
     std::vector<FileLine*> m_defparamsSeen;  // Locations of defparam pins, in order seen
+    // Locations of defparam pins selecting through generate blocks sharing a name
+    std::unordered_set<const FileLine*> m_defparamsSharedName;
+    // A visit of a defparam V3LinkDot checks, in a specialization of its module
+    struct CheckedVisit final {
+        string modName;  // The specialization, none for a path from $root
+        string genHier;  // The generate blocks the defparam is in
+        string cellPath;  // Its path to an instance, and in it to the parameter
+        string paramName;
+    };
+    // A defparam V3LinkDot checks from each instance of its module, see defparamChecked
+    struct CheckedDefparam final {
+        bool sharedName = false;  // Its path selects through generate blocks sharing a name
+        AstNode* valuep = nullptr;  // Its value
+        std::vector<CheckedVisit> visits;
+    };
+    std::unordered_map<FileLine*, CheckedDefparam> m_defparamsChecked;  // By location
+    std::vector<FileLine*> m_defparamsCheckedOrder;  // m_defparamsChecked keys, in order seen
+    // Locations of the pins of those, setting a parameter, in order seen
+    std::vector<FileLine*> m_defparamSelectPins;
+    // The instances built, once all are, for checking defparams; see builtInstances
+    struct BuiltInstances final {
+        std::unordered_map<string, string> origNames;  // Instance path -> its module's
+        // Module name -> keys of origNames, its instances
+        std::unordered_map<string, std::vector<const string*>> byModule;
+        std::vector<const string*> paths;  // Keys of origNames, sorted
+    };
+    std::unique_ptr<BuiltInstances> m_builtp;
+    AstNetlist* const m_netlistp;  // The design
+    // Values of defparams for instances under them, by path, with the defparam and the instance
+    // of its module, in order registered
+    std::vector<std::tuple<string, FileLine*, string>> m_defparamInstanceValues;
+    // A value a defparam's pin gave, folded, and the scope of the defparam (see
+    // AstPin::defparamScope)
+    struct DefparamValue final {
+        AstNode* valuep = nullptr;
+        std::unordered_set<int> scopes;  // Of the defparams giving it, the last of each
+    };
+    // Paths of parameters a defparam set, with their values
+    std::unordered_map<string, DefparamValue> m_defparamTargets;
+    // Locations of defparams with a value given by their pin, with their scopes (see
+    // AstPin::defparamScope) and that value
+    std::unordered_map<const FileLine*, std::pair<int, AstNode*>> m_defparamFolded;
+    std::unordered_set<const FileLine*> m_defparamsDiffering;  // Reported, see nodeDeparam
+    // Paths of parameters defparams set to different values, reported so
+    std::unordered_set<string> m_defparamTargetsDiffering;
     std::set<const FileLine*> m_defparamsMatched;  // Locations of defparams naming an instance
     VNDeleter m_deleter;  // Used to delay deletion of nodes
 
@@ -2881,6 +2937,139 @@ public:
         m_defparamValues[path] = valuep;
         m_copyDefparamsUnknown.erase(path);
     }
+    // Record a visit of a defparam V3LinkDot checks
+    void defparamChecked(const AstDefParam* nodep, CheckedVisit&& visit) {
+        const auto pair = m_defparamsChecked.emplace(
+            nodep->fileline(), CheckedDefparam{nodep->sharedName(), nodep->rhsp(), {}});
+        if (pair.second) m_defparamsCheckedOrder.push_back(nodep->fileline());
+        pair.first->second.visits.push_back(std::move(visit));
+    }
+    // Add the instances below items of an instance at path to built
+    static void addBuiltInstances(const AstNode* itemsp, const string& path,
+                                  BuiltInstances& built) {
+        for (const AstNode* nodep = itemsp; nodep; nodep = nodep->nextp()) {
+            if (const AstCell* const cellp = VN_CAST(nodep, Cell)) {
+                const auto pair = built.origNames.emplace(path + "." + cellp->name(),
+                                                          cellp->modp()->origName());
+                built.byModule[cellp->modp()->name()].push_back(&pair.first->first);
+                addBuiltInstances(cellp->modp()->stmtsp(), pair.first->first, built);
+            } else if (const AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
+                addBuiltInstances(
+                    blockp->itemsp(),
+                    blockp->name().empty() ? path : path + "." + defparamBlockName(blockp->name()),
+                    built);
+            }
+        }
+    }
+    // Return the instances built, from each top module, once all are
+    const BuiltInstances& builtInstances() {
+        if (m_builtp) return *m_builtp;
+        m_builtp = std::make_unique<BuiltInstances>();
+        for (const AstNodeModule* const modp : m_netlistp->modulespList()) {
+            if (!modp->isTop() || VN_IS(modp, Package) || VN_IS(modp, Class)) continue;
+            const auto pair = m_builtp->origNames.emplace(modp->name(), modp->origName());
+            m_builtp->byModule[modp->name()].push_back(&pair.first->first);
+            addBuiltInstances(modp->stmtsp(), modp->name(), *m_builtp);
+        }
+        for (const auto& itr : m_builtp->origNames) m_builtp->paths.push_back(&itr.first);
+        std::sort(m_builtp->paths.begin(), m_builtp->paths.end(),
+                  [](const string* ap, const string* bp) { return *ap < *bp; });
+        return *m_builtp;
+    }
+    // Return whether a block or instance named name is built in the scope
+    static bool defparamBlockBuilt(const string& scope, const string& name,
+                                   const BuiltInstances& built) {
+        const string blockPath = scope + "." + withoutIndices(name);
+        if (built.origNames.count(blockPath)) return true;
+        const std::vector<const string*>& instancePaths = built.paths;
+        for (const string& below : {blockPath + ".", blockPath + "["}) {
+            const auto it = std::lower_bound(
+                instancePaths.begin(), instancePaths.end(), below,
+                [](const string* pathp, const string& key) { return *pathp < key; });
+            if (it != instancePaths.end() && (*it)->compare(0, below.size(), below) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // Return the instance of the built instance the cell path names, found upwards from scope
+    // as of a block or instance named as its first name, or the instance named as its module
+    // by it (IEEE 1800-2023 23.8), as V3LinkDot's checkDefParamPath does before. Empty if
+    // none, as V3LinkDot reports.
+    static string defparamTarget(const string& scope, const string& cellPath,
+                                 const BuiltInstances& built) {
+        const size_t dotPos = cellPath.find('.');
+        const string firstName = cellPath.substr(0, dotPos);
+        const string rest = dotPos == string::npos ? "" : cellPath.substr(dotPos);
+        std::vector<string> scopes;
+        for (const string& name : VString::split(scope, '.')) {
+            scopes.push_back(VString::dot(scopes.empty() ? "" : scopes.back(), ".", name));
+        }
+        for (auto it = scopes.crbegin(); it != scopes.crend(); ++it) {
+            if (defparamBlockBuilt(*it, firstName, built)) {
+                return built.origNames.count(*it + "." + cellPath) ? *it + "." + cellPath : "";
+            }
+            const auto origIt = built.origNames.find(*it);
+            if (origIt != built.origNames.end() && origIt->second == firstName) {
+                return built.origNames.count(*it + rest) ? *it + rest : "";
+            }
+        }
+        return built.origNames.count(cellPath) ? cellPath : "";
+    }
+    // Report a defparam V3LinkDot checks that, from an instance of its module, names a built
+    // parameter it did not set: its pin is on an instance it names from another, or, through
+    // blocks sharing a name, on a block not built
+    void checkCheckedDefparam(FileLine* flp, const CheckedDefparam& checked,
+                              const BuiltInstances& built) const {
+        for (const CheckedVisit& visit : checked.visits) {
+            // A path from $root is checked once
+            static const string rootScope;
+            const auto it = built.byModule.find(visit.modName);
+            std::vector<const string*> instances;
+            if (visit.modName.empty()) {
+                instances.push_back(&rootScope);
+            } else if (it != built.byModule.end()) {
+                instances = it->second;
+            }
+            // Its scope and value, as folded where its pin gave it, else as written
+            const auto valueIt = m_defparamFolded.find(flp);
+            const int scope = valueIt != m_defparamFolded.end() ? valueIt->second.first : 0;
+            AstNode* const valuep = valueIt != m_defparamFolded.end() && valueIt->second.second
+                                        ? valueIt->second.second
+                                        : checked.valuep;
+            for (const string* const instanceNamep : instances) {
+                const string cellp = defparamTarget(defparamPath(*instanceNamep + visit.genHier),
+                                                    visit.cellPath, built);
+                if (cellp.empty()) continue;
+                const auto setIt = m_defparamTargets.find(cellp + "." + visit.paramName);
+                // Set by it or a later one in its scope, or to its value
+                if (setIt != m_defparamTargets.end()
+                    && (setIt->second.scopes.count(scope)
+                        || defparamValuesEqual(setIt->second.valuep, valuep))) {
+                    continue;
+                }
+                if (setIt != m_defparamTargets.end()) {
+                    if (!m_defparamTargetsDiffering.count(setIt->first)) {
+                        flp->v3warn(E_UNSUPPORTED, differingUnsupported());
+                    }
+                    return;
+                }
+                if (checked.sharedName) {
+                    flp->v3warn(E_UNSUPPORTED, sharedNameUnsupported());
+                } else {
+                    flp->v3warn(E_UNSUPPORTED,
+                                "Unsupported: defparam with instance select naming "
+                                "different instances from different instances of its "
+                                "module");
+                }
+                return;
+            }
+        }
+    }
+    // The defparam at flp, in the instance instanceName of its module, gave the value at path
+    void defparamInstanceValue(const string& path, FileLine* flp, const string& instanceName) {
+        m_defparamInstanceValues.emplace_back(path, flp, instanceName);
+    }
 
     // Find 'name' declared in classp or a class it extends, setting memberClassp to the declaring
     // class. V3LinkDot defers names inherited through a parameterized base until the base is
@@ -3001,11 +3190,76 @@ public:
     void visitModpCells() { m_visitCells = true; }
     void visitBaseQueued(bool flag) { m_visitBaseQueued = flag; }
 
+    // Return whether two defparam values are identical once folded: the same constant, of a
+    // similar type, bit for bit and with the same flags (a real by its bits). Values written
+    // differently may give the parameter different types, or only some instances the same value.
+    static bool defparamValuesEqual(const AstNode* ap, const AstNode* bp) {
+        const AstConst* const aConstp = VN_CAST(ap, Const);
+        const AstConst* const bConstp = VN_CAST(bp, Const);
+        if (!aConstp || !bConstp) return false;
+        const V3Number& aNum = aConstp->num();
+        const V3Number& bNum = bConstp->num();
+        if (aNum.isDouble() != bNum.isDouble() || aNum.isString() != bNum.isString()
+            || aNum.isSigned() != bNum.isSigned() || aNum.width() != bNum.width()
+            || aNum.sized() != bNum.sized() || aNum.autoExtend() != bNum.autoExtend()
+            || aNum.isNull() != bNum.isNull() || aNum.isFromString() != bNum.isFromString()
+            || aNum.is1Step() != bNum.is1Step()
+            || !aConstp->dtypep()->similarDType(bConstp->dtypep())) {
+            return false;
+        }
+        if (aNum.isDouble()) {
+            const double aValue = aNum.toDouble();
+            const double bValue = bNum.toDouble();
+            return std::memcmp(&aValue, &bValue, sizeof(double)) == 0;
+        }
+        return aNum.isCaseEq(bNum);
+    }
+    static const char* differingUnsupported() {
+        return "Unsupported: defparam with instance select to a parameter that another defparam "
+               "sets to a different value";
+    }
+    static const char* sharedNameUnsupported() {
+        return "Unsupported: defparam with instance select through generate blocks of the same"
+               " name, naming no instance built";
+    }
     // Report defparams whose path named no instance once generate loops were elaborated
     void checkUnmatchedDefparams() {
+        // A defparam for an instance under it naming one in some instances of its module only,
+        // e.g. a loop iteration that only some have (IEEE 1800-2023 23.6)
+        for (const auto& site : m_defparamInstanceValues) {
+            if (m_defparamTargets.count(std::get<0>(site))) continue;
+            if (!m_defparamsMatched.count(std::get<1>(site))) continue;  // Reported below
+            if (m_defparamsSharedName.count(std::get<1>(site))) {
+                std::get<1>(site)->v3warn(E_UNSUPPORTED, sharedNameUnsupported());
+                continue;
+            }
+            std::get<1>(site)->v3error("In defparam, the path names no instance from instance "
+                                       << AstNode::prettyNameQ(std::get<2>(site))
+                                       << " (IEEE 1800-2023 23.6)");
+        }
+        for (FileLine* const flp : m_defparamsCheckedOrder) {
+            checkCheckedDefparam(flp, m_defparamsChecked.at(flp), builtInstances());
+        }
+        m_builtp.reset();
+        // A defparam selecting generate loop iterations, in code not built, set a parameter
+        // of an instance built. Built, it would be in a generate block, setting a parameter
+        // outside it (IEEE 1800-2023 23.10.1).
+        std::unordered_set<const FileLine*> unbuiltFlps;
+        for (FileLine* const flp : m_defparamSelectPins) {
+            if (m_defparamsChecked.count(flp) || !unbuiltFlps.emplace(flp).second) continue;
+            flp->v3warn(E_UNSUPPORTED, "Unsupported: defparam in code not built, setting a "
+                                       "parameter of an instance that is built");
+        }
+
         // E.g. a loop index outside the loop's range. Mark each reported, to report it once.
         for (FileLine* const flp : m_defparamsSeen) {
+            if (m_defparamsChecked.count(flp)) continue;
             if (!m_defparamsMatched.emplace(flp).second) continue;
+            // The block found before generate blocks were built may not be the one built
+            if (m_defparamsSharedName.count(flp)) {
+                flp->v3warn(E_UNSUPPORTED, sharedNameUnsupported());
+                continue;
+            }
             flp->v3error("In defparam, the path names no instance");
         }
     }
@@ -3215,7 +3469,7 @@ public:
         for (AstNode* const nodep : VNList<AstNode>{stmtsp}) {
             ++scannedr;
             if (AstDefParam* const defParamp = VN_CAST(nodep, DefParam)) {
-                defParamsr.push_back(defParamp);
+                if (!defParamp->checkTarget()) defParamsr.push_back(defParamp);
             } else if (const AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
                 // Unnamed, so in this scope, as in ParamVisitor::iterateDefParams
                 if (blockp->name().empty()) {
@@ -3535,6 +3789,81 @@ public:
         return it == items.end() ? nullptr : it->second;
     }
 
+    // Of defparam pins of a cell setting one parameter, one selecting generate loop iterations,
+    // keep the last of each scope of their defparams, as the last in source text wins (IEEE
+    // 1800-2023 23.10.1), before they give the instance its parameters
+    void removeSupersededDefparamPins(AstCell* cellp) {
+        // By parameter, whether a pin selects, and the last pin of each scope
+        struct ParamPins final {
+            bool select = false;
+            std::unordered_map<int, AstPin*> lastPins;
+        };
+        std::unordered_map<const AstNode*, ParamPins> params;
+        std::vector<AstPin*> pins;  // In order
+        for (AstPin* const pinp : cellp->paramspList()) {
+            if (pinp->paramPath().empty() || !pinp->exprp()) continue;
+            ParamPins& paramPins = params[paramOf(pinp)];
+            paramPins.select = paramPins.select || pinp->paramPath().find('[') != string::npos;
+            paramPins.lastPins[pinp->defparamScope()] = pinp;
+            pins.push_back(pinp);
+            m_defparamFolded.emplace(pinp->fileline(),
+                                     std::make_pair(pinp->defparamScope(), nullptr));
+        }
+        for (AstPin* const pinp : pins) {
+            const ParamPins& paramPins = params[paramOf(pinp)];
+            if (!paramPins.select || paramPins.lastPins.at(pinp->defparamScope()) == pinp) {
+                continue;
+            }
+            VL_DO_DANGLING(m_deleter.pushDeletep(pinp->unlinkFrBack()), pinp);
+        }
+    }
+    static const AstNode* paramOf(const AstPin* pinp) {
+        if (pinp->modVarp()) return pinp->modVarp();
+        return pinp->modPTypep();
+    }
+    // Record the values defparam pins of an instance give, once folded. Of the last of each
+    // scope, the one that wins may depend on what is built (IEEE 1800-2023 23.10.1), and
+    // simulators differ, so report those with different values, one selecting generate loop
+    // iterations.
+    void checkDefparamPins(const AstCell* cellp, const string& instanceName,
+                           const std::unordered_set<const AstPin*>& ownValuePins) {
+        // Pins setting each parameter, in order seen, and whether one selects
+        std::unordered_map<const AstNode*, std::pair<bool, std::vector<AstPin*>>> params;
+        std::vector<const AstNode*> paramOrder;
+        for (AstPin* const pinp : cellp->paramspList()) {
+            if (pinp->paramPath().empty() || !pinp->exprp()) continue;
+            const bool select = pinp->paramPath().find('[') != string::npos;
+            AstNode* const valuep = pinp->exprp()->cloneTree(false);
+            m_deleter.pushDeletep(valuep);
+            if (ownValuePins.count(pinp)) {
+                if (select) m_defparamSelectPins.push_back(pinp->fileline());
+                m_defparamFolded[pinp->fileline()] = {pinp->defparamScope(), valuep};
+            }
+            DefparamValue& value
+                = m_defparamTargets[defparamPath(instanceName) + "." + pinp->name()];
+            value.valuep = valuep;
+            value.scopes.emplace(pinp->defparamScope());
+            const auto pair
+                = params.emplace(paramOf(pinp), std::make_pair(false, std::vector<AstPin*>{}));
+            if (pair.second) paramOrder.push_back(paramOf(pinp));
+            pair.first->second.first = pair.first->second.first || select;
+            pair.first->second.second.push_back(pinp);
+        }
+        for (const AstNode* const paramp : paramOrder) {
+            const auto& paramPins = params.at(paramp);
+            if (!paramPins.first) continue;
+            const std::vector<AstPin*>& pins = paramPins.second;
+            for (AstPin* const pinp : pins) {
+                if (pinp == pins.front()) continue;
+                if (defparamValuesEqual(pins.front()->exprp(), pinp->exprp())) continue;
+                m_defparamTargetsDiffering.emplace(defparamPath(instanceName) + "."
+                                                   + pinp->name());
+                if (m_defparamsDiffering.emplace(pinp->fileline()).second) {
+                    pinp->v3warn(E_UNSUPPORTED, differingUnsupported());
+                }
+            }
+        }
+    }
     // Set the instance name of modp, recording the previous one while specializing a copy
     void setInstanceName(AstNodeModule* modp, const string& name) {
         if (!m_copyOriginals.empty())
@@ -3571,27 +3900,29 @@ public:
                                         ? someInstanceName
                                         : (someInstanceName + "." + nodeName);
 
+        // Defparam pins of a cell giving a value of their own, not one registered
+        std::unordered_set<const AstPin*> ownValuePins;
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             m_instanceOrigNames[instanceName] = srcModp->origName();
-            const auto paramOf = [](const AstPin* pinp) -> const AstNode* {
-                if (pinp->modVarp()) return pinp->modVarp();
-                return pinp->modPTypep();
-            };
-            std::set<const AstNode*> defparamParams;  // Parameters set by a defparam to this cell
+            // Parameters set by a defparam to this cell
+            std::unordered_set<const AstNode*> defparamParams;
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
                 m_defparamsSeen.emplace_back(pinp->fileline());
+                if (pinp->defparamSharedName()) m_defparamsSharedName.emplace(pinp->fileline());
                 if (defParamNames(pinp->paramPath(), instanceName)) {
                     m_defparamsMatched.emplace(pinp->fileline());
-                    if (!pinp->exprp()) {  // Value from the instance of the defparam's module
-                        const auto it
-                            = registeredDefparam(defparamPath(instanceName) + "." + pinp->name());
+                    const bool registered = !pinp->exprp();
+                    if (registered) {  // Value from the instance of the defparam's module
+                        const string valuePath = defparamPath(instanceName) + "." + pinp->name();
+                        const auto it = registeredDefparam(valuePath);
                         if (it != m_defparamValues.end()) {
                             pinp->exprp(it->second->cloneTree(false));
                         }
                     }
                     if (pinp->exprp()) {
                         defparamParams.emplace(paramOf(pinp));
+                        if (!registered) ownValuePins.emplace(pinp);
                         continue;
                     }
                     // No value: the defparam is in a generate block not built, or, for a copy
@@ -3619,8 +3950,12 @@ public:
         // Resolve `class::member` Dots in pin values, and in any deferred
         // lparam reachable from the pin tree, so constify sees Consts.
         resolveDeferredDotsReachableFrom(nodep, modp);
+        if (AstCell* const cellp = VN_CAST(nodep, Cell)) removeSupersededDefparamPins(cellp);
         // Evaluate all module constants
         V3Const::constifyParamsEdit(nodep);
+        if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
+            checkDefparamPins(cellp, instanceName, ownValuePins);
+        }
         // Set name for warnings for when we param propagate the module
         // For AstIfaceRefDType, name() returns the modport name (often empty),
         // so use cellName() which is the actual cell instance name.
@@ -3681,7 +4016,8 @@ public:
 
     // CONSTRUCTORS
     explicit ParamProcessor(AstNetlist* nodep)
-        : m_hierBlocks{v3Global.opt.hierBlocks(), nodep} {
+        : m_hierBlocks{v3Global.opt.hierBlocks(), nodep}
+        , m_netlistp{nodep} {
         for (AstNodeModule* const modp : nodep->modulespList()) {
             m_allModuleNames.insert(modp->name());
         }
@@ -5246,7 +5582,7 @@ class ParamVisitor final : public VNVisitor {
             // An unnamed block that is not a generate scope has no name
             if (!nodep->name().empty()) {
                 m_processor.visitScopeItem(nodep, m_genBlockp);
-                m_generateHierName += "." + nodep->prettyName();
+                m_generateHierName += "." + defparamBlockName(nodep->name());
                 m_genBlockp = nodep;
             }
             iterateDefParams(nodep->itemsp());
@@ -5257,14 +5593,35 @@ class ParamVisitor final : public VNVisitor {
         nodep->v3fatalSrc("GENFOR should have been wrapped in BEGIN");
     }
     void visit(AstDefParam* nodep) override {
+        if (nodep->checkTarget()) {  // Its pin has the value; kept for V3LinkDot to check
+            // The path from $root, or upwards from the scope of this instance of the module
+            const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
+            std::deque<string> names = VString::split(targetp->dotted(), '.');
+            const bool fromRoot = names.front() == "$root";
+            if (fromRoot) names.pop_front();
+            string cellPath;
+            for (const string& name : names) {
+                cellPath = VString::dot(cellPath, ".", defparamBlockName(name));
+            }
+            const bool anywhere = fromRoot || VN_IS(m_modp, Package);
+            m_processor.defparamChecked(nodep, {anywhere ? "" : m_modp->name(),
+                                                anywhere ? "" : m_generateHierName, cellPath,
+                                                targetp->name()});
+            return;
+        }
         // The parameters of this instance of the module are known, and the generate blocks
         // above expanded, so nodeDeparam can give the value (IEEE 1800-2023 23.10.1)
         checkParamNotHierRecurse(nodep->rhsp());
         const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
         const string instanceName
             = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
-        m_processor.defparamValue(defparamPath(instanceName) + "." + targetp->name(),
-                                  nodep->rhsp()->unlinkFrBack());
+        const string valuePath = defparamPath(instanceName) + "." + targetp->name();
+        m_processor.defparamValue(valuePath, nodep->rhsp()->unlinkFrBack());
+        // A path selecting generate loop iterations is checked in each instance
+        if (targetp->dotted().find('[') != string::npos) {
+            m_processor.defparamInstanceValue(valuePath, nodep->fileline(),
+                                              m_modp->someInstanceName());
+        }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
     void visit(AstGenCase* nodep) override {

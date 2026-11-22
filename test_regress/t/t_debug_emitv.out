@@ -2129,6 +2129,19 @@ endmodule
 module defparam_gen__pie9c2606d;
     /* generate */ begin : dpg
     end : dpg
+    /* generate */ begin : dpl
+        integer i;
+    end : dpl
+    /* generate */ begin : dpl[0]
+        localparam integer i = 32'sh0;
+        /* generate */ begin : alt
+        end : alt
+    end : dpl[0]
+    /* generate */ begin : dpl[1]
+        localparam integer i = 32'sh1;
+        /* generate */ begin : alt
+        end : alt
+    end : dpl[1]
 endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
@@ -2379,6 +2392,8 @@ interface Iface;
         input logic ifsig
     );
 endinterface
+module defparam_cfg;
+endmodule
 module defparam_leaf;
     parameter bit signed [31:0]  P = 32'sh1;
 endmodule
@@ -2394,8 +2409,14 @@ module dump_value_driver;
     input logic value;
     assign p = value;
 endmodule
+module defparam_leaf__P4;
+    parameter bit signed [31:0]  P = 32'sh4;
+endmodule
 module defparam_leaf__P2;
     parameter bit signed [31:0]  P = 32'sh2;
+endmodule
+module defparam_leaf__P3;
+    parameter bit signed [31:0]  P = 32'sh3;
 endmodule
 interface \esc.ifc ;
     logic \sig.i ;
