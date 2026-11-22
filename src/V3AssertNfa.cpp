@@ -390,6 +390,11 @@ class SvaNfaBuilder final {
     // Building the consequent of an antecedent with a zero-minimum repetition, whose empty
     // match is not filtered (see buildImplicationEdges)
     bool m_inEmptyMatchConsequent = false;
+    // Building a sequence 'or' that only records matches (see buildOrMerge)
+    bool m_inMergeOr = false;
+    // Building the end of a property body, after any sequence concatenation or implication, and
+    // inside no other property operator (see buildExpr)
+    bool m_atSeqEnd = true;
     bool m_trackVacuous = false;  // Record vacuous successes (they fail a negated assertion)
     // Building the outer operand of a variable-length 'within', which needs a vertex on every
     // tick of each thread, so no delay ring (see buildVarLenWithin)
@@ -1478,11 +1483,70 @@ class SvaNfaBuilder final {
                " expressions in an asserted property (IEEE 1800-2023 16.9.7)";
     }
 
+    // Whether an operand of a sequence 'or' holds only booleans, cycle delays, concatenation,
+    // nested 'or's and repetitions of booleans, whose matches the merge vertex records exactly
+    static bool isMergeableOperand(const AstNodeExpr* nodep) {
+        if (isPlainBoolean(nodep)) return true;
+        if (const AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            return isMergeableOperand(orp->lhsp()) && isMergeableOperand(orp->rhsp());
+        }
+        if (const AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
+            return (!sexprp->preExprp() || isMergeableOperand(sexprp->preExprp()))
+                   && isMergeableOperand(sexprp->exprp());
+        }
+        if (const AstSConsRep* const repp = VN_CAST(nodep, SConsRep)) {
+            return isPlainBoolean(repp->exprp());
+        }
+        if (const AstSGotoRep* const repp = VN_CAST(nodep, SGotoRep)) {
+            return isPlainBoolean(repp->exprp());
+        }
+        return false;
+    }
+    // Whether an operand reports its own form in a negated property, by its top-level node only:
+    // an implication other than followed-by, or s_eventually, which is not a top-level step there
+    static bool reportsOwnNegated(const AstNodeExpr* nodep) {
+        const AstImplication* const implp = VN_CAST(nodep, Implication);
+        return (implp && !implp->isFollowedBy()) || VN_IS(nodep, SEventually);
+    }
+    // Whether `lhsp or rhsp` is a sequence 'or' of mergeable operands, some multi-cycle, with
+    // more operands than buildFixedSeqOrProp tracks
+    static bool isMergeOr(AstNodeExpr* lhsp, AstNodeExpr* rhsp) {
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(lhsp, opps);
+        collectOrOperands(rhsp, opps);
+        if (opps.size() <= MAX_FIXED_OR_OPERANDS) return false;
+        bool multiCycle = false;
+        for (const AstNodeExpr* const opp : opps) {
+            if (!isMergeableOperand(opp)) return false;
+            multiCycle |= !isPlainBoolean(opp);
+        }
+        return multiCycle;
+    }
+    // Whether nodep is a sequence 'or' with more operands than buildFixedSeqOrProp tracks
+    static bool hasManyOrOperands(AstNodeExpr* nodep) {
+        if (!VN_IS(nodep, SOr)) return false;
+        std::vector<AstNodeExpr*> opps;
+        collectOrOperands(nodep, opps);
+        return opps.size() > MAX_FIXED_OR_OPERANDS;
+    }
     // Build merge vertex for SOr / LogOr: both branches feed into one vertex.
     BuildResult buildOrMerge(AstNodeExpr* lhsp, AstNodeExpr* rhsp, SvaStateVertex* entryVtxp,
                              FileLine* flp, bool wantBoolLeaf) {
+        // A sequence 'or' with more operands than buildFixedSeqOrProp tracks, and every 'or'
+        // and '||' nested in it, only records matches: an attempt in which every operand fails
+        // is not reported, and each matching operand end passes. It is a merge only at the end
+        // of a property body, as a sequence prefix a later step would reject after one operand
+        // matched while another may still match, and another operator would see every operand
+        // end. A plain boolean operand is first split off by buildBoolOrProp, which fails
+        // exactly. Quadratic in the length of a source 'or' chain that is not a merge, as each
+        // nesting level rescans its operands, like isPropertyOperand and newZeroLengthCondp.
+        VL_RESTORER(m_inMergeOr);
+        m_inMergeOr = m_inMergeOr
+                      || (m_atSeqEnd && !m_inSequencePrefix && !m_noEosFailure && !m_inAntecedent
+                          && !(wantBoolLeaf && (isPlainBoolean(lhsp) || isPlainBoolean(rhsp)))
+                          && isMergeOr(lhsp, rhsp));
         // An attempt fails when every operand fails, which the merge vertex does not see
-        const bool canFail = !m_noEosFailure && !m_inAntecedent;
+        const bool canFail = !m_noEosFailure && !m_inAntecedent && !m_inMergeOr;
         if (wantBoolLeaf || (canFail && !m_inEmptyMatchConsequent)) {
             // Operands with no cycle delay hold or fail at once, as the boolean OR-fold below
             if (AstNodeExpr* const lhsCondp = newZeroLengthCondp(lhsp, flp)) {
@@ -1511,6 +1575,16 @@ class SvaNfaBuilder final {
                     return BuildResult::failWithError();
                 }
             }
+        }
+        // Negated, each operand end the merge vertex below records fails the attempt again
+        // (IEEE 1800-2023 16.12.3), unless every operand ends on the same tick. Quadratic in the
+        // length of an 'or' chain, as each nesting level measures its operands.
+        if (m_isNegated && !m_noEosFailure && !m_inAntecedent && !reportsOwnNegated(lhsp)
+            && !reportsOwnNegated(rhsp)
+            && (fixedLength(lhsp) < 0 || fixedLength(lhsp) != fixedLength(rhsp))) {
+            flp->v3warn(E_UNSUPPORTED, "Unsupported: 'or' with operands of different or variable"
+                                       " lengths in a negated property (IEEE 1800-2023 16.12.3)");
+            return BuildResult::failWithError();
         }
         const BuildResult lhs = buildExpr(lhsp, entryVtxp);
         const BuildResult rhs = buildExpr(rhsp, entryVtxp);
@@ -2738,9 +2812,14 @@ public:
         VL_RESTORER(m_wantBoolLeaf);
         const bool wantBoolLeaf = m_wantBoolLeaf;
         m_wantBoolLeaf = false;
+        // Only a sequence concatenation, 'or' or implication keeps the end of a property body
+        VL_RESTORER(m_atSeqEnd);
+        const bool atSeqEnd = m_atSeqEnd;
+        m_atSeqEnd = false;
         if (AstSExpr* const sexprp = VN_CAST(nodep, SExpr)) {
-            if (wantBoolLeaf && !m_noEosFailure && !m_inAntecedent && !m_isNegated
-                && !m_isSeqEvent) {
+            m_atSeqEnd = atSeqEnd;
+            if (wantBoolLeaf && !m_noEosFailure && !m_inAntecedent && !m_isNegated && !m_isSeqEvent
+                && !hasManyOrOperands(sexprp->exprp())) {
                 if (AstNodeExpr* const orp = newDistributedOrp(sexprp)) {
                     // Build `s ##N (s1 or s2)` as `(s ##N s1) or (s ##N s2)` (IEEE 1800-2023
                     // 16.9.7), which buildFixedSeqOrProp can make fail
@@ -2768,6 +2847,7 @@ public:
             return buildThroughout(throughoutp, entryVtxp, isTopLevelStep);
         }
         if (AstSOr* const orp = VN_CAST(nodep, SOr)) {
+            m_atSeqEnd = atSeqEnd && !isPropertyOperand(orp);
             return buildOrMerge(orp->lhsp(), orp->rhsp(), entryVtxp, orp->fileline(),
                                 wantBoolLeaf);
         }
@@ -2828,6 +2908,7 @@ public:
                                 isTopLevelStep);
         }
         if (AstImplication* const implp = VN_CAST(nodep, Implication)) {
+            m_atSeqEnd = atSeqEnd;
             // A vacuous success is a success of the whole property only when nothing follows
             // the implication
             const bool trackVacuous = m_trackVacuous && !implp->isFollowedBy();
@@ -2970,8 +3051,10 @@ public:
         // repetition's empty match is not handled here; keep the merge vertex for those
         VL_RESTORER(m_wantBoolLeaf);
         VL_RESTORER(m_inEmptyMatchConsequent);
+        VL_RESTORER(m_atSeqEnd);
         m_inEmptyMatchConsequent = hasZeroMinRep(antExprp);
         m_wantBoolLeaf = !isFollowedBy && !m_inEmptyMatchConsequent;
+        m_atSeqEnd = m_atSeqEnd && m_wantBoolLeaf;
         return buildExpr(bodyExprp, bodyEntryp, /*isTopLevelStep=*/true);
     }
 
