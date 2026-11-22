@@ -115,6 +115,7 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     std::unordered_map<const AstNodeStmt*, Site> m_sites;
     std::vector<std::pair<AstNodeModule*, AstVar*>> m_declarations;
     size_t m_selectors = 0;  // Selectors with hierarchy arguments
+    bool m_hasUntypedChecks = false;  // Global effects can also change unselected checks
     std::vector<AstAssertCtlArgs*> m_wholeModel;  // Proven top selectors, not expanded yet
     // Interned structural occurrences, independent of lexical blocks and flattened names.
     std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
@@ -166,6 +167,9 @@ class LinkDotAssertCtlSites final : public VNVisitor {
                                  : nodep->uniquePragma()  ? VAssertType::UNIQUE
                                  : nodep->unique0Pragma() ? VAssertType::UNIQUE0
                                                           : VAssertType::INTERNAL;
+        if (type == VAssertType::INTERNAL && (nodep->fullPragma() || nodep->parallelPragma())) {
+            m_hasUntypedChecks = true;
+        }
         addSite(nodep, type, VAssertDirectiveType::ASSERT);
         iterateChildren(nodep);
     }
@@ -355,17 +359,23 @@ public:
 void LinkDotAssertCtlSites::attach() {
     // Whole-model selectors can share the global path only if no other selector can
     // establish a distinct history for an individual site.
-    if (m_wholeModel.size() == m_selectors) {
+    if (!m_hasUntypedChecks && m_wholeModel.size() == m_selectors) {
         VNDeleter deleter;
         for (AstAssertCtlArgs* const argsp : m_wholeModel) {
             VL_DO_DANGLING(deleter.pushDeletep(argsp->unlinkFrBack()), argsp);
         }
-    } else {
-        for (AstAssertCtlArgs* const argsp : m_wholeModel) {
-            const string& top = m_standaloneTopp->name();
-            std::unordered_map<string, AstAssertCtlTarget*> targets;
-            AssertControlTargetVisitor{*this, m_standaloneTopp, argsp, top,
-                                       top,   targets,          false, true};
+    } else if (!m_wholeModel.empty()) {
+        // The concrete top and unlimited depth agree across these selectors.
+        AstAssertCtlArgs* const firstp = m_wholeModel.front();
+        const string& top = m_standaloneTopp->name();
+        std::unordered_map<string, AstAssertCtlTarget*> targets;
+        AssertControlTargetVisitor{*this, m_standaloneTopp, firstp, top,
+                                   top,   targets,          false,  true};
+        if (firstp->targetsp()) {
+            AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
+                firstp->fileline(), firstp->targetsp()->unlinkFrBackWithNext()};
+            m_rootp->addMiscsp(setp);
+            for (AstAssertCtlArgs* const argsp : m_wholeModel) argsp->sharedp(setp);
         }
     }
     for (const auto& declaration : m_declarations) {
@@ -8547,7 +8557,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
             // Past a port, only names within the interface instance (or modport) reached
             const VSymEnt* const symp = m_statep->findAssertCtlDotted(
                 flp, basep, rest, baddot, okSymp, baseIndex == 0, &crossing.boundaryp);
-            if (!symp) break;
+            if (!symp) {
+                // Virtual interface arrays are not elaborated into scope symbols. Inspect only
+                // the failed component's unindexed declaration to retain the diagnostic.
+                const size_t bra = rest.rfind("__BRA__");
+                if (!crossing.boundaryp && bra != string::npos
+                    && VString::endsWith(rest, "__KET__") && rest.find('.', bra) == string::npos) {
+                    const VSymEnt* const arrayp = m_statep->findAssertCtlDotted(
+                        flp, basep, rest.substr(0, bra), baddot, okSymp, baseIndex == 0);
+                    AstVar* const varp = arrayp ? VN_CAST(arrayp->nodep(), Var) : nullptr;
+                    if (varp && VN_IS(varp->subDTypep(), UnpackArrayDType)) {
+                        const AstIfaceRefDType* const ifp
+                            = LinkDotState::ifaceRefFromArray(varp->subDTypep());
+                        crossing.isVirtual = ifp && ifp->isVirtual();
+                    }
+                }
+                break;
+            }
             if (i + 1 == names.size()) crossing.foundp = symp;
             const AstVar* const varp = VN_CAST(symp->nodep(), Var);
             if (!varp) continue;
