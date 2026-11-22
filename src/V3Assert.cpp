@@ -249,7 +249,10 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
                 tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
                 rootp->typeTablep()->addTypesp(tableDtp);
             }
-            AstVarScope* const tablep = tables.make(flp, apply.first, tableDtp);
+            // Class methods can execute without a model-owned class object. Keep their
+            // statically resolved tables in the owning model, not in the C++ class.
+            AstScope* const storagep = VN_IS(apply.first->modp(), Class) ? topScopep : apply.first;
+            AstVarScope* const tablep = tables.make(flp, storagep, tableDtp);
             tablep->varp()->noReset(true);
             tablep->varp()->isInternal(true);
             tablep->varp()->setIgnoreSchedWrite();
