@@ -1946,10 +1946,12 @@ void AstDefParam::dump(std::ostream& str) const {
     Super::dump(str);
     if (fromBind()) str << " [FROMBIND]";
     if (checkTarget()) str << " [CHECKTARGET]";
+    if (sharedName()) str << " [SHAREDNAME]";
 }
 void AstDefParam::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, fromBind);
     dumpJsonBoolFuncIf(str, checkTarget);
+    dumpJsonBoolFuncIf(str, sharedName);
     dumpJsonGen(str);
 }
 string AstDefParam::name() const VL_MT_STABLE {
@@ -3967,6 +3969,7 @@ void AstPin::dump(std::ostream& str) const {
     if (!paramPath().empty()) str << " paramPath=" << paramPath();
     if (defparamGenAlt()) str << " [GENALT]";
     if (defparamSharedName()) str << " [SHAREDNAME]";
+    if (defparamScope()) str << " defparamScope=" << defparamScope();
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
     if (returnWrittenInput()) str << " [RETURNWRITTENINPUT]";
@@ -3975,6 +3978,7 @@ void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
     dumpJsonBoolFuncIf(str, defparamGenAlt);
     dumpJsonBoolFuncIf(str, defparamSharedName);
+    if (defparamScope()) dumpJsonNumFunc(str, defparamScope);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
     dumpJsonBoolFuncIf(str, returnWrittenInput);

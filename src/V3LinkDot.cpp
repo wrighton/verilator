@@ -2701,10 +2701,12 @@ class LinkDotParamVisitor final : public VNVisitor {
         const VSymEnt* cellSymp;  // Symbol of the instance its path resolved to
         // That defparam, if kept for V3Param to give the pin's value, or to check its target
         AstDefParam* defParamp;
+        const VSymEnt* defSymp;  // Symbol of the scope of that defparam
     };
     // Defparam pins made, by cell, parameter and recorded path
     std::map<std::tuple<const AstCell*, std::string, const AstVar*, std::string>, DefParamPin>
         m_defParamPins;
+    std::unordered_map<const VSymEnt*, int> m_defParamScopeIds;  // Scopes of defparams, IDs
     // Current module or generate block, where implicit nets are declared (IEEE 1800-2023 6.10)
     const AstNode* m_scopep = nullptr;
 
@@ -3135,14 +3137,6 @@ class LinkDotParamVisitor final : public VNVisitor {
                                              " defparam in another generate block of the same"
                                              " name");
             } else {
-                // IEEE 1800-2023 23.10.1: Last defparam in source text wins, also over a kept
-                // defparam that would give V3Param its value
-                if (prevr.pinp) {
-                    VL_DO_DANGLING(prevr.pinp->unlinkFrBack()->deleteTree(), prevr.pinp);
-                }
-                if (prevr.defParamp) {
-                    VL_DO_DANGLING(pushDeletep(prevr.defParamp->unlinkFrBack()), prevr.defParamp);
-                }
                 // If the instance is under the defparam's scope, V3Param passes the value down
                 // from each instance of this module, so it uses the parameters of the module
                 // declaring it (IEEE 1800-2023 23.10.1). Not if the path, e.g. from $root, only
@@ -3152,6 +3146,22 @@ class LinkDotParamVisitor final : public VNVisitor {
                 const VSymEnt* symp = cellSymp;
                 for (; symp && symp != defSymp; symp = symp->parentp()) ++belowDepth;
                 const bool below = symp && belowDepth + 1 >= cellNames.size();
+                // A path selecting generate loop iterations, found from one instance of this
+                // module, is checked from each once they are built (see checkDefParamPath)
+                const bool checkTarget = !below && path != lookupPath;
+                // IEEE 1800-2023 23.10.1: Last defparam in source text wins, also over a kept
+                // defparam that would give V3Param its value. Two selecting generate loop
+                // iterations from different scopes are both kept, for V3Param to check that
+                // they agree.
+                const bool bothSelect
+                    = checkTarget && prevr.defParamp && prevr.defParamp->checkTarget();
+                if (prevr.pinp && (!bothSelect || prevr.defSymp == defSymp)) {
+                    VL_DO_DANGLING(prevr.pinp->unlinkFrBack()->deleteTree(), prevr.pinp);
+                    if (prevr.defParamp) {
+                        VL_DO_DANGLING(pushDeletep(prevr.defParamp->unlinkFrBack()),
+                                       prevr.defParamp);
+                    }
+                }
                 // Path to the instance from that scope: the last components of the path, which,
                 // unlike symbols, have generate loop indices
                 string belowPath;
@@ -3164,16 +3174,6 @@ class LinkDotParamVisitor final : public VNVisitor {
                 // so V3Param keys the value apart from a parameter of the same name elsewhere
                 const string scopePath
                     = cellSymp != foundp ? path.substr(cellPath.size() + 1) : "";
-                // A path selecting generate loop iterations, found from one instance of this
-                // module, is checked from each once they are built (see checkDefParamPath)
-                const bool checkTarget = !below && path != lookupPath;
-                if (checkTarget && sharedName) {
-                    nodep->v3warn(E_UNSUPPORTED, "Unsupported: defparam with instance select "
-                                                 "through generate blocks of the same name, from "
-                                                 "outside its scope");
-                    VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
-                    return;
-                }
                 AstNode* const exprp = below         ? nullptr
                                        : checkTarget ? nodep->rhsp()->cloneTree(false)
                                                      : nodep->rhsp()->unlinkFrBack();
@@ -3188,9 +3188,13 @@ class LinkDotParamVisitor final : public VNVisitor {
                 pinp->paramPath(anchoredPath);
                 pinp->defparamGenAlt(defParamGenAlt(nodep, lookupPath));
                 pinp->defparamSharedName(sharedName);
+                pinp->defparamScope(
+                    m_defParamScopeIds.emplace(defSymp, m_defParamScopeIds.size() + 1)
+                        .first->second);
                 pinp->modVarp(scopedVarp);
                 cellp->addParamsp(pinp);
-                prevr = DefParamPin{pinp, cellSymp, exprp && !checkTarget ? nullptr : nodep};
+                prevr = DefParamPin{pinp, cellSymp, exprp && !checkTarget ? nullptr : nodep,
+                                    defSymp};
                 if (!exprp) {
                     pushDeletep(nodep->pathp()->unlinkFrBack());
                     targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
@@ -3202,9 +3206,11 @@ class LinkDotParamVisitor final : public VNVisitor {
                 pinp->user1p(defSymp);  // For the value, see ResolveVisitor::visit(AstPin)
                 if (checkTarget) {
                     nodep->checkTarget(true);
+                    nodep->sharedName(sharedName);
                     pushDeletep(nodep->pathp()->unlinkFrBack());
-                    targetp->replaceWith(new AstVarXRef{targetp->fileline(), name,
-                                                        iterationPath(path), VAccess::WRITE});
+                    targetp->replaceWith(new AstVarXRef{targetp->fileline(),
+                                                        VString::dot(scopePath, ".", name),
+                                                        iterationPath(cellPath), VAccess::WRITE});
                     VL_DO_DANGLING(pushDeletep(targetp), targetp);
                     return;
                 }
@@ -4297,8 +4303,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
     }
     void markAndCheckPinDup(AstPin* nodep, AstNode* refp, const char* whatp) {
         // A defparam overrides an instance's parameter value assignment (IEEE 1800-2023
-        // 23.10), so is only checked against other defparams; V3Param removes the
-        // overridden pin once it knows which defparams apply to the instance
+        // 23.10), and V3Param checks defparams of one parameter agree
+        if (!nodep->paramPath().empty()) return;
         const auto pair = m_usedPins.emplace(std::make_pair(refp, nodep->paramPath()), nodep);
         if (!pair.second) duplicatePinError(nodep, pair.first->second, whatp);
     }
