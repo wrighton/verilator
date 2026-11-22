@@ -15,6 +15,7 @@ module assertion_leaf (
 endmodule
 module t (
     input bit clk,
+    input bit scoped_off,
     output int afails,
     output int bfails
 );
@@ -26,7 +27,7 @@ module t (
       clk,
       bfails
   );
-  initial begin
+  initial if (scoped_off) begin
     $assertoff(0, a.labelled_check);
     $assertcontrol(1, 2, 1, 0, a.labelled_check);
   end
