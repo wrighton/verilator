@@ -82,9 +82,14 @@ class ScopeVisitor final : public VNVisitor {
     std::vector<std::pair<AstInitial*, const AstScope*>> m_programInitials;
 
     using AssertCtlRoutes = std::vector<std::pair<size_t, AstAssertCtlTargetSet*>>;
+    struct AssertCtlCallerRoutes final {
+        AssertCtlRoutes routes;  // Applicable routes in source order
+        size_t uses = 0;  // Copies of the live source operations materialized for this caller
+    };
     struct AssertCtlPlanIndex final {
         AssertCtlRoutes common;  // Routes used by every caller
-        std::unordered_map<const AstAssertCtlCaller*, AssertCtlRoutes> byCaller;
+        std::unordered_map<const AstAssertCtlCaller*, AssertCtlCallerRoutes> byCaller;
+        size_t sourceUses = 0;  // Surviving operation templates before scoping clones them
     };
     // Lookup of the structural child occurrence by (parent occurrence, declaration).
     std::unordered_map<const AstAssertCtlCaller*,
@@ -99,21 +104,24 @@ class ScopeVisitor final : public VNVisitor {
     void indexAssertionPlans(AstNetlist* rootp) {
         for (AstNode* const miscp : rootp->miscspList()) {
             if (AstAssertCtlCaller* const callerp = VN_CAST(miscp, AssertCtlCaller)) {
-                m_assertCtlCallers[callerp->parentp()].emplace(callerp->anchorp(), callerp);
+                const bool inserted = m_assertCtlCallers[callerp->parentp()]
+                                          .emplace(callerp->anchorp(), callerp)
+                                          .second;
+                UASSERT_OBJ(inserted, callerp, "Duplicate assertion selector caller identity");
             } else if (AstAssertCtlPlan* const planp = VN_CAST(miscp, AssertCtlPlan)) {
                 AssertCtlPlanIndex& index = m_assertCtlPlans[planp];
                 size_t ordinal = 0;
                 for (AstAssertCtlTargetSet* const setp : planp->setspList()) {
                     if (!setp->callersp()) index.common.emplace_back(ordinal, setp);
                     for (const AstAssertCtlCallerRef* const refp : setp->callerspList()) {
-                        index.byCaller[refp->callerp()].emplace_back(ordinal, setp);
+                        index.byCaller[refp->callerp()].routes.emplace_back(ordinal, setp);
                     }
                     ++ordinal;
                 }
             }
         }
     }
-    AstAssertCtlCaller* assertCtlChildp(const AstCell* cellp, const AstScope* parentp) const {
+    AstAssertCtlCaller* takeAssertCtlChildp(const AstCell* cellp, const AstScope* parentp) {
         if (!cellp) return nullptr;
         const auto children = m_assertCtlCallers.find(m_assertCtlCallerp);
         if (children == m_assertCtlCallers.end()) return nullptr;
@@ -126,7 +134,11 @@ class ScopeVisitor final : public VNVisitor {
             }
         }
         const auto found = children->second.find(anchorp);
-        return found == children->second.end() ? nullptr : found->second;
+        if (found == children->second.end()) return nullptr;
+        AstAssertCtlCaller* const callerp = found->second;
+        children->second.erase(found);
+        if (children->second.empty()) m_assertCtlCallers.erase(children);
+        return callerp;
     }
 
     // Count module instantiations, visiting cells the same way the traversal below does
@@ -260,10 +272,14 @@ class ScopeVisitor final : public VNVisitor {
     }
 
     // Move a truly absolute selection out of code that is cloned per caller.
-    static std::vector<AstAssertCtlTargetSet*> shareAbsoluteTargets(AstNetlist* rootp) {
+    std::vector<AstAssertCtlTargetSet*> prepareAssertionTargets(AstNetlist* rootp) {
         std::vector<AstAssertCtlTargetSet*> sets;
         if (!v3Global.hasAssertCtlReads()) return sets;
         rootp->foreach([&](AstAssertCtlApply* applyp) {
+            if (const AstAssertCtlPlan* const planp = applyp->planp()) {
+                ++m_assertCtlPlans.at(planp).sourceUses;
+                return;
+            }
             if (!applyp->targetsp()) return;
             for (const AstAssertCtlTarget* const targetp : applyp->targetspList()) {
                 const AstVarXRef* const refp = VN_CAST(targetp->statep(), VarXRef);
@@ -289,7 +305,8 @@ class ScopeVisitor final : public VNVisitor {
             return;
         }
         if (v3Global.hasAssertCtlReads()) indexAssertionPlans(nodep);
-        const std::vector<AstAssertCtlTargetSet*> sharedTargets = shareAbsoluteTargets(nodep);
+        // Each concrete caller must materialize each live source operation once.
+        const std::vector<AstAssertCtlTargetSet*> sharedTargets = prepareAssertionTargets(nodep);
         // Operate starting at the top of the hierarchy
         m_aboveCellp = nullptr;
         m_aboveScopep = nullptr;
@@ -298,6 +315,15 @@ class ScopeVisitor final : public VNVisitor {
         for (AstAssertCtlTargetSet* const setp : sharedTargets) {
             setp->unlinkFrBack();
             nodep->topScopep()->scopep()->addBlocksp(setp);
+        }
+        UASSERT_OBJ(m_assertCtlCallers.empty(), nodep, "Unscoped assertion selector callers");
+        if (!V3Error::errorCount()) {
+            for (const auto& plan : m_assertCtlPlans) {
+                for (const auto& caller : plan.second.byCaller) {
+                    UASSERT_OBJ(caller.second.uses == plan.second.sourceUses, plan.first,
+                                "Assertion selector plan not consumed once per caller and use");
+                }
+            }
         }
         // Defer attachment until all instances are visited so cell collection and child
         // iteration do not rescan a growing list of completed scopes.
@@ -313,7 +339,7 @@ class ScopeVisitor final : public VNVisitor {
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_vpiBlocksp);
         VL_RESTORER(m_assertCtlCallerp);
-        m_assertCtlCallerp = assertCtlChildp(m_aboveCellp, m_aboveScopep);
+        m_assertCtlCallerp = takeAssertCtlChildp(m_aboveCellp, m_aboveScopep);
         // Create required blocks and add to module
         string scopename;
         if (!m_aboveScopep) {
@@ -447,10 +473,16 @@ class ScopeVisitor final : public VNVisitor {
     void visit(AstAssertCtlApply* nodep) override {
         if (const AstAssertCtlPlan* const planp = nodep->planp()) {
             UASSERT_OBJ(m_assertCtlCallerp, nodep, "Assertion selector lost its caller scope");
-            const AssertCtlPlanIndex& index = m_assertCtlPlans.at(planp);
+            AssertCtlPlanIndex& index = m_assertCtlPlans.at(planp);
             const auto found = index.byCaller.find(m_assertCtlCallerp);
-            const AssertCtlRoutes empty;
-            const AssertCtlRoutes& local = found == index.byCaller.end() ? empty : found->second;
+            UASSERT_OBJ(found != index.byCaller.end(), nodep,
+                        "Assertion selector plan has no route for this caller");
+            UASSERT_OBJ(!nodep->targetsp(), nodep, "Assertion selector plan already materialized");
+            AssertCtlCallerRoutes& caller = found->second;
+            ++caller.uses;
+            UASSERT_OBJ(caller.uses <= index.sourceUses, nodep,
+                        "Assertion selector plan materialized too many times for this caller");
+            const AssertCtlRoutes& local = caller.routes;
             auto a = index.common.begin();
             auto b = local.begin();
             while (a != index.common.end() || b != local.end()) {
@@ -694,6 +726,10 @@ void V3Scope::scopeAll(AstNetlist* nodep) {
         ScopeCleanupVisitor{nodep};
     }  // Destruct before checking
     if (v3Global.hasAssertCtlReads()) {
+        UASSERT_OBJ(!nodep->exists([](const AstAssertCtlApply* applyp) {
+            return applyp->planp() != nullptr;
+        }),
+                    nodep, "Unconsumed assertion selector plan");
         VNDeleter metadata;
         for (AstNode* const miscp : nodep->miscspList()) {
             if (VN_IS(miscp, AssertCtlCaller) || VN_IS(miscp, AssertCtlPlan)) {
