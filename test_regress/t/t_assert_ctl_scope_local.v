@@ -29,12 +29,24 @@ module sub #(
 endmodule
 
 module t;
+  bit clk;
+  int cycle = 0;
+  int procedural_failures = 0;
+  always #1 clk = !clk;
+  always @(negedge clk) ++cycle;
+  process_check : assert property (@(posedge clk) cycle == 1)
+  else procedural_failures++;
+  initial $assertoff(0, process_check);
+  always_ff @(posedge clk) if (cycle == 1) $asserton(0, process_check);
+
   sub #(.OFF(1)) a ();
   sub #(.OFF(0)) b ();
   initial begin
     #2;
     `checkd(a.chk_blk.failures, 0);
     `checkd(b.chk_blk.failures, 1);
+    #4;
+    `checkd(procedural_failures, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
