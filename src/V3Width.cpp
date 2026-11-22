@@ -9336,6 +9336,9 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstAssertCtlTarget* nodep) override {
         userIterateAndNext(nodep->statep(), WidthVP{SELF, BOTH}.p());
     }
+    void visit(AstAssertCtlTargetSet* nodep) override {
+        userIterateAndNext(nodep->targetsp(), WidthVP{SELF, BOTH}.p());
+    }
     void visit(AstAssertCtlArgs* nodep) override {
         if (nodep->levelp()) {
             iterateCheckSizedSelf(nodep, "Levels", nodep->levelp(), SELF, BOTH);

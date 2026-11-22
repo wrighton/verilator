@@ -1457,6 +1457,8 @@ class AssertVisitor final : public VNVisitor {
     AstNodeCoverOrAssert* m_assertp = nullptr;  // Current assertion
     AstFinal* m_finalp = nullptr;  // Current final block
     int m_controlTempNum = 0;  // Assertion-control operand temporaries within a module
+    // Union of statically possible masks across users of each shared whole-model target list.
+    std::unordered_map<AstAssertCtlTargetSet*, uint32_t> m_sharedControlMasks;
     VDouble0 m_statLiftedCaseExprs;  // Count of purified case expressions
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
@@ -3560,6 +3562,15 @@ class AssertVisitor final : public VNVisitor {
         }
         return limitp;
     }
+    void pruneTargets(AstAssertCtlTarget* targetsp, uint32_t limit, uint32_t mask) {
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            const AstVar* const statep = targetp->statep()->varp();
+            if (static_cast<uint32_t>(targetp->depth()) >= limit
+                || (statep && !(statep->assertCtlMask() & mask))) {
+                VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
+            }
+        }
+    }
     void pruneControlTargets(AstAssertCtl* nodep) {
         AstAssertCtlArgs* const argsp = nodep->argsp();
         const AstConst* const levelp = VN_CAST(argsp->levelp(), Const);
@@ -3587,17 +3598,15 @@ class AssertVisitor final : public VNVisitor {
                 }
             }
         }
-        const auto prune = [&](AstAssertCtlTarget* targetsp) {
-            for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
-                const AstVar* const statep = targetp->statep()->varp();
-                if (static_cast<uint32_t>(targetp->depth()) >= limit
-                    || (statep && !(statep->assertCtlMask() & mask))) {
-                    VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
-                }
-            }
-        };
-        prune(argsp->targetsp());
-        for (AstAssertCtlTargetSet* const setp : argsp->setspList()) prune(setp->targetsp());
+        pruneTargets(argsp->targetsp(), limit, mask);
+        for (AstAssertCtlTargetSet* const setp : argsp->setspList()) {
+            pruneTargets(setp->targetsp(), limit, mask);
+        }
+        if (AstAssertCtlTargetSet* const setp = argsp->sharedp()) {
+            UASSERT_OBJ(limit == unlimited, argsp,
+                        "Shared whole-model selector has a depth limit");
+            m_sharedControlMasks[setp] |= mask;
+        }
     }
     AstNodeStmt* newScopedControlp(AstAssertCtl* nodep) {
         pruneControlTargets(nodep);
@@ -3628,6 +3637,7 @@ class AssertVisitor final : public VNVisitor {
             newControlDepthLimitp(flp, levelp),
             nodep->directiveTypes(),
             argsp->targetsp() ? argsp->targetsp()->unlinkFrBackWithNext() : nullptr};
+        applyp->targetSetp(argsp->sharedp());
         if (argsp->setsp()) {
             AstAssertCtlPlan* const planp
                 = new AstAssertCtlPlan{flp, argsp->setsp()->unlinkFrBackWithNext()};
@@ -3851,7 +3861,13 @@ class AssertVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit AssertVisitor(AstNetlist* nodep) { iterate(nodep); }
+    explicit AssertVisitor(AstNetlist* nodep) {
+        iterate(nodep);
+        for (const auto& item : m_sharedControlMasks) {
+            pruneTargets(item.first->targetsp(), std::numeric_limits<uint32_t>::max(),
+                         item.second);
+        }
+    }
     ~AssertVisitor() override {
         V3Stats::addStat("Assertions, assert non-immediate statements", m_statAsNotImm);
         V3Stats::addStat("Assertions, assert immediate statements", m_statAsImm);
