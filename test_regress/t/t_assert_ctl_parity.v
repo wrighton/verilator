@@ -43,6 +43,42 @@ module t;
     end
   end
 
+  let OFF = 4;
+  let UNIQUE = 32;
+  let UNIQUE0 = 64;
+  let PRIORITY = 128;
+  let COVER = 2;
+
+  // Both forms keep the same directive filtering for violation reports.
+  task automatic check_violation(input bit [1:0] selected);
+    priority case (1'b1)
+      selected[0]: ;
+      selected[1]: ;
+    endcase
+    unique case (1'b1)
+      selected[0]: ;
+      selected[1]: ;
+    endcase
+    unique0 case (1'b1)
+      selected[0]: ;
+      selected[1]: ;
+    endcase
+  endtask
+
+  initial begin
+    #1;
+    $assertcontrol(OFF, UNIQUE | UNIQUE0 | PRIORITY, COVER);
+    check_violation(0);
+    check_violation(3);
+`ifdef SEED_CONTROL
+    $assertcontrol(OFF, UNIQUE | UNIQUE0 | PRIORITY, COVER, 0, check_violation);
+`else
+    $assertcontrol(OFF, UNIQUE | UNIQUE0 | PRIORITY, COVER);
+`endif
+    check_violation(0);
+    check_violation(3);
+  end
+
   function void record(input int value);
     deferred_sum += value;
   endfunction

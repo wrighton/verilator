@@ -11,8 +11,13 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-test.compile(verilator_flags2=['--binary', '--assert'], threads=2 if test.vltmt else 1)
+test.compile(verilator_flags2=['--binary', '--assert', '--no-stop-fail'],
+             threads=2 if test.vltmt else 1)
 
-test.execute()
+report = test.obj_dir + '/reports.log'
+test.execute(logfile=report)
+test.file_grep_count(report, r'Assertion failed in .*check_violation: priority case,', 2)
+test.file_grep_count(report, r'Assertion failed in .*check_violation: unique case,', 4)
+test.file_grep_count(report, r'Assertion failed in .*check_violation: unique0 case,', 2)
 
 test.passes()
