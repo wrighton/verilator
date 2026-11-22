@@ -471,6 +471,8 @@ private:
     bool m_fGate;        // main switch: -fno-gate: gate wire elimination
     // main switch: -fno-ico-change-detect: input change detection optimization
     VOptionBool m_fIcoChangeDetect{VOptionBool::OPT_DEFAULT_TRUE};
+    // main switch: -fico-public-change-detect: change detection of public variables
+    bool m_fIcoPublicChangeDetect = false;
     bool m_fInline;      // main switch: -fno-inline: module inlining
     bool m_fInlineCFuncs;  // main switch: -fno-inline-cfuncs: inline small C functions
     bool m_fInlineFuncs = true;  // main switch: -fno-inline-funcs: function inlining
@@ -829,6 +831,7 @@ public:
     bool fFunc() const { return fFuncSplitCat() || fFuncBalanceCat(); }
     bool fGate() const { return m_fGate; }
     VOptionBool fIcoChangeDetect() const { return m_fIcoChangeDetect; }
+    bool fIcoPublicChangeDetect() const { return m_fIcoPublicChangeDetect; }
     bool fInline() const { return m_fInline; }
     bool fInlineCFuncs() const { return m_fInlineCFuncs; }
     bool fInlineFuncs() const { return m_fInlineFuncs; }

@@ -1089,8 +1089,11 @@ void V3Options::notify() VL_MT_DISABLED {
     // Preprocessor defines based on options used
     if (timing().isSetTrue()) V3PreShell::defineCmdLine("VERILATOR_TIMING", "1");
 
-    // If VPI is used, and no explicit ico change detect option was passed, disable it by default
-    if (m_vpi.isTrue() && m_fIcoChangeDetect.isDefault()) m_fIcoChangeDetect.setTrueOrFalse(false);
+    // If VPI is used, and no explicit ico change detect option was passed, disable it by default,
+    // unless public variable change detection, which needs it, was asked for
+    if (m_vpi.isTrue() && m_fIcoChangeDetect.isDefault() && !m_fIcoPublicChangeDetect) {
+        m_fIcoChangeDetect.setTrueOrFalse(false);
+    }
 
     // === Leave last
     // Mark options as available
@@ -1559,6 +1562,7 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     DECL_OPTION("-fico-change-detect", CbFOnOff, [this](bool flag) {  //
         m_fIcoChangeDetect.setTrueOrFalse(flag);
     });
+    DECL_OPTION("-fico-public-change-detect", FOnOff, &m_fIcoPublicChangeDetect);
     DECL_OPTION("-finline", FOnOff, &m_fInline);
     DECL_OPTION("-finline-cfuncs", FOnOff, &m_fInlineCFuncs);
     DECL_OPTION("-finline-funcs", FOnOff, &m_fInlineFuncs);
