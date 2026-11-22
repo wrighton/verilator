@@ -260,7 +260,13 @@ VerilatedSerialize& operator<<(VerilatedSerialize& os, VerilatedContext* rhsp) {
     return os;
 }
 VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VerilatedContext* rhsp) {
-    os.read(rhsp->serialized1Ptr(), VerilatedContext::serialized1Size());
+    {
+        const VerilatedLockGuard lock{rhsp->m_assertCtlMutex};
+        os.read(rhsp->serialized1Ptr(), VerilatedContext::serialized1Size());
+        for (VlAssertControl* const statep : rhsp->m_assertControls) {
+            rhsp->assertCtlRefresh(*statep);
+        }
+    }
     std::string s;
     os >> s;
     rhsp->impp()->timeFormatSuffix(s);
