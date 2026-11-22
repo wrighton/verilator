@@ -467,7 +467,7 @@ void TriggerKit::addValueChangeTriggerAssignment(AstNetlist* netlistp, AstCFunc*
         cmhp->dtypeSetBit();
         neqp = cmhp;
     } else {
-        neqp = AstNeq::newTyped(flp, rdInst(instVscp), rdPrev(prevVscp));
+        neqp = SenExprBuilder::newChangedp(flp, rdInst(instVscp), rdPrev(prevVscp));
     }
 
     // Build post-update: prev = inst
