@@ -54,6 +54,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -226,6 +227,7 @@ using VerilatedAssertDirectiveType_t = std::underlying_type<VerilatedAssertDirec
 
 class VerilatedSerialize;
 class VerilatedDeserialize;
+class VerilatedMutex;
 
 /// Internal per-assertion state, owned by a generated model instance.
 /// Registration is construction-time only; the context must outlive the model.
@@ -243,7 +245,7 @@ class VlAssertControl final {
     uint32_t m_mask = 0;  // One known assertion-type/directive bit
     std::atomic<uint32_t> m_flags{0};  // On, action, and lock state
     std::atomic<uint32_t> m_kill{0};  // Generation aborting this assertion's active attempts
-    void control(uint32_t controlType) VL_MT_SAFE;
+    void control(uint32_t controlType, VerilatedMutex& mutex) VL_REQUIRES(mutex);
     VL_UNCOPYABLE(VlAssertControl);
 
 public:
@@ -259,6 +261,20 @@ public:
         assert(index < sizeof(flags) / sizeof(flags[0]));
         return (m_flags.load() & flags[index]) != 0;
     }
+};
+
+// A table belongs to a concrete model instance and is bound under the context lock.
+class VlAssertCtlTable final {
+    friend class VerilatedContext;
+
+public:
+    struct Target final {
+        VlAssertControl* statep;
+        uint32_t depth;
+    };
+
+private:
+    std::vector<Target> m_targets;
 };
 
 // Type trait: whether T is a user-defined custom struct
@@ -626,6 +642,9 @@ protected:
     friend class VlAssertControl;
     mutable VerilatedMutex m_assertCtlMutex;  // Protect assertion control registration and updates
     std::unordered_set<VlAssertControl*> m_assertControls VL_GUARDED_BY(m_assertCtlMutex);
+    void assertCtlApplyTable(uint32_t effect, VerilatedAssertType_t types,
+                             VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                             const VlAssertCtlTable& table) VL_REQUIRES(m_assertCtlMutex);
     mutable VerilatedMutex m_timeDumpMutex;  // Protect misc slow strings
     std::string m_timeFormatSuffix VL_GUARDED_BY(m_timeDumpMutex);  // $timeformat printf format
     std::string m_dumpfile VL_GUARDED_BY(m_timeDumpMutex);  // $dumpfile setting
@@ -725,13 +744,17 @@ public:
                    VerilatedAssertDirectiveType_t directives) VL_MT_SAFE;
     /// Internal: validate the effect once, even if static selection is empty.
     bool assertCtlValid(uint32_t controlType) VL_MT_SAFE;
-    /// Internal: apply an already validated effect to a statically selected site.
-    void assertCtlApply(uint32_t controlType, VerilatedAssertType_t types,
-                        VerilatedAssertDirectiveType_t directives,
-                        VlAssertControl& state) VL_MT_SAFE;
-    /// Internal: apply control to one statically selected assertion instance.
-    void assertCtl(uint32_t controlType, VerilatedAssertType_t types,
-                   VerilatedAssertDirectiveType_t directives, VlAssertControl& state) VL_MT_SAFE;
+    // Apply a scoped effect to a table bound on its first use. Depth is exclusive.
+    template <typename T_Bind>
+    void assertCtlTable(uint32_t effect, VerilatedAssertType_t types,
+                        VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                        VlAssertCtlTable& table, const T_Bind& bind)
+        VL_MT_SAFE_EXCLUDES(m_assertCtlMutex) {
+        if (!assertCtlValid(effect) || !depthLimit) return;
+        const VerilatedLockGuard lock{m_assertCtlMutex};
+        if (table.m_targets.empty()) bind(table.m_targets);
+        assertCtlApplyTable(effect, types, directives, depthLimit, table);
+    }
     /// Return if calculating of unused signals (for traces)
     bool calcUnusedSigs() const VL_MT_SAFE { return m_s.m_calcUnusedSigs; }
     /// Enable calculation of unused signals (for traces)

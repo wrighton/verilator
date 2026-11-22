@@ -312,10 +312,19 @@ class ScopeVisitor final : public VNVisitor {
             // V3Param copies a module per instance for such a reference, but not an
             // interface, as a virtual interface may refer to any instance
             if (const AstNode* const refp = nodep->instanceStateRefp()) {
-                refp->v3warn(E_UNSUPPORTED,
-                             "Unsupported: Class referencing "
-                                 << refp->prettyNameQ() << " of " << m_modp->verilogKwd() << " "
-                                 << m_modp->prettyNameQ() << " instantiated more than once");
+                const AstNodeVarRef* const varrefp = VN_CAST(refp, NodeVarRef);
+                if (varrefp && varrefp->varp() && varrefp->varp()->assertCtlMask()) {
+                    refp->v3warn(E_UNSUPPORTED,
+                                 "Unsupported: Instance-dependent assertion control in a class of "
+                                     << m_modp->verilogKwd() << " " << m_modp->prettyNameQ()
+                                     << " instantiated more than once.");
+                } else {
+                    refp->v3warn(E_UNSUPPORTED, "Unsupported: Class referencing "
+                                                    << refp->prettyNameQ() << " of "
+                                                    << m_modp->verilogKwd() << " "
+                                                    << m_modp->prettyNameQ()
+                                                    << " instantiated more than once");
+                }
             }
         }
         // Create required blocks and add to module
