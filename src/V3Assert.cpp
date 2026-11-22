@@ -1392,16 +1392,7 @@ class AssertVisitor final : public VNVisitor {
                 VL_DO_DANGLING(pushDeletep(pexprp), pexprp);
                 return new AstBegin{nodep->fileline(), "", nullptr, false};
             }
-            AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
-            forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
             if (AstNodeStmt* const finalp = pexprp->finalp()) {
-                // The end-of-simulation check runs action blocks in a final block, where an
-                // NBA, legal in an action block, executes as a blocking assignment
-                finalp->foreach([](AstAssignDly* const dlyp) {
-                    FileLine* const newfl = new FileLine{dlyp->fileline()};
-                    newfl->warnOff(V3ErrorCode::FINALDLY, true);
-                    dlyp->fileline(newfl);
-                });
                 // The final block executes in zero time (IEEE 1800-2023 9.2.3), so a timing
                 // control there never resumes
                 const AstNode* timingp = nullptr;
@@ -1414,8 +1405,23 @@ class AssertVisitor final : public VNVisitor {
                     timingp->v3warn(E_UNSUPPORTED,
                                     "Unsupported: Timing control in action block of a strong "
                                     "property, which also runs at end of simulation");
-                    VL_DO_DANGLING(pushDeletep(finalp->unlinkFrBack()), finalp);
-                } else if (!m_finalp) {
+                    // Drop the whole property, its attempts too, as for a missing --timing: a
+                    // property expression nested in them is not lowered for later passes
+                    VL_DO_DANGLING(pushDeletep(pexprp), pexprp);
+                    return new AstBegin{nodep->fileline(), "", nullptr, false};
+                }
+            }
+            AstFork* const forkp = new AstFork{nodep->fileline(), VJoinType::JOIN_NONE};
+            forkp->addForksp(new AstForkItem{nodep->fileline(), pexprp->bodyp()->unlinkFrBack()});
+            if (AstNodeStmt* const finalp = pexprp->finalp()) {
+                // The end-of-simulation check runs action blocks in a final block, where an
+                // NBA, legal in an action block, executes as a blocking assignment
+                finalp->foreach([](AstAssignDly* const dlyp) {
+                    FileLine* const newfl = new FileLine{dlyp->fileline()};
+                    newfl->warnOff(V3ErrorCode::FINALDLY, true);
+                    dlyp->fileline(newfl);
+                });
+                if (!m_finalp) {
                     m_finalp = new AstFinal{m_modp->fileline(), finalp->unlinkFrBack()};
                     m_modp->addStmtsp(m_finalp);
                 } else {
