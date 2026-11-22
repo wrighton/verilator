@@ -458,6 +458,8 @@ class RtmdBuilder final : public VNVisitor {
 
         // Only static variables
         if (!nodep->lifetime().isStatic()) return;
+        // Assertion control state is compiler-owned, not a SystemVerilog variable.
+        if (nodep->assertCtlMask()) return;
         // Skip weird stuff
         if (nodep->isSc()) return;
 
