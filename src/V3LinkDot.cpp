@@ -8814,11 +8814,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
             symIterateNull(selp->bitp(), m_curSymp);
-            AstNodeExpr* const clonep
-                = m_statep->forParamed() ? nullptr
-                                         : V3Const::constifyEdit(selp->bitp()->cloneTree(false));
-            if (!clonep) V3Const::constifyParamsNoWarnEdit(selp->bitp());
-            const AstConst* const constp = VN_CAST(clonep ? clonep : selp->bitp(), Const);
+            AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
+            const AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
             if (!constp || constp->num().isFourState()) {
@@ -8826,7 +8823,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (!base.empty()) {
                 path = base + "__BRA__" + AstNode::encodeNumber(constp->toSInt()) + "__KET__";
             }
-            if (clonep) VL_DO_DANGLING(pushDeletep(clonep), clonep);
+            VL_DO_DANGLING(pushDeletep(indexp), indexp);
             return path;
         }
         return "";
@@ -8869,7 +8866,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
         bool nonconstant = false;
         const string path = assertControlPath(itemp, &nonconstant);
         if (path.empty()) {
-            if (nonconstant) {
+            if (nonconstant && itemp->exists([](const AstFuncRef*) { return true; })) {
+                itemp->v3warn(E_UNSUPPORTED,
+                              "Unsupported: Function call in assertion control scope index.");
+            } else if (nonconstant) {
                 itemp->v3error("Nonconstant index in assertion control scope "
                                "(IEEE 1800-2023 20.11).");
             } else {
