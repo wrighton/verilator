@@ -3278,6 +3278,10 @@ VlAssertControl::~VlAssertControl() {
     const VerilatedLockGuard lock{m_contextp->m_assertCtlMutex};
     m_contextp->m_assertControls.erase(this);
 }
+static constexpr bool isAssertCtlTypeValid(uint32_t controlType) {
+    return controlType >= 1 && controlType <= 11;
+}
+
 void VlAssertControl::control(uint32_t controlType) VL_MT_SAFE {
     if (controlType == 1) {
         m_flags |= LOCK;
@@ -3301,7 +3305,7 @@ void VlAssertControl::control(uint32_t controlType) VL_MT_SAFE {
     case 9: m_flags &= ~FAIL; break;
     case 10: m_flags |= PASS_NONVACUOUS; break;
     case 11: m_flags &= ~PASS_VACUOUS; break;
-    default: VL_FATAL_MT(__FILE__, __LINE__, "", "Internal: Invalid assertion control type");
+    default: VL_UNREACHABLE;
     }
 }
 
@@ -3321,7 +3325,7 @@ void VerilatedContext::assertOn(bool flag) VL_MT_SAFE {
 }
 bool VerilatedContext::assertCtlValid(uint32_t controlType) VL_MT_SAFE {
     if (m_ns.m_assertCtlsLocked) return false;
-    if (controlType >= 1 && controlType <= 11) return true;
+    if (isAssertCtlTypeValid(controlType)) return true;
     VL_WARN_MT("", 0, "",
                ("Bad $assertcontrol control_type '" + std::to_string(controlType)
                 + "' (IEEE 1800-2023 Table 20-5)")
@@ -3380,7 +3384,7 @@ void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t typ
     case 11:  // VacuousOff
         m_s.m_assertPassOnVacuous &= ~lockedMask;
         break;
-    default: VL_FATAL_MT(__FILE__, __LINE__, "", "Internal: Invalid assertion control type");
+    default: VL_UNREACHABLE;
     }
 }
 void VerilatedContext::assertCtl(uint32_t controlType, VerilatedAssertType_t types,
@@ -3392,6 +3396,11 @@ void VerilatedContext::assertCtlApply(uint32_t controlType, VerilatedAssertType_
                                       VerilatedAssertDirectiveType_t directives,
                                       VlAssertControl& state) VL_MT_SAFE {
     if (m_ns.m_assertCtlsLocked) return;
+    // Check the internal precondition before taking a lock; fatal handlers may reenter.
+    if (VL_UNLIKELY(!isAssertCtlTypeValid(controlType))) {
+        VL_FATAL_MT(__FILE__, __LINE__, "", "Internal: Invalid assertion control type");
+        return;
+    }
     const VerilatedLockGuard lock{m_assertCtlMutex};
     assert(state.m_contextp == this);
     if (assertOnMask(types, directives) & state.m_mask) state.control(controlType);
