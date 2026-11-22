@@ -1,0 +1,22 @@
+%Error: t/t_assert_ctl_gen_walk_bad.v:109:27: Assertion control target is not a scope or assertion from 't.missing_case.q.m': 'gb.inner' (IEEE 1800-2023 20.11).
+                                            : ... note: In instance 't.missing_case.p.m'
+  109 |   initial $assertoff(0, gb.inner);
+      |                           ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=5.055 for more assistance.
+%Error: t/t_assert_ctl_gen_walk_bad.v:85:27: Assertion control target is not a scope or assertion from 't.pkg_case.q.m': 'gb.inner' (IEEE 1800-2023 20.11).
+                                           : ... note: In instance 't.pkg_case.p.m'
+   85 |   initial $assertoff(0, gb.inner);
+      |                           ^
+%Error: t/t_assert_ctl_gen_walk_bad.v:53:27: Assertion control target is not a scope or assertion from 't.out_case.p0.m': 'gb.c' (IEEE 1800-2023 20.11).
+                                           : ... note: In instance 't.out_case.p1.m'
+   53 |   initial $assertoff(0, gb.c);
+      |                           ^
+%Error: t/t_assert_ctl_gen_walk_bad.v:33:25: Assertion control target is not a scope or assertion from 't.import_case.p2.m': 'pk' (IEEE 1800-2023 20.11).
+                                           : ... note: In instance 't.import_case.q2.m'
+   33 |   initial $assertoff(0, pk);
+      |                         ^~
+%Error: t/t_assert_ctl_gen_walk_bad.v:14:25: Assertion control target is not a scope or assertion from 't.import_case.q.m': 'pk' (IEEE 1800-2023 20.11).
+                                           : ... note: In instance 't.import_case.p.m'
+   14 |   initial $assertoff(0, pk);
+      |                         ^~
+%Error: Exiting due to 5 error(s)
