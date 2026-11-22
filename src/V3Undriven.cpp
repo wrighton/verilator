@@ -864,8 +864,6 @@ class UndrivenVisitor final : public VNVisitorConst {
 
     // VISITORS
     void visit(AstVar* nodep) override {
-        // Assertion control state has no SystemVerilog declaration, drivers or sinks.
-        if (nodep->assertCtlMask()) return;
         const bool funcInout = nodep->isFuncLocal() && nodep->isInout();
         for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
             // For assigns and non-combo always, do just usr==1, to look
