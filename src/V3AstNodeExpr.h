@@ -1251,6 +1251,21 @@ public:
     // May return nullptr on parse failure.
     static AstConst* parseParamLiteral(FileLine* fl, const string& literal);
 };
+class AstConstCast final : public AstNodeExpr {
+    // A const cast, const'(expr). In a concurrent assertion, kept for V3Assert to take the value
+    // of a procedural assertion's when queued (IEEE 1800-2023 16.14.6.1), otherwise only the
+    // expression
+    // @astgen op1 := lhsp : AstNodeExpr
+public:
+    AstConstCast(FileLine* fl, AstNodeExpr* lhsp)
+        : ASTGEN_SUPER_ConstCast(fl) {
+        this->lhsp(lhsp);
+    }
+    ASTGEN_MEMBERS_AstConstCast;
+    string emitVerilog() override { return "const'(%l)"; }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { V3ERROR_NA_RETURN(true); }
+};
 class AstConstraintRef final : public AstNodeExpr {
     // A reference to a constraint identifier
     // @astgen op1 := fromp : Optional[AstNodeExpr]
