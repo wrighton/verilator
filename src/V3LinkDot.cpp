@@ -1162,7 +1162,7 @@ private:
 public:
     VSymEnt* findDotted(FileLine* refLocationp, VSymEnt* lookupSymp, const string& dotname,
                         string& baddot, VSymEnt*& okSymp, bool firstId,
-                        const AstCell** assertCtlBoundarypp = nullptr) {
+                        const AstCell** assertCtlBoundarypp = nullptr, bool exactIndices = false) {
         // Given a dotted hierarchy name, return where in scope it is
         // Note when dotname=="" we just fall through and return lookupSymp
         UINFO(8, "    dottedFind se" << cvtToHex(lookupSymp) << " '" << dotname << "'");
@@ -1181,7 +1181,7 @@ public:
             baddot = ident;  // So user can see where they botched it
             okSymp = lookupSymp;
             string altIdent;
-            if (!forScopeCreation()) {
+            if (!forScopeCreation() && !exactIndices) {
                 // GENFOR Begin is foo__BRA__##__KET__ after we've genloop unrolled,
                 // but presently should be just "foo".
                 // Likewise cell foo__[array] before we've expanded arrays is just foo.
@@ -1350,6 +1350,13 @@ public:
             firstId = false;
         }
         return lookupSymp;
+    }
+
+    VSymEnt* findAssertCtlDotted(FileLine* flp, VSymEnt* scopep, const string& path,
+                                 string& baddot, VSymEnt*& okSymp, bool firstId,
+                                 const AstCell** boundarypp = nullptr) {
+        // Once elaborated, a missing array element must not fall back to its scalar name.
+        return findDotted(flp, scopep, path, baddot, okSymp, firstId, boundarypp, forParamed());
     }
 
     static string removeLastInlineScope(const string& name) {
@@ -4164,6 +4171,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     // Lexical children indexed by declaration identity for replay in another instance.
     std::unordered_map<const VSymEnt*, std::unordered_map<const AstNode*, VSymEnt*>>
         m_assertCtlChildren;
+    // Direct interface pin bindings indexed once per instance declaration.
+    std::unordered_map<const AstCell*, std::unordered_map<const AstVar*, const AstPin*>>
+        m_assertCtlPins;
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
     bool m_inGenBlock = false;  // True if in generate block
@@ -8334,7 +8344,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string baddot;
             VSymEnt* okSymp = nullptr;
             const VSymEnt* const symp
-                = m_statep->findDotted(fl, cellSymp, firstName, baddot, okSymp, true);
+                = m_statep->findAssertCtlDotted(fl, cellSymp, firstName, baddot, okSymp, true);
             if (!symp || symp->nodep() != firstSymp->nodep()) return true;
         }
         return false;
@@ -8350,7 +8360,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         const VSymEnt* const firstSymp
             = firstName == "$root"
                   ? nullptr
-                  : m_statep->findDotted(fl, lookupSymp, firstName, baddot, okSymp, true);
+                  : m_statep->findAssertCtlDotted(fl, lookupSymp, firstName, baddot, okSymp, true);
         for (const VSymEnt* symp = foundp->parentp(); symp; symp = symp->parentp()) {
             if (VN_IS(symp->nodep(), Class)) return true;
             if (symp == firstSymp) break;
@@ -8394,7 +8404,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         string baddot;
         VSymEnt* okSymp = nullptr;
         const VSymEnt* const foundp
-            = m_statep->findDotted(flp, callerp, path, baddot, okSymp, true);
+            = m_statep->findAssertCtlDotted(flp, callerp, path, baddot, okSymp, true);
         AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
         if (!isAssertControlTarget(targetp)
             || assertControlThroughClass(flp, callerp, path, foundp)) {
@@ -8416,7 +8426,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             return true;
         }
         const VSymEnt* const firstp
-            = m_statep->findDotted(flp, callerp, firstName, baddot, okSymp, true);
+            = m_statep->findAssertCtlDotted(flp, callerp, firstName, baddot, okSymp, true);
         UASSERT_OBJ(firstp, itemp, "Upward assertion control scope without its first scope");
         string instancePath;
         string childPath;
@@ -8532,8 +8542,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string baddot;
             VSymEnt* okSymp = nullptr;
             // Past a port, only names within the interface instance (or modport) reached
-            const VSymEnt* const symp = m_statep->findDotted(flp, basep, rest, baddot, okSymp,
-                                                             baseIndex == 0, &crossing.boundaryp);
+            const VSymEnt* const symp = m_statep->findAssertCtlDotted(
+                flp, basep, rest, baddot, okSymp, baseIndex == 0, &crossing.boundaryp);
             if (!symp) break;
             if (i + 1 == names.size()) crossing.foundp = symp;
             const AstVar* const varp = VN_CAST(symp->nodep(), Var);
@@ -8644,6 +8654,37 @@ class LinkDotResolveVisitor final : public VNVisitor {
                  VString::dot(prefix, ".", childRest)};
         return true;
     }
+    // Prove a simple port connection from the caller's pin, not from the interface dtype,
+    // which identifies an elaborated body and may be shared by many distinct instances.
+    VSymEnt* assertCtlDirectIface(FileLine* flp, VSymEnt* scopep, const string& name) {
+        string baddot;
+        VSymEnt* okp = nullptr;
+        const VSymEnt* const portp
+            = m_statep->findAssertCtlDotted(flp, scopep, name, baddot, okp, true);
+        const AstVar* const varp = portp ? VN_CAST(portp->nodep(), Var) : nullptr;
+        if (!varp) return nullptr;
+        const VSymEnt* const parentp = portp->parentp();
+        const AstCell* const callerp = parentp ? VN_CAST(parentp->nodep(), Cell) : nullptr;
+        if (!callerp || !parentp->parentp() || callerp->assertCtlIfaceOriginp()) return nullptr;
+        const auto pins = m_assertCtlPins.try_emplace(callerp);
+        auto& byVar = pins.first->second;
+        if (pins.second) {
+            for (const AstPin* const pinp : callerp->pinspList()) {
+                if (pinp->modVarp()) byVar.emplace(pinp->modVarp(), pinp);
+            }
+        }
+        const auto pin = byVar.find(varp);
+        if (pin == byVar.end()) return nullptr;
+        const AstVarRef* const refp = VN_CAST(pin->second->exprp(), VarRef);
+        if (!refp || !refp->varp() || !refp->varp()->isIfaceParent()) return nullptr;
+        const AstIfaceRefDType* const dtypep = VN_CAST(refp->varp()->subDTypep(), IfaceRefDType);
+        const AstCell* const cellp = dtypep ? dtypep->cellp() : nullptr;
+        if (!cellp || cellp->assertCtlIfaceOriginp() || !VN_IS(cellp->modp(), Iface))
+            return nullptr;
+        VSymEnt* const concretep = m_statep->findAssertCtlDotted(flp, parentp->parentp(),
+                                                                 cellp->name(), baddot, okp, true);
+        return concretep && concretep->nodep() == cellp ? concretep : nullptr;
+    }
     // A scope name through a port of interface type names the instance connected to the port
     // (IEEE 1800-2023 20.11, 25.3). The symbols here reach one representative instance of the
     // interface instead, so the name is kept as written up to the last such port, and the
@@ -8687,6 +8728,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         if (!crossingCount) return false;
+        if (names.size() == 1 && scopes.size() > 1 && crossingCount == scopes.size()
+            && !VN_IS(m_modp, Class)) {
+            VSymEnt* const sharedp = assertCtlDirectIface(flp, scopes.front(), names.front());
+            bool shared = sharedp != nullptr;
+            for (size_t i = 0; shared && i < scopes.size(); ++i) {
+                shared = !crossings[i].modport
+                         && (i == 0
+                             || assertCtlDirectIface(flp, scopes[i], names.front()) == sharedp);
+            }
+            if (shared) {
+                const string targetPath = assertionScopePath(sharedp);
+                addAssertCtlTargets({{sharedp->nodep(), targetPath, targetPath}}, argsp, targets,
+                                    true);
+                return true;
+            }
+        }
         // A name from $root, or from a top module in every instance, is the same from every
         // instance, so it is absolute; AssertControlTargetVisitor prefixes $root, which also keeps
         // a closer scope of the same name from hiding it. Otherwise each instance resolves the
@@ -8698,7 +8755,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 string baddot;
                 VSymEnt* okSymp = nullptr;
                 const VSymEnt* const firstSymp
-                    = m_statep->findDotted(flp, scopep, names[0], baddot, okSymp, true);
+                    = m_statep->findAssertCtlDotted(flp, scopep, names[0], baddot, okSymp, true);
                 const AstNodeModule* const firstModp
                     = firstSymp ? VN_CAST(firstSymp->nodep(), NodeModule) : nullptr;
                 if (!firstModp || !firstModp->isTop()
@@ -8761,8 +8818,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (firstName == "$root") continue;
             string baddot;
             VSymEnt* okSymp = nullptr;
-            const VSymEnt* const firstSymp = m_statep->findDotted(itemp->fileline(), m_curSymp,
-                                                                  firstName, baddot, okSymp, true);
+            const VSymEnt* const firstSymp = m_statep->findAssertCtlDotted(
+                itemp->fileline(), m_curSymp, firstName, baddot, okSymp, true);
             // Not found yet, or owned by an instance below the top: not a class, package,
             // $unit, top module or top interface
             if (!firstSymp) dependent = true;
@@ -8799,8 +8856,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (assertControlThroughPort(itemp, argsp, path, targets)) return;
         string baddot;
         VSymEnt* okSymp = nullptr;
-        VSymEnt* const foundp
-            = m_statep->findDotted(itemp->fileline(), m_curSymp, path, baddot, okSymp, true);
+        VSymEnt* const foundp = m_statep->findAssertCtlDotted(itemp->fileline(), m_curSymp, path,
+                                                              baddot, okSymp, true);
         AstNode* const targetp = foundp ? foundp->nodep() : nullptr;
         // A bare $root resolves to the netlist, which is not a scope (IEEE 1800-2023
         // Syntax 20-12)
@@ -8838,9 +8895,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
         string firstBaddot;
         VSymEnt* firstOkSymp = nullptr;
         const VSymEnt* const firstSymp
-            = firstName == "$root" ? nullptr
-                                   : m_statep->findDotted(itemp->fileline(), m_curSymp, firstName,
-                                                          firstBaddot, firstOkSymp, true);
+            = firstName == "$root"
+                  ? nullptr
+                  : m_statep->findAssertCtlDotted(itemp->fileline(), m_curSymp, firstName,
+                                                  firstBaddot, firstOkSymp, true);
         string instancePath;
         string childPath;
         string firstPath;
@@ -8899,7 +8957,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     || (m_modp == topp && path == topp->origName())) {
                     string baddot;
                     VSymEnt* okp = nullptr;
-                    const VSymEnt* const foundp = m_statep->findDotted(
+                    const VSymEnt* const foundp = m_statep->findAssertCtlDotted(
                         itemp->fileline(), m_curSymp, path, baddot, okp, true);
                     if (foundp && foundp->nodep() == topp) {
                         m_statep->assertCtlSites().markWholeModel(nodep);
