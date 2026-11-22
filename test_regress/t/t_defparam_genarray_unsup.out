@@ -18,6 +18,18 @@
    28 |   defparam g[1'bx].u.P = 5;   
       |             ^
 %Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:29:13: Unsupported: defparam with instance select other than one integer literal
-   29 |   defparam g[2'sb11].u.P = 5;   
+   29 |   defparam g[1.0].u.P = 5;   
       |             ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:30:13: Unsupported: defparam with instance select other than one integer literal
+   30 |   defparam g[null].u.P = 5;   
+      |             ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:31:13: Unsupported: defparam with instance select 40'h100000001, outside the 32-bit integer range of a genvar
+   31 |   defparam g[40'h1_0000_0001].u.P = 5;   
+      |             ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:41:26: Unsupported: defparam with instance select through generate blocks of the same name
+   41 |   defparam gp[0].alt.u.P = 6;
+      |                          ^
+%Error-UNSUPPORTED: t/t_defparam_genarray_unsup.v:54:28: Unsupported: defparam with instance select through generate blocks of the same name, from outside its scope
+   54 |   defparam t.g2[0].alt.u.P = 3;
+      |                            ^
 %Error: Exiting due to
