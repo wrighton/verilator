@@ -18,6 +18,7 @@ endmodule
 
 module t (
     input bit clk,
+    input bit off_whole,
     output int afails,
     output int bfails
 );
@@ -29,6 +30,8 @@ module t (
       clk,
       bfails
   );
+  always @(posedge off_whole) $assertoff(0, $root.t);
+
   initial begin
     $assertoff(0, a.labelled_check);
     $assertcontrol(1, 2, 1, 0, a.labelled_check);  // Lock the selected assertion
