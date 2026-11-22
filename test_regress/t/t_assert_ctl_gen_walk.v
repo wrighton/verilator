@@ -269,12 +269,19 @@ module up_qualified(output bit done);
   up_qualified_leaf u ();
   if (1) begin : g
     up_qualified_leaf u ();
-    initial $assertoff(0, up_qualified.u.check);
+    if (1) begin : g
+      up_qualified_leaf u ();
+    end
+    initial begin
+      $assertoff(0, up_qualified.u.check);
+      $assertoff(0, u);
+    end
   end
   initial begin
     #2;
     `checkd(u.failures, 0);
-    `checkd(g.u.failures, 1);
+    `checkd(g.u.failures, 0);
+    `checkd(g.g.u.failures, 1);
     done = 1;
   end
 endmodule
