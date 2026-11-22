@@ -978,6 +978,7 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         putfs(nodep,
               "/* assertion control target at depth " + std::to_string(nodep->depth()) + " */");
     }
+    void visit(AstAssertCtlTargetSet*) override {}  // Shared compiler metadata
     void visit(AstAssertCtlApply* nodep) override {
         putfs(nodep, "$_ASSERT_CTL_APPLY(");
         iterateConst(nodep->effectp());

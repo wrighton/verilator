@@ -223,6 +223,17 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
 };
+class AstAssertCtlTargetSet final : public AstNode {
+    // Absolute targets shared by all copies of a scoped control statement.
+    // @astgen op1 := targetsp : List[AstAssertCtlTarget]
+public:
+    AstAssertCtlTargetSet(FileLine* flp, AstAssertCtlTarget* targetsp)
+        : ASTGEN_SUPER_AssertCtlTargetSet(flp) {
+        addTargetsp(targetsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlTargetSet;
+    bool maybePointedTo() const override VL_MT_SAFE { return true; }
+};
 class AstCaseItem final : public AstNode {
     // Single item of AstCase/AstRandCase
     // @astgen op1 := condsp : List[AstNodeExpr]
@@ -323,6 +334,7 @@ class AstAssertCtlApply final : public AstNodeStmt {
     // @astgen op2 := typesp : AstNodeExpr
     // @astgen op3 := limitp : AstNodeExpr
     // @astgen op4 := targetsp : List[AstAssertCtlTarget]
+    // @astgen ptr := m_targetSetp : Optional[AstAssertCtlTargetSet]  // Shared absolute targets
     const VAssertDirectiveType m_directives;  // Directive filter for the table
 
 public:
@@ -337,8 +349,11 @@ public:
     }
     ASTGEN_MEMBERS_AstAssertCtlApply;
     VAssertDirectiveType directives() const { return m_directives; }
+    AstAssertCtlTargetSet* targetSetp() const { return m_targetSetp; }
+    void targetSetp(AstAssertCtlTargetSet* setp) { m_targetSetp = setp; }
     bool sameNode(const AstNode* samep) const override {
-        return directives() == VN_DBG_AS(samep, AssertCtlApply)->directives();
+        const AstAssertCtlApply* const otherp = VN_DBG_AS(samep, AssertCtlApply);
+        return directives() == otherp->directives() && targetSetp() == otherp->targetSetp();
     }
     bool isGateOptimizable() const override { return false; }
     bool isPredictOptimizable() const override { return false; }
