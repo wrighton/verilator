@@ -350,19 +350,30 @@ element, or a net of a module other than an interface by a hierarchical
 reference), or to an input port that is not coerced.
 
 An input port of net kind that is written but not coerced, including one
-written procedurally inside its module, through a virtual interface, or by a
-hierarchical reference, drives the net it is connected to if that net has no
-other driver, as the port and the net collapse into one net (IEEE 1800-2023
-23.3.3.7). The connection may be a hierarchical reference, and a constant
-bit, part, or element select of the net. Otherwise the net drives the port,
-and overrides the writes to it when it changes. A net, as a whole, has
-another driver if anything other than force or release writes any bit of it,
-if it is declared tri0 or tri1 or connected to a pullup or pulldown, if it is
-an input port connected in any instance or set by ```unconnected_drive``, if
-it is a port of the top-level module, or if it is public writable. Two such
-ports connected to overlapping bits of a net keep their connections driving
-the ports. :option:`ASSIGNIN` is still reported on a write inside the module
-or by a hierarchical reference.
+written procedurally inside its module, through a virtual interface, or by
+a hierarchical reference, drives the net it is connected to if that net has
+no other driver, as the port and the net collapse into one net (IEEE
+1800-2023 23.3.3.7). The connection may be a hierarchical reference, and a
+constant bit, part, or element select of the net. This fallback requires no
+other driver. A net has another driver if anything other than force or
+release writes any bit of it, if it is declared tri0 or tri1 or connected
+to a pullup or pulldown, if it is an input port connected in any instance
+or set by ```unconnected_drive``, if it is a port of the top-level module,
+or if it is public writable. This fallback does not collapse two ports
+connected to overlapping bits of the same net.
+
+A continuously written net input that any instance connects to a value,
+such as a variable, a hierarchical reference to a variable, a select by a
+runtime position, or a value expression, can also return a drive through
+another instance's eligible local net connection, including to an
+already-driven net or an instance array element of one. This route requires
+a bit-preserving connection, such as a local net, constant selection, or
+concatenation. It does not apply to input assignment conversions or to
+wired, delayed, or aliased nets. Where neither return route applies, the
+connection drives the port only. A value and the local drivers are resolved
+on the formal, without driving the value in reverse. :option:`ASSIGNIN`
+remains applicable to writes inside the module, subject to its documented
+exceptions.
 
 
 Gate Primitives
