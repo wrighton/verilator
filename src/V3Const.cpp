@@ -1790,27 +1790,35 @@ class ConstVisitor final : public VNVisitor {
                                << nodep->lsbp()->name() << " width=" << nodep->widthConst());
                 // Replacing nodep will make a mess above, so we replace the offender
                 replaceZero(nodep->lsbp());
-            } else if (nodep->declRange().ranged()
-                       && (nodep->msbConst() > maxDeclBit || nodep->lsbConst() > maxDeclBit)) {
+            } else if (nodep->declRange().ranged() && nodep->lsbConstOutOfRange(maxDeclBit)) {
                 // See also warning in V3Width
                 // Must adjust by element width as declRange() is in number of elements
                 string msbLsbProtected;
+                int outsideMsb = nodep->declRange().hiMaxSelect();
+                int adjustScale = 1;  // Units of the negative-lsb adjustment
                 if (nodep->declElWidth() == 0) {
                     msbLsbProtected = "(nodep->declElWidth() == 0) "
                                       + std::to_string(nodep->msbConst()) + ":"
                                       + std::to_string(nodep->lsbConst());
+                } else if (nodep->declElWidth() > 1
+                           && nodep->widthConst() != nodep->declElWidth()) {
+                    // A select of other than one element is in bits, as V3Width reports it
+                    msbLsbProtected = nodep->lsbConstStr(nodep->widthConst() - 1) + ":"
+                                      + nodep->lsbConstStr(0);
+                    outsideMsb = maxDeclBit;
+                    adjustScale = nodep->declElWidth();
                 } else {
-                    msbLsbProtected = std::to_string(nodep->msbConst() / nodep->declElWidth())
-                                      + ":"
-                                      + std::to_string(nodep->lsbConst() / nodep->declElWidth());
+                    msbLsbProtected
+                        = nodep->lsbConstStr(nodep->widthConst() - 1, nodep->declElWidth()) + ":"
+                          + nodep->lsbConstStr(0, nodep->declElWidth());
                 }
                 nodep->v3warn(SELRANGE,
                               "Selection index out of range: "
-                                  << msbLsbProtected << " outside "
-                                  << nodep->declRange().hiMaxSelect() << ":0"
+                                  << msbLsbProtected << " outside " << outsideMsb << ":0"
                                   << (nodep->declRange().lo() >= 0
                                           ? ""
-                                          : (" (adjusted +" + cvtToStr(-nodep->declRange().lo())
+                                          : (" (adjusted +"
+                                             + cvtToStr(-nodep->declRange().lo() * adjustScale)
                                              + " to account for negative lsb)")));
                 UINFO(1, "    Related Raw index is " << nodep->msbConst() << ":"
                                                      << nodep->lsbConst());
