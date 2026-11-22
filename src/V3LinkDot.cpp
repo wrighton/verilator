@@ -114,9 +114,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     int m_number = 0;
     std::unordered_map<const AstNodeStmt*, Site> m_sites;
     std::vector<std::pair<AstNodeModule*, AstVar*>> m_declarations;
-    std::vector<AstNodeStmt*> m_boundSites;
-    std::vector<AstAssertCtlArgs*> m_selectors;
-    std::unordered_set<const AstAssertCtlArgs*> m_wholeModel;
+    size_t m_selectors = 0;  // Selectors with hierarchy arguments
+    std::vector<AstAssertCtlArgs*> m_wholeModel;  // Proven top selectors, not expanded yet
     // Interned structural occurrences, independent of lexical blocks and flattened names.
     std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
     AstModule* m_standaloneTopp = nullptr;
@@ -127,7 +126,7 @@ class LinkDotAssertCtlSites final : public VNVisitor {
         if (VN_IS(m_modp, Package) || VN_IS(m_modp, Class)) m_standaloneTopp = nullptr;
     }
     void visit(AstAssertCtl* nodep) override {
-        if (AstAssertCtlArgs* const argsp = nodep->argsp()) m_selectors.push_back(argsp);
+        if (nodep->argsp()) ++m_selectors;
         iterateChildren(nodep);
     }
     void visit(AstNodeFTask* nodep) override {
@@ -210,28 +209,9 @@ public:
         m_callers.emplace(symp, resultp);
         return resultp;
     }
-    void markWholeModel(AstAssertCtlArgs* argsp) { m_wholeModel.emplace(argsp); }
-    // Delay inserting declarations until LinkDot's current traversal has finished.
-    void attach() {
-        // Competing scoped selectors may give sites different control histories.
-        // Only use the context path when every selector selects the whole model.
-        if (m_standaloneTopp && !m_selectors.empty()
-            && m_wholeModel.size() == m_selectors.size()) {
-            VNDeleter deleter;
-            for (AstAssertCtlArgs* const argsp : m_selectors) {
-                VL_DO_DANGLING(deleter.pushDeletep(argsp->unlinkFrBack()), argsp);
-            }
-            for (AstNodeStmt* const sitep : m_boundSites) sitep->controlVarp(nullptr);
-            for (const auto& declaration : m_declarations) deleter.pushDeletep(declaration.second);
-            m_declarations.clear();
-        }
-        for (const auto& declaration : m_declarations) {
-            declaration.first->addStmtsp(declaration.second);
-        }
-        if (v3Global.opt.stats()) {
-            V3Stats::addStatSum("LinkDot, Assertion control states", m_declarations.size());
-        }
-    }
+    void deferWholeModel(AstAssertCtlArgs* argsp) { m_wholeModel.push_back(argsp); }
+    // Delay enumeration of proven whole-model scopes and insertion of state declarations.
+    void attach();
     AstVar* select(AstNodeStmt* nodep, AstNodeModule*& ownerpr) {
         const auto it = m_sites.find(nodep);
         if (it == m_sites.end()) return nullptr;
@@ -252,7 +232,6 @@ public:
         varp->assertCtlMask(static_cast<uint32_t>(site.directive)
                             << (VAssertDirectiveType::MASK_WIDTH * typeBit));
         m_declarations.emplace_back(site.ownerp, varp);
-        m_boundSites.push_back(nodep);
         nodep->controlVarp(varp);
         return varp;
     }
@@ -372,6 +351,30 @@ public:
         }
     }
 };
+
+void LinkDotAssertCtlSites::attach() {
+    // Whole-model selectors can share the global path only if no other selector can
+    // establish a distinct history for an individual site.
+    if (m_wholeModel.size() == m_selectors) {
+        VNDeleter deleter;
+        for (AstAssertCtlArgs* const argsp : m_wholeModel) {
+            VL_DO_DANGLING(deleter.pushDeletep(argsp->unlinkFrBack()), argsp);
+        }
+    } else {
+        for (AstAssertCtlArgs* const argsp : m_wholeModel) {
+            const string& top = m_standaloneTopp->name();
+            std::unordered_map<string, AstAssertCtlTarget*> targets;
+            AssertControlTargetVisitor{*this, m_standaloneTopp, argsp, top,
+                                       top,   targets,          false, true};
+        }
+    }
+    for (const auto& declaration : m_declarations) {
+        declaration.first->addStmtsp(declaration.second);
+    }
+    if (v3Global.opt.stats()) {
+        V3Stats::addStatSum("LinkDot, Assertion control states", m_declarations.size());
+    }
+}
 
 static string assertionScopePath(const VSymEnt* symp) {
     std::vector<string> names;
@@ -8985,7 +8988,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     const VSymEnt* const foundp = m_statep->findAssertCtlDotted(
                         itemp->fileline(), m_curSymp, path, baddot, okp, true);
                     if (foundp && foundp->nodep() == topp) {
-                        m_statep->assertCtlSites().markWholeModel(nodep);
+                        m_statep->assertCtlSites().deferWholeModel(nodep);
+                        VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
+                        return;
                     }
                 }
             }
