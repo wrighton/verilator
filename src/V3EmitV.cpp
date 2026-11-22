@@ -967,10 +967,10 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
         puts(");\n");
     }
     void visit(AstAssertCtlArgs* nodep) override {
-        puts(", ");
+        puts(",");
         iterateAndNextConstNull(nodep->levelp());
         for (AstNodeExpr* const itemp : nodep->itemspList()) {
-            puts(", ");
+            puts(",");
             iterateConst(itemp);
         }
     }
@@ -1693,6 +1693,8 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
     void visit(AstTopScope* nodep) override { iterateChildrenConst(nodep); }
     void visit(AstScope* nodep) override { iterateChildrenConst(nodep); }
     void visit(AstVar* nodep) override {
+        // Resolved assertion-control state has no source-level declaration.
+        if (nodep->assertCtlMask()) return;
         if (m_activeClassp && nodep->isGParam()) return;
         if (nodep->isIO() || nodep->varType() == VVarType::WIRE || nodep->isTristate()) {
             putfs(nodep, nodep->verilogKwd());
