@@ -4353,7 +4353,8 @@ public:
     int widthConst() const { return m_widthConst; }
     void widthConst(int value) { m_widthConst = value; }
     int lsbConst() const { return VN_AS(lsbp(), Const)->toSInt(); }
-    int msbConst() const { return lsbConst() + widthConst() - 1; }
+    // Wider than int, as a position may be near the integer limit
+    int64_t msbConst() const { return static_cast<int64_t>(lsbConst()) + widthConst() - 1; }
     VNumRange& declRange() VL_MT_STABLE { return m_declRange; }
     const VNumRange& declRange() const VL_MT_STABLE { return m_declRange; }
     void declRange(const VNumRange& flag) { m_declRange = flag; }

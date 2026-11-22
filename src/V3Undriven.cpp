@@ -133,13 +133,17 @@ public:
 
 private:
     // METHODS
-    bool bitNumOk(int bit) const {
-        return bit >= 0 && (bit * FLAGS_PER_BIT < static_cast<int>(m_bitFlags.size()));
+    // End of the bits a select of 'width' from 'lsb' accesses within the variable. Bits past
+    // its end are out of range (IEEE 1800-2023 11.5.1), so none when 'lsb' itself is. Computed
+    // in 64 bits, so neither the end nor a flag index below it can overflow for a position near
+    // the integer limit.
+    uint64_t bitEnd(uint64_t lsb, int width) const {
+        return std::min<uint64_t>(lsb + width, bitCount());
     }
-    bool usedFlag(int bit) const {
+    bool usedFlag(uint64_t bit) const {
         return m_wholeFlags[FLAG_USED] || m_bitFlags[bit * FLAGS_PER_BIT + FLAG_USED];
     }
-    bool drivenFlag(int bit) const {
+    bool drivenFlag(uint64_t bit) const {
         return m_wholeFlags[FLAG_DRIVEN] || m_bitFlags[bit * FLAGS_PER_BIT + FLAG_DRIVEN];
     }
     int bitCount() const { return m_bitFlags.size() / FLAGS_PER_BIT; }
@@ -277,28 +281,25 @@ public:
     const AstAlways* getAlwFFp() const { return m_alwFFp; }
     const AstAlways* getAlwPlainp() const { return m_alwPlainp; }
     const AstClocking* getClockingp() const { return m_clockingp; }
-    void usedBit(int bit, int width, const AstNode* nodep) {
-        UINFO(9, "set u[" << (bit + width - 1) << ":" << bit << "] " << m_varp->name());
-        for (int i = 0; i < width; i++) {
-            if (bitNumOk(bit + i)) {
-                if (!drivenFlag(bit + i)) recordUsedNotDriven(nodep);
-                m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_USED] = true;
-            }
+    void usedBit(uint64_t lsb, int width, const AstNode* nodep) {
+        UINFO(9, "set u[" << (lsb + width - 1) << ":" << lsb << "] " << m_varp->name());
+        const uint64_t end = bitEnd(lsb, width);
+        for (uint64_t bit = lsb; bit < end; ++bit) {
+            if (!drivenFlag(bit)) recordUsedNotDriven(nodep);
+            m_bitFlags[bit * FLAGS_PER_BIT + FLAG_USED] = true;
         }
     }
-    void drivenBit(int bit, int width) {
-        UINFO(9, "set d[" << (bit + width - 1) << ":" << bit << "] " << m_varp->name());
-        for (int i = 0; i < width; i++) {
-            if (bitNumOk(bit + i)) m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_DRIVEN] = true;
+    void drivenBit(uint64_t lsb, int width) {
+        UINFO(9, "set d[" << (lsb + width - 1) << ":" << lsb << "] " << m_varp->name());
+        const uint64_t end = bitEnd(lsb, width);
+        for (uint64_t bit = lsb; bit < end; ++bit) {
+            m_bitFlags[bit * FLAGS_PER_BIT + FLAG_DRIVEN] = true;
         }
     }
-    bool isUsedNotDrivenBit(int bit, int width) const {
-        for (int i = 0; i < width; i++) {
-            if (bitNumOk(bit + i)
-                && (m_wholeFlags[FLAG_USED] || m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_USED])
-                && !(m_wholeFlags[FLAG_DRIVEN]
-                     || m_bitFlags[(bit + i) * FLAGS_PER_BIT + FLAG_DRIVEN]))
-                return true;
+    bool isUsedNotDrivenBit(uint64_t lsb, int width) const {
+        const uint64_t end = bitEnd(lsb, width);
+        for (uint64_t bit = lsb; bit < end; ++bit) {
+            if (usedFlag(bit) && !drivenFlag(bit)) return true;
         }
         return false;
     }
@@ -541,7 +542,7 @@ class UndrivenVisitor final : public VNVisitorConst {
     const AstPin* m_drivingPinp = nullptr;  // In a pin of an output port, which drives its net
     bool m_contAssignZExempt = false;  // Current continuous assign RHS may be all-Z (open-drain)
     bool m_inSelLhs = false;  // Iterating the fromp of an AstSel (a partial-bit write target)
-    int m_memberSelLsb = 0;  // Bit offset through nested packed selections of a member
+    uint64_t m_memberSelLsb = 0;  // Bit offset through nested packed selections of a member
     int m_memberSelWidth = 0;  // Selected member width, or zero for a whole-member access
     const AstNodeFTask* m_taskp = nullptr;  // Current task
     const AstAlways* m_alwaysp = nullptr;  // Current always of either type
@@ -940,7 +941,7 @@ class UndrivenVisitor final : public VNVisitorConst {
             warnWriteKind(varrefp);
             for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
                 UndrivenVarEntry* const entryp = getEntryp(varrefp->varp(), usr);
-                const int lsb = constp->toUInt();
+                const uint32_t lsb = constp->toUInt();
                 if (m_inBBox || varrefp->access().isWriteOrRW()) {
                     // Don't warn if already driven earlier as "a=0; if(a) a=1;" is fine.
                     if (usr == 2 && m_alwaysCombp

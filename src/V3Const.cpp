@@ -3443,7 +3443,7 @@ class ConstVisitor final : public VNVisitor {
                 = new AstSel{nodep->fileline(), conLhsp, nodep->lsbConst() - conRhsp->width(),
                              nodep->widthConst()};
             nodep->replaceWithKeepDType(newp);
-        } else if (static_cast<int>(nodep->msbConst()) < conRhsp->width()) {
+        } else if (nodep->msbConst() < conRhsp->width()) {
             conRhsp->unlinkFrBack();
             AstSel* const newp
                 = new AstSel{nodep->fileline(), conRhsp, nodep->lsbConst(), nodep->widthConst()};
@@ -3452,12 +3452,12 @@ class ConstVisitor final : public VNVisitor {
             // Yuk, split between the two
             conRhsp->unlinkFrBack();
             conLhsp->unlinkFrBack();
-            AstConcat* const newp
-                = new AstConcat{nodep->fileline(),
-                                new AstSel{nodep->fileline(), conLhsp, 0,
-                                           nodep->msbConst() - conRhsp->width() + 1},
-                                new AstSel{nodep->fileline(), conRhsp, nodep->lsbConst(),
-                                           conRhsp->width() - nodep->lsbConst()}};
+            AstConcat* const newp = new AstConcat{
+                nodep->fileline(),
+                new AstSel{nodep->fileline(), conLhsp, 0,
+                           static_cast<int>(nodep->msbConst() - conRhsp->width() + 1)},
+                new AstSel{nodep->fileline(), conRhsp, nodep->lsbConst(),
+                           conRhsp->width() - nodep->lsbConst()}};
             nodep->replaceWithKeepDType(newp);
         }
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
