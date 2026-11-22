@@ -229,12 +229,35 @@ module up_types(output bit done);
   end
 endmodule
 
+module up_qualified_leaf;
+  int failures = 0;
+  initial begin
+    #1;
+    check : assert (1'b0) else failures++;
+  end
+endmodule
+
+module up_qualified(output bit done);
+  up_qualified_leaf u ();
+  if (1) begin : g
+    up_qualified_leaf u ();
+    initial $assertoff(0, up_qualified.u.check);
+  end
+  initial begin
+    #2;
+    `checkd(u.failures, 0);
+    `checkd(g.u.failures, 1);
+    done = 1;
+  end
+endmodule
+
 module t;
-  wire [3:0] done;
+  wire [4:0] done;
   up_far far_test (done[0]);
   up_inst inst_test (done[1]);
   up_nest nest_test (done[2]);
   up_types types_test (done[3]);
+  up_qualified qualified_test (done[4]);
   initial begin
     wait (&done);
     $display("*-* All Finished *-*");
