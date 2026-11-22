@@ -90,6 +90,7 @@ class ScopeVisitor final : public VNVisitor {
         AssertCtlRoutes common;  // Routes used by every caller
         std::unordered_map<const AstAssertCtlCaller*, AssertCtlCallerRoutes> byCaller;
         size_t sourceUses = 0;  // Surviving operation templates before scoping clones them
+        AstAssertCtlTargetSet* sharedp = nullptr;  // Absolute part shared by all those copies
     };
     // Lookup of the structural child occurrence by (parent occurrence, declaration).
     std::unordered_map<const AstAssertCtlCaller*,
@@ -112,7 +113,9 @@ class ScopeVisitor final : public VNVisitor {
                 AssertCtlPlanIndex& index = m_assertCtlPlans[planp];
                 size_t ordinal = 0;
                 for (AstAssertCtlTargetSet* const setp : planp->setspList()) {
-                    if (!setp->callersp()) index.common.emplace_back(ordinal, setp);
+                    if (!setp->callersp() && setp->targetsp()) {
+                        index.common.emplace_back(ordinal, setp);
+                    }
                     for (const AstAssertCtlCallerRef* const refp : setp->callerspList()) {
                         index.byCaller[refp->callerp()].routes.emplace_back(ordinal, setp);
                     }
@@ -271,29 +274,52 @@ class ScopeVisitor final : public VNVisitor {
         return blocks;
     }
 
-    // Move a truly absolute selection out of code that is cloned per caller.
+    // Preserve the first-occurrence order across the shared and concrete lists.
+    static void separateAbsoluteTargets(AstAssertCtlTarget* targetsp, uint32_t& ordinal,
+                                        AstAssertCtlTargetSet& shared, bool common) {
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            targetp->ordinal(ordinal++);
+            AstVarXRef* const refp = VN_CAST(targetp->statep(), VarXRef);
+            if (!common || !refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional())
+                continue;
+            refp->inlinedDots("");
+            shared.addTargetsp(targetp->unlinkFrBack());
+        }
+    }
+
     std::vector<AstAssertCtlTargetSet*> prepareAssertionTargets(AstNetlist* rootp) {
         std::vector<AstAssertCtlTargetSet*> sets;
         if (!v3Global.hasAssertCtlReads()) return sets;
-        rootp->foreach([&](AstAssertCtlApply* applyp) {
-            if (const AstAssertCtlPlan* const planp = applyp->planp()) {
-                ++m_assertCtlPlans.at(planp).sourceUses;
-                return;
+        // Capture the live operations before changing their tree ownership.
+        std::vector<AstAssertCtlApply*> applies;
+        rootp->foreach([&](AstAssertCtlApply* applyp) { applies.push_back(applyp); });
+        for (AstAssertCtlApply* const applyp : applies) {
+            AstAssertCtlPlan* const planp = applyp->planp();
+            if (planp && m_assertCtlPlans[planp].sourceUses++) continue;
+            if (!planp && !applyp->targetsp()) continue;
+            AstAssertCtlTargetSet* const sharedp
+                = new AstAssertCtlTargetSet{applyp->fileline(), nullptr};
+            uint32_t ordinal = 0;
+            if (planp) {
+                for (AstAssertCtlTargetSet* const setp : planp->setspList()) {
+                    separateAbsoluteTargets(setp->targetsp(), ordinal, *sharedp,
+                                            !setp->callersp());
+                }
+            } else {
+                separateAbsoluteTargets(applyp->targetsp(), ordinal, *sharedp, true);
             }
-            if (!applyp->targetsp()) return;
-            for (const AstAssertCtlTarget* const targetp : applyp->targetspList()) {
-                const AstVarXRef* const refp = VN_CAST(targetp->statep(), VarXRef);
-                if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) return;
+            if (sharedp->targetsp()) {
+                rootp->addMiscsp(sharedp);
+                sets.push_back(sharedp);
+                if (planp) {
+                    m_assertCtlPlans.at(planp).sharedp = sharedp;
+                } else {
+                    applyp->targetSetp(sharedp);
+                }
+            } else {
+                VL_DO_DANGLING(sharedp->deleteTree(), sharedp);
             }
-            for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
-                VN_AS(targetp->statep(), VarXRef)->inlinedDots("");
-            }
-            AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
-                applyp->fileline(), applyp->targetsp()->unlinkFrBackWithNext()};
-            rootp->addMiscsp(setp);
-            applyp->targetSetp(setp);
-            sets.push_back(setp);
-        });
+        }
         return sets;
     }
 
@@ -304,9 +330,9 @@ class ScopeVisitor final : public VNVisitor {
             nodep->v3error("No top level module found");
             return;
         }
-        if (v3Global.hasAssertCtlReads()) indexAssertionPlans(nodep);
         // Each concrete caller must materialize each live source operation once.
         const std::vector<AstAssertCtlTargetSet*> sharedTargets = prepareAssertionTargets(nodep);
+        if (v3Global.hasAssertCtlReads()) indexAssertionPlans(nodep);
         // Operate starting at the top of the hierarchy
         m_aboveCellp = nullptr;
         m_aboveScopep = nullptr;
@@ -493,6 +519,7 @@ class ScopeVisitor final : public VNVisitor {
                     nodep->addTargetsp(targetsp->cloneTree(true));
                 }
             }
+            nodep->targetSetp(index.sharedp);
             nodep->planp(nullptr);
         }
         iterateChildren(nodep);

@@ -163,14 +163,31 @@ struct AssertCtlSignature final {
         return scopep == other.scopep && mask == other.mask && history == other.history;
     }
 };
-using AssertCtlTableKey = std::vector<std::pair<const AstVarScope*, int>>;
+struct AssertCtlTableRow final {
+    const AstVarScope* statep;
+    int depth;
+    uint32_t ordinal;
+    bool operator==(const AssertCtlTableRow& other) const {
+        return statep == other.statep && depth == other.depth && ordinal == other.ordinal;
+    }
+};
+struct AssertCtlTableKey final {
+    std::vector<AssertCtlTableRow> rows;
+    std::vector<uint32_t> skips;
+    bool overlay;
+    bool operator==(const AssertCtlTableKey& other) const {
+        return overlay == other.overlay && rows == other.rows && skips == other.skips;
+    }
+};
 struct AssertCtlTableKeyHash final {
     size_t operator()(const AssertCtlTableKey& key) const {
-        V3Hash hash;
-        for (const auto& target : key) {
-            hash += target.first;
-            hash += target.second;
+        V3Hash hash{static_cast<uint32_t>(key.overlay)};
+        for (const AssertCtlTableRow& row : key.rows) {
+            hash += row.statep;
+            hash += row.depth;
+            hash += row.ordinal;
         }
+        for (uint32_t slot : key.skips) hash += slot;
         return hash.value();
     }
 };
@@ -199,54 +216,119 @@ class AssertCtlTableBindings final {
     size_t m_entries = 0;  // Number of concrete targets in the unique tables
     // Concrete target sequence to its shared cache and binder.
     std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> m_bound;
-    // Fast path for an absolute target sequence already linked for another caller.
-    std::unordered_map<const AstAssertCtlTargetSet*, AssertCtlBoundTable> m_absolute;
+    struct IndexedTable final {
+        AssertCtlBoundTable binding;  // Model-owned shared cache and its binder
+        std::unordered_map<const AstVarScope*, size_t> slots;  // Index by canonical state
+        const AssertCtlTableKey* keyp = nullptr;  // Key retained by m_bound
+    };
+    // Index base rows once, then build each overlay without scanning the base again.
+    std::unordered_map<const AstAssertCtlTargetSet*, IndexedTable> m_absolute;
 
     template <typename T_Rebind>
     AssertCtlBoundTable bindingFor(FileLine* flp, AstAssertCtlTarget* targetsp,
-                                   const T_Rebind& rebind) {
+                                   const T_Rebind& rebind, IndexedTable* outputp = nullptr,
+                                   const IndexedTable* sharedp = nullptr) {
+        struct InputRow final {
+            AssertCtlTableRow row;
+            AstNodeVarRef* refp;
+        };
+        std::unordered_map<const AstVarScope*, size_t> seen;
+        std::vector<InputRow> inputs;
+        AssertCtlTableKey key{{}, {}, sharedp != nullptr};
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            AstNodeVarRef* const refp = targetp->statep();
+            rebind(refp);
+            const AstVarScope* const statep = refp->varScopep();
+            const auto result = seen.emplace(statep, inputs.size());
+            if (result.second) {
+                inputs.push_back(
+                    {{statep, targetp->depth(), outputp || sharedp ? targetp->ordinal() : 0},
+                     refp});
+            } else {
+                AssertCtlTableRow& row = inputs[result.first->second].row;
+                row.depth = std::min(row.depth, targetp->depth());
+            }
+        }
+        if (sharedp) {
+            for (InputRow& input : inputs) {
+                const auto found = sharedp->slots.find(input.row.statep);
+                if (found == sharedp->slots.end()) continue;
+                const size_t slot = found->second;
+                const AssertCtlTableRow& original = sharedp->keyp->rows[slot];
+                input.row.depth = std::min(input.row.depth, original.depth);
+                input.row.ordinal = std::min(input.row.ordinal, original.ordinal);
+                key.skips.push_back(static_cast<uint32_t>(slot));
+            }
+            std::sort(key.skips.begin(), key.skips.end());
+            std::sort(inputs.begin(), inputs.end(), [](const InputRow& a, const InputRow& b) {
+                return a.row.ordinal < b.row.ordinal;
+            });
+        }
+        key.rows.reserve(inputs.size());
+        for (const InputRow& input : inputs) key.rows.push_back(input.row);
+        const auto table = m_bound.try_emplace(std::move(key));
+        const AssertCtlTableKey& stored = table.first->first;
+        AssertCtlBoundTable& binding = table.first->second;
+        if (table.second) binding = newBinding(flp, stored, inputs);
+        if (outputp) {
+            outputp->keyp = &stored;  // Rehashing does not invalidate element references.
+            outputp->slots = std::move(seen);
+        }
+        return binding;
+    }
+
+    template <typename T_Rows>
+    AssertCtlBoundTable newBinding(FileLine* flp, const AssertCtlTableKey& key,
+                                   const T_Rows& rows) {
         if (!m_tableDtp) {
             m_tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
             m_rootp->typeTablep()->addTypesp(m_tableDtp);
         }
-        AssertCtlTableKey key;
-        std::vector<AstNodeVarRef*> refs;
-        std::unordered_set<const AstVarScope*> emitted;
-        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
-            AstNodeVarRef* const statep = targetp->statep();
-            rebind(statep);
-            if (!emitted.emplace(statep->varScopep()).second) continue;
-            key.emplace_back(statep->varScopep(), targetp->depth());
-            refs.push_back(statep);
+        // The cache belongs to the model, not to the calling module or class.
+        AstVarScope* const cachep = m_tables.make(flp, m_topScopep, m_tableDtp);
+        cachep->varp()->noReset(true);
+        cachep->varp()->isInternal(true);
+        cachep->varp()->setIgnoreSchedWrite();
+        AstCFunc* const bindp = new AstCFunc{
+            flp, "__VbindAssertCtlTable_" + std::to_string(m_bound.size()), m_topScopep};
+        bindp->isStatic(true);
+        bindp->isLoose(true);
+        bindp->slow(true);
+        std::string args
+            = EmitCUtil::symClassVar() + ", std::vector<VlAssertCtlTable::Target>& targets";
+        if (key.overlay) args += ", std::vector<uint32_t>& skipped";
+        bindp->argTypes(args);
+        m_topScopep->addBlocksp(bindp);
+        AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
+        for (const auto& input : rows) {
+            initp->add("{&");
+            initp->add(input.refp->unlinkFrBack());
+            initp->add(", " + std::to_string(input.row.depth) + ", "
+                       + std::to_string(input.row.ordinal) + "},\n");
         }
-        const auto table = m_bound.try_emplace(key);
-        AssertCtlBoundTable& binding = table.first->second;
-        if (table.second) {
-            // The cache belongs to the model even if the selector is called
-            // from a class method with no model-owned class object.
-            binding.cachep = m_tables.make(flp, m_topScopep, m_tableDtp);
-            binding.cachep->varp()->noReset(true);
-            binding.cachep->varp()->isInternal(true);
-            binding.cachep->varp()->setIgnoreSchedWrite();
-            binding.bindp = new AstCFunc{
-                flp, "__VbindAssertCtlTable_" + std::to_string(m_bound.size()), m_topScopep};
-            binding.bindp->isStatic(true);
-            binding.bindp->isLoose(true);
-            binding.bindp->slow(true);
-            binding.bindp->argTypes(EmitCUtil::symClassVar()
-                                    + ", std::vector<VlAssertCtlTable::Target>& targets");
-            m_topScopep->addBlocksp(binding.bindp);
-            AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
-            for (size_t i = 0; i < refs.size(); ++i) {
-                initp->add("{&");
-                initp->add(refs[i]->unlinkFrBack());
-                initp->add(", " + std::to_string(key[i].second) + "},\n");
-            }
+        initp->add("};\n");
+        if (key.overlay) {
+            initp->add("skipped = {\n");
+            for (uint32_t slot : key.skips) initp->add(std::to_string(slot) + ",\n");
             initp->add("};\n");
-            binding.bindp->addStmtsp(initp);
-            m_entries += key.size();
         }
-        return binding;
+        bindp->addStmtsp(initp);
+        m_entries += key.rows.size();
+        return {cachep, bindp};
+    }
+
+    static void appendBinding(AstCStmt* callp, const AssertCtlBoundTable& binding, bool overlay) {
+        FileLine* const flp = callp->fileline();
+        callp->add(", ");
+        callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
+        callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets");
+        if (overlay) callp->add(", std::vector<uint32_t>& skipped");
+        callp->add(") { ");
+        AstCCall* const bindCallp = new AstCCall{flp, binding.bindp};
+        bindCallp->dtypeSetVoid();
+        bindCallp->argTypes(overlay ? "vlSymsp, targets, skipped" : "vlSymsp, targets");
+        callp->add(bindCallp);
+        callp->add("; }");
     }
 
 public:
@@ -261,36 +343,34 @@ public:
     AstCStmt* newCallp(AstAssertCtlApply* applyp, const T_Rebind& rebind) {
         FileLine* const flp = applyp->fileline();
         AstCStmt* const callp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->"};
-        AssertCtlBoundTable binding;
+        const IndexedTable* sharedp = nullptr;
         if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
             const auto shared = m_absolute.try_emplace(setp);
+            IndexedTable& table = shared.first->second;
             if (shared.second && setp->targetsp()) {
-                shared.first->second = bindingFor(flp, setp->targetsp(), rebind);
+                table.binding = bindingFor(flp, setp->targetsp(), rebind, &table);
             }
-            binding = shared.first->second;
-        } else if (applyp->targetsp()) {
-            binding = bindingFor(flp, applyp->targetsp(), rebind);
+            if (table.binding.cachep) sharedp = &table;
         }
-        if (!binding.cachep) {
+        const bool mixed = sharedp && applyp->targetsp();
+        const AssertCtlBoundTable local
+            = applyp->targetsp() ? bindingFor(flp, applyp->targetsp(), rebind, nullptr, sharedp)
+                                 : AssertCtlBoundTable{};
+        if (!sharedp && !local.cachep) {
             callp->add("assertCtlValid(");
             callp->add(applyp->effectp()->unlinkFrBack());
             callp->add(");\n");
             return callp;
         }
-        callp->add("assertCtlTable(");
+        callp->add(mixed ? "assertCtlMixedTable(" : "assertCtlTable(");
         callp->add(applyp->effectp()->unlinkFrBack());
         callp->add(", ");
         callp->add(applyp->typesp()->unlinkFrBack());
         callp->add(", " + std::to_string(applyp->directives()) + ", ");
         callp->add(applyp->limitp()->unlinkFrBack());
-        callp->add(", ");
-        callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
-        callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { ");
-        AstCCall* const bindCallp = new AstCCall{flp, binding.bindp};
-        bindCallp->dtypeSetVoid();
-        bindCallp->argTypes("vlSymsp, targets");
-        callp->add(bindCallp);
-        callp->add("; });\n");
+        if (sharedp) appendBinding(callp, sharedp->binding, false);
+        if (local.cachep) appendBinding(callp, local, mixed);
+        callp->add(");\n");
         return callp;
     }
 };
@@ -304,39 +384,42 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     std::vector<AstAssertCtlApply*> applies;
     std::vector<AstAssertCtlTarget*> uniqueLists;
     std::unordered_set<const AstAssertCtlTargetSet*> seenSets;
+    const auto addTargets = [&](AstAssertCtlTarget* targetsp) {
+        if (!targetsp) return;
+        uniqueLists.push_back(targetsp);
+        std::unordered_map<const AstVarScope*, AstAssertCtlTarget*> seen;
+        std::vector<AstAssertCtlTarget*> duplicates;
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            AstVarScope* const statep = targetp->statep()->varScopep();
+            UASSERT_OBJ(statep, targetp, "Unbound assertion control state");
+            const auto target = seen.emplace(statep, targetp);
+            if (!target.second) {
+                AstAssertCtlTarget* const firstp = target.first->second;
+                firstp->depth(std::min(firstp->depth(), targetp->depth()));
+                duplicates.push_back(targetp);
+            } else if (selected.emplace(statep).second) {
+                selectedInOrder.push_back(statep);
+            }
+        }
+        // Different scope paths can alias one instance. Apply each effect once per site.
+        VNDeleter deleter;
+        for (AstAssertCtlTarget* const targetp : duplicates) {
+            VL_DO_DANGLING(deleter.pushDeletep(targetp->unlinkFrBack()), targetp);
+        }
+    };
     rootp->foreach([&](AstScope* scopep) {
         if (!scopep->blocksp()) return;
         scopep->blocksp()->foreachAndNext([&](AstAssertCtlApply* applyp) {
             applies.push_back(applyp);
-            AstAssertCtlTarget* targetsp = applyp->targetsp();
             if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
-                if (!seenSets.emplace(setp).second) return;
-                targetsp = setp->targetsp();
+                if (seenSets.emplace(setp).second) addTargets(setp->targetsp());
             }
-            if (!targetsp) return;
-            uniqueLists.push_back(targetsp);
-            std::unordered_map<const AstVarScope*, AstAssertCtlTarget*> seen;
-            std::vector<AstAssertCtlTarget*> duplicates;
-            for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
-                AstVarScope* const statep = targetp->statep()->varScopep();
-                UASSERT_OBJ(statep, targetp, "Unbound assertion control state");
-                const auto target = seen.emplace(statep, targetp);
-                if (!target.second) {
-                    AstAssertCtlTarget* const firstp = target.first->second;
-                    firstp->depth(std::min(firstp->depth(), targetp->depth()));
-                    duplicates.push_back(targetp);
-                } else if (selected.emplace(statep).second) {
-                    selectedInOrder.push_back(statep);
-                }
-            }
-            // Different scope paths can alias one instance. Apply each effect once per site.
-            VNDeleter deleter;
-            for (AstAssertCtlTarget* const targetp : duplicates) {
-                VL_DO_DANGLING(deleter.pushDeletep(targetp->unlinkFrBack()), targetp);
-            }
+            addTargets(applyp->targetsp());
         });
     });
     rootp->foreach([&](AstAssertCtlRead* readp) { reads.push_back(readp); });
+    // Matching component histories imply matching unions. Keeping components distinct
+    // can retain separate state when two different histories happen to have equal unions.
     std::unordered_map<const AstVarScope*, AssertCtlHistory> histories;
     for (size_t i = 0; i < uniqueLists.size(); ++i) {
         const VNList<AstAssertCtlTarget> targets{uniqueLists[i]};
