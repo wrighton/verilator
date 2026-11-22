@@ -14,6 +14,9 @@ test.scenarios('vlt_all')
 test.compile(verilator_flags2=['--binary', '--assert', '--stats', '-fno-inline'],
              threads=2 if test.vltmt else 1)
 test.execute()
-test.file_grep(test.stats, r'Assertions, Scoped state instances\s+(\d+)', 1)
+test.file_grep(test.stats, r'Assertions, Scoped selected sites\s+(\d+)', 3)
+test.file_grep(test.stats, r'Assertions, Scoped state instances\s+(\d+)', 2)
+test.file_grep(test.stats, r'Assertions, Scoped tables\s+(\d+)', 2)
+test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 2)
 
 test.passes()
