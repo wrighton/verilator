@@ -735,6 +735,30 @@ void AstAssert::selfTest() {
     VL_DO_DANGLING(bp->deleteTree(), bp);
     VL_DO_DANGLING(loweredp->deleteTree(), loweredp);
     VL_DO_DANGLING(loweredCopyp->deleteTree(), loweredCopyp);
+
+    AstAssertCtlArgs* const implicitp = new AstAssertCtlArgs{flp, nullptr, nullptr};
+    AstAssertCtlArgs* const scopedp = new AstAssertCtlArgs{flp, nullptr, new AstConst{flp, 0}};
+    // Resolving the scope list does not change whether the selection is explicit.
+    scopedp->itemsp()->unlinkFrBack()->deleteTree();
+    AstAssertCtlArgs* const scopedCopyp = scopedp->cloneTree(false);
+    UASSERT_OBJ(scopedp->sameTree(scopedCopyp) && !scopedp->sameTree(implicitp), scopedp,
+                "Assertion control must distinguish explicit and implicit selection");
+    scopedCopyp->instanceDependent(false);
+    UASSERT_OBJ(!scopedp->sameTree(scopedCopyp), scopedp,
+                "Assertion control must distinguish instance-dependent targets");
+
+    AstAssertCtlTarget* const targetp = new AstAssertCtlTarget{
+        flp, new AstVarXRef{flp, "state", "scope", VAccess::READWRITE}, 0};
+    AstAssertCtlTarget* const targetCopyp = targetp->cloneTree(false);
+    UASSERT_OBJ(targetp->sameTree(targetCopyp), targetp, "Assertion target must survive cloning");
+    targetCopyp->depth(1);
+    UASSERT_OBJ(!targetp->sameTree(targetCopyp), targetp,
+                "Assertion control targets at different depths must differ");
+    VL_DO_DANGLING(implicitp->deleteTree(), implicitp);
+    VL_DO_DANGLING(scopedp->deleteTree(), scopedp);
+    VL_DO_DANGLING(scopedCopyp->deleteTree(), scopedCopyp);
+    VL_DO_DANGLING(targetp->deleteTree(), targetp);
+    VL_DO_DANGLING(targetCopyp->deleteTree(), targetCopyp);
 }
 AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assertType,
                            uint32_t directiveType, AstNodeExpr* levelp, AstNodeExpr* itemsp)
