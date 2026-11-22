@@ -1,0 +1,11 @@
+[0] startup
+[10] t.u_a value=11
+[30] t.u_a value=12
+[40] t.u_b value=23
+[60] t.u_b value=24
+[70] gen 0 g=0
+[80] gen 1 g=0
+[85] gen 1 g=1
+[95] pkg pv=5
+[105] pkg pv=6
+*-* All Finished *-*
