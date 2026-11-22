@@ -199,25 +199,12 @@ class AssertCtlTableBindings final {
     size_t m_entries = 0;  // Number of concrete targets in the unique tables
     // Concrete target sequence to its shared cache and binder.
     std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> m_bound;
-
-public:
-    AssertCtlTableBindings(AstNetlist* rootp, AstScope* topScopep)
-        : m_rootp{rootp}
-        , m_topScopep{topScopep} {}
-
-    size_t size() const { return m_bound.size(); }
-    size_t entries() const { return m_entries; }
+    // Fast path for an absolute target sequence already linked for another caller.
+    std::unordered_map<const AstAssertCtlTargetSet*, AssertCtlBoundTable> m_absolute;
 
     template <typename T_Rebind>
-    AstCStmt* newCallp(AstAssertCtlApply* applyp, const T_Rebind& rebind) {
-        FileLine* const flp = applyp->fileline();
-        AstCStmt* const callp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->"};
-        if (!applyp->targetsp()) {
-            callp->add("assertCtlValid(");
-            callp->add(applyp->effectp()->unlinkFrBack());
-            callp->add(");\n");
-            return callp;
-        }
+    AssertCtlBoundTable bindingFor(FileLine* flp, AstAssertCtlTarget* targetsp,
+                                   const T_Rebind& rebind) {
         if (!m_tableDtp) {
             m_tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
             m_rootp->typeTablep()->addTypesp(m_tableDtp);
@@ -225,7 +212,7 @@ public:
         AssertCtlTableKey key;
         std::vector<AstNodeVarRef*> refs;
         std::unordered_set<const AstVarScope*> emitted;
-        for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
             AstNodeVarRef* const statep = targetp->statep();
             rebind(statep);
             if (!emitted.emplace(statep->varScopep()).second) continue;
@@ -259,6 +246,37 @@ public:
             binding.bindp->addStmtsp(initp);
             m_entries += key.size();
         }
+        return binding;
+    }
+
+public:
+    AssertCtlTableBindings(AstNetlist* rootp, AstScope* topScopep)
+        : m_rootp{rootp}
+        , m_topScopep{topScopep} {}
+
+    size_t size() const { return m_bound.size(); }
+    size_t entries() const { return m_entries; }
+
+    template <typename T_Rebind>
+    AstCStmt* newCallp(AstAssertCtlApply* applyp, const T_Rebind& rebind) {
+        FileLine* const flp = applyp->fileline();
+        AstCStmt* const callp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->"};
+        AssertCtlBoundTable binding;
+        if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
+            const auto shared = m_absolute.try_emplace(setp);
+            if (shared.second && setp->targetsp()) {
+                shared.first->second = bindingFor(flp, setp->targetsp(), rebind);
+            }
+            binding = shared.first->second;
+        } else if (applyp->targetsp()) {
+            binding = bindingFor(flp, applyp->targetsp(), rebind);
+        }
+        if (!binding.cachep) {
+            callp->add("assertCtlValid(");
+            callp->add(applyp->effectp()->unlinkFrBack());
+            callp->add(");\n");
+            return callp;
+        }
         callp->add("assertCtlTable(");
         callp->add(applyp->effectp()->unlinkFrBack());
         callp->add(", ");
@@ -284,13 +302,22 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     std::vector<AstVarScope*> selectedInOrder;
     std::vector<AstAssertCtlRead*> reads;
     std::vector<AstAssertCtlApply*> applies;
+    std::vector<AstAssertCtlTarget*> uniqueLists;
+    std::unordered_set<const AstAssertCtlTargetSet*> seenSets;
     rootp->foreach([&](AstScope* scopep) {
         if (!scopep->blocksp()) return;
         scopep->blocksp()->foreachAndNext([&](AstAssertCtlApply* applyp) {
             applies.push_back(applyp);
+            AstAssertCtlTarget* targetsp = applyp->targetsp();
+            if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
+                if (!seenSets.emplace(setp).second) return;
+                targetsp = setp->targetsp();
+            }
+            if (!targetsp) return;
+            uniqueLists.push_back(targetsp);
             std::unordered_map<const AstVarScope*, AstAssertCtlTarget*> seen;
             std::vector<AstAssertCtlTarget*> duplicates;
-            for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
+            for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
                 AstVarScope* const statep = targetp->statep()->varScopep();
                 UASSERT_OBJ(statep, targetp, "Unbound assertion control state");
                 const auto target = seen.emplace(statep, targetp);
@@ -311,8 +338,9 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     });
     rootp->foreach([&](AstAssertCtlRead* readp) { reads.push_back(readp); });
     std::unordered_map<const AstVarScope*, AssertCtlHistory> histories;
-    for (size_t i = 0; i < applies.size(); ++i) {
-        for (const AstAssertCtlTarget* const targetp : applies[i]->targetspList()) {
+    for (size_t i = 0; i < uniqueLists.size(); ++i) {
+        const VNList<AstAssertCtlTarget> targets{uniqueLists[i]};
+        for (const AstAssertCtlTarget* const targetp : targets) {
             histories[targetp->statep()->varScopep()].emplace_back(i, targetp->depth());
         }
     }
@@ -384,6 +412,12 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         applyp->replaceWith(tables.newCallp(applyp, rebind));
         VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
     }
+    std::vector<AstAssertCtlTargetSet*> sharedSets;
+    rootp->foreach([&](AstAssertCtlTargetSet* setp) { sharedSets.push_back(setp); });
+    const size_t sharedSetCount = sharedSets.size();
+    for (AstAssertCtlTargetSet* const setp : sharedSets) {
+        VL_DO_DANGLING(deleter.pushDeletep(setp->unlinkFrBack()), setp);
+    }
     UASSERT_OBJ(!rootp->exists([](const AstNode* nodep) {
         return VN_IS(nodep, AssertCtlApply) || VN_IS(nodep, AssertCtlRead);
     }),
@@ -393,6 +427,8 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         V3Stats::addStatSum("Assertions, Scoped state instances", representatives.size());
         V3Stats::addStatSum("Assertions, Scoped tables", tables.size());
         V3Stats::addStatSum("Assertions, Scoped table entries", tables.entries());
+        V3Stats::addStatSum("Assertions, Scoped target lists", uniqueLists.size());
+        V3Stats::addStatSum("Assertions, Shared absolute target lists", sharedSetCount);
     }
 }
 
