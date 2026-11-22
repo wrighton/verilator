@@ -1349,6 +1349,9 @@ class UndrivenVisitor final : public VNVisitorConst {
     void visit(AstCoverToggle*) override {}
     void visit(AstRtmdHier*) override {}  // Descriptors are not a sink for UNUSED warnings
 
+    // Selectors reference compiler state updated by the assertion runtime, not SV drivers.
+    void visit(AstAssertCtlTarget*) override {}
+
     // iterate
     void visit(AstConst* nodep) override {}
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
