@@ -8388,7 +8388,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                        << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
     }
     bool assertControlPlainReach(AstNodeExpr* itemp, VSymEnt* callerp, const string& path,
-                                 const string& firstName, bool absolute, AssertCtlReach& reach) {
+                                 const string& firstName, bool absolute, AssertCtlReach& reach,
+                                 const VSymEnt** resolvedpp = nullptr) {
         FileLine* const flp = itemp->fileline();
         string baddot;
         VSymEnt* okSymp = nullptr;
@@ -8409,6 +8410,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             assertCtlBadReach(itemp, callerp, path);
             return false;
         }
+        if (resolvedpp) *resolvedpp = foundp;
         if (absolute) {
             reach = {targetp, assertionScopePath(instancep), assertionScopePath(foundp)};
             return true;
@@ -8479,15 +8481,34 @@ class LinkDotResolveVisitor final : public VNVisitor {
         UASSERT_OBJ(!instanceSyms.empty(), itemp, "Module resolving names has no instance");
         std::vector<AssertCtlReach> reaches;
         AssertCtlReachKeys seen;
+        const VSymEnt* commonTargetp = nullptr;
+        bool common = instanceSyms.size() > 1 && !VN_IS(m_modp, Class);
         for (VSymEnt* const callerp : instanceSyms) {
             AssertCtlReach reach;
+            const VSymEnt* resolvedp = nullptr;
             if (!assertControlPlainReach(itemp, assertControlCallerScope(callerp), path, firstName,
-                                         false, reach)) {
+                                         false, reach, &resolvedp)) {
                 return;
             }
+            if (!commonTargetp) commonTargetp = resolvedp;
+            common &= commonTargetp == resolvedp;
             addAssertCtlReach(reaches, seen, std::move(reach), callerp);
         }
-        addAssertCtlTargets(reaches, argsp, targets);
+        // The same resolved symbol, not just the same declaration, proves every caller
+        // reached one concrete instance. Point at it directly so the list can be shared.
+        for (const VSymEnt* symp = commonTargetp; common && symp; symp = symp->parentp()) {
+            const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
+            if (cellp && cellp->assertCtlIfaceOriginp()) common = false;
+        }
+        if (common) {
+            AssertCtlReach absolute;
+            VSymEnt* const callerp = assertControlCallerScope(instanceSyms.front());
+            if (assertControlPlainReach(itemp, callerp, path, firstName, true, absolute)) {
+                addAssertCtlTargets({std::move(absolute)}, argsp, targets, true);
+            }
+        } else {
+            addAssertCtlTargets(reaches, argsp, targets);
+        }
     }
     // The last port of interface type in a scope name, as found from one instance's symbols
     struct AssertCtlPortCrossing final {
