@@ -669,13 +669,13 @@ module t;
             ???? // ASSERTCTLARGS
             32'sh0
             ???? // ASSERTCTLTARGET
-            __VassertControl8
+            __VassertControl11
             ???? // ASSERTCTL
             32'h332'hf32'h7
             ???? // ASSERTCTLARGS
             32'sh1
             ???? // ASSERTCTLTARGET
-            __VassertControl9
+            __VassertControl12
             ???? // ASSERTCTL
             32'h432'hf32'h7
             ???? // ASSERTCTLARGS
@@ -789,7 +789,13 @@ module t;
             ???? // ASSERTCTLTARGET
             $root.t.__VassertControl53
             ???? // ASSERTCTLTARGET
-            $root.t.__VassertControl54begin : assume_simple_immediate
+            $root.t.__VassertControl54
+            ???? // ASSERTCTLTARGET
+            $root.t.__VassertControl55
+            ???? // ASSERTCTLTARGET
+            $root.t.__VassertControl56
+            ???? // ASSERTCTLTARGET
+            $root.t.__VassertControl57begin : assume_simple_immediate
                 assume (1'h0) begin
                 end
                 else begin
@@ -2025,6 +2031,21 @@ module t;
 
     ???? // CDTYPE 'VlAssertControl'
      __VassertControl54
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl55
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl56
+    ???? // CDTYPE 'VlAssertControl'
+    ;
+
+    ???? // CDTYPE 'VlAssertControl'
+     __VassertControl57
     ???? // CDTYPE 'VlAssertControl'
     ;
     enum logic [2:0] {
