@@ -213,6 +213,28 @@ class ScopeVisitor final : public VNVisitor {
         return blocks;
     }
 
+    // Move a truly absolute selection out of code that is cloned per caller.
+    static std::vector<AstAssertCtlTargetSet*> shareAbsoluteTargets(AstNetlist* rootp) {
+        std::vector<AstAssertCtlTargetSet*> sets;
+        if (!v3Global.hasAssertCtlReads()) return sets;
+        rootp->foreach([&](AstAssertCtlApply* applyp) {
+            if (!applyp->targetsp()) return;
+            for (const AstAssertCtlTarget* const targetp : applyp->targetspList()) {
+                const AstVarXRef* const refp = VN_CAST(targetp->statep(), VarXRef);
+                if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) return;
+            }
+            for (AstAssertCtlTarget* const targetp : applyp->targetspList()) {
+                VN_AS(targetp->statep(), VarXRef)->inlinedDots("");
+            }
+            AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
+                applyp->fileline(), applyp->targetsp()->unlinkFrBackWithNext()};
+            rootp->addMiscsp(setp);
+            applyp->targetSetp(setp);
+            sets.push_back(setp);
+        });
+        return sets;
+    }
+
     // VISITORS
     void visit(AstNetlist* nodep) override {
         AstNodeModule* const modp = nodep->topModulep();
@@ -220,11 +242,16 @@ class ScopeVisitor final : public VNVisitor {
             nodep->v3error("No top level module found");
             return;
         }
+        const std::vector<AstAssertCtlTargetSet*> sharedTargets = shareAbsoluteTargets(nodep);
         // Operate starting at the top of the hierarchy
         m_aboveCellp = nullptr;
         m_aboveScopep = nullptr;
         countInstantiations(modp);
         iterate(modp);
+        for (AstAssertCtlTargetSet* const setp : sharedTargets) {
+            setp->unlinkFrBack();
+            nodep->topScopep()->scopep()->addBlocksp(setp);
+        }
         // Defer attachment until all instances are visited so cell collection and child
         // iteration do not rescan a growing list of completed scopes.
         for (AstScope* const scopep : m_scopes) scopep->modp()->addStmtsp(scopep);

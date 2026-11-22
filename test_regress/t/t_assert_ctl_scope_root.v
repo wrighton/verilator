@@ -26,6 +26,12 @@ module sub;
   end
 endmodule
 
+`ifndef WHOLE_MODEL
+module scope_off;
+  initial $assertoff(0, $root.t.a);
+endmodule
+`endif
+
 module t;
   sub a ();
   sub b ();
@@ -47,9 +53,8 @@ module t;
   end
 `else
   int top_failures = 0;
+  scope_off ctl [2] ();
   initial begin
-    // $root.t.a names the instance t.a (IEEE 1800-2023 Syntax 20-12)
-    $assertoff(0, $root.t.a);
     #2;
     `checkd(a.failures, 0);
     `checkd(b.failures, 1);
