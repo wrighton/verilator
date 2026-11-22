@@ -10,7 +10,8 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-test.compile(verilator_flags2=['--binary', '--assert'], threads=2 if test.vltmt else 1)
+test.compile(verilator_flags2=['--binary', '--assert', '-Wwarn-UNUSEDSIGNAL'],
+             threads=2 if test.vltmt else 1)
 
 test.execute()
 
