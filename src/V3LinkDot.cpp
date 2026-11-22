@@ -5731,7 +5731,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                    && VN_IS(m_ds.m_dotp->lhsp(), SchemaRef)
                    && VN_IS(VN_AS(m_ds.m_dotp->lhsp(), SchemaRef)->schemap(), Sequence)) {
             // A sequence instance with arguments
-            replaceSequenceTriggered(nodep, VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
+            replaceSequenceTriggered(nodep,
+                                     VN_AS(m_ds.m_dotp->lhsp()->unlinkFrBack(), SchemaRef));
         } else if (m_ds.m_dotPos == DP_MEMBER) {
             // Found a Var, everything following is membership.  {scope}.{var}.HERE {member}
             if (m_ds.m_dotErr) {
