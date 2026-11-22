@@ -3417,6 +3417,36 @@ void VerilatedContext::assertCtlApplyTable(uint32_t effect, VerilatedAssertType_
         }
     }
 }
+void VerilatedContext::assertCtlApplyMixedTable(uint32_t effect, VerilatedAssertType_t types,
+                                                VerilatedAssertDirectiveType_t directives,
+                                                uint32_t depthLimit,
+                                                const VlAssertCtlTable& shared,
+                                                const VlAssertCtlTable& local)
+    VL_REQUIRES(m_assertCtlMutex) {
+    const uint32_t mask = assertOnMask(types, directives);
+    const auto apply = [&](const VlAssertCtlTable::Target& target) VL_REQUIRES(m_assertCtlMutex) {
+        VlAssertControl* const statep = target.statep;
+        assert(statep->m_contextp == this);
+        if (target.depth < depthLimit && (statep->m_mask & mask)) {
+            statep->control(effect, m_assertCtlMutex);
+        }
+    };
+    auto nextLocal = local.m_targets.begin();
+    auto nextSkip = local.m_skipShared.begin();
+    uint32_t slot = 0;
+    for (const VlAssertCtlTable::Target& target : shared.m_targets) {
+        const uint32_t index = slot++;
+        if (nextSkip != local.m_skipShared.end() && *nextSkip == index) {
+            ++nextSkip;
+            continue;
+        }
+        while (nextLocal != local.m_targets.end() && nextLocal->ordinal < target.ordinal) {
+            apply(*nextLocal++);
+        }
+        apply(target);
+    }
+    for (; nextLocal != local.m_targets.end(); ++nextLocal) apply(*nextLocal);
+}
 void VerilatedContext::calcUnusedSigs(bool flag) VL_MT_SAFE {
     const VerilatedLockGuard lock{m_mutex};
     m_s.m_calcUnusedSigs = flag;

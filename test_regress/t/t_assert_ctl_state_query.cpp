@@ -53,12 +53,46 @@ static bool consistentConcurrentControl(VerilatedContext& context, const VlAsser
     return consistent;
 }
 
+static void checkMixedControl(VerilatedContext& context) {
+    VlAssertControl first;
+    VlAssertControl second;
+    first.configure(&context, 8);
+    second.configure(&context, 8);
+    require(first.get(VerilatedAssertCtlQuery::ASSERT_CTL_KILL) == 0,
+            "Mixed control starts with a nonzero Kill generation");
+    VlAssertCtlTable shared;
+    VlAssertCtlTable local;
+    unsigned bindings = 0;
+    const auto bindShared = [&](std::vector<VlAssertCtlTable::Target>& targets) {
+        ++bindings;
+        targets = {{&first, 2, 0}, {&second, 1, 1}};
+    };
+    const auto bindLocal
+        = [&](std::vector<VlAssertCtlTable::Target>& targets, std::vector<uint32_t>& skipped) {
+              ++bindings;
+              targets = {{&first, 0, 0}};
+              skipped = {0};
+          };
+    context.assertCtlMixedTable(5, 2, 1, 1, shared, bindShared, local, bindLocal);
+    require(first.get(VerilatedAssertCtlQuery::ASSERT_CTL_KILL) == 1,
+            "Mixed Kill missed a shallower local alias");
+    require(second.get(VerilatedAssertCtlQuery::ASSERT_CTL_KILL) == 0,
+            "Mixed Kill ignored the depth limit");
+    context.assertCtlMixedTable(5, 2, 1, 3, shared, bindShared, local, bindLocal);
+    require(first.get(VerilatedAssertCtlQuery::ASSERT_CTL_KILL) == 2,
+            "Mixed Kill updated an aliased state twice");
+    require(second.get(VerilatedAssertCtlQuery::ASSERT_CTL_KILL) == 1,
+            "Mixed Kill missed a shared target");
+    require(bindings == 2, "Mixed assertion control tables were not cached");
+}
+
 int main(int argc, char** argv) {
     const std::unique_ptr<VerilatedContext> contextp{new VerilatedContext};
     contextp->threads(1);
     contextp->commandArgs(argc, argv);
     const std::unique_ptr<VM_PREFIX> topp{new VM_PREFIX{contextp.get()}};
     topp->eval();
+    checkMixedControl(*contextp);
     {
         VlAssertControl state;
         state.configure(contextp.get(), 8);  // Simple immediate assert
