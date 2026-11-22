@@ -29,6 +29,23 @@ endmodule
 module t;
   sub a ();
   sub b ();
+`ifdef WHOLE_MODEL
+  localparam int ZERO = 0;
+  initial begin
+    $assertoff(0);
+    $asserton(ZERO + 0);
+    $assertoff(0, $root.t);
+    #2;
+    `checkd(a.failures, 0);
+    `checkd(b.failures, 0);
+    $asserton(0, t);
+    #3;
+    `checkd(a.late_failures, 1);
+    `checkd(b.late_failures, 1);
+    $display("*-* All Finished *-*");
+    $finish;
+  end
+`else
   int top_failures = 0;
   initial begin
     // $root.t.a names the instance t.a (IEEE 1800-2023 Syntax 20-12)
@@ -49,4 +66,5 @@ module t;
     $display("*-* All Finished *-*");
     $finish;
   end
+`endif
 endmodule
