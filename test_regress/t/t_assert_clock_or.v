@@ -16,13 +16,19 @@ module t (
   int unsigned crc = 32'h1;
   bit a, b;
   int cyc = 0;
+  // Set in the time step of the $finish request: actions of concurrent assertions decided then
+  // are not counted, as their Reactive region need not run after $finish (IEEE 1800-2023 20.2)
+  bit finishing = 0;
 
   always @(posedge clk) begin
     cyc <= cyc + 1;
     crc <= {crc[30:0], crc[31] ^ crc[21] ^ crc[1] ^ crc[0]};
     a <= crc[0];
     b <= crc[1];
-    if (cyc == 40) $finish;
+    if (cyc == 40) begin
+      finishing = 1;
+      $finish;
+    end
   end
 
   // Reference model, evaluated on both clock edges
@@ -98,14 +104,16 @@ module t (
 
   int fails_noncons_or = 0, fails_noncons_edge = 0;
   assert property (@(posedge clk or negedge clk) a [= 2] |=> b)
-  else fails_noncons_or++;
+  else if (!finishing) fails_noncons_or++;
   assert property (@(edge clk) a [= 2] |=> b)
-  else fails_noncons_edge++;
+  else if (!finishing) fails_noncons_edge++;
 
   // A weak repetition does not fail here, so count its passes
   int passes_rep_or = 0, passes_rep_edge = 0;
-  assert property (@(posedge clk or negedge clk) b [= 2]) passes_rep_or++;
-  assert property (@(edge clk) b [= 2]) passes_rep_edge++;
+  assert property (@(posedge clk or negedge clk) b [= 2])
+    if (!finishing) passes_rep_or++;
+  assert property (@(edge clk) b [= 2])
+    if (!finishing) passes_rep_edge++;
 
   // Three-item 'or' list of edges of a reset and of a compound expression, with
   // disable iff. x and y hold while rst_n rises, so that event is from rst_n alone;
@@ -147,7 +155,7 @@ module t (
     `checkd(fails_nested, exp_fails_a);
     `checkd(fails_goto_edge, 11);
     `checkd(fails_goto_or, fails_goto_edge);
-    `checkd(fails_noncons_edge, 46);
+    `checkd(fails_noncons_edge, 32);
     `checkd(fails_noncons_or, fails_noncons_edge);
     `checkd(passes_rep_edge, 79);
     `checkd(passes_rep_or, passes_rep_edge);

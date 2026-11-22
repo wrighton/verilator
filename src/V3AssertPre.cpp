@@ -1285,9 +1285,9 @@ private:
     //   begin
     //     automatic uint32 cnt = 0;
     //     loop { test(cnt < N); if (sampled(expr)) cnt++; if (cnt < N) @(clk); }
-    //     @(clk);  // ##1
-    //     if (!isOverlapped) @(clk);  // |=> delay
-    //     loop { if (sampled(expr)) fail; if (sampled(rhs)) pass; @(clk); }
+    //     if (!isOverlapped) @(clk);  // |=>
+    //     loop { if (!sampled(rhs)) fail; else if overlapped { @(clk); if (sampled(expr)) pass; }
+    //            else if (sampled(expr)) pass; else @(clk); }
     //   end
     AstPExpr* createRepPExpr(FileLine* flp, AstNodeExpr* exprp, AstNodeExpr* countp,
                              AstNodeExpr* rhsp, bool isOverlapped, bool isNonConsec) {
@@ -1323,16 +1323,10 @@ private:
         beginp->addStmtsp(loopp);
 
         if (isNonConsec && rhsp) {
-            // IEEE 16.9.2: b[=N] = b[->N] ##1 !b[*0:$]
-            // Trailing window: ##1 advance, then scan !expr cycles checking rhs.
-            // Window closes when expr becomes true again (fail if rhs was never true).
-            beginp->addStmtsp(new AstEventControl{
-                flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});  // ##1
-            if (!isOverlapped) {
-                beginp->addStmtsp(new AstEventControl{
-                    flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});  // |=>
-            }
-            // Window loop: check rhs at each !expr cycle (done variable for termination)
+            // IEEE 1800-2023 16.9.2: b[=N] matches at the N-th b and at every later tick before
+            // the next b. The implication holds only if the consequent holds for each of these
+            // matches (16.12.7), so fail at the first failing consequent, and pass once the next
+            // b ends the matches.
             AstVar* const doneVarp
                 = new AstVar{flp, VVarType::BLOCKTEMP, name + "__done", exprp->findBitDType()};
             doneVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
@@ -1343,27 +1337,32 @@ private:
                 return new AstAssign{flp, new AstVarRef{flp, doneVarp, VAccess::WRITE},
                                      new AstConst{flp, AstConst::BitTrue{}}};
             };
-            AstLoop* const windowp = new AstLoop{flp};
-            // LoopTest: continue while !done
-            windowp->addStmtsp(new AstLoopTest{
-                flp, windowp, new AstNot{flp, new AstVarRef{flp, doneVarp, VAccess::READ}}});
-            // if (expr) { fail; done = 1; } -- window closed, expr true again
+            const auto newClockWait = [&]() {
+                return new AstEventControl{flp, new AstSenTree{flp, sensesp->cloneTree(true)},
+                                           nullptr};
+            };
             AstNodeStmt* const failsp = new AstPExprClause{flp, false};
             failsp->addNext(setDone());
-            windowp->addStmtsp(new AstIf{flp, exprp->cloneTreePure(false), failsp});
-            // if (rhs) { pass; done = 1; } -- consequent true at this !expr endpoint
             AstNodeStmt* const passsp = new AstPExprClause{flp, true};
             passsp->addNext(setDone());
-            windowp->addStmtsp(new AstIf{flp, rhsp, passsp});
-            // @(clk) -- advance to next cycle in window
-            windowp->addStmtsp(
-                new AstEventControl{flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});
+            AstLoop* const windowp = new AstLoop{flp};
+            windowp->addStmtsp(new AstLoopTest{
+                flp, windowp, new AstNot{flp, new AstVarRef{flp, doneVarp, VAccess::READ}}});
+            if (isOverlapped) {
+                // The consequent of a match starts at its end point: check it at this tick,
+                // then the next b closes the matches
+                AstNodeStmt* const holdsp = newClockWait();
+                holdsp->addNext(new AstIf{flp, exprp->cloneTreePure(false), passsp});
+                windowp->addStmtsp(new AstIf{flp, rhsp, holdsp, failsp});
+            } else {
+                // The consequent of a match starts one tick after its end point, including the
+                // consequent of the last match at the tick of the next b
+                beginp->addStmtsp(newClockWait());
+                AstIf* const closep
+                    = new AstIf{flp, exprp->cloneTreePure(false), passsp, newClockWait()};
+                windowp->addStmtsp(new AstIf{flp, rhsp, closep, failsp});
+            }
             beginp->addStmtsp(windowp);
-        } else if (isNonConsec) {
-            // Standalone nonconsec: ##1 into window, then pass
-            beginp->addStmtsp(
-                new AstEventControl{flp, new AstSenTree{flp, sensesp->cloneTree(true)}, nullptr});
-            beginp->addStmtsp(new AstPExprClause{flp, true});
         } else if (rhsp) {
             // Goto rep: check consequent once at match endpoint
             if (!isOverlapped) {
@@ -1373,7 +1372,8 @@ private:
             beginp->addStmtsp(new AstIf{flp, rhsp, new AstPExprClause{flp, true},
                                         new AstPExprClause{flp, false}});
         } else {
-            // Standalone goto: pass after counting
+            // Standalone: pass at the first match, the N-th b. For b[=N], it ends the first
+            // match of b[->N] ##1 !b[*0:$], as !b[*0] is empty (IEEE 1800-2023 16.9.2).
             beginp->addStmtsp(new AstPExprClause{flp, true});
         }
 
