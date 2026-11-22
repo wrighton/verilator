@@ -3504,17 +3504,17 @@ class AssertVisitor final : public VNVisitor {
                 }
             }
         }
-        std::vector<AstAssertCtlTarget*> unused;
-        for (AstAssertCtlTarget* const targetp : argsp->targetspList()) {
-            const AstVar* const statep = targetp->statep()->varp();
-            if (static_cast<uint32_t>(targetp->depth()) >= limit
-                || (statep && !(statep->assertCtlMask() & mask))) {
-                unused.push_back(targetp);
+        const auto prune = [&](AstAssertCtlTarget* targetsp) {
+            for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+                const AstVar* const statep = targetp->statep()->varp();
+                if (static_cast<uint32_t>(targetp->depth()) >= limit
+                    || (statep && !(statep->assertCtlMask() & mask))) {
+                    VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
+                }
             }
-        }
-        for (AstAssertCtlTarget* const targetp : unused) {
-            VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
-        }
+        };
+        prune(argsp->targetsp());
+        for (AstAssertCtlTargetSet* const setp : argsp->setspList()) prune(setp->targetsp());
     }
     AstNodeStmt* newScopedControlp(AstAssertCtl* nodep) {
         pruneControlTargets(nodep);
@@ -3545,6 +3545,12 @@ class AssertVisitor final : public VNVisitor {
             newControlDepthLimitp(flp, levelp),
             nodep->directiveTypes(),
             argsp->targetsp() ? argsp->targetsp()->unlinkFrBackWithNext() : nullptr};
+        if (argsp->setsp()) {
+            AstAssertCtlPlan* const planp
+                = new AstAssertCtlPlan{flp, argsp->setsp()->unlinkFrBackWithNext()};
+            v3Global.rootp()->addMiscsp(planp);
+            applyp->planp(planp);
+        }
         v3Global.setHasAssertCtlReads();
         if (argsp->scoped()) {
             beginp->addStmtsp(applyp);

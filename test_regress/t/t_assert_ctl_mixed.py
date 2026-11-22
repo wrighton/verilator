@@ -11,8 +11,9 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-test.compile(verilator_flags2=['--binary', '--assert'], threads=2 if test.vltmt else 1)
+test.compile(verilator_flags2=['--binary', '--assert', '--stats'], threads=2 if test.vltmt else 1)
 
 test.execute()
+test.file_grep_not(test.stats, r'LinkDot, Assertion control dropped targets\s+[1-9]\d*')
 
 test.passes()
