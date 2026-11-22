@@ -201,7 +201,7 @@ class UnknownVisitor final : public VNVisitor {
     // `exprp`
     static bool isStaticlyGte(AstConst* const msbConstp, const AstNodeExpr* const exprp) {
         if (msbConstp->width() >= exprp->width() && exprp->width() < 32
-            && msbConstp->num().toSInt() >= (1 << exprp->width()) - 1) {
+            && msbConstp->num().toSInt() >= (int64_t{1} << exprp->width()) - 1) {
             return true;
         }
         if (const AstConst* const constp = VN_CAST(exprp, Const)) {
