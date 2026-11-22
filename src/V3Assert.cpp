@@ -1313,7 +1313,13 @@ class AssertVisitor final : public VNVisitor {
         callp->dtypeFrom(elemDTypep);
         return callp;
     }
-    void snapshotObservedExpr(AstNodeExpr* exprp, AstNodeStmt*& queuesp) {
+    struct DeferredReportQueues final {
+        AstNodeStmt* enqueuep = nullptr;
+        AstNodeStmt* maturep = nullptr;
+        AstNodeStmt* discardp = nullptr;
+        const AstNodeCoverOrAssert* assertp;
+    };
+    void snapshotObservedExpr(AstNodeExpr* exprp, DeferredReportQueues& queues) {
         // Constants and, within the time step of the call, the time cannot change
         if (VN_IS(exprp, Const) || VN_IS(exprp, Time)) return;
         FileLine* const flp = exprp->fileline();
@@ -1323,17 +1329,26 @@ class AssertVisitor final : public VNVisitor {
         queuep->setIgnoreSchedWrite();
         VNRelinker handle;
         AstNodeExpr* const oldp = exprp->unlinkFrBack(&handle);
-        handle.relink(newQueuePop(flp, queuep, dtypep));
-        queuesp = AstNode::addNext(queuesp, newQueuePush(flp, queuep, oldp));
+        AstVar* readp = queuep;
+        if (queues.assertp->controlVarp()) {
+            readp = newModuleTemp(flp, m_obsNames.get("MatureQueue"), queuep->dtypep(), m_modp);
+            readp->setIgnoreSchedWrite();
+            queues.maturep = AstNode::addNext(
+                queues.maturep, newQueuePush(flp, readp, newQueuePop(flp, queuep, dtypep)));
+            queues.discardp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+                queues.discardp, newQueuePop(flp, queuep, dtypep)->makeStmt());
+        }
+        handle.relink(newQueuePop(flp, readp, dtypep));
+        queues.enqueuep = AstNode::addNext(queues.enqueuep, newQueuePush(flp, queuep, oldp));
         AstCMethodHard* const clearp = new AstCMethodHard{
             flp, new AstVarRef{flp, queuep, VAccess::WRITE}, VCMethod::DYN_CLEAR};
         clearp->dtypeSetVoid();
         m_obsFlushp = AstNode::addNext(m_obsFlushp, clearp->makeStmt());
     }
-    void snapshotObservedSFormatArgs(AstSFormatF* fmtp, AstNodeStmt*& queuesp) {
+    void snapshotObservedSFormatArgs(AstSFormatF* fmtp, DeferredReportQueues& queues) {
         for (AstNodeExpr* const exprp : fmtp->exprspList()) {
             AstSFormatArg* const argp = VN_CAST(exprp, SFormatArg);
-            snapshotObservedExpr(argp ? argp->exprp() : exprp, queuesp);
+            snapshotObservedExpr(argp ? argp->exprp() : exprp, queues);
         }
     }
     static AstIf* newIfAssertOn(AstVar* statep, AstNodeStmt* bodyp,
@@ -1546,7 +1561,8 @@ class AssertVisitor final : public VNVisitor {
     // Lower observed deferred action into a pending call with its input arguments snapshotted.
     // Pending calls run in the Reactive region unless a flush of their process clears them
     // (IEEE 1800-2023 16.4.1).
-    AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp) {
+    AstNodeStmt* newObservedDeferredAction(FileLine* flp, AstNodeStmt* actionsp,
+                                           const AstNodeCoverOrAssert* assertp) {
         // The null statement of an 'else;', an empty implied block, has no call to defer
         const AstBegin* const beginp = VN_CAST(actionsp, Begin);
         if (beginp && beginp->implied() && !beginp->stmtsp()) return actionsp;
@@ -1566,14 +1582,14 @@ class AssertVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(actionsp), actionsp);
             return nullptr;
         }
-        AstNodeStmt* queuesp = nullptr;
+        DeferredReportQueues queues{nullptr, nullptr, nullptr, assertp};
         if (AstDisplay* const displayp = VN_CAST(actionsp, Display)) {
-            if (displayp->filep()) snapshotObservedExpr(displayp->filep(), queuesp);
-            snapshotObservedSFormatArgs(displayp->fmtp(), queuesp);
+            if (displayp->filep()) snapshotObservedExpr(displayp->filep(), queues);
+            snapshotObservedSFormatArgs(displayp->fmtp(), queues);
         } else if (AstSFormat* const sformatp = VN_CAST(actionsp, SFormat)) {
-            snapshotObservedSFormatArgs(sformatp->fmtp(), queuesp);
+            snapshotObservedSFormatArgs(sformatp->fmtp(), queues);
         } else if (AstSystemT* const systemp = VN_CAST(actionsp, SystemT)) {
-            snapshotObservedExpr(systemp->lhsp(), queuesp);
+            snapshotObservedExpr(systemp->lhsp(), queues);
         } else if (refp) {
             // Match actuals to formal ports, including named/default arguments
             const V3TaskConnects tconnects
@@ -1591,7 +1607,7 @@ class AssertVisitor final : public VNVisitor {
                             "have automatic or dynamic storage (IEEE 1800-2023 16.4).");
                     }
                 } else if (portp->isNonOutput()) {
-                    snapshotObservedExpr(argp->exprp(), queuesp);
+                    snapshotObservedExpr(argp->exprp(), queues);
                 } else {
                     argp->exprp()->v3error("Observed deferred immediate assertion action "
                                            "argument must be input, ref, or const ref "
@@ -1599,11 +1615,11 @@ class AssertVisitor final : public VNVisitor {
                 }
             }
         }
-        return newObservedDeferredCall(flp, actionsp, queuesp);
+        return newObservedDeferredCall(flp, actionsp, queues);
     }
     // Make statements pending, appending what queues them to queuesp
     AstNodeStmt* newObservedDeferredCall(FileLine* flp, AstNodeStmt* callsp,
-                                         AstNodeStmt* queuesp) {
+                                         DeferredReportQueues& queues) {
         AstVar* const pendingp
             = newModuleTemp(flp, m_obsNames.get("Pending"), m_modp->findUInt32DType(), m_modp);
         pendingp->setIgnoreSchedWrite();
@@ -1624,6 +1640,13 @@ class AssertVisitor final : public VNVisitor {
             m_obsReactivep->deferredReports(true);
             m_modp->addStmtsp(m_obsReactivep);
         }
+        AstNodeStmt* queuesp = queues.enqueuep;
+        AstVar* readyp = pendingp;
+        if (queues.assertp->controlVarp()) {
+            readyp = newModuleTemp(flp, m_obsNames.get("Ready"), pendingp->dtypep(), m_modp);
+            readyp->setIgnoreSchedWrite();
+            queuesp = addObservedReportMaturity(flp, pendingp, readyp, queues);
+        }
         queuesp = AstNode::addNext(
             queuesp, new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
                                    new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ},
@@ -1634,13 +1657,47 @@ class AssertVisitor final : public VNVisitor {
 
         AstLoop* const reactLoopp = new AstLoop{flp};
         reactLoopp->addStmtsp(
-            new AstLoopTest{flp, reactLoopp, new AstVarRef{flp, pendingp, VAccess::READ}});
+            new AstLoopTest{flp, reactLoopp, new AstVarRef{flp, readyp, VAccess::READ}});
         reactLoopp->addStmtsp(new AstAssign{
-            flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
-            new AstSub{flp, new AstVarRef{flp, pendingp, VAccess::READ}, new AstConst{flp, 1}}});
+            flp, new AstVarRef{flp, readyp, VAccess::WRITE},
+            new AstSub{flp, new AstVarRef{flp, readyp, VAccess::READ}, new AstConst{flp, 1}}});
         reactLoopp->addStmtsp(callsp);
         m_obsReactivep->addStmtsp(reactLoopp);
         return queuesp;
+    }
+
+    // Pending reports can be killed; after Observed maturity they always run in Reactive
+    // (IEEE 1800-2023 16.4.1, 20.11). Move or discard each report's arguments together.
+    AstNodeStmt* addObservedReportMaturity(FileLine* flp, AstVar* pendingp, AstVar* readyp,
+                                          DeferredReportQueues& queues) {
+        AstNodeDType* const u32p = pendingp->dtypep();
+        AstVar* const killQp
+            = newModuleTemp(flp, m_obsNames.get("KillQueue"), newQueueDTypep(flp, u32p), m_modp);
+        killQp->setIgnoreSchedWrite();
+        AstCMethodHard* const clearp = new AstCMethodHard{
+            flp, new AstVarRef{flp, killQp, VAccess::WRITE}, VCMethod::DYN_CLEAR};
+        clearp->dtypeSetVoid();
+        m_obsFlushp = AstNode::addNext(m_obsFlushp, clearp->makeStmt());
+        const auto newInc = [&](AstVar* varp, bool add) {
+            AstNodeExpr* const rhsp = new AstVarRef{flp, varp, VAccess::READ};
+            AstConst* const onep = new AstConst{flp, 1};
+            AstNodeExpr* const valuep = add ? static_cast<AstNodeExpr*>(new AstAdd{flp, rhsp, onep})
+                                           : new AstSub{flp, rhsp, onep};
+            return new AstAssign{flp, new AstVarRef{flp, varp, VAccess::WRITE}, valuep};
+        };
+        AstLoop* const loopp = new AstLoop{flp};
+        loopp->addStmtsp(new AstLoopTest{flp, loopp, new AstVarRef{flp, pendingp, VAccess::READ}});
+        loopp->addStmtsp(newInc(pendingp, false));
+        AstNodeExpr* const keep = new AstEq{flp, newQueuePop(flp, killQp, u32p),
+                                           newKillCountp(flp, queues.assertp)};
+        loopp->addStmtsp(new AstIf{flp, keep, AstNode::addNext(queues.maturep, newInc(readyp, true)),
+                                   queues.discardp});
+        AstSenTree* const senp = new AstSenTree{
+            flp, new AstSenItem{flp, VEdgeType::ET_EVENT,
+                               new AstVarRef{flp, m_obsEventp, VAccess::READ}}};
+        m_modp->addStmtsp(new AstAlwaysObserved{flp, senp, loopp});
+        return AstNode::addNext(queues.enqueuep,
+                                newQueuePush(flp, killQp, newKillCountp(flp, queues.assertp)));
     }
 
     // Return the variable holding the value of 'condp' at the start of the current PExpr's
@@ -2305,8 +2362,9 @@ class AssertVisitor final : public VNVisitor {
                 // IEEE 1800-2023 16.4.2: Deferred coverage is flushed like a pending report
                 AstNodeStmt* creditsp = covincp;
                 if (obsDeferred) {
-                    creditsp = newObservedDeferredCall(flp, covincp, nullptr);
-                    if (passsp) passsp = newObservedDeferredAction(flp, passsp);
+                    DeferredReportQueues queues{nullptr, nullptr, nullptr, nodep};
+                    creditsp = newObservedDeferredCall(flp, covincp, queues);
+                    if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
                 }
                 if (passsp) {
                     passsp = newIfAssertPassOn(nodep->controlVarp(), passsp, nodep->directive(),
@@ -2328,8 +2386,8 @@ class AssertVisitor final : public VNVisitor {
                 failsp = newFireAssertUnchecked(
                     nodep, VN_IS(nodep, AssertIntrinsic) ? "'$cast' failed." : "'assert' failed.");
             if (obsDeferred) {
-                if (passsp) passsp = newObservedDeferredAction(flp, passsp);
-                if (failsp) failsp = newObservedDeferredAction(flp, failsp);
+                if (passsp) passsp = newObservedDeferredAction(flp, passsp, nodep);
+                if (failsp) failsp = newObservedDeferredAction(flp, failsp, nodep);
             }
         } else {
             nodep->v3fatalSrc("Unknown node type");
