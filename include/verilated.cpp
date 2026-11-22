@@ -3864,9 +3864,9 @@ void VerilatedContextImp::commandArgVl(const std::string& arg) {
             logFilename(str);
             logOutputToFile(false /* append */);
         } else if (arg == "+verilator+noassert") {
-            // Set directly on to avoid conflicts with +verilator+assert+lock
-            m_s.m_assertOn = 0;
+            // Set directly on to avoid conflicts with +verilator+assert+lock.
             const VerilatedLockGuard lock{m_assertCtlMutex};
+            m_s.m_assertOn = 0;
             for (VlAssertControl* const statep : m_assertControls) {
                 statep->m_flags &= ~VlAssertControl::ON;
             }
