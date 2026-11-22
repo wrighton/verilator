@@ -819,6 +819,56 @@ Summary:
    ``VL_VPRINTF`` functions, and may need to include :file:`verilatedos.h`
    as this file is included before any other standard includes.
 
+.. option:: -fico-public-change-detect
+
+   Skip evaluating the input combinational logic that reads a public read-write
+   signal (see :option:`/*verilator&32;public*/`, ``public_flat_rw`` and
+   :vlopt:`--public-flat-rw`) when the signal has not changed, rather than
+   evaluating it on every evaluation; its other inputs still evaluate it as
+   usual. This applies to signals of packed types, other than top level ports
+   and forced signals. Logic reading the time, such as :code:`$time`, is also
+   evaluated when the time advanced.
+
+   This does not apply to a signal read, directly or through other input
+   combinational logic, by logic whose result can depend on state outside the
+   signals it reads: random numbers such as :code:`$urandom`,
+   :code:`$test$plusargs` and :code:`$value$plusargs`, members of class objects
+   read through a handle, including by formatting an object with ``%p``, and
+   static members of classes, formatting of the time with ``%t`` into a value,
+   as it uses the :code:`$timeformat` settings, whether a named event was
+   triggered (``.triggered``), the assertion controls, such as
+   :code:`$assertoff`, for an assertion with actions writing signals or files
+   or calling tasks, which for a deferred assertion applies to all deferred
+   assertions of its module, file input and output, including :code:`$fwrite`,
+   and calls to C++ code, such as a DPI import not declared ``pure``,
+   :code:`$c`, or a function that is not inlined. All readers of such a signal
+   run on every evaluation, as without this option, and this option also leaves
+   any top level input read this way out of input change detection. A DPI
+   import declared ``pure`` is assumed to depend only on its arguments (IEEE
+   1800-2023 35.5.2).
+
+   It needs input change detection, which it enables with :vlopt:`--vpi`,
+   unless :vlopt:`-fno-ico-change-detect` is given. It is off by default, as it
+   can change the results of a design. Outputs of logic that is skipped, such
+   as displays to the standard output and the reports of immediate and deferred
+   assertions, are not repeated: an assertion that keeps failing is reported
+   when an input or, if it reads the time, the time changed, rather than on
+   every evaluation. A change of the assertion controls by C++ code, such as
+   with ``VerilatedContext::assertOn()``, also takes effect for an assertion
+   with only reports, including its :code:`$fatal`, :code:`$stop` or
+   :code:`$finish` ending the simulation and its errors counted, when its logic
+   next runs, not at the next evaluation. Likewise, a :code:`$monitor` or
+   :code:`$strobe` started by logic that is skipped is not started again, so a
+   :code:`$monitor` started since by other logic stays in effect. An
+   :code:`always_comb` or :code:`always_latch` that reads a value it wrote in
+   an earlier run, such as a latch incrementing its own output, runs only when
+   an input changed, as IEEE 1800-2023 9.2.2.2.1 and 9.2.2.3 specify, while
+   without this option it runs again on every evaluation. A change during an
+   evaluation is not seen if C++ code then restores the value the signal had at
+   the start of the evaluation, or after the input combinational logic for a
+   signal that logic writes, nor is a change by C++ code during the input
+   combinational logic to a signal that logic writes.
+
 .. option:: --flatten
 
    Force flattening of the design's hierarchy, with all modules, tasks, and
@@ -1016,7 +1066,8 @@ Summary:
    for top level input signals that are written within the design. Accesses via
    the VPI cannot be analyzed at compile time, therefore :vlopt:`--vpi`
    disables this optimization for all inputs; it may be turned back on by
-   explicitly passing :vlopt:`-fico-change-detect <-fno-ico-change-detect>`.
+   explicitly passing :vlopt:`-fico-change-detect <-fno-ico-change-detect>`, or
+   :vlopt:`-fico-public-change-detect`.
 
 .. option:: -fno-inline
 
