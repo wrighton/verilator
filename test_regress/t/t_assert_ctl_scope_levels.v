@@ -28,12 +28,16 @@ endmodule
 module t;
   mid a ();
   mid b ();
+  leaf neg[-1:-2] ();
   initial begin
     // An omitted levels argument selects every level below the scope (IEEE 1800-2023 20.11)
     $assertcontrol(4, 15, 7,, t.a);
+    $assertoff(0, neg[-1].check);
     #2;
     `checkd(a.l.failures, 0);
     `checkd(b.l.failures, 1);
+    `checkd(neg[-1].failures, 0);
+    `checkd(neg[-2].failures, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
