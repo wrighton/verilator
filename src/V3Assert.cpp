@@ -1329,15 +1329,13 @@ class AssertVisitor final : public VNVisitor {
         queuep->setIgnoreSchedWrite();
         VNRelinker handle;
         AstNodeExpr* const oldp = exprp->unlinkFrBack(&handle);
-        AstVar* readp = queuep;
-        if (queues.assertp->controlVarp()) {
-            readp = newModuleTemp(flp, m_obsNames.get("MatureQueue"), queuep->dtypep(), m_modp);
-            readp->setIgnoreSchedWrite();
-            queues.maturep = AstNode::addNext(
-                queues.maturep, newQueuePush(flp, readp, newQueuePop(flp, queuep, dtypep)));
-            queues.discardp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
-                queues.discardp, newQueuePop(flp, queuep, dtypep)->makeStmt());
-        }
+        AstVar* const readp
+            = newModuleTemp(flp, m_obsNames.get("MatureQueue"), queuep->dtypep(), m_modp);
+        readp->setIgnoreSchedWrite();
+        queues.maturep = AstNode::addNext(
+            queues.maturep, newQueuePush(flp, readp, newQueuePop(flp, queuep, dtypep)));
+        queues.discardp = AstNode::addNext<AstNodeStmt, AstNodeStmt>(
+            queues.discardp, newQueuePop(flp, queuep, dtypep)->makeStmt());
         handle.relink(newQueuePop(flp, readp, dtypep));
         queues.enqueuep = AstNode::addNext(queues.enqueuep, newQueuePush(flp, queuep, oldp));
         AstCMethodHard* const clearp = new AstCMethodHard{
@@ -1640,13 +1638,10 @@ class AssertVisitor final : public VNVisitor {
             m_obsReactivep->deferredReports(true);
             m_modp->addStmtsp(m_obsReactivep);
         }
-        AstNodeStmt* queuesp = queues.enqueuep;
-        AstVar* readyp = pendingp;
-        if (queues.assertp->controlVarp()) {
-            readyp = newModuleTemp(flp, m_obsNames.get("Ready"), pendingp->dtypep(), m_modp);
-            readyp->setIgnoreSchedWrite();
-            queuesp = addObservedReportMaturity(flp, pendingp, readyp, queues);
-        }
+        AstVar* const readyp
+            = newModuleTemp(flp, m_obsNames.get("Ready"), pendingp->dtypep(), m_modp);
+        readyp->setIgnoreSchedWrite();
+        AstNodeStmt* queuesp = addObservedReportMaturity(flp, pendingp, readyp, queues);
         queuesp = AstNode::addNext(
             queuesp, new AstAssign{flp, new AstVarRef{flp, pendingp, VAccess::WRITE},
                                    new AstAdd{flp, new AstVarRef{flp, pendingp, VAccess::READ},
