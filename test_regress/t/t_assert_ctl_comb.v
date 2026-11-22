@@ -29,13 +29,8 @@ module t;
   always @(posedge clk) value <= value + 1;
 
   initial begin
-`ifdef GLOBAL_CONTROL
-    $assertoff;
-    $asserton;
-`else
     $assertoff(0, a);
     $asserton(0, a);
-`endif
     #2;
     #80;
     $display("*-* All Finished *-*");
