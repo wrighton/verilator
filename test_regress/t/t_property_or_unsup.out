@@ -1,30 +1,109 @@
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:15:82: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
-   15 |   assert property (@(posedge clk) a |-> (##1 a) or (##1 b) or (##1 c) or (##2 a) or (##2 b));
-      |                                                                                  ^~
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:16:53: Unsupported: sequence 'or' with an operand that is not a fixed-length sequence of boolean expressions in an asserted property (IEEE 1800-2023 16.9.7)
-   16 |   assert property (@(posedge clk) a |-> (##[1:2] b) or (##3 c));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:15:53: Unsupported: sequence 'or' with an operand that is not a fixed-length sequence of boolean expressions in an asserted property (IEEE 1800-2023 16.9.7)
+   15 |   assert property (@(posedge clk) a |-> (##[1:2] b) or (##3 c));
       |                                                     ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:17:49: Unsupported: property 'or' with a property operand in an asserted property (IEEE 1800-2023 16.12.4)
-   17 |   assert property (@(posedge clk) (a |-> ##1 b) or (b |-> ##1 c));
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:16:49: Unsupported: property 'or' with a property operand in an asserted property (IEEE 1800-2023 16.12.4)
+   16 |   assert property (@(posedge clk) (a |-> ##1 b) or (b |-> ##1 c));
       |                                                 ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:18:46: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
-   18 |   assert property (@(posedge clk) ((a ##1 b) or (b ##1 a)) intersect (c ##1 c));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:17:46: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   17 |   assert property (@(posedge clk) ((a ##1 b) or (b ##1 a)) intersect (c ##1 c));
       |                                              ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:19:63: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
-   19 |   assert property (@(posedge clk) a |-> c throughout ((##1 b) or (##2 b)));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:18:63: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   18 |   assert property (@(posedge clk) a |-> c throughout ((##1 b) or (##2 b)));
       |                                                               ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:20:50: Unsupported: sequence 'or' with an operand that is not a fixed-length sequence of boolean expressions in an asserted property (IEEE 1800-2023 16.9.7)
-   20 |   assert property (@(posedge clk) a |-> (b [*2]) or (c ##1 a));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:19:50: Unsupported: sequence 'or' with an operand that is not a fixed-length sequence of boolean expressions in an asserted property (IEEE 1800-2023 16.9.7)
+   19 |   assert property (@(posedge clk) a |-> (b [*2]) or (c ##1 a));
       |                                                  ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:21:65: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
-   21 |   assert property (@(posedge clk) a |-> ##[1:2] (##1 ((b ##1 c) or (c ##1 b))));
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:20:65: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   20 |   assert property (@(posedge clk) a |-> ##[1:2] (##1 ((b ##1 c) or (c ##1 b))));
       |                                                                 ^~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:22:45: Unsupported: 'within' with an inner sequence shorter than the outer sequence in an asserted property (IEEE 1800-2023 16.9.10)
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:21:45: Unsupported: 'within' with an inner sequence shorter than the outer sequence in an asserted property (IEEE 1800-2023 16.9.10)
                                                  : ... note: In instance 't'
-   22 |   assert property (@(posedge clk) (a ##1 b) within (c ##2 c));
+   21 |   assert property (@(posedge clk) (a ##1 b) within (c ##2 c));
       |                                             ^~~~~~
-%Error-UNSUPPORTED: t/t_property_or_unsup.v:31:7: Unsupported: sequence 'or' with more than 1024 transitions between the sets of operands still matching in an asserted property (IEEE 1800-2023 16.9.7)
-   31 |       or (!a ##1 b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:22:49: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   22 |   assert property (@(posedge clk) (a |-> ##1 b) or (b |-> ##1 c) or (c |-> ##1 a) or (a |-> ##2 b)
+      |                                                 ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:24:65: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   24 |   assert property (@(posedge clk) ((a |-> ((##1 b) or (##1 c))) or (##2 a)) or ((##2 b) or (##2 c)
+      |                                                                 ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:24:89: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   24 |   assert property (@(posedge clk) ((a |-> ((##1 b) or (##1 c))) or (##2 a)) or ((##2 b) or (##2 c)
+      |                                                                                         ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:27:51: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   27 |   assert property (@(posedge clk) a |-> ((b[->1]) or (##2 c) or (##3 a) or (##4 b) or (##5 c))
+      |                                                   ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:29:50: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   29 |   assert property (@(posedge clk) a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c))
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:32:63: Unsupported: sequence 'or' with a multi-cycle operand inside another operator of an asserted property (IEEE 1800-2023 16.9.7)
+   32 |   assert property (@(posedge clk) a |-> b throughout ((##2 a) or (##3 b) or (##4 c) or (##5 a)
+      |                                                               ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:34:83: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   34 |   assert property (@(posedge clk) a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c))
+      |                                                                                   ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:37:84: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   37 |   assert property (@(posedge clk) (a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c)))
+      |                                                                                    ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:39:84: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   39 |   assert property (@(posedge clk) (a |-> ((##1 b) or (##2 c) or (##3 a) or (##4 b) or (##5 c)))
+      |                                                                                    ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:42:50: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   42 |   assert property (@(posedge clk) not ((a ##1 b) or (a ##[2:3] c)));
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:43:51: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   43 |   assert property (@(posedge clk) not (((a ##1 b) or c) ##1 a));
+      |                                                   ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:44:57: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   44 |   assert property (@(posedge clk) not ((always [0:1] a) or (b ##[2:3] c)));
+      |                                                         ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:45:50: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   45 |   assert property (@(posedge clk) not ((a #-# b) or (c ##1 a)));
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:46:50: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   46 |   assert property (@(posedge clk) not ((a #=# b) or (c ##[2:3] a)));
+      |                                                  ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:47:41: Unsupported: 's_eventually' in complex property expression
+                                                 : ... note: In instance 't'
+   47 |   assert property (@(posedge clk) not ((s_eventually a) or (b ##1 c)));
+      |                                         ^~~~~~~~~~~~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:48:58: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   48 |   assert property (@(posedge clk) not (((a |-> b) and a) or (a ##[1:2] c)));
+      |                                                          ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:49:56: Unsupported: implication inside another property operator in a negated property
+                                                 : ... note: In instance 't'
+   49 |   assert property (@(posedge clk) not ((b ##1 c) or (a |=> b)));
+      |                                                        ^~~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:50:43: Unsupported: implication inside another property operator in a negated property
+                                                 : ... note: In instance 't'
+   50 |   assert property (@(posedge clk) not ((a |=> b) or (b ##1 c)));
+      |                                           ^~~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:51:51: Unsupported: sequence antecedent of an implication in a negated property
+                                                 : ... note: In instance 't'
+   51 |   assert property (@(posedge clk) not (((a ##1 b) or (c ##2 a)) |-> b));
+      |                                                   ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:52:81: Unsupported: 'or' with operands of different or variable lengths in a negated property (IEEE 1800-2023 16.12.3)
+   52 |   assert property (@(posedge clk) not ((##1 a) or (##2 b) or (##3 c) or (##4 a) or (##5 b)));
+      |                                                                                 ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:55:59: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   55 |       or (##6 b))) or (b ##2 a) or (c ##3 b) or (a ##4 c) or (b ##5 a)));
+      |                                                           ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:57:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   57 |       or (a ##4 a) or (b ##5 b)));
+      |                    ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:59:33: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   59 |       or (c ##3 c) or (a ##4 a) or (b ##5 b));
+      |                                 ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:61:33: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   61 |       or (c ##3 c) or (a ##4 a) or (b ##5 b));
+      |                                 ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:63:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   63 |       or (a ##4 a) or (b ##5 b));
+      |                    ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:65:20: Unsupported: sequence 'or' with more than 4 operands in an asserted property (IEEE 1800-2023 16.9.7)
+   65 |       or (a ##4 a) or (b ##5 b));
+      |                    ^~
+%Error-UNSUPPORTED: t/t_property_or_unsup.v:74:7: Unsupported: sequence 'or' with more than 1024 transitions between the sets of operands still matching in an asserted property (IEEE 1800-2023 16.9.7)
+   74 |       or (!a ##1 b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c ##1 !a ##1 b ##1 !c
       |       ^~
 %Error: Exiting due to

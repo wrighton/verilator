@@ -81,6 +81,52 @@ module t (
   assert property (@(posedge clk) oa |-> ##1 ((ob ##1 oc) or (oc ##1 ob))) else ++orlead_fail;
   int orpre_fail = 0, orpre_exp = 0;
   assert property (@(posedge clk) oa |-> ob ##2 (oc or (oa ##1 oc))) else ++orpre_fail;
+  // A sequence 'or' with more operands than are tracked records only matches. One of ob and !ob
+  // matches a tick after each start, so this never fails.
+  int or8_fail = 0;
+  assert property (@(posedge clk) oa |-> (##1 ob) or (##2 oc) or (ob ##1 oc) or (##1 !ob)
+      or (oc ##2 oa) or (##3 ob) or (oa ##1 oc ##1 ob) or (##2 !oc))
+  else ++or8_fail;
+  // A plain always over the whole property is the property attempted at every tick
+  int or8always_fail = 0;
+  assert property (@(posedge clk) always (oa |-> (##1 ob) or (##2 oc) or (ob ##1 oc)
+      or (##1 !ob) or (oc ##2 oa) or (##3 ob) or (oa ##1 oc ##1 ob) or (##2 !oc)))
+  else ++or8always_fail;
+  // Negated, a sequence 'or' of operands of one length fails once when any operand matches
+  int ornot5_fail = 0, ornot5_exp = 0;
+  assert property (@(posedge clk) not ((oa ##1 ob) or (ob ##1 oc) or (oc ##1 oa) or (oa ##1 !ob)
+      or (!oc ##1 ob)))
+  else ++ornot5_fail;
+  // Negated, a cover property and a boolean antecedent keep their lowering
+  cover property (@(posedge clk) not ((oa ##1 ob) or oc));
+  int ornotimpl_fail = 0, ornotimpl_exp = 0;
+  assert property (@(posedge clk) not ((oa || ob) |-> oc))
+  else ++ornotimpl_fail;
+  // Repetitions of booleans and a nested 'or' are operands of the same kind
+  int or6rep_fail = 0;
+  assert property (@(posedge clk) oa |-> (ob[->1]) or (oc[*1:2]) or (od ##1 (ob or (##1 oc)))
+      or (##1 ob) or (##1 !ob) or (oa[*2]))
+  else ++or6rep_fail;
+  // The same with a leading od fails only when od does not hold
+  int or5pre_fail = 0, or5pre_exp = 0;
+  assert property (@(posedge clk) oa |-> od ##1 ((##1 ob) or (##1 oc) or (##1 !ob) or (##2 oa)
+      or (##2 !oa)))
+  else ++or5pre_fail;
+  // In an antecedent or a cover property, where nothing fails, the same 'or' may precede a
+  // later step
+  int or5ante_fail = 0;
+  assert property (@(posedge clk) (((##1 oa) or (##2 ob) or (##3 oc) or (##4 od) or (##5 oa))
+      ##1 ob) |-> 1'b1)
+  else ++or5ante_fail;
+  cover property (@(posedge clk) ((##1 oa) or (##2 ob) or (##3 oc) or (##4 od) or (##5 oa))
+      ##1 ob);
+  // A trailing boolean operand is split off, leaving four sequences that fail exactly
+  int or5tail_fail = 0, or5tail_exp = 0;
+  assert property (@(posedge clk) oa |-> (ob ##1 oc) or (oc ##1 ob) or (##2 oa) or (##1 od) or ob)
+  else ++or5tail_fail;
+  int or5bool_fail = 0, or5bool_exp = 0;
+  assert property (@(posedge clk) oa |-> od ##1 (oa or ob or oc or od or (oa && ob)))
+  else ++or5bool_fail;
   always @(posedge clk) begin
     ++or_cyc;
     oa_q <= {oa_q[6:0], oa};
@@ -96,6 +142,15 @@ module t (
     if (oa_q[0] && !ob && !oc) ++orlead_exp;
     if (oa_q[1] && (ob_q[0] || oc_q[0]) && !(ob_q[0] && oc) && !(oc_q[0] && ob)) ++orlead_exp;
     if (oa && !ob) ++orpre_exp;
+    if (oa && !od) ++or5pre_exp;
+    if (oa && !od) ++or5bool_exp;
+    if (!(oa || ob) || oc) ++ornotimpl_exp;
+    if (or_cyc > 1
+        && ((oa_q[0] && ob) || (ob_q[0] && oc) || (oc_q[0] && oa) || (oa_q[0] && !ob)
+            || (!oc_q[0] && ob)))
+      ++ornot5_exp;
+    if (oa_q[1] && !ob_q[1] && !(oc_q[1] && ob_q[0]) && !oa && !od_q[0]) ++or5tail_exp;
+    if (oa_q[0] && od_q[0] && !oa && !ob && !oc && !od) ++or5bool_exp;
     if (oa_q[1] && ob_q[1] && !oc && !oa) ++orpre_exp;
     if (oa_q[2] && ob_q[2] && !oc_q[0] && oa_q[0] && !oc) ++orpre_exp;
   end
@@ -119,6 +174,15 @@ module t (
     `checkd(ordis_fail, ordis_exp);
     `checkd(orlead_fail, orlead_exp);
     `checkd(orpre_fail, orpre_exp);
+    `checkd(or8_fail, 0);
+    `checkd(or6rep_fail, 0);
+    `checkd(or8always_fail, 0);
+    `checkd(ornot5_fail, ornot5_exp);
+    `checkd(ornotimpl_fail, ornotimpl_exp);
+    `checkd(or5pre_fail, or5pre_exp);
+    `checkd(or5bool_fail, or5bool_exp);
+    `checkd(or5tail_fail, or5tail_exp);
+    `checkd(or5ante_fail, 0);
     or_checked = 1;
   end
 
