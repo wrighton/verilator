@@ -420,9 +420,403 @@ void createSettle(AstNetlist* netlistp, AstCFunc* const initFuncp, SenExprBuilde
 //============================================================================
 // Order the replicated combinational logic to create the 'ico' region
 
+// Change detection of the public read-write variables read by 'ico' logic, in place of the 'first
+// iteration' trigger of their readers, with -fico-public-change-detect. A variable triggers if it
+// differs from its value at the previous trigger computation, which catches any write in between,
+// or if a flag set at the end of the previous evaluation records that it then differed from that
+// value or from its value at the start of that evaluation, so a later write restoring either value
+// is still seen. The value written by 'ico' logic, which its readers follow, counts as seen, and
+// as the value at the start.
+struct IcoPublicChangeDetect final {
+    AstCFunc* m_updatep = nullptr;  // Takes the values after each trigger computation
+    AstCFunc* m_seenp = nullptr;  // Takes the values written by 'ico' logic after it runs
+    AstCFunc* m_endp = nullptr;  // Sets the flags at the end of an evaluation
+    AstCFunc* m_startp = nullptr;  // Takes the values at the start of an evaluation
+    AstCFunc* m_nowp = nullptr;  // Takes the time before each trigger computation
+    AstVarScope* m_atStartp = nullptr;  // Set until the first trigger computation of an evaluation
+};
+
+// Whether the formatting may format a time (%t), or has a format only known at run time
+bool icoFormatsTime(const AstSFormatF* fmtp) {
+    if (fmtp->exprFormat()) return true;
+    bool inPct = false;
+    for (const char ch : fmtp->text()) {
+        if (!inPct) {
+            inPct = ch == '%';
+        } else if (!std::isdigit(ch) && ch != '.' && ch != '-') {
+            if (std::tolower(ch) == 't') return true;
+            inPct = false;
+        }
+    }
+    return false;
+}
+
+// Whether the node makes the result of logic depend on state that the change detection of the
+// variables it reads does not see, so the result can differ between evaluations reading the same
+// values. The first group is listed explicitly, as those nodes are pure for optimization
+// (isPure()), which only means they have no side effect within one evaluation:
+// - random numbers ($random, $urandom, $urandom_range, $dist_*, randomize), drawn from generator
+//   state that each call advances;
+// - the command line ($test$plusargs, $value$plusargs), which C++ code can extend, and
+//   $get_initial_random_seed, which C++ code can change;
+// - members of class objects read or written through a handle, also when formatted with the
+//   object (%p), and static members of classes, which class methods and C++ code can change
+//   without the scheduler seeing it;
+// - formatting of the time (%t), which uses the $timeformat settings, unless only displayed,
+//   while formatting an object (%p) is hidden state also when only displayed;
+// - whether a named event was triggered (.triggered), which is cleared at the start of each
+//   evaluation after the time slot it was triggered in.
+// C++ expressions pure for optimization, such as the assertion controls, also read state that C++
+// code can change; they are judged with the whole logic by icoLogicReadsHiddenState().
+// The others are the nodes not pure in their own right rather than through a child, such as a
+// call to C++ code (a DPI import not declared pure, $c) or to a function that is not inlined,
+// file input and output ($fopen, $fgets, $fwrite, $fdisplay...) and $system, other than outputs
+// to the user: a display to the standard output, $stop or $finish, and queueing the report of a
+// deferred assertion, with the push and clear of the queue the scheduler does not consider
+// written. The time is handled separately, by change detected temporaries. The kinds are listed,
+// as no property of a node tells whether it reads state outside the variables of the design.
+bool icoReadsHiddenState(AstNode* nodep) {
+    if (VN_IS(nodep, Rand) || VN_IS(nodep, RandRNG) || VN_IS(nodep, URandomRange)
+        || VN_IS(nodep, NodeDistBiop) || VN_IS(nodep, NodeDistTriop) || VN_IS(nodep, TestPlusArgs)
+        || VN_IS(nodep, ValuePlusArgs) || VN_IS(nodep, GetInitialRandomSeed)) {
+        return true;
+    }
+    if (const AstMemberRef* const refp = VN_CAST(nodep, MemberRef)) {
+        // A member of a virtual interface instead has its own triggers
+        if (VN_IS(refp->fromp()->dtypep()->skipRefp(), ClassRefDType)) return true;
+    }
+    if (const AstVarRef* const refp = VN_CAST(nodep, VarRef)) {
+        if (refp->varp()->isClassMember()) return true;
+    }
+    if (const AstToStringN* const strp = VN_CAST(nodep, ToStringN)) {
+        if (VN_IS(strp->lhsp()->dtypep()->skipRefp(), ClassRefDType)) return true;
+    }
+    if (const AstSFormatF* const fmtp = VN_CAST(nodep, SFormatF)) {
+        const AstDisplay* const displayp = VN_CAST(fmtp->firstAbovep(), Display);
+        if (icoFormatsTime(fmtp) && !(displayp && !displayp->filep())) return true;
+    }
+    if (const AstCMethodHard* const callp = VN_CAST(nodep, CMethodHard)) {
+        if (callp->method() == VCMethod::EVENT_IS_TRIGGERED) return true;
+    }
+    if (nodep->isPure()) return false;
+    for (AstNode* childp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+        for (; childp; childp = childp->nextp()) {
+            if (!childp->isPure()) return false;
+        }
+    }
+    if (const AstDisplay* const displayp = VN_CAST(nodep, Display)) {
+        return displayp->filep() != nullptr;
+    }
+    if (VN_IS(nodep, Stop) || VN_IS(nodep, Finish)) return false;
+    if (const AstCMethodHard* const callp = VN_CAST(nodep, CMethodHard)) {
+        const AstVarRef* const refp = VN_CAST(callp->fromp(), VarRef);
+        if (refp
+            && (callp->method() == VCMethod::ARRAY_PUSH_BACK
+                || callp->method() == VCMethod::DYN_CLEAR)) {
+            const AstVar* const varp = refp->varp();
+            return !(varp->ignoreSchedWrite() && !varp->processQueue()
+                     && VN_IS(varp->dtypep()->skipRefp(), QueueDType));
+        }
+    }
+    return true;
+}
+
+// Whether the variable is compiler state the scheduler does not consider written, such as the
+// queue of deferred assertion reports
+bool icoIsCompilerState(const AstVar* varp) {
+    return varp->isInternal() && varp->ignoreSchedWrite();
+}
+
+// Whether the node writes a variable that design logic can read, rather than compiler state or
+// an event of the compiler that only starts reports (see findIcoReportEvents())
+bool icoWritesVariable(const AstNode* nodep,
+                       const std::unordered_set<const AstVar*>& reportEvents) {
+    return nodep->exists([&](const AstNodeVarRef* refp) {
+        const AstVar* const varp = refp->varp();
+        return refp->access().isWriteOrRW() && !icoIsCompilerState(varp)
+               && !reportEvents.count(varp);
+    });
+}
+
+// Whether the node takes a value from compiler state, such as a value of a deferred assertion
+// report taken from its queue
+bool icoTakesCompilerState(const AstNode* nodep) {
+    const AstCMethodHard* const callp = VN_CAST(nodep, CMethodHard);
+    if (!callp || callp->method() != VCMethod::ARRAY_POP_FRONT) return false;
+    const AstVarRef* const refp = VN_CAST(callp->fromp(), VarRef);
+    return refp && icoIsCompilerState(refp->varp());
+}
+
+// The events of the compiler whose triggering only starts outputs to the user, such as the one
+// flushing the queue of deferred assertion reports when every action of those assertions is a
+// report: all the logic sensitive to the event writes no variable other than compiler state, does
+// nothing hidden other than outputs and operating on compiler state, and only formats the values
+// it takes from compiler state, as the impurity of taking them must not hide that of their user.
+// The only such events are those V3Assert creates for deferred assertions.
+std::unordered_set<const AstVar*> findIcoReportEvents(const LogicRegions& regions) {
+    std::unordered_set<const AstVar*> eventps;
+    std::unordered_set<const AstVar*> statefulps;
+    const auto reportOnly = [](AstNode* logicp) {
+        return !logicp->exists([](AstNode* nodep) {
+            if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+                return refp->access().isWriteOrRW() && !icoIsCompilerState(refp->varp());
+            }
+            // A display to a file writes it whatever its operands are. Defensive: such a display
+            // is also not pure in its own right, or takes a value checked below
+            if (const AstDisplay* const displayp = VN_CAST(nodep, Display)) {
+                if (displayp->filep()) return true;
+            }
+            if (!VN_IS(nodep, SFormatF) && !VN_IS(nodep, SFormatArg)) {
+                for (AstNode* childp :
+                     {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+                    for (; childp; childp = childp->nextp()) {
+                        if (icoTakesCompilerState(childp)) return true;
+                    }
+                }
+            }
+            if (const AstCMethodHard* const callp = VN_CAST(nodep, CMethodHard)) {
+                const AstVarRef* const refp = VN_CAST(callp->fromp(), VarRef);
+                if (refp && icoIsCompilerState(refp->varp())) return false;
+            }
+            return icoReadsHiddenState(nodep);
+        });
+    };
+    for (const ProcessList* const listp :
+         {&regions.m_pre, &regions.m_act, &regions.m_nba, &regions.m_obs, &regions.m_react}) {
+        for (const Process& process : *listp) {
+            if (!process.m_senTreep) continue;
+            process.m_senTreep->foreach([&](const AstVarRef* refp) {
+                const AstVar* const varp = refp->varp();
+                const AstBasicDType* const basicp = varp->basicp();
+                if (!varp->isInternal() || !basicp || !basicp->isEvent()) return;
+                eventps.emplace(varp);
+                if (!reportOnly(process.m_procp)) statefulps.emplace(varp);
+            });
+        }
+    }
+    for (const AstVar* const varp : statefulps) eventps.erase(varp);
+    return eventps;
+}
+
+// Whether the logic reads hidden state (see icoReadsHiddenState()). A C++ expression pure for
+// optimization reads state that C++ code can change, such as the assertion controls, so is hidden
+// state too, unless it only decides whether outputs to the user run: an assertion with only
+// reports reports when its logic runs, as other outputs, while one with actions writing variables
+// must see the controls in every evaluation. Each If is walked for its writes, which is linear in
+// the logic for each level of If nesting, and the logic of an input is small.
+bool icoLogicReadsHiddenState(AstNode* logicp,
+                              const std::unordered_set<const AstVar*>& reportEvents) {
+    std::unordered_set<const AstCExpr*> outputCondps;
+    logicp->foreach([&](const AstIf* ifp) {
+        if (icoWritesVariable(ifp, reportEvents)) return;
+        ifp->condp()->foreach([&](const AstCExpr* exprp) { outputCondps.emplace(exprp); });
+    });
+    return logicp->exists([&](AstNode* nodep) {
+        if (const AstCExpr* const exprp = VN_CAST(nodep, CExpr)) {
+            if (!outputCondps.count(exprp)) return true;
+        }
+        return icoReadsHiddenState(nodep);
+    });
+}
+
+// Replace the reads of the time in the logic with temporaries taking it before each trigger
+// computation, one per kind of read, so the logic reading the time runs when it advanced once
+// they are change detected. Returns the temporaries.
+std::vector<AstVarScope*> replaceIcoTimeReads(AstNetlist* netlistp, ProcessList& logic,
+                                              IcoPublicChangeDetect& result) {
+    FileLine* const flp = netlistp->fileline();
+    // The kinds of reads are few ($time and $realtime in each time unit), so are searched
+    std::vector<std::pair<const AstNodeExpr*, AstVarScope*>> nowVscps;
+    for (Process& process : logic) {
+        std::vector<AstNodeExpr*> timeps;
+        process.m_procp->foreach([&](AstTime* timep) { timeps.push_back(timep); });
+        process.m_procp->foreach([&](AstTimeD* timep) { timeps.push_back(timep); });
+        for (AstNodeExpr* const timep : timeps) {
+            const auto it = std::find_if(nowVscps.begin(), nowVscps.end(), [&](const auto& pair) {
+                return timep->sameTree(pair.first);
+            });
+            AstVarScope* nowp = it == nowVscps.end() ? nullptr : it->second;
+            if (!nowp) {
+                if (!result.m_nowp) {
+                    result.m_nowp = util::makeSubFunction(netlistp, "_ico_public_now", false);
+                }
+                nowp = netlistp->topScopep()->createTemp(
+                    "__VicoPublicNow" + std::to_string(nowVscps.size()), timep->dtypep());
+                AstNodeExpr* const valuep = timep->cloneTree(false);
+                result.m_nowp->addStmtsp(
+                    new AstAssign{flp, new AstVarRef{flp, nowp, VAccess::WRITE}, valuep});
+                nowVscps.emplace_back(valuep, nowp);
+            }
+            timep->replaceWith(new AstVarRef{flp, nowp, VAccess::READ});
+            VL_DO_DANGLING(timep->deleteTree(), timep);
+            process.m_implicitSen.emplace(nowp);
+        }
+    }
+    std::vector<AstVarScope*> vscps;
+    for (const auto& pair : nowVscps) vscps.push_back(pair.second);
+    return vscps;
+}
+
+// The variables feeding logic whose result depends on hidden state: the ones it reads, and those
+// the logic computing them reads. Also collects the variables read by the logic, in order, and
+// those it writes.
+std::unordered_set<const AstVarScope*> findIcoHiddenStateFed(
+    const ProcessList& logic, const std::unordered_set<const AstVar*>& reportEvents,
+    std::vector<AstVarScope*>& readVscps, std::unordered_set<const AstVarScope*>& writtenVscps) {
+    std::vector<size_t> readStarts;  // Where the reads of each process start in readVscps
+    std::unordered_map<const AstVarScope*, std::vector<size_t>> writerIndices;
+    std::unordered_set<const AstVarScope*> fedVscps;
+    std::vector<const AstVarScope*> pendingVscps;
+    for (const Process& process : logic) {
+        const size_t index = readStarts.size();
+        readStarts.push_back(readVscps.size());
+        const bool hidden = icoLogicReadsHiddenState(process.m_procp, reportEvents);
+        process.m_procp->foreach([&](const AstVarRef* refp) {
+            AstVarScope* const vscp = refp->varScopep();
+            if (refp->access().isWriteOrRW()) {
+                writerIndices[vscp].push_back(index);
+                writtenVscps.emplace(vscp);
+            }
+            if (refp->access().isReadOrRW()) {
+                readVscps.push_back(vscp);
+                if (hidden && fedVscps.emplace(vscp).second) pendingVscps.push_back(vscp);
+            }
+        });
+    }
+    readStarts.push_back(readVscps.size());
+    // Walk back through the processes writing them. Each process and each variable is visited at
+    // most once, so this is linear in the number of references.
+    std::vector<bool> visited(readStarts.size(), false);
+    while (!pendingVscps.empty()) {
+        const AstVarScope* const vscp = pendingVscps.back();
+        pendingVscps.pop_back();
+        const auto it = writerIndices.find(vscp);
+        if (it == writerIndices.end()) continue;
+        for (const size_t index : it->second) {
+            if (visited[index]) continue;
+            visited[index] = true;
+            for (size_t i = readStarts[index]; i < readStarts[index + 1]; ++i) {
+                if (fedVscps.emplace(readVscps[i]).second) pendingVscps.push_back(readVscps[i]);
+            }
+        }
+    }
+    return fedVscps;
+}
+
+// What the change detection of the public variables needs to know about the logic
+struct IcoPublicAnalysis final {
+    std::vector<AstVarScope*> m_nowVscps;  // Temporaries replacing the reads of the time
+    std::vector<AstVarScope*> m_readVscps;  // Variables read by the logic, in order
+    std::unordered_set<const AstVarScope*> m_writtenVscps;  // Variables written by the logic
+    // Variables feeding logic whose result depends on hidden state
+    std::unordered_set<const AstVarScope*> m_hiddenFedVscps;
+};
+
+// Replace the reads of the time in the logic, and find the variables feeding hidden state reads,
+// which the change detection of the top level inputs also leaves out
+IcoPublicAnalysis analyzeIcoPublic(AstNetlist* netlistp, ProcessList& logic,
+                                   const LogicRegions& regions, IcoPublicChangeDetect& result) {
+    IcoPublicAnalysis analysis;
+    analysis.m_nowVscps = replaceIcoTimeReads(netlistp, logic, result);
+    analysis.m_hiddenFedVscps = findIcoHiddenStateFed(
+        logic, findIcoReportEvents(regions), analysis.m_readVscps, analysis.m_writtenVscps);
+    return analysis;
+}
+
+void createIcoPublicChangeDetect(AstNetlist* netlistp, const IcoPublicAnalysis& analysis,
+                                 std::unordered_map<const AstVarScope*, AstSenTree*>& var2changedp,
+                                 std::vector<AstSenTree*>& senTreeps,
+                                 IcoPublicChangeDetect& result) {
+    FileLine* const flp = netlistp->fileline();
+    AstTopScope* const topScopep = netlistp->topScopep();
+    const auto newRead
+        = [flp](AstVarScope* vscp) { return new AstVarRef{flp, vscp, VAccess::READ}; };
+    const auto newSet = [flp](AstVarScope* vscp, AstNodeExpr* valuep) {
+        return new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, valuep};
+    };
+    const std::vector<AstVarScope*>& nowVscps = analysis.m_nowVscps;
+    const std::vector<AstVarScope*>& readVscps = analysis.m_readVscps;
+    const std::unordered_set<const AstVarScope*>& writtenVscps = analysis.m_writtenVscps;
+    const std::unordered_set<const AstVarScope*>& hiddenFedVscps = analysis.m_hiddenFedVscps;
+
+    V3UniqueNames prevNames{"__VicoPublicPrev"};
+    V3UniqueNames startNames{"__VicoPublicStart"};
+    V3UniqueNames writtenNames{"__VicoPublicWritten"};
+    size_t nPublic = 0;
+    std::unordered_set<const AstVarScope*> hiddenVscps;
+    // The time temporaries, which only change between evaluations, and the public variables
+    std::vector<AstVarScope*> candidateVscps = nowVscps;
+    candidateVscps.insert(candidateVscps.end(), readVscps.begin(), readVscps.end());
+    for (size_t i = 0; i < candidateVscps.size(); ++i) {
+        AstVarScope* const vscp = candidateVscps[i];
+        const AstVar* const varp = vscp->varp();
+        const bool isNow = i < nowVscps.size();
+        if (!isNow) {
+            // Not top level ports, which are left to the input change detection, as it handles
+            // the ones that can be compared, nor forced variables, as for the inputs
+            if (!varp->isSigUserRWPublic() || varp->isPrimaryIO() || varp->isForced()) continue;
+            if (!vscp->dtypep()->skipRefp()->isIntegralOrPacked()) continue;
+            // Its readers keep the 'first iteration' trigger if it feeds logic whose result
+            // depends on hidden state
+            if (hiddenFedVscps.count(vscp)) {
+                hiddenVscps.emplace(vscp);
+                continue;
+            }
+        }
+        const auto pair = var2changedp.emplace(vscp, nullptr);
+        if (!pair.second) continue;
+        if (!result.m_updatep) {
+            result.m_updatep = util::makeSubFunction(netlistp, "_ico_public_update", false);
+        }
+        AstVarScope* const prevp
+            = topScopep->createTemp(prevNames.get(varp->name()), vscp->dtypep());
+        result.m_updatep->addStmtsp(newSet(prevp, newRead(vscp)));
+        AstNodeExpr* changedp = new AstNeq{flp, newRead(vscp), newRead(prevp)};
+        if (!isNow) {
+            ++nPublic;
+            if (!result.m_endp) {
+                result.m_endp = util::makeSubFunction(netlistp, "_ico_public_end", false);
+                result.m_startp = util::makeSubFunction(netlistp, "_ico_public_start", false);
+                result.m_atStartp = topScopep->createTemp("__VicoPublicAtStart", 1);
+            }
+            AstVarScope* const startp
+                = topScopep->createTemp(startNames.get(varp->name()), vscp->dtypep());
+            AstVarScope* const writtenp = topScopep->createTemp(writtenNames.get(varp->name()), 1);
+            result.m_updatep->addStmtsp(newSet(writtenp, new AstConst{flp, AstConst::BitFalse{}}));
+            result.m_startp->addStmtsp(newSet(startp, newRead(vscp)));
+            if (writtenVscps.count(vscp)) {
+                if (!result.m_seenp) {
+                    result.m_seenp = util::makeSubFunction(netlistp, "_ico_public_seen", false);
+                }
+                result.m_seenp->addStmtsp(newSet(prevp, newRead(vscp)));
+                result.m_seenp->addStmtsp(newSet(startp, newRead(vscp)));
+            }
+            result.m_endp->addStmtsp(
+                newSet(writtenp, new AstOr{flp, new AstNeq{flp, newRead(vscp), newRead(prevp)},
+                                           new AstNeq{flp, newRead(vscp), newRead(startp)}}));
+            changedp = new AstOr{flp, changedp, newRead(writtenp)};
+        }
+        pair.first->second
+            = new AstSenTree{flp, new AstSenItem{flp, VEdgeType::ET_TRUE, changedp}};
+        senTreeps.push_back(pair.first->second);
+    }
+    if (result.m_atStartp) {
+        result.m_startp->addStmtsp(
+            newSet(result.m_atStartp, new AstConst{flp, AstConst::BitFalse{}}));
+        result.m_updatep->addStmtsp(
+            new AstIf{flp, newRead(result.m_atStartp), util::callVoidFunc(result.m_startp)});
+        result.m_endp->addStmtsp(
+            newSet(result.m_atStartp, new AstConst{flp, AstConst::BitTrue{}}));
+    }
+    V3Stats::addStat("Scheduling, 'ico' public variable change detects", nPublic);
+    V3Stats::addStat("Scheduling, 'ico' time reads change detected", nowVscps.size());
+    V3Stats::addStat("Scheduling, 'ico' public variables feeding hidden state reads",
+                     hiddenVscps.size());
+}
+
 void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
                      SenExprBuilder& senExprBuilder, ProcessList& logic,
-                     const VirtIfaceTriggers& virtIfaceTriggers,
+                     const LogicRegions& regions, const VirtIfaceTriggers& virtIfaceTriggers,
                      const CovergroupRefBindings& cgRefBindings) {
     // SystemC only: Any top level inputs feeding a combinational logic must be marked,
     // so we can make them sc_sensitive
@@ -464,6 +858,14 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
     // using the 'first iteration' trigger, same as if this optimization was disabled.
     std::unordered_map<const AstVarScope*, AstSenTree*> inp2changedp;
     std::vector<AstSenTree*> icoChangeSenTreeps;
+    IcoPublicChangeDetect publicChangeDetect;
+    IcoPublicAnalysis publicAnalysis;
+    const bool publicDetect
+        = v3Global.opt.fIcoChangeDetect().isTrue() && v3Global.opt.fIcoPublicChangeDetect();
+    if (publicDetect) {
+        publicAnalysis = analyzeIcoPublic(netlistp, logic, regions, publicChangeDetect);
+    }
+    size_t nHiddenInputs = 0;
     if (v3Global.opt.fIcoChangeDetect().isTrue()) {
         FileLine* const flp = netlistp->fileline();
         AstScope* const scopep = netlistp->topScopep()->scopep();
@@ -478,6 +880,11 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
             if (VN_IS(vscp->dtypep()->skipRefp(), UnpackArrayDType)) continue;
             // Similarly to arrays, can't handle SystemC types
             if (vscp->varp()->isSc()) continue;
+            // With -fico-public-change-detect, nor if it feeds logic reading hidden state
+            if (publicAnalysis.m_hiddenFedVscps.count(vscp)) {
+                ++nHiddenInputs;
+                continue;
+            }
             // Create a sen tree triggered when this input changes
             AstSenTree*& senTreepr = inp2changedp[vscp];
             UASSERT_OBJ(!senTreepr, vscp, "Duplicate input change detect trigger");
@@ -489,6 +896,12 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
     }
     V3Stats::addStat("Scheduling, 'ico' change detect triggers", icoChangeSenTreeps.size());
 
+    if (publicDetect) {
+        V3Stats::addStat("Scheduling, 'ico' inputs feeding hidden state reads", nHiddenInputs);
+        createIcoPublicChangeDetect(netlistp, publicAnalysis, inp2changedp, icoChangeSenTreeps,
+                                    publicChangeDetect);
+    }
+
     // Gather the relevant sensitivity expressions and create the trigger kit
     std::vector<const AstSenTree*> senTreeps = getSenTreesUsedBy({&logic});
     senTreeps.insert(senTreeps.end(), icoChangeSenTreeps.begin(), icoChangeSenTreeps.end());
@@ -498,6 +911,21 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
 
     if (dpiExportTriggerVscp) {
         trigKit.addExtraTriggerAssignment(dpiExportTriggerVscp, dpiExportTriggerIndex);
+    }
+    if (AstCFunc* const updatep = publicChangeDetect.m_updatep) {
+        util::splitCheck(updatep);
+        if (publicChangeDetect.m_seenp) util::splitCheck(publicChangeDetect.m_seenp);
+        if (AstCFunc* const nowp = publicChangeDetect.m_nowp) {
+            util::splitCheck(nowp);
+            trigKit.compBasep()->stmtsp()->addHereThisAsNext(util::callVoidFunc(nowp));
+        }
+        trigKit.compBasep()->addStmtsp(util::callVoidFunc(updatep));
+        if (AstCFunc* const endp = publicChangeDetect.m_endp) {
+            util::splitCheck(endp);
+            util::splitCheck(publicChangeDetect.m_startp);
+            initFuncp->addStmtsp(util::setVar(publicChangeDetect.m_atStartp, 1));
+            netlistp->evalFuncp(VEval::POSTPONED)->addStmtsp(util::callVoidFunc(endp));
+        }
     }
     addVirtIfaceTriggerAssignments(netlistp, initFuncp, virtIfaceTriggers, firstVifTriggerIndex,
                                    trigKit);
@@ -546,7 +974,10 @@ void createIcoRegion(AstNetlist* netlistp, AstCFunc* const initFuncp,
             return stmtp;
         }(),
         // Work statements: Invoke the 'ico' function
-        util::callVoidFunc(icoFuncp));
+        AstNode::addNextNull(util::callVoidFunc(icoFuncp),
+                             publicChangeDetect.m_seenp
+                                 ? util::callVoidFunc(publicChangeDetect.m_seenp)
+                                 : nullptr));
 
     // Release temporary input change detect SenTrees
     for (AstSenTree* const senTreep : icoChangeSenTreeps)
@@ -1038,8 +1469,8 @@ void schedule(AstNetlist* netlistp) {
     }
 
     // Step 9: Create the input combinational logic
-    createIcoRegion(netlistp, staticp, senExprBuilder, logicReplicas.m_ico, virtIfaceTriggers,
-                    cgRefBindings);
+    createIcoRegion(netlistp, staticp, senExprBuilder, logicReplicas.m_ico, logicRegions,
+                    virtIfaceTriggers, cgRefBindings);
     if (v3Global.opt.stats()) V3Stats::statsStage("sched-create-ico");
 
     // Step 10: Create the triggers
