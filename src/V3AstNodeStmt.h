@@ -103,9 +103,9 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     string m_name;  // Name to report
     const VAssertType m_userType;  // Assertion/cover type for user enable/disable
     const VAssertDirectiveType m_directive;  // Assertion directive type
-    bool m_nfaLowered = false;  // New-attempt gating already emitted by V3AssertNfa
     bool m_senFromAlways = false;  // Sensitivity list copied from upper always
     bool m_immediate = false;  // Immediate assert (may differ from userType being immediate)
+    bool m_nfaLowered = false;  // V3AssertNfa lowered its property to a Boolean output
 
 public:
     AstNodeCoverOrAssert(VNType t, FileLine* fl, AstNode* propp, AstNodeStmt* passsp,
