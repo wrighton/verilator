@@ -8229,7 +8229,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                              const string& firstName,
                              std::unordered_map<string, AstAssertCtlTarget*>& targets) {
         struct Reach final {
-            const AstNode* bodyp;
             AstNode* targetp;
             string instancePath;
             string childPath;
@@ -8237,6 +8236,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         const std::vector<VSymEnt*>& instanceSyms = m_statep->moduleInstanceSyms(m_modp);
         UASSERT_OBJ(!instanceSyms.empty(), itemp, "Module resolving names has no instance");
         std::vector<Reach> reaches;
+        std::unordered_set<const AstNode*> seenBodies;
         for (VSymEnt* const cellSymp : instanceSyms) {
             string baddot;
             VSymEnt* okSymp = nullptr;
@@ -8282,9 +8282,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 return;
             }
             const AstNode* const bodyp = assertControlTargetBody(targetp);
-            if (std::none_of(reaches.begin(), reaches.end(),
-                             [&](const Reach& reach) { return reach.bodyp == bodyp; })) {
-                reaches.push_back({bodyp, targetp, VString::dot(firstName, ".", instancePath),
+            if (seenBodies.emplace(bodyp).second) {
+                reaches.push_back({targetp, VString::dot(firstName, ".", instancePath),
                                    VString::dot(firstName, ".", childPath)});
             }
         }
@@ -8459,12 +8458,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         struct Reach final {
-            const AstNode* bodyp;
             AstNode* targetp;
             string instancePath;
             string childPath;
         };
         std::vector<Reach> reaches;
+        std::unordered_set<const AstNode*> seenBodies;
         for (size_t idx = 0; idx < scopes.size(); ++idx) {
             const AssertCtlPortCrossing& crossing = crossings[idx];
             const string fromName = AstNode::prettyName(assertionScopePath(scopes[idx]));
@@ -8516,9 +8515,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 prefix = VString::dot(prefix, ".", names[i]);
             }
             const AstNode* const bodyp = assertControlTargetBody(targetp);
-            if (std::none_of(reaches.begin(), reaches.end(),
-                             [&](const Reach& reach) { return reach.bodyp == bodyp; })) {
-                reaches.push_back({bodyp, targetp, VString::dot(prefix, ".", instanceRest),
+            if (seenBodies.emplace(bodyp).second) {
+                reaches.push_back({targetp, VString::dot(prefix, ".", instanceRest),
                                    VString::dot(prefix, ".", childRest)});
             }
         }
