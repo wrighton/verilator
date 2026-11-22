@@ -4,9 +4,11 @@
 #include VM_PREFIX_INCLUDE
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <thread>
 #include <vector>
 
 static void require(bool condition, const char* message) {
@@ -26,6 +28,31 @@ static std::array<uint32_t, 5> observe(const VlAssertControl& state) {
     for (size_t i = 0; i < queries.size(); ++i) result[i] = state.get(queries[i]);
     return result;
 }
+static bool consistentConcurrentControl(VerilatedContext& context, const VlAssertControl& state) {
+    constexpr unsigned rounds = 200000;
+    std::atomic<unsigned> started{0};
+    std::atomic<unsigned> finished{0};
+    std::thread noassert([&]() {
+        const char* argv[] = {"+verilator+noassert"};
+        for (unsigned round = 1; round <= rounds; ++round) {
+            while (started.load(std::memory_order_acquire) != round) std::this_thread::yield();
+            context.commandArgsAdd(1, argv);
+            finished.store(round, std::memory_order_release);
+        }
+    });
+    bool consistent = true;
+    for (unsigned round = 1; round <= rounds; ++round) {
+        started.store(round, std::memory_order_release);
+        context.assertOn(true);
+        while (finished.load(std::memory_order_acquire) != round) std::this_thread::yield();
+        // Both calls have finished; either order is legal, but the two paths must agree.
+        const bool selected = state.get(VerilatedAssertCtlQuery::ASSERT_CTL_ON) != 0;
+        if (selected != context.assertOn()) consistent = false;
+    }
+    noassert.join();
+    return consistent;
+}
+
 int main(int argc, char** argv) {
     const std::unique_ptr<VerilatedContext> contextp{new VerilatedContext};
     contextp->threads(1);
@@ -48,6 +75,8 @@ int main(int argc, char** argv) {
         require(observe(state) == std::array<uint32_t, 5>{{0, 1, 0, 1, 1}},
                 "VacuousOff/Kill state failed");
         require(bindings == 1, "Assertion control table was not cached");
+        require(consistentConcurrentControl(*contextp, state),
+                "Concurrent noassert and assertOn left inconsistent assertion states");
     }
     topp->final();
     std::puts("*-* All Finished *-*");
