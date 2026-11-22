@@ -5538,7 +5538,6 @@ class AssertNfaVisitor final : public VNVisitor {
                          AstSenTree* senTreep, AstNodeExpr* outputp, AstNodeExpr* matchp,
                          AstNodeExpr* matchCountp, AstNodeExpr* failCountp,
                          AstNodeExpr* passCountp) {
-        assertp->nfaLowered(true);
         AstNodeExpr* outputExprp = outputp;
         FileLine* const flp = assertp->fileline();
         AstPropSpec* const propp = VN_AS(assertp->propp(), PropSpec);
