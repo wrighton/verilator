@@ -12,4 +12,8 @@
    23 |     $assertoff(0, g[selected_index()]);
       |                    ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_assert_ctl_scope_select_bad.v:24:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   24 |     $assertoff(0, g[selected_index() + i]);
+      |                    ^
 %Error: Exiting due to
