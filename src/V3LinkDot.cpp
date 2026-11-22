@@ -198,12 +198,12 @@ public:
         AstNode* const nodep = symp->nodep();
         AstCell* const cellp = VN_CAST(nodep, Cell);
         if (!cellp && !VN_IS(nodep, Module)) return callerp(symp->parentp());
-        auto found = m_callers.find(symp);
+        const auto found = m_callers.find(symp);
         if (found != m_callers.end()) return found->second;
-        AstAssertCtlCaller* const parentp = callerp(symp->parentp());
-        AstNode* const anchorp = cellp && cellp->assertCtlIfaceOriginp()
-                                     ? static_cast<AstNode*>(cellp->assertCtlIfaceOriginp())
-                                     : nodep;
+        AstVar* const originp = cellp ? cellp->assertCtlIfaceOriginp() : nullptr;
+        // The placeholder above a top interface is not a physical parent occurrence.
+        AstAssertCtlCaller* const parentp = originp ? nullptr : callerp(symp->parentp());
+        AstNode* const anchorp = originp ? static_cast<AstNode*>(originp) : nodep;
         AstAssertCtlCaller* const resultp
             = new AstAssertCtlCaller{nodep->fileline(), parentp, anchorp};
         m_rootp->addMiscsp(resultp);
@@ -276,6 +276,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
     int m_depth = 0;  // Module-instance depth relative to the selected scope
     const bool m_optional;  // Sites of one of several elaborations reached by an upward name
     const bool m_absolute;  // Sites named by an absolute path, the same from every instance
+    const bool m_moduleRelative;  // Paths normalized relative to the caller module
     const AstNodeModule* m_classp = nullptr;  // Class whose code references the state
     // A dynamic level may include the partition. Zero includes all depths.
     bool reachesDepth(int depth) const {
@@ -311,7 +312,8 @@ class AssertControlTargetVisitor final : public VNVisitor {
         if (AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt)) {
             AstNodeModule* ownerp = nullptr;
             if (AstVar* const varp = m_sites.select(stmtp, ownerp)) {
-                const string key = VString::dot(m_instancePath, ".", varp->name());
+                const string key = (m_moduleRelative ? "\x01"s : ""s)
+                                   + VString::dot(m_instancePath, ".", varp->name());
                 const auto pair = m_targets.emplace(key, nullptr);
                 if (pair.second) {
                     AstNodeVarRef* const refp
@@ -331,8 +333,8 @@ class AssertControlTargetVisitor final : public VNVisitor {
                         xrefp->assertCtlOptional(m_optional);
                         xrefp->assertCtlAbsolute(m_absolute);
                     }
-                    AstAssertCtlTarget* const targetp
-                        = new AstAssertCtlTarget{nodep->fileline(), refp, m_depth};
+                    AstAssertCtlTarget* const targetp = new AstAssertCtlTarget{
+                        nodep->fileline(), refp, m_depth, m_moduleRelative};
                     pair.first->second = targetp;
                     m_argsp->addTargetsp(targetp);
                 } else {
@@ -349,7 +351,7 @@ public:
                                const string& childPath,
                                std::unordered_map<string, AstAssertCtlTarget*>& targets,
                                bool optional = false, bool absolute = false,
-                               const AstNodeModule* classp = nullptr)
+                               const AstNodeModule* classp = nullptr, bool moduleRelative = false)
         : m_sites{sites}
         , m_argsp{argsp}
         , m_targets{targets}
@@ -359,6 +361,7 @@ public:
         , m_childPath{absolute && !childPath.empty() ? "$root." + childPath : childPath}
         , m_optional{optional}
         , m_absolute{absolute}
+        , m_moduleRelative{moduleRelative}
         , m_classp{classp} {
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             iterateAndNextNull(cellp->modp()->stmtsp());
@@ -771,10 +774,8 @@ public:
         symp->parentp(rootEntp());  // Needed so backward search can find name of top module
         symp->fallbackp(dunitEntp());  // Needed so can find $unit stuff
         nodep->user1p(symp);
-        if (nodep->modp()) {
-            nodep->modp()->user1p(symp);
-            m_modInstanceSyms[nodep->modp()].push_back(symp);
-        }
+        // The dummy cell visit installs the populated occurrence for caller lookup.
+        if (nodep->modp()) nodep->modp()->user1p(symp);
         checkDuplicate(rootEntp(), nodep, nodep->origName());
         rootEntp()->insert(nodep->origName(), symp);
         if (forScopeCreation()) m_nameScopeSymMap.emplace(scopename, symp);
@@ -4158,6 +4159,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     int m_modportNum = 0;  // Uniqueify modport numbers
     bool m_inAssertCtlTarget = false;  // Resolving the target's single state reference
     bool m_assertCtlTargetAbsent = false;  // This elaboration does not contain the site
+    bool m_assertCtlModuleRelative = false;  // Normalized selector path starts at module scope
     VDouble0 m_statAssertCtlDropped;  // Optional targets removed after concrete binding
     // Lexical children indexed by declaration identity for replay in another instance.
     std::unordered_map<const VSymEnt*, std::unordered_map<const AstNode*, VSymEnt*>>
@@ -4542,13 +4544,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
         return dotSymp;
     }
     VSymEnt* findDottedRefSymp(AstNode* nodep, VSymEnt* lookupSymp, const string& dotted,
-                               string& baddot, VSymEnt*& okSymp, bool* modportp = nullptr) {
+                               string& baddot, VSymEnt*& okSymp, bool* modportp = nullptr,
+                               bool firstId = true) {
         // Return scope to search for a relinked hierarchical reference
         // (AstVarXRef or AstEnumItemRef), or nullptr after error if not found
         // If modportp is given, set true when the reference went through a modport
         if (modportp) *modportp = false;
         VSymEnt* dotSymp = m_statep->findDotted(nodep->fileline(), lookupSymp, dotted, baddot,
-                                                okSymp, true);  // Maybe nullptr
+                                                okSymp, firstId);  // Maybe nullptr
         if (!dotSymp) {
             nodep->v3error(
                 "Can't find definition of "
@@ -6682,8 +6685,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
     void visit(AstAssertCtlTarget* nodep) override {
         VL_RESTORER(m_inAssertCtlTarget);
         VL_RESTORER(m_assertCtlTargetAbsent);
+        VL_RESTORER(m_assertCtlModuleRelative);
         m_inAssertCtlTarget = true;
         m_assertCtlTargetAbsent = false;
+        m_assertCtlModuleRelative = nodep->moduleRelative();
         iterateChildren(nodep);
         if (m_assertCtlTargetAbsent) {
             ++m_statAssertCtlDropped;
@@ -6708,15 +6713,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
             UINFO(9, "Dead module for " << nodep);
             nodep->varp(nullptr);
         } else {
-            VSymEnt* lookupSymp = m_curSymp;  // Start search at current scope
-            if (nodep->inlinedDots() != "") {  // Correct for current post-inlined scope
+            VSymEnt* lookupSymp = m_assertCtlModuleRelative ? m_modSymp : m_curSymp;
+            if (!m_assertCtlModuleRelative && !nodep->inlinedDots().empty()) {
                 lookupSymp = findInlinedDotsSym(nodep, nodep->inlinedDots());
             }
+            const bool firstId = !m_assertCtlModuleRelative;
             if (nodep->assertCtlOptional()) {
                 string baddot;
                 VSymEnt* okSymp = nullptr;
                 if (!m_statep->findDotted(nodep->fileline(), lookupSymp, nodep->dotted(), baddot,
-                                          okSymp, true)) {
+                                          okSymp, firstId)) {
                     assertCtlSiteAbsent(nodep);
                     return;
                 }
@@ -6724,8 +6730,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             string baddot;
             VSymEnt* okSymp;
             bool modport;
-            VSymEnt* const dotSymp
-                = findDottedRefSymp(nodep, lookupSymp, nodep->dotted(), baddot, okSymp, &modport);
+            VSymEnt* const dotSymp = findDottedRefSymp(nodep, lookupSymp, nodep->dotted(), baddot,
+                                                       okSymp, &modport, firstId);
             if (!dotSymp) return;
 
             if (!m_statep->forScopeCreation()) {
@@ -8818,6 +8824,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         string childPath;
         string firstPath;
         bool absolute = false;
+        bool moduleRelative = false;
         // An upward search can find the instance whose symbols resolve this statement; that
         // is local only when named by the module's own name
         const bool firstLocal = firstSymp
@@ -8825,12 +8832,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 && (firstSymp != m_modSymp || firstName == m_modp->origName());
         if (firstLocal && assertionRelativeScopePath(instanceSymp, m_modSymp, instancePath)
             && assertionRelativeScopePath(foundp, m_modSymp, childPath)) {
-            // Preserve an explicit module qualifier: a closer lexical scope may also
-            // contain an instance with the relative name.
-            if (firstSymp == m_modSymp) {
-                instancePath = VString::dot(firstName, ".", instancePath);
-                childPath = VString::dot(firstName, ".", childPath);
-            }
+            // These paths are normalized relative to the module, not the call's block.
+            moduleRelative = true;
         } else if (!firstLocal && firstSymp
                    && (VN_IS(firstSymp->nodep(), Cell) || upwardScopeInstance(firstSymp)
                        || assertControlFirstVaries(itemp->fileline(), firstName, firstSymp))) {
@@ -8851,7 +8854,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                    childPath,
                                    targets,
                                    false,
-                                   absolute};
+                                   absolute,
+                                   nullptr,
+                                   moduleRelative};
     }
     void visit(AstAssertCtlArgs* nodep) override {
         LINKDOT_VISIT_START();

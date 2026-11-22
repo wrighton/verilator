@@ -257,17 +257,21 @@ class AstAssertCtlTarget final : public AstNode {
     // One statically selected assertion instance, and its distance below a scope.
     // @astgen op1 := statep : AstNodeVarRef
     int m_depth;  // Module hierarchy distance; zero for the selected scope itself
+    const bool m_moduleRelative;  // Normalized path starts from the caller module, not a block
 public:
-    AstAssertCtlTarget(FileLine* fl, AstNodeVarRef* statep, int depth)
+    AstAssertCtlTarget(FileLine* fl, AstNodeVarRef* statep, int depth, bool moduleRelative = false)
         : ASTGEN_SUPER_AssertCtlTarget(fl)
-        , m_depth{depth} {
+        , m_depth{depth}
+        , m_moduleRelative{moduleRelative} {
         this->statep(statep);
     }
     ASTGEN_MEMBERS_AstAssertCtlTarget;
     int depth() const { return m_depth; }
     void depth(int value) { m_depth = value; }
+    bool moduleRelative() const { return m_moduleRelative; }
     bool sameNode(const AstNode* samep) const override {
-        return depth() == VN_DBG_AS(samep, AssertCtlTarget)->depth();
+        const AstAssertCtlTarget* const targetp = VN_DBG_AS(samep, AssertCtlTarget);
+        return depth() == targetp->depth() && moduleRelative() == targetp->moduleRelative();
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
