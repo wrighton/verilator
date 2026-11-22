@@ -31,15 +31,14 @@
 
 class AstNodeStmt VL_NOT_FINAL : public AstNode {
     // Procedural statement; assertions and unique/priority checks may have control state.
-    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
 protected:
     AstNodeStmt(VNType t, FileLine* fl)
         : AstNode{t, fl} {}
 
 public:
     ASTGEN_MEMBERS_AstNodeStmt;
-    AstVar* controlVarp() const { return m_controlVarp; }
-    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
+    AstVar* controlVarp() const;
+    void controlVarp(AstVar* varp);
     // METHODS
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
@@ -100,6 +99,7 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     // @astgen op2 := sentreep : Optional[AstSenTree]
     // op3 used by some sub-types only
     // @astgen op4 := passsp: List[AstNodeStmt] // Statements when propp is passing/truthly
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
     string m_name;  // Name to report
     const VAssertType m_userType;  // Assertion/cover type for user enable/disable
     const VAssertDirectiveType m_directive;  // Assertion directive type
@@ -123,6 +123,8 @@ public:
                       || m_userType == VAssertType::INTERNAL;
     }
     ASTGEN_MEMBERS_AstNodeCoverOrAssert;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     bool sameNode(const AstNode* samep) const override {
         const AstNodeCoverOrAssert* const sp = VN_DBG_AS(samep, NodeCoverOrAssert);
@@ -315,6 +317,36 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
 };
+class AstAssertCtlApply final : public AstNodeStmt {
+    // Scoped operation retained until its targets are linked in the concrete caller.
+    // @astgen op1 := effectp : AstNodeExpr
+    // @astgen op2 := typesp : AstNodeExpr
+    // @astgen op3 := limitp : AstNodeExpr
+    // @astgen op4 := targetsp : List[AstAssertCtlTarget]
+    const VAssertDirectiveType m_directives;  // Directive filter for the table
+
+public:
+    AstAssertCtlApply(FileLine* fl, AstNodeExpr* effectp, AstNodeExpr* typesp, AstNodeExpr* limitp,
+                      VAssertDirectiveType directives, AstAssertCtlTarget* targetsp)
+        : ASTGEN_SUPER_AssertCtlApply(fl)
+        , m_directives{directives} {
+        this->effectp(effectp);
+        this->typesp(typesp);
+        this->limitp(limitp);
+        addTargetsp(targetsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlApply;
+    VAssertDirectiveType directives() const { return m_directives; }
+    bool sameNode(const AstNode* samep) const override {
+        return directives() == VN_DBG_AS(samep, AssertCtlApply)->directives();
+    }
+    bool isGateOptimizable() const override { return false; }
+    bool isPredictOptimizable() const override { return false; }
+    bool isPure() override { return false; }
+    bool isOutputter() override { return true; }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+};
 class AstBreak final : public AstNodeStmt {
 public:
     explicit AstBreak(FileLine* fl)
@@ -464,6 +496,7 @@ class AstCase final : public AstNodeStmt {
     // @astgen op2 := itemsp : List[AstCaseItem]
     // @astgen op3 := notParallelp : List[AstNodeStmt] // assertion code for non-full case's
     // @astgen op4 := coverDefaultp : Optional[AstCoverInc] // Implicit default's coverage
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
     VCaseType m_caseType;  // 0=case, 1=casex, 2=casez
     bool m_fullPragma = false;  // Synthesis full_case
     bool m_parallelPragma = false;  // Synthesis parallel_case
@@ -478,6 +511,8 @@ public:
         addItemsp(itemsp);
     }
     ASTGEN_MEMBERS_AstCase;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
@@ -910,6 +945,7 @@ class AstIf final : public AstNodeStmt {
     // @astgen op1 := condp : AstNodeExpr
     // @astgen op2 := thensp : List[AstNodeStmt]
     // @astgen op3 := elsesp : List[AstNodeStmt]
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
     VBranchPred m_branchPred;  // Branch prediction as taken/untaken?
     bool m_isBoundsCheck = false;  // True if this if node is for assertion/bounds checking
     bool m_uniquePragma = false;  // unique case
@@ -924,6 +960,8 @@ public:
         addElsesp(elsesp);
     }
     ASTGEN_MEMBERS_AstIf;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool isGateOptimizable() const override { return false; }

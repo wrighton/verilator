@@ -798,6 +798,14 @@ void AstAssertCtl::dumpJson(std::ostream& str) const {
     }
     dumpJsonGen(str);
 }
+void AstAssertCtlApply::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " [" << directives().ascii() << ']';
+}
+void AstAssertCtlApply::dumpJson(std::ostream& str) const {
+    dumpJsonStr(str, "directives", directives().ascii());
+    dumpJsonGen(str);
+}
 void AstAssertCtlArgs::dump(std::ostream& str) const {
     Super::dump(str);
     if (scoped()) str << " [SCOPED]";
@@ -806,6 +814,14 @@ void AstAssertCtlArgs::dump(std::ostream& str) const {
 void AstAssertCtlArgs::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, scoped);
     dumpJsonBoolFuncIf(str, instanceDependent);
+    dumpJsonGen(str);
+}
+void AstAssertCtlRead::dump(std::ostream& str) const {
+    Super::dump(str);
+    str << " [" << assertCtlQueryName(query()) << "]";
+}
+void AstAssertCtlRead::dumpJson(std::ostream& str) const {
+    dumpJsonStr(str, "query", assertCtlQueryName(query()));
     dumpJsonGen(str);
 }
 void AstAssertCtlTarget::dump(std::ostream& str) const {
@@ -3845,6 +3861,25 @@ void AstNodeReadWriteMem::dump(std::ostream& str) const {
 void AstNodeReadWriteMem::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, isHex);
     dumpJsonGen(str);
+}
+AstVar* AstNodeStmt::controlVarp() const {
+    if (const AstNodeCoverOrAssert* const sitep = VN_CAST(this, NodeCoverOrAssert)) {
+        return sitep->controlVarp();
+    }
+    if (const AstIf* const sitep = VN_CAST(this, If)) return sitep->controlVarp();
+    if (const AstCase* const sitep = VN_CAST(this, Case)) return sitep->controlVarp();
+    return nullptr;
+}
+void AstNodeStmt::controlVarp(AstVar* varp) {
+    if (AstNodeCoverOrAssert* const assertp = VN_CAST(this, NodeCoverOrAssert)) {
+        assertp->controlVarp(varp);
+    } else if (AstIf* const ifp = VN_CAST(this, If)) {
+        ifp->controlVarp(varp);
+    } else if (AstCase* const casep = VN_CAST(this, Case)) {
+        casep->controlVarp(varp);
+    } else {
+        UASSERT_OBJ(!varp, this, "Statement has no assertion control state");
+    }
 }
 void AstNodeStmt::dump(std::ostream& str) const {
     Super::dump(str);
