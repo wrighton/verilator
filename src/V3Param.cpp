@@ -446,6 +446,14 @@ class ParamProcessor final {
     // Module name before per-instance copying -> number of instances seen so far
     std::map<std::string, int> m_instanceCounts;
     std::vector<FileLine*> m_defparamsSeen;  // Locations of defparam pins, in order seen
+    // Locations of defparam pins selecting through generate blocks sharing a name
+    std::unordered_set<const FileLine*> m_defparamsSharedName;
+    // Locations of defparams V3LinkDot checks from each instance of their module
+    std::unordered_set<const FileLine*> m_defparamsChecked;
+    // Values of defparams for instances under them, by path, with the defparam and the instance
+    // of its module, in order registered; and the paths an instance took a value from
+    std::vector<std::tuple<string, FileLine*, string>> m_defparamInstanceValues;
+    std::unordered_set<string> m_defparamValuesTaken;
     std::set<const FileLine*> m_defparamsMatched;  // Locations of defparams naming an instance
     VNDeleter m_deleter;  // Used to delay deletion of nodes
 
@@ -2891,6 +2899,11 @@ public:
         m_defparamValues[path] = valuep;
         m_copyDefparamsUnknown.erase(path);
     }
+    void defparamChecked(const FileLine* flp) { m_defparamsChecked.emplace(flp); }
+    // The defparam at flp, in the instance instanceName of its module, gave the value at path
+    void defparamInstanceValue(const string& path, FileLine* flp, const string& instanceName) {
+        m_defparamInstanceValues.emplace_back(path, flp, instanceName);
+    }
 
     // Find 'name' declared in classp or a class it extends, setting memberClassp to the declaring
     // class. V3LinkDot defers names inherited through a parameterized base until the base is
@@ -3011,11 +3024,34 @@ public:
     void visitModpCells() { m_visitCells = true; }
     void visitBaseQueued(bool flag) { m_visitBaseQueued = flag; }
 
+    static const char* sharedNameUnsupported() {
+        return "Unsupported: defparam with instance select through generate blocks of the same"
+               " name, naming no instance built";
+    }
     // Report defparams whose path named no instance once generate loops were elaborated
     void checkUnmatchedDefparams() {
+        // A defparam for an instance under it naming one in some instances of its module only,
+        // e.g. a loop iteration that only some have (IEEE 1800-2023 23.6)
+        for (const auto& site : m_defparamInstanceValues) {
+            if (m_defparamValuesTaken.count(std::get<0>(site))) continue;
+            if (!m_defparamsMatched.count(std::get<1>(site))) continue;  // Reported below
+            if (m_defparamsSharedName.count(std::get<1>(site))) {
+                std::get<1>(site)->v3warn(E_UNSUPPORTED, sharedNameUnsupported());
+                continue;
+            }
+            std::get<1>(site)->v3error("In defparam, the path names no instance from instance "
+                                       << AstNode::prettyNameQ(std::get<2>(site))
+                                       << " (IEEE 1800-2023 23.6)");
+        }
         // E.g. a loop index outside the loop's range. Mark each reported, to report it once.
         for (FileLine* const flp : m_defparamsSeen) {
+            if (m_defparamsChecked.count(flp)) continue;
             if (!m_defparamsMatched.emplace(flp).second) continue;
+            // The block found before generate blocks were built may not be the one built
+            if (m_defparamsSharedName.count(flp)) {
+                flp->v3warn(E_UNSUPPORTED, sharedNameUnsupported());
+                continue;
+            }
             flp->v3error("In defparam, the path names no instance");
         }
     }
@@ -3225,7 +3261,7 @@ public:
         for (AstNode* const nodep : VNList<AstNode>{stmtsp}) {
             ++scannedr;
             if (AstDefParam* const defParamp = VN_CAST(nodep, DefParam)) {
-                defParamsr.push_back(defParamp);
+                if (!defParamp->checkTarget()) defParamsr.push_back(defParamp);
             } else if (const AstGenBlock* const blockp = VN_CAST(nodep, GenBlock)) {
                 // Unnamed, so in this scope, as in ParamVisitor::iterateDefParams
                 if (blockp->name().empty()) {
@@ -3591,13 +3627,15 @@ public:
             for (AstPin* const pinp : cellp->paramspList()) {
                 if (pinp->paramPath().empty()) continue;
                 m_defparamsSeen.emplace_back(pinp->fileline());
+                if (pinp->defparamSharedName()) m_defparamsSharedName.emplace(pinp->fileline());
                 if (defParamNames(pinp->paramPath(), instanceName)) {
                     m_defparamsMatched.emplace(pinp->fileline());
                     if (!pinp->exprp()) {  // Value from the instance of the defparam's module
-                        const auto it
-                            = registeredDefparam(defparamPath(instanceName) + "." + pinp->name());
+                        const string valuePath = defparamPath(instanceName) + "." + pinp->name();
+                        const auto it = registeredDefparam(valuePath);
                         if (it != m_defparamValues.end()) {
                             pinp->exprp(it->second->cloneTree(false));
+                            m_defparamValuesTaken.emplace(valuePath);
                         }
                     }
                     if (pinp->exprp()) {
@@ -5267,14 +5305,23 @@ class ParamVisitor final : public VNVisitor {
         nodep->v3fatalSrc("GENFOR should have been wrapped in BEGIN");
     }
     void visit(AstDefParam* nodep) override {
+        if (nodep->checkTarget()) {  // Its pin has the value; kept for V3LinkDot to check
+            m_processor.defparamChecked(nodep->fileline());
+            return;
+        }
         // The parameters of this instance of the module are known, and the generate blocks
         // above expanded, so nodeDeparam can give the value (IEEE 1800-2023 23.10.1)
         checkParamNotHierRecurse(nodep->rhsp());
         const AstVarXRef* const targetp = VN_AS(nodep->targetp(), VarXRef);
         const string instanceName
             = m_modp->someInstanceName() + m_generateHierName + "." + targetp->dotted();
-        m_processor.defparamValue(defparamPath(instanceName) + "." + targetp->name(),
-                                  nodep->rhsp()->unlinkFrBack());
+        const string valuePath = defparamPath(instanceName) + "." + targetp->name();
+        m_processor.defparamValue(valuePath, nodep->rhsp()->unlinkFrBack());
+        // A path selecting generate loop iterations is checked in each instance
+        if (targetp->dotted().find('[') != string::npos) {
+            m_processor.defparamInstanceValue(valuePath, nodep->fileline(),
+                                              m_modp->someInstanceName());
+        }
         VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
     }
     void visit(AstGenCase* nodep) override {

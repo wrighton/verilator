@@ -1416,6 +1416,7 @@ class AstDefParam final : public AstNode {
     // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if own scope or after V3LinkDot
     // @astgen op3 := targetp : AstNodeExpr // After V3LinkDot, AstVarXRef from this scope
     bool m_fromBind = false;  // From a bind to an instance path (see V3LinkCells)
+    bool m_checkTarget = false;  // Kept only for V3LinkDot to check its target once elaborated
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNode* rhsp)
         : ASTGEN_SUPER_DefParam(fl) {
@@ -1428,10 +1429,13 @@ public:
     void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE;  // Name of the parameter set, from targetp
     bool sameNode(const AstNode* samep) const override {
-        return m_fromBind == VN_DBG_AS(samep, DefParam)->m_fromBind;
+        return m_fromBind == VN_DBG_AS(samep, DefParam)->m_fromBind
+               && m_checkTarget == VN_DBG_AS(samep, DefParam)->m_checkTarget;
     }
     bool fromBind() const { return m_fromBind; }
     void fromBind(bool flag) { m_fromBind = flag; }
+    bool checkTarget() const { return m_checkTarget; }
+    void checkTarget(bool flag) { m_checkTarget = flag; }
 };
 class AstDefaultClocking final : public AstNode {
     std::string m_name;  // Clocking block name
@@ -1835,6 +1839,7 @@ class AstPin final : public AstNode {
     string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
     bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
+    bool m_defparamSharedName = false;  // Defparam select through blocks sharing a name
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
     bool m_returnWrittenInput = false;  // Width-proved original net destination for Tristate
@@ -1865,6 +1870,8 @@ public:
     void paramPath(const string& path) { m_paramPath = path; }
     bool defparamGenAlt() const { return m_defparamGenAlt; }
     void defparamGenAlt(bool flag) { m_defparamGenAlt = flag; }
+    bool defparamSharedName() const { return m_defparamSharedName; }
+    void defparamSharedName(bool flag) { m_defparamSharedName = flag; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }

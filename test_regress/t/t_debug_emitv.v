@@ -788,6 +788,17 @@ module defparam_gen;
     defparam_leaf n();
   end
   defparam dpg.n.P = 2;
+  // A select of a generate loop iteration, from outside the scope
+  for (genvar i = 0; i < 2; ++i) begin : dpl
+    defparam_leaf n();
+  end
+  defparam_cfg dpc();
+  // verilator lint_on DEFPARAM
+endmodule
+
+module defparam_cfg;
+  // verilator lint_off DEFPARAM
+  defparam $root.t.dpg.dpl[1].n.P = 3;
   // verilator lint_on DEFPARAM
 endmodule
 
