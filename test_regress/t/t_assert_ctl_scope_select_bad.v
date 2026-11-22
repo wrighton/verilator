@@ -21,5 +21,6 @@ module t;
     $assertoff(0, g[i]);
     $assertoff(0, scalar[0]);
     $assertoff(0, g[selected_index()]);
+    $assertoff(0, g[selected_index() + i]);
   end
 endmodule
