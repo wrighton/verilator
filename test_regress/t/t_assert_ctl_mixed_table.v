@@ -1,0 +1,51 @@
+// DESCRIPTION: Verilator: Absolute and local assertion targets in one control
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: got=%0d exp=%0d\n", `__FILE__, `__LINE__, (gotv), (expv)); `stop; end while (0);
+// verilog_format: on
+
+module bank_leaf (input bit clk, input bit good, output int reports);
+  always @(posedge clk) begin
+    bank_check : assert (good) else reports++;
+  end
+endmodule
+
+module caller (input bit clk, input bit good, input bit off, output int reports);
+  always @(posedge clk) begin
+    local_check : assert (good) else reports++;
+  end
+  always @(posedge off) $assertoff(0, $root.t.bank, local_check);
+endmodule
+
+module t;
+  bit clk;
+  bit good;
+  bit [3:0] off;
+  wire [31:0] local_reports [4];
+  wire [31:0] bank_reports [4];
+  if (1) begin : bank
+    for (genvar i = 0; i < 4; ++i) begin : slots
+      bank_leaf u (.clk, .good, .reports(bank_reports[i]));
+    end
+  end
+  for (genvar i = 0; i < 4; ++i) begin : callers
+    caller u (.clk, .good, .off(off[i]), .reports(local_reports[i]));
+  end
+  initial begin
+    #1 off = 4'b0001;
+    #1 clk = 1;
+    #1 clk = 0;
+    #1 good = 1;
+    #1 clk = 1;
+    #1;
+    foreach (bank_reports[i]) `checkd(bank_reports[i], 0);
+    foreach (local_reports[i]) `checkd(local_reports[i], i == 0 ? 0 : 1);
+    $display("*-* All Finished *-*");
+    $finish;
+  end
+endmodule
