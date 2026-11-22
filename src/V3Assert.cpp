@@ -333,7 +333,6 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
                     flp, "__VbindAssertCtlTable_" + std::to_string(bound.size()), topScopep};
                 binding.bindp->isStatic(true);
                 binding.bindp->isLoose(true);
-                binding.bindp->dontCombine(true);  // The table call takes its address.
                 binding.bindp->slow(true);
                 binding.bindp->argTypes(EmitCUtil::symClassVar()
                                         + ", std::vector<VlAssertCtlTable::Target>& targets");
@@ -356,9 +355,12 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
             callp->add(applyp->limitp()->unlinkFrBack());
             callp->add(", ");
             callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
-            callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { (");
-            callp->add(new AstAddrOfCFunc{flp, binding.bindp});
-            callp->add(")(vlSymsp, targets); });\n");
+            callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets) { ");
+            AstCCall* const bindCallp = new AstCCall{flp, binding.bindp};
+            bindCallp->dtypeSetVoid();
+            bindCallp->argTypes("vlSymsp, targets");
+            callp->add(bindCallp);
+            callp->add("; });\n");
         }
         applyp->replaceWith(callp);
         VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
