@@ -27,17 +27,23 @@ module t;
   bit good;
   leaf selected (.clk, .good);
   leaf sibling (.clk, .good);
+  leaf grouped (.clk, .good);
 
   initial begin
     $assertoff(ZERO_LEVEL);
     $asserton(ZERO_LEVEL);
+    $asserton(0, selected.first_check);
     $assertoff(0, selected.first_check);
+    $asserton(0, grouped);
+    $assertoff(0, grouped);
     #1 clk = 1;
     #1;
     `checkd(selected.first_reports, 0);
     `checkd(selected.second_reports, 1);
     `checkd(sibling.first_reports, 1);
     `checkd(sibling.second_reports, 1);
+    `checkd(grouped.first_reports, 0);
+    `checkd(grouped.second_reports, 0);
     $display("*-* All Finished *-*");
     $finish;
   end
