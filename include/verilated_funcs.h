@@ -3592,6 +3592,143 @@ inline void VL_ASSIGNSEL_WW(int rbits, int obits, int lsb, WDataOutP iowp,
     _vl_insert_WW(iowp, rwp, lsb + _vl_assignsel_bits(rbits, obits, lsb) - 1, lsb, rbits);
 }
 
+// Part-select writes at a signed position 'lsb' within a window of 'wbits' bits from bit 'wlsb'
+// of a destination of rbits bits, which may put them partly out of the window, writing only its
+// bits within the window, each from its bit of the obits-bit value (IEEE 1800-2023 11.5.1). The
+// window is the destination, or a select of it the write is part of.
+
+// Return whether position 'lsb' puts any bit within the window: then set the lowest written,
+// relative to the window, 'lowr', the number of value bits below it, 'skipr', and the number
+// written, 'countr'
+inline bool _vl_assignsel_partial(int wbits, int obits, QData lsb, int& lowr, int& skipr,
+                                  int& countr) VL_PURE {
+    const int64_t pos = static_cast<int64_t>(lsb);
+    if (pos >= wbits || pos <= -obits) return false;
+    lowr = pos < 0 ? 0 : static_cast<int>(pos);
+    skipr = lowr - static_cast<int>(pos);
+    countr = std::min(static_cast<int>(pos) + obits, wbits) - lowr;
+    return true;
+}
+// The bits of a wide value from 'skip' up, as a QData
+inline QData _vl_assignsel_value_W(int obits, WDataInP const rwp, int skip, int count) VL_MT_SAFE {
+    return count > VL_IDATASIZE ? VL_SEL_QWII(obits, rwp, skip, count)
+                                : VL_SEL_IWII(obits, rwp, skip, count);
+}
+
+// Writes of the value's bits within the window, also for a value wholly within it
+
+// Return 'lhs', of at most 64 bits, written by a value of at most 64 bits, without branches, as
+// the position is often unpredictable: the value and its mask are shifted left by a positive
+// position, else right, and limited to the window
+inline QData _vl_assignsel_partial_Q(QData lhs, int obits, QData lsb, QData rhs, int wlsb,
+                                     int wbits) VL_PURE {
+    const int64_t pos = static_cast<int64_t>(lsb);
+    const int left = pos > 0 ? (pos < VL_QUADSIZE ? static_cast<int>(pos) : VL_QUADSIZE) : 0;
+    const int right = pos < 0 ? (pos > -VL_QUADSIZE ? static_cast<int>(-pos) : VL_QUADSIZE) : 0;
+    const bool out = left == VL_QUADSIZE || right == VL_QUADSIZE;
+    const QData valueMask = VL_MASK_Q(obits);
+    const QData mask = out ? 0 : ((valueMask >> right) << left);
+    const QData value = out ? 0 : (((rhs & valueMask) >> right) << left);
+    const QData windowMask = VL_MASK_Q(wbits) << wlsb;
+    const QData insMask = (mask << wlsb) & windowMask;
+    return (lhs & ~insMask) | ((value << wlsb) & insMask);
+}
+// Out of line, as a write partly out of range is rare, and its code would bloat each in-range
+// write inlined beside it
+template <typename T_Lhs>
+VL_ATTR_NOINLINE void _vl_assignsel_partial_I(int, int obits, QData lsb, T_Lhs& lhsr, QData rhs,
+                                              int wlsb, int wbits) VL_PURE {
+    lhsr = static_cast<T_Lhs>(_vl_assignsel_partial_Q(lhsr, obits, lsb, rhs, wlsb, wbits));
+}
+template <typename T_Lhs>
+inline void _vl_assignsel_partial_IW(int rbits, int obits, QData lsb, T_Lhs& lhsr,
+                                     WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
+    int low, skip, count;
+    if (!_vl_assignsel_partial(wbits, obits, lsb, low, skip, count)) return;
+    _vl_insert_II(lhsr, static_cast<IData>(_vl_assignsel_value_W(obits, rwp, skip, count)),
+                  wlsb + low + count - 1, wlsb + low, rbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_II(int rbits, int obits, QData lsb, CData& lhsr, IData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    _vl_assignsel_partial_I(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_II(int rbits, int obits, QData lsb, SData& lhsr, IData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    _vl_assignsel_partial_I(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_II(int rbits, int obits, QData lsb, IData& lhsr, IData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    _vl_assignsel_partial_I(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_IQ(int rbits, int obits, QData lsb, CData& lhsr, QData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    _vl_assignsel_partial_I(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_IQ(int rbits, int obits, QData lsb, SData& lhsr, QData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    _vl_assignsel_partial_I(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_IQ(int rbits, int obits, QData lsb, IData& lhsr, QData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    _vl_assignsel_partial_I(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_IW(int rbits, int obits, QData lsb, CData& lhsr,
+                                    WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
+    _vl_assignsel_partial_IW(rbits, obits, lsb, lhsr, rwp, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_IW(int rbits, int obits, QData lsb, SData& lhsr,
+                                    WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
+    _vl_assignsel_partial_IW(rbits, obits, lsb, lhsr, rwp, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_IW(int rbits, int obits, QData lsb, IData& lhsr,
+                                    WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
+    _vl_assignsel_partial_IW(rbits, obits, lsb, lhsr, rwp, wlsb, wbits);
+}
+// Out of line, as _vl_assignsel_partial_I
+VL_ATTR_NOINLINE inline void VL_ASSIGNSEL_PARTIAL_QQ(int, int obits, QData lsb, QData& lhsr,
+                                                     QData rhs, int wlsb, int wbits) VL_PURE {
+    lhsr = _vl_assignsel_partial_Q(lhsr, obits, lsb, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_QI(int rbits, int obits, QData lsb, QData& lhsr, IData rhs,
+                                    int wlsb, int wbits) VL_PURE {
+    VL_ASSIGNSEL_PARTIAL_QQ(rbits, obits, lsb, lhsr, rhs, wlsb, wbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_QW(int rbits, int obits, QData lsb, QData& lhsr,
+                                    WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
+    int low, skip, count;
+    if (!_vl_assignsel_partial(wbits, obits, lsb, low, skip, count)) return;
+    _vl_insert_QQ(lhsr, _vl_assignsel_value_W(obits, rwp, skip, count), wlsb + low + count - 1,
+                  wlsb + low, rbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_WQ(int rbits, int obits, QData lsb, WDataOutP iowp, QData rhs,
+                                    int wlsb, int wbits) VL_MT_SAFE {
+    int low, skip, count;
+    if (!_vl_assignsel_partial(wbits, obits, lsb, low, skip, count)) return;
+    const int pos = wlsb + low;
+    if (count <= VL_IDATASIZE) {
+        _vl_insert_WI(iowp, static_cast<IData>(rhs >> skip), pos + count - 1, pos, rbits);
+    } else {
+        _vl_insert_WQ(iowp, rhs >> skip, pos + count - 1, pos, rbits);
+    }
+}
+inline void VL_ASSIGNSEL_PARTIAL_WI(int rbits, int obits, QData lsb, WDataOutP iowp, IData rhs,
+                                    int wlsb, int wbits) VL_MT_SAFE {
+    int low, skip, count;
+    if (!_vl_assignsel_partial(wbits, obits, lsb, low, skip, count)) return;
+    _vl_insert_WI(iowp, rhs >> skip, wlsb + low + count - 1, wlsb + low, rbits);
+}
+inline void VL_ASSIGNSEL_PARTIAL_WW(int rbits, int obits, QData lsb, WDataOutP iowp,
+                                    WDataInP const rwp, int wlsb, int wbits) VL_MT_SAFE {
+    int low, skip, count;
+    if (!_vl_assignsel_partial(wbits, obits, lsb, low, skip, count)) return;
+    // The value's bits from 'skip' up, a word at a time
+    for (int bit = 0; bit < count; bit += VL_EDATASIZE) {
+        const int bits = std::min(VL_EDATASIZE, count - bit);
+        const int pos = wlsb + low + bit;
+        _vl_insert_WI(iowp, VL_SEL_IWII(obits, rwp, skip + bit, bits), pos + bits - 1, pos, rbits);
+    }
+}
+
 //====================================================
 // Range assignments
 

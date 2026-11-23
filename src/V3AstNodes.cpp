@@ -4525,6 +4525,7 @@ void AstSel::dump(std::ostream& str) const {
         if (declElWidth() != 1) str << "/" << declElWidth();
     }
     if (valueWidth()) str << " valueWidth=" << valueWidth();
+    if (partialWrite()) str << " [PARTIALW]";
 }
 void AstSel::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, widthConst);
@@ -4533,6 +4534,7 @@ void AstSel::dumpJson(std::ostream& str) const {
         dumpJsonNumFunc(str, declElWidth);
     }
     if (valueWidth()) dumpJsonNumFunc(str, valueWidth);
+    dumpJsonBoolFuncIf(str, partialWrite);
     dumpJsonGen(str);
 }
 int AstSel::lsbConstInt() const {
@@ -4557,7 +4559,14 @@ AstConst* AstSel::narrowLsbConst() {
     AstConst* const constp = VN_CAST(lsbp(), Const);
     if (!constp) return nullptr;
     V3Number narrow{constp, VL_IDATASIZE, 0};
-    if (!narrowPosition(constp->num(), constp->isSigned(), narrow)) return nullptr;
+    if (partialWrite()) {
+        if (constp->num().isFourState()) return nullptr;
+        narrow.setLongS(static_cast<int32_t>(partialWritePos()));
+        narrow.isSigned(true);
+        if (constp->num().isCaseEq(narrow) && constp->isSigned()) return nullptr;
+    } else if (!narrowPosition(constp->num(), constp->isSigned(), narrow)) {
+        return nullptr;
+    }
     constp->replaceWith(new AstConst{constp->fileline(), narrow});
     return constp;
 }
@@ -4582,6 +4591,23 @@ bool AstSel::narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow
         narrow.setAllBits1();
     }
     return true;
+}
+int64_t AstSel::partialWritePos() const {
+    // A position is signed, but folding may leave either the constant or its type unsigned;
+    // narrowPosition() narrows one far above to all ones, both unsigned
+    const AstConst* const constp = VN_AS(lsbp(), Const);
+    const V3Number& num = constp->num();
+    const int64_t width = widthConst();
+    if ((constp->isSigned() || num.isSigned()) && num.bitIs1(num.width() - 1)) {
+        V3Number magnitude{num};
+        magnitude.opNegate(num);
+        if (!magnitude.fitsInUInt()) return -width;
+        return std::max<int64_t>(-int64_t{magnitude.toUInt()}, -width);
+    }
+    if (num.fitsInUInt() && num.toUInt() < static_cast<uint32_t>(fromp()->width())) {
+        return num.toUInt();
+    }
+    return -width;
 }
 void AstSel::selectBelow(V3Number& out, const V3Number& from, const V3Number& bit) const {
     const int64_t below = (int64_t{1} << bit.width()) - static_cast<int64_t>(bit.toUInt());

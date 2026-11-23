@@ -30,6 +30,8 @@ public:
     static void unknownAll(AstNetlist* nodep) VL_MT_DISABLED;
     // Return an upper bound of the unsigned value of 'exprp'
     static uint64_t staticMax(const AstNodeExpr* exprp) VL_MT_DISABLED;
+    // Split the writes of part-selects marked partialWrite, once scheduled
+    static void partialWritesAll(AstNetlist* nodep) VL_MT_DISABLED;
 };
 
 #endif  // Guard
