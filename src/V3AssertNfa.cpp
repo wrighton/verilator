@@ -265,8 +265,8 @@ static AstNodeExpr* assertKillGet(AstVar* statep, FileLine* flp, VAssertType typ
 
 static AstNodeExpr* assertPassOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                      VAssertDirectiveType directiveType, bool vacuous) {
-    if (!(static_cast<int>(directiveType) & VAssertDirectiveType::SV_MASK))
-        return new AstConst{flp, AstConst::BitTrue{}};
+    UASSERT(static_cast<int>(directiveType) & VAssertDirectiveType::SV_MASK,
+            "Non-directive NFA must not install assertion action controls");
     if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
     return V3AssertCommon::newAssertCtlGetp(flp, assertPassOnQuery(vacuous), type, directiveType,
                                             statep);
@@ -274,8 +274,8 @@ static AstNodeExpr* assertPassOnCond(AstVar* statep, FileLine* flp, VAssertType 
 
 static AstNodeExpr* assertFailOnCond(AstVar* statep, FileLine* flp, VAssertType type,
                                      VAssertDirectiveType directiveType) {
-    if (!(static_cast<int>(directiveType) & VAssertDirectiveType::SV_MASK))
-        return new AstConst{flp, AstConst::BitTrue{}};
+    UASSERT(static_cast<int>(directiveType) & VAssertDirectiveType::SV_MASK,
+            "Non-directive NFA must not install assertion action controls");
     if (!v3Global.opt.assertOn()) return new AstConst{flp, AstConst::BitFalse{}};
     return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::FAIL_ON, type, directiveType,
                                             statep);

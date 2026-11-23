@@ -206,6 +206,7 @@ constexpr const char* assertCtlQueryName(VAssertCtlQuery query) {
     case VAssertCtlQuery::PASS_NONVACUOUS: return "ASSERT_CTL_PASS_ON_NONVACUOUS";
     case VAssertCtlQuery::FAIL_ON: return "ASSERT_CTL_FAIL_ON";
     }
+    UASSERT_STATIC(false, "Invalid assertion control query");
     return "";
 }
 
