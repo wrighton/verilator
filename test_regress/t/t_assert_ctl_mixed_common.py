@@ -12,12 +12,18 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 test.top_filename = 't/t_assert_ctl_mixed_table.v'
 n = 8 if test.vltmt else 4
+common = 16 * n if test.vltmt else n + 1
 test.compile(verilator_flags2=[
     '--binary', '--assert', '--stats', '+define+VIA_PORT+VIA_FORWARD+VIA_COHORTS+VIA_COMMON',
-    f'+define+N={n}'
+    f'+define+N={n}', f'+define+COMMON_N={common}'
 ], threads=2 if test.vltmt else 1)
 test.execute()
-# The two cohort unions and the fallback each include the N+1 common rows.
-test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 13 * n + 5)
+if test.vltmt:
+    # Keep the large common table shared rather than copying it into both unions.
+    entries = common + 2 * n * (2 * n + 1) + 2 * (2 * n + 1)
+else:
+    # The small common table is included in both cohort unions and the fallback.
+    entries = 13 * n + 5
+test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', entries)
 
 test.passes()
