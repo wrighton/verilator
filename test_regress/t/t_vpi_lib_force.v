@@ -18,6 +18,8 @@ module t (
     output logic [6:0] m2,
     output logic [6:0] leaf1,
     output logic [6:0] leaf2,
+    output logic [6:0] sm1,
+    output logic [6:0] zc,
     output int tbo
 );
   sub u1 (
@@ -41,6 +43,17 @@ module t (
       .n(n2),
       .m(m2),
       .o2(leaf2)
+  );
+
+  // A flop sampling a combinational output of a library instance
+  always_ff @(posedge clk) sm1 <= m1;
+
+  // A library instance without a clock, fed from a flop
+  logic [6:0] pflop;
+  always_ff @(posedge clk) pflop <= drv;
+  cmb c (
+      .y(pflop),
+      .z(zc)
   );
 
   // An export not related to the library instances
@@ -82,7 +95,7 @@ module sub (
       .j(sel[6:0]),
       .o(o2)
   );
-  // Called at every evaluation of the instance, as it reads a variable written through the VPI
+  // Called at every evaluation of the instance
   int evalsReader  /*verilator public_flat_rw*/ = 0;
   import "DPI-C" function void sub_evaluated(
       input int id,
@@ -100,3 +113,13 @@ module leaf (
   assign o = i ^ j;
 endmodule
 `endif
+
+module cmb (
+    input logic [6:0] y,
+    output logic [6:0] z
+);
+  /*verilator hier_block*/
+  logic [6:0] memc[0:3]  /*verilator public_flat_rw*/;
+  initial for (int k = 0; k < 4; ++k) memc[k] = 7'(k + 9);
+  assign z = memc[y[1:0]] + y;
+endmodule
