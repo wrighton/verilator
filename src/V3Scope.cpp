@@ -358,8 +358,8 @@ class ScopeVisitor final : public VNVisitor {
                     applyp->addTargetsp(residualp->targetsp()->cloneTree(true));
                 }
                 for (const AstAssertCtlTargetSet* const routep : cohorts) {
-                    if (routep->targetsp())
-                        applyp->addTargetsp(routep->targetsp()->cloneTree(true));
+                    UASSERT_OBJ(routep->targetsp(), routep, "A shared cohort must have targets");
+                    applyp->addTargetsp(routep->targetsp()->cloneTree(true));
                 }
                 return preferSource ? sourcep : commonp;
             }

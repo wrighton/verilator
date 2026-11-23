@@ -21,6 +21,7 @@ module t (
   int last_bo = 0;
   int last_bc = 0;
   byte lvl;
+  longint wide_lvl;
 
   // The oracle deliberately uses if/stop, never an assertion subject to control.
   task automatic check_deltas(int ao, int ac, int bo, int bc);
@@ -83,8 +84,22 @@ module t (
           lvl = byte'(-cyc);
           $assertoff(lvl, a);  // A signed negative level selects no sites.
         end
-        default: begin
+        11: begin
           check_deltas(1, 1, 1, 1);
+          $assertoff(-1, a);  // Constant negative level also selects no sites.
+        end
+        12: begin
+          check_deltas(1, 1, 1, 1);
+          wide_lvl = 64'(cyc == 27);
+          $assertoff(wide_lvl, a);  // A small wide value still selects at the stated depth.
+        end
+        13: begin
+          check_deltas(0, 1, 1, 1);
+          wide_lvl = (64'sd1 << 32) + 64'(cyc == 29);
+          $assertoff(wide_lvl, a);  // Clamping must not truncate this value to level one.
+        end
+        default: begin
+          check_deltas(0, 0, 1, 1);
           $write("*-* All Finished *-*\n");
           $finish;
         end
