@@ -13,7 +13,6 @@ test.scenarios('vlt')
 
 # Three builds: flat, --hierarchical, and manual --lib-create, all behave the same
 test.vm_prefix = "Vlib_sub"
-# Single threaded, as the library is evaluated within the threads of the model using it
 test.compile(make_main=False,
              threads=1,
              verilator_make_gmake=False,
@@ -26,7 +25,7 @@ for prefix, extra_flags in (("Vnonh", []), ("Vhier", ["--hierarchical"]),
     test.vm_prefix = prefix
     # Each model needs its own main, as they share the object directory
     main_filename = test.obj_dir + "/" + prefix + "__main.cpp"
-    test.write_wholefile(main_filename,
+    test.write_wholefile(main_filename, ("#define T_FLAT 1\n" if prefix == "Vnonh" else "") +
                          "#include \"" + os.path.abspath(test.pli_filename) + "\"\n")
     test.compile(make_main=False,
                  make_top_shell=False,

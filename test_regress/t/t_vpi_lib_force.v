@@ -5,35 +5,85 @@
 // SPDX-License-Identifier: CC0-1.0
 
 module t (
-    input logic [7:0] drv,
-    output logic [7:0] out,
-    output logic [7:0] out2
+    input logic clk,
+    input logic [6:0] drv,
+    output logic [6:0] out1,
+    output logic [6:0] out2,
+    output logic [6:0] q1,
+    output logic [6:0] n1,
+    output logic [6:0] m1,
+    output logic [6:0] leaf1,
+    output int tbo
 );
-  sub u (
+  sub u1 (
+      .clk,
       .i(drv),
-      .o(out),
-      .o2(out2)
+      .vpi_writes__V(1),
+      .o(out1),
+      .q(q1),
+      .n(n1),
+      .m(m1),
+      .o2(leaf1)
   );
+  // verilator lint_off PINCONNECTEMPTY
+  sub u2 (
+      .clk,
+      .i(~drv),
+      .vpi_writes__V(2),
+      .o(out2),
+      .q(),
+      .n(),
+      .m(),
+      .o2()
+  );
+  // verilator lint_on PINCONNECTEMPTY
+
+  // An export not related to the library instances
+  int tbv = 0;
+  export "DPI-C" function tb_set;
+  function void tb_set(int v);
+    tbv = v;
+  endfunction
+  assign tbo = tbv + 1;
 endmodule
 
 `ifndef USE_LIB
 module sub (
-    input logic [7:0] i  /*verilator public_flat_rw*/  /*verilator forceable*/,
-    output logic [7:0] o  /*verilator public_flat_rw*/  /*verilator forceable*/,
-    output logic [7:0] o2
+    input logic clk  /*verilator public_flat_rw*/  /*verilator forceable*/,
+    input logic [6:0] i  /*verilator public_flat_rw*/  /*verilator forceable*/,
+    // A port with the name of a signal of the library's wrapper, identifying the instance
+    input int vpi_writes__V,
+    output logic [6:0] o  /*verilator public_flat_rw*/  /*verilator forceable*/,
+    output logic [6:0] q  /*verilator public_flat_rw*/,
+    output logic [6:0] n  /*verilator public_flat_rw*/,
+    output logic [6:0] m,
+    output logic [6:0] o2
 );
   /*verilator hier_block*/
   assign o = i;
+  initial q = 0;
+  initial n = 0;
+  always @(posedge clk) begin
+    n <= n + 1;
+    q <= i;
+  end
+  logic [6:0] mem[0:3]  /*verilator public_flat_rw*/;
+  initial for (int k = 0; k < 4; ++k) mem[k] = 7'(k + 1);
+  assign m = mem[i[1:0]];
   // A library within a library, in a hierarchical build
   leaf l (
       .i(~i),
       .o(o2)
   );
+  // Counts the evaluations of the instance, as this reads a variable written through the VPI
+  int evalsReader  /*verilator public_flat_rw*/ = 0;
+  import "DPI-C" function void sub_evaluated(input int id, input int unused);
+  always_comb sub_evaluated(vpi_writes__V, evalsReader);
 endmodule
 
 module leaf (
-    input logic [7:0] i  /*verilator public_flat_rw*/  /*verilator forceable*/,
-    output logic [7:0] o
+    input logic [6:0] i  /*verilator public_flat_rw*/  /*verilator forceable*/,
+    output logic [6:0] o
 );
   /*verilator hier_block*/
   assign o = i;

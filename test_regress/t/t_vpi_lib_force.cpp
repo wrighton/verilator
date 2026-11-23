@@ -13,15 +13,22 @@
 #include "verilated_vpi.h"
 
 #include VM_PREFIX_INCLUDE
+#include VM_PREFIX_INCLUDE_DPI
 
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 
 // A force and a release through the VPI of a port of the instance of a library take effect
-// without a change in the model using it, as in a flat model
+// without a change in the model using it, as in a flat model, evaluating only that instance
 
 static VM_PREFIX* topp = nullptr;
 static int errors = 0;
+static int evaluations[3] = {0, 0, 0};  // Of instances u1 and u2
+
+extern "C" void sub_evaluated(int id, int /*unused*/) {
+    if (id == 1 || id == 2) ++evaluations[id];
+}
 
 static vpiHandle handle(const char* namep) {
     const vpiHandle objp = vpi_handle_by_name(const_cast<PLI_BYTE8*>(namep), nullptr);
@@ -57,56 +64,123 @@ int main(int argc, char** argv) {
     contextp->commandArgs(argc, argv);
     topp = new VM_PREFIX{contextp.get(), "top"};
 
+    topp->clk = 0;
     topp->drv = 0x11;
     topp->eval();
-    const vpiHandle ip = handle("top.t.u.i");
-    const vpiHandle op = handle("top.t.u.o");
-    check("initial", topp->out, 0x11);
+    const vpiHandle ip = handle("top.t.u1.i");
+    const vpiHandle op = handle("top.t.u1.o");
+    const vpiHandle clkp = handle("top.t.u1.clk");
+    check("initial", topp->out1, 0x11);
+    check("initial u2", topp->out2, 0x6e);
 
     // A force of the input holds while its driver changes, until released
-    put(ip, 0xa5, vpiForceFlag);
+    put(ip, 0x25, vpiForceFlag);
     topp->eval();
-    check("force i", topp->out, 0xa5);
-    check("force i, i", get(ip), 0xa5);
-    check("force i, o", get(op), 0xa5);
+    check("force i", topp->out1, 0x25);
+    check("force i, i", get(ip), 0x25);
+    check("force i, o", get(op), 0x25);
+    check("force i, u2", topp->out2, 0x6e);
     topp->drv = 0x22;
     topp->eval();
-    check("force i, drv changes", topp->out, 0xa5);
+    check("force i, drv changes", topp->out1, 0x25);
     put(ip, 0, vpiReleaseFlag);
     topp->eval();
-    check("release i", topp->out, 0x22);
+    check("release i", topp->out1, 0x22);
     check("release i, i", get(ip), 0x22);
     topp->drv = 0x33;
     topp->eval();
-    check("released i, drv changes", topp->out, 0x33);
+    check("released i, drv changes", topp->out1, 0x33);
 
     // Likewise a force of the output
-    put(op, 0xc3, vpiForceFlag);
+    put(op, 0x43, vpiForceFlag);
     topp->eval();
-    check("force o", topp->out, 0xc3);
-    check("force o, o", get(op), 0xc3);
+    check("force o", topp->out1, 0x43);
+    check("force o, o", get(op), 0x43);
     topp->drv = 0x44;
     topp->eval();
-    check("force o, drv changes", topp->out, 0xc3);
+    check("force o, drv changes", topp->out1, 0x43);
     put(op, 0, vpiReleaseFlag);
     topp->eval();
-    check("release o", topp->out, 0x44);
+    check("release o", topp->out1, 0x44);
 
-    // Likewise a force of a port of a library instance within one
-    const vpiHandle lp = handle("top.t.u.l.i");
-    check("leaf", topp->out2, 0xbb);
-    put(lp, 0x5a, vpiForceFlag);
+    // A force of a clock makes an edge where the instance sees all its inputs
+    topp->drv = 0x11;
     topp->eval();
-    check("force leaf i", topp->out2, 0x5a);
+    const int n = topp->n1;
+    put(clkp, 1, vpiForceFlag);
+    topp->eval();
+    check("force clk", topp->n1, (n + 1) & 0x7f);
+    check("force clk, q", topp->q1, 0x11);
+    // Released while its driver rises, it stays high, without another edge
+    topp->clk = 1;
+    put(clkp, 0, vpiReleaseFlag);
+    topp->eval();
+    check("release clk, driver rises", topp->n1, (n + 1) & 0x7f);
+    topp->clk = 0;
+    topp->eval();
+    // Forced while the data input changes, the edge samples the new data
+    put(clkp, 1, vpiForceFlag);
     topp->drv = 0x55;
     topp->eval();
-    check("force leaf i, drv changes", topp->out2, 0x5a);
+    check("force clk with data", topp->n1, (n + 2) & 0x7f);
+    check("force clk with data, q", topp->q1, 0x55);
+    put(clkp, 0, vpiReleaseFlag);
+    topp->eval();
+    check("release clk", topp->n1, (n + 2) & 0x7f);
+
+    // A write of a whole array
+    const vpiHandle memp = handle("top.t.u1.mem");
+    PLI_INT32 values[4] = {0x31, 0x32, 0x33, 0x34};
+    s_vpi_arrayvalue arrayValue;
+    arrayValue.format = vpiIntVal;
+    arrayValue.flags = 0;
+    arrayValue.value.integers = values;
+    PLI_INT32 indexes[1] = {0};
+    vpi_put_value_array(memp, &arrayValue, indexes, 4);
+    topp->eval();
+    check("put array", topp->m1, 0x32);
+
+    // Likewise a force of a port of a library instance within one
+    const vpiHandle lp = handle("top.t.u1.l.i");
+    check("leaf", topp->leaf1, 0x2a);
+    put(lp, 0x5a, vpiForceFlag);
+    topp->eval();
+    check("force leaf i", topp->leaf1, 0x5a);
+    topp->drv = 0x66;
+    topp->eval();
+    check("force leaf i, drv changes", topp->leaf1, 0x5a);
     put(lp, 0, vpiReleaseFlag);
     topp->eval();
-    check("release leaf i", topp->out2, 0xaa);
+    check("release leaf i", topp->leaf1, 0x19);
 
+#ifndef T_FLAT
+    // Only the instance written through the VPI is evaluated again, and an unrelated export
+    // evaluates none
+    const int evaluations1 = evaluations[1];
+    const int evaluations2 = evaluations[2];
+    svSetScope(svGetScopeFromName("top.t"));
+    for (int k = 0; k < 10; ++k) {
+        tb_set(k);
+        topp->eval();
+    }
+    check("export", topp->tbo, 10);
+    check("export, u1 evaluations", evaluations[1], evaluations1);
+    check("export, u2 evaluations", evaluations[2], evaluations2);
+    put(ip, 0x2b, vpiForceFlag);
+    topp->eval();
+    check("force i, written instance evaluated", evaluations[1] > evaluations1, 1);
+    check("force i, u2 evaluations", evaluations[2], evaluations2);
+    put(ip, 0, vpiReleaseFlag);
+    topp->eval();
+#endif
+
+    // A write after the model using a library is deleted, while the library model remains
     topp->final();
     delete topp;
+    topp = nullptr;
+    const vpiHandle afterp = vpi_handle_by_name(const_cast<PLI_BYTE8*>("top.t.u1.l.i"), nullptr);
+    if (afterp) put(afterp, 0x15, vpiForceFlag);
+
     if (errors) return 1;
     printf("*-* All Finished *-*\n");
     return 0;
