@@ -1,115 +1,123 @@
-%Error: t/t_assert_ctl_scope_select_bad.v:32:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:34:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   32 |     $assertoff(0, g[i]);
+   34 |     $assertoff(0, g[i]);
       |                    ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assert_ctl_scope_select_bad.v:33:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:35:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   33 |     $assertoff(0, scalar[0]);
+   35 |     $assertoff(0, scalar[0]);
       |                         ^
-%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:34:20: Unsupported: Function call in assertion control scope index.
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:36:20: Unsupported: Function call in assertion control scope index.
                                                            : ... note: In instance 't'
-   34 |     $assertoff(0, g[selected_index()]);
+   36 |     $assertoff(0, g[selected_index()]);
       |                    ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error: t/t_assert_ctl_scope_select_bad.v:35:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:37:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   35 |     $assertoff(0, g[selected_index() + i]);
+   37 |     $assertoff(0, g[selected_index() + i]);
       |                    ^
-%Error: t/t_assert_ctl_scope_select_bad.v:36:33: Can't find definition of 'omitted_cfg'
+%Error: t/t_assert_ctl_scope_select_bad.v:38:33: Can't find definition of 'omitted_cfg'
                                                : ... note: In instance 't'
-   36 |     $assertoff(0, g[omitted_cfg.SELECTED]);
+   38 |     $assertoff(0, g[omitted_cfg.SELECTED]);
       |                                 ^~~~~~~~
-%Error: t/t_assert_ctl_scope_select_bad.v:37:25: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
+%Error: t/t_assert_ctl_scope_select_bad.v:39:25: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
                                                : ... note: In instance 't'
-   37 |     $assertoff(0, g[cfg.SELECTED]);
+   39 |     $assertoff(0, g[cfg.SELECTED]);
       |                         ^~~~~~~~
-%Error: t/t_assert_ctl_scope_select_bad.v:38:24: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
+%Error: t/t_assert_ctl_scope_select_bad.v:40:24: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
                                                : ... note: In instance 't'
-   38 |     $assertoff(0, g[int'(cfg.SELECTED)]);
+   40 |     $assertoff(0, g[int'(cfg.SELECTED)]);
       |                        ^
-%Error: t/t_assert_ctl_scope_select_bad.v:39:33: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
+%Error: t/t_assert_ctl_scope_select_bad.v:41:33: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
                                                : ... note: In instance 't'
-   39 |     $assertoff(0, g[cfg.SELECTED[0]]);
+   41 |     $assertoff(0, g[cfg.SELECTED[0]]);
       |                                 ^
-%Error: t/t_assert_ctl_scope_select_bad.v:40:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
-                                               : ... note: In instance 't'
-   40 |     $assertoff(0, g[(choice.IDX < 32'sd0) ? i : 0]);
-      |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:42:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   42 |     $assertoff(0, g[1'b0 && i[0]]);
-      |                    ^
-%Error: t/t_assert_ctl_scope_select_bad.v:43:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
-                                               : ... note: In instance 't'
-   43 |     $assertoff(0, g[1'b1 || i[0]]);
+   42 |     $assertoff(0, g[(choice.IDX < 32'sd0) ? i : 0]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:44:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   44 |     $assertoff(0, g[i & 0]);
+   44 |     $assertoff(0, g[1'b0 && i[0]]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:45:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   45 |     $assertoff(0, g[0 * i]);
+   45 |     $assertoff(0, g[1'b1 || i[0]]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:46:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   46 |     $assertoff(0, g[1'b1 ? 0 : i]);
+   46 |     $assertoff(0, g[i & 0]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:47:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   47 |     $assertoff(0, g[i ^ i]);
+   47 |     $assertoff(0, g[0 * i]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:48:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   48 |     $assertoff(0, g[1'b0 && (($bits(i) + i) != 0)]);
+   48 |     $assertoff(0, g[1'b1 ? 0 : i]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:49:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   49 |     $assertoff(0, g[i ^ i]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:50:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   50 |     $assertoff(0, g[1'b0 && ($time != 0)]);
-      |                    ^
-%Error: t/t_assert_ctl_scope_select_bad.v:51:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
-                                               : ... note: In instance 't'
-   51 |     $assertoff(0, g[1'b1 || ($time != 0)]);
+   50 |     $assertoff(0, g[1'b0 && (($bits(i) + i) != 0)]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:52:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   52 |     $assertoff(0, g[1'b0 && ($realtime != 0.0)]);
+   52 |     $assertoff(0, g[1'b0 && ($time != 0)]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:53:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   53 |     $assertoff(0, g[1'b0 && ($urandom != 0)]);
+   53 |     $assertoff(0, g[1'b1 || ($time != 0)]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:54:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   54 |     $assertoff(0, g[1'b0 && ($test$plusargs("SELECT") != 0)]);
+   54 |     $assertoff(0, g[1'b0 && ($realtime != 0.0)]);
       |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:55:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   55 |     $assertoff(0, g[1'b0 && ($get_initial_random_seed() != 0)]);
+   55 |     $assertoff(0, g[1'b0 && ($urandom != 0)]);
       |                    ^
-%Error: t/t_assert_ctl_scope_select_bad.v:57:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+%Error: t/t_assert_ctl_scope_select_bad.v:56:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   57 |     $assertoff(0, g[64'sd2147483648]);
-      |                     ^~~~~~~~~~~~~~~
-%Error: t/t_assert_ctl_scope_select_bad.v:58:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+   56 |     $assertoff(0, g[1'b0 && ($test$plusargs("SELECT") != 0)]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:57:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   58 |     $assertoff(0, g[-64'sd2147483649]);
-      |                     ^
-%Error: t/t_assert_ctl_scope_select_bad.v:59:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+   57 |     $assertoff(0, g[1'b0 && ($get_initial_random_seed() != 0)]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:58:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   59 |     $assertoff(0, g[95'sd4294967296]);
-      |                     ^~~~~~~~~~~~~~~
-%Error: t/t_assert_ctl_scope_select_bad.v:60:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+   58 |     $assertoff(0, g[1'b0 && $past(1'b1)]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:59:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   60 |     $assertoff(0, g[-95'sd4294967296]);
-      |                     ^
+   59 |     $assertoff(0, g[1'b0 && $stable(1'b1)]);
+      |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:61:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   61 |     $assertoff(0, g[129'd4294967297]);
+   61 |     $assertoff(0, g[64'sd2147483648]);
       |                     ^~~~~~~~~~~~~~~
 %Error: t/t_assert_ctl_scope_select_bad.v:62:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   62 |     $assertoff(0, g[32'h80000000]);
+   62 |     $assertoff(0, g[-64'sd2147483649]);
+      |                     ^
+%Error: t/t_assert_ctl_scope_select_bad.v:63:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+                                               : ... note: In instance 't'
+   63 |     $assertoff(0, g[95'sd4294967296]);
+      |                     ^~~~~~~~~~~~~~~
+%Error: t/t_assert_ctl_scope_select_bad.v:64:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+                                               : ... note: In instance 't'
+   64 |     $assertoff(0, g[-95'sd4294967296]);
+      |                     ^
+%Error: t/t_assert_ctl_scope_select_bad.v:65:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+                                               : ... note: In instance 't'
+   65 |     $assertoff(0, g[129'd4294967297]);
+      |                     ^~~~~~~~~~~~~~~
+%Error: t/t_assert_ctl_scope_select_bad.v:66:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+                                               : ... note: In instance 't'
+   66 |     $assertoff(0, g[32'h80000000]);
       |                     ^~~~~~~~~~~~
 %Error: Exiting due to
