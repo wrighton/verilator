@@ -11,7 +11,8 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-test.compile(make_pli=True, verilator_flags2=["--binary --vpi", test.t_dir + "/t_force_public_rhs.vlt"])
+test.compile(make_pli=True,
+             verilator_flags2=["--binary --vpi", test.t_dir + "/" + test.name + ".vlt"])
 
 test.execute(all_run_flags=["+verilator+vpi+" + test.obj_dir + "/libvpi.so"], check_finished=True)
 

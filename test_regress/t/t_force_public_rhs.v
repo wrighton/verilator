@@ -12,14 +12,14 @@
 // verilog_format: on
 
 // A force keeps evaluating its value (IEEE 1800-2023 10.6.2), also when the forced variable
-// can be forced and read through the VPI. The .vlt files make 'y', 'w', 'v' and 'r' so.
+// can be forced and read through the VPI, as the .vlt files make the variables. The .cpp forces
+// and releases some of them through the VPI, and counts value changes of others.
 
 `timescale 1ns / 1ns
 
 module t;
-  int vpi_changes = 0;  // Value changes of 'y' seen through the VPI, written by the VPI
-
   // A force with a value that keeps changing, under a control that changes
+  int vpi_changes = 0;  // Value changes of 'y' seen through the VPI, written by the VPI
   logic src = 1'b0;
   always #1 src = ~src;
   logic drv = 1'b0;
@@ -48,54 +48,93 @@ module t;
     end
   end
 
-  // A force and a release through the VPI (at 11, 17 and 27 ns, by the .cpp) override a
-  // force in code, as a later force or release does
-  logic wsrc = 1'b0;
-  always #2 wsrc = ~wsrc;
-  logic wdrv = 1'b1;
-  logic w;
+  // A force and a release through the VPI override a force in code, as a later force or
+  // release does. At 11 ns the VPI forces 'w' to the value it has, and releases it at 17 and
+  // 27 ns
+  logic [2:0] wsrc = 3'd0;
+  always #2 wsrc = wsrc + 3'd1;
+  logic [2:0] wdrv = 3'd6;
+  logic [2:0] w;
   assign w = wdrv;
   initial begin
     #5 force w = wsrc;
-    #8 `checkh(w, 1'b0);  // The VPI forced 0 at 11 ns, while 'wsrc' was 1
-    #2 `checkh(w, 1'b0);
-    #4 `checkh(w, wdrv);  // The VPI released it at 17 ns
-    #3 force w = wsrc;
-    #3 `checkh(w, wsrc);
-    #4 `checkh(w, wdrv);  // The VPI released the force in code at 27 ns
+    #8 `checkh(w, 3'd5);
+    #2 `checkh(w, 3'd5);
+    #4 `checkh(w, wdrv);
+    #2 force w = wsrc;
+    #2 `checkh(w, wsrc);
+    #6 `checkh(w, wdrv);
     #4 `checkh(w, wdrv);
   end
 
-  // Overlapping and partial forces, each keeping only the bits no later force or release took
-  logic [7:0] a = 8'h00;
-  logic [7:0] b = 8'h00;
-  always #1 a = a + 8'd3;
-  always #1 b = b - 8'd5;
-  logic [7:0] vdrv = 8'h5a;
-  logic [7:0] v;
+  // A force in code of other bits in the same time step as a force through the VPI (of 'h55
+  // at 6 ns) takes only its own bits
+  logic [6:0] msrc = 7'd0;
+  always #2 msrc = msrc + 7'd9;
+  logic [6:0] mdrv = 7'd0;
+  logic [6:0] m;
+  assign m = mdrv;
+  initial begin
+    #1 force m[6:3] = msrc[6:3];
+    #5 force m[2:0] = msrc[2:0];
+    #1 `checkh(m, {4'b1010, msrc[2:0]});
+    #2 `checkh(m, {4'b1010, msrc[2:0]});
+  end
+
+  // Overlapping and partial forces of a wide variable, each keeping only the bits no later
+  // force or release took
+  logic [94:0] a = 95'h0;
+  logic [94:0] b = 95'h0;
+  always #2 a = a + 95'h1234_5678_9abc_def0_1234_5679;
+  always #2 b = b - 95'h0fed_cba9_8765_4321_0fed_cba9;
+  logic [94:0] vdrv = 95'h5a5a_5a5a_5a5a_5a5a_5a5a_5a5a;
+  logic [94:0] v;
   assign v = vdrv;
   initial begin
-    #2 force v = a;
-    #3 `checkh(v, a);
-    force v[3:0] = b[3:0];
-    #3 `checkh(v, {a[7:4], b[3:0]});
-    release v[3:0];
-    #3 `checkh(v, {a[7:4], vdrv[3:0]});
+    #1 force v = a;
+    #4 `checkh(v, a);
+    force v[70:30] = b[70:30];
+    #4 `checkh(v, {a[94:71], b[70:30], a[29:0]});
+    release v[70:30];
+    #4 `checkh(v, {a[94:71], vdrv[70:30], a[29:0]});
     release v;
-    #3 `checkh(v, vdrv);
+    #4 `checkh(v, vdrv);
   end
 
   // A forced value of a type without bits
   real rsrc = 0.0;
-  always #1 rsrc = rsrc + 1.5;
+  always #2 rsrc = rsrc + 1.5;
   real rdrv = -1.0;
   real r;
   assign r = rdrv;
   initial begin
     #3 force r = rsrc;
-    #5 `checkr(r, rsrc);
+    #6 `checkr(r, rsrc);
     release r;
     #2 `checkr(r, rdrv);
+  end
+
+  // A forced real keeps following its value after the value was not a number
+  real nsrc = 1.0;
+  real ndrv = -1.0;
+  real n;
+  assign n = ndrv;
+  initial begin
+    #1 force n = nsrc;
+    #2 nsrc = $bitstoreal(64'h7ff8_0000_0000_0000);
+    #2 nsrc = 4.0;
+    #2 `checkr(n, 4.0);
+  end
+
+  // A value change a value change callback makes itself is seen as well: at 31 ns the VPI
+  // forces 'c' to 1, and the callback seeing that forces it to 0
+  int vpi_c_changes = 0;  // Value changes of 'c' seen through the VPI, written by the VPI
+  wire c = 1'b0;
+  initial begin
+    #1 force c = 1'b0;
+    #1 release c;
+    #33 `checkd(vpi_c_changes, 2);
+    `checkh(c, 1'b0);
   end
 
   initial begin
