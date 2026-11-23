@@ -3847,6 +3847,11 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value valuep, p_vpi_time /*time_
             return object;
         }
         VerilatedVpiImp::evalNeeded(true);
+        // A model using this instance of a library evaluates it again
+        const VerilatedSyms* const symsp = baseSignalVop->scopep()->symsp();
+        if (VL_UNLIKELY(symsp->__Vm_vpiWriteCbp)) {
+            symsp->__Vm_vpiWriteCbp(symsp->__Vm_vpiWriteCbDatap);
+        }
         const int varBits = baseSignalVop->bitSize();
 
         const auto forceControlSignals
