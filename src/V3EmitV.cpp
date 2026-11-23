@@ -974,8 +974,8 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             iterateConst(itemp);
         }
     }
-    // Assertion targets and route metadata have no Verilog representation: Netlist emits
-    // only modules, and Args/Apply emit operands rather than their resolved target lists.
+    // Shared target sets can also appear in the scoped module's block list.
+    void visit(AstAssertCtlTargetSet*) override {}  // Compiler metadata, not Verilog
     void visit(AstAssertCtlApply* nodep) override {
         putfs(nodep, "$_ASSERT_CTL_APPLY(");
         iterateConst(nodep->effectp());
