@@ -48,6 +48,22 @@ module caller (input bit clk, input bit good, input bit off, output int reports
 `endif
 endmodule
 
+`ifdef VIA_FORWARD
+module relay_inner (input bit clk, input bit good, input bit [1:0] off,
+                    output wire [31:0] reports [2], bank_group upstream);
+  for (genvar i = 0; i < 2; ++i) begin : callers
+    caller u (.clk, .good, .off(off[i]), .reports(reports[i]), .port_bank(upstream));
+  end
+endmodule
+
+module relay_outer (input bit clk, input bit good, input bit [1:0] off,
+                    output wire [31:0] reports [2], bank_group forwarded);
+  if (1) begin : bridge
+    relay_inner u (.clk, .good, .off, .reports, .upstream(forwarded));
+  end
+endmodule
+`endif
+
 module t;
   bit clk;
   bit good;
@@ -63,6 +79,12 @@ module t;
     end
   end
 `endif
+`ifdef VIA_FORWARD
+  for (genvar i = 0; i < 2; ++i) begin : relays
+    relay_outer u (.clk, .good, .off(off[2*i+:2]), .reports(local_reports[2*i+:2]),
+                   .forwarded(bank));
+  end
+`else
   for (genvar i = 0; i < 4; ++i) begin : callers
     caller u (.clk, .good, .off(off[i]), .reports(local_reports[i])
 `ifdef VIA_PORT
@@ -70,6 +92,7 @@ module t;
 `endif
     );
   end
+`endif
   initial begin
     #1 off = 4'b0001;
     #1 clk = 1;
