@@ -796,6 +796,8 @@ class AstCell final : public AstNode {
     // @astgen op4 := intfRefsp : List[AstIntfRef] // List of interface references, for VPI
     //
     // @astgen ptr := m_modp : Optional[AstNodeModule]  // [AfterLink] Pointer to module instanced
+    // @astgen ptr := m_assertCtlIfaceOriginp : Optional[AstVar]  // Port of a wrapped top
+    // interface
     FileLine* m_modNameFileline;  // Where module the cell instances token was
     string m_name;  // Cell name
     string m_origName;  // Original name before dot addition
@@ -843,6 +845,8 @@ public:
     FileLine* modNameFileline() const { return m_modNameFileline; }
     AstNodeModule* modp() const { return m_modp; }  // [AfterLink] = Pointer to module instantiated
     void modp(AstNodeModule* nodep) { m_modp = nodep; }
+    AstVar* assertCtlIfaceOriginp() const { return m_assertCtlIfaceOriginp; }
+    void assertCtlIfaceOriginp(AstVar* varp) { m_assertCtlIfaceOriginp = varp; }
     int arrayIdx() const { return m_arrayIdx; }
     void arrayIdx(int idx) { m_arrayIdx = idx; }
     bool fromBind() const { return m_fromBind; }
@@ -1871,6 +1875,7 @@ class AstPin final : public AstNode {
     int m_defparamScope = 0;  // Scope of its defparam, by an ID unique to it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
+    bool m_explicitModport = false;  // Actual expression explicitly selected a modport
     bool m_returnWrittenInput = false;  // Width-proved original net destination for Tristate
 public:
     AstPin(FileLine* fl, int pinNum, const string& name, AstNode* exprp)
@@ -1881,6 +1886,9 @@ public:
     }
     ASTGEN_MEMBERS_AstPin;
     void cloneRelink() override {}  // TODO V3Param shouldn't require avoiding cloneRelinkGen
+    bool sameNode(const AstNode* samep) const override {
+        return explicitModport() == VN_DBG_AS(samep, Pin)->explicitModport();
+    }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Pin name, ""=go by number
@@ -1907,6 +1915,8 @@ public:
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
     void svImplicit(bool flag) { m_svImplicit = flag; }
+    bool explicitModport() const { return m_explicitModport; }
+    void explicitModport(bool flag) { m_explicitModport = flag; }
     void setReturnWrittenInput() { m_returnWrittenInput = true; }
     bool returnWrittenInput() const { return m_returnWrittenInput; }
 };
@@ -2568,6 +2578,7 @@ class AstVar final : public AstNode {
     bool m_isStdRandomizeArg : 1;  // Argument variable created for std::randomize (__Varg*)
     bool m_processQueue : 1;  // Process queue variable
     bool m_mtaskCacheLineAlign : 1;  // Start MTask affinity group on a cache line
+    uint32_t m_assertCtlMask = 0;  // Type/directive bit of per-instance assertion control state
     void init() {
         m_libInoutEnable = false;
         m_ansi = false;
@@ -2892,6 +2903,8 @@ public:
     }
     bool isIfaceParent() const { return m_isIfaceParent; }
     bool isIfaceArraySplit() const { return m_isIfaceArraySplit; }
+    uint32_t assertCtlMask() const { return m_assertCtlMask; }
+    void assertCtlMask(uint32_t mask) { m_assertCtlMask = mask; }
     bool isInternal() const { return m_isInternal; }
     bool isIfaceParam() const { return m_isIfaceParam; }
     bool isSignal() const VL_MT_SAFE { return varType().isSignal(); }

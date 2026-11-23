@@ -1,0 +1,5 @@
+%Error: t/t_assert_ctl_scope_pkg_bad.v:11:21: Assertion control target is not a scope or assertion: 'sib' (IEEE 1800-2023 20.11).
+   11 |       $assertoff(0, sib);
+      |                     ^~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: Exiting due to

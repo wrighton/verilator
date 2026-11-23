@@ -673,6 +673,11 @@ module t;
                     $display("fail");
                 end
             end
+            $_SCOPED_ASSERTCONTROL(32'h4, 32'hf, 32'h7,
+                                   32'sh0);
+            $_SCOPED_ASSERTCONTROL(32'h3, 32'hf, 32'h7,
+                                   32'sh1);
+            $assertcontrol(32'h4, 32'hf, 32'h7,32'sh1);
             begin : assume_simple_immediate
                 assume (1'h0) begin
                 end

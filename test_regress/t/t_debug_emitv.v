@@ -555,6 +555,10 @@ module t (/*AUTOARG*/
     assert_simple_immediate_stmt: assert(0) $display("pass");
     assert_simple_immediate_stmt_else: assert(0) $display("pass"); else $display("fail");
 
+    $assertoff(0, assert_simple_immediate_else);
+    $asserton(1, assert_simple_immediate_stmt);
+    $assertoff(1);
+
     assume_simple_immediate: assume(0);
     assume_simple_immediate_else: assume(0) else $display("fail");
     assume_simple_immediate_stmt: assume(0) $display("pass");
@@ -666,7 +670,8 @@ module t (/*AUTOARG*/
       bins t01  = (3'b000 => 3'b001);
       bins t12  = (3'b001 => 3'b010);
       bins talt = (3'b010 => 3'b011), (3'b100 => 3'b101);  // multiple transition sets
-      bins trep = (3'b000 => 3'b001 [->2]);  // repetition op -> non-NONE VTransRepType (exercises ascii())
+      // Repetition exercises the VTransRepType formatting.
+      bins trep = (3'b000 => 3'b001 [->2]);
       bins trng = (3'b000 [*2:3]);  // repetition range
       bins tarr[] = (3'b000 => 3'b001), (3'b001 => 3'b010);  // array transition bins -> m_isArray
     }
@@ -908,7 +913,7 @@ module escapes;
   int esc_q[$];
   int esc_dpi_out;
   \esc.ifc \i.f ();
-  \esc.sub \u.s (.\port.p (\i.f ));
+  \esc.sub \u.s (.\port.p (\i.f .\mp.m ));
   function int \f.e ();
     \f.e = 1;
   endfunction
