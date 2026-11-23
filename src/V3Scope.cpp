@@ -22,6 +22,9 @@
 //      Make the last initial procedure of the programs to end call $finish
 //      Kill the threads of a program when its initial procedures have ended
 //
+//      Share the ordered union of absolute assertion targets among callers with
+//      the same applicable cohorts (proven routes shared by multiple callers).
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -30,6 +33,7 @@
 
 #include "V3ConstPool.h"
 #include "V3Control.h"
+#include "V3Hash.h"
 
 #include <cstring>
 #include <map>
@@ -48,6 +52,7 @@ class ScopeVisitor final : public VNVisitor {
     // AstTask::user2p          -> AstTask*.  Replacement task
     // AstRtmdHier::user2()     -> bool.  Iterated already, under the scope of its instance
     // AstNodeModule::user3()   -> uint64_t.  Pending instantiations of this module
+    // AstAssertCtlTargetSet::user3() -> bool.  Referenced by a scoped operation
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
     const VNUser3InUse m_inuser3;
@@ -82,18 +87,28 @@ class ScopeVisitor final : public VNVisitor {
     std::vector<std::pair<AstInitial*, const AstScope*>> m_programInitials;
 
     using AssertCtlRoutes = std::vector<std::pair<size_t, AstAssertCtlTargetSet*>>;
+    using AssertCtlComponents = std::vector<const AstAssertCtlTargetSet*>;
+    struct AssertCtlComponentsHash final {
+        size_t operator()(const AssertCtlComponents& components) const {
+            V3Hash hash;
+            for (const AstAssertCtlTargetSet* const setp : components) hash += setp;
+            return hash.value();
+        }
+    };
     struct AssertCtlCallerRoutes final {
-        AssertCtlRoutes routes;  // Applicable routes in source order
+        AssertCtlRoutes routes;  // Routes private to this caller, in source order
+        AssertCtlComponents cohorts;  // Shared absolute routes, in source order
         size_t uses = 0;  // Copies of the live source operations materialized for this caller
-        AstAssertCtlTargetSet* sharedp = nullptr;  // Absolute targets for this caller's cohort
-        const AstAssertCtlTargetSet* sharedRoutep = nullptr;  // Route already in the base
     };
     struct AssertCtlPlanIndex final {
-        AssertCtlRoutes common;  // Routes used by every caller
+        AssertCtlRoutes common;  // Unshared routes used by every caller
         std::unordered_map<const AstAssertCtlCaller*, AssertCtlCallerRoutes> byCaller;
         size_t sourceUses = 0;  // Surviving operation templates before scoping clones them
-        AstAssertCtlTargetSet* sharedp = nullptr;  // Absolute part shared by all those copies
+        AstAssertCtlTargetSet* sharedp = nullptr;  // Absolute targets common to all callers
+        std::unordered_map<AssertCtlComponents, AstAssertCtlTargetSet*, AssertCtlComponentsHash>
+            unions;  // One absolute target list per distinct combination of components
     };
+    std::vector<AstAssertCtlTargetSet*> m_assertCtlTargetSets;  // Awaiting attachment to top
     // Lookup of the structural child occurrence by (parent occurrence, declaration).
     std::unordered_map<const AstAssertCtlCaller*,
                        std::unordered_map<const AstNode*, AstAssertCtlCaller*>>
@@ -118,8 +133,20 @@ class ScopeVisitor final : public VNVisitor {
                     if (!setp->callersp() && setp->targetsp()) {
                         index.common.emplace_back(ordinal, setp);
                     }
+                    const AstVarXRef* const statep
+                        = setp->targetsp() ? VN_CAST(setp->targetsp()->statep(), VarXRef)
+                                           : nullptr;
+                    // Only proven cohorts have non-optional absolute routes.
+                    const bool cohort = setp->callersp() && setp->callersp()->nextp() && statep
+                                        && statep->assertCtlAbsolute()
+                                        && !statep->assertCtlOptional();
                     for (const AstAssertCtlCallerRef* const refp : setp->callerspList()) {
-                        index.byCaller[refp->callerp()].routes.emplace_back(ordinal, setp);
+                        AssertCtlCallerRoutes& caller = index.byCaller[refp->callerp()];
+                        if (cohort) {
+                            caller.cohorts.push_back(setp);
+                        } else {
+                            caller.routes.emplace_back(ordinal, setp);
+                        }
                     }
                     ++ordinal;
                 }
@@ -289,54 +316,51 @@ class ScopeVisitor final : public VNVisitor {
         }
     }
 
-    static void shareAssertionCohorts(AstNetlist* rootp, AstAssertCtlPlan* planp,
-                                      AssertCtlPlanIndex& index,
-                                      std::vector<AstAssertCtlTargetSet*>& sets, size_t baseRows) {
-        using Choice = std::pair<size_t, const AstAssertCtlTargetSet*>;
-        std::unordered_map<const AstAssertCtlCaller*, Choice> choices;
-        for (AstAssertCtlTargetSet* const routep : planp->setspList()) {
-            if (!routep->callersp() || !routep->callersp()->nextp() || !routep->targetsp())
-                continue;
-            // Only proven cohorts have non-optional absolute routes.
-            const AstVarXRef* const refp = VN_CAST(routep->targetsp()->statep(), VarXRef);
-            if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) continue;
-            size_t rows = 0;
-            for (const AstAssertCtlTarget* const targetp : routep->targetspList()) {
-                (void)targetp;
-                ++rows;
-            }
-            if (rows <= baseRows) continue;
-            for (const AstAssertCtlCallerRef* const memberp : routep->callerspList()) {
-                Choice& choice = choices[memberp->callerp()];
-                if (rows > choice.first) choice = {rows, routep};
-            }
-        }
-        // Share the largest eligible list for each caller. Keep the route prototype for
-        // members that chose a different base; each shared copy is made only once.
-        for (AstAssertCtlTargetSet* const routep : planp->setspList()) {
-            AstAssertCtlTargetSet* sharedp = nullptr;
-            for (const AstAssertCtlCallerRef* const memberp : routep->callerspList()) {
-                const auto found = choices.find(memberp->callerp());
-                if (found == choices.end() || found->second.second != routep) continue;
-                if (!sharedp) {
-                    sharedp = new AstAssertCtlTargetSet{routep->fileline(),
-                                                        routep->targetsp()->cloneTree(true)};
-                    for (AstAssertCtlTarget* const targetp : sharedp->targetspList()) {
-                        VN_AS(targetp->statep(), VarXRef)->inlinedDots("");
-                    }
-                    rootp->addMiscsp(sharedp);
-                    sets.push_back(sharedp);
+    AstAssertCtlTargetSet* shareAssertionTargets(AstAssertCtlApply* applyp,
+                                                 AssertCtlPlanIndex& index,
+                                                 const AssertCtlComponents& cohorts) {
+        AstAssertCtlTargetSet* const sourcep = applyp->targetSetp();
+        AstAssertCtlTargetSet* const commonp = index.sharedp;
+        if (cohorts.empty() && !(sourcep && commonp)) return sourcep ? sourcep : commonp;
+
+        AssertCtlComponents components;
+        components.reserve(cohorts.size() + 2);
+        components.push_back(sourcep);
+        components.push_back(commonp);
+        components.insert(components.end(), cohorts.begin(), cohorts.end());
+        const auto entry = index.unions.try_emplace(std::move(components), nullptr);
+        if (!entry.second) return entry.first->second;
+        AstAssertCtlTargetSet* const sharedp = new AstAssertCtlTargetSet{
+            applyp->fileline(),
+            sourcep && sourcep->targetsp() ? sourcep->targetsp()->cloneTree(true) : nullptr};
+        entry.first->second = sharedp;
+        v3Global.rootp()->addMiscsp(sharedp);
+        m_assertCtlTargetSets.push_back(sharedp);
+
+        // The source list comes first. Merge the ordered cohort and common streams by ordinal
+        // so binding can keep the first occurrence and minimum depth for every concrete site.
+        const VNList<AstAssertCtlTarget> common{commonp ? commonp->targetsp() : nullptr};
+        auto next = common.begin();
+        for (const AstAssertCtlTargetSet* const routep : cohorts) {
+            for (AstAssertCtlTarget* const targetp : routep->targetspList()) {
+                while (next != common.end() && (*next)->ordinal() < targetp->ordinal()) {
+                    sharedp->addTargetsp((*next)->cloneTree(false));
+                    ++next;
                 }
-                AssertCtlCallerRoutes& caller = index.byCaller[memberp->callerp()];
-                caller.sharedp = sharedp;
-                caller.sharedRoutep = routep;
+                AstAssertCtlTarget* const clonep = targetp->cloneTree(false);
+                VN_AS(clonep->statep(), VarXRef)->inlinedDots("");
+                sharedp->addTargetsp(clonep);
             }
         }
+        while (next != common.end()) {
+            sharedp->addTargetsp((*next)->cloneTree(false));
+            ++next;
+        }
+        return sharedp;
     }
 
-    std::vector<AstAssertCtlTargetSet*> prepareAssertionTargets(AstNetlist* rootp) {
-        std::vector<AstAssertCtlTargetSet*> sets;
-        if (!v3Global.hasAssertCtlReads()) return sets;
+    void prepareAssertionTargets(AstNetlist* rootp) {
+        if (!v3Global.hasAssertCtlReads()) return;
         // Capture the live operations before changing their tree ownership.
         std::vector<AstAssertCtlApply*> applies;
         rootp->foreach([&](AstAssertCtlApply* applyp) { applies.push_back(applyp); });
@@ -347,7 +371,7 @@ class ScopeVisitor final : public VNVisitor {
             if (sourcep) {
                 const auto source = sourceSets.try_emplace(sourcep, 0);
                 if (source.second) {
-                    sets.push_back(sourcep);
+                    m_assertCtlTargetSets.push_back(sourcep);
                     separateAbsoluteTargets(sourcep->targetsp(), source.first->second, nullptr);
                 }
                 ordinal = source.first->second;
@@ -356,42 +380,28 @@ class ScopeVisitor final : public VNVisitor {
             if (planp && m_assertCtlPlans[planp].sourceUses++) continue;
             if (!planp && !applyp->targetsp()) continue;
             AstAssertCtlTargetSet* const sharedp
-                = sourcep ? nullptr : new AstAssertCtlTargetSet{applyp->fileline(), nullptr};
+                = sourcep && !planp ? nullptr
+                                    : new AstAssertCtlTargetSet{applyp->fileline(), nullptr};
             separateAbsoluteTargets(applyp->targetsp(), ordinal, sharedp);
+            if (!sharedp) continue;
             if (planp) {
                 for (AstAssertCtlTargetSet* const setp : planp->setspList()) {
                     separateAbsoluteTargets(setp->targetsp(), ordinal,
                                             setp->callersp() ? nullptr : sharedp);
                 }
             }
-            if (sourcep) {
-                if (planp) {
-                    shareAssertionCohorts(rootp, planp, m_assertCtlPlans.at(planp), sets,
-                                          sourceSets.at(sourcep));
-                }
-                continue;
-            }
             if (sharedp->targetsp()) {
                 rootp->addMiscsp(sharedp);
-                sets.push_back(sharedp);
+                m_assertCtlTargetSets.push_back(sharedp);
                 if (planp) {
                     m_assertCtlPlans.at(planp).sharedp = sharedp;
-                    size_t rows = 0;
-                    for (const AstAssertCtlTarget* const targetp : sharedp->targetspList()) {
-                        (void)targetp;
-                        ++rows;
-                    }
-                    shareAssertionCohorts(rootp, planp, m_assertCtlPlans.at(planp), sets, rows);
                 } else {
                     applyp->targetSetp(sharedp);
                 }
             } else {
                 VL_DO_DANGLING(sharedp->deleteTree(), sharedp);
-                if (planp)
-                    shareAssertionCohorts(rootp, planp, m_assertCtlPlans.at(planp), sets, 0);
             }
         }
-        return sets;
     }
 
     // VISITORS
@@ -402,16 +412,20 @@ class ScopeVisitor final : public VNVisitor {
             return;
         }
         // Each concrete caller must materialize each live source operation once.
-        const std::vector<AstAssertCtlTargetSet*> sharedTargets = prepareAssertionTargets(nodep);
+        prepareAssertionTargets(nodep);
         if (v3Global.hasAssertCtlReads()) indexAssertionPlans(nodep);
         // Operate starting at the top of the hierarchy
         m_aboveCellp = nullptr;
         m_aboveScopep = nullptr;
         countInstantiations(modp);
         iterate(modp);
-        for (AstAssertCtlTargetSet* const setp : sharedTargets) {
+        for (AstAssertCtlTargetSet* const setp : m_assertCtlTargetSets) {
             setp->unlinkFrBack();
-            nodep->topScopep()->scopep()->addBlocksp(setp);
+            if (setp->user3()) {
+                nodep->topScopep()->scopep()->addBlocksp(setp);
+            } else {
+                VL_DO_DANGLING(pushDeletep(setp), setp);
+            }
         }
         UASSERT_OBJ(m_assertCtlCallers.empty(), nodep, "Unscoped assertion selector callers");
         if (!V3Error::errorCount()) {
@@ -578,29 +592,21 @@ class ScopeVisitor final : public VNVisitor {
             ++caller.uses;
             UASSERT_OBJ(caller.uses <= index.sourceUses, nodep,
                         "Assertion selector plan materialized too many times for this caller");
+            nodep->targetSetp(shareAssertionTargets(nodep, index, caller.cohorts));
             const AssertCtlRoutes& local = caller.routes;
-            if (caller.sharedp) {
-                AstAssertCtlTargetSet* const currentp
-                    = nodep->targetSetp() ? nodep->targetSetp() : index.sharedp;
-                if (currentp && currentp->targetsp()) {
-                    nodep->addTargetsp(currentp->targetsp()->cloneTree(true));
-                }
-                nodep->targetSetp(caller.sharedp);
-            }
             auto a = index.common.begin();
             auto b = local.begin();
             while (a != index.common.end() || b != local.end()) {
                 const bool common
                     = b == local.end() || (a != index.common.end() && a->first < b->first);
                 const AstAssertCtlTargetSet* const setp = common ? (a++)->second : (b++)->second;
-                if (setp == caller.sharedRoutep) continue;
                 if (AstAssertCtlTarget* const targetsp = setp->targetsp()) {
                     nodep->addTargetsp(targetsp->cloneTree(true));
                 }
             }
-            if (!nodep->targetSetp()) nodep->targetSetp(index.sharedp);
             nodep->planp(nullptr);
         }
+        if (AstAssertCtlTargetSet* const setp = nodep->targetSetp()) setp->user3(true);
         iterateChildren(nodep);
     }
     void visit(AstNodeProcedure* nodep) override {
