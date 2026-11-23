@@ -296,7 +296,7 @@ module t (
     `checkd(ref_fails_mix, 15);
     `checkd(ref_fails_wrap, 13);
     `checkd(ref_fails_req, 12);
-    `checkd(ref_fails_wide, 8);
+    `checkd(ref_fails_wide, 4);
     `checkd(ref_fails_part, 11);
     `checkd(ref_fails_plus, 11);
     `checkd(ref_fails_clk, 8);

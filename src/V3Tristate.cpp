@@ -3137,13 +3137,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                 } else if (const AstSel* const selp = VN_CAST(nodep->backp(), Sel)) {
                     // Bits a select does not write stay undriven; constant selects writing
                     // every bit write the whole variable
-                    if (const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const)) {
+                    if (VN_IS(selp->lsbp(), Const)) {
                         aux.selBits.resize(nodep->width());
-                        // The position is unsigned, as V3Unknown checks it; bits out of range
-                        // are ignored
-                        const uint64_t lsb = lsbp->toUInt();
-                        const uint64_t end
-                            = std::min<uint64_t>(lsb + selp->widthConst(), nodep->width());
+                        // Bits out of range are ignored
+                        const std::pair<uint64_t, int> bits = selp->constSelectedBits();
+                        const uint64_t lsb = bits.first;
+                        const uint64_t end = std::min<uint64_t>(lsb + bits.second, nodep->width());
                         for (uint64_t i = lsb; i < end; ++i) {
                             if (!aux.selBits[i]) {
                                 aux.selBits[i] = true;

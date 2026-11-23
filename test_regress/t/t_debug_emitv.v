@@ -457,6 +457,9 @@ module t (/*AUTOARG*/
     if (after_struct_packed) $write("");
     if (ascending_packed[2]) $write("");
     if (uns_int > 0) $write("");
+    // verilator lint_off SELRANGE
+    if (ascending_packed[uns_int+:4] != 0) $write("");
+    // verilator lint_on SELRANGE
     if (usarr.marr[0] != 0) $write("");
     if (arraymanyd[10][12][14][6][4][2]) $write("");
     if (var_part != 0) $write("");
