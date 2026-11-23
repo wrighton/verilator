@@ -66,6 +66,7 @@ int main(int argc, char** argv) {
 
     topp->clk = 0;
     topp->drv = 0x11;
+    topp->sel = 1;
     topp->eval();
     const vpiHandle ip = handle("top.t.u1.i");
     const vpiHandle op = handle("top.t.u1.o");
@@ -103,10 +104,22 @@ int main(int argc, char** argv) {
     topp->eval();
     check("release o", topp->out1, 0x44);
 
+    // A force and another input change in one evaluation, without an edge
+    put(ip, 0x3c, vpiForceFlag);
+    topp->sel = 2;
+    topp->eval();
+    check("force i with sel", topp->out1, 0x3c);
+    check("force i with sel, m", topp->m1, 0x03);
+    put(ip, 0, vpiReleaseFlag);
+    topp->sel = 1;
+    topp->eval();
+    check("release i with sel", topp->out1, 0x44);
+    check("release i with sel, m", topp->m1, 0x02);
+
     // A force of a clock makes an edge where the instance sees all its inputs
     topp->drv = 0x11;
     topp->eval();
-    const int n = topp->n1;
+    int n = topp->n1;
     put(clkp, 1, vpiForceFlag);
     topp->eval();
     check("force clk", topp->n1, (n + 1) & 0x7f);
@@ -127,6 +140,20 @@ int main(int argc, char** argv) {
     put(clkp, 0, vpiReleaseFlag);
     topp->eval();
     check("release clk", topp->n1, (n + 2) & 0x7f);
+    // Held low while its driver rises, then released while the data input changes, the edge
+    // samples the new data
+    n = topp->n1;
+    put(clkp, 0, vpiForceFlag);
+    topp->clk = 1;
+    topp->eval();
+    check("hold clk low, driver rises", topp->n1, n);
+    topp->drv = 0x47;
+    put(clkp, 0, vpiReleaseFlag);
+    topp->eval();
+    check("release clk high with data", topp->n1, (n + 1) & 0x7f);
+    check("release clk high with data, q", topp->q1, 0x47);
+    topp->clk = 0;
+    topp->eval();
 
     // A write of a whole array
     const vpiHandle memp = handle("top.t.u1.mem");
@@ -140,36 +167,52 @@ int main(int argc, char** argv) {
     topp->eval();
     check("put array", topp->m1, 0x32);
 
-    // Likewise a force of a port of a library instance within one
+    // Likewise a force of a port of a library instance without a clock within one
     const vpiHandle lp = handle("top.t.u1.l.i");
-    check("leaf", topp->leaf1, 0x2a);
+    check("leaf", topp->leaf1, 0x39);
     put(lp, 0x5a, vpiForceFlag);
     topp->eval();
-    check("force leaf i", topp->leaf1, 0x5a);
+    check("force leaf i", topp->leaf1, 0x5b);
     topp->drv = 0x66;
     topp->eval();
-    check("force leaf i, drv changes", topp->leaf1, 0x5a);
+    check("force leaf i, drv changes", topp->leaf1, 0x5b);
+    topp->sel = 3;
+    topp->eval();
+    check("force leaf i, sel changes", topp->leaf1, 0x59);
     put(lp, 0, vpiReleaseFlag);
     topp->eval();
-    check("release leaf i", topp->leaf1, 0x19);
+    check("release leaf i", topp->leaf1, 0x1a);
+    put(lp, 0x2d, vpiForceFlag);
+    topp->sel = 1;
+    topp->eval();
+    check("force leaf i with sel", topp->leaf1, 0x2c);
+    put(lp, 0, vpiReleaseFlag);
+    topp->eval();
+    check("release leaf i with sel", topp->leaf1, 0x18);
 
 #ifndef T_FLAT
-    // Only the instance written through the VPI is evaluated again, and an unrelated export
-    // evaluates none
-    const int evaluations1 = evaluations[1];
-    const int evaluations2 = evaluations[2];
+    // An unrelated export evaluates no instance, and a write through the VPI evaluates only
+    // the written instance, beyond the evaluations of an evaluation without them
     svSetScope(svGetScopeFromName("top.t"));
+    int evaluations1 = evaluations[1];
+    int evaluations2 = evaluations[2];
+    topp->eval();
+    const int idle1 = evaluations[1] - evaluations1;
+    const int idle2 = evaluations[2] - evaluations2;
     for (int k = 0; k < 10; ++k) {
+        evaluations1 = evaluations[1];
+        evaluations2 = evaluations[2];
         tb_set(k);
         topp->eval();
+        check("export, u1 evaluations", evaluations[1] - evaluations1, idle1);
+        check("export, u2 evaluations", evaluations[2] - evaluations2, idle2);
     }
     check("export", topp->tbo, 10);
-    check("export, u1 evaluations", evaluations[1], evaluations1);
-    check("export, u2 evaluations", evaluations[2], evaluations2);
+    evaluations2 = evaluations[2];
     put(ip, 0x2b, vpiForceFlag);
     topp->eval();
-    check("force i, written instance evaluated", evaluations[1] > evaluations1, 1);
-    check("force i, u2 evaluations", evaluations[2], evaluations2);
+    check("force i, u1", topp->out1, 0x2b);
+    check("force i, u2 evaluations", evaluations[2] - evaluations2, idle2);
     put(ip, 0, vpiReleaseFlag);
     topp->eval();
 #endif
