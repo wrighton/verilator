@@ -1303,6 +1303,9 @@ private:
         if (AstVarRef* const varrefp = VN_CAST(selp->fromp(), VarRef)) {
             outVarrefpRef = varrefp;
             lsbRef = fetchConst(selp->lsbp())->num();
+            // A computed signed position below zero writes from bit zero up; a constant
+            // position is already a number of its own signedness
+            if (!VN_IS(selp->lsbp(), Const)) lsbRef.isSigned(selp->lsbp()->isSigned());
             return;  // And presumably still optimizable()
         }
         if (AstSel* const subselp = VN_CAST(selp->fromp(), Sel)) {

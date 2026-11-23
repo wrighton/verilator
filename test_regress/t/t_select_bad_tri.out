@@ -2,12 +2,6 @@
    11 |     if (in[((1'h0/1'b0))+:71] != 71'h0) $stop;
       |                  ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Warning-WIDTHEXPAND: t/t_select_bad_tri.v:11:11: Bit extraction of var[72:1] requires 7 bit index, not 1 bits.
-                                                : ... note: In instance 't'
-   11 |     if (in[((1'h0/1'b0))+:71] != 71'h0) $stop;
-      |           ^
-                      ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
-                      ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
 %Error: Internal Error: t/t_select_bad_tri.v:11:18: ../V3Number.cpp:#: toUInt with 4-state 1'bx
                                                   : ... note: In instance 't'
    11 |     if (in[((1'h0/1'b0))+:71] != 71'h0) $stop;

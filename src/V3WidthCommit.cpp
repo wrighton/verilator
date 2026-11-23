@@ -633,6 +633,14 @@ private:
         selLifetimeCheck(nodep, nodep->baseFromp(/* overMembers: */ false));
     }
     void visit(AstSel* nodep) override {
+        // V3Width kept a constant position as written; later passes read it as an integer
+        if (AstConst* const constp = nodep->narrowLsbConst()) {
+            VL_DO_DANGLING(pushDeletep(constp), constp);
+            // V3Width reported the position as written, so the integer is not reported again
+            FileLine* const flp = new FileLine{nodep->fileline()};
+            flp->warnOff(V3ErrorCode::SELRANGE, true);
+            nodep->fileline(flp);
+        }
         {
             VL_RESTORER(m_underSel);
             if (!nodep->isLValue() && !m_contReads) m_underSel = true;

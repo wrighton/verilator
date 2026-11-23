@@ -695,7 +695,7 @@ class UndrivenVisitor final : public VNVisitorConst {
         // A select of the whole vector has the whole vector as its longest static
         // prefix (IEEE 1800-2023 11.5.3), so treat it as a whole-variable access.
         // Aggregate selects come from member accesses and stay per-bit.
-        const bool wholeSel = constSel && constp->toUInt() == 0
+        const bool wholeSel = constSel && constp->num().isEqZero()
                               && nodep->width() == varrefp->varp()->width()
                               && !VN_IS(nodep->fromp()->dtypep()->skipRefp(), NodeUOrStructDType);
         if (wholeSel) {
@@ -703,22 +703,22 @@ class UndrivenVisitor final : public VNVisitorConst {
             return;
         }
         if (constSel) {
+            const std::pair<uint64_t, int> bits = nodep->constSelectedBits();
             for (int usr = 1; usr < (m_alwaysCombp ? 3 : 2); ++usr) {
                 UndrivenVarEntry* const entryp = getEntryp(varrefp->varp(), usr);
-                const uint32_t lsb = constp->toUInt();
                 if (m_inBBox || varrefp->access().isWriteOrRW()) {
                     // Don't warn if already driven earlier as "a=0; if(a) a=1;" is fine.
                     if (usr == 2 && m_alwaysCombp
-                        && entryp->isUsedNotDrivenBit(lsb, nodep->width())) {
+                        && entryp->isUsedNotDrivenBit(bits.first, bits.second)) {
                         UINFO(9, " Select.  Entryp=" << cvtToHex(entryp));
                         warnAlwCombOrder(varrefp, entryp->firstUsedNotDrivenp());
                     }
-                    entryp->drivenBit(lsb, nodep->width());
+                    entryp->drivenBit(bits.first, bits.second);
                     // Partial-range continuous assigns count as drivers too
                     if (usr == 1 && isContDriver(varrefp)) entryp->addContDriver(varrefp);
                 }
                 if (m_inBBox || !varrefp->access().isWriteOrRW())
-                    entryp->usedBit(lsb, nodep->width(), varrefp);
+                    entryp->usedBit(bits.first, bits.second, varrefp);
             }
         } else {
             // skip over static longest static prefix
@@ -731,7 +731,8 @@ class UndrivenVisitor final : public VNVisitorConst {
             VL_RESTORER(m_memberSelWidth);
             // The width is known, but an X/Z LSB has no definite offset for toUInt().
             // Track it like a dynamic index rather than claiming a specific bit range.
-            if (constp && !constp->num().isFourState()
+            // A constant folded wider than an integer is narrowed only by a later V3Const pass
+            if (constp && !constp->num().isFourState() && constp->num().fitsInUInt()
                 && (VN_IS(nodep->fromp(), Sel) || VN_IS(nodep->fromp(), MemberRef))) {
                 m_memberSelLsb = constp->toUInt() + (m_memberSelWidth ? m_memberSelLsb : 0);
                 if (!m_memberSelWidth) m_memberSelWidth = nodep->width();
