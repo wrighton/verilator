@@ -21,12 +21,15 @@
 #include "verilatedos.h"
 
 class AstNetlist;
+class AstNodeExpr;
 
 //============================================================================
 
 class V3Unknown final {
 public:
     static void unknownAll(AstNetlist* nodep) VL_MT_DISABLED;
+    // Return an upper bound of the unsigned value of 'exprp'
+    static uint64_t staticMax(const AstNodeExpr* exprp) VL_MT_DISABLED;
 };
 
 #endif  // Guard
