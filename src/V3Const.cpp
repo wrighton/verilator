@@ -34,6 +34,7 @@
 #include "V3Stats.h"
 #include "V3String.h"
 #include "V3UniqueNames.h"
+#include "V3Unknown.h"
 #include "V3Width.h"
 
 #include <algorithm>
@@ -1679,7 +1680,7 @@ class ConstVisitor final : public VNVisitor {
         AstExtend* const extendp = VN_CAST(nodep->fromp(), Extend);
         if (!extendp) return false;
         AstConst* const lsbp = VN_CAST(nodep->lsbp(), Const);
-        if (!lsbp) return false;
+        if (!lsbp || !selConstInRange(nodep)) return false;
         const int width = nodep->widthConst();
         const int lsb = lsbp->toSInt();
         const int msb = lsb + width - 1;
@@ -1859,10 +1860,15 @@ class ConstVisitor final : public VNVisitor {
                                           ? ""
                                           : (" (adjusted +" + cvtToStr(-nodep->declRange().lo())
                                              + " to account for negative lsb)")));
-                UINFO(1, "    Related Raw index is " << nodep->msbConst() << ":"
-                                                     << nodep->lsbConst());
+                UINFO(1, "    Related Raw index is " << nodep->lsbConstStr(nodep->widthConst() - 1)
+                                                     << ":" << nodep->lsbConstStr(0));
                 // Don't replace with zero, we'll do it later
             }
+        }
+        // A position folded to a constant wider than an integer is read as one by later passes,
+        // after the warning above reported it as written
+        if (AstConst* const constp = nodep->narrowLsbConst()) {
+            VL_DO_DANGLING(pushDeletep(constp), constp);
         }
         return false;  // Not a transform, so NOP
     }
@@ -1938,9 +1944,37 @@ class ConstVisitor final : public VNVisitor {
     bool ifConcatMergeableBiop(const AstNode* nodep) {
         return (VN_IS(nodep, And) || VN_IS(nodep, Or) || VN_IS(nodep, Xor));
     }
+    // Whether 'selp' is a select at a constant position selecting only bits of its value: one
+    // partly or wholly out of range is left for V3Unknown, as its position may read as negative
+    static bool selConstInRange(const AstSel* selp) {
+        return VN_IS(selp->lsbp(), Const) && !selp->lsbConstOutOfRange(selp->fromp()->width() - 1);
+    }
+    // Whether a select moved into a bitwise negation reads the same: one of a 2-state value must
+    // select only bits of its value at any value of its position, as the negation of a zero out
+    // of range is not zero
+    static bool selNotMovable(const AstSel* selp) {
+        if (selp->dtypep()->isFourstate()) return true;
+        if (VN_IS(selp->lsbp(), Const)) return selConstInRange(selp);
+        const int width = selp->widthConst();
+        const int fromWidth = selp->fromp()->width();
+        return width <= fromWidth
+               && V3Unknown::staticMax(selp->lsbp()) <= static_cast<uint64_t>(fromWidth - width);
+    }
+    // Whether 'nodep' reads a 4-state constant all X at a repeatable position, which it then
+    // need not evaluate, so reads X in range or not
+    static bool operandSelAllX(const AstSel* nodep) {
+        return nodep->dtypep()->isFourstate() && VN_AS(nodep->fromp(), Const)->num().isAllX()
+               && nodep->lsbp()->isRepeatable();
+    }
+    void replaceSelAllX(AstSel* nodep) {
+        V3Number num{nodep, nodep->width()};
+        num.setAllBitsX();
+        VL_DO_DANGLING(replaceNum(nodep, num), nodep);
+    }
     bool ifAdjacentSel(const AstSel* lhsp, const AstSel* rhsp) {
         if (!v3Global.opt.fAssemble()) return false;  // opt disabled
         if (!lhsp || !rhsp) return false;
+        if (!selConstInRange(lhsp) || !selConstInRange(rhsp)) return false;
         const AstNode* const lfromp = lhsp->fromp();
         const AstNode* const rfromp = rhsp->fromp();
         if (!lfromp || !rfromp || !lfromp->sameGateTree(rfromp)) return false;
@@ -1958,8 +1992,8 @@ class ConstVisitor final : public VNVisitor {
         const AstSel* const lselp = VN_CAST(lhsp, Sel);
         const AstSel* const rselp = VN_CAST(rhsp, Sel);
         if (!lselp && !rselp) return false;
-        if (lselp && !VN_IS(lselp->lsbp(), Const)) return false;
-        if (rselp && !VN_IS(rselp->lsbp(), Const)) return false;
+        if (lselp && !selConstInRange(lselp)) return false;
+        if (rselp && !selConstInRange(rselp)) return false;
         // a[i:j] {a[j-1:k], b}
         if (lselp && !rselp && VN_IS(rhsp, Concat))
             return ifMergeAdjacent(lhsp, VN_AS(rhsp, Concat)->lhsp());
@@ -2530,6 +2564,7 @@ class ConstVisitor final : public VNVisitor {
         if (!con1p) return false;
         const AstConst* const con2p = VN_CAST(sel2p->lsbp(), Const);
         if (!con2p) return false;
+        if (!selConstInRange(sel1p) || !selConstInRange(sel2p)) return false;
         // We need to make sure there's no self-references involved in either
         // assignment.  For speed, we only look 3 deep, then give up.
         if (!varNotReferenced(nodep->rhsp(), varref1p->varp())) return false;
@@ -3394,39 +3429,247 @@ class ConstVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
+    // Whether a read of a select of a select is at a constant position wholly outside the lower
+    // select, so reads out-of-range bits, not bits beyond the lower select
+    static bool operandSelSelOutside(AstSel* nodep) {
+        if (nodep->isLValue()) return false;
+        AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
+        const AstConst* const constp = VN_CAST(nodep->lsbp(), Const);
+        if (!constp || constp->num().isFourState()) return false;
+        const V3Number& num = constp->num();
+        if (num.isSigned() && num.isNegative()) {
+            return num.width() <= VL_QUADSIZE && num.toSQuad() + nodep->widthConst() <= 0;
+        }
+        return !num.fitsInUInt() || num.toUInt() >= static_cast<uint32_t>(belowp->width());
+    }
+    void replaceSelSelOutside(AstSel* nodep) {
+        V3Number num{nodep, nodep->width()};
+        if (nodep->dtypep()->isFourstate()) {
+            num.setAllBitsX();
+        } else {
+            num.setAllBits0();
+        }
+        AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
+        if (belowp->isRepeatable()) {
+            VL_DO_DANGLING(replaceNum(nodep, num), nodep);
+            return;
+        }
+        // The lower select is still evaluated for its side effects, its value intentionally
+        // discarded
+        FileLine* const flp = nodep->fileline();
+        FileLine* const stmtFlp = new FileLine{flp};
+        stmtFlp->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+        AstNodeExpr* const newp = new AstExprStmt{
+            flp, new AstStmtExpr{stmtFlp, belowp->unlinkFrBack()}, new AstConst{flp, num}};
+        nodep->replaceWith(newp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+    // Return the width of the value of select 'selp', not of the padding V3Width may extend it
+    // with, which reads as out of range
+    static int valueWidthOf(const AstSel* selp) {
+        return selp->valueWidth() ? selp->valueWidth() : selp->fromp()->width();
+    }
+    // Return the top of lower select 'belowp' if a read past it can read out of range of the
+    // value only, else 0: it is at a constant position, partly above the bottom of the value,
+    // and reading below it needs it to start at or below the bottom, if upper position 'lsbp'
+    // may be negative.
+    static int64_t readPastTop(const AstSel* belowp, const AstNodeExpr* lsbp) {
+        const AstConst* const constp = VN_CAST(belowp->lsbp(), Const);
+        if (!constp || constp->num().isFourState() || constp->width() > VL_IDATASIZE) return 0;
+        const V3Number& num = constp->num();
+        const int64_t lsb = num.isSigned() && num.isNegative()
+                                ? static_cast<int64_t>(num.toUInt()) - (int64_t{1} << num.width())
+                                : static_cast<int64_t>(num.toUInt());
+        const int64_t top = lsb + belowp->widthConst();
+        if (top <= 0 || (lsb > 0 && mayBeNegative(lsbp))) return 0;
+        return top;
+    }
+    // Whether read 'nodep' of a lower select reads past it only out of range of the value, so
+    // composes at any upper position
+    static bool readsPastLower(const AstSel* nodep) {
+        return !nodep->isLValue() && readPastTop(VN_AS(nodep->fromp(), Sel), nodep->lsbp());
+    }
+    // Whether select position 'lsbp' may be negative: a negative integer constant, or signed
+    static bool mayBeNegative(const AstNodeExpr* lsbp) {
+        if (const AstConst* const constp = VN_CAST(lsbp, Const)) {
+            return !constp->num().isFourState() && constp->num().isSigned()
+                   && constp->num().isNegative();
+        }
+        return lsbp->isSigned();
+    }
+    // Whether upper position 'lsbp' of select 'nodep' of lower select 'belowp' is known to
+    // select within the lower select
+    static bool withinLower(const AstNodeExpr* lsbp, const AstSel* belowp, const AstSel* nodep) {
+        if (nodep->widthConst() > belowp->width()) return false;
+        const uint32_t maxLsb = belowp->width() - nodep->widthConst();
+        if (const AstConst* const constp = VN_CAST(lsbp, Const)) {
+            const V3Number& num = constp->num();
+            return !num.isFourState() && !(num.isSigned() && num.isNegative()) && num.fitsInUInt()
+                   && num.toUInt() <= maxLsb;
+        }
+        // An unsigned position narrower than an integer is bounded by its width
+        return !lsbp->isSigned() && lsbp->width() < VL_IDATASIZE
+               && (uint64_t{1} << lsbp->width()) - 1 <= maxLsb;
+    }
     void replaceSelSel(AstSel* nodep) {
         // SEL(SEL({x},a,b),c,d) => SEL({x},a+c,d)
         // cppcheck-suppress constVariablePointer // children unlinked below
         AstSel* const belowp = VN_AS(nodep->fromp(), Sel);
-        AstNodeExpr* const fromp = belowp->fromp()->unlinkFrBack();
+        const bool lvalue = nodep->isLValue();
+        const bool readsPast = readsPastLower(nodep);
+        const bool within = withinLower(nodep->lsbp(), belowp, nodep);
+        const bool upperSigned = mayBeNegative(nodep->lsbp());
+        const int valueWidth = valueWidthOf(belowp);
+        const int64_t readTop = readsPast && !within ? readPastTop(belowp, nodep->lsbp()) : 0;
+        // A lower select of a padded value loses the mark of its value's width; V3Unknown then
+        // guards the padded width, whose padding reads as out of range all the same
+        AstNodeExpr* fromp = belowp->fromp()->unlinkFrBack();
+        // A read past the lower select reads the value up to the top of the lower select or of
+        // the value, the end it reads up to, padded above with bits out of range as wide as the
+        // read, so one starting below that end selects only within what it reads from, and
+        // V3Unknown reads one starting at or above it as out of range
+        const int readEnd = static_cast<int>(std::min<int64_t>(readTop, valueWidth));
+        if (readTop) {
+            FileLine* const flp = fromp->fileline();
+            if (readEnd < fromp->width()) fromp = new AstSel{flp, fromp, 0, readEnd};
+            const bool fourstate = fromp->dtypep()->isFourstate();
+            V3Number pad{nodep, nodep->widthConst()};
+            if (fourstate) {
+                pad.setAllBitsX();
+            } else {
+                pad.setAllBits0();
+            }
+            fromp = new AstConcat{flp, new AstConst{flp, pad}, fromp};
+            fromp->dtypeSetBitOrLogicSized(readEnd + nodep->widthConst(), VSigning::UNSIGNED,
+                                           fourstate);
+        }
         AstNodeExpr* const lsb1p = nodep->lsbp()->unlinkFrBack();
         AstNodeExpr* const lsb2p = belowp->lsbp()->unlinkFrBack();
         // Eliminate lower range
         UINFO(4, "Elim Lower range: " << nodep);
         AstNodeExpr* newlsbp;
-        if (VN_IS(lsb1p, Const) && VN_IS(lsb2p, Const)) {
-            newlsbp = new AstConst{lsb1p->fileline(),
-                                   VN_AS(lsb1p, Const)->toUInt() + VN_AS(lsb2p, Const)->toUInt()};
+        // A constant position far above any value, which V3WidthSel gives out of range, or an
+        // upper one below or past the lower select, keeps the whole selection out of range. A
+        // lower select may start below the value, as its upper part may be in range.
+        const auto negative = [](const AstNodeExpr* lsbp) {
+            const AstConst* const constp = VN_CAST(lsbp, Const);
+            return constp && !constp->num().isFourState() && constp->num().isSigned()
+                   && constp->num().isNegative();
+        };
+        const auto constOutside = [&](const AstNodeExpr* lsbp, uint32_t width) {
+            const AstConst* const constp = VN_CAST(lsbp, Const);
+            if (!constp || constp->num().isFourState()) return false;
+            const V3Number& num = constp->num();
+            return negative(lsbp) || !num.fitsInUInt()
+                   || num.toUInt() >= std::min(width, static_cast<uint32_t>(AstSel::FAR_POSITION));
+        };
+        // Unless the upper position reads past the lower select only out of range of the value
+        const bool outside1
+            = constOutside(lsb1p, belowp->width()) && !(readsPast && negative(lsb1p));
+        if (outside1 || (!negative(lsb2p) && constOutside(lsb2p, AstSel::FAR_POSITION))) {
+            V3Number num{nodep, VL_IDATASIZE, 0};
+            num.setAllBits1();
+            newlsbp = new AstConst{lsb1p->fileline(), num};
+            AstNodeExpr* const outsidep = outside1 ? lsb1p : lsb2p;
+            AstNodeExpr* const otherp = outside1 ? lsb2p : lsb1p;
+            VL_DO_DANGLING(pushDeletep(outsidep), outsidep);
+            if (otherp->isRepeatable()) {
+                VL_DO_DANGLING(pushDeletep(otherp), otherp);
+            } else {
+                // The other position is still evaluated for its side effects, its value
+                // intentionally discarded
+                FileLine* const flp = otherp->fileline();
+                FileLine* const stmtFlp = new FileLine{flp};
+                stmtFlp->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+                newlsbp = new AstExprStmt{flp, new AstStmtExpr{stmtFlp, otherp}, newlsbp};
+            }
+        } else if (VN_IS(lsb1p, Const) && VN_IS(lsb2p, Const)) {
+            const V3Number& lsb1 = VN_AS(lsb1p, Const)->num();
+            const V3Number& lsb2 = VN_AS(lsb2p, Const)->num();
+            // Both are within the integers, maybe negative
+            const int64_t sum = (negative(lsb1p) ? lsb1.toSQuad() : int64_t{lsb1.toUInt()})
+                                + (negative(lsb2p) ? lsb2.toSQuad() : int64_t{lsb2.toUInt()});
+            V3Number num{nodep, VL_IDATASIZE, 0};
+            if (sum < 0 || sum >= AstSel::FAR_POSITION) {
+                num.setAllBits1();
+            } else {
+                num.setLong(static_cast<uint32_t>(sum));
+            }
+            newlsbp = new AstConst{lsb1p->fileline(), num};
             VL_DO_DANGLING(pushDeletep(lsb1p), lsb1p);
             VL_DO_DANGLING(pushDeletep(lsb2p), lsb2p);
+        } else if ((lsb2p->isSigned()
+                    && (within || readsPast
+                        || (!lvalue && lsb1p->isRepeatable() && lsb2p->isRepeatable()
+                            && nodep->widthConst() <= belowp->width())))
+                   || (upperSigned && readsPast)) {
+            // A position that may be negative is added signed, wide enough not to overflow, to
+            // the other; Unknown reads a negative sum as out of range. A read at an upper position
+            // not known within the lower select keeps the sum only when it is, else the whole
+            // selection is out of range, both positions being repeatable, as the condition copies
+            // one and only one arm evaluates them, unless it reads past the lower select only out
+            // of range of the value; a write there composes unsigned below, so its bits in range
+            // are written.
+            const int width = std::max(lsb1p->width(), lsb2p->width()) + 2;
+            const bool fourstate
+                = lsb1p->dtypep()->isFourstate() || lsb2p->dtypep()->isFourstate();
+            FileLine* const flp = lsb1p->fileline();
+            AstNodeExpr* withinp = nullptr;
+            if (!within && !readsPast) {
+                withinp = new AstGte{
+                    flp,
+                    new AstConst{flp, AstConst::WidthedValue{}, lsb1p->width(),
+                                 static_cast<uint32_t>(belowp->width() - nodep->widthConst())},
+                    lsb1p->cloneTreePure(false)};
+            }
+            const auto newExtend = [width, fourstate](AstNodeExpr* lsbp, bool isSigned) {
+                AstNodeExpr* const extendp
+                    = isSigned ? static_cast<AstNodeExpr*>(
+                                     new AstExtendS{lsbp->fileline(), lsbp, width})
+                               : new AstExtend{lsbp->fileline(), lsbp, width};
+                extendp->dtypeSetBitOrLogicSized(width, VSigning::SIGNED, fourstate);
+                return extendp;
+            };
+            AstNodeExpr* const lowerp = newExtend(lsb2p, mayBeNegative(lsb2p));
+            AstNodeExpr* const upperp = newExtend(lsb1p, upperSigned);
+            newlsbp = new AstAdd{flp, lowerp, upperp};
+            newlsbp->dtypeSetBitOrLogicSized(width, VSigning::SIGNED, fourstate);
+            if (withinp) {
+                V3Number outside{nodep, width, 0};
+                outside.setAllBits1();
+                AstNodeExpr* const outsidep = new AstConst{flp, outside};
+                outsidep->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED, fourstate);
+                newlsbp = new AstCond{flp, withinp, newlsbp, outsidep};
+                newlsbp->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED, fourstate);
+            }
         } else {
-            // Width is important, we need the width of the fromp's expression, not the
-            // potentially smaller lsb1p's width, but don't insert a redundant AstExtend.
-            // Note that due to some sloppiness in earlier passes, lsb1p might actually be wider,
-            // so extend to the wider type.
-            const AstNodeExpr* const widep = lsb1p->width() > lsb2p->width() ? lsb1p : lsb2p;
-            AstNodeExpr* const lhsp = widep->width() > lsb2p->width()
-                                          ? new AstExtend{lsb2p->fileline(), lsb2p}
-                                          : lsb2p;
-            AstNodeExpr* const rhsp = widep->width() > lsb1p->width()
-                                          ? new AstExtend{lsb1p->fileline(), lsb1p}
-                                          : lsb1p;
-            lhsp->dtypeFrom(widep);
-            rhsp->dtypeFrom(widep);
-            newlsbp = new AstAdd{lsb1p->fileline(), lhsp, rhsp};
-            newlsbp->dtypeFrom(widep);
+            // Unsigned, as Unknown checks the position, and as wide as the sum of their largest
+            // values needs, so it does not wrap into range: a position below the lower select
+            // selects no bit
+            const auto maxValue = [](const AstNodeExpr* lsbp) {
+                const AstConst* const constp = VN_CAST(lsbp, Const);
+                if (constp && constp->num().fitsInUInt()) return uint64_t{constp->toUInt()};
+                return (uint64_t{1} << std::min(lsbp->width(), VL_IDATASIZE)) - 1;
+            };
+            const bool narrow = (VN_IS(lsb1p, Const) || lsb1p->width() <= VL_IDATASIZE)
+                                && (VN_IS(lsb2p, Const) || lsb2p->width() <= VL_IDATASIZE);
+            const int sumWidth = narrow
+                                     ? V3Number::log2bQuad(maxValue(lsb1p) + maxValue(lsb2p)) + 1
+                                     : std::max(lsb1p->width(), lsb2p->width()) + 1;
+            const int width = std::max({lsb1p->width(), lsb2p->width(), sumWidth});
+            const bool fourstate
+                = lsb1p->dtypep()->isFourstate() || lsb2p->dtypep()->isFourstate();
+            const auto newWidened = [width, fourstate](AstNodeExpr* lsbp) -> AstNodeExpr* {
+                if (lsbp->width() == width) return lsbp;  // Adds the same bits
+                AstNodeExpr* const extendp = new AstExtend{lsbp->fileline(), lsbp, width};
+                extendp->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED, fourstate);
+                return extendp;
+            };
+            newlsbp = new AstAdd{lsb1p->fileline(), newWidened(lsb2p), newWidened(lsb1p)};
+            newlsbp->dtypeSetBitOrLogicSized(width, VSigning::UNSIGNED, fourstate);
         }
         AstSel* const newp = new AstSel{nodep->fileline(), fromp, newlsbp, nodep->widthConst()};
+        if (readTop) newp->valueWidth(readEnd);
         nodep->replaceWithKeepDType(newp);
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
@@ -3468,7 +3711,7 @@ class ConstVisitor final : public VNVisitor {
         AstReplicate* const repp = VN_AS(nodep->fromp(), Replicate);
         AstNodeExpr* const fromp = repp->srcp();
         const AstConst* const lsbp = VN_CAST(nodep->lsbp(), Const);
-        if (!lsbp) return false;
+        if (!lsbp || !selConstInRange(nodep)) return false;
         UASSERT_OBJ(fromp->width(), nodep, "Not widthed");
         if ((lsbp->toUInt() / fromp->width())
             != ((lsbp->toUInt() + nodep->width() - 1) / fromp->width())) {
@@ -4951,6 +5194,7 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstSel{matchSelRand(nodep)}",      "DONE");
     TREEOPV("AstSel{operandSelExtend(nodep)}",  "DONE");
     TREEOPV("AstSel{operandSelFull(nodep)}",    "replaceWChild(nodep, nodep->fromp())");
+    TREEOPV("AstSel{$fromp.castSel, operandSelSelOutside(nodep)}", "replaceSelSelOutside(nodep)");
     TREEOPV("AstSel{$fromp.castSel}",           "replaceSelSel(nodep)");
     TREEOPV("AstSel{$fromp.castAdd, operandSelBiLower(nodep)}", "DONE");
     TREEOPV("AstSel{$fromp.castAnd, operandSelBiLower(nodep)}", "DONE");
@@ -4959,16 +5203,17 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstSel{$fromp.castXor, operandSelBiLower(nodep)}", "DONE");
     TREEOPV("AstSel{$fromp.castShiftR, operandSelShiftLower(nodep)}",   "DONE");
     TREEOPA("AstSel{$fromp.castConst, $lsbp.castConst, }",   "replaceConst(nodep)");
-    TREEOPV("AstSel{$fromp.castConcat, $lsbp.castConst, $fromp.isPure}",  "replaceSelConcat(nodep)");  // Must not drop side effects
+    TREEOPV("AstSel{$fromp.castConst, operandSelAllX(nodep)}", "replaceSelAllX(nodep)");
+    TREEOPV("AstSel{$fromp.castConcat, $lsbp.castConst, $fromp.isPure, selConstInRange(nodep)}",  "replaceSelConcat(nodep)");  // Must not drop side effects
     TREEOPV("AstSel{$fromp.castReplicate, $lsbp.castConst, operandSelReplicate(nodep) }",    "DONE");
     // V3Tristate requires selects below BufIf1.
     // Also do additional operators that are bit-independent, but only definite
     // win if bit select is a constant (otherwise we may need to compute bit index several times)
     TREEOPV("AstSel{$fromp.castBufIf1}",                "replaceSelIntoBiop(nodep)");
-    TREEOPV("AstSel{$fromp.castNot}",                   "replaceSelIntoUniop(nodep)");
-    TREEOPV("AstSel{$fromp.castAnd,$lsbp.castConst}",   "replaceSelIntoBiop(nodep)");
-    TREEOPV("AstSel{$fromp.castOr,$lsbp.castConst}",    "replaceSelIntoBiop(nodep)");
-    TREEOPV("AstSel{$fromp.castXor,$lsbp.castConst}",   "replaceSelIntoBiop(nodep)");
+    TREEOPV("AstSel{$fromp.castNot, selNotMovable(nodep)}", "replaceSelIntoUniop(nodep)");
+    TREEOPV("AstSel{$fromp.castAnd,$lsbp.castConst, selConstInRange(nodep)}",   "replaceSelIntoBiop(nodep)");
+    TREEOPV("AstSel{$fromp.castOr,$lsbp.castConst, selConstInRange(nodep)}",    "replaceSelIntoBiop(nodep)");
+    TREEOPV("AstSel{$fromp.castXor,$lsbp.castConst, selConstInRange(nodep)}",   "replaceSelIntoBiop(nodep)");
     // This visit function here must allow for short-circuiting.
     TREEOPS("AstLogIf{$lhsp.isZero}",  "replaceNum(nodep, 1)");
     TREEOPV("AstLogIf{$lhsp, $rhsp}",  "AstLogOr{AstLogNot{$lhsp},$rhsp}");

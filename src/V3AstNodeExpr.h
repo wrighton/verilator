@@ -4306,8 +4306,13 @@ class AstSel final : public AstNodeBiop {
     int m_declElWidth;  // If a packed array, the number of bits per element
     // Selection width (!= this->width() from V3Clean onwards, != this->widthMin() in V3Width)
     int m_widthConst;
+    // Width of a value V3Width padded to the selection's width, else 0
+    int m_valueWidth = 0;
 
 public:
+    // A constant position from here up is out of range of any value, and far enough from the
+    // integer limit that the top bit of its selection is an integer too
+    static constexpr int64_t FAR_POSITION = int64_t{1} << 30;
     AstSel(FileLine* fl, AstNodeExpr* fromp, AstNodeExpr* lsbp, int bitwidth)
         : ASTGEN_SUPER_Sel(fl, fromp, lsbp)
         , m_declElWidth{1}
@@ -4349,13 +4354,16 @@ public:
     bool sizeMattersLhs() const override { return false; }
     bool sizeMattersRhs() const override { return false; }
     bool sameNode(const AstNode* otherp) const override {
-        return widthConst() == VN_DBG_AS(otherp, Sel)->widthConst();
+        const AstSel* const selp = VN_DBG_AS(otherp, Sel);
+        return widthConst() == selp->widthConst() && valueWidth() == selp->valueWidth();
     }
     int instrCount() const override {
         return widthInstrs() * (VN_CAST(lsbp(), Const) ? 3 : 10) + 1;
     }
     int widthConst() const { return m_widthConst; }
     void widthConst(int value) { m_widthConst = value; }
+    // A constant lsbp() is an integer from V3WidthCommit on, or once V3Const::warnSelect sees one
+    // folded later
     int lsbConst() const { return VN_AS(lsbp(), Const)->toSInt(); }
     // Wider than int, as a position may be near the integer limit
     int64_t msbConst() const { return static_cast<int64_t>(lsbConst()) + widthConst() - 1; }
@@ -4364,6 +4372,22 @@ public:
     // Constant lsbp() plus 'offset', divided by 'scale', as text, negative only for a negative
     // signed lsbp()
     string lsbConstStr(int offset, int scale = 1) const;
+    // Replace a constant position wider than an integer, or far above any value, by an integer,
+    // as passes read it: its value if it fits and is not far above, else the most negative
+    // integer or, above, the largest 32-bit value, both out of range; return the replaced
+    // constant, to delete
+    AstConst* narrowLsbConst();
+    // Constant lsbp() as an integer, as narrowLsbConst() would give it
+    int lsbConstInt() const;
+    // Set 'narrow' to constant position 'num', signed if 'isSigned', as an integer, as
+    // narrowLsbConst() describes; return whether that changes it
+    static bool narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow);
+    // First bit and number of bits from the bottom of the value a select at a constant position
+    // accesses, as V3Unknown reads the position: one narrowed to a negative integer clips at bit
+    // zero, and one far above the value accesses no bit
+    std::pair<uint64_t, int> constSelectedBits() const;
+    int valueWidth() const { return m_valueWidth; }
+    void valueWidth(int value) { m_valueWidth = value; }
     VNumRange& declRange() VL_MT_STABLE { return m_declRange; }
     const VNumRange& declRange() const VL_MT_STABLE { return m_declRange; }
     void declRange(const VNumRange& flag) { m_declRange = flag; }

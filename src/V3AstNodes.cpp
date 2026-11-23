@@ -3538,6 +3538,9 @@ const AstNodeExpr* AstNodeExpr::getVAccessTargetRecurse() const {
     if (const AstStructSel* const anodep = VN_CAST(this, StructSel)) {
         return anodep->fromp()->getVAccessTargetRecurse();
     }
+    if (const AstSliceSel* const anodep = VN_CAST(this, SliceSel)) {
+        return anodep->fromp()->getVAccessTargetRecurse();
+    }
     if (const AstConcat* const anodep = VN_CAST(this, Concat)) {
         // Enough to check only one side, as both must be same otherwise malformed
         return anodep->lhsp()->getVAccessTargetRecurse();
@@ -4502,6 +4505,18 @@ std::string AstScopeName::scopePrettyNameFormatter(const std::string& text) {
     if (out.substr(0, 1) == ".") out.replace(0, 1, "");
     return AstNode::prettyName(out);
 }
+std::pair<uint64_t, int> AstSel::constSelectedBits() const {
+    const AstConst* const constp = VN_AS(lsbp(), Const);
+    V3Number narrow{constp->fileline(), VL_IDATASIZE, 0};
+    const bool narrowed = narrowPosition(constp->num(), constp->isSigned(), narrow);
+    const V3Number& pos = narrowed ? narrow : constp->num();
+    // The signedness of the position's type, as a folded constant may lose that of its number
+    if ((narrowed ? narrow.isSigned() : constp->isSigned()) && pos.bitIs1(pos.width() - 1)) {
+        const int64_t lsb = static_cast<int64_t>(pos.toUInt()) - (int64_t{1} << pos.width());
+        return {0, static_cast<int>(std::max<int64_t>(widthConst() + lsb, 0))};
+    }
+    return {pos.toUInt(), widthConst()};
+}
 void AstSel::dump(std::ostream& str) const {
     Super::dump(str);
     str << " widthConst=" << this->widthConst();
@@ -4509,6 +4524,7 @@ void AstSel::dump(std::ostream& str) const {
         str << " decl" << declRange() << "]";
         if (declElWidth() != 1) str << "/" << declElWidth();
     }
+    if (valueWidth()) str << " valueWidth=" << valueWidth();
 }
 void AstSel::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, widthConst);
@@ -4516,7 +4532,14 @@ void AstSel::dumpJson(std::ostream& str) const {
         dumpJsonStr(str, "declRange", cvtToStr(declRange()));
         dumpJsonNumFunc(str, declElWidth);
     }
+    if (valueWidth()) dumpJsonNumFunc(str, valueWidth);
     dumpJsonGen(str);
+}
+int AstSel::lsbConstInt() const {
+    const AstConst* const constp = VN_AS(lsbp(), Const);
+    V3Number narrow{constp->fileline(), VL_IDATASIZE, 0};
+    return narrowPosition(constp->num(), constp->isSigned(), narrow) ? narrow.toSInt()
+                                                                     : constp->toSInt();
 }
 bool AstSel::lsbConstOutOfRange(int maxBit) const {
     const V3Number& num = VN_AS(lsbp(), Const)->num();
@@ -4529,6 +4552,36 @@ string AstSel::lsbConstStr(int offset, int scale) const {
     if (num.width() > 64) return num.ascii();
     if (num.isSigned() && num.isNegative()) return cvtToStr((num.toSQuad() + offset) / scale);
     return cvtToStr((num.toUQuad() + offset) / scale);
+}
+AstConst* AstSel::narrowLsbConst() {
+    AstConst* const constp = VN_CAST(lsbp(), Const);
+    if (!constp) return nullptr;
+    V3Number narrow{constp, VL_IDATASIZE, 0};
+    if (!narrowPosition(constp->num(), constp->isSigned(), narrow)) return nullptr;
+    constp->replaceWith(new AstConst{constp->fileline(), narrow});
+    return constp;
+}
+bool AstSel::narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow) {
+    if (num.isFourState()) return false;
+    const bool negative = isSigned && num.bitIs1(num.width() - 1);
+    const bool farAbove
+        = !negative && num.mostSetBitP1() > static_cast<uint32_t>(V3Number::log2b(FAR_POSITION));
+    if (num.width() <= VL_IDATASIZE && !farAbove) return false;
+    if (num.width() == VL_IDATASIZE && num.isEqAllOnes()) return false;
+    if (farAbove) {
+        narrow.setAllBits1();
+    } else if (negative) {
+        const bool fits
+            = num.width() <= VL_QUADSIZE && num.toSQuad() >= std::numeric_limits<int32_t>::min();
+        narrow.setLong(fits ? static_cast<uint32_t>(num.toSQuad())
+                            : static_cast<uint32_t>(std::numeric_limits<int32_t>::min()));
+        narrow.isSigned(true);
+    } else if (num.mostSetBitP1() < VL_IDATASIZE) {
+        narrow.opAssign(num);
+    } else {
+        narrow.setAllBits1();
+    }
+    return true;
 }
 void AstSelBit::dump(std::ostream& str) const {
     Super::dump(str);

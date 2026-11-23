@@ -55,6 +55,47 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
 
+uint64_t V3Unknown::staticMax(const AstNodeExpr* exprp) {
+    const uint64_t widthMax = exprp->width() < VL_QUADSIZE ? (1ULL << exprp->width()) - 1
+                                                           : std::numeric_limits<uint64_t>::max();
+    // Arithmetic that may exceed the width wraps, so only the width bounds it
+    const auto bounded = [widthMax](uint64_t value, bool overflow) {
+        return overflow ? widthMax : std::min(value, widthMax);
+    };
+    if (const AstConst* const constp = VN_CAST(exprp, Const)) {
+        const V3Number& num = constp->num();
+        if (!num.isFourState() && num.width() <= VL_QUADSIZE) return num.toUQuad();
+    } else if (const AstAnd* const andp = VN_CAST(exprp, And)) {
+        return std::min(V3Unknown::staticMax(andp->lhsp()), V3Unknown::staticMax(andp->rhsp()));
+    } else if (const AstCond* const condp = VN_CAST(exprp, Cond)) {
+        return std::max(V3Unknown::staticMax(condp->thenp()),
+                        V3Unknown::staticMax(condp->elsep()));
+    } else if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
+        return V3Unknown::staticMax(extendp->lhsp());
+    } else if (const AstExtendS* const extendp = VN_CAST(exprp, ExtendS)) {
+        // Unchanged unless its sign bit may be set
+        const uint64_t lhs = V3Unknown::staticMax(extendp->lhsp());
+        const int lhsWidth = extendp->lhsp()->width();
+        if (lhsWidth <= VL_QUADSIZE && lhs < (1ULL << (lhsWidth - 1))) return lhs;
+    } else if (const AstAdd* const addp = VN_CAST(exprp, Add)) {
+        const uint64_t lhs = V3Unknown::staticMax(addp->lhsp());
+        const uint64_t rhs = V3Unknown::staticMax(addp->rhsp());
+        return bounded(lhs + rhs, lhs + rhs < lhs);
+    } else if (const AstMul* const mulp = VN_CAST(exprp, Mul)) {
+        const uint64_t lhs = V3Unknown::staticMax(mulp->lhsp());
+        const uint64_t rhs = V3Unknown::staticMax(mulp->rhsp());
+        return bounded(lhs * rhs, lhs != 0 && rhs > widthMax / lhs);
+    } else if (const AstShiftL* const shiftp = VN_CAST(exprp, ShiftL)) {
+        const uint64_t lhs = V3Unknown::staticMax(shiftp->lhsp());
+        const uint64_t shift = V3Unknown::staticMax(shiftp->rhsp());
+        return bounded(shift < VL_QUADSIZE ? lhs << shift : 0,
+                       shift >= VL_QUADSIZE || lhs > (widthMax >> shift));
+    }
+    return widthMax;
+}
+
+//######################################################################
+
 class UnknownVisitor final : public VNVisitor {
     // NODE STATE
     // Cleared on Netlist
@@ -62,12 +103,18 @@ class UnknownVisitor final : public VNVisitor {
     //  AstArraySel::user()     -> bool.  Set true if already processed
     //  AstSliceSel::user()     -> bool.  Set true if already processed
     //  AstNodeDType::user()    -> bool.  Set true if member initializers converted
+    //  AstCond::user()         -> bool.  Set true if guarding a select
     //  AstNode::user2p()       -> AstIf* Inserted if assignment for conditional
     //  AstArraySel::user3()    -> bool.  Set true if passed by reference
     const VNUser1InUse m_inuser1;
     const VNUser2InUse m_inuser2;
     const VNUser3InUse m_inuser3;
     static const std::string s_xrandPrefix;
+    // Most nodes of a position containing a guarded select that is copied, not evaluated once.
+    // A guarded bit or element select of a variable index is about 10 to 20 nodes, so one level
+    // of nesting is copied and stays visible to Gate and Dfg, while deeper nesting, whose copies
+    // would multiply at each level, is evaluated once.
+    static constexpr int MAX_COPIED_NODES = 32;
 
     // STATE - across all visitors
     VDouble0 m_statUnkVars;  // Statistic of xrand variable created
@@ -234,42 +281,6 @@ class UnknownVisitor final : public VNVisitor {
         return varp;
     }
 
-    // Return an upper bound of the unsigned value of 'exprp'
-    static uint64_t staticMax(const AstNodeExpr* exprp) {
-        static constexpr int QUAD_BITS = std::numeric_limits<uint64_t>::digits;
-        const uint64_t widthMax = exprp->width() < QUAD_BITS
-                                      ? (1ULL << exprp->width()) - 1
-                                      : std::numeric_limits<uint64_t>::max();
-        // Arithmetic that may exceed the width wraps, so only the width bounds it
-        const auto bounded = [widthMax](uint64_t value, bool overflow) {
-            return overflow ? widthMax : std::min(value, widthMax);
-        };
-        if (const AstConst* const constp = VN_CAST(exprp, Const)) {
-            const V3Number& num = constp->num();
-            if (!num.isFourState() && num.width() <= QUAD_BITS) return num.toUQuad();
-        } else if (const AstAnd* const andp = VN_CAST(exprp, And)) {
-            return std::min(staticMax(andp->lhsp()), staticMax(andp->rhsp()));
-        } else if (const AstCond* const condp = VN_CAST(exprp, Cond)) {
-            return std::max(staticMax(condp->thenp()), staticMax(condp->elsep()));
-        } else if (const AstExtend* const extendp = VN_CAST(exprp, Extend)) {
-            return staticMax(extendp->lhsp());
-        } else if (const AstAdd* const addp = VN_CAST(exprp, Add)) {
-            const uint64_t lhs = staticMax(addp->lhsp());
-            const uint64_t rhs = staticMax(addp->rhsp());
-            return bounded(lhs + rhs, lhs + rhs < lhs);
-        } else if (const AstMul* const mulp = VN_CAST(exprp, Mul)) {
-            const uint64_t lhs = staticMax(mulp->lhsp());
-            const uint64_t rhs = staticMax(mulp->rhsp());
-            return bounded(lhs * rhs, lhs != 0 && rhs > widthMax / lhs);
-        } else if (const AstShiftL* const shiftp = VN_CAST(exprp, ShiftL)) {
-            const uint64_t lhs = staticMax(shiftp->lhsp());
-            const uint64_t shift = staticMax(shiftp->rhsp());
-            return bounded(shift < QUAD_BITS ? lhs << shift : 0,
-                           shift >= QUAD_BITS || lhs > (widthMax >> shift));
-        }
-        return widthMax;
-    }
-
     // Return array index 'bitp' truncated to the bits that address 'elements' elements
     static AstNodeExpr* newIndexTrunc(AstNodeExpr* bitp, int elements) {
         // V3Width keeps all bits of the index for the bounds check
@@ -288,10 +299,39 @@ class UnknownVisitor final : public VNVisitor {
         return new AstVarRef{flp, varp, VAccess::READ};
     }
 
-    AstNodeExpr* newExprStmtOrClone(AstNodeExpr*& exprp) {
+    // Whether 'exprp' is costly to copy: large, and containing a select guarded by this pass, as
+    // in nested selects, whose copies would multiply. A temporary for a cheaper one would hide
+    // it from later optimizations.
+    static bool costlyToCopy(const AstNodeExpr* exprp) {
+        return exprp->isLargerThan(MAX_COPIED_NODES)
+               && exprp->exists([](const AstCond* condp) { return condp->user1(); });
+    }
+    // Return a copy of 'exprp' to use after it, or if it is not repeatable or 'once', a
+    // temporary that 'exprp' becomes an assignment to
+    AstNodeExpr* newExprStmtOrClone(AstNodeExpr*& exprp, bool once = false) {
         // A clone evaluates the expression again
-        if (!exprp->isRepeatable()) return newExprStmtTemp(exprp);
+        if (once || !exprp->isRepeatable()) return newExprStmtTemp(exprp);
         return exprp->cloneTreePure(false);
+    }
+    // If the value 'fromp' a select reads is impure, such as a method's result, make it a
+    // temporary, so it is evaluated once whatever the position; return the assignment to it
+    AstNodeStmt* newImpureValueAssign(AstNodeExpr* fromp) {
+        if (fromp->isRepeatable()) return nullptr;
+        FileLine* const fl = fromp->fileline();
+        VNRelinker relinker;
+        fromp->unlinkFrBack(&relinker);
+        AstVar* const varp = createAddTemp(fromp);
+        relinker.relink(new AstVarRef{fl, varp, VAccess::READ});
+        return new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, fromp};
+    }
+    // Return 'exprp' evaluated after statements 'stmtsp', if any, through a temporary, as a
+    // wide value could otherwise be computed before them
+    AstNodeExpr* newAfterStmts(AstNodeStmt* stmtsp, AstNodeExpr* exprp) {
+        if (!stmtsp) return exprp;
+        FileLine* const fl = exprp->fileline();
+        AstVar* const varp = createAddTemp(exprp);
+        stmtsp->addNext(new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, exprp});
+        return new AstExprStmt{fl, stmtsp, new AstVarRef{fl, varp, VAccess::READ}};
     }
 
     // Return dynamic array or queue element index 'indexp', which is signed and narrower, or
@@ -561,14 +601,17 @@ class UnknownVisitor final : public VNVisitor {
         iterateChildren(nodep);
         if (!nodep->user1SetOnce()) {
             // Guard against reading/writing past end of bit vector array
-            const AstNode* const basefromp = nodep->baseFromp(true);
-            bool lvalue = false;
-            if (const AstNodeVarRef* const varrefp = VN_CAST(basefromp, NodeVarRef)) {
-                lvalue = varrefp->access().isWriteOrRW();
-            }
+            // Not a select of a method's result, such as a queue's popped element, though the
+            // method writes its object
+            const bool lvalue = nodep->isLValue();
             // Find range of dtype we are selecting from
             // Similar code in V3Const::warnSelect
-            const uint32_t maxmsb = nodep->fromp()->dtypep()->width() - 1;
+            // Reading the padding of a value narrower than the selection is as reading out of
+            // range
+            const int valueWidth = nodep->valueWidth() && !lvalue
+                                       ? nodep->valueWidth()
+                                       : nodep->fromp()->dtypep()->width();
+            const uint32_t maxmsb = valueWidth - 1;
             UINFOTREE(9, nodep, "", "sel_old");
 
             // If (maxmsb >= selected), we're in bound
@@ -578,13 +621,14 @@ class UnknownVisitor final : public VNVisitor {
                 nodep->fileline(), AstConst::WidthedValue{}, nodep->lsbp()->width(), maxmsb};
             AstNodeExpr* lsbp = V3Const::constifyEdit(nodep->lsbp()->unlinkFrBack());
             if (maxmsb + 1 >= static_cast<uint32_t>(nodep->widthConst())
-                && staticMax(lsbp) <= maxmsb + 1 - nodep->widthConst()) {
+                && V3Unknown::staticMax(lsbp) <= maxmsb + 1 - nodep->widthConst()) {
                 // We don't need to add a conditional; the whole selection is in range
                 VL_DO_DANGLING(maxmsbConstp->deleteTree(), maxmsbConstp);
                 nodep->lsbp(newIndexTrunc(lsbp, maxmsb + 1));
                 return;
             }
-            nodep->lsbp(newIndexTrunc(newExprStmtOrClone(lsbp), maxmsb + 1));
+            // A position costly to copy is evaluated once, as it is used twice
+            nodep->lsbp(newIndexTrunc(newExprStmtOrClone(lsbp, costlyToCopy(lsbp)), maxmsb + 1));
             AstNodeExpr* condp
                 = V3Const::constifyEdit(new AstGte{nodep->fileline(), maxmsbConstp, lsbp});
             if (condp->isNeqZero()) {
@@ -596,9 +640,12 @@ class UnknownVisitor final : public VNVisitor {
                 // SEL(...) -> COND(LTE(bit<=maxmsb), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
                 nodep->unlinkFrBack(&replaceHandle);
+                AstNodeStmt* const fromAssignp = newImpureValueAssign(nodep->fromp());
                 V3Number xnum{nodep, nodep->width()};
                 // Bits of a 2-state vector read as zero (IEEE 1800-2023 11.5.1)
-                if (nodep->fromp()->dtypep()->isFourstate()) xnum.setAllBitsX();
+                // As the select's own type: the value may be an X, of a lower select out of
+                // range, already replaced by a 2-state constant
+                if (nodep->dtypep()->isFourstate()) xnum.setAllBitsX();
                 AstNodeExpr* const xexprp = new AstConst{nodep->fileline(), xnum};
                 AstNodeExpr* const newp = [&]() -> AstNodeExpr* {
                     if (condp->isZero()) {
@@ -606,11 +653,13 @@ class UnknownVisitor final : public VNVisitor {
                         VL_DO_DANGLING(nodep->deleteTree(), nodep);
                         return xexprp;
                     }
-                    return new AstCond{nodep->fileline(), condp, nodep, xexprp};
+                    AstCond* const guardp = new AstCond{nodep->fileline(), condp, nodep, xexprp};
+                    guardp->user1(true);
+                    return guardp;
                 }();
                 UINFOTREE(9, newp, "", "_new");
                 // Link in conditional
-                replaceHandle.relink(newp);
+                replaceHandle.relink(newAfterStmts(fromAssignp, newp));
                 // Added X's, tristate them too
                 iterate(newp);
             } else {  // lvalue
@@ -632,7 +681,7 @@ class UnknownVisitor final : public VNVisitor {
             static_cast<uint32_t>(adtypep->elementsConst() - nodep->declRange().elements())};
         AstNodeExpr* lsbp = V3Const::constifyEdit(nodep->lsbp()->unlinkFrBack());
         AstNodeExpr* condp = nullptr;
-        if (staticMax(lsbp) <= maxLsbp->num().toUQuad()) {
+        if (V3Unknown::staticMax(lsbp) <= maxLsbp->num().toUQuad()) {
             VL_DO_DANGLING(maxLsbp->deleteTree(), maxLsbp);
         } else {
             AstNodeExpr* const indexp = newExprStmtOrClone(lsbp);
@@ -676,15 +725,9 @@ class UnknownVisitor final : public VNVisitor {
         if (!nodep->user1SetOnce()) {
             UINFOTREE(9, nodep, "", "in");
             // Guard against reading/writing past end of arrays
-            AstNode* const basefromp = nodep->fromp()->baseFromp(true);
-            bool lvalue = nodep->user3();
-            if (const AstNodeVarRef* const varrefp = VN_CAST(basefromp, NodeVarRef)) {
-                lvalue = lvalue || varrefp->access().isWriteOrRW();
-            } else if (VN_IS(basefromp, Const)) {
-                // If it's a PARAMETER[bit], then basefromp may be a constant instead of a varrefp
-            } else {
-                // Normally one of above, but might have MEMBERREF or otherwise
-            }
+            // Not a select of a method's result, such as a queue's popped element, though the
+            // method writes its object
+            const bool lvalue = nodep->user3() || nodep->isLValue();
             // Find range of dtype we are selecting from
             int declElements = -1;
             AstNodeDType* const dtypep = nodep->fromp()->dtypep()->skipRefp();
@@ -712,7 +755,7 @@ class UnknownVisitor final : public VNVisitor {
                 = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, nodep->bitp()->width(),
                                static_cast<uint32_t>(declElements - 1)};
             AstNodeExpr* bitp = V3Const::constifyEdit(nodep->bitp()->unlinkFrBack());
-            if (!xIndex && staticMax(bitp) <= static_cast<uint64_t>(declElements - 1)) {
+            if (!xIndex && V3Unknown::staticMax(bitp) <= static_cast<uint64_t>(declElements - 1)) {
                 // We don't need to add a conditional; we know the existing expression is ok
                 VL_DO_DANGLING(declElementsp->deleteTree(), declElementsp);
                 nodep->bitp(newIndexTrunc(bitp, declElements));
@@ -745,10 +788,30 @@ class UnknownVisitor final : public VNVisitor {
                 // ARRAYSEL(...) -> COND(LT(bit<maxbit), ARRAYSEL(...), {width{1'bx}})
                 VNRelinker replaceHandle;
                 readp->unlinkFrBack(&replaceHandle);
-                AstNode* const newp = new AstCond{readp->fileline(), condp, readp, defaultp};
+                FileLine* const fl = readp->fileline();
+                AstNodeExpr* valuep = readp;
+                AstNodeStmt* stmtsp = nullptr;
+                if (!nodep->fromp()->isRepeatable()) {
+                    // An impure array, such as a method's result, is selected from at an index
+                    // kept in range, so is evaluated whatever the index, as copying it whole
+                    // could evaluate it per element
+                    AstVar* const inRangep = createAddTemp(condp);
+                    stmtsp = new AstAssign{fl, new AstVarRef{fl, inRangep, VAccess::WRITE}, condp};
+                    AstNodeExpr* const indexp = nodep->bitp()->unlinkFrBack();
+                    nodep->bitp(new AstCond{
+                        fl, new AstVarRef{fl, inRangep, VAccess::READ}, indexp,
+                        new AstConst{fl, AstConst::WidthedValue{}, indexp->width(), 0}});
+                    AstVar* const elementp = createAddTemp(readp);
+                    stmtsp->addNext(
+                        new AstAssign{fl, new AstVarRef{fl, elementp, VAccess::WRITE}, readp});
+                    condp = new AstVarRef{fl, inRangep, VAccess::READ};
+                    valuep = new AstVarRef{fl, elementp, VAccess::READ};
+                }
+                AstCond* const newp = new AstCond{fl, condp, valuep, defaultp};
+                newp->user1(true);
                 UINFOTREE(9, newp, "", "_new");
                 // Link in conditional, can blow away temp xor
-                replaceHandle.relink(newp);
+                replaceHandle.relink(newAfterStmts(stmtsp, newp));
                 // Added X's, tristate them too. An ancestor's Cond is visited when iteration
                 // continues with it, after the ancestor's own visit, which has not finished.
                 if (readp == nodep) iterate(newp);
@@ -760,6 +823,7 @@ class UnknownVisitor final : public VNVisitor {
                     = new AstCond{asBitp->fileline(), condp, asBitp,
                                   new AstConst{asBitp->fileline(), AstConst::WidthedValue{},
                                                asBitp->width(), 0}};
+                newp->user1(true);
                 // Added X's, tristate them too
                 UINFOTREE(9, newp, "", "_new");
                 replaceHandle.relink(newp);
