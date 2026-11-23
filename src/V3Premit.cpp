@@ -63,7 +63,8 @@ class PremitVisitor final : public VNVisitor {
         if (nodep->user1SetOnce()) return false;  // Already processed
         if (!nodep->isWide()) return false;  // Not wide
         if (m_assignLhs) return false;  // This is an lvalue!
-        UASSERT_OBJ(!VN_IS(nodep->firstAbovep(), ArraySel), nodep, "Should have been ignored");
+        // An array selected from, e.g. a queue element, is referenced in place
+        if (VN_IS(nodep->firstAbovep(), ArraySel)) return false;
         return true;
     }
 

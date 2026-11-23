@@ -33,6 +33,19 @@ module t;
     end
 
     begin
+      // Test: selects of a wide element of a dynamic array of arrays
+      bit [64:0] wdyn[][2];
+      int j;
+      wdyn = new[1];
+      wdyn[0] = '{65'h1_0000_0000_0000_0008, 65'h4};
+      j = $urandom_range(1, 1);
+      `checkh(wdyn[0][0][3], 1'b1);
+      `checkh(wdyn[0][0][64], 1'b1);
+      `checkh(wdyn[0][j][2], 1'b1);
+      `checkh(wdyn[0][j][64], 1'b0);
+    end
+
+    begin
       // Issue #6907
       int a[2][100:1];
       int b[];

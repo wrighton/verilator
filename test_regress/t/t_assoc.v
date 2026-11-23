@@ -412,6 +412,17 @@ module t (
       `checkh(w4["z"], 4'h2);
     end
 
+    begin
+      // Test: selects of a wide element of an associative array of arrays
+      bit [64:0] aa[int][2];
+      int j;
+      aa[3] = '{65'h1_0000_0000_0000_0000, 65'h2};
+      j = $urandom_range(0, 0);
+      `checkh(aa[3][j][64], 1'b1);
+      `checkh(aa[3][j + 1][1], 1'b1);
+      `checkh(aa[3][j + 1][64], 1'b0);
+    end
+
     $write("*-* All Finished *-*\n");
     $finish;
   end
