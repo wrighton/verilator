@@ -12,6 +12,8 @@
 #include "verilated.h"
 #include "verilated_vpi.h"
 
+#include "TestVpi.h"
+
 #include VM_PREFIX_INCLUDE
 #include VM_PREFIX_INCLUDE_DPI
 
@@ -68,9 +70,9 @@ int main(int argc, char** argv) {
     topp->drv = 0x11;
     topp->sel = 1;
     topp->eval();
-    const vpiHandle ip = handle("top.t.u1.i");
-    const vpiHandle op = handle("top.t.u1.o");
-    const vpiHandle clkp = handle("top.t.u1.clk");
+    const TestVpiHandle ip{handle("top.t.u1.i")};
+    const TestVpiHandle op{handle("top.t.u1.o")};
+    const TestVpiHandle clkp{handle("top.t.u1.clk")};
     check("initial", topp->out1, 0x11);
     check("initial u2", topp->out2, 0x6e);
 
@@ -149,7 +151,7 @@ int main(int argc, char** argv) {
     // flop sampling a combinational output sees the new data
     topp->clk = 0;
     topp->eval();
-    const vpiHandle np = handle("top.t.u1.n");
+    const TestVpiHandle np{handle("top.t.u1.n")};
     put(np, 0x05, vpiNoDelay);
     topp->sel = 2;
     topp->clk = 1;
@@ -166,12 +168,13 @@ int main(int argc, char** argv) {
     topp->eval();
     const int y = topp->drv & 3;
     check("cmb", topp->zc, (y + 9 + topp->drv) & 0x7f);
-    put(vpi_handle_by_index(handle("top.t.c.memc"), y), 0x20, vpiNoDelay);
+    const TestVpiHandle memcp{handle("top.t.c.memc")};
+    put(TestVpiHandle{vpi_handle_by_index(memcp, y)}, 0x20, vpiNoDelay);
     topp->eval();
     check("write memc", topp->zc, (0x20 + topp->drv) & 0x7f);
 
     // A write of a whole array
-    const vpiHandle memp = handle("top.t.u1.mem");
+    const TestVpiHandle memp{handle("top.t.u1.mem")};
     PLI_INT32 values[4] = {0x31, 0x32, 0x33, 0x34};
     s_vpi_arrayvalue arrayValue;
     arrayValue.format = vpiIntVal;
@@ -183,7 +186,7 @@ int main(int argc, char** argv) {
     check("put array", topp->m1, 0x32);
 
     // Likewise a force of a port of a library instance without a clock within one
-    const vpiHandle lp = handle("top.t.u1.l.i");
+    const TestVpiHandle lp{handle("top.t.u1.l.i")};
     check("leaf", topp->leaf1, 0x39);
     put(lp, 0x5a, vpiForceFlag);
     topp->eval();
@@ -236,7 +239,8 @@ int main(int argc, char** argv) {
     topp->final();
     delete topp;
     topp = nullptr;
-    const vpiHandle afterp = vpi_handle_by_name(const_cast<PLI_BYTE8*>("top.t.u1.l.i"), nullptr);
+    const TestVpiHandle afterp{
+        vpi_handle_by_name(const_cast<PLI_BYTE8*>("top.t.u1.l.i"), nullptr)};
     if (afterp) put(afterp, 0x15, vpiForceFlag);
 
     if (errors) return 1;
