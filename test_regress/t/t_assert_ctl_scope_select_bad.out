@@ -1,35 +1,39 @@
-%Error: t/t_assert_ctl_scope_select_bad.v:27:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:32:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   27 |     $assertoff(0, g[i]);
+   32 |     $assertoff(0, g[i]);
       |                    ^
         ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assert_ctl_scope_select_bad.v:28:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:33:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   28 |     $assertoff(0, scalar[0]);
+   33 |     $assertoff(0, scalar[0]);
       |                         ^
-%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:29:20: Unsupported: Function call in assertion control scope index.
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:34:20: Unsupported: Function call in assertion control scope index.
                                                            : ... note: In instance 't'
-   29 |     $assertoff(0, g[selected_index()]);
+   34 |     $assertoff(0, g[selected_index()]);
       |                    ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error: t/t_assert_ctl_scope_select_bad.v:30:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+%Error: t/t_assert_ctl_scope_select_bad.v:35:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   30 |     $assertoff(0, g[selected_index() + i]);
+   35 |     $assertoff(0, g[selected_index() + i]);
       |                    ^
-%Error: t/t_assert_ctl_scope_select_bad.v:31:33: Can't find definition of 'omitted_cfg'
+%Error: t/t_assert_ctl_scope_select_bad.v:36:33: Can't find definition of 'omitted_cfg'
                                                : ... note: In instance 't'
-   31 |     $assertoff(0, g[omitted_cfg.SELECTED]);
+   36 |     $assertoff(0, g[omitted_cfg.SELECTED]);
       |                                 ^~~~~~~~
-%Error: t/t_assert_ctl_scope_select_bad.v:32:25: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
+%Error: t/t_assert_ctl_scope_select_bad.v:37:25: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
                                                : ... note: In instance 't'
-   32 |     $assertoff(0, g[cfg.SELECTED]);
+   37 |     $assertoff(0, g[cfg.SELECTED]);
       |                         ^~~~~~~~
-%Error: t/t_assert_ctl_scope_select_bad.v:33:24: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
+%Error: t/t_assert_ctl_scope_select_bad.v:38:24: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
                                                : ... note: In instance 't'
-   33 |     $assertoff(0, g[int'(cfg.SELECTED)]);
+   38 |     $assertoff(0, g[int'(cfg.SELECTED)]);
       |                        ^
-%Error: t/t_assert_ctl_scope_select_bad.v:34:33: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
+%Error: t/t_assert_ctl_scope_select_bad.v:39:33: Generate-qualified enum item in assertion control scope index (IEEE 1800-2023 A.8.4, 11.2.1).
                                                : ... note: In instance 't'
-   34 |     $assertoff(0, g[cfg.SELECTED[0]]);
+   39 |     $assertoff(0, g[cfg.SELECTED[0]]);
       |                                 ^
+%Error: t/t_assert_ctl_scope_select_bad.v:40:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   40 |     $assertoff(0, g[(choice.IDX < 32'sd0) ? i : 0]);
+      |                    ^
 %Error: Exiting due to
