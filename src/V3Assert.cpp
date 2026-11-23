@@ -3267,9 +3267,14 @@ class AssertVisitor final : public VNVisitor {
         } else if (stmtsp && (m_inPExprFinal || (coverp && coverp->isSeqEvent()))) {
             // The end-of-simulation check runs in a final block, and the attempts of a sequence
             // event control are not assertion attempts, so both keep the controls applying now
-            UASSERT_OBJ(nodep->pass(), nodep, "An uncounted final or event clause cannot fail");
-            stmtsp = newIfAssertPassOn(m_assertp->controlVarp(), stmtsp, m_assertp->directive(),
+            if (nodep->pass()) {
+                stmtsp
+                    = newIfAssertPassOn(m_assertp->controlVarp(), stmtsp, m_assertp->directive(),
                                         m_assertp->userType(), nodep->vacuous());
+            } else {
+                stmtsp = newIfAssertFailOn(m_assertp->controlVarp(), stmtsp,
+                                           m_assertp->directive(), m_assertp->userType());
+            }
         } else if (stmtsp) {
             // The controls apply to attempts starting after them; one already executing is not
             // affected, unless killed (IEEE 1800-2023 20.11). A cover statement controls its
