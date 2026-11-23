@@ -24,14 +24,14 @@ module t (
   logic ysrc = 1'b0;
   always #1 ysrc = ~ysrc;
   logic y /*verilator public_flat_rw*/;
-  assign y = clk_in;
+  assign y = clk_in;  // The .cpp holds clk_in at 0
   bit en = 1'b0;
   always @(en or ysrc) if (en) force y = ysrc;
   int edges = 0;
   always @(posedge y) ++edges;
   initial begin
     #5 en = 1'b1;
-    #50 `checkd(edges, 25);
+    #49 `checkd(edges, 25);  // 54 ns: no edge of ysrc at this time
     `checkd(vpi_rises, 25);
   end
 
