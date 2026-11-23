@@ -51,8 +51,13 @@ module caller (input bit clk, input bit good, input bit off, output int reports
     local_check : assert (good) else reports++;
   end
 `ifdef VIA_COHORTS
+`ifdef REVERSE_COHORT
+  always @(posedge off) $assertoff(level, port_bank.payload.slots[0].u, port_bank.payload,
+                                 local_check);
+`else
   always @(posedge off) $assertoff(level, port_bank.payload, port_bank.payload.slots[0].u,
                                  local_check);
+`endif
 `elsif VIA_PORT
   always @(posedge off) $assertoff(0, port_bank.payload, local_check);
 `else

@@ -12,9 +12,10 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 test.top_filename = 't/t_assert_ctl_mixed_table.v'
 n = 8 if test.vltmt else 4
+order = ['+define+REVERSE_COHORT'] if test.vltmt else []
 test.compile(verilator_flags2=[
     '--binary', '--assert', '--stats', '+define+VIA_PORT+VIA_FORWARD+VIA_COHORTS', f'+define+N={n}'
-], threads=2 if test.vltmt else 1)
+] + order, threads=2 if test.vltmt else 1)
 test.execute()
 # Two banks with N sites and N two-row overlays each, plus two hierarchical callers.
 test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 6 * n + 2 * (n + 1))
