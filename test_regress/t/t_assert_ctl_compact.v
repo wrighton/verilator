@@ -23,6 +23,7 @@ endmodule
 
 module t;
   localparam int ZERO_LEVEL = 1 - 1;
+  typedef enum int { ENUM_ZERO = 0 } levels_t;
   bit clk;
   bit good;
   leaf selected (.clk, .good);
@@ -32,10 +33,15 @@ module t;
   initial begin
     $assertoff(ZERO_LEVEL);
     $asserton(ZERO_LEVEL);
+    $assertoff(ENUM_ZERO);
+    $asserton(ENUM_ZERO);
+    $assertoff(int'(ENUM_ZERO));
+    $asserton(ENUM_ZERO + ZERO_LEVEL);
     $asserton(0, selected.first_check);
-    $assertoff(0, selected.first_check);
+    // Scoped zero stays local; unrelated assertions remain enabled.
+    $assertoff(ENUM_ZERO, selected.first_check);
     $asserton(0, grouped);
-    $assertoff(0, grouped);
+    $assertoff(ENUM_ZERO, grouped);
     #1 clk = 1;
     #1;
     `checkd(selected.first_reports, 0);

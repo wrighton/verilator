@@ -9554,11 +9554,14 @@ void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
         if (!argsp || argsp->scoped() || !argsp->levelp()) return;
         AstNodeExpr* const exprp = argsp->levelp();
         if (!VN_IS(exprp, Const) && !exprp->exists([](const AstNode* subp) {
-                if (const AstVarRef* const refp = VN_CAST(subp, VarRef)) {
-                    return !refp->varp() || !refp->varp()->isParam();
+                if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                    return !refp->varp();
                 }
-                return !VN_IS(subp, Const) && !VN_IS(subp, NodeUniop) && !VN_IS(subp, NodeBiop)
-                       && !VN_IS(subp, NodeTriop);
+                if (const AstEnumItemRef* const refp = VN_CAST(subp, EnumItemRef)) {
+                    return !refp->itemp();
+                }
+                return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
+                       || VN_IS(subp, UnlinkedRef);
             })) {
             V3Const::constifyParamsNoWarnEdit(exprp);
         }
