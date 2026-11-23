@@ -2,5 +2,5 @@
                                                       : ... note: In instance 't'
    14 |   initial $assertoff(0, g[int'(cfg[1].IDX)].chk);
       |                              ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=5.055
-%Error: Exiting due to 1 error(s)
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to
