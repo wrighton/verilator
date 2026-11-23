@@ -179,13 +179,21 @@ struct AssertCtlTableKey final {
         return overlay == other.overlay && rows == other.rows && skips == other.skips;
     }
 };
+template <typename T>
+uint32_t appendAssertCtlHash(uint32_t hash, T value) {
+    const V3Hash seed{hash};
+    return seed.operator+(value).value();
+}
+
 struct AssertCtlTableKeyHash final {
     size_t operator()(const AssertCtlTableKey& key) const {
         uint32_t hash = static_cast<uint32_t>(key.overlay);
         for (const AssertCtlTableRow& row : key.rows) {
-            hash = (V3Hash{hash} + row.statep + row.depth + row.ordinal).value();
+            hash = appendAssertCtlHash(hash, row.statep);
+            hash = appendAssertCtlHash(hash, row.depth);
+            hash = appendAssertCtlHash(hash, row.ordinal);
         }
-        for (uint32_t slot : key.skips) hash = (V3Hash{hash} + slot).value();
+        for (uint32_t slot : key.skips) hash = appendAssertCtlHash(hash, slot);
         return hash;
     }
 };
@@ -195,9 +203,10 @@ struct AssertCtlBoundTable final {
 };
 struct AssertCtlSignatureHash final {
     size_t operator()(const AssertCtlSignature& sig) const {
-        uint32_t hash = (V3Hash{sig.scopep} + sig.mask).value();
+        uint32_t hash = appendAssertCtlHash(V3Hash{sig.scopep}.value(), sig.mask);
         for (const auto& entry : sig.history) {
-            hash = (V3Hash{hash} + static_cast<uint64_t>(entry.first) + entry.second).value();
+            hash = appendAssertCtlHash(hash, static_cast<uint64_t>(entry.first));
+            hash = appendAssertCtlHash(hash, entry.second);
         }
         return hash;
     }
