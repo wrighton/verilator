@@ -20,4 +20,9 @@ module t;
   end
   initial $assertoff(0, g[int'(choice.IDX)].chk);
   initial $assertoff(0, g[choice.IDX < 32'sd0].chk);
+
+  if (1) begin : cfg_named
+    localparam int IDX = 1;
+  end
+  initial $assertoff(0, g[int'(cfg_named.IDX)].chk);
 endmodule
