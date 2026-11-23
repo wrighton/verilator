@@ -66,6 +66,9 @@ module caller (input bit clk, input bit good, input bit off, output int reports
 `ifdef VIA_COMMON
                                  $root.t.common.payload,
 `endif
+`ifdef VIA_TOP
+                                 $root.t,
+`endif
                                  local_check);
 `elsif VIA_PORT
   always @(posedge off) $assertoff(0, port_bank.payload, local_check);
@@ -164,6 +167,16 @@ module t;
     foreach (common_reports[i]) `checkd(common_reports[i], 1);
 `endif
 
+`ifdef VIA_TOP
+    // The unlimited top selector reaches every site, including the non-forwarded bank.
+    level = 0;
+    #1 off[1][N-1] = 1;
+    tick();
+    foreach (bank_reports[b, k, i]) `checkd(bank_reports[b][k][i], b == 0 && i == 0 ? 0 : 1);
+    foreach (local_reports[b, i]) `checkd(local_reports[b][i], b == 0 && i == 0 ? 0 : 1);
+    foreach (fallback_reports[i]) `checkd(fallback_reports[i], 1);
+    foreach (common_reports[i]) `checkd(common_reports[i], 1);
+`else
     // With no depth limit, a caller in the second host stops every site in both its banks.
     level = 0;
     #1 off[1][N-1] = 1;
@@ -194,6 +207,7 @@ module t;
     foreach (fallback_reports[i]) `checkd(fallback_reports[i], i == 0 ? 2 : 3);
 `ifdef VIA_COMMON
     foreach (common_reports[i]) `checkd(common_reports[i], 1);
+`endif
 `endif
     $display("*-* All Finished *-*");
     $finish;
