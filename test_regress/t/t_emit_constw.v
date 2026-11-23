@@ -42,7 +42,7 @@ module t (
                          32'hbbdbd761, 32'h760fe07d, 32'h3808cb28, 32'haf313051, 32'h37dc63b9, 32'hdddb418b, 32'he65a9d64, 32'hc1b6ab23,
                          32'h11131ac1, 32'h0050e0bc, 32'h442e3754, 32'h0eb4556e, 32'hd153064b, 32'h41349f97, 32'hb6f4149f, 32'h34bb1fb1};
 
-  function [7:0] bytehash (input [32*32-1:0] data);
+  function [7:0] bytehash (input bit [32*32-1:0] data);
     integer i;
     bytehash = 0;
     for (i=0; i<32*32; ++i) begin
@@ -64,7 +64,7 @@ module t (
                         ^ bytehash(w17));
   // verilator lint_on WIDTH
 
-`define EXPECTED_SUM 64'h2bc7c2a98a302891
+`define EXPECTED_SUM 64'h8c895f9320108046
 
   // Test loop
   always @ (posedge clk) begin
