@@ -495,7 +495,9 @@ public:
     VerilatedVpioVar* withSameLayout(const VerilatedVar* varp) const {
         VerilatedVpioVar* const retp = new VerilatedVpioVar{this};
         retp->m_varp = varp;
-        retp->m_varDatap = varp->datap();
+        retp->m_varDatap
+            = static_cast<uint8_t*>(varp->datap())
+              + (static_cast<uint8_t*>(m_varDatap) - static_cast<uint8_t*>(this->varp()->datap()));
         return retp;
     }
     VerilatedVpioVar* withIndex(int32_t index) const {
