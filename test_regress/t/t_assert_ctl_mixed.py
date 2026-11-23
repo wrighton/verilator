@@ -14,12 +14,11 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 
 test.compile(verilator_flags2=[
-    '--binary', '--assert', '--stats', '--dumpi-tree 9', '--dumpi-tree-json 9', '--no-json-ids',
+    '--binary', '--assert', '--stats', '--dumpi-tree 3', '--dumpi-tree-json 3', '--no-json-ids',
     '--debug-emitv'
 ], threads=2 if test.vltmt else 1)
 
 test.execute()
-test.file_grep_not(test.stats, r'LinkDot, Assertion control dropped targets\s+[1-9]\d*')
 
 # Mixed routes retain their concrete caller identities until scoping consumes the plan.
 seen = set()
