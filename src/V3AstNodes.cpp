@@ -4510,8 +4510,8 @@ std::pair<uint64_t, int> AstSel::constSelectedBits() const {
     V3Number narrow{constp->fileline(), VL_IDATASIZE, 0};
     const bool narrowed = narrowPosition(constp->num(), constp->isSigned(), narrow);
     const V3Number& pos = narrowed ? narrow : constp->num();
-    // The signedness of the position's type, as a folded constant may lose that of its number
-    if ((narrowed ? narrow.isSigned() : constp->isSigned()) && pos.bitIs1(pos.width() - 1)) {
+    // Read as lsbConstInt() reads it, with the signedness of its number
+    if (pos.isSigned() && pos.isNegative()) {
         const int64_t lsb = static_cast<int64_t>(pos.toUInt()) - (int64_t{1} << pos.width());
         return {0, static_cast<int>(std::max<int64_t>(widthConst() + lsb, 0))};
     }
@@ -4582,6 +4582,24 @@ bool AstSel::narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow
         narrow.setAllBits1();
     }
     return true;
+}
+void AstSel::selectBelow(V3Number& out, const V3Number& from, const V3Number& bit) const {
+    const int64_t below = (int64_t{1} << bit.width()) - static_cast<int64_t>(bit.toUInt());
+    const char outside = v3Global.constRemoveXs() ? '0' : 'x';
+    out.setZero();
+    for (int i = 0; i < widthConst(); ++i) {
+        const int64_t srcBit = i - below;
+        const int src = static_cast<int>(srcBit);
+        if (srcBit < 0 || srcBit >= from.width()) {
+            out.setBit(i, outside);
+        } else if (from.bitIs1(src)) {
+            out.setBit(i, '1');
+        } else if (from.bitIsX(src)) {
+            out.setBit(i, 'x');
+        } else if (from.bitIsZ(src)) {
+            out.setBit(i, 'z');
+        }
+    }
 }
 void AstSelBit::dump(std::ostream& str) const {
     Super::dump(str);

@@ -53,6 +53,8 @@ module t;
   wire [3:0] nest_y = nest_v[nest_v[nest_v[nest_v[nest_k+:5]+:5]+:5]+:4];
   int nest_events;
   always @(nest_v[nest_v[nest_v[nest_k+:5]+:5]+:5]) ++nest_events;
+  int nest_j;
+  wire [2:0] nest_p = nest_v[nest_v[nest_v[nest_j+:5]+:5]+:3];
 
   int calls;
   function automatic bit [1:0] pick();
@@ -68,6 +70,23 @@ module t;
   logic [7:0] forced;
   logic [7:0] driver = 8'h00;
   wire [7:0] driven = driver;
+
+  let low_nibble(a) = a[3:0];
+
+  // Wide vectors, each followed by a vector of ones a read past its end would show
+  // verilator lint_off ASCRANGE
+  bit [0:127] wide_asc;
+  // verilator lint_on ASCRANGE
+  bit [127:0] wide_asc_ones;
+  bit [127:0] wide_desc;
+  bit [127:0] wide_desc_ones;
+
+  int draws;
+
+  function automatic int next_pos(int value);
+    ++draws;
+    return value;
+  endfunction
 
   initial begin
     foreach (pos[n]) void'($value$plusargs($sformatf("pos%0d=%%d", n), pos[n]));
@@ -351,6 +370,44 @@ module t;
       `checkh(lanes[k][3-:1], 1'b0);
       `checkh(lanes[k][4-:2], 2'b00);
       // verilator lint_on SELRANGE
+`ifdef X_ONE
+      begin
+        logic [3:0][1:0] lanes4;
+        int j;
+        j = pos[0] - 8;
+        lanes4 = '0;
+        // verilator lint_off SELRANGE
+        `checkh(lanes4[k - 96][j+:3], 3'b110);
+        // verilator lint_on SELRANGE
+      end
+`endif
+    end
+
+    begin
+      // Test: a part-select of a packed array element partly below it reads its bits in range
+      bit [2:0][3:0] lanes;
+      int k;
+      int j;
+      k = pos[0] - 8;
+      j = pos[0] - 10;
+      lanes = 12'h521 << (pos[0] - 9);
+      // verilator lint_off SELRANGE
+      `checkh(lanes[k][-1+:2], 2'b00);
+      `checkh(lanes[k + 1][-1+:2], 2'b10);
+      `checkh(lanes[k][j+:2], 2'b00);
+      `checkh(lanes[k + 1][j+:2], 2'b10);
+      `checkh(lanes[k + 1][j-:1], 1'b0);
+`ifdef X_ONE
+      begin
+        logic [2:0][3:0] lanes4;
+        lanes4 = 12'h521 << (pos[0] - 9);
+        `checkh(lanes4[k][-1+:2], 2'b01);
+        `checkh(lanes4[k + 1][-1+:2], 2'b11);
+        `checkh(lanes4[k][j+:2], 2'b01);
+        `checkh(lanes4[k + 1][j+:2], 2'b11);
+      end
+`endif
+      // verilator lint_on SELRANGE
     end
 
     begin
@@ -510,8 +567,10 @@ module t;
       int events;
       nest_v = 32'hacab_1a6b ^ 32'(pos[0] - 9);
       nest_k = pos[0] - 7;
+      nest_j = pos[0] - 5;
       #1;
       `checkh(nest_y, 4'ha);
+      `checkh(nest_p, 3'b010);
       events = nest_events;
       nest_v[16] = ~nest_v[16];
       #1;
@@ -634,6 +693,19 @@ module t;
     end
 
     begin
+      // Test: a part-select of a wide vector partly above it reads its bits in range
+      bit [94:0] v;
+      bit [6:0] got;
+      int k;
+      v = {7'h7f, 88'd0} | 95'h5aef0c8d_d70a4497_1234567;
+      k = pos[0] + 85;
+      // verilator lint_off SELRANGE
+      got = v[k+:7];
+      // verilator lint_on SELRANGE
+      `checkh(got, 7'h01);
+    end
+
+    begin
       // Test: a select above a replication, a negation or an extension reads no bit of it
       bit [7:0] a;
       bit [3:0] n;
@@ -696,6 +768,72 @@ module t;
     end
 
     begin
+      // Test: lanes of a slice past both ends of a packed array read the lanes in range
+      typedef bit [3:0][3:0] lanes_t;
+      lanes_t a;
+      lanes_t q[$];
+      int k;
+      bit [11:0] got;
+      a = 16'h1234 ^ 16'(pos[0] - 9);
+      for (int n = 0; n < 2; ++n) q.push_back(a);
+      // verilator lint_off SELRANGE
+      got = a[5:-2][0-:3];
+      `checkh(got, 12'h400);
+      k = pos[0] - 9;
+      got = a[5:-2][k-:3];
+      `checkh(got, 12'h400);
+      k = pos[0] - 8;
+      got = a[5:-2][k-:3];
+      `checkh(got, 12'h340);
+      k = pos[0] - 4;
+      got = a[5:-2][k-:3];
+      `checkh(got, 12'h001);
+      k = pos[0] - 10;
+      got = q.pop_back()[5:-2][k+:3];
+      `checkh(got, 12'h340);
+      k = pos[0] - 9;
+      got = q.pop_back()[5:-2][k-:3];
+      `checkh(got, 12'h400);
+      // verilator lint_on SELRANGE
+      `checkh(q.size(), 0);
+    end
+
+    begin
+      // Test: a constant part-select partly below a constant reads its bits in range
+      localparam bit [7:0] P = 8'ha5;
+      bit [1:0] got;
+      // verilator lint_off SELRANGE
+      got = P[0-:2];
+      // verilator lint_on SELRANGE
+      `checkh(got, 2'b10);
+    end
+
+    begin
+      // Test: a part-select wider than its value reads the bits of the value it overlaps
+      bit [31:0] w;
+      bit [63:0] got;
+      int k;
+      w = 32'h8000_0001 ^ 32'(pos[0] - 9);
+      k = pos[0] - 9;
+      // verilator lint_off SELRANGE
+      got = w[k-:64];
+      `checkh(got, 64'h8000_0000_0000_0000);
+      k = pos[0] + 22;
+      got = w[k-:64];
+      `checkh(got, 64'h8000_0001_0000_0000);
+      k = pos[0] + 31;
+      got = w[k-:64];
+      `checkh(got, 64'h0040_0000_0080_0000);
+      k = pos[0] + 55;
+      got = w[k-:64];
+      `checkh(got, 64'h4000_0000);
+      k = pos[0] + 86;
+      got = w[k-:64];
+      `checkh(got, 64'h0);
+      // verilator lint_on SELRANGE
+    end
+
+    begin
       // Test: a lane window of a slice ending below the top of a packed array reads only the
       // lanes of the slice
       typedef bit [2:0][3:0] lanes_t;
@@ -738,6 +876,50 @@ module t;
     end
 
     begin
+      // Test: a part-select wider than its value pops its value and its index once
+      bit [7:0] data_q[$];
+      int index_q[$];
+      bit [11:0] got;
+      data_q.push_back(8'ha5);
+      data_q.push_back(8'h3c);
+      index_q.push_back(pos[0] - 9);
+      index_q.push_back(pos[0] - 9);
+      index_q.push_back(pos[0] - 2);
+      // verilator lint_off SELRANGE
+      got = data_q.pop_front()[index_q.pop_front()+:12];
+      // verilator lint_on SELRANGE
+      `checkh(got, 12'h0a5);
+      `checkh(data_q.size(), 1);
+      `checkh(index_q.size(), 2);
+    end
+
+    begin
+      // Test: a part-select wider than its value evaluates its position once
+      bit [31:0] w;
+      bit [63:0] got;
+      bit [7:0] a, b, c;
+      int i, j, k;
+      draws = 0;
+      w = 32'h8000_0001 ^ 32'(pos[0] - 9);
+      // verilator lint_off SELRANGE
+      got = w[next_pos(pos[0] + 22)-:64];
+      `checkh(got, 64'h8000_0001_0000_0000);
+      `checkh(draws, 1);
+      got = w[$urandom_range(pos[0] + 22, pos[0] + 22)-:64];
+      `checkh(got, 64'h8000_0001_0000_0000);
+      a = 8'h12;
+      b = 8'h34;
+      c = 8'h56;
+      i = pos[0] - 8;
+      j = pos[0] - 7;
+      k = pos[0] - 6;
+      // A position of several part-selects, each guarded
+      got = w[(a[i+:3] + b[j+:3] + c[k+:3] + a[j+:2] + b[k+:2] + c[i+:2])-:64];
+      // verilator lint_on SELRANGE
+      `checkh(got, 64'h0400_0000_0000_0000);
+    end
+
+    begin
       // Test: lane windows of slices of wide queued packed arrays past their bottom
       typedef bit [3:0][31:0] lanes_t;
       lanes_t q[$];
@@ -776,6 +958,24 @@ module t;
       got = X4[$urandom()%n];
       `checkh($urandom(), draw2);
     end
+
+`ifdef X_ONE
+    begin
+      // Test: a bit of the negation of a 4-state value reads X out of range
+      logic [7:0] a;
+      logic got;
+      int k;
+      a = 8'hfc ^ 8'(pos[0] - 9);
+      k = pos[0];
+      // verilator lint_off SELRANGE
+      got = {~a}[k];
+      `checkh(got, 1'b1);
+      // verilator lint_on SELRANGE
+      k = pos[0] - 8;
+      got = {~a}[k];
+      `checkh(got, 1'b1);
+    end
+`endif
 
     begin
       // Test: a negative narrow signed literal selects no bit
@@ -852,6 +1052,83 @@ module t;
       v[3'(pos[0] - 4)] = 1'b1;
       `checkh(v, 8'h5a);
       `checkh(v[3'(pos[0] - 4)], 1'b0);
+    end
+
+    begin
+      // Test: a part-select partly out of range reads its bits in range
+      bit [7:0] v;
+      logic [7:0] lv;
+      bit [94:0] w;
+      int k;
+      bit signed [2:0] s;
+      v = 8'ha5;
+      lv = 8'ha5;
+      w = {95{1'b1}} >> 1;
+      k = pos[0] - 9;
+      `checkh(v[k-:2], 2'b10);
+      k = pos[5];
+      `checkh(v[k+:3], 3'b010);
+      k = pos[0] - 2;
+      `checkh(v[k+:2], 2'b01);
+`ifdef X_ONE
+      `checkh(lv[k+:2], 2'b11);
+`else
+      `checkh(lv[k+:2] & 2'b01, 2'b01);
+`endif
+      k = pos[0] + 85;
+      `checkh(w[k+:2], 2'b00);
+      k = pos[0] + 84;
+      `checkh(w[k+:3], 3'b001);
+      k = 32'h8000_0000 + pos[0] - 9;
+      `checkh(v[k+:2], 2'b00);
+      s = 3'(pos[5] - 1);
+      `checkh(v[s+:4], 4'b0100);
+    end
+
+    begin
+      // Test: a position far above a range near the most negative integer reads no bit, while
+      // one just below it reads its bits in range
+      bit [32'sh8000_0009:32'sh8000_0002] v;
+      int k;
+      v = 8'(pos[0] - 8);
+      k = 32'sh7fff_fff6 + pos[0];
+      `checkh(v[k+:4], 4'b0000);
+      k = 32'sh8000_0000 + pos[0] - 9;
+      `checkh(v[k+:4], 4'b0100);
+    end
+
+    begin
+      // Test: an index whose wrapped arithmetic is not aligned reads only its bits in range
+      bit [95:0] v;
+      int unsigned k;
+      v = 96'(pos[0] - 8) << 95;
+      k = 32'h5555_5575 + pos[0] - 9;
+      `checkh(v[(k * 32'd3)+:3], 3'b001);
+    end
+
+    begin
+      // Test: the same from an unsigned index, also into an ascending range
+      bit [7:0] v;
+      logic [7:0] lv;
+      // verilator lint_off ASCRANGE
+      bit [0:7] asc;
+      // verilator lint_on ASCRANGE
+      int unsigned u;
+      v = 8'ha5;
+      lv = 8'ha5;
+      asc = 8'h5b;
+      u = 32'(pos[0] - 9);
+      `checkh(v[u-:2], 2'b10);
+`ifdef X_ONE
+      `checkh(lv[u-:2], 2'b11);
+`else
+      `checkh(lv[u-:2] & 2'b10, 2'b10);
+`endif
+      u = 32'(pos[0] - 2);
+      `checkh(asc[u+:2], 2'b10);
+      u = 32'hffff_fff6 + pos[0];
+      `checkh(v[u-:2], 2'b00);
+      `checkh(asc[u+:2], 2'b00);
     end
 
     begin
@@ -938,6 +1215,16 @@ module t;
     end
 
     begin
+      // Test: a position shifted by a 64-bit count is written after the wait
+      bit [7:0] v;
+      int seed;
+      seed = pos[0];
+      v = '0;
+      v[($random(seed) << 64'h1_0000_0000)+:2] = #2 2'b01;
+      `checkh(v, 8'h01);
+    end
+
+    begin
       // Test: a select written by the value of such an assignment is selected before the wait,
       // and the target is still written after it
       bit [7:0] v;
@@ -978,6 +1265,64 @@ module t;
     // verilator lint_on SELRANGE
     #1;
     `checkh(driven, 8'h00);
+
+    begin
+      // Test: a part-select wider than 64 bits partly below or above the vector reads its bits
+      // in range
+      longint i;
+      wide_asc = 128'h83aa_ad63_1097_8b7d_b29b_8ac4_31a3_4214;
+      wide_desc = 128'h83aa_ad63_1097_8b7d_b29b_8ac4_31a3_4214;
+      wide_asc_ones = '1;
+      wide_desc_ones = '1;
+      i = longint'(pos[0] + 6);
+      // verilator lint_off SELRANGE
+      `checkh(wide_asc[(i-16)+:65], 65'h0_83aa_ad63_1097_8b7d);
+      `checkh(wide_asc[(i+50)+:65], 65'h0_ca6e_2b10_c68d_0850);
+      `checkh(wide_desc[(i-16)+:65], 65'h1_6537_1588_6346_8428);
+      `checkh(wide_desc[(i+50)+:65], 65'h0_41d5_56b1_884b_c5be);
+      `checkh(wide_desc[(i+120)-:65], 65'h0_0107_555a_c621_2f16);
+      // verilator lint_on SELRANGE
+    end
+
+    begin
+      // Test: so does one of the element a queue method returns, which is popped once
+      bit [127:0] pending[$];
+      bit [64:0] got;
+      int at;
+      at = pos[0] + 55;
+      pending.push_back(128'h0123_4567_89ab_cdef_fedc_ba98_7654_3210);
+      pending.push_back(128'h0123_4567_89ab_cdef_fedc_ba98_7654_3210);
+      // verilator lint_off SELRANGE
+      got = pending[$][at+:65];
+      `checkh(got, 65'h0_0123_4567_89ab_cdef);
+      got = pending.pop_front()[at+:65];
+      `checkh(got, 65'h0_0123_4567_89ab_cdef);
+      got = pending.pop_front()[at*3+:65];
+      `checkh(got, 65'h0);
+      // verilator lint_on SELRANGE
+      `checkh(pending.size(), 0);
+    end
+
+    begin
+      // Test: a bit past a lane of a popped element reads zero
+      bit [1:0][3:0] lanes_q[$];
+      int j;
+      bit got;
+      lanes_q.push_back(8'h10);
+      j = pos[0] - 5;
+      got = lanes_q.pop_back()[0][j];
+      `checkh(got, 1'b0);
+      `checkh(lanes_q.size(), 0);
+    end
+
+    begin
+      // Test: a selection of a part-select partly below the vector reads its bits in range
+      bit [7:0] v;
+      v = 8'hb6 ^ 8'(pos[0] - 9);
+      // verilator lint_off SELRANGE
+      `checkh(low_nibble(v[-2+:8]), 4'b1000);
+      // verilator lint_on SELRANGE
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

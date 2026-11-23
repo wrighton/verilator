@@ -1949,11 +1949,10 @@ class ConstVisitor final : public VNVisitor {
     static bool selConstInRange(const AstSel* selp) {
         return VN_IS(selp->lsbp(), Const) && !selp->lsbConstOutOfRange(selp->fromp()->width() - 1);
     }
-    // Whether a select moved into a bitwise negation reads the same: one of a 2-state value must
-    // select only bits of its value at any value of its position, as the negation of a zero out
-    // of range is not zero
+    // Whether a select moved into a bitwise negation reads the same: it must select only bits of
+    // its value at any value of its position, as the negation of a bit out of range is not one
+    // out of range, also for a 4-state value, whose X out of range takes a value when assigned
     static bool selNotMovable(const AstSel* selp) {
-        if (selp->dtypep()->isFourstate()) return true;
         if (VN_IS(selp->lsbp(), Const)) return selConstInRange(selp);
         const int width = selp->widthConst();
         const int fromWidth = selp->fromp()->width();
@@ -3429,6 +3428,15 @@ class ConstVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
+    // Whether a select of a select can be one select: a write, which writes through the lower
+    // select, or a read at a position known to lie within the lower select, or reading past it
+    // only out of range of the value. Otherwise each is guarded by V3Unknown, as one select
+    // could read bits beyond the lower select.
+    static bool operandSelSelComposable(AstSel* nodep) {
+        if (nodep->isLValue()) return true;
+        return withinLower(nodep->lsbp(), VN_AS(nodep->fromp(), Sel), nodep)
+               || readsPastLower(nodep);
+    }
     // Whether a read of a select of a select is at a constant position wholly outside the lower
     // select, so reads out-of-range bits, not bits beyond the lower select
     static bool operandSelSelOutside(AstSel* nodep) {
@@ -3590,10 +3598,13 @@ class ConstVisitor final : public VNVisitor {
             const int64_t sum = (negative(lsb1p) ? lsb1.toSQuad() : int64_t{lsb1.toUInt()})
                                 + (negative(lsb2p) ? lsb2.toSQuad() : int64_t{lsb2.toUInt()});
             V3Number num{nodep, VL_IDATASIZE, 0};
-            if (sum < 0 || sum >= AstSel::FAR_POSITION) {
+            if (sum >= AstSel::FAR_POSITION) {
                 num.setAllBits1();
             } else {
+                // A negative sum is a negative integer, as V3WidthSel gives one, so a selection
+                // partly below the value reads its bits in range
                 num.setLong(static_cast<uint32_t>(sum));
+                num.isSigned(sum < 0);
             }
             newlsbp = new AstConst{lsb1p->fileline(), num};
             VL_DO_DANGLING(pushDeletep(lsb1p), lsb1p);
@@ -3644,8 +3655,8 @@ class ConstVisitor final : public VNVisitor {
             }
         } else {
             // Unsigned, as Unknown checks the position, and as wide as the sum of their largest
-            // values needs, so it does not wrap into range: a position below the lower select
-            // selects no bit
+            // values needs, so it does not wrap: a read composes only at a position within the
+            // lower select, and a write at a position below it writes no bit
             const auto maxValue = [](const AstNodeExpr* lsbp) {
                 const AstConst* const constp = VN_CAST(lsbp, Const);
                 if (constp && constp->num().fitsInUInt()) return uint64_t{constp->toUInt()};
@@ -5195,7 +5206,7 @@ class ConstVisitor final : public VNVisitor {
     TREEOPV("AstSel{operandSelExtend(nodep)}",  "DONE");
     TREEOPV("AstSel{operandSelFull(nodep)}",    "replaceWChild(nodep, nodep->fromp())");
     TREEOPV("AstSel{$fromp.castSel, operandSelSelOutside(nodep)}", "replaceSelSelOutside(nodep)");
-    TREEOPV("AstSel{$fromp.castSel}",           "replaceSelSel(nodep)");
+    TREEOPV("AstSel{$fromp.castSel, operandSelSelComposable(nodep)}", "replaceSelSel(nodep)");
     TREEOPV("AstSel{$fromp.castAdd, operandSelBiLower(nodep)}", "DONE");
     TREEOPV("AstSel{$fromp.castAnd, operandSelBiLower(nodep)}", "DONE");
     TREEOPV("AstSel{$fromp.castOr,  operandSelBiLower(nodep)}", "DONE");

@@ -4338,6 +4338,13 @@ public:
             const uint32_t lsb = bit.fitsInUInt() ? bit.toUInt() : maxPos;
             const uint64_t msb = uint64_t{lsb} + widthConst() - 1;
             out.opSel(from, static_cast<uint32_t>(std::min<uint64_t>(msb, maxPos)), lsb);
+            // A position narrowed to a negative integer, as V3WidthCommit gives, read with the
+            // signedness of its constant's number, as lsbConstInt() reads it
+            const AstConst* const constp = VN_CAST(lsbp(), Const);
+            const V3Number& pos = constp ? constp->num() : bit;
+            if (pos.isSigned() && pos.width() <= VL_IDATASIZE && pos.isNegative()) {
+                selectBelow(out, from, pos);
+            }
         }
         out.opCleanTwoStateNumber(dtypep());
     }
@@ -4382,6 +4389,9 @@ public:
     // Set 'narrow' to constant position 'num', signed if 'isSigned', as an integer, as
     // narrowLsbConst() describes; return whether that changes it
     static bool narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow);
+    // Set 'out' to the selection of constant 'from' at negative position 'bit': the bits of
+    // 'from' from zero, above out-of-range bits
+    void selectBelow(V3Number& out, const V3Number& from, const V3Number& bit) const;
     // First bit and number of bits from the bottom of the value a select at a constant position
     // accesses, as V3Unknown reads the position: one narrowed to a negative integer clips at bit
     // zero, and one far above the value accesses no bit
