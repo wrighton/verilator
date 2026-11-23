@@ -3975,12 +3975,6 @@ class ParamVisitor final : public VNVisitor {
     ParamProcessor m_processor;  // De-parameterize a cell, build modules
     GenForUnroller m_unroller;  // Unroller for AstGenFor
 
-    // Selector operands waiting for the module's generate bodies to finish elaborating.
-    std::vector<AstAssertCtlArgs*> m_assertCtlDeferred;
-    std::unordered_map<const AstVarXRef*, AstVar*> m_assertCtlOriginalParams;
-    // Do not resurrect a discarded declaration even if its address is reused.
-    std::unordered_set<const AstVar*> m_discardedGenerateVars;
-
     bool m_iterateModule = false;  // Iterating module body
     string m_unlinkedTxt;  // Text for AstUnlinkedRef
     // Cells left to process (in current module), keyed by (!isIface, !inClassExtends)
@@ -4301,7 +4295,6 @@ class ParamVisitor final : public VNVisitor {
                     m_genBlockp = nullptr;
                     iterateDefParams(modp->stmtsp());
                     iterateChildren(modp);
-                    foldDeferredAssertCtlPaths(modp);
                 }
             }
 
@@ -5150,51 +5143,9 @@ class ParamVisitor final : public VNVisitor {
             }
         }
     }
-    void foldDeferredAssertCtlPaths(AstNodeModule* modp) {
-        if (m_assertCtlDeferred.empty()) return;
-        // V3Param may have removed a generate arm. Do not follow the old reference unless its
-        // exact declaration is still present in this elaborated module.
-        std::unordered_set<AstVar*> live;
-        modp->foreach([&](AstVar* varp) {
-            if (varp->isParam() && varp->valuep()) live.emplace(varp);
-        });
-        for (AstAssertCtlArgs* const argsp : m_assertCtlDeferred) {
-            argsp->foreach([&](AstVarXRef* refp) {
-                const auto original = m_assertCtlOriginalParams.find(refp);
-                if (refp->varp() || original == m_assertCtlOriginalParams.end()) return;
-                AstVar* const varp = original->second;
-                if (!m_discardedGenerateVars.count(varp) && live.count(varp)
-                    && varp->name() == refp->name()
-                    && V3LinkDotIfaceCapture::findOwnerModule(varp) == modp) {
-                    refp->varp(varp);
-                }
-            });
-            for (AstNodeExpr* const itemp : argsp->itemspList()) foldAssertCtlPath(itemp);
-            // Expressions that did not fold still need ordinary post-parameter relinking.
-            argsp->foreach([&](AstVarXRef* refp) {
-                if (m_assertCtlOriginalParams.count(refp)) refp->varp(nullptr);
-            });
-        }
-        m_assertCtlDeferred.clear();
-        m_assertCtlOriginalParams.clear();
-    }
     void visit(AstAssertCtlArgs* nodep) override {
-        const size_t saved = m_assertCtlOriginalParams.size();
-        for (AstNodeExpr* const itemp : nodep->itemspList()) {
-            itemp->foreach([&](const AstVarXRef* refp) {
-                AstVar* const varp = refp->varp();
-                if (refp->containsGenBlock() && varp) {
-                    // Save identity only. A discarded generate arm may already have freed varp.
-                    m_assertCtlOriginalParams.emplace(refp, varp);
-                }
-            });
-        }
         iterateChildren(nodep);
-        if (m_assertCtlOriginalParams.size() != saved) {
-            m_assertCtlDeferred.push_back(nodep);
-        } else {
-            for (AstNodeExpr* const itemp : nodep->itemspList()) foldAssertCtlPath(itemp);
-        }
+        for (AstNodeExpr* const itemp : nodep->itemspList()) foldAssertCtlPath(itemp);
     }
     void visit(AstCellArrayRef* nodep) override {
         // Multi-dim iface arrays chain multiple selps via nextp(); constify each in place.
@@ -5238,20 +5189,15 @@ class ParamVisitor final : public VNVisitor {
 
     // Generate Statements
 
-    // Record discarded declarations and report defparams that resolve outside their arm.
-    void checkDroppedGenerate(AstNode* nodep) {
-        nodep->foreach([&](const AstNode* subp) {
-            if (const AstVar* const varp = VN_CAST(subp, Var)) {
-                m_discardedGenerateVars.emplace(varp);
-            } else if (const AstPin* const pinp = VN_CAST(subp, Pin)) {
-                // IEEE 1800-2023 23.10.4.2: The elaborated path names a scope outside this
-                // block, but V3LinkDot attached the defparam to an instance in it.
-                if (!pinp->defparamGenAlt()) return;
-                pinp->v3warn(E_UNSUPPORTED,
-                             "Unsupported: defparam into a generate block that is not"
-                             " elaborated, whose path also names a scope outside it"
-                             " (IEEE 1800-2023 23.10.4.2)");
-            }
+    // Report defparams into a generate branch that is not elaborated, that resolve elsewhere
+    static void checkDroppedDefparams(AstNode* nodep) {
+        // IEEE 1800-2023 23.10.4.2: Resolved after elaboration, the path names the scope
+        // outside the block, but V3LinkDot attached the defparam to an instance in it
+        nodep->foreach([](const AstPin* pinp) {
+            if (!pinp->defparamGenAlt()) return;
+            pinp->v3warn(E_UNSUPPORTED, "Unsupported: defparam into a generate block that is not"
+                                        " elaborated, whose path also names a scope outside it"
+                                        " (IEEE 1800-2023 23.10.4.2)");
         });
     }
 
@@ -5288,7 +5234,7 @@ class ParamVisitor final : public VNVisitor {
             } else {
                 nodep->unlinkFrBack();
             }
-            checkDroppedGenerate(nodep);
+            checkDroppedDefparams(nodep);
             // The kept declarations keep their scope, as a generate if is none
             m_processor.forgetScopes(nodep);
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
@@ -5411,7 +5357,7 @@ class ParamVisitor final : public VNVisitor {
         } else {
             nodep->unlinkFrBack();
         }
-        checkDroppedGenerate(nodep);
+        checkDroppedDefparams(nodep);
         // The kept declarations keep their scope, as a generate case is none
         m_processor.forgetScopes(nodep);
         VL_DO_DANGLING(nodep->deleteTree(), nodep);
