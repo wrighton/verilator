@@ -56,12 +56,15 @@ module caller (input bit clk, input bit good, input bit off, output int reports
 `ifdef VIA_COHORTS
 `ifdef REVERSE_COHORT
   always @(posedge off) $assertoff(level, other_bank.payload.slots[0].u, port_bank.payload.slots[0].u,
-                                 other_bank.payload, port_bank.payload, local_check);
+                                 other_bank.payload, port_bank.payload,
 `else
   always @(posedge off) $assertoff(level, port_bank.payload, other_bank.payload,
                                  port_bank.payload.slots[0].u, other_bank.payload.slots[0].u,
-                                 local_check);
 `endif
+`ifdef VIA_COMMON
+                                 $root.t.common.payload,
+`endif
+                                 local_check);
 `elsif VIA_PORT
   always @(posedge off) $assertoff(0, port_bank.payload, local_check);
 `else
@@ -122,6 +125,10 @@ module t;
   wire [31:0] local_reports [2][N];
   wire [31:0] fallback_reports [2];
   wire [31:0] bank_reports [3][2][N];
+`ifdef VIA_COMMON
+  wire [31:0] common_reports [N+1];
+  bank_group #(.N(N+1)) common (.clk, .good, .reports(common_reports));
+`endif
   // Each host's callers share two banks, neither shared with the other host.
   for (genvar b = 0; b < 2; ++b) begin : hosts
     bank_host u (.clk, .good, .off(off[b]), .level, .local_reports(local_reports[b]),
@@ -148,6 +155,9 @@ module t;
     foreach (bank_reports[b, k, i]) `checkd(bank_reports[b][k][i], b == 0 && i == 0 ? 0 : 1);
     foreach (local_reports[b, i]) `checkd(local_reports[b][i], b == 0 && i == 0 ? 0 : 1);
     foreach (fallback_reports[i]) `checkd(fallback_reports[i], 1);
+`ifdef VIA_COMMON
+    foreach (common_reports[i]) `checkd(common_reports[i], 1);
+`endif
 
     // With no depth limit, a caller in the second host stops every site in both its banks.
     level = 0;
@@ -160,6 +170,9 @@ module t;
       `checkd(local_reports[b][i], b == 0 && i == 0 ? 0 : b == 1 && i == N-1 ? 1 : 2);
     end
     foreach (fallback_reports[i]) `checkd(fallback_reports[i], 2);
+`ifdef VIA_COMMON
+    foreach (common_reports[i]) `checkd(common_reports[i], 1);
+`endif
 
     // Another caller in the first host and the hierarchical route each stop both their banks.
     #1;
@@ -174,6 +187,9 @@ module t;
               b == 1 && i == N-1 ? 1 : 3);
     end
     foreach (fallback_reports[i]) `checkd(fallback_reports[i], i == 0 ? 2 : 3);
+`ifdef VIA_COMMON
+    foreach (common_reports[i]) `checkd(common_reports[i], 1);
+`endif
     $display("*-* All Finished *-*");
     $finish;
   end
