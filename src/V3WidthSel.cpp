@@ -37,6 +37,10 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // Width state, as a visitor of each AstNode
 
 class WidthSelVisitor final : public VNVisitor {
+    // A 32-bit position wraps modulo this
+    static constexpr int64_t WRAP = 1LL << 32;
+    // Largest scale of an element whose positions are bounded
+    static constexpr uint32_t MAX_BOUNDED_SCALE = 1U << 20;
     // IMPORTANT
     //**** This is not a normal visitor, in that all iteration is instead
     //  done by the caller (V3Width).  This avoids duplicating much of the
@@ -199,6 +203,271 @@ class WidthSelVisitor final : public VNVisitor {
         return mulp;
     }
 
+    // Return self-determined index 'indexp' as a value of 'toWidth' bits, extended as it is read
+    // signed. The extension, or cast, is a boundary that keeps the index's own arithmetic at its
+    // width and signedness, which the width pass would otherwise take from around it.
+    static AstNodeExpr* newWidenedIndex(AstNodeExpr* indexp, int toWidth) {
+        const bool isSigned = indexSigned(indexp);
+        // Only operators take their width and signedness from around them
+        if (indexp->width() == toWidth && isSigned == indexp->isSigned()
+            && !VN_IS(indexp, NodeUniop) && !VN_IS(indexp, NodeBiop)
+            && !VN_IS(indexp, NodeTriop)) {
+            return indexp;
+        }
+        AstNodeExpr* extendp;
+        if (indexp->width() == toWidth) {
+            // A cast to the signedness, as an extension must widen
+            if (isSigned) {
+                extendp = new AstSigned{indexp->fileline(), indexp};
+            } else {
+                extendp = new AstUnsigned{indexp->fileline(), indexp};
+            }
+        } else if (isSigned) {
+            extendp = new AstExtendS{indexp->fileline(), indexp, toWidth};
+        } else {
+            extendp = new AstExtend{indexp->fileline(), indexp, toWidth};
+        }
+        extendp->dtypeSetLogicSized(toWidth, VSigning::fromBool(isSigned));
+        return extendp;
+    }
+    // Whether index 'indexp' is read as signed. An index of up to 32 bits is an integer, so a
+    // 32-bit unsigned index with its top bit set is negative, as other simulators take it.
+    static bool indexSigned(const AstNodeExpr* indexp) {
+        return indexp->isSigned() || indexp->width() == VL_IDATASIZE;
+    }
+
+    // Return the bit position of 'indexp' in a packed select of 'width' bits: 'addend' minus
+    // 'indexp' if 'negate', else 'indexp' plus 'addend', times 'scale'. A non-constant position
+    // is signed like its index, and computed in 64 or more bits if 32-bit arithmetic could wrap
+    // it into the selected value, so that V3Unknown's bounds check sees where it selects.
+    AstNodeExpr* newPosition(AstNodeExpr* indexp, bool negate, int64_t addend, uint32_t scale,
+                             int width, bool partSelect = false) {
+        FileLine* const flp = indexp->fileline();
+        if (const AstConst* const constp = VN_CAST(indexp, Const)) {
+            // The caller deletes the unused index
+            if (!constp->num().isFourState()) {
+                return newConstPosition(constp, negate, addend, scale);
+            }
+        }
+        int64_t lo = 0;
+        int64_t hi = 0;
+        const bool bounded = positionBounds(indexp, negate, addend, scale, lo, hi);
+        const bool wide = !bounded || hi >= WRAP || lo <= -WRAP + width;
+        // A part-select from an unsigned index may start below the value, which a reader of its
+        // bits in range needs to tell from a large position
+        const bool isSigned = indexSigned(indexp) || (partSelect && (!bounded || lo < 0));
+        // The 32-bit arithmetic below needs the addend and its negation as integers
+        const bool addendFits = addend > std::numeric_limits<int32_t>::min()
+                                && addend <= std::numeric_limits<int32_t>::max();
+        if (VN_IS(indexp, Const) || (!isSigned && !wide && addendFits)) {
+            AstNodeExpr* const widenedp = newWidenedIndex(indexp, indexp->width());
+            AstNodeExpr* posp = negate ? newSubNeg(static_cast<int32_t>(addend), widenedp)
+                                       : newSubNeg(widenedp, static_cast<int32_t>(-addend));
+            if (scale != 1) posp = newMulConst(flp, scale, posp);
+            return posp;
+        }
+        if (!negate && addend == 0 && scale == 1 && isSigned == indexp->isSigned()) {
+            // A narrower signed index is an integer, so a negative one stays out of range
+            if (isSigned && indexp->width() < VL_IDATASIZE) {
+                return newWidenedIndex(indexp, VL_IDATASIZE);
+            }
+            return indexp;
+        }
+        // A signed bit position wraps in 32 bits only far out of range, where it stays; a
+        // part-select tells a position below the value by its sign, so needs its whole range as an
+        // integer
+        const bool fitsInt = (indexSigned(indexp) && !partSelect)
+                             || (bounded && lo >= std::numeric_limits<int32_t>::min()
+                                 && hi <= std::numeric_limits<int32_t>::max());
+        const int posWidth = !wide && fitsInt
+                                 ? VL_IDATASIZE
+                                 : std::max(VL_QUADSIZE, std::max(indexp->width(), 33) + 2
+                                                             + V3Number::log2b(scale) + 1);
+        // Unsized, so the arithmetic widens to it without warning, as with an integer
+        const auto newConst = [flp, posWidth, isSigned](int64_t value) {
+            V3Number quad{flp, VL_QUADSIZE, 0};
+            quad.setQuad(static_cast<uint64_t>(value));
+            quad.isSigned(true);
+            V3Number num{flp, posWidth, 0};
+            num.opExtendS(quad, VL_QUADSIZE);
+            num.isSigned(isSigned);
+            num.width(posWidth, false);
+            return new AstConst{flp, num};
+        };
+        AstNodeExpr* posp = newWidenedIndex(indexp, posWidth);
+        // An unsigned index of a part-select below the value is made signed after extending
+        if (isSigned && posp != indexp) posp->dtypeSetLogicSized(posWidth, VSigning::SIGNED);
+        if (negate) {
+            posp = new AstSub{flp, newConst(addend), posp};
+        } else if (addend > 0) {
+            posp = new AstAdd{flp, posp, newConst(addend)};
+        } else if (addend < 0) {
+            posp = new AstSub{flp, posp, newConst(-addend)};
+        }
+        if (scale != 1) {
+            posp = new AstMul{flp, newConst(scale), posp};
+            posp->dtypeSetLogicSized(posWidth, VSigning::fromBool(isSigned));
+        }
+        return posp;
+    }
+    // Return the position of constant index 'constp', as newPosition describes, computed exactly.
+    // A non-negative position under 2^31 of an element is scaled after; an unsigned position
+    // keeps the index's width if it fits there and that is at most 32 bits, else takes 32 bits;
+    // a negative integer one is in 32 bits. One far above any value, or below the integers, is
+    // given as is, wider than an integer, all out of range.
+    AstNodeExpr* newConstPosition(const AstConst* constp, bool negate, int64_t addend,
+                                  uint32_t scale) {
+        FileLine* const flp = constp->fileline();
+        const int indexWidth = constp->width();
+        // Wide enough for any such position
+        const int posWidth
+            = std::max(indexWidth, VL_IDATASIZE + 1) + 2 + V3Number::log2b(scale) + 1;
+        const auto newNum = [flp, posWidth](int64_t value) {
+            V3Number quad{flp, VL_QUADSIZE, 0};
+            quad.setQuad(static_cast<uint64_t>(value));
+            V3Number num{flp, posWidth, 0};
+            num.opExtendS(quad, VL_QUADSIZE);
+            return num;
+        };
+        V3Number index{flp, posWidth, 0};
+        if (indexSigned(constp)) {
+            index.opExtendS(constp->num(), indexWidth);
+        } else {
+            index.opAssign(constp->num());
+        }
+        V3Number offset{flp, posWidth, 0};
+        if (negate) {
+            offset.opSub(newNum(addend), index);
+        } else {
+            offset.opAdd(index, newNum(addend));
+        }
+        V3Number pos{flp, posWidth, 0};
+        pos.opMul(offset, newNum(scale));
+        pos.isSigned(true);
+        const uint32_t posBits = pos.isNegative() ? 0 : pos.mostSetBitP1();
+        // V3Width reports a position far above any value, or below the integers, as it is, then
+        // reads it as an integer out of range
+        V3Number farAbove{flp, 1, 0};
+        farAbove.opGteS(pos, newNum(AstSel::FAR_POSITION));
+        V3Number belowInt{flp, 1, 0};
+        belowInt.opLtS(pos, newNum(std::numeric_limits<int32_t>::min()));
+        if (farAbove.isNeqZero() || belowInt.isNeqZero()) return new AstConst{flp, pos};
+        if (scale != 1 && !pos.isNegative() && posBits < static_cast<uint32_t>(VL_IDATASIZE)) {
+            // An element in or above range, scaled without wrapping, as V3Const reports it
+            return newMulConst(flp, scale,
+                               new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE,
+                                            static_cast<uint32_t>(offset.toUQuad())});
+        }
+        if (!pos.isNegative() && posBits <= static_cast<uint32_t>(indexWidth)
+            && indexWidth <= VL_IDATASIZE) {
+            V3Number num{flp, indexWidth, 0};
+            num.opAssign(pos);
+            return new AstConst{flp, num};
+        }
+        if (!pos.isNegative() && posBits <= VL_IDATASIZE) {
+            return new AstConst{flp, AstConst::WidthedValue{}, VL_IDATASIZE,
+                                static_cast<uint32_t>(pos.toUQuad())};
+        }
+        // A negative integer, as later passes read a constant position
+        UASSERT_OBJ(pos.isNegative(), constp, "Constant position not handled above");
+        V3Number num{flp, VL_IDATASIZE, 0};
+        num.opAssign(pos);
+        num.isSigned(true);
+        return new AstConst{flp, num};
+    }
+    // Whether a position as newPosition describes may wrap, in 32 bits, from out of range into
+    // a value of 'width' bits
+    static bool positionMayWrap(const AstNodeExpr* indexp, bool negate, int64_t addend,
+                                uint32_t scale, int width) {
+        int64_t lo = 0;
+        int64_t hi = 0;
+        if (!positionBounds(indexp, negate, addend, scale, lo, hi)) return true;
+        return hi >= WRAP || lo <= -WRAP + width;
+    }
+    // Set the bounds of a position as newPosition describes, unless its index is too wide or
+    // its scale too large to be worth it
+    static bool positionBounds(const AstNodeExpr* indexp, bool negate, int64_t addend,
+                               uint32_t scale, int64_t& lo, int64_t& hi) {
+        if (indexp->width() > VL_IDATASIZE || scale > MAX_BOUNDED_SCALE) return false;
+        const int64_t indexMin = indexSigned(indexp) ? -(1LL << (indexp->width() - 1)) : 0;
+        const int64_t indexMax = indexSigned(indexp) ? (1LL << (indexp->width() - 1)) - 1
+                                                     : (1LL << indexp->width()) - 1;
+        lo = (negate ? addend - indexMax : indexMin + addend) * scale;
+        hi = (negate ? addend - indexMin : indexMax + addend) * scale;
+        return true;
+    }
+
+    // Return the bit position of element 'indexp' of 'scale' bits in a packed range 'fromRange'
+    // of 'width' bits. An index of up to 32 bits whose position could wrap, or is signed, takes
+    // its offset from the low end of the range modulo its width, unsigned, if it can hold every
+    // index in range: this maps the indices it can hold one to one onto offsets, and those in
+    // range onto the offsets in range, so only the scaling needs checking.
+    AstNodeExpr* newElementPosition(AstNodeExpr* indexp, const VNumRange& fromRange,
+                                    uint32_t scale, int width) {
+        const bool negate = fromRange.ascending();
+        // Widened before negating, as the bound may be the most negative integer
+        const int64_t addend = negate ? int64_t{fromRange.hi()} : -int64_t{fromRange.lo()};
+        const int indexWidth = indexp->width();
+        if (VN_IS(indexp, Const) || indexWidth > VL_IDATASIZE
+            || (!indexSigned(indexp) && !positionMayWrap(indexp, negate, addend, scale, width))) {
+            return newPosition(indexp, negate, addend, scale, width);
+        }
+        const int64_t indexMin = indexSigned(indexp) ? -(1LL << (indexWidth - 1)) : 0;
+        const int64_t indexMax
+            = indexSigned(indexp) ? (1LL << (indexWidth - 1)) - 1 : (1LL << indexWidth) - 1;
+        // Scaling may wrap, unless the offset is first checked in range, which needs it twice
+        const bool mayWrap = scale != 1 && indexWidth + V3Number::log2b(scale) + 1 > VL_IDATASIZE;
+        // The index must be able to hold every index in range
+        if (fromRange.lo() < indexMin || fromRange.hi() > indexMax
+            || (mayWrap && !indexp->isRepeatable())) {
+            return newPosition(indexp, negate, addend, scale, width);
+        }
+        // The end of the range the offset counts from
+        const int64_t base = negate ? fromRange.hi() : fromRange.lo();
+        FileLine* const flp = indexp->fileline();
+        const auto newConst = [flp](int constWidth, uint64_t value) {
+            V3Number num{flp, constWidth, 0};
+            num.setQuad(value);
+            return new AstConst{flp, num};
+        };
+        // The arithmetic and comparisons below are unsigned whatever the index's signedness
+        AstNodeExpr* offsetp = newWidenedIndex(indexp, indexWidth);
+        if (negate || base != 0) {
+            offsetp = negate ? new AstSub{flp, newConst(indexWidth, static_cast<uint64_t>(base)),
+                                          offsetp}
+                             : new AstSub{flp, offsetp,
+                                          newConst(indexWidth, static_cast<uint64_t>(base))};
+            offsetp->dtypeSetLogicSized(indexWidth, VSigning::UNSIGNED);
+        }
+        AstNodeExpr* posp = mayWrap ? offsetp->cloneTreePure(false) : offsetp;
+        if (indexWidth < VL_IDATASIZE) {
+            posp = new AstExtend{flp, posp, VL_IDATASIZE};
+            posp->dtypeSetLogicSized(VL_IDATASIZE, VSigning::UNSIGNED);
+        }
+        if (scale != 1) {
+            posp = new AstMul{flp, newConst(VL_IDATASIZE, scale), posp};
+            posp->dtypeSetLogicSized(VL_IDATASIZE, VSigning::UNSIGNED);
+        }
+        if (mayWrap) {
+            // Scaled only if in range, so the scaling does not wrap; else the end of the value,
+            // a multiple of the scale, so aligned, which stays out of range with a position
+            // within the element added, as a select of the element composes
+            AstNodeExpr* const inRangep = new AstGte{
+                flp, newConst(indexWidth, static_cast<uint64_t>(fromRange.elements() - 1)),
+                offsetp};
+            inRangep->dtypeSetBit();
+            posp = new AstCond{flp, inRangep, posp,
+                               newConst(VL_IDATASIZE, static_cast<uint64_t>(width))};
+            posp->dtypeSetLogicSized(VL_IDATASIZE, VSigning::UNSIGNED);
+        }
+        return posp;
+    }
+    // Return the bit position of bit 'indexp' of a vector with range 'fromRange'
+    AstNodeExpr* newBitPosition(AstNodeExpr* indexp, const VNumRange& fromRange, int width) {
+        if (!fromRange.ranged()) return indexp;
+        return newElementPosition(indexp, fromRange, 1, width);
+    }
+
     AstNodeDType* sliceDType(AstPackArrayDType* nodep, int msb, int lsb) {
         // Return slice needed for msb/lsb, either as original dtype or a new slice dtype
         if (nodep->declRange().elements() == (msb - lsb + 1)  // Extracting whole of original array
@@ -278,12 +547,6 @@ class WidthSelVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else if (const AstPackArrayDType* const adtypep = VN_CAST(ddtypep, PackArrayDType)) {
             // SELBIT(array, index) -> SEL(array, index*width-of-subindex, width-of-subindex)
-            AstNodeExpr* subp = rhsp;
-            if (fromRange.ascending()) {
-                subp = newSubNeg(fromRange.hi(), subp);
-            } else {
-                subp = newSubNeg(subp, fromRange.lo());
-            }
             UASSERT_OBJ(!(!fromRange.elements() || (adtypep->width() % fromRange.elements()) != 0),
                         adtypep,
                         "Array extraction with width miscomputed " << adtypep->width() << "/"
@@ -291,7 +554,8 @@ class WidthSelVisitor final : public VNVisitor {
             // cppcheck-suppress zerodivcond
             const int elwidth = adtypep->width() / fromRange.elements();
             AstSel* const newp = new AstSel{
-                nodep->fileline(), fromp, newMulConst(nodep->fileline(), elwidth, subp), elwidth};
+                nodep->fileline(), fromp,
+                newElementPosition(rhsp, fromRange, elwidth, adtypep->width()), elwidth};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);
             newp->dtypeFrom(adtypep->subDTypep());  // Need to strip off array reference
@@ -360,8 +624,8 @@ class WidthSelVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else if (VN_IS(ddtypep, BasicDType)) {
             // SELBIT(range, index) -> SEL(array, index, 1)
-            AstSel* const newp
-                = new AstSel{nodep->fileline(), fromp, newSubLsbOf(rhsp, fromRange), 1};
+            AstSel* const newp = new AstSel{nodep->fileline(), fromp,
+                                            newBitPosition(rhsp, fromRange, fromp->width()), 1};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             UINFOTREE(9, newp, "", "SELBTn");
@@ -369,8 +633,8 @@ class WidthSelVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
         } else if (VN_IS(ddtypep, NodeUOrStructDType)) {  // A bit from the packed struct
             // SELBIT(range, index) -> SEL(array, index, 1)
-            AstSel* const newp
-                = new AstSel{nodep->fileline(), fromp, newSubLsbOf(rhsp, fromRange), 1};
+            AstSel* const newp = new AstSel{nodep->fileline(), fromp,
+                                            newBitPosition(rhsp, fromRange, fromp->width()), 1};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             UINFOTREE(9, newp, "", "SELBTn");
@@ -484,7 +748,10 @@ class WidthSelVisitor final : public VNVisitor {
             const int elwidth = adtypep->width() / fromRange.elements();
             AstSel* const newp
                 = new AstSel{nodep->fileline(), fromp,
-                             newMulConst(nodep->fileline(), elwidth, newSubLsbOf(lsbp, fromRange)),
+                             newPosition(lsbp, fromRange.ascending(),
+                                         fromRange.ascending() ? int64_t{fromRange.hi()}
+                                                               : -int64_t{fromRange.lo()},
+                                         elwidth, adtypep->width()),
                              (msb - lsb + 1) * elwidth};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);
@@ -505,8 +772,9 @@ class WidthSelVisitor final : public VNVisitor {
                 std::swap(msb, lsb);
                 std::swap(msbp, lsbp);  // Select starts at the new lsb
             }
-            AstSel* const newp = new AstSel{nodep->fileline(), fromp, newSubLsbOf(lsbp, fromRange),
-                                            msb + 1 - lsb};
+            AstSel* const newp
+                = new AstSel{nodep->fileline(), fromp,
+                             newBitPosition(lsbp, fromRange, fromp->width()), msb + 1 - lsb};
             newp->declRange(fromRange);
             UINFO(6, "   new " << newp);
             // UINFOTREE(9, newp, "", "SELEXnew");
@@ -608,27 +876,23 @@ class WidthSelVisitor final : public VNVisitor {
                 elwidth = adtypep->width() / fromRange.elements();
                 newwidth = width * elwidth;
             }
-            AstNodeExpr* newlsbp = nullptr;
+            const bool ascending = fromRange.ascending();
+            int64_t addend = 0;
             if (VN_IS(nodep, SelPlus)) {
-                if (fromRange.ascending()) {
-                    // SELPLUS(from,lsb,width) -> SEL(from, (vector_msb-width+1)-sel, width)
-                    newlsbp = newSubNeg((fromRange.hi() - width + 1), rhsp);
-                } else {
-                    // SELPLUS(from,lsb,width) -> SEL(from, lsb-vector_lsb, width)
-                    newlsbp = newSubNeg(rhsp, fromRange.lo());
-                }
+                // SELPLUS(from,lsb,width) -> SEL(from, (vector_msb-width+1)-sel, width) or
+                // SEL(from, lsb-vector_lsb, width)
+                addend
+                    = ascending ? int64_t{fromRange.hi()} - width + 1 : -int64_t{fromRange.lo()};
             } else if (VN_IS(nodep, SelMinus)) {
-                if (fromRange.ascending()) {
-                    // SELMINUS(from,msb,width) -> SEL(from, msb-[bit])
-                    newlsbp = newSubNeg(fromRange.hi(), rhsp);
-                } else {
-                    // SELMINUS(from,msb,width) -> SEL(from, msb-(width-1)-lsb#)
-                    newlsbp = newSubNeg(rhsp, fromRange.lo() + (width - 1));
-                }
+                // SELMINUS(from,msb,width) -> SEL(from, msb-[bit]) or
+                // SEL(from, msb-(width-1)-lsb#)
+                addend = ascending ? int64_t{fromRange.hi()}
+                                   : -(int64_t{fromRange.lo()} + (width - 1));
             } else {
                 nodep->v3fatalSrc("Bad Case");
             }
-            if (elwidth != 1) newlsbp = newMulConst(nodep->fileline(), elwidth, newlsbp);
+            AstNodeExpr* const newlsbp
+                = newPosition(rhsp, ascending, addend, elwidth, ddtypep->width(), width > 1);
             AstSel* const newp = new AstSel{nodep->fileline(), fromp, newlsbp, newwidth};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);

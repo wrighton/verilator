@@ -1470,6 +1470,28 @@ class WidthVisitor final : public VNVisitor {
         }
     }
 
+    // Pad the value 'nodep' selects from to 'width' bits, its bits above the value being out of
+    // range, as V3Unknown also reads them: X for a 4-state value, else zeros
+    void padSelectFrom(AstSel* nodep, int width) {
+        AstNodeExpr* const fromp = nodep->fromp();
+        if (width <= fromp->width()) return;  // Padded already
+        if (!nodep->valueWidth()) nodep->valueWidth(fromp->width());
+        AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
+            width, width, fromp->dtypep()->numeric(), fromp->dtypep()->isFourstate());
+        if (!fromp->dtypep()->isFourstate()) {
+            widthCheckSized(nodep, "errorless...", fromp, subDTypep, EXTEND_EXP,
+                            false /*noerror*/);
+            return;
+        }
+        FileLine* const flp = fromp->fileline();
+        V3Number xnum{nodep, width - fromp->width()};
+        xnum.setAllBitsX();
+        AstConcat* const concatp
+            = new AstConcat{flp, new AstConst{flp, xnum}, fromp->unlinkFrBack()};
+        concatp->dtypep(subDTypep);
+        nodep->fromp(concatp);
+    }
+
     void visit(AstSel* nodep) override {
         // Signed: always unsigned; Real: Not allowed
         // LSB is self-determined (IEEE 2012 11.5.1)
@@ -1503,11 +1525,11 @@ class WidthVisitor final : public VNVisitor {
                     nodep->v3warn(SELRANGE, "Extracting " << width << " bits from only "
                                                           << nodep->fromp()->width()
                                                           << " bit number");
-                    AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
-                        width, width, nodep->fromp()->dtypep()->numeric(),
-                        nodep->fromp()->dtypep()->isFourstate());
-                    widthCheckSized(nodep, "errorless...", nodep->fromp(), subDTypep, EXTEND_EXP,
-                                    false /*noerror*/);
+                    // Wide enough for the selection at any position in the value; a constant
+                    // position pads further below
+                    padSelectFrom(nodep, VN_IS(nodep->lsbp(), Const)
+                                             ? width
+                                             : nodep->fromp()->width() + width - 1);
                 } else {
                     // Partial assignment
                     nodep->v3warn(SELRANGE, "Assigning " << width << " bits to only "
@@ -1535,12 +1557,22 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->dtypep()->isFourstate());
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, FINAL}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, FINAL}.p());
-            // Bounds of a constant select, read before any warning, as reading a too wide index
-            // reports an error, and wider than int, as the index may be near its maximum
+            // V3WidthSel may have extended or cast a constant index, now known; fold it
+            if (const AstNodeUniop* const uniopp = VN_CAST(nodep->lsbp(), NodeUniop)) {
+                if (VN_IS(uniopp->lhsp(), Const)) {
+                    V3Const::constifyEdit(nodep->lsbp());  // Replaces the position
+                }
+            }
+            // Bounds of a constant select, read as an integer, wider than int, as the index may be
+            // near its maximum. The constant stays as written, so reported as such, until
+            // V3WidthCommit.
             const AstConst* const lsbConstp = VN_CAST(nodep->lsbp(), Const);
-            const int64_t lsb = lsbConstp ? lsbConstp->toSInt() : 0;
+            const int64_t lsb = lsbConstp ? nodep->lsbConstInt() : 0;
             const int64_t msb = lsb + width - 1;
-            if (widthBad(nodep->lsbp(), selwidthDTypep) && nodep->lsbp()->width() != 32) {
+            // A position of an integer or more bits may have been widened so it does not wrap,
+            // and one sign extended below has been reported already
+            if (widthBad(nodep->lsbp(), selwidthDTypep) && nodep->lsbp()->width() < VL_IDATASIZE
+                && !VN_IS(nodep->lsbp(), ExtendS)) {
                 if (!nodep->fileline()->warnIsOff(V3ErrorCode::WIDTH)) {
                     nodep->v3widthWarn(
                         (selwidth / elw), (nodep->lsbp()->width() / elw),
@@ -1555,11 +1587,8 @@ class WidthVisitor final : public VNVisitor {
                     UINFO(1, "    Related node: " << nodep);
                 }
             }
-            if (lsbConstp && msb >= std::numeric_limits<int>::max()) {
-                nodep->v3warn(
-                    E_UNSUPPORTED,
-                    "Unsupported: Selection beyond the 32-bit index range: " << msb << ":" << lsb);
-            } else if (lsbConstp && msb > frommsb) {
+            const bool lsbOutOfRange = lsbConstp && nodep->lsbConstOutOfRange(frommsb);
+            if (lsbOutOfRange) {
                 // See also warning in V3Const
                 // We need to check here, because the widthCheckSized may silently
                 // add another SEL which will lose the out-of-range check
@@ -1571,28 +1600,24 @@ class WidthVisitor final : public VNVisitor {
                 if (m_doGenerate) {
                     UINFO(5, "Selection index out of range inside generate");
                 } else if (!inParameterizedTemplate) {
+                    const string msbStr = nodep->lsbConstStr(nodep->widthConst() - 1);
+                    const string lsbStr = nodep->lsbConstStr(0);
                     if (nodep->declRange().ranged()) {
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
-                                                    << msb << ":" << lsb << " outside " << frommsb
-                                                    << ":" << fromlsb);
+                                                    << msbStr << ":" << lsbStr << " outside "
+                                                    << frommsb << ":" << fromlsb);
                     } else {
                         nodep->v3warn(SELRANGE,
                                       "Selection "
-                                          << msb << ":" << lsb
+                                          << msbStr << ":" << lsbStr
                                           << " performed on an object without declared range");
                     }
                     UINFO(1, "    Related node: " << nodep);
                 }
-                // Extend unless it's a lvalue,
-                // because extending lvalue would lose write access.
-                if (!isWriteSelect) {
-                    // Extend it
-                    const int extendTo = static_cast<int>(msb + 1);
-                    AstNodeDType* const subDTypep = nodep->findBitOrLogicDType(
-                        extendTo, extendTo, nodep->fromp()->dtypep()->numeric(),
-                        nodep->fromp()->dtypep()->isFourstate());
-                    widthCheckSized(nodep, "errorless...", nodep->fromp(), subDTypep, EXTEND_EXP,
-                                    false /*noerror*/);
+                // Extend unless it's a lvalue, because extending lvalue would lose write access,
+                // or the selection is below or above the vector, as it then selects no bit
+                if (!isWriteSelect && lsb >= 0 && lsb < nodep->fromp()->width()) {
+                    padSelectFrom(nodep, static_cast<int>(msb + 1));
                 }
             }
             // iterate FINAL is two blocks above
@@ -1601,12 +1626,24 @@ class WidthVisitor final : public VNVisitor {
             // it down and mask it, so we have no chance of finding a real
             // error in the future. So don't do this for them.
             if (!m_doGenerate) {
-                // lsbp() must be self-determined, however for performance
-                // we want the select to be truncated to fit within the
-                // maximum select range, e.g. turn Xs outside of the select
-                // into something fast which pulls from within the array.
-                widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep, EXTEND_EXP,
-                                false /*NOWARN*/);
+                // lsbp() must be self-determined. A wider index is truncated by V3Unknown after
+                // its bounds check, unless it is a constant in range.
+                if (lsbConstp && !lsbOutOfRange) {
+                    widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                } else if (!lsbConstp && nodep->lsbp()->isSigned()
+                           && nodep->lsbp()->width() <= selwidth) {
+                    // One bit wider, so a negative position stays out of range; a constant one
+                    // out of range is already an integer, which later passes read
+                    AstNodeDType* const signedDTypep
+                        = nodep->findBitOrLogicDType(selwidth + 1, selwidth + 1, VSigning::SIGNED,
+                                                     nodep->lsbp()->dtypep()->isFourstate());
+                    widthCheckSized(nodep, "Extract Range", nodep->lsbp(), signedDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                } else if (nodep->lsbp()->width() < selwidth) {
+                    widthCheckSized(nodep, "Extract Range", nodep->lsbp(), selwidthDTypep,
+                                    EXTEND_EXP, false /*NOWARN*/);
+                }
             }
             // UINFOTREE(9, nodep, "", "seldone");
         }

@@ -1025,6 +1025,10 @@ private:
         selLifetimeCheck(nodep, nodep->baseFromp(/* overMembers: */ false));
     }
     void visit(AstSel* nodep) override {
+        // V3Width kept a constant position as written; later passes read it as an integer
+        if (AstConst* const constp = nodep->narrowLsbConst()) {
+            VL_DO_DANGLING(pushDeletep(constp), constp);
+        }
         {
             VL_RESTORER(m_underSel);
             if (!nodep->isLValue() && !m_contReads) m_underSel = true;

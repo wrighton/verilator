@@ -12,6 +12,12 @@
 %Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:124:38: 'ra' marked split_var but will not be split because it is a function argument.
   124 |                      ref logic [6:0] ra[2]  /*verilator split_var*/);
       |                                      ^~
+%Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:113:20: 't.whole' marked split_var but will not be split because it is referenced in an unsupported way.
+  113 |   initial tcd = #1 whole;
+      |                    ^~~~~
+%Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:113:11: 't.tcd' marked split_var but will not be split because it is referenced in an unsupported way.
+  113 |   initial tcd = #1 whole;
+      |           ^~~
 %Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:24:23: 'in_arr' marked split_var but will not be split because it is a primary input or output.
    24 |     input logic [6:0] in_arr[2]  /*verilator split_var*/
       |                       ^~~~~~
@@ -24,12 +30,6 @@
 %Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:49:17: 't.nd' marked split_var but will not be split because it has a net delay.
    49 |   wire [6:0] #1 nd[2]  /*verilator split_var*/;
       |                 ^~
-%Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:113:20: 't.whole' marked split_var but will not be split because it is referenced in an unsupported way.
-  113 |   initial tcd = #1 whole;
-      |                    ^~~~~
-%Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:113:11: 't.tcd' marked split_var but will not be split because it is referenced in an unsupported way.
-  113 |   initial tcd = #1 whole;
-      |           ^~~
 %Warning-SPLITVAR: t/t_opt_decompose_unpacked_attr_bad.v:140:13: 't.dyn' marked split_var but will not be split because it is referenced in an unsupported way.
   140 |     do if ((dyn[crc[1:0]]) !== (crc[crc[1:0]*7+:7] ^ in_arr[0])) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", "t/t_opt_decompose_unpacked_attr_bad.v",140, (dyn[crc[1:0]]), (crc[crc[1:0]*7+:7] ^ in_arr[0])); $stop; end while(0);;
       |             ^~~
