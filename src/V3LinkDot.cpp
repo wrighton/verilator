@@ -4126,7 +4126,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     VSymEnt* m_pinSymp = nullptr;  // SymEnt for pin lookups
     VSymEnt* m_randSymp = nullptr;  // SymEnt for randomize target class's lookups
     const AstCell* m_cellp = nullptr;  // Current cell
-    const AstPin* m_pinp = nullptr;  // Current pin
+    AstPin* m_pinp = nullptr;  // Current pin
     AstNodeModule* m_modp = nullptr;  // Current module
     AstGenBlock* m_genBlockp = nullptr;  // Current generate block
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
@@ -4146,9 +4146,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
     // Lexical children indexed by declaration identity for replay in another instance.
     std::unordered_map<const VSymEnt*, std::unordered_map<const AstNode*, VSymEnt*>>
         m_assertCtlChildren;
-    // Direct interface pin bindings indexed once per instance declaration.
+    // Interface pin bindings indexed once per instance declaration.
     std::unordered_map<const AstCell*, std::unordered_map<const AstVar*, const AstPin*>>
         m_assertCtlPins;
+    // Concrete formal symbols mapped to the proven interface symbol, or nullptr if unproven.
+    std::unordered_map<const VSymEnt*, VSymEnt*> m_assertCtlStaticIfaces;
     int m_indent = 0;  // Indentation (tree depth) for debug
     bool m_inSens = false;  // True if in senitem
     bool m_inGenBlock = false;  // True if in generate block
@@ -6224,7 +6226,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // We drop __BRA__??__KET__ as cells don't have that naming yet
                     AstVar* const ifaceRefVarp
                         = findIfaceTopVarp(nodep, parentEntp, cellp->name());
-                    if (m_pinp && m_pinp->exprp() == m_ds.m_dotp) checkPinModport(nodep, modportp);
+                    if (m_pinp && m_pinp->exprp() == m_ds.m_dotp) {
+                        m_pinp->explicitModport(true);
+                        checkPinModport(nodep, modportp);
+                    }
                     // Nested cell (e.g. 'o.l.mp'): reference ifaceRefVarp via the prefix
                     // Modports only legal under `interface` so can just look back one dot
                     const size_t cellPos = m_ds.m_dotText.rfind('.');
@@ -8650,36 +8655,83 @@ class LinkDotResolveVisitor final : public VNVisitor {
                  VString::dot(prefix, ".", childRest)};
         return true;
     }
-    // Prove a simple port connection from the caller's pin, not from the interface dtype,
-    // which identifies an elaborated body and may be shared by many distinct instances.
-    VSymEnt* assertCtlDirectIface(FileLine* flp, VSymEnt* scopep, const string& name) {
-        string baddot;
-        VSymEnt* okp = nullptr;
-        const VSymEnt* const portp
-            = m_statep->findAssertCtlDotted(flp, scopep, name, baddot, okp, true);
-        const AstVar* const varp = portp ? VN_CAST(portp->nodep(), Var) : nullptr;
-        if (!varp) return nullptr;
+    static const AstIfaceRefDType* assertCtlStaticIfaceType(const AstVar* varp) {
+        if (!varp->isIfaceRef()) return nullptr;
+        AstNodeDType* const subp = varp->subDTypep();
+        AstIfaceRefDType* const dtypep
+            = VN_CAST(subp ? subp->skipRefOrNullp() : nullptr, IfaceRefDType);
+        return dtypep && !dtypep->isVirtual() && !dtypep->isModport() ? dtypep : nullptr;
+    }
+    // Follow the pin from a concrete formal to either another formal or the interface cell.
+    VSymEnt* assertCtlIfacePin(const VSymEnt* portp) {
+        const AstVar* const varp = VN_AS(portp->nodep(), Var);
+        if (!assertCtlStaticIfaceType(varp) || varp->isIfaceParent() || portp->imported()) {
+            return nullptr;
+        }
         const VSymEnt* const parentp = portp->parentp();
         const AstCell* const callerp = parentp ? VN_CAST(parentp->nodep(), Cell) : nullptr;
-        if (!callerp || !parentp->parentp() || callerp->assertCtlIfaceOriginp()) return nullptr;
+        if (!callerp || !parentp->parentp() || callerp->assertCtlIfaceOriginp()
+            || (v3Global.opt.hierarchical() && callerp->modp()->hierBlock())) {
+            return nullptr;
+        }
         const auto pins = m_assertCtlPins.try_emplace(callerp);
         auto& byVar = pins.first->second;
         if (pins.second) {
             for (const AstPin* const pinp : callerp->pinspList()) {
-                if (pinp->modVarp()) byVar.emplace(pinp->modVarp(), pinp);
+                if (!pinp->modVarp()) continue;
+                const auto entry = byVar.emplace(pinp->modVarp(), pinp);
+                if (!entry.second) entry.first->second = nullptr;
             }
         }
         const auto pin = byVar.find(varp);
-        if (pin == byVar.end()) return nullptr;
+        if (pin == byVar.end() || !pin->second || pin->second->explicitModport()) return nullptr;
         const AstVarRef* const refp = VN_CAST(pin->second->exprp(), VarRef);
-        if (!refp || !refp->varp() || !refp->varp()->isIfaceParent()) return nullptr;
-        const AstIfaceRefDType* const dtypep = VN_CAST(refp->varp()->subDTypep(), IfaceRefDType);
-        const AstCell* const cellp = dtypep ? dtypep->cellp() : nullptr;
-        if (!cellp || cellp->assertCtlIfaceOriginp() || !VN_IS(cellp->modp(), Iface))
-            return nullptr;
-        VSymEnt* const concretep = m_statep->findAssertCtlDotted(flp, parentp->parentp(),
-                                                                 cellp->name(), baddot, okp, true);
-        return concretep && concretep->nodep() == cellp ? concretep : nullptr;
+        const AstVar* const actualp = refp ? refp->varp() : nullptr;
+        if (!actualp) return nullptr;
+
+        // A plain pin reference is lexical to the instantiator. Re-find its declaration
+        // in that instance, without following interface aliases or crossing a cell boundary.
+        const string name = actualp->name();
+        for (VSymEnt* scopep = parentp->parentp(); scopep; scopep = scopep->parentp()) {
+            if (VSymEnt* const symp = scopep->findIdFlatNoRef(name)) {
+                if (symp->nodep() != actualp || symp->parentp() != scopep || symp->imported()) {
+                    return nullptr;
+                }
+                if (!actualp->isIfaceParent()) return symp;
+                const AstIfaceRefDType* const dtypep = assertCtlStaticIfaceType(actualp);
+                const AstCell* const cellp = dtypep ? dtypep->cellp() : nullptr;
+                if (!cellp || cellp->assertCtlIfaceOriginp() || !VN_IS(cellp->modp(), Iface)) {
+                    return nullptr;
+                }
+                VSymEnt* const concretep = scopep->findIdFlatNoRef(cellp->origName());
+                return concretep && concretep->nodep() == cellp && concretep->parentp() == scopep
+                           ? concretep
+                           : nullptr;
+            }
+            if (VN_IS(scopep->nodep(), Cell) || VN_IS(scopep->nodep(), NodeModule)) break;
+        }
+        return nullptr;
+    }
+    // Memoize both outcomes along the chain: several concrete callers can forward one formal.
+    VSymEnt* assertCtlStaticIface(FileLine* flp, VSymEnt* scopep, const string& name) {
+        string baddot;
+        VSymEnt* okp = nullptr;
+        VSymEnt* symp = m_statep->findAssertCtlDotted(flp, scopep, name, baddot, okp, true);
+        if (!symp || !VN_IS(symp->nodep(), Var)) return nullptr;
+        std::vector<const VSymEnt*> formals;
+        while (symp && VN_IS(symp->nodep(), Var)) {
+            const auto cached = m_assertCtlStaticIfaces.try_emplace(symp, nullptr);
+            if (!cached.second) {
+                symp = cached.first->second;
+                break;
+            }
+            formals.push_back(symp);
+            symp = assertCtlIfacePin(symp);
+        }
+        for (const VSymEnt* const formalp : formals) {
+            m_assertCtlStaticIfaces.find(formalp)->second = symp;
+        }
+        return symp;
     }
     // A scope name through a port of interface type names the instance connected to the port
     // (IEEE 1800-2023 20.11, 25.3). The symbols here reach one representative instance of the
@@ -8724,13 +8776,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         if (!crossingCount) return false;
-        if (scopes.size() > 1 && crossingCount == scopes.size() && !VN_IS(m_modp, Class)) {
-            VSymEnt* const sharedp = assertCtlDirectIface(flp, scopes.front(), names.front());
+        if (scopes.size() > 1 && crossingCount == scopes.size() && !VN_IS(m_modp, Class)
+            && crossings.front().components == 1 && !crossings.front().modport) {
+            VSymEnt* const sharedp = assertCtlStaticIface(flp, scopes.front(), names.front());
             bool shared = sharedp != nullptr;
-            for (size_t i = 0; shared && i < scopes.size(); ++i) {
+            for (size_t i = 1; shared && i < scopes.size(); ++i) {
                 shared = crossings[i].components == 1 && !crossings[i].modport
-                         && (i == 0
-                             || assertCtlDirectIface(flp, scopes[i], names.front()) == sharedp);
+                         && assertCtlStaticIface(flp, scopes[i], names.front()) == sharedp;
             }
             if (shared) {
                 AssertCtlPortCrossing concrete = crossings.front();

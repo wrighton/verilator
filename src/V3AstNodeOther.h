@@ -1853,6 +1853,7 @@ class AstPin final : public AstNode {
     bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
+    bool m_explicitModport = false;  // Actual expression explicitly selected a modport
     bool m_returnWrittenInput = false;  // Width-proved original net destination for Tristate
 public:
     AstPin(FileLine* fl, int pinNum, const string& name, AstNode* exprp)
@@ -1863,6 +1864,9 @@ public:
     }
     ASTGEN_MEMBERS_AstPin;
     void cloneRelink() override {}  // TODO V3Param shouldn't require avoiding cloneRelinkGen
+    bool sameNode(const AstNode* samep) const override {
+        return explicitModport() == VN_DBG_AS(samep, Pin)->explicitModport();
+    }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Pin name, ""=go by number
@@ -1885,6 +1889,8 @@ public:
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
     void svImplicit(bool flag) { m_svImplicit = flag; }
+    bool explicitModport() const { return m_explicitModport; }
+    void explicitModport(bool flag) { m_explicitModport = flag; }
     void setReturnWrittenInput() { m_returnWrittenInput = true; }
     bool returnWrittenInput() const { return m_returnWrittenInput; }
 };
