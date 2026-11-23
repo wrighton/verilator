@@ -22,6 +22,7 @@ module t (
   int last_bc = 0;
   byte lvl;
   longint wide_lvl;
+  typedef enum int { ENUM_ONE = 1 } levels_t;
 
   // The oracle deliberately uses if/stop, never an assertion subject to control.
   task automatic check_deltas(int ao, int ac, int bo, int bc);
@@ -48,6 +49,8 @@ module t (
         2: begin
           check_deltas(1, 1, 1, 1);
           $assertoff(4'd1, a);  // Unsigned narrow level: the scope itself only
+          $assertoff(ENUM_ONE, a);
+          $assertoff(int'(ENUM_ONE), a);
         end
         3: begin
           check_deltas(0, 1, 1, 1);
