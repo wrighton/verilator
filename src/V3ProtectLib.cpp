@@ -399,12 +399,22 @@ class ProtectVisitor final : public VNVisitor {
 
         // Initial
         initialComment(txtp, fl);
-        txtp->add("void* " + m_libName + "_protectlib_create(const char* scopep__V) {\n");
+        // A Verilator model using the library creates the library model with the VPI scope
+        // above its instance. Without VPI, the library model has no VPI scopes to add.
+        txtp->add("void* " + m_libName
+                  + "_protectlib_create_under(const char* scopep__V, const VerilatedScope* "
+                  + (v3Global.opt.vpi() ? "abovep__V" : "/*abovep__V*/") + ") {\n");
         txtp->add(/**/ m_topName + "_container* const handlep__V = new " + m_topName
                   + "_container{scopep__V};\n");
         txtp->add(/**/ "handlep__V->contextp()->addEndContextCb(" + m_libName
                   + "_protectlib_delete, handlep__V);\n");
+        if (v3Global.opt.vpi()) txtp->add(/**/ "handlep__V->__VvpiAttach(abovep__V);\n");
         txtp->add(/**/ "return handlep__V;\n");
+        txtp->add("}\n\n");
+        // A library model created otherwise, as in another simulator, has its VPI scopes at the
+        // top level
+        txtp->add("void* " + m_libName + "_protectlib_create(const char* scopep__V) {\n");
+        txtp->add(/**/ "return " + m_libName + "_protectlib_create_under(scopep__V, nullptr);\n");
         txtp->add("}\n\n");
 
         // Updates

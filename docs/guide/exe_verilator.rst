@@ -1494,6 +1494,9 @@ Summary:
    and cannot use :vlopt:`--sc`. The design must have a single top level module,
    see :vlopt:`--top-module`.
 
+   A Verilator model using the library must be built with the same version of
+   Verilator as the library.
+
    See also :vlopt:`--protect-lib`.
 
 .. option:: +libext+<ext>[+<ext>][...]
