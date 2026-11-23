@@ -20,6 +20,11 @@ module t;
   if (1) begin : cfg
     typedef enum bit [3:0] { SELECTED = '1 } index_t;
   end
+  if (1) begin : choice
+    localparam int IDX = -1;
+  end else begin : choice
+    localparam int IDX = 0;
+  end
   int i = 0;
   initial begin
     // A hierarchical_identifier selects a generate scope by a constant_bit_select only
@@ -32,5 +37,6 @@ module t;
     $assertoff(0, g[cfg.SELECTED]);
     $assertoff(0, g[int'(cfg.SELECTED)]);
     $assertoff(0, g[cfg.SELECTED[0]]);
+    $assertoff(0, g[(choice.IDX < 32'sd0) ? i : 0]);
   end
 endmodule
