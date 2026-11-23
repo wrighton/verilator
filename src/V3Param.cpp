@@ -5198,7 +5198,13 @@ class ParamVisitor final : public VNVisitor {
                     return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
                            || VN_IS(subp, UnlinkedRef);
                 })) {
-                foldDottedIndex(indexp, false);
+                // Resolve fixed type queries before checking value dependencies.
+                V3Width::widthParamsEdit(indexp);
+                if (!selp->bitp()->exists([](const AstNodeVarRef* refp) {
+                        return !refp->varp() || !refp->varp()->isParam();
+                    })) {
+                    foldDottedIndex(selp->bitp(), false);
+                }
             }
         }
     }

@@ -77,6 +77,7 @@
 #include "V3String.h"
 #include "V3SymTable.h"
 #include "V3UniqueNames.h"
+#include "V3Width.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -9002,18 +9003,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const auto generatedParameter = [](const AstVarXRef* refp) {
                 return refp->containsGenBlock() && refp->varp() && refp->varp()->isParam();
             };
+            // Type queries depend on the operand's type, not its runtime value.
+            if (m_statep->forParamed()
+                && selp->bitp()->exists([](const AstAttrOf*) { return true; })) {
+                V3Width::widthParamsEdit(selp->bitp());
+            }
+            // Check before folding can erase a runtime value or an unsupported call.
+            if (selp->bitp()->exists([](const AstNode* subp) {
+                    if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                        return !refp->varp() || !refp->varp()->isParam();
+                    }
+                    return VN_IS(subp, NodeFTaskRef);
+                })) {
+                if (nonconstantp) *nonconstantp = true;
+                return "";
+            }
             if (m_statep->forParamed() && selp->bitp()->exists(generatedParameter)) {
                 // Late relinking must not expose an un-widthed expression to constant folding.
-                // In particular, do not let the fold erase a runtime dependency.
-                if (selp->bitp()->exists([](const AstNode* subp) {
-                        if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
-                            return !refp->varp() || !refp->varp()->isParam();
-                        }
-                        return VN_IS(subp, NodeFTaskRef);
-                    })) {
-                    if (nonconstantp) *nonconstantp = true;
-                    return "";
-                }
                 if (selp->bitp()->exists([&](const AstVarXRef* refp) {
                         return generatedParameter(refp)
                                && refp->dotted().find("__BRA__") != string::npos;
