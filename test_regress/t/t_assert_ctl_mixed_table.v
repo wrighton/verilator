@@ -24,9 +24,15 @@ endmodule
 `endif
 
 `ifdef VIA_PORT
-interface bank_group (input bit clk, input bit good, output wire [31:0] reports [4]);
+`ifdef VIA_COHORTS
+interface bank_group #(parameter int N = `N)
+                     (input bit clk, input bit good, output wire [31:0] reports [N]);
+`else
+interface bank_group #(parameter int N = 4)
+                     (input bit clk, input bit good, output wire [31:0] reports [N]);
+`endif
   if (1) begin : payload
-    for (genvar i = 0; i < 4; ++i) begin : slots
+    for (genvar i = 0; i < N; ++i) begin : slots
       bank_leaf u (.clk, .good, .reports(reports[i]));
     end
   end
@@ -34,6 +40,9 @@ endinterface
 `endif
 
 module caller (input bit clk, input bit good, input bit off, output int reports
+`ifdef VIA_COHORTS
+               , input int level
+`endif
 `ifdef VIA_PORT
                , bank_group port_bank
 `endif
@@ -41,7 +50,10 @@ module caller (input bit clk, input bit good, input bit off, output int reports
   always @(posedge clk) begin
     local_check : assert (good) else reports++;
   end
-`ifdef VIA_PORT
+`ifdef VIA_COHORTS
+  always @(posedge off) $assertoff(level, port_bank.payload, port_bank.payload.slots[0].u,
+                                 local_check);
+`elsif VIA_PORT
   always @(posedge off) $assertoff(0, port_bank.payload, local_check);
 `else
   always @(posedge off) $assertoff(0, $root.t.bank, local_check);
@@ -50,20 +62,112 @@ endmodule
 
 `ifdef VIA_FORWARD
 module relay_inner (input bit clk, input bit good, input bit [1:0] off,
-                    output wire [31:0] reports [2], bank_group upstream);
+                    output wire [31:0] reports [2], bank_group upstream
+`ifdef VIA_COHORTS
+                    , input int level
+`endif
+);
   for (genvar i = 0; i < 2; ++i) begin : callers
-    caller u (.clk, .good, .off(off[i]), .reports(reports[i]), .port_bank(upstream));
+    caller u (.clk, .good, .off(off[i]), .reports(reports[i]), .port_bank(upstream)
+`ifdef VIA_COHORTS
+              , .level
+`endif
+    );
   end
 endmodule
 
 module relay_outer (input bit clk, input bit good, input bit [1:0] off,
-                    output wire [31:0] reports [2], bank_group forwarded);
+                    output wire [31:0] reports [2], bank_group forwarded
+`ifdef VIA_COHORTS
+                    , input int level
+`endif
+);
   if (1) begin : bridge
-    relay_inner u (.clk, .good, .off, .reports, .upstream(forwarded));
+    relay_inner u (.clk, .good, .off, .reports, .upstream(forwarded)
+`ifdef VIA_COHORTS
+                   , .level
+`endif
+    );
   end
 endmodule
 `endif
 
+`ifdef VIA_COHORTS
+module bank_host (input bit clk, input bit good, input bit [`N-1:0] off, input int level,
+                  output wire [31:0] local_reports [`N], output wire [31:0] bank_reports [`N]);
+  bank_group bank (.clk, .good, .reports(bank_reports));
+  for (genvar i = 0; i < `N/2; ++i) begin : relays
+    relay_outer u (.clk, .good, .off(off[2*i+:2]), .reports(local_reports[2*i+:2]),
+                   .forwarded(bank), .level);
+  end
+endmodule
+
+module t;
+  localparam int N = `N;
+  bit clk;
+  bit good;
+  bit [N-1:0] off [2];
+  bit [1:0] fallback_off;
+  int level;
+  wire [31:0] local_reports [2][N];
+  wire [31:0] fallback_reports [2];
+  wire [31:0] bank_reports [3][N];
+  // Each instance of bank_host has its own bank and callers.
+  for (genvar b = 0; b < 2; ++b) begin : hosts
+    bank_host u (.clk, .good, .off(off[b]), .level, .local_reports(local_reports[b]),
+                 .bank_reports(bank_reports[b]));
+  end
+  // The same callers also receive an interface through a hierarchical pin reference.
+  if (1) begin : fallback
+    bank_group bank (.clk, .good, .reports(bank_reports[2]));
+  end
+  relay_outer fallback_relay (.clk, .good, .off(fallback_off), .reports(fallback_reports),
+                              .forwarded(fallback.bank), .level);
+
+  task automatic tick;
+    #1 clk = 1;
+    #1 clk = 0;
+  endtask
+
+  initial begin
+    // At level 1, only the directly named bank leaf and the caller's own site stop.
+    level = 1;
+    #1 off[0][0] = 1;
+    tick();
+    foreach (bank_reports[b, i]) `checkd(bank_reports[b][i], b == 0 && i == 0 ? 0 : 1);
+    foreach (local_reports[b, i]) `checkd(local_reports[b][i], b == 0 && i == 0 ? 0 : 1);
+    foreach (fallback_reports[i]) `checkd(fallback_reports[i], 1);
+
+    // With no depth limit, a caller in the second bank stops all its bank's sites.
+    level = 0;
+    #1 off[1][N-1] = 1;
+    tick();
+    foreach (bank_reports[b, i]) begin
+      `checkd(bank_reports[b][i], b == 0 && i == 0 ? 0 : b == 1 ? 1 : 2);
+    end
+    foreach (local_reports[b, i]) begin
+      `checkd(local_reports[b][i], b == 0 && i == 0 ? 0 : b == 1 && i == N-1 ? 1 : 2);
+    end
+    foreach (fallback_reports[i]) `checkd(fallback_reports[i], 2);
+
+    // Another caller in the first bank and the hierarchical route each stop their bank.
+    #1;
+    off[0][1] = 1;
+    fallback_off[0] = 1;
+    tick();
+    foreach (bank_reports[b, i]) begin
+      `checkd(bank_reports[b][i], b == 0 && i == 0 ? 0 : b == 1 ? 1 : 2);
+    end
+    foreach (local_reports[b, i]) begin
+      `checkd(local_reports[b][i], b == 0 && i == 0 ? 0 : b == 0 && i == 1 ? 2 :
+              b == 1 && i == N-1 ? 1 : 3);
+    end
+    foreach (fallback_reports[i]) `checkd(fallback_reports[i], i == 0 ? 2 : 3);
+    $display("*-* All Finished *-*");
+    $finish;
+  end
+endmodule
+`else
 module t;
   bit clk;
   bit good;
@@ -106,3 +210,4 @@ module t;
     $finish;
   end
 endmodule
+`endif
