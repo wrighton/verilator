@@ -29,6 +29,9 @@ module t;
       $assertoff(0, g[$bits(fixed_value) - 7].labelled_check);
       $assertoff(0, g[$bits(type(fixed_value)) - 7].labelled_check);
       $assertoff(0, g[$size(fixed_value) - 7].labelled_check);
+      $assertoff(0, g[$bits($time) - 64].labelled_check);
+      $assertoff(0, g[$bits($realtime) - 64].labelled_check);
+      $assertoff(0, g[$bits($urandom) - 32].labelled_check);
     end
     #2;
     `checkd(g[0].failures, 0);

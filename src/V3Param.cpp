@@ -5200,8 +5200,11 @@ class ParamVisitor final : public VNVisitor {
                 })) {
                 // Resolve fixed type queries before checking value dependencies.
                 V3Width::widthParamsEdit(indexp);
-                if (!selp->bitp()->exists([](const AstNodeVarRef* refp) {
-                        return !refp->varp() || !refp->varp()->isParam();
+                if (!selp->bitp()->exists([](const AstNode* subp) {
+                        if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                            return !refp->varp() || !refp->varp()->isParam();
+                        }
+                        return !subp->isPredictOptimizable();
                     })) {
                     foldDottedIndex(selp->bitp(), false);
                 }

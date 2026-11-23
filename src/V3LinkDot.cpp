@@ -9039,7 +9039,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
                         return !refp->varp() || !refp->varp()->isParam();
                     }
-                    return VN_IS(subp, NodeFTaskRef);
+                    return VN_IS(subp, NodeFTaskRef) || !subp->isPredictOptimizable();
                 })) {
                 if (nonconstantp) *nonconstantp = true;
                 return "";

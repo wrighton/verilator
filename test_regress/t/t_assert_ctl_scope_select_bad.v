@@ -46,6 +46,12 @@ module t;
     $assertoff(0, g[1'b1 ? 0 : i]);
     $assertoff(0, g[i ^ i]);
     $assertoff(0, g[1'b0 && (($bits(i) + i) != 0)]);
+    // Runtime system functions remain nonconstant even in an unevaluated branch.
+    $assertoff(0, g[1'b0 && ($time != 0)]);
+    $assertoff(0, g[1'b1 || ($time != 0)]);
+    $assertoff(0, g[1'b0 && ($realtime != 0.0)]);
+    $assertoff(0, g[1'b0 && ($urandom != 0)]);
+    $assertoff(0, g[1'b0 && $test$plusargs("SELECT")]);
     // Out-of-range indices must not wrap to a valid hierarchy element.
     $assertoff(0, g[64'sd2147483648]);
     $assertoff(0, g[-64'sd2147483649]);
