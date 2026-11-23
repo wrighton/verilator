@@ -36,6 +36,7 @@ module t;
   leaf bits_target[1:0] ();
   leaf param_target[1:0] ();
   leaf enum_target[1:0] ();
+  leaf gen_param_target[1:0] ();
   typedef enum int { SELECTED = 1 } index_t;
   initial begin
     // An omitted levels argument selects every level below the scope (IEEE 1800-2023 20.11)
@@ -45,6 +46,7 @@ module t;
     $assertoff(0, bits_target[$bits(width_probe)].check);
     $assertoff(0, param_target[INDEX_TABLE[1]].check);
     $assertoff(0, enum_target[int'(SELECTED)].check);
+    $assertoff(0, gen_param_target[int'(cfg.SELECTED)].check);
     #2;
     `checkd(a.l.failures, 0);
     `checkd(b.l.failures, 1);
@@ -59,7 +61,12 @@ module t;
     `checkd(param_target[0].failures, 1);
     `checkd(enum_target[1].failures, 0);
     `checkd(enum_target[0].failures, 1);
+    `checkd(gen_param_target[int'(cfg.SELECTED)].failures, 0);
+    `checkd(gen_param_target[0].failures, 1);
     $display("*-* All Finished *-*");
     $finish;
+  end
+  if (1) begin : cfg
+    localparam int SELECTED = 1;
   end
 endmodule
