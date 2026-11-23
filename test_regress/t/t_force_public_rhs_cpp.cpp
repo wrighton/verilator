@@ -22,9 +22,13 @@ int main(int argc, char** argv) {
     while (!contextp->gotFinish()) {
         topp->eval();
         if (!forced && contextp->time() >= 3) {
-            // Force all bits of 'x' from C++
-            topp->rootp->t__DOT__x__VforceVal = 0xee;
+            topp->rootp->t__DOT__x__VforceVal = 0xcc;
             topp->rootp->t__DOT__x__VforceEn = 0xff;
+            topp->rootp->t__DOT__z__VforceVal = 0x3c;
+            topp->rootp->t__DOT__z__VforceEn = 0xff;
+            topp->rootp->t__DOT__w__VforceVal = 0x3c;
+            topp->rootp->t__DOT__w__VforceEn = 0xff;
+            topp->rootp->t__DOT__w__VforceVpi = 0xff;
             forced = true;
             topp->eval();
         }
