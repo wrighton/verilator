@@ -119,6 +119,9 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     std::vector<std::pair<AstModule*, AstAssertCtlArgs*>> m_wholeModel;
     // Repeated references to the same top within one selector select it only once.
     std::unordered_map<const AstAssertCtlArgs*, const AstModule*> m_wholeModelTop;
+    // Identical absolute subtrees at the same depth limit share one early target list.
+    std::unordered_map<string, std::unordered_map<uint32_t, AstAssertCtlTargetSet*>> m_absoluteScopes;
+    std::vector<AstAssertCtlTargetSet*> m_pendingSets;
     // Interned structural occurrences, independent of lexical blocks and flattened names.
     std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
 
@@ -183,6 +186,9 @@ public:
         if (entry.second) m_wholeModel.emplace_back(topp, argsp);
         return entry.first->second == topp;
     }
+    // Share concrete subtree enumeration without changing the operation's operands.
+    void shareAbsoluteScope(AstNode* scopep, AstAssertCtlArgs* argsp, const string& instancePath,
+                            const string& childPath);
     // Delay enumeration of proven whole-model scopes and insertion of state declarations.
     void attach();
     AstVar* select(AstNodeStmt* nodep, AstNodeModule*& ownerpr) {
@@ -217,6 +223,16 @@ static void warnAssertControlHierarchy(AstNode* locationp, const AstCell* cellp,
                                          << AstNode::prettyName(path) << "'.");
 }
 
+// Zero or a dynamic level can reach any child. A signed negative level reaches none.
+static uint32_t assertCtlTraversalLimit(const AstAssertCtlArgs* argsp) {
+    constexpr uint32_t unlimited = std::numeric_limits<uint32_t>::max();
+    const AstConst* const levelp = VN_CAST(argsp->levelp(), Const);
+    if (!levelp || levelp->num().isOpaque() || levelp->num().isFourState()) return unlimited;
+    if (levelp->isSigned() && levelp->num().isNegative()) return 0;
+    if (levelp->num().isEqZero() || !levelp->num().fitsInUInt()) return unlimited;
+    return levelp->toUInt();
+}
+
 // Assertion selection is done before V3Begin removes lexical scopes. The emitted
 // references use normal VarXRef/VarScope identity, never runtime path matching.
 class AssertControlTargetVisitor final : public VNVisitor {
@@ -230,17 +246,10 @@ class AssertControlTargetVisitor final : public VNVisitor {
     const bool m_absolute;  // Sites named by an absolute path, the same from every instance
     const bool m_moduleRelative;  // Paths normalized relative to the caller module
     const AstNodeModule* m_classp = nullptr;  // Class whose code references the state
-    // A dynamic level may include the partition. Zero includes all depths.
-    bool reachesDepth(int depth) const {
-        const AstConst* const levelp = VN_CAST(m_argsp->levelp(), Const);
-        if (!levelp || levelp->num().isOpaque() || levelp->num().isFourState()) return true;
-        if (levelp->isSigned() && levelp->num().isNegative()) return false;
-        return levelp->num().isEqZero() || !levelp->num().fitsInUInt()
-               || levelp->toUInt() > static_cast<uint32_t>(depth);
-    }
+    const uint32_t m_limit;  // Exclusive depth bound for child traversal
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
-        if (!reachesDepth(m_depth + 1)) return;
+        if (static_cast<uint32_t>(m_depth + 1) >= m_limit) return;
         if (v3Global.opt.hierarchical() && nodep->modp()->hierBlock()) {
             warnAssertControlHierarchy(m_argsp, nodep,
                                        VString::dot(m_childPath, ".", nodep->name()));
@@ -313,7 +322,8 @@ public:
         , m_optional{optional}
         , m_absolute{absolute}
         , m_moduleRelative{moduleRelative}
-        , m_classp{classp} {
+        , m_classp{classp}
+        , m_limit{assertCtlTraversalLimit(argsp)} {
         if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
             iterateAndNextNull(cellp->modp()->stmtsp());
         } else if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
@@ -324,7 +334,27 @@ public:
     }
 };
 
+void LinkDotAssertCtlSites::shareAbsoluteScope(AstNode* scopep, AstAssertCtlArgs* argsp,
+                                               const string& instancePath,
+                                               const string& childPath) {
+    const auto entry = m_absoluteScopes[childPath].try_emplace(assertCtlTraversalLimit(argsp),
+                                                              nullptr);
+    if (entry.second) {
+        std::unordered_map<string, AstAssertCtlTarget*> targets;
+        AssertControlTargetVisitor{*this, scopep, argsp, instancePath, childPath, targets, false,
+                                   true};
+        if (argsp->targetsp()) {
+            AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
+                argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
+            entry.first->second = setp;
+            m_pendingSets.push_back(setp);
+        }
+    }
+    argsp->sharedp(entry.first->second);
+}
+
 void LinkDotAssertCtlSites::attach() {
+    for (AstAssertCtlTargetSet* const setp : m_pendingSets) m_rootp->addMiscsp(setp);
     // Explicit top selectors are model-local even if Verilator also emits a main.
     std::unordered_map<const AstModule*, AstAssertCtlTargetSet*> shared;
     for (const auto& selector : m_wholeModel) {
@@ -4209,6 +4239,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     V3UniqueNames m_seqTriggeredNames{"__Vtriggered"};  // Names of those events
     int m_modportNum = 0;  // Uniqueify modport numbers
     bool m_assertCtlModuleRelative = false;  // Normalized selector path starts at module scope
+    std::vector<AstNodeModule*> m_assertCtlTops;  // Top scopes for implicit selection
     // Lexical children indexed by declaration identity for replay in another instance.
     std::unordered_map<const VSymEnt*, std::unordered_map<const AstNode*, VSymEnt*>>
         m_assertCtlChildren;
@@ -9153,6 +9184,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             childPath = assertionScopePath(foundp);
             absolute = true;
         }
+        if (absolute && !v3Global.opt.hierarchical() && argsp->itemsp() == itemp
+            && !itemp->nextp() && VString::startsWith(path, "$root.")
+            && (VN_IS(targetp, Cell) || VN_IS(targetp, GenBlock))) {
+            m_statep->assertCtlSites().shareAbsoluteScope(targetp, argsp, instancePath, childPath);
+            return;
+        }
         AssertControlTargetVisitor{m_statep->assertCtlSites(),
                                    targetp,
                                    argsp,
@@ -9174,16 +9211,26 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (!m_statep->forParamed()) return;
         std::unordered_map<string, AstAssertCtlTarget*> targets;
         if (!nodep->scoped()) {
-            for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
-                if (!modp->isTop()) continue;
-                AssertControlTargetVisitor{m_statep->assertCtlSites(),
-                                           modp,
-                                           nodep,
-                                           modp->name(),
-                                           modp->name(),
-                                           targets,
-                                           false,
-                                           true};
+            if (m_assertCtlTops.empty()) {
+                for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
+                    if (modp->isTop()) m_assertCtlTops.push_back(modp);
+                }
+            }
+            if (!v3Global.opt.hierarchical() && m_assertCtlTops.size() == 1) {
+                AstNodeModule* const topp = m_assertCtlTops.front();
+                m_statep->assertCtlSites().shareAbsoluteScope(topp, nodep, topp->name(),
+                                                              topp->name());
+            } else {
+                for (AstNodeModule* const modp : m_assertCtlTops) {
+                    AssertControlTargetVisitor{m_statep->assertCtlSites(),
+                                               modp,
+                                               nodep,
+                                               modp->name(),
+                                               modp->name(),
+                                               targets,
+                                               false,
+                                               true};
+                }
             }
         }
         for (AstNodeExpr* const itemp : nodep->itemspList()) {
