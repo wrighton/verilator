@@ -3518,7 +3518,8 @@ class AssertVisitor final : public VNVisitor {
         AstVar* const varp
             = new AstVar{exprp->fileline(), VVarType::BLOCKTEMP,
                          "__VassertCtlArg" + std::to_string(m_controlTempNum++), exprp->dtypep()};
-        if (m_ftaskp) {
+        // A concurrent action can be hoisted out of its enclosing task.
+        if (m_ftaskp && !m_inConcurrentAction) {
             varp->funcLocal(true);
             varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
             m_ftaskp->addDeclsp(varp);
