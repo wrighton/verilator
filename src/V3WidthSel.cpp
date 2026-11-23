@@ -37,6 +37,10 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 // Width state, as a visitor of each AstNode
 
 class WidthSelVisitor final : public VNVisitor {
+    // A 32-bit position wraps modulo this
+    static constexpr int64_t WRAP = 1LL << 32;
+    // Largest scale of an element whose positions are bounded
+    static constexpr uint32_t MAX_BOUNDED_SCALE = 1U << 20;
     // IMPORTANT
     //**** This is not a normal visitor, in that all iteration is instead
     //  done by the caller (V3Width).  This avoids duplicating much of the
@@ -237,7 +241,7 @@ class WidthSelVisitor final : public VNVisitor {
     // is signed like its index, and computed in 64 or more bits if 32-bit arithmetic could wrap
     // it into the selected value, so that V3Unknown's bounds check sees where it selects.
     AstNodeExpr* newPosition(AstNodeExpr* indexp, bool negate, int64_t addend, uint32_t scale,
-                             int width) {
+                             int width, bool partSelect = false) {
         FileLine* const flp = indexp->fileline();
         if (const AstConst* const constp = VN_CAST(indexp, Const)) {
             // The caller deletes the unused index
@@ -245,19 +249,23 @@ class WidthSelVisitor final : public VNVisitor {
                 return newConstPosition(constp, negate, addend, scale);
             }
         }
+        int64_t lo = 0;
+        int64_t hi = 0;
+        const bool bounded = positionBounds(indexp, negate, addend, scale, lo, hi);
+        const bool wide = !bounded || hi >= WRAP || lo <= -WRAP + width;
+        // A part-select from an unsigned index may start below the value, which a reader of its
+        // bits in range needs to tell from a large position
+        const bool isSigned = indexSigned(indexp) || (partSelect && (!bounded || lo < 0));
         // The 32-bit arithmetic below needs the addend and its negation as integers
         const bool addendFits = addend > std::numeric_limits<int32_t>::min()
                                 && addend <= std::numeric_limits<int32_t>::max();
-        if (VN_IS(indexp, Const)
-            || (!indexSigned(indexp) && addendFits
-                && !positionMayWrap(indexp, negate, addend, scale, width))) {
+        if (VN_IS(indexp, Const) || (!isSigned && !wide && addendFits)) {
             AstNodeExpr* const widenedp = newWidenedIndex(indexp, indexp->width());
             AstNodeExpr* posp = negate ? newSubNeg(static_cast<int32_t>(addend), widenedp)
                                        : newSubNeg(widenedp, static_cast<int32_t>(-addend));
             if (scale != 1) posp = newMulConst(flp, scale, posp);
             return posp;
         }
-        const bool isSigned = indexSigned(indexp);
         if (!negate && addend == 0 && scale == 1 && isSigned == indexp->isSigned()) {
             // A narrower signed index is an integer, so a negative one stays out of range
             if (isSigned && indexp->width() < VL_IDATASIZE) {
@@ -265,10 +273,16 @@ class WidthSelVisitor final : public VNVisitor {
             }
             return indexp;
         }
-        const bool wide = positionMayWrap(indexp, negate, addend, scale, width);
-        const int posWidth = wide ? std::max(VL_QUADSIZE, std::max(indexp->width(), 33) + 2
-                                                              + V3Number::log2b(scale) + 1)
-                                  : 32;
+        // A signed bit position wraps in 32 bits only far out of range, where it stays; a
+        // part-select tells a position below the value by its sign, so needs its whole range as an
+        // integer
+        const bool fitsInt = (indexSigned(indexp) && !partSelect)
+                             || (bounded && lo >= std::numeric_limits<int32_t>::min()
+                                 && hi <= std::numeric_limits<int32_t>::max());
+        const int posWidth = !wide && fitsInt
+                                 ? VL_IDATASIZE
+                                 : std::max(VL_QUADSIZE, std::max(indexp->width(), 33) + 2
+                                                             + V3Number::log2b(scale) + 1);
         // Unsized, so the arithmetic widens to it without warning, as with an integer
         const auto newConst = [flp, posWidth, isSigned](int64_t value) {
             V3Number quad{flp, VL_QUADSIZE, 0};
@@ -281,6 +295,8 @@ class WidthSelVisitor final : public VNVisitor {
             return new AstConst{flp, num};
         };
         AstNodeExpr* posp = newWidenedIndex(indexp, posWidth);
+        // An unsigned index of a part-select below the value is made signed after extending
+        if (isSigned && posp != indexp) posp->dtypeSetLogicSized(posWidth, VSigning::SIGNED);
         if (negate) {
             posp = new AstSub{flp, newConst(addend), posp};
         } else if (addend > 0) {
@@ -363,15 +379,22 @@ class WidthSelVisitor final : public VNVisitor {
     // a value of 'width' bits
     static bool positionMayWrap(const AstNodeExpr* indexp, bool negate, int64_t addend,
                                 uint32_t scale, int width) {
-        static constexpr int64_t WRAP = 1LL << 32;
-        // Wider operands, or a large scale, are not worth the bound
-        if (indexp->width() > 32 || scale > (1U << 20)) return true;
+        int64_t lo = 0;
+        int64_t hi = 0;
+        if (!positionBounds(indexp, negate, addend, scale, lo, hi)) return true;
+        return hi >= WRAP || lo <= -WRAP + width;
+    }
+    // Set the bounds of a position as newPosition describes, unless its index is too wide or
+    // its scale too large to be worth it
+    static bool positionBounds(const AstNodeExpr* indexp, bool negate, int64_t addend,
+                               uint32_t scale, int64_t& lo, int64_t& hi) {
+        if (indexp->width() > VL_IDATASIZE || scale > MAX_BOUNDED_SCALE) return false;
         const int64_t indexMin = indexSigned(indexp) ? -(1LL << (indexp->width() - 1)) : 0;
         const int64_t indexMax = indexSigned(indexp) ? (1LL << (indexp->width() - 1)) - 1
                                                      : (1LL << indexp->width()) - 1;
-        const int64_t lo = (negate ? addend - indexMax : indexMin + addend) * scale;
-        const int64_t hi = (negate ? addend - indexMin : indexMax + addend) * scale;
-        return hi >= WRAP || lo <= -WRAP + width;
+        lo = (negate ? addend - indexMax : indexMin + addend) * scale;
+        hi = (negate ? addend - indexMin : indexMax + addend) * scale;
+        return true;
     }
 
     // Return the bit position of element 'indexp' of 'scale' bits in a packed range 'fromRange'
@@ -427,8 +450,8 @@ class WidthSelVisitor final : public VNVisitor {
         }
         if (mayWrap) {
             // Scaled only if in range, so the scaling does not wrap; else the end of the value,
-            // which stays out of range with a position within the element added, as a select
-            // of the element composes
+            // a multiple of the scale, so aligned, which stays out of range with a position
+            // within the element added, as a select of the element composes
             AstNodeExpr* const inRangep = new AstGte{
                 flp, newConst(indexWidth, static_cast<uint64_t>(fromRange.elements() - 1)),
                 offsetp};
@@ -869,7 +892,7 @@ class WidthSelVisitor final : public VNVisitor {
                 nodep->v3fatalSrc("Bad Case");
             }
             AstNodeExpr* const newlsbp
-                = newPosition(rhsp, ascending, addend, elwidth, ddtypep->width());
+                = newPosition(rhsp, ascending, addend, elwidth, ddtypep->width(), width > 1);
             AstSel* const newp = new AstSel{nodep->fileline(), fromp, newlsbp, newwidth};
             newp->declRange(fromRange);
             newp->declElWidth(elwidth);

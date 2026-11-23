@@ -465,7 +465,7 @@ module t;
                 $write("");
             end
             if (($unsigned(4'(({3'bx, ascending_packed}) >> (
-                                                             (32'sh0 
+                                                             (64'sh0 
                                                               - 
                                                               uns_int)))) 
                  != 32'sh0)) begin
