@@ -77,6 +77,7 @@
 #include "V3String.h"
 #include "V3SymTable.h"
 #include "V3UniqueNames.h"
+#include "V3Width.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -8875,8 +8876,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
             return lhs.empty() || rhs.empty() ? "" : VString::dot(lhs, ".", rhs);
         }
         if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
+            const bool deferred
+                = m_statep->forParamed() && selp->bitp()->exists([](const AstEnumItemRef* refp) {
+                      return !refp->itemp();
+                  });
+            const int errors = V3Error::errorCount();
             symIterateNull(selp->bitp(), m_curSymp);
-            AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
+            if (V3Error::errorCount() != errors) return "";
+            AstNodeExpr* indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
+            // An explicit enum value can become a literal only after relinking. Width the
+            // remaining literal expression, without following other declarations or calls.
+            if (deferred && !VN_IS(indexp, Const) && !indexp->exists([](const AstNode* subp) {
+                    return !VN_IS(subp, Const) && !VN_IS(subp, BasicDType)
+                           && !VN_IS(subp, NodeUniop) && !VN_IS(subp, NodeBiop)
+                           && !VN_IS(subp, NodeTriop) && !VN_IS(subp, Cast);
+                })) {
+                indexp = V3Const::constifyEdit(VN_AS(V3Width::widthParamsEdit(indexp), NodeExpr));
+            }
             const AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
@@ -8926,7 +8942,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     void resolveAssertCtlItem(AstNodeExpr* itemp, AstAssertCtlArgs* argsp,
                               std::unordered_map<string, AstAssertCtlTarget*>& targets) {
         bool nonconstant = false;
+        const int errors = V3Error::errorCount();
         const string path = assertControlPath(itemp, &nonconstant);
+        if (V3Error::errorCount() != errors) return;
         if (path.empty()) {
             const bool runtimeIndex = itemp->exists([](const AstNodeVarRef* refp) {
                 return !refp->varp() || !refp->varp()->isParam();

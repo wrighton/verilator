@@ -14,6 +14,9 @@ module t;
   function automatic int selected_index();
     return 1;
   endfunction
+  if (0) begin : omitted_cfg
+    typedef enum int { SELECTED = 1 } index_t;
+  end
   int i = 0;
   initial begin
     // A hierarchical_identifier selects a generate scope by a constant_bit_select only
@@ -22,5 +25,6 @@ module t;
     $assertoff(0, scalar[0]);
     $assertoff(0, g[selected_index()]);
     $assertoff(0, g[selected_index() + i]);
+    $assertoff(0, g[omitted_cfg.SELECTED]);
   end
 endmodule
