@@ -9272,9 +9272,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
             bool hasPartSelect = false;
             const string path = extractDottedPath(itemp, hasPartSelect);
             if (!VString::startsWith(path, "$root.")) return "";
-            const VSymEnt* symp = m_statep->rootEntp();
+            VSymEnt* symp = m_statep->rootEntp();
             for (const string& name : VString::split(path.substr(6), '.')) {
-                const VSymEnt* const childp = symp->findIdFlatNoRef(name);
+                VSymEnt* const childp = symp->findIdFlatNoRef(name);
                 if (!childp || childp->parentp() != symp || childp->imported()) return "";
                 const AstNode* const scopep = childp->nodep();
                 if (!VN_IS(scopep, Module) && !VN_IS(scopep, Cell) && !VN_IS(scopep, GenBlock)) {
