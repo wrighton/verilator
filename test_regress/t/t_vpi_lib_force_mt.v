@@ -38,7 +38,7 @@ module sub (
   /*verilator hier_block*/
   always @(posedge clk) q <= i;
   assign o = i;
-  // Called at every evaluation of the instance, as it reads a variable written through the VPI
+  // Called at every evaluation of the instance
   int evalsReader  /*verilator public_flat_rw*/ = 0;
   import "DPI-C" function void sub_evaluated(
       input int id,

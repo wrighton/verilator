@@ -119,41 +119,56 @@ int main(int argc, char** argv) {
     // A force of a clock makes an edge where the instance sees all its inputs
     topp->drv = 0x11;
     topp->eval();
-    int n = topp->n1;
+    const int n = topp->n1;
     put(clkp, 1, vpiForceFlag);
     topp->eval();
     check("force clk", topp->n1, (n + 1) & 0x7f);
     check("force clk, q", topp->q1, 0x11);
-    // Released while its driver rises, it stays high, without another edge
-    topp->clk = 1;
+    // Released while its driver stays low, it makes no edge
     put(clkp, 0, vpiReleaseFlag);
     topp->eval();
-    check("release clk, driver rises", topp->n1, (n + 1) & 0x7f);
-    topp->clk = 0;
-    topp->eval();
-    // Forced while the data input changes, the edge samples the new data
-    put(clkp, 1, vpiForceFlag);
-    topp->drv = 0x55;
-    topp->eval();
-    check("force clk with data", topp->n1, (n + 2) & 0x7f);
-    check("force clk with data, q", topp->q1, 0x55);
-    put(clkp, 0, vpiReleaseFlag);
-    topp->eval();
-    check("release clk", topp->n1, (n + 2) & 0x7f);
-    // Held low while its driver rises, then released while the data input changes, the edge
-    // samples the new data
-    n = topp->n1;
+    check("release clk low", topp->n1, (n + 1) & 0x7f);
+    // Held low while its driver rises and the data changes, then released, it makes an edge
     put(clkp, 0, vpiForceFlag);
     topp->clk = 1;
     topp->eval();
-    check("hold clk low, driver rises", topp->n1, n);
+    check("hold clk low, driver rises", topp->n1, (n + 1) & 0x7f);
     topp->drv = 0x47;
+    topp->eval();
+    check("hold clk low, data changes", topp->n1, (n + 1) & 0x7f);
     put(clkp, 0, vpiReleaseFlag);
     topp->eval();
-    check("release clk high with data", topp->n1, (n + 1) & 0x7f);
-    check("release clk high with data, q", topp->q1, 0x47);
+    check("release clk high", topp->n1, (n + 2) & 0x7f);
+    check("release clk high, q", topp->q1, 0x47);
     topp->clk = 0;
     topp->eval();
+    // The edge a write makes in the same evaluation as a change of an input of the library
+    // evaluated with its clocks may see the previous value of that input, as documented
+
+    // A write into an unrelated register, with a data change and an edge in one evaluation: the
+    // flop sampling a combinational output sees the new data
+    topp->clk = 0;
+    topp->eval();
+    const vpiHandle np = handle("top.t.u1.n");
+    put(np, 0x05, vpiNoDelay);
+    topp->sel = 2;
+    topp->clk = 1;
+    topp->eval();
+    check("deposit n with sel and edge, sm1", topp->sm1, 0x03);
+    topp->sel = 1;
+    topp->clk = 0;
+    topp->eval();
+
+    // A write into a library instance without a clock, fed from a flop
+    topp->clk = 1;
+    topp->eval();
+    topp->clk = 0;
+    topp->eval();
+    const int y = topp->drv & 3;
+    check("cmb", topp->zc, (y + 9 + topp->drv) & 0x7f);
+    put(vpi_handle_by_index(handle("top.t.c.memc"), y), 0x20, vpiNoDelay);
+    topp->eval();
+    check("write memc", topp->zc, (0x20 + topp->drv) & 0x7f);
 
     // A write of a whole array
     const vpiHandle memp = handle("top.t.u1.mem");

@@ -1500,7 +1500,12 @@ Summary:
    When the library is created with :vlopt:`--vpi`, a write through the VPI
    into the library model, such as a force of one of its ports, has the
    Verilator model using the library evaluate that instance of the library
-   again at its next evaluation.
+   again at its next evaluation. Sequential logic of the model using the
+   library that samples outputs of the instance at an edge in that
+   evaluation sees their values from before the write. An edge that the
+   write makes in the instance, such as by releasing a forced clock, may see
+   the previous value of an input of the instance that changes in that
+   evaluation.
 
    See also :vlopt:`--protect-lib`.
 
