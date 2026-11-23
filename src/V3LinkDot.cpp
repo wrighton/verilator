@@ -8890,6 +8890,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 return "";
             }
+            if (m_statep->forParamed() && selp->bitp()->exists([](const AstVarXRef* refp) {
+                    return refp->containsGenBlock() && refp->varp() && refp->varp()->isParam()
+                           && refp->dotted().find("__BRA__") != string::npos;
+                })) {
+                selp->bitp()->v3warn(E_UNSUPPORTED, "Unsupported: Generate-array-qualified "
+                                                    "parameter in assertion control scope index.");
+                return "";
+            }
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             const AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
