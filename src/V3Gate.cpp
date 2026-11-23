@@ -1231,6 +1231,8 @@ class GateMergeAssignments final {
         AstVarRef* const cRefp = VN_CAST(currSelp->fromp(), VarRef);
         if (!pRefp || !cRefp || !cRefp->sameNode(pRefp)) return nullptr;  // not the same var
 
+        // A write partly out of range writes only bits within, not the whole select
+        if (prevSelp->partialWrite() || currSelp->partialWrite()) return nullptr;
         const AstConst* const pstartp = VN_CAST(prevSelp->lsbp(), Const);
         const AstConst* const cstartp = VN_CAST(currSelp->lsbp(), Const);
         if (!pstartp || !cstartp) return nullptr;  // too complicated

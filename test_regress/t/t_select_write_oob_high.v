@@ -10,7 +10,24 @@
 `define checkh(gotv, expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d: $time=%0t got='h%x exp='h%x\n", `__FILE__,`__LINE__, $time, (gotv), (expv)); `stop; end while(0)
 // verilog_format: on
 
+class Holder;
+  // verilator lint_off ASCRANGE
+  bit [2147483575:2147483639] f;
+  // verilator lint_on ASCRANGE
+endclass
+
 module t;
+
+  // A constant write fully out of range of a vector with large bounds, in always_comb
+  // verilator lint_off ASCRANGE
+  bit [2147483607:2147483637] comb_wr;
+  // verilator lint_on ASCRANGE
+  always_comb begin
+    comb_wr = '0;
+    // verilator lint_off SELRANGE
+    comb_wr[-10-:4] = 4'hf;
+    // verilator lint_on SELRANGE
+  end
 
   initial begin
     bit [5:0] x;
@@ -129,6 +146,30 @@ module t;
       up = {25{4'ha}};
       up[i-:64] = 64'h8765_4321_0fed_cba9;
       `checkh(up, 100'h3fb72ea6aaaaaaaaaaaaaaaaa);  // Var, ascending -:, OOB at the left end
+    end
+
+    // Constant positions out of range of vectors with large bounds
+    begin : large_bounds
+      // verilator lint_off ASCRANGE
+      bit [2147483575:2147483639] rd;
+      bit [2147483607:2147483637] wr;
+      // verilator lint_on ASCRANGE
+      bit [2:0] got;
+      rd = '1;
+      got = rd[-1-:3];  // Const, read fully OOB
+      wr = '0;
+      wr[-10-:4] = 4'hf;
+      `checkh(wr, '0);  // Const, write fully OOB
+    end
+
+    begin : large_bounds_member
+      Holder c;
+      bit [2:0] got;
+      c = new;
+      c.f = '1;
+      got = c.f[-1-:3];  // Const, class member read fully OOB
+      c.f[-1-:3] = 3'b101;
+      `checkh(c.f, '1);  // Const, class member write fully OOB
     end
     // verilator lint_on SELRANGE
 

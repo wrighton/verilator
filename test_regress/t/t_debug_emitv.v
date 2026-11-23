@@ -462,6 +462,9 @@ module t (/*AUTOARG*/
     if (after_struct_packed) $write("");
     if (ascending_packed[2]) $write("");
     if (uns_int > 0) $write("");
+    // verilator lint_off SELRANGE
+    if (ascending_packed[uns_int+:4] != 0) $write("");
+    // verilator lint_on SELRANGE
     if (usarr.marr[0] != 0) $write("");
     if (arraymanyd[10][12][14][6][4][2]) $write("");
     if (var_part != 0) $write("");
@@ -815,6 +818,22 @@ module defparam_gen;
     defparam_leaf n();
   end
   defparam dpg.n.P = 2;
+  // A select through generate blocks of the same name, from outside the scope
+  for (genvar i = 0; i < 2; ++i) begin : dpl
+    if (i == 0) begin : alt
+      defparam_leaf n();
+    end else begin : alt
+      defparam_leaf n();
+    end
+  end
+  defparam_cfg dpc();
+  // verilator lint_on DEFPARAM
+endmodule
+
+module defparam_cfg;
+  // verilator lint_off DEFPARAM
+  defparam $root.t.dpg.dpl[1].alt.n.P = 3;
+  defparam $root.t.dpg.n.P = 4;
   // verilator lint_on DEFPARAM
 endmodule
 

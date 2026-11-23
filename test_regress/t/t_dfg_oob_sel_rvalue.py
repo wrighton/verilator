@@ -13,7 +13,8 @@ test.scenarios('vlt')
 
 test.compile(verilator_flags2=["--stats"])
 
+# V3Unknown reads a selection partly out of bounds by its bits in range, so none reaches Dfg
 test.file_grep(test.stats,
-               r'Optimizations, DFG, Synthesis, conv / non-representable \(oobsel\)\s+(\d+)', 1)
+               r'Optimizations, DFG, Synthesis, conv / non-representable \(oobsel\)\s+(\d+)', 0)
 
 test.passes()
