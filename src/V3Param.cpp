@@ -3975,6 +3975,11 @@ class ParamVisitor final : public VNVisitor {
     ParamProcessor m_processor;  // De-parameterize a cell, build modules
     GenForUnroller m_unroller;  // Unroller for AstGenFor
 
+    // Selector operands waiting for the module's generate bodies to finish elaborating.
+    std::vector<AstAssertCtlArgs*> m_assertCtlDeferred;
+    std::unordered_map<const AstVarXRef*, std::pair<AstVar*, const FileLine*>>
+        m_assertCtlOriginalParams;
+
     bool m_iterateModule = false;  // Iterating module body
     string m_unlinkedTxt;  // Text for AstUnlinkedRef
     // Cells left to process (in current module), keyed by (!isIface, !inClassExtends)
@@ -4295,6 +4300,7 @@ class ParamVisitor final : public VNVisitor {
                     m_genBlockp = nullptr;
                     iterateDefParams(modp->stmtsp());
                     iterateChildren(modp);
+                    foldDeferredAssertCtlPaths(modp);
                 }
             }
 
@@ -5143,9 +5149,51 @@ class ParamVisitor final : public VNVisitor {
             }
         }
     }
+    void foldDeferredAssertCtlPaths(AstNodeModule* modp) {
+        if (m_assertCtlDeferred.empty()) return;
+        // V3Param may have removed a generate arm. Do not follow the old reference unless its
+        // exact declaration is still present in this elaborated module.
+        std::unordered_set<AstVar*> live;
+        modp->foreach([&](AstVar* varp) {
+            if (varp->isParam() && varp->valuep()) live.emplace(varp);
+        });
+        for (AstAssertCtlArgs* const argsp : m_assertCtlDeferred) {
+            argsp->foreach([&](AstVarXRef* refp) {
+                const auto original = m_assertCtlOriginalParams.find(refp);
+                if (refp->varp() || original == m_assertCtlOriginalParams.end()) return;
+                AstVar* const varp = original->second.first;
+                if (live.count(varp) && varp->fileline() == original->second.second
+                    && varp->name() == refp->name()
+                    && V3LinkDotIfaceCapture::findOwnerModule(varp) == modp) {
+                    refp->varp(varp);
+                }
+            });
+            for (AstNodeExpr* const itemp : argsp->itemspList()) foldAssertCtlPath(itemp);
+            // Expressions that did not fold still need ordinary post-parameter relinking.
+            argsp->foreach([&](AstVarXRef* refp) {
+                if (m_assertCtlOriginalParams.count(refp)) refp->varp(nullptr);
+            });
+        }
+        m_assertCtlDeferred.clear();
+        m_assertCtlOriginalParams.clear();
+    }
     void visit(AstAssertCtlArgs* nodep) override {
+        const size_t saved = m_assertCtlOriginalParams.size();
+        for (AstNodeExpr* const itemp : nodep->itemspList()) {
+            itemp->foreach([&](const AstVarXRef* refp) {
+                AstVar* const varp = refp->varp();
+                if (refp->containsGenBlock() && varp && varp->isParam()) {
+                    m_assertCtlOriginalParams.emplace(refp,
+                                                      std::make_pair(varp, varp->fileline()));
+                }
+            });
+        }
         iterateChildren(nodep);
-        for (AstNodeExpr* const itemp : nodep->itemspList()) foldAssertCtlPath(itemp);
+        if (m_assertCtlOriginalParams.size() != saved) {
+            m_assertCtlDeferred.push_back(nodep);
+        } else {
+            for (AstNodeExpr* const itemp : nodep->itemspList()) foldAssertCtlPath(itemp);
+        }
     }
     void visit(AstCellArrayRef* nodep) override {
         // Multi-dim iface arrays chain multiple selps via nextp(); constify each in place.
