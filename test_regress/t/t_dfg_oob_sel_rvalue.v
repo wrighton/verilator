@@ -7,7 +7,9 @@
 
 module t (
     input logic [0:0][2:0] i,
-    output logic o
+    input logic [2:0] j,
+    output logic o,
+    output logic p
 );
 
   always_comb begin
@@ -15,6 +17,14 @@ module t (
     // verilator unroll_full
     for (int n = 0; n < 3; ++n) begin
       o = o | i[n] == 3'd0;  // Intentionally out of bounds
+    end
+  end
+
+  always_comb begin
+    p = 1'b0;
+    // verilator unroll_full
+    for (int n = 0; n < 3; ++n) begin
+      p = p | j[n+:2] == 2'd0;  // Intentionally partly out of bounds
     end
   end
 
