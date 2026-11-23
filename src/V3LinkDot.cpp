@@ -9294,6 +9294,26 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Scope names must not resolve as ordinary value expressions. Resolve them after
         // parameter and generate expansion, but before assertion lowering removes labels.
         if (!m_statep->forParamed()) return;
+        // Relinking can expose constant levels used to bound hierarchy traversal.
+        AstNodeExpr* const exprp = nodep->levelp();
+        if (exprp && !VN_IS(exprp, Const) && !exprp->exists([](const AstNode* subp) {
+                if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                    return !refp->varp();
+                }
+                if (const AstEnumItemRef* const refp = VN_CAST(subp, EnumItemRef)) {
+                    return !refp->itemp();
+                }
+                return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
+                       || VN_IS(subp, UnlinkedRef);
+            })) {
+            V3Const::constifyParamsNoWarnEdit(exprp);
+        }
+        const AstConst* const levelp = VN_CAST(nodep->levelp(), Const);
+        // Unscoped zero is a context operation; scoped zero still selects local sites.
+        if (!nodep->scoped() && levelp && !levelp->num().isOpaque() && levelp->num().isEqZero()) {
+            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
+            return;
+        }
         std::unordered_map<string, AstAssertCtlTarget*> targets;
         if (!nodep->scoped()) {
             if (m_assertCtlTops.empty()) {
@@ -9612,31 +9632,6 @@ void V3LinkDot::linkDotPrimary(AstNetlist* nodep) {
 
 void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");
-    // A constant zero without a scope is a context operation, never a site selection.
-    VNDeleter unusedArgs;
-    nodep->foreach([&](AstAssertCtl* ctlp) {
-        AstAssertCtlArgs* const argsp = ctlp->argsp();
-        if (!argsp || argsp->scoped() || !argsp->levelp()) return;
-        AstNodeExpr* const exprp = argsp->levelp();
-        if (!VN_IS(exprp, Const) && !exprp->exists([](const AstNode* subp) {
-                if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
-                    return !refp->varp();
-                }
-                if (const AstEnumItemRef* const refp = VN_CAST(subp, EnumItemRef)) {
-                    return !refp->itemp();
-                }
-                return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
-                       || VN_IS(subp, UnlinkedRef);
-            })) {
-            V3Const::constifyParamsNoWarnEdit(exprp);
-        }
-        const AstConst* const levelp = VN_CAST(argsp->levelp(), Const);
-        if (levelp && !levelp->num().isOpaque() && levelp->num().isEqZero()) {
-            VL_DO_DANGLING(unusedArgs.pushDeletep(argsp->unlinkFrBack()), argsp);
-        }
-    });
-    // The stage check treats detached, still-allocated nodes as leaks.
-    unusedArgs.doDeletes();
     linkDotGuts(nodep, LDS_PARAMED);
     V3Global::dumpCheckGlobalTree("linkdotparam", 0, dumpTreeEitherLevel() >= 3);
 }
