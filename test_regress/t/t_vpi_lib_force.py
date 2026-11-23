@@ -9,9 +9,8 @@
 
 import vltest_bootstrap
 
-test.scenarios('vlt')
+test.scenarios('vlt_all')
 
-# Three builds: flat, --hierarchical, and manual --lib-create, all behave the same
 test.vm_prefix = "Vlib_sub"
 test.compile(make_main=False,
              threads=1,
@@ -20,8 +19,15 @@ test.compile(make_main=False,
 test.run(logfile=test.obj_dir + "/" + test.vm_prefix + "_make.log",
          cmd=[os.environ["MAKE"], "-C", test.obj_dir, "-f", test.vm_prefix + ".mk", "libsub.a"])
 
-for prefix, extra_flags in (("Vnonh", []), ("Vhier", ["--hierarchical"]),
-                            ("Vlibs", ["+define+USE_LIB", test.obj_dir + "/sub.sv", "libsub.a"])):
+# Three builds: flat, --hierarchical, and manual --lib-create, all behave the same
+builds = (
+    ("Vnonh", []),
+    ("Vhier", ["--hierarchical"]),
+    ("Vlibs", ["+define+USE_LIB", test.obj_dir + "/sub.sv", "libsub.a"]),
+)
+# With threads, evaluate in parallel whatever may be
+thread_flags = ["-CFLAGS", "-DVL_THREADS_SERIAL_COST=0"] if test.vltmt else []
+for prefix, extra_flags in builds:
     test.vm_prefix = prefix
     # Each model needs its own main, as they share the object directory
     main_filename = test.obj_dir + "/" + prefix + "__main.cpp"
@@ -29,7 +35,7 @@ for prefix, extra_flags in (("Vnonh", []), ("Vhier", ["--hierarchical"]),
                          "#include \"" + os.path.abspath(test.pli_filename) + "\"\n")
     test.compile(make_main=False,
                  make_top_shell=False,
-                 verilator_flags2=["--exe", "--vpi", main_filename] + extra_flags)
+                 verilator_flags2=["--exe", "--vpi", main_filename] + extra_flags + thread_flags)
     test.execute(executable=test.obj_dir + "/" + prefix,
                  logfile=test.obj_dir + "/" + prefix + "__sim.log",
                  check_finished=True)
