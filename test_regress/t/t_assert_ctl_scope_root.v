@@ -57,13 +57,16 @@ module t;
 `else
   int top_failures = 0;
   scope_off ctl [2] ();
+  if (1) begin : empty_scope
+  end
   initial begin
+    // Depth one reaches the top, not the two child instances.
+    $assertoff(1, $root.t);
     #2;
     `checkd(a.failures, 0);
     `checkd(b.failures, 1);
-    // Equivalent whole-model calls share targets even with a narrower selector elsewhere.
-    $assertoff(0, $root.t);
-    $assertoff(0, $root.t);
+    $assertoff(0, $root.t, $root.t.empty_scope);
+    $assertoff(0, $root.t, $root.t.empty_scope);
     #2;
     top_check :
     assert (1'b0)

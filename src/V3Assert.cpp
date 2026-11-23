@@ -1457,8 +1457,9 @@ class AssertVisitor final : public VNVisitor {
     AstNodeCoverOrAssert* m_assertp = nullptr;  // Current assertion
     AstFinal* m_finalp = nullptr;  // Current final block
     int m_controlTempNum = 0;  // Assertion-control operand temporaries within a module
-    // Union of statically possible masks across users of each shared whole-model target list.
-    std::unordered_map<AstAssertCtlTargetSet*, uint32_t> m_sharedControlMasks;
+    using AssertCtlDepths = std::array<uint32_t, std::numeric_limits<uint32_t>::digits>;
+    // Maximum statically possible depth by type/directive bit for each shared list.
+    std::unordered_map<AstAssertCtlTargetSet*, AssertCtlDepths> m_sharedControlDepths;
     VDouble0 m_statLiftedCaseExprs;  // Count of purified case expressions
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
@@ -3603,9 +3604,10 @@ class AssertVisitor final : public VNVisitor {
             pruneTargets(setp->targetsp(), limit, mask);
         }
         if (AstAssertCtlTargetSet* const setp = argsp->sharedp()) {
-            UASSERT_OBJ(limit == unlimited, argsp,
-                        "Shared whole-model selector has a depth limit");
-            m_sharedControlMasks[setp] |= mask;
+            AssertCtlDepths& depths = m_sharedControlDepths[setp];
+            for (size_t bit = 0; bit < depths.size(); ++bit) {
+                if (mask & (uint32_t{1} << bit)) depths[bit] = std::max(depths[bit], limit);
+            }
         }
     }
     AstNodeStmt* newScopedControlp(AstAssertCtl* nodep) {
@@ -3863,9 +3865,20 @@ public:
     // CONSTRUCTORS
     explicit AssertVisitor(AstNetlist* nodep) {
         iterate(nodep);
-        for (const auto& item : m_sharedControlMasks) {
-            pruneTargets(item.first->targetsp(), std::numeric_limits<uint32_t>::max(),
-                         item.second);
+        for (const auto& item : m_sharedControlDepths) {
+            for (AstAssertCtlTarget* const targetp : item.first->targetspList()) {
+                const AstVar* const statep = targetp->statep()->varp();
+                const uint32_t mask = statep->assertCtlMask();
+                const auto depth = static_cast<uint32_t>(targetp->depth());
+                bool selected = false;
+                for (size_t bit = 0; bit < item.second.size(); ++bit) {
+                    if ((mask & (uint32_t{1} << bit)) && depth < item.second[bit]) {
+                        selected = true;
+                        break;
+                    }
+                }
+                if (!selected) VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
+            }
         }
     }
     ~AssertVisitor() override {
