@@ -22,11 +22,13 @@ module t (
     output bit echoed
 );
   leaf u (.clk, .good, .echoed);
+  typedef enum int { ENUM_ZERO = 0 } levels_t;
   initial begin
     $assertoff(0, u);
     $assertoff(0, u.checking.check_good);
-    $assertoff(0, t);
+    $assertoff(ENUM_ZERO, t);  // Scoped zero still reaches the partition.
     $assertoff(1, t);  // Does not reach the partition below this scope.
     $assertoff(0);  // Global, including partitions sharing this context.
+    $assertoff(ENUM_ZERO);  // Enum zero is also a global context control.
   end
 endmodule
