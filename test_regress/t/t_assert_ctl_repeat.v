@@ -56,6 +56,16 @@ module t;
     `checkd(selected, 2);
     `checkd(peer, 3);
     `checkd(deeper, 4);
+    $assertoff(0, $root.t.hub, $root.t.other);
+    tick();
+    `checkd(selected, 2);
+    `checkd(peer, 3);
+    `checkd(deeper, 5);
+    $asserton(0, $root.t.hub, $root.t.other);
+    tick();
+    `checkd(selected, 3);
+    `checkd(peer, 4);
+    `checkd(deeper, 6);
     $display("*-* All Finished *-*");
     $finish;
   end

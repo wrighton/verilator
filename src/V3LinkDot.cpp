@@ -190,6 +190,8 @@ public:
     // Share concrete subtree enumeration without changing the operation's operands.
     void shareAbsoluteScope(AstNode* scopep, AstAssertCtlArgs* argsp, const string& instancePath,
                             const string& childPath);
+    bool reuseCompoundScope(const string& key, AstAssertCtlArgs* argsp);
+    void rememberCompoundScope(const string& key, AstAssertCtlArgs* argsp);
     // Delay enumeration of proven whole-model scopes and insertion of state declarations.
     void attach();
     AstVar* select(AstNodeStmt* nodep, AstNodeModule*& ownerpr) {
@@ -352,6 +354,30 @@ void LinkDotAssertCtlSites::shareAbsoluteScope(AstNode* scopep, AstAssertCtlArgs
         }
     }
     argsp->sharedp(entry.first->second);
+}
+
+bool LinkDotAssertCtlSites::reuseCompoundScope(const string& key, AstAssertCtlArgs* argsp) {
+    const auto found = m_absoluteScopes.find(key);
+    if (found == m_absoluteScopes.end()) return false;
+    const auto atDepth = found->second.find(assertCtlTraversalLimit(argsp));
+    if (atDepth == found->second.end()) return false;
+    argsp->sharedp(atDepth->second);
+    return true;
+}
+
+void LinkDotAssertCtlSites::rememberCompoundScope(const string& key, AstAssertCtlArgs* argsp) {
+    // Deferred top selectors and caller-dependent routes use their own sharing.
+    if (argsp->sharedp() || argsp->setsp() || m_wholeModelTop.count(argsp)) return;
+    for (const AstAssertCtlTarget* const targetp : argsp->targetspList()) {
+        const AstVarXRef* const refp = VN_CAST(targetp->statep(), VarXRef);
+        if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) return;
+    }
+    if (!argsp->targetsp()) return;
+    AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
+        argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
+    m_pendingSets.push_back(setp);
+    m_absoluteScopes[key].emplace(assertCtlTraversalLimit(argsp), setp);
+    argsp->sharedp(setp);
 }
 
 void LinkDotAssertCtlSites::attach() {
@@ -9231,6 +9257,35 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                    nullptr,
                                    moduleRelative};
     }
+    string compoundScopeKey(const AstAssertCtlArgs* argsp) const {
+        if (v3Global.opt.hierarchical() || argsp->instanceDependent() || !argsp->itemsp()
+            || !argsp->itemsp()->nextp()) {
+            return "";
+        }
+        // A direct child chain from $root cannot depend on the caller's lexical scope.
+        // The leading NUL separates compound keys from canonical single-scope paths.
+        string key(1, '\0');
+        for (AstNodeExpr* const itemp : argsp->itemspList()) {
+            if (itemp->exists([](const AstNode* p) { return !VN_IS(p, Dot) && !VN_IS(p, ParseRef); })) {
+                return "";
+            }
+            bool hasPartSelect = false;
+            const string path = extractDottedPath(itemp, hasPartSelect);
+            if (!VString::startsWith(path, "$root.")) return "";
+            const VSymEnt* symp = m_statep->rootEntp();
+            for (const string& name : VString::split(path.substr(6), '.')) {
+                const VSymEnt* const childp = symp->findIdFlatNoRef(name);
+                if (!childp || childp->parentp() != symp || childp->imported()) return "";
+                const AstNode* const scopep = childp->nodep();
+                if (!VN_IS(scopep, Module) && !VN_IS(scopep, Cell) && !VN_IS(scopep, GenBlock)) {
+                    return "";
+                }
+                symp = childp;
+            }
+            key.append(path).push_back('\0');
+        }
+        return key;
+    }
     void visit(AstAssertCtlArgs* nodep) override {
         LINKDOT_VISIT_START();
         checkNoDot(nodep);
@@ -9263,8 +9318,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
             }
         }
-        for (AstNodeExpr* const itemp : nodep->itemspList()) {
-            resolveAssertCtlItem(itemp, nodep, targets);
+        const string compoundKey = compoundScopeKey(nodep);
+        LinkDotAssertCtlSites& sites = m_statep->assertCtlSites();
+        if (compoundKey.empty() || !sites.reuseCompoundScope(compoundKey, nodep)) {
+            const int errors = V3Error::errorCount();
+            const int warnings = V3Error::warnCount();
+            for (AstNodeExpr* const itemp : nodep->itemspList()) {
+                resolveAssertCtlItem(itemp, nodep, targets);
+            }
+            if (!compoundKey.empty() && V3Error::errorCount() == errors
+                && V3Error::warnCount() == warnings) {
+                sites.rememberCompoundScope(compoundKey, nodep);
+            }
         }
         if (nodep->setsp()) flushAssertCtlTargets(nodep, targets);
         if (nodep->itemsp()) {
