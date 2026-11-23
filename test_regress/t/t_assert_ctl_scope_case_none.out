@@ -1,0 +1,12 @@
+[1000] match both
+[2000] no match in a then arm
+[2000] %Error: t_assert_ctl_scope_case_none.v:25: Assertion failed in t.a.then_blk: unique case, but none matched for '2'h3'
+[2000] %Error: t_assert_ctl_scope_case_none.v:25: Assertion failed in t.a.then_blk: unique case, but none matched for '2'h3'
+[3000] no match in a else arm
+[3000] %Error: t_assert_ctl_scope_case_none.v:33: Assertion failed in t.a.else_blk: unique case, but none matched for '2'h3'
+[3000] %Error: t_assert_ctl_scope_case_none.v:33: Assertion failed in t.a.else_blk: unique case, but none matched for '2'h3'
+[4000] no match in b then arm
+[4000] %Error: t_assert_ctl_scope_case_none.v:25: Assertion failed in t.b.then_blk: unique case, but none matched for '2'h3'
+[4000] %Error: t_assert_ctl_scope_case_none.v:25: Assertion failed in t.b.then_blk: unique case, but none matched for '2'h3'
+[5000] match both again
+*-* All Finished *-*

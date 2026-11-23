@@ -1,0 +1,34 @@
+// DESCRIPTION: Preserve selected assertion state across a model save/restore.
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+module assertion_leaf (
+    input bit clk,
+    output int failures
+);
+  initial failures = 0;
+  always @(posedge clk) begin
+    labelled_check :
+    assert (1'b0)
+    else failures++;
+  end
+endmodule
+module t (
+    input bit clk,
+    input bit scoped_off,
+    output int afails,
+    output int bfails
+);
+  assertion_leaf a (
+      clk,
+      afails
+  );
+  assertion_leaf b (
+      clk,
+      bfails
+  );
+  initial if (scoped_off) begin
+    $assertoff(0, a.labelled_check);
+    $assertcontrol(1, 2, 1, 0, a.labelled_check);
+  end
+endmodule

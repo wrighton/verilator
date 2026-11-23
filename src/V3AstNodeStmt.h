@@ -30,13 +30,15 @@
 // === Abstract base node types (AstNode*) =====================================
 
 class AstNodeStmt VL_NOT_FINAL : public AstNode {
-    // Procedural statement
+    // Procedural statement; assertions and unique/priority checks may have control state.
 protected:
     AstNodeStmt(VNType t, FileLine* fl)
         : AstNode{t, fl} {}
 
 public:
     ASTGEN_MEMBERS_AstNodeStmt;
+    AstVar* controlVarp() const;
+    void controlVarp(AstVar* varp);
     // METHODS
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
@@ -97,6 +99,7 @@ class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
     // @astgen op2 := sentreep : Optional[AstSenTree]
     // op3 used by some sub-types only
     // @astgen op4 := passsp: List[AstNodeStmt] // Statements when propp is passing/truthly
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
     string m_name;  // Name to report
     const VAssertType m_userType;  // Assertion/cover type for user enable/disable
     const VAssertDirectiveType m_directive;  // Assertion directive type
@@ -120,10 +123,13 @@ public:
                       || m_userType == VAssertType::INTERNAL;
     }
     ASTGEN_MEMBERS_AstNodeCoverOrAssert;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     bool sameNode(const AstNode* samep) const override {
-        return samep->name() == name()
-               && m_nfaLowered == VN_DBG_AS(samep, NodeCoverOrAssert)->m_nfaLowered;
+        const AstNodeCoverOrAssert* const sp = VN_DBG_AS(samep, NodeCoverOrAssert);
+        return sp->name() == name() && sp->controlVarp() == controlVarp()
+               && sp->nfaLowered() == nfaLowered();
     }
     void name(const string& name) override { m_name = name; }
     void dump(std::ostream& str = std::cout) const override;
@@ -173,6 +179,123 @@ public:
 // === Concrete node types =====================================================
 
 // === AstNode ===
+class AstAssertCtlArgs final : public AstNode {
+    // Retains assertion-control hierarchy arguments until static target selection.
+    // @astgen op1 := levelp : Optional[AstNodeExpr]
+    // @astgen op2 := itemsp : List[AstNodeExpr]
+    // @astgen op3 := targetsp : List[AstAssertCtlTarget]
+    // @astgen op4 := setsp : List[AstAssertCtlTargetSet]  // Ordered route buckets
+    // @astgen ptr := m_sharedp : Optional[AstAssertCtlTargetSet]  // Shared whole-model targets
+    const bool m_scoped;  // Explicit scope list, including a resolved empty selection
+    bool m_instanceDependent = true;  // A scope name resolves from the holding instance
+public:
+    AstAssertCtlArgs(FileLine* fl, AstNodeExpr* levelp, AstNodeExpr* itemsp)
+        : ASTGEN_SUPER_AssertCtlArgs(fl)
+        , m_scoped{itemsp != nullptr} {
+        this->levelp(levelp);
+        addItemsp(itemsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlArgs;
+    bool scoped() const { return m_scoped; }
+    bool instanceDependent() const { return m_instanceDependent; }
+    void instanceDependent(bool flag) { m_instanceDependent = flag; }
+    AstAssertCtlTargetSet* sharedp() const { return m_sharedp; }
+    void sharedp(AstAssertCtlTargetSet* setp) { m_sharedp = setp; }
+    bool sameNode(const AstNode* samep) const override {
+        const AstAssertCtlArgs* const asamep = VN_DBG_AS(samep, AssertCtlArgs);
+        return scoped() == asamep->scoped() && instanceDependent() == asamep->instanceDependent()
+               && sharedp() == asamep->sharedp();
+    }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+};
+class AstAssertCtlCaller final : public AstNode {
+    // A structural occurrence of a module containing an assertion selector.
+    // @astgen ptr := m_parentp : Optional[AstAssertCtlCaller]  // Parent occurrence
+    // @astgen ptr := m_anchorp : AstNode  // Root module, interface port, or child cell
+public:
+    AstAssertCtlCaller(FileLine* flp, AstAssertCtlCaller* parentp, AstNode* anchorp)
+        : ASTGEN_SUPER_AssertCtlCaller(flp)
+        , m_parentp{parentp}
+        , m_anchorp{anchorp} {}
+    ASTGEN_MEMBERS_AstAssertCtlCaller;
+    AstAssertCtlCaller* parentp() const { return m_parentp; }
+    AstNode* anchorp() const { return m_anchorp; }
+    bool maybePointedTo() const override VL_MT_SAFE { return true; }
+    bool sameNode(const AstNode* samep) const override {
+        const AstAssertCtlCaller* const otherp = VN_DBG_AS(samep, AssertCtlCaller);
+        return parentp() == otherp->parentp() && anchorp() == otherp->anchorp();
+    }
+    void dump(std::ostream& str) const override {
+        Super::dump(str);
+        str << " anchor=" << cvtToHex(anchorp()) << " parent=" << cvtToHex(parentp());
+    }
+    void dumpJson(std::ostream& str) const override { dumpJsonGen(str); }
+};
+class AstAssertCtlCallerRef final : public AstNode {
+    // Caller membership in one resolved target set.
+    // @astgen ptr := m_callerp : AstAssertCtlCaller  // Concrete caller occurrence
+public:
+    AstAssertCtlCallerRef(FileLine* flp, AstAssertCtlCaller* callerp)
+        : ASTGEN_SUPER_AssertCtlCallerRef(flp)
+        , m_callerp{callerp} {}
+    ASTGEN_MEMBERS_AstAssertCtlCallerRef;
+    AstAssertCtlCaller* callerp() const { return m_callerp; }
+    bool sameNode(const AstNode* samep) const override {
+        return callerp() == VN_DBG_AS(samep, AssertCtlCallerRef)->callerp();
+    }
+    void dumpJson(std::ostream& str) const override { dumpJsonGen(str); }
+};
+class AstAssertCtlPlan final : public AstNode {
+    // Ordered target sets before expanding a control into concrete caller scopes.
+    // @astgen op1 := setsp : List[AstAssertCtlTargetSet]
+public:
+    AstAssertCtlPlan(FileLine* flp, AstAssertCtlTargetSet* setsp)
+        : ASTGEN_SUPER_AssertCtlPlan(flp) {
+        addSetsp(setsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlPlan;
+    bool maybePointedTo() const override VL_MT_SAFE { return true; }
+};
+class AstAssertCtlTarget final : public AstNode {
+    // One statically selected assertion instance, and its distance below a scope.
+    // @astgen op1 := statep : AstNodeVarRef
+    int m_depth;  // Module hierarchy distance; zero for the selected scope itself
+    uint32_t m_ordinal = 0;  // Order before partitioning shared and caller-local targets
+    const bool m_moduleRelative;  // Normalized path starts from the caller module, not a block
+public:
+    AstAssertCtlTarget(FileLine* fl, AstNodeVarRef* statep, int depth, bool moduleRelative = false)
+        : ASTGEN_SUPER_AssertCtlTarget(fl)
+        , m_depth{depth}
+        , m_moduleRelative{moduleRelative} {
+        this->statep(statep);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlTarget;
+    int depth() const { return m_depth; }
+    void depth(int value) { m_depth = value; }
+    uint32_t ordinal() const { return m_ordinal; }
+    void ordinal(uint32_t value) { m_ordinal = value; }
+    bool moduleRelative() const { return m_moduleRelative; }
+    bool sameNode(const AstNode* samep) const override {
+        const AstAssertCtlTarget* const targetp = VN_DBG_AS(samep, AssertCtlTarget);
+        return depth() == targetp->depth() && ordinal() == targetp->ordinal()
+               && moduleRelative() == targetp->moduleRelative();
+    }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+};
+class AstAssertCtlTargetSet final : public AstNode {
+    // A target list shared by callers with the same resolved route.
+    // @astgen op1 := targetsp : List[AstAssertCtlTarget]
+    // @astgen op2 := callersp : List[AstAssertCtlCallerRef]  // Empty means every caller
+public:
+    AstAssertCtlTargetSet(FileLine* flp, AstAssertCtlTarget* targetsp)
+        : ASTGEN_SUPER_AssertCtlTargetSet(flp) {
+        addTargetsp(targetsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlTargetSet;
+    bool maybePointedTo() const override VL_MT_SAFE { return true; }
+};
 class AstCaseItem final : public AstNode {
     // Single item of AstCase/AstRandCase
     // @astgen op1 := condsp : List[AstNodeExpr]
@@ -234,6 +357,7 @@ class AstAssertCtl final : public AstNodeStmt {
     // @astgen op1 := controlTypep : AstNodeExpr
     // @astgen op2 := assertTypesp : Optional[AstNodeExpr]
     // @astgen op3 := directiveTypesp : Optional[AstNodeExpr]
+    // @astgen op4 := argsp : Optional[AstAssertCtlArgs]
     // Type of assertcontrol task; either known from parser or from evaluated
     // controlTypep expression.
     VAssertCtlType m_ctlType;  // $assert keyword type (control_type)
@@ -265,6 +389,44 @@ public:
     void directiveTypes(VAssertDirectiveType types) { m_directiveTypes = types; }
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
+};
+class AstAssertCtlApply final : public AstNodeStmt {
+    // Scoped operation retained until its targets are linked in the concrete caller.
+    // @astgen op1 := effectp : AstNodeExpr
+    // @astgen op2 := typesp : AstNodeExpr
+    // @astgen op3 := limitp : AstNodeExpr
+    // @astgen op4 := targetsp : List[AstAssertCtlTarget]
+    // @astgen ptr := m_targetSetp : Optional[AstAssertCtlTargetSet]  // Shared absolute targets
+    // @astgen ptr := m_planp : Optional[AstAssertCtlPlan]  // Per-caller targets before V3Scope
+    const VAssertDirectiveType m_directives;  // Directive filter for the table
+
+public:
+    AstAssertCtlApply(FileLine* fl, AstNodeExpr* effectp, AstNodeExpr* typesp, AstNodeExpr* limitp,
+                      VAssertDirectiveType directives, AstAssertCtlTarget* targetsp)
+        : ASTGEN_SUPER_AssertCtlApply(fl)
+        , m_directives{directives} {
+        this->effectp(effectp);
+        this->typesp(typesp);
+        this->limitp(limitp);
+        addTargetsp(targetsp);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlApply;
+    VAssertDirectiveType directives() const { return m_directives; }
+    AstAssertCtlTargetSet* targetSetp() const { return m_targetSetp; }
+    void targetSetp(AstAssertCtlTargetSet* setp) { m_targetSetp = setp; }
+    AstAssertCtlPlan* planp() const { return m_planp; }
+    void planp(AstAssertCtlPlan* planp) { m_planp = planp; }
+    bool sameNode(const AstNode* samep) const override {
+        const AstAssertCtlApply* const otherp = VN_DBG_AS(samep, AssertCtlApply);
+        return directives() == otherp->directives() && targetSetp() == otherp->targetSetp()
+               && planp() == otherp->planp();
+    }
+    bool isGateOptimizable() const override { return false; }
+    bool isPredictOptimizable() const override { return false; }
+    bool isPure() override { return false; }
+    bool isOutputter() override { return true; }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
 };
 class AstBreak final : public AstNodeStmt {
 public:
@@ -414,6 +576,7 @@ class AstCase final : public AstNodeStmt {
     // @astgen op2 := itemsp : List[AstCaseItem]
     // @astgen op3 := notParallelp : List[AstNodeStmt] // assertion code for non-full case's
     // @astgen op4 := coverDefaultp : Optional[AstCoverInc] // Implicit default's coverage
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
     VCaseType m_caseType;  // 0=case, 1=casex, 2=casez
     bool m_fullPragma = false;  // Synthesis full_case
     bool m_parallelPragma = false;  // Synthesis parallel_case
@@ -428,12 +591,15 @@ public:
         addItemsp(itemsp);
     }
     ASTGEN_MEMBERS_AstCase;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     string verilogKwd() const override { return casez() ? "casez" : casex() ? "casex" : "case"; }
     bool sameNode(const AstNode* samep) const override {
-        return m_caseType == VN_DBG_AS(samep, Case)->m_caseType;
+        const AstCase* const sp = VN_DBG_AS(samep, Case);
+        return m_caseType == sp->m_caseType && controlVarp() == sp->controlVarp();
     }
     bool casex() const { return m_caseType == VCaseType::CT_CASEX; }
     bool casez() const { return m_caseType == VCaseType::CT_CASEZ; }
@@ -859,6 +1025,7 @@ class AstIf final : public AstNodeStmt {
     // @astgen op1 := condp : AstNodeExpr
     // @astgen op2 := thensp : List[AstNodeStmt]
     // @astgen op3 := elsesp : List[AstNodeStmt]
+    // @astgen ptr := m_controlVarp : Optional[AstVar]  // Per-instance assertion control state
     VBranchPred m_branchPred;  // Branch prediction as taken/untaken?
     bool m_isBoundsCheck = false;  // True if this if node is for assertion/bounds checking
     bool m_uniquePragma = false;  // unique case
@@ -873,12 +1040,16 @@ public:
         addElsesp(elsesp);
     }
     ASTGEN_MEMBERS_AstIf;
+    AstVar* controlVarp() const { return m_controlVarp; }
+    void controlVarp(AstVar* varp) { m_controlVarp = varp; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool isGateOptimizable() const override { return false; }
     bool isGateDedupable() const override { return true; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
-    bool sameNode(const AstNode* /*samep*/) const override { return true; }
+    bool sameNode(const AstNode* samep) const override {
+        return controlVarp() == VN_DBG_AS(samep, If)->controlVarp();
+    }
     void branchPred(VBranchPred flag) { m_branchPred = flag; }
     VBranchPred branchPred() const { return m_branchPred; }
     void isBoundsCheck(bool flag) { m_isBoundsCheck = flag; }

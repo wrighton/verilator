@@ -19,6 +19,9 @@
 #include "V3Assert.h"
 
 #include "V3Const.h"
+#include "V3EmitCBase.h"
+#include "V3Hash.h"
+#include "V3SharedTmps.h"
 #include "V3Stats.h"
 #include "V3Task.h"
 #include "V3UniqueNames.h"
@@ -128,12 +131,395 @@ AstVar* V3AssertCommon::newSequenceEvent(FileLine* flp, AstNodeModule* modp, con
     return eventp;
 }
 
-string V3AssertCommon::assertCtlGetCall(const char* query, VAssertType type,
+string V3AssertCommon::assertCtlGetCall(VAssertCtlQuery query, VAssertType type,
                                         VAssertDirectiveType directiveType) {
     // Template arguments let the runtime build the type/directive mask at C++ compile time.
     // Parenthesized, so the template comma cannot split an argument of an emitted macro.
     return "(vlSymsp->_vm_contextp__->assertCtlGet<"s + std::to_string(type) + ", "s
-           + std::to_string(directiveType) + ">(VerilatedAssertCtlQuery::"s + query + "))"s;
+           + std::to_string(directiveType) + ">(VerilatedAssertCtlQuery::"s
+           + assertCtlQueryName(query) + "))"s;
+}
+
+AstNodeExpr* V3AssertCommon::newAssertCtlGetp(FileLine* flp, VAssertCtlQuery query,
+                                              VAssertType type, VAssertDirectiveType directiveType,
+                                              AstVar* statep) {
+    const int width = query == VAssertCtlQuery::KILL ? 32 : 1;
+    AstCExpr* const globalp
+        = new AstCExpr{flp, AstCExpr::Pure{}, assertCtlGetCall(query, type, directiveType), width};
+    if (!statep) return globalp;
+    v3Global.setHasAssertCtlReads();
+    return new AstAssertCtlRead{flp, globalp, new AstVarRef{flp, statep, VAccess::READ}, query};
+}
+
+namespace {
+// Ordered selector ordinals and minimum depths encode every scoped update to a
+// state. States in the same concrete scope with equal masks and histories agree.
+using AssertCtlHistory = std::vector<std::pair<size_t, int>>;
+struct AssertCtlSignature final {
+    const AstScope* scopep;
+    uint32_t mask;
+    AssertCtlHistory history;
+    bool operator==(const AssertCtlSignature& other) const {
+        return scopep == other.scopep && mask == other.mask && history == other.history;
+    }
+};
+struct AssertCtlTableRow final {
+    const AstVarScope* statep;
+    int depth;
+    uint32_t ordinal;
+    bool operator==(const AssertCtlTableRow& other) const {
+        return statep == other.statep && depth == other.depth && ordinal == other.ordinal;
+    }
+};
+struct AssertCtlTableKey final {
+    std::vector<AssertCtlTableRow> rows;
+    std::vector<uint32_t> skips;
+    bool overlay;
+    bool operator==(const AssertCtlTableKey& other) const {
+        return overlay == other.overlay && rows == other.rows && skips == other.skips;
+    }
+};
+template <typename T>
+uint32_t appendAssertCtlHash(uint32_t hash, T value) {
+    const V3Hash seed{hash};
+    return seed.operator+(value).value();
+}
+
+struct AssertCtlTableKeyHash final {
+    size_t operator()(const AssertCtlTableKey& key) const {
+        uint32_t hash = static_cast<uint32_t>(key.overlay);
+        for (const AssertCtlTableRow& row : key.rows) {
+            hash = appendAssertCtlHash(hash, row.statep);
+            hash = appendAssertCtlHash(hash, row.depth);
+            hash = appendAssertCtlHash(hash, row.ordinal);
+        }
+        for (uint32_t slot : key.skips) hash = appendAssertCtlHash(hash, slot);
+        return hash;
+    }
+};
+struct AssertCtlBoundTable final {
+    AstVarScope* cachep = nullptr;
+    AstCFunc* bindp = nullptr;
+};
+struct AssertCtlSignatureHash final {
+    size_t operator()(const AssertCtlSignature& sig) const {
+        uint32_t hash = appendAssertCtlHash(V3Hash{sig.scopep}.value(), sig.mask);
+        for (const auto& entry : sig.history) {
+            hash = appendAssertCtlHash(hash, static_cast<uint64_t>(entry.first));
+            hash = appendAssertCtlHash(hash, entry.second);
+        }
+        return hash;
+    }
+};
+
+// Each identical concrete selection shares one cache and one cold pointer binder.
+class AssertCtlTableBindings final {
+    AstNetlist* const m_rootp;  // Netlist owning the generated table type
+    AstScope* const m_topScopep;  // Model scope storing all concrete table caches
+    V3SharedTmps m_tables{"__VassertCtlTable", VVarType::MODULETEMP};  // Cache variables
+    AstCDType* m_tableDtp = nullptr;  // Created with the first nonempty selection
+    size_t m_entries = 0;  // Number of concrete targets in the unique tables
+    // Concrete target sequence to its shared cache and binder.
+    std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> m_bound;
+    struct IndexedTable final {
+        AssertCtlBoundTable binding;  // Model-owned shared cache and its binder
+        std::unordered_map<const AstVarScope*, size_t> slots;  // Index by canonical state
+        const AssertCtlTableKey* keyp = nullptr;  // Key retained by m_bound
+    };
+    // Index base rows once, then build each overlay without scanning the base again.
+    std::unordered_map<const AstAssertCtlTargetSet*, IndexedTable> m_absolute;
+
+    struct InputRow final {
+        AssertCtlTableRow row;
+        AstNodeVarRef* refp;
+    };
+
+    template <typename T_Rebind>
+    AssertCtlBoundTable bindingFor(FileLine* flp, AstAssertCtlTarget* targetsp,
+                                   const T_Rebind& rebind, IndexedTable* outputp = nullptr,
+                                   const IndexedTable* sharedp = nullptr) {
+        std::unordered_map<const AstVarScope*, size_t> seen;
+        std::vector<InputRow> inputs;
+        AssertCtlTableKey key{{}, {}, sharedp != nullptr};
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            AstNodeVarRef* const refp = targetp->statep();
+            rebind(refp);
+            const AstVarScope* const statep = refp->varScopep();
+            const auto result = seen.emplace(statep, inputs.size());
+            if (result.second) {
+                inputs.push_back(
+                    {{statep, targetp->depth(), outputp || sharedp ? targetp->ordinal() : 0},
+                     refp});
+            } else {
+                AssertCtlTableRow& row = inputs[result.first->second].row;
+                row.depth = std::min(row.depth, targetp->depth());
+                if (outputp || sharedp) row.ordinal = std::min(row.ordinal, targetp->ordinal());
+            }
+        }
+        if (sharedp) {
+            for (InputRow& input : inputs) {
+                const auto found = sharedp->slots.find(input.row.statep);
+                if (found == sharedp->slots.end()) continue;
+                const size_t slot = found->second;
+                const AssertCtlTableRow& original = sharedp->keyp->rows[slot];
+                input.row.depth = std::min(input.row.depth, original.depth);
+                input.row.ordinal = std::min(input.row.ordinal, original.ordinal);
+                key.skips.push_back(static_cast<uint32_t>(slot));
+            }
+            std::sort(key.skips.begin(), key.skips.end());
+            std::sort(inputs.begin(), inputs.end(), [](const InputRow& a, const InputRow& b) {
+                return a.row.ordinal < b.row.ordinal;
+            });
+        }
+        key.rows.reserve(inputs.size());
+        for (const InputRow& input : inputs) key.rows.push_back(input.row);
+        const auto table = m_bound.try_emplace(std::move(key));
+        const AssertCtlTableKey& stored = table.first->first;
+        AssertCtlBoundTable& binding = table.first->second;
+        if (table.second) binding = newBinding(flp, stored, inputs);
+        if (outputp) {
+            outputp->keyp = &stored;  // Rehashing does not invalidate element references.
+            outputp->slots = std::move(seen);
+        }
+        return binding;
+    }
+
+    AssertCtlBoundTable newBinding(FileLine* flp, const AssertCtlTableKey& key,
+                                   const std::vector<InputRow>& rows) {
+        if (!m_tableDtp) {
+            m_tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
+            m_rootp->typeTablep()->addTypesp(m_tableDtp);
+        }
+        // The cache belongs to the model, not to the calling module or class.
+        AstVarScope* const cachep = m_tables.make(flp, m_topScopep, m_tableDtp);
+        cachep->varp()->noReset(true);
+        cachep->varp()->isInternal(true);
+        cachep->varp()->setIgnoreSchedWrite();
+        AstCFunc* const bindp = new AstCFunc{
+            flp, "__VbindAssertCtlTable_" + std::to_string(m_bound.size()), m_topScopep};
+        bindp->isStatic(true);
+        bindp->isLoose(true);
+        bindp->slow(true);
+        std::string args
+            = EmitCUtil::symClassVar() + ", std::vector<VlAssertCtlTable::Target>& targets";
+        if (key.overlay) args += ", std::vector<uint32_t>& skipped";
+        bindp->argTypes(args);
+        m_topScopep->addBlocksp(bindp);
+        AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
+        for (const InputRow& input : rows) {
+            initp->add("{&");
+            initp->add(input.refp->unlinkFrBack());
+            initp->add(", " + std::to_string(input.row.depth) + ", "
+                       + std::to_string(input.row.ordinal) + "},\n");
+        }
+        initp->add("};\n");
+        if (key.overlay) {
+            initp->add("skipped = {\n");
+            for (uint32_t slot : key.skips) initp->add(std::to_string(slot) + ",\n");
+            initp->add("};\n");
+        }
+        bindp->addStmtsp(initp);
+        m_entries += key.rows.size();
+        return {cachep, bindp};
+    }
+
+    static void appendBinding(AstCStmt* callp, const AssertCtlBoundTable& binding, bool overlay) {
+        FileLine* const flp = callp->fileline();
+        callp->add(", ");
+        callp->add(new AstVarRef{flp, binding.cachep, VAccess::READWRITE});
+        callp->add(", [&](std::vector<VlAssertCtlTable::Target>& targets");
+        if (overlay) callp->add(", std::vector<uint32_t>& skipped");
+        callp->add(") { ");
+        AstCCall* const bindCallp = new AstCCall{flp, binding.bindp};
+        bindCallp->dtypeSetVoid();
+        bindCallp->argTypes(overlay ? "vlSymsp, targets, skipped" : "vlSymsp, targets");
+        callp->add(bindCallp);
+        callp->add("; }");
+    }
+
+public:
+    AssertCtlTableBindings(AstNetlist* rootp, AstScope* topScopep)
+        : m_rootp{rootp}
+        , m_topScopep{topScopep} {}
+
+    size_t size() const { return m_bound.size(); }
+    size_t entries() const { return m_entries; }
+
+    template <typename T_Rebind>
+    AstCStmt* newCallp(AstAssertCtlApply* applyp, const T_Rebind& rebind) {
+        FileLine* const flp = applyp->fileline();
+        AstCStmt* const callp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->"};
+        const IndexedTable* sharedp = nullptr;
+        if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
+            const auto shared = m_absolute.try_emplace(setp);
+            IndexedTable& table = shared.first->second;
+            if (shared.second && setp->targetsp()) {
+                table.binding = bindingFor(flp, setp->targetsp(), rebind, &table);
+            }
+            if (table.binding.cachep) sharedp = &table;
+        }
+        const bool mixed = sharedp && applyp->targetsp();
+        const AssertCtlBoundTable local
+            = applyp->targetsp() ? bindingFor(flp, applyp->targetsp(), rebind, nullptr, sharedp)
+                                 : AssertCtlBoundTable{};
+        if (!sharedp && !local.cachep) {
+            callp->add("assertCtlValid(");
+            callp->add(applyp->effectp()->unlinkFrBack());
+            callp->add(");\n");
+            return callp;
+        }
+        callp->add(mixed ? "assertCtlMixedTable(" : "assertCtlTable(");
+        callp->add(applyp->effectp()->unlinkFrBack());
+        callp->add(", ");
+        callp->add(applyp->typesp()->unlinkFrBack());
+        callp->add(", " + std::to_string(applyp->directives()) + ", ");
+        callp->add(applyp->limitp()->unlinkFrBack());
+        if (sharedp) appendBinding(callp, sharedp->binding, false);
+        if (local.cachep) appendBinding(callp, local, mixed);
+        callp->add(");\n");
+        return callp;
+    }
+};
+}  // namespace
+
+void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
+    // Scoped target writes identify the concrete states that a selector can reach.
+    std::unordered_set<const AstVarScope*> selected;
+    std::vector<AstVarScope*> selectedInOrder;
+    std::vector<AstAssertCtlRead*> reads;
+    std::vector<AstAssertCtlApply*> applies;
+    std::vector<AstAssertCtlTarget*> uniqueLists;
+    std::unordered_set<const AstAssertCtlTargetSet*> seenSets;
+    const auto addTargets = [&](AstAssertCtlTarget* targetsp) {
+        if (!targetsp) return;
+        uniqueLists.push_back(targetsp);
+        std::unordered_map<const AstVarScope*, AstAssertCtlTarget*> seen;
+        std::vector<AstAssertCtlTarget*> duplicates;
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            AstVarScope* const statep = targetp->statep()->varScopep();
+            UASSERT_OBJ(statep, targetp, "Unbound assertion control state");
+            const auto target = seen.emplace(statep, targetp);
+            if (!target.second) {
+                AstAssertCtlTarget* const firstp = target.first->second;
+                firstp->depth(std::min(firstp->depth(), targetp->depth()));
+                firstp->ordinal(std::min(firstp->ordinal(), targetp->ordinal()));
+                duplicates.push_back(targetp);
+            } else if (selected.emplace(statep).second) {
+                selectedInOrder.push_back(statep);
+            }
+        }
+        // Different scope paths can alias one instance. Apply each effect once per site.
+        VNDeleter deleter;
+        for (AstAssertCtlTarget* const targetp : duplicates) {
+            VL_DO_DANGLING(deleter.pushDeletep(targetp->unlinkFrBack()), targetp);
+        }
+    };
+    rootp->foreach([&](AstScope* scopep) {
+        if (!scopep->blocksp()) return;
+        scopep->blocksp()->foreachAndNext([&](AstAssertCtlApply* applyp) {
+            applies.push_back(applyp);
+            if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
+                if (seenSets.emplace(setp).second) addTargets(setp->targetsp());
+            }
+            addTargets(applyp->targetsp());
+        });
+    });
+    rootp->foreach([&](AstAssertCtlRead* readp) { reads.push_back(readp); });
+    // Matching component histories imply matching unions. Keeping components distinct
+    // can retain separate state when two different histories happen to have equal unions.
+    std::unordered_map<const AstVarScope*, AssertCtlHistory> histories;
+    for (size_t i = 0; i < uniqueLists.size(); ++i) {
+        const VNList<AstAssertCtlTarget> targets{uniqueLists[i]};
+        for (const AstAssertCtlTarget* const targetp : targets) {
+            histories[targetp->statep()->varScopep()].emplace_back(i, targetp->depth());
+        }
+    }
+    std::unordered_map<AssertCtlSignature, AstVarScope*, AssertCtlSignatureHash> groups;
+    std::unordered_map<const AstVarScope*, AstVarScope*> canonical;
+    std::vector<AstVarScope*> representatives;
+    for (AstVarScope* const statep : selectedInOrder) {
+        AssertCtlSignature signature{statep->scopep(), statep->varp()->assertCtlMask(),
+                                     std::move(histories.at(statep))};
+        const auto result = groups.emplace(std::move(signature), statep);
+        canonical.emplace(statep, result.first->second);
+        if (result.second) representatives.push_back(statep);
+    }
+    // If only some instances use a declaration, allocate their state once in the
+    // root rather than adding a dead object to every instance of its module.
+    struct StateCounts final {
+        size_t declared = 0;
+        size_t selected = 0;
+    };
+    std::unordered_map<const AstVar*, StateCounts> stateCounts;
+    rootp->foreach([&](const AstVarScope* statep) {
+        if (statep->varp()->assertCtlMask()) ++stateCounts[statep->varp()].declared;
+    });
+    for (const AstVarScope* const statep : representatives) ++stateCounts[statep->varp()].selected;
+    V3SharedTmps concreteStates{"__VassertCtlState", VVarType::MODULETEMP};
+    std::unordered_map<const AstVarScope*, AstVarScope*> replacements;
+    AstScope* const topScopep = rootp->topScopep()->scopep();
+    for (AstVarScope* const oldp : representatives) {
+        AstVar* const varp = oldp->varp();
+        const StateCounts& counts = stateCounts.at(varp);
+        if (counts.declared == counts.selected) continue;
+        AstVarScope* const newp = concreteStates.make(oldp->fileline(), topScopep, varp->dtypep());
+        newp->varp()->assertCtlMask(varp->assertCtlMask());
+        newp->varp()->isInternal(true);
+        newp->varp()->setIgnoreSchedWrite();
+        newp->varp()->lifetime(VLifetime::STATIC_EXPLICIT);
+        replacements.emplace(oldp, newp);
+    }
+    const auto rebind = [&](AstNodeVarRef* refp) {
+        AstVarScope* statep = canonical.at(refp->varScopep());
+        const auto it = replacements.find(statep);
+        if (it != replacements.end()) statep = it->second;
+        refp->varp(statep->varp());
+        refp->varScopep(statep);
+    };
+    // The assertion and violation nodes no longer own the state after query lowering.
+    rootp->foreach([](AstNodeStmt* stmtp) { stmtp->controlVarp(nullptr); });
+    VNDeleter deleter;
+    for (AstAssertCtlRead* const readp : reads) {
+        AstVarRef* const statep = readp->statep();
+        AstNodeExpr* replacementp;
+        if (!selected.count(statep->varScopep())) {
+            replacementp = readp->globalp()->unlinkFrBack();
+        } else {
+            rebind(statep);
+            AstCExpr* const exprp = new AstCExpr{readp->fileline(), AstCExpr::Pure{}};
+            exprp->dtypeFrom(readp);
+            exprp->add(statep->unlinkFrBack());
+            exprp->add(".get(VerilatedAssertCtlQuery::"s + assertCtlQueryName(readp->query())
+                       + ")");
+            replacementp = exprp;
+        }
+        readp->replaceWith(replacementp);
+        VL_DO_DANGLING(deleter.pushDeletep(readp), readp);
+    }
+
+    AssertCtlTableBindings tables{rootp, topScopep};
+    for (AstAssertCtlApply* const applyp : applies) {
+        applyp->replaceWith(tables.newCallp(applyp, rebind));
+        VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
+    }
+    std::vector<AstAssertCtlTargetSet*> sharedSets;
+    rootp->foreach([&](AstAssertCtlTargetSet* setp) { sharedSets.push_back(setp); });
+    const size_t sharedSetCount = sharedSets.size();
+    for (AstAssertCtlTargetSet* const setp : sharedSets) {
+        VL_DO_DANGLING(deleter.pushDeletep(setp->unlinkFrBack()), setp);
+    }
+    UASSERT_OBJ(!rootp->exists([](const AstNode* nodep) {
+        return VN_IS(nodep, AssertCtlApply) || VN_IS(nodep, AssertCtlRead);
+    }),
+                rootp, "Assertion control binding left unresolved operations");
+    if (v3Global.opt.stats()) {
+        V3Stats::addStatSum("Assertions, Scoped selected sites", selected.size());
+        V3Stats::addStatSum("Assertions, Scoped state instances", representatives.size());
+        V3Stats::addStatSum("Assertions, Scoped tables", tables.size());
+        V3Stats::addStatSum("Assertions, Scoped table entries", tables.entries());
+        V3Stats::addStatSum("Assertions, Scoped target lists", uniqueLists.size());
+        V3Stats::addStatSum("Assertions, Shared absolute target lists", sharedSetCount);
+    }
 }
 
 bool V3AssertCommon::isSampledType(const AstNodeDType* dtypep) {
@@ -1078,6 +1464,10 @@ class AssertVisitor final : public VNVisitor {
     std::unordered_map<const AstPExprClause*, AstNodeStmt*> m_clauseActionsp;
     AstNodeCoverOrAssert* m_assertp = nullptr;  // Current assertion
     AstFinal* m_finalp = nullptr;  // Current final block
+    int m_controlTempNum = 0;  // Assertion-control operand temporaries within a module
+    using AssertCtlDepths = std::array<uint32_t, std::numeric_limits<uint32_t>::digits>;
+    // Maximum statically possible depth by type/directive bit for each shared list.
+    std::unordered_map<AstAssertCtlTargetSet*, AssertCtlDepths> m_sharedControlDepths;
     VDouble0 m_statLiftedCaseExprs;  // Count of purified case expressions
     AstNodeFTask* m_ftaskp = nullptr;  // Current function/task
     V3UniqueNames m_caseTempNames{"__VCase"};  // Unique names for case temporaries
@@ -1111,12 +1501,10 @@ class AssertVisitor final : public VNVisitor {
     std::unordered_map<const AstAlways*, AstVar*> m_delayedAlways2TickTimep;
 
     // METHODS
-    static const char* assertPassOnQuery(bool vacuous) {
-        static constexpr const char* queries[2]
-            = {"ASSERT_CTL_PASS_ON_NONVACUOUS", "ASSERT_CTL_PASS_ON_VACUOUS"};
-        return queries[vacuous];
+    static VAssertCtlQuery assertPassOnQuery(bool vacuous) {
+        return vacuous ? VAssertCtlQuery::PASS_VACUOUS : VAssertCtlQuery::PASS_NONVACUOUS;
     }
-    static AstNodeExpr* assertOnCond(FileLine* fl, VAssertType type,
+    static AstNodeExpr* assertOnCond(AstVar* statep, FileLine* fl, VAssertType type,
                                      VAssertDirectiveType directiveType) {
         // cppcheck-suppress missingReturn
         switch (directiveType) {
@@ -1133,10 +1521,8 @@ class AssertVisitor final : public VNVisitor {
             // (IEEE 1800-2023 Table 20-6), as assert directives; full_case/parallel_case
             // checks have no type and follow the global state.
             if (type != VAssertType::INTERNAL) {
-                return new AstCExpr{fl, AstCExpr::Pure{},
-                                    V3AssertCommon::assertCtlGetCall("ASSERT_CTL_ON", type,
-                                                                     VAssertDirectiveType::ASSERT),
-                                    1};
+                return V3AssertCommon::newAssertCtlGetp(fl, VAssertCtlQuery::ON, type,
+                                                        VAssertDirectiveType::ASSERT, statep);
             }
             return new AstCExpr{fl, AstCExpr::Pure{}, "vlSymsp->_vm_contextp__->assertOn()", 1};
         }
@@ -1144,9 +1530,8 @@ class AssertVisitor final : public VNVisitor {
         case VAssertDirectiveType::COVER:
         case VAssertDirectiveType::ASSUME: {
             if (v3Global.opt.assertOn()) {
-                return new AstCExpr{
-                    fl, AstCExpr::Pure{},
-                    V3AssertCommon::assertCtlGetCall("ASSERT_CTL_ON", type, directiveType), 1};
+                return V3AssertCommon::newAssertCtlGetp(fl, VAssertCtlQuery::ON, type,
+                                                        directiveType, statep);
             }
             return new AstConst{fl, AstConst::BitFalse{}};
         }
@@ -1168,21 +1553,19 @@ class AssertVisitor final : public VNVisitor {
                    | static_cast<int>(VAssertDirectiveType::COVER)
                    | static_cast<int>(VAssertDirectiveType::ASSUME)));
     }
-    static AstNodeExpr* assertPassOnCond(FileLine* fl, VAssertType type,
+    static AstNodeExpr* assertPassOnCond(AstVar* statep, FileLine* fl, VAssertType type,
                                          VAssertDirectiveType directiveType, bool vacuous) {
         if (!isControlled(directiveType)) return new AstConst{fl, AstConst::BitTrue{}};
         if (!v3Global.opt.assertOn()) return new AstConst{fl, AstConst::BitFalse{}};
-        return new AstCExpr{
-            fl, AstCExpr::Pure{},
-            V3AssertCommon::assertCtlGetCall(assertPassOnQuery(vacuous), type, directiveType), 1};
+        return V3AssertCommon::newAssertCtlGetp(fl, assertPassOnQuery(vacuous), type,
+                                                directiveType, statep);
     }
-    static AstNodeExpr* assertFailOnCond(FileLine* fl, VAssertType type,
+    static AstNodeExpr* assertFailOnCond(AstVar* statep, FileLine* fl, VAssertType type,
                                          VAssertDirectiveType directiveType) {
         if (!isControlled(directiveType)) return new AstConst{fl, AstConst::BitTrue{}};
         if (!v3Global.opt.assertOn()) return new AstConst{fl, AstConst::BitFalse{}};
-        return new AstCExpr{
-            fl, AstCExpr::Pure{},
-            V3AssertCommon::assertCtlGetCall("ASSERT_CTL_FAIL_ON", type, directiveType), 1};
+        return V3AssertCommon::newAssertCtlGetp(fl, VAssertCtlQuery::FAIL_ON, type, directiveType,
+                                                statep);
     }
     string assertDisplayMessage(const AstNode* nodep, const string& prefix, const string& message,
                                 VDisplayType severity) {
@@ -1340,13 +1723,14 @@ class AssertVisitor final : public VNVisitor {
             snapshotObservedExpr(argp ? argp->exprp() : exprp, queuesp);
         }
     }
-    static AstIf* newIfAssertOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
+    static AstIf* newIfAssertOn(AstVar* statep, AstNodeStmt* bodyp,
+                                VAssertDirectiveType directiveType,
                                 VAssertType type = VAssertType::INTERNAL) {
         // Add an internal if to check assertions are on.
         // Don't make this an AND term, as it's unlikely to need to test this.
         FileLine* const fl = bodyp->fileline();
 
-        AstNodeExpr* const condp = assertOnCond(fl, type, directiveType);
+        AstNodeExpr* const condp = assertOnCond(statep, fl, type, directiveType);
         AstIf* const newp = new AstIf{fl, condp, bodyp};
         newp->isBoundsCheck(true);  // To avoid LATCH warning
         newp->user2(true);  // Mark as an assertOn() check
@@ -1360,18 +1744,20 @@ class AssertVisitor final : public VNVisitor {
         newp->user2(true);  // Mark as an assertOn() check
         return newp;
     }
-    static AstNodeStmt* newIfAssertPassOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
-                                          VAssertType type, bool vacuous) {
+    static AstNodeStmt* newIfAssertPassOn(AstVar* statep, AstNodeStmt* bodyp,
+                                          VAssertDirectiveType directiveType, VAssertType type,
+                                          bool vacuous) {
         // Add an internal if to check assertion passOn is enabled.
         // Don't make this an AND term, as it's unlikely to need to test this.
-        return newIfControl(assertPassOnCond(bodyp->fileline(), type, directiveType, vacuous),
-                            bodyp);
+        return newIfControl(
+            assertPassOnCond(statep, bodyp->fileline(), type, directiveType, vacuous), bodyp);
     }
-    static AstNodeStmt* newIfAssertFailOn(AstNodeStmt* bodyp, VAssertDirectiveType directiveType,
-                                          VAssertType type) {
+    static AstNodeStmt* newIfAssertFailOn(AstVar* statep, AstNodeStmt* bodyp,
+                                          VAssertDirectiveType directiveType, VAssertType type) {
         // Add an internal if to check assertion failOn is enabled.
         // Don't make this an AND term, as it's unlikely to need to test this.
-        return newIfControl(assertFailOnCond(bodyp->fileline(), type, directiveType), bodyp);
+        return newIfControl(assertFailOnCond(statep, bodyp->fileline(), type, directiveType),
+                            bodyp);
     }
 
     static AstIf* assertCond(const AstNodeCoverOrAssert* nodep, AstNodeExpr* propp,
@@ -1452,7 +1838,7 @@ class AssertVisitor final : public VNVisitor {
                                VAssertType assertType, const string& message,
                                AstNodeExpr* exprsp = nullptr) {
         AstNodeStmt* bodysp = newFireAssertUnchecked(nodep, message, exprsp);
-        bodysp = newIfAssertOn(bodysp, directiveType, assertType);
+        bodysp = newIfAssertOn(nodep->controlVarp(), bodysp, directiveType, assertType);
         return bodysp;
     }
 
@@ -1675,10 +2061,8 @@ class AssertVisitor final : public VNVisitor {
     }
     // The Kill count of the current assertion
     AstNodeExpr* newKillCountp(FileLine* flp) const {
-        return new AstCExpr{flp, AstCExpr::Pure{},
-                            V3AssertCommon::assertCtlGetCall(
-                                "ASSERT_CTL_KILL", m_assertp->userType(), m_assertp->directive()),
-                            32};
+        return V3AssertCommon::newAssertCtlGetp(flp, VAssertCtlQuery::KILL, m_assertp->userType(),
+                                                m_assertp->directive(), m_assertp->controlVarp());
     }
     // A Kill aborts an executing attempt (IEEE 1800-2023 20.11): after each wait of the attempt
     // of 'nodep' (marked by user3), end it if killed since its start, so it evaluates nothing
@@ -1753,10 +2137,10 @@ class AssertVisitor final : public VNVisitor {
         // and retires them
         const VAssertDirectiveType directive = m_assertp->directive();
         const VAssertType type = m_assertp->userType();
-        AstVar* const passStartp
-            = getPExprStartVarp("pass0", assertPassOnCond(flp, type, directive, false));
-        AstVar* const failStartp
-            = getPExprStartVarp("fail", assertFailOnCond(flp, type, directive));
+        AstVar* const passStartp = getPExprStartVarp(
+            "pass0", assertPassOnCond(m_assertp->controlVarp(), flp, type, directive, false));
+        AstVar* const failStartp = getPExprStartVarp(
+            "fail", assertFailOnCond(m_assertp->controlVarp(), flp, type, directive));
         const auto newCountp = [&](bool inc) {
             AstNodeStmt* stmtsp = nullptr;
             for (AstVar* const countp : {m_strongPassOnp, m_strongFailOnp}) {
@@ -2080,7 +2464,7 @@ class AssertVisitor final : public VNVisitor {
         clockAlwaysp->addStmtsp(new AstAssign{flp, wr(clkTimep), newTimep()});
         m_procedurep->addNextHere(runnerp);
         m_procedurep->addNextHere(clockAlwaysp);
-        return newIfAssertOn(queuesp, nodep->directive(), nodep->userType());
+        return newIfAssertOn(nodep->controlVarp(), queuesp, nodep->directive(), nodep->userType());
     }
 
     // The action lists of a concurrent assertion that run in a process of their own: a jump that
@@ -2319,7 +2703,8 @@ class AssertVisitor final : public VNVisitor {
                     if (passsp) passsp = newObservedDeferredAction(flp, passsp);
                 }
                 if (passsp) {
-                    passsp = newIfAssertPassOn(passsp, nodep->directive(), nodep->userType(),
+                    passsp = newIfAssertPassOn(nodep->controlVarp(), passsp, nodep->directive(),
+                                               nodep->userType(),
                                                /*vacuous=*/false);
                     passspGated = true;
                     passsp = AstNode::addNext(creditsp, passsp);
@@ -2400,11 +2785,13 @@ class AssertVisitor final : public VNVisitor {
         if (passsp && VN_IS(passsp, If)) passspAlreadyGated = VN_AS(passsp, If)->user1();
         if (passsp && !passspGated && !passspAlreadyGated && !VN_IS(propExprp, PExpr)
             && !seqEvent) {
-            passsp = newIfAssertPassOn(passsp, nodep->directive(), nodep->userType(),
+            passsp = newIfAssertPassOn(nodep->controlVarp(), passsp, nodep->directive(),
+                                       nodep->userType(),
                                        /*vacuous=*/false);
         }
         if (failsp && !VN_IS(propExprp, PExpr)) {
-            failsp = newIfAssertFailOn(failsp, nodep->directive(), nodep->userType());
+            failsp = newIfAssertFailOn(nodep->controlVarp(), failsp, nodep->directive(),
+                                       nodep->userType());
         }
         if (coverp && matchCountp && passsp) {
             // Convert the match count into a loop that decrements a temporary variable until it
@@ -2444,8 +2831,9 @@ class AssertVisitor final : public VNVisitor {
             bodysp = newMatureInstance(nodep, bodysp, procClockp);
             procClockp = nullptr;
         } else if (!seqEvent) {
-            // Add assertOn check last, for better combining
-            bodysp = newIfAssertOn(bodysp, nodep->directive(), nodep->userType());
+            // The outcome gate applies the same control policy to global and scoped sites.
+            bodysp = newIfAssertOn(nodep->controlVarp(), bodysp, nodep->directive(),
+                                   nodep->userType());
         }
         if (procClockp) VL_DO_DANGLING(pushDeletep(procClockp), procClockp);
         bodysp->foreach([](AstNodeVarRef* nodep) {
@@ -2898,10 +3286,12 @@ class AssertVisitor final : public VNVisitor {
             // The end-of-simulation check runs in a final block, and the attempts of a sequence
             // event control are not assertion attempts, so both keep the controls applying now
             if (nodep->pass()) {
-                stmtsp = newIfAssertPassOn(stmtsp, m_assertp->directive(), m_assertp->userType(),
-                                           nodep->vacuous());
+                stmtsp
+                    = newIfAssertPassOn(m_assertp->controlVarp(), stmtsp, m_assertp->directive(),
+                                        m_assertp->userType(), nodep->vacuous());
             } else {
-                stmtsp = newIfAssertFailOn(stmtsp, m_assertp->directive(), m_assertp->userType());
+                stmtsp = newIfAssertFailOn(m_assertp->controlVarp(), stmtsp,
+                                           m_assertp->directive(), m_assertp->userType());
             }
         } else if (stmtsp) {
             // The controls apply to attempts starting after them; one already executing is not
@@ -2917,15 +3307,18 @@ class AssertVisitor final : public VNVisitor {
                     pushDeletep(ifp->condp()->unlinkFrBack());
                     ifp->condp(new AstVarRef{
                         flp,
-                        getPExprStartVarp("pass0", assertPassOnCond(flp, type, directive, false)),
+                        getPExprStartVarp("pass0", assertPassOnCond(m_assertp->controlVarp(), flp,
+                                                                    type, directive, false)),
                         VAccess::READ});
                 }
             }
             AstVar* const enablep
                 = nodep->pass()
                       ? getPExprStartVarp(nodep->vacuous() ? "pass1" : "pass0",
-                                          assertPassOnCond(flp, type, directive, nodep->vacuous()))
-                      : getPExprStartVarp("fail", assertFailOnCond(flp, type, directive));
+                                          assertPassOnCond(m_assertp->controlVarp(), flp, type,
+                                                           directive, nodep->vacuous()))
+                      : getPExprStartVarp("fail", assertFailOnCond(m_assertp->controlVarp(), flp,
+                                                                   type, directive));
             AstVar* const killp = getPExprStartVarp("kill", newKillCountp(flp));
             stmtsp = newQueuedAction(flp, stmtsp);
             stmtsp = newIfControl(new AstVarRef{flp, enablep, VAccess::READ}, stmtsp);
@@ -3159,6 +3552,159 @@ class AssertVisitor final : public VNVisitor {
     void visit(AstAssert* nodep) override {  //
         visitAssertionIterate(nodep, nodep->failsp());
     }
+    AstVar* newControlArgp(AstNodeExpr* exprp, AstBegin* beginp) {
+        AstVar* const varp
+            = new AstVar{exprp->fileline(), VVarType::BLOCKTEMP,
+                         "__VassertCtlArg" + std::to_string(m_controlTempNum++), exprp->dtypep()};
+        // A concurrent action can be hoisted out of its enclosing task.
+        if (m_ftaskp && !m_inConcurrentAction) {
+            varp->funcLocal(true);
+            varp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            m_ftaskp->addDeclsp(varp);
+        } else {
+            // Procedural operands execute without yielding. Module-owned storage
+            // must not pretend to be an automatic enclosing-fork variable.
+            varp->lifetime(VLifetime::STATIC_EXPLICIT);
+            m_modp->addStmtsp(varp);
+        }
+        beginp->addStmtsp(new AstAssign{
+            exprp->fileline(), new AstVarRef{exprp->fileline(), varp, VAccess::WRITE}, exprp});
+        return varp;
+    }
+    static AstCStmt* newControlCallp(FileLine* flp, AstVar* controlp, AstVar* typesp,
+                                     VAssertDirectiveType directives) {
+        AstCStmt* const stmtp = new AstCStmt{flp, "vlSymsp->_vm_contextp__->assertCtl("};
+        stmtp->add(new AstVarRef{flp, controlp, VAccess::READ});
+        stmtp->add(", ");
+        stmtp->add(new AstVarRef{flp, typesp, VAccess::READ});
+        stmtp->add(", " + std::to_string(directives) + ");\n");
+        return stmtp;
+    }
+    static AstConst* newControlLevelConstp(FileLine* flp, AstVar* levelp, uint32_t value) {
+        AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, levelp->dtypep()};
+        constp->num().setLong(value);
+        return constp;
+    }
+    static AstNodeExpr* newControlDepthLimitp(FileLine* flp, AstVar* levelp) {
+        constexpr uint32_t unlimited = std::numeric_limits<uint32_t>::max();
+        const auto newLevelRef = [&]() { return new AstVarRef{flp, levelp, VAccess::READ}; };
+        const auto newLimitConst = [&](uint32_t value) {
+            return new AstConst{flp, AstConst::WidthedValue{}, 32, value};
+        };
+        AstNodeExpr* allp = new AstEq{flp, newLevelRef(), newControlLevelConstp(flp, levelp, 0)};
+        AstNodeExpr* limitp = newLevelRef();
+        if (levelp->width() > 32) {
+            allp = new AstLogOr{
+                flp, allp,
+                new AstGt{flp, newLevelRef(), newControlLevelConstp(flp, levelp, unlimited)}};
+            limitp = new AstSel{flp, limitp, 0, 32};
+        }
+        AstNodeExpr* const narrowedp = limitp;
+        limitp = new AstCond{flp, allp, newLimitConst(unlimited), narrowedp};
+        limitp->dtypeFrom(narrowedp);
+        if (levelp->isSigned()) {
+            limitp = new AstCond{
+                flp, new AstLtS{flp, newLevelRef(), newControlLevelConstp(flp, levelp, 0)},
+                newLimitConst(0), limitp};
+        }
+        return limitp;
+    }
+    void pruneTargets(AstAssertCtlTarget* targetsp, uint32_t limit, uint32_t mask) {
+        for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            const AstVar* const statep = targetp->statep()->varp();
+            if (static_cast<uint32_t>(targetp->depth()) >= limit
+                || (statep && !(statep->assertCtlMask() & mask))) {
+                VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
+            }
+        }
+    }
+    void pruneControlTargets(AstAssertCtl* nodep) {
+        AstAssertCtlArgs* const argsp = nodep->argsp();
+        const AstConst* const levelp = VN_CAST(argsp->levelp(), Const);
+        const AstConst* const typesp = VN_CAST(nodep->assertTypesp(), Const);
+        constexpr uint32_t unlimited = std::numeric_limits<uint32_t>::max();
+        uint32_t limit = unlimited;
+        if (levelp && !levelp->num().isOpaque() && !levelp->num().isFourState()
+            && levelp->width() <= 32) {
+            if (levelp->isSigned() && levelp->toSInt() < 0) {
+                limit = 0;
+            } else if (!levelp->num().isEqZero()) {
+                limit = levelp->toUInt();
+            }
+        }
+        uint32_t mask = unlimited;
+        if (!nodep->assertTypesp()
+            || (typesp && !typesp->num().isOpaque() && !typesp->num().isFourState()
+                && typesp->width() <= 32)) {
+            const uint32_t types = typesp ? typesp->toUInt() : ALL_ASSERT_TYPES;
+            mask = 0;
+            for (unsigned bit = 0; bit < std::numeric_limits<uint8_t>::digits; ++bit) {
+                if (types & (uint32_t{1} << bit)) {
+                    mask |= static_cast<uint32_t>(nodep->directiveTypes())
+                            << (VAssertDirectiveType::MASK_WIDTH * bit);
+                }
+            }
+        }
+        pruneTargets(argsp->targetsp(), limit, mask);
+        for (AstAssertCtlTargetSet* const setp : argsp->setspList()) {
+            pruneTargets(setp->targetsp(), limit, mask);
+        }
+        if (AstAssertCtlTargetSet* const setp = argsp->sharedp()) {
+            AssertCtlDepths& depths = m_sharedControlDepths[setp];
+            for (size_t bit = 0; bit < depths.size(); ++bit) {
+                if (mask & (uint32_t{1} << bit)) depths[bit] = std::max(depths[bit], limit);
+            }
+        }
+    }
+    AstNodeStmt* newScopedControlp(AstAssertCtl* nodep) {
+        pruneControlTargets(nodep);
+        FileLine* const flp = nodep->fileline();
+        AstAssertCtlArgs* const argsp = nodep->argsp();
+        AstBegin* const beginp = new AstBegin{flp, "", nullptr, true};
+        // Evaluate effect, types and levels once in source order, even for an empty selection.
+        AstVar* const controlp = newControlArgp(nodep->controlTypep()->unlinkFrBack(), beginp);
+        AstVar* const typesp
+            = newControlArgp(nodep->assertTypesp() ? nodep->assertTypesp()->unlinkFrBack()
+                                                   : new AstConst{flp, ALL_ASSERT_TYPES},
+                             beginp);
+        AstNodeExpr* levelExprp
+            = argsp->levelp() ? argsp->levelp()->unlinkFrBack() : new AstConst{flp, 0};
+        if (levelExprp->width() < 32) {
+            if (levelExprp->isSigned()) {
+                levelExprp = new AstExtendS{flp, levelExprp, 32};
+                levelExprp->dtypeSetBitSized(32, VSigning::SIGNED);
+            } else {
+                levelExprp = new AstExtend{flp, levelExprp, 32};
+            }
+        }
+        AstVar* const levelp = newControlArgp(levelExprp, beginp);
+        AstAssertCtlApply* const applyp = new AstAssertCtlApply{
+            flp,
+            new AstVarRef{flp, controlp, VAccess::READ},
+            new AstVarRef{flp, typesp, VAccess::READ},
+            newControlDepthLimitp(flp, levelp),
+            nodep->directiveTypes(),
+            argsp->targetsp() ? argsp->targetsp()->unlinkFrBackWithNext() : nullptr};
+        applyp->targetSetp(argsp->sharedp());
+        if (argsp->setsp()) {
+            AstAssertCtlPlan* const planp
+                = new AstAssertCtlPlan{flp, argsp->setsp()->unlinkFrBackWithNext()};
+            v3Global.rootp()->addMiscsp(planp);
+            applyp->planp(planp);
+        }
+        v3Global.setHasAssertCtlReads();
+        if (argsp->scoped()) {
+            beginp->addStmtsp(applyp);
+        } else {
+            // A zero level with no explicit scopes is an operation on the context.
+            beginp->addStmtsp(new AstIf{
+                flp,
+                new AstEq{flp, new AstVarRef{flp, levelp, VAccess::READ},
+                          newControlLevelConstp(flp, levelp, 0)},
+                newControlCallp(flp, controlp, typesp, nodep->directiveTypes()), applyp});
+        }
+        return beginp;
+    }
     void visit(AstAssertCtl* nodep) override {
         iterateChildren(nodep);
 
@@ -3214,6 +3760,11 @@ class AssertVisitor final : public VNVisitor {
             return;
         }
 
+        if (nodep->argsp()) {
+            nodep->replaceWith(newScopedControlp(nodep));
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
         FileLine* const fl = nodep->fileline();
         UINFO(9, "Generating assertctl for a module: " << m_modp);
         AstCStmt* const newp = new AstCStmt{fl};
@@ -3245,6 +3796,8 @@ class AssertVisitor final : public VNVisitor {
 
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
+        VL_RESTORER(m_controlTempNum);
+        m_controlTempNum = 0;
         VL_RESTORER_COPY(m_obsNames);
         VL_RESTORER(m_obsFlushp);
         VL_RESTORER(m_obsEventp);
@@ -3358,7 +3911,24 @@ class AssertVisitor final : public VNVisitor {
 
 public:
     // CONSTRUCTORS
-    explicit AssertVisitor(AstNetlist* nodep) { iterate(nodep); }
+    explicit AssertVisitor(AstNetlist* nodep) {
+        iterate(nodep);
+        for (const auto& item : m_sharedControlDepths) {
+            for (AstAssertCtlTarget* const targetp : item.first->targetspList()) {
+                const AstVar* const statep = targetp->statep()->varp();
+                const uint32_t mask = statep->assertCtlMask();
+                const auto depth = static_cast<uint32_t>(targetp->depth());
+                bool selected = false;
+                for (size_t bit = 0; bit < item.second.size(); ++bit) {
+                    if ((mask & (uint32_t{1} << bit)) && depth < item.second[bit]) {
+                        selected = true;
+                        break;
+                    }
+                }
+                if (!selected) VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
+            }
+        }
+    }
     ~AssertVisitor() override {
         V3Stats::addStat("Assertions, assert non-immediate statements", m_statAsNotImm);
         V3Stats::addStat("Assertions, assert immediate statements", m_statAsImm);

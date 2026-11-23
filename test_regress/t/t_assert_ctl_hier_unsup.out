@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_hier_unsup.v:27:19: Unsupported: Assertion control across hierarchical instance 'u': 'u'.
+                                                     : ... note: In instance 't'
+   27 |     $assertoff(0, u);
+      |                   ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_ctl_hier_unsup.v:28:29: Unsupported: Assertion control across hierarchical instance 'u': 'u.checking.check_good'.
+                                                     : ... note: In instance 't'
+   28 |     $assertoff(0, u.checking.check_good);
+      |                             ^
+%Error-UNSUPPORTED: t/t_assert_ctl_hier_unsup.v:30:5: Unsupported: Assertion control across hierarchical instance 'u': 'u'.
+                                                    : ... note: In instance 't'
+   30 |     $assertoff(ENUM_ZERO, t);
+      |     ^~~~~~~~~~
+%Error: Exiting due to

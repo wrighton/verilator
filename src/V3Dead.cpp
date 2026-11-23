@@ -299,6 +299,11 @@ class DeadVisitor final : public VNVisitor {
 
     // cppcheck-suppress constParameterPointer
     void checkAll(AstNode* nodep) {
+        // Before assertion lowering, this semantic pointer is the site's state
+        // reference. Target lists alone do not keep unselected siblings alive.
+        if (AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt)) {
+            if (AstVar* const statep = stmtp->controlVarp()) statep->user1Inc();
+        }
         if (AstNode* const subnodep = nodep->dtypep()) {
             if (nodep != subnodep  // Not NodeDTypes reference themselves
                 && m_curDTypep != subnodep) {  // Not EnumItem referencing parent Enum
@@ -384,10 +389,15 @@ class DeadVisitor final : public VNVisitor {
             m_scopesp.push_back(nodep);
         }
     }
+    void visit(AstAssertCtlCaller* nodep) override {
+        // Caller identity is needed until concrete scopes consume the selection plan.
+        nodep->anchorp()->user1Inc();
+    }
     void visit(AstCell* nodep) override {
         iterateChildren(nodep);
         checkAll(nodep);
         m_cellsp.push_back(nodep);
+        if (AstVar* const originp = nodep->assertCtlIfaceOriginp()) originp->user1Inc();
         nodep->modp()->user1Inc();
     }
 
