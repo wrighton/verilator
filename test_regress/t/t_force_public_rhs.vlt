@@ -8,6 +8,10 @@
 
 public_flat_rw -module "t" -var "y"
 public_flat_rw -module "t" -var "w"
+public_flat_rw -module "t" -var "m"
 public_flat_rw -module "t" -var "v"
 public_flat_rw -module "t" -var "r"
+public_flat_rw -module "t" -var "n"
+public_flat_rw -module "t" -var "c"
 public_flat_rw -module "t" -var "vpi_changes"
+public_flat_rw -module "t" -var "vpi_c_changes"

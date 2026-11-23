@@ -30,6 +30,15 @@
 //  For each read of <name>:
 //    - Replace with: VlForceVec::read(<name>, __VforceVec)
 //
+//  A variable the VPI can force has public force controls, which its readers use. For the
+//  forces in code of such a variable, the force value keeps following their RHS:
+//    - Each such force has an owner index, 1 and up. The per-bit owner index of the force
+//      value, 0 if none, is held in bit planes <name>__VforceOwner<bit>
+//    - <name>__VforceVpi has the bits the VPI forced last, which no force in code owns
+//    - A force sets the owner index of its bits and clears their VPI-forced bits; a release
+//      clears both
+//    - On a change of a force's RHS shadow, its owned bits of the force value take its value
+//
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -66,9 +75,10 @@ public:
         bool m_skipRdRefresh = false;  // finalizeRhsVars's force-rd-update block refreshes forceRd
         AstVarScope* m_rhsVarVscp = nullptr;  // Scope of the var containing RHSID
         AstNodeExpr* m_rhsExprp = nullptr;  // Expression on RHS of this force assignment
-        // Scope of the var holding the bits of the public force value this force keeps in
-        // sync with its RHS, for a force in code of an externally forceable variable
-        AstVarScope* m_ownVscp = nullptr;
+        bool m_hasOpaquePath = false;  // Forces a member of a variable that is not bitwise
+        // Owner index of the public force value bits this force keeps in sync with its RHS;
+        // nonzero for a force in code of an externally forceable variable
+        uint32_t m_ownerId = 0;
 
         ForceInfo() = default;
         ForceInfo(int rangeLsb, int rangeMsb, int padLsb, int padMsb, int forceId,
@@ -89,8 +99,9 @@ public:
         AstVarScope* m_forceRdVscp = nullptr;  // Scope of the __VforceRd (read-back) variable
         AstVarScope* m_forceEnVscp = nullptr;  // Scope of the __VforceEn (force enable) variable
         AstVarScope* m_forceValVscp = nullptr;  // Scope of the __VforceVal (force value) variable
-        // Scope of the force value as last seen by the forces keeping it in sync with their RHS
-        AstVarScope* m_forceValSeenVscp = nullptr;
+        // Scopes of the bit planes of the owner index of the force value bits, lowest first
+        std::vector<AstVarScope*> m_ownerVscps;
+        AstVarScope* m_forceVpiVscp = nullptr;  // Scope of the __VforceVpi variable
         AstVarScope* m_varVscp = nullptr;  // Scope of the forced (original) variable
         AstVar* m_varp = nullptr;  // The forced (original) variable
         AstScope* m_scopep = nullptr;  // Scope containing the forced variable
@@ -204,6 +215,7 @@ public:
         AstVar* m_rdVarp = nullptr;  // The __VforceRd (read-back) variable
         AstVar* m_enVarp = nullptr;  // The __VforceEn (force enable) variable
         AstVar* m_valVarp = nullptr;  // The __VforceVal (force value) variable
+        AstVar* m_vpiVarp = nullptr;  // The __VforceVpi (bits forced through the VPI) variable
     };
 
     struct ArraySelInfo final {
@@ -247,6 +259,7 @@ private:
                                  // statements instead of force statements
     ProtectedVarRefSet& m_permanentlyProtected;
     BuiltVarScopeSet& m_forceRdUpdateBuilt;
+    VDouble0 m_statSyncedForceVars;  // Statistic tracking
 
 public:
     ForceState(bool doingAssign, ForceHelperVarsByVar& forceHelperVarsByVar,
@@ -255,6 +268,12 @@ public:
         , m_doingAssign{doingAssign}
         , m_permanentlyProtected{permanentlyProtected}
         , m_forceRdUpdateBuilt{forceRdUpdateBuilt} {}
+    ~ForceState() {
+        if (!m_doingAssign) {
+            V3Stats::addStat("Force, public values synced with forces in code",
+                             m_statSyncedForceVars);
+        }
+    }
     VL_UNCOPYABLE(ForceState);
 
     // STATIC METHODS
@@ -275,29 +294,32 @@ public:
         return new AstConst{nodep->fileline(), mask};
     }
 
-    // Mask of the public force value bits a force or release of a variable covers
+    // Mask of the force value bits a force or release of a variable covers
     static AstNodeExpr* makeOwnMask(AstNode* nodep, AstVar* varp, const ForceRange& range) {
         if (!isBitwiseDType(varp)) return makeRangeMaskConst(nodep, 1, 0, 0);
         return makeRangeMaskConst(nodep, varp->width(), range.m_rangeLsb, range.m_rangeMsb);
     }
 
-    // Statements taking the bits in 'range' from the forces of a variable that keep the public
-    // force value in sync, other than 'keepp'
-    static AstNodeStmt* makeDisownStmts(FileLine* flp, AstNode* nodep, AstVar* varp,
-                                        const VarForceInfo& varInfo, const ForceRange& range,
-                                        const ForceInfo* keepp) {
+    // Statements making 'ownerId' the owner index of the force value bits in 'range', which
+    // the VPI then no longer forces
+    static AstNodeStmt* makeOwnerStmts(FileLine* flp, AstNode* nodep, AstVar* varp,
+                                       const VarForceInfo& varInfo, const ForceRange& range,
+                                       uint32_t ownerId) {
+        if (varInfo.m_ownerVscps.empty()) return nullptr;
         AstNodeStmt* stmtsp = nullptr;
-        for (const ForceInfo* const finfop :
-             varInfo.forcesInRange(range.m_rangeLsb, range.m_rangeMsb)) {
-            if (finfop == keepp || !finfop->m_ownVscp) continue;
-            // own = own & ~mask
-            AstNodeExpr* const newOwnp
-                = new AstAnd{flp, new AstVarRef{flp, finfop->m_ownVscp, VAccess::READ},
-                             new AstNot{flp, makeOwnMask(nodep, varp, range)}};
-            AstNodeStmt* const assignp = new AstAssign{
-                flp, new AstVarRef{flp, finfop->m_ownVscp, VAccess::WRITE}, newOwnp};
-            stmtsp = AstNode::addNextNull(stmtsp, assignp);
+        const auto addMaskAssign = [&](AstVarScope* vscp, bool set) {
+            // vscp = vscp | mask; or vscp = vscp & ~mask;
+            AstNodeExpr* const oldp = new AstVarRef{flp, vscp, VAccess::READ};
+            AstNodeExpr* const maskp = makeOwnMask(nodep, varp, range);
+            AstNodeExpr* const newp = set ? static_cast<AstNodeExpr*>(new AstOr{flp, oldp, maskp})
+                                          : new AstAnd{flp, oldp, new AstNot{flp, maskp}};
+            stmtsp = AstNode::addNextNull(
+                stmtsp, new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE}, newp});
+        };
+        for (size_t bit = 0; bit < varInfo.m_ownerVscps.size(); ++bit) {
+            addMaskAssign(varInfo.m_ownerVscps[bit], (ownerId >> bit) & 1);
         }
+        addMaskAssign(varInfo.m_forceVpiVscp, false);
         return stmtsp;
     }
 
@@ -713,6 +735,8 @@ public:
                                                     hasArraySel, nullptr, rhsExprp});
         ForceInfo& finfo = pair.first->second;
         finfo.m_isExternal = forceStmtp->user2();
+        finfo.m_hasOpaquePath
+            = !isBitwiseDType(varp) && !hasArraySel && !VN_IS(forceStmtp->lhsp(), VarRef);
         finfo.m_skipRdRefresh = skipRdRefresh;
         if (doingAssign()) {
             std::vector<AstVar*> depVarps;
@@ -811,6 +835,7 @@ public:
         return new AstVarRef{flp, finfo.m_rhsVarVscp, VAccess::READ};
     }
 
+    // A variable of the scope of 'info', named after its variable
     AstVarScope* createHelperVar(const VarForceInfo& info, const string& suffix,
                                  AstNodeDType* dtypep) {
         AstVar* const varp = info.m_varp;
@@ -827,81 +852,84 @@ public:
 
     // A force in code of an externally forceable variable sets the public force controls,
     // which its readers use. Its RHS keeps being evaluated (IEEE 1800-2023 10.6.2), so the
-    // force value is kept in sync with it, for the bits this force still owns
-    void createForceOwnVar(VarForceInfo& info, ForceInfo& finfo) {
+    // force value is kept in sync with it, for the bits whose owner index is the force's
+    void createForceOwners(VarForceInfo& info) {
         AstVar* const varp = info.m_varp;
-        if (doingAssign() || finfo.m_isExternal || finfo.m_hasArraySel || !info.m_forceValVscp
-            || isUnpackedArrayDType(varp->dtypep())) {
-            return;
+        if (doingAssign() || !info.m_forceValVscp || isUnpackedArrayDType(varp->dtypep())) return;
+        uint32_t ownerId = 0;
+        for (ForceInfo* const finfop : forceInfosInIdOrder(info)) {
+            if (finfop->m_isExternal || finfop->m_hasArraySel || finfop->m_hasOpaquePath) continue;
+            finfop->m_ownerId = ++ownerId;
         }
+        if (!ownerId) return;
+        ++m_statSyncedForceVars;
         AstNodeDType* const enDtypep = info.m_forceEnVscp->dtypep();
-        finfo.m_ownVscp
-            = createHelperVar(info, "__VforceOwn" + std::to_string(finfo.m_forceId), enDtypep);
-        if (!info.m_forceValSeenVscp) {
-            info.m_forceValSeenVscp
-                = createHelperVar(info, "__VforceValSeen", info.m_forceValVscp->dtypep());
+        for (uint32_t ids = ownerId; ids; ids >>= 1) {
+            info.m_ownerVscps.push_back(createHelperVar(
+                info, "__VforceOwner" + std::to_string(info.m_ownerVscps.size()), enDtypep));
+        }
+        AstVar*& vpiVarp = m_forceHelperVarsByVar(varp).m_vpiVarp;
+        if (!vpiVarp) {
+            vpiVarp = new AstVar{varp->fileline(), VVarType::VAR, varp->name() + "__VforceVpi",
+                                 enDtypep};
+            vpiVarp->sigUserRWPublic(true);
+            varp->forceVpiVarp(vpiVarp);
+            varp->addNextHere(vpiVarp);
         }
     }
 
-    // Statements keeping the force value in sync with the RHS of the forces in code, for the
-    // bits each still owns: those no later force or release took, whose force enable is set,
-    // and which nothing outside wrote since last seen, as a force through the VPI does
+    // Statements keeping the force value in sync with the RHS of the forces in code
     AstNodeStmt* createForceValSyncStmts(const VarForceInfo& info) const {
-        if (!info.m_forceValSeenVscp) return nullptr;
         AstVar* const varp = info.m_varp;
         FileLine* const flp = varp->fileline();
-        const bool bitwise = isBitwiseDType(varp);
-        const auto valRef
-            = [&](VAccess access) { return new AstVarRef{flp, info.m_forceValVscp, access}; };
-        const auto seenRef
-            = [&](VAccess access) { return new AstVarRef{flp, info.m_forceValSeenVscp, access}; };
         AstNodeStmt* stmtsp = nullptr;
-        const std::vector<const ForceInfo*> forceps = forceInfosInIdOrder(info);
-        for (const ForceInfo* const finfop : forceps) {
-            if (!finfop->m_ownVscp) continue;
-            // own = own & forceEn & (forceVal unchanged since seen)
-            AstNodeExpr* const unchangedp
-                = bitwise
-                      ? static_cast<AstNodeExpr*>(new AstNot{
-                            flp, new AstXor{flp, valRef(VAccess::READ), seenRef(VAccess::READ)}})
-                      : new AstEq{flp, valRef(VAccess::READ), seenRef(VAccess::READ)};
-            AstNodeExpr* const newOwnp
-                = new AstAnd{flp,
-                             new AstAnd{flp, new AstVarRef{flp, finfop->m_ownVscp, VAccess::READ},
-                                        new AstVarRef{flp, info.m_forceEnVscp, VAccess::READ}},
-                             unchangedp};
-            stmtsp = AstNode::addNextNull(
-                stmtsp, new AstAssign{flp, new AstVarRef{flp, finfop->m_ownVscp, VAccess::WRITE},
-                                      newOwnp});
-        }
-        for (const ForceInfo* const finfop : forceps) {
-            if (!finfop->m_ownVscp) continue;
+        for (const ForceInfo* const finfop : forceInfosInIdOrder(info)) {
+            if (!finfop->m_ownerId) continue;
+            // own = forceEn & ~forceVpi & (ownerIndex == ownerId);
+            AstNodeExpr* ownp = new AstAnd{
+                flp, new AstVarRef{flp, info.m_forceEnVscp, VAccess::READ},
+                new AstNot{flp, new AstVarRef{flp, info.m_forceVpiVscp, VAccess::READ}}};
+            for (size_t bit = 0; bit < info.m_ownerVscps.size(); ++bit) {
+                AstNodeExpr* const planep
+                    = new AstVarRef{flp, info.m_ownerVscps[bit], VAccess::READ};
+                ownp = new AstAnd{flp, ownp,
+                                  ((finfop->m_ownerId >> bit) & 1)
+                                      ? planep
+                                      : static_cast<AstNodeExpr*>(new AstNot{flp, planep})};
+            }
             AstVarRef* const rhsp = new AstVarRef{flp, finfop->m_rhsVarVscp, VAccess::READ};
             markNonReplaceable(rhsp);
-            AstNodeExpr* const ownp = new AstVarRef{flp, finfop->m_ownVscp, VAccess::READ};
-            AstNodeStmt* syncp;
-            if (bitwise) {
-                // forceVal = (forceVal & ~own) | (rhs_padded & own);
-                AstNodeExpr* const paddedp
-                    = zeroPadToBaseWidth(rhsp, varp->width(), finfop->m_padLsb, finfop->m_padMsb);
-                AstNodeExpr* const keptp = new AstAnd{flp, valRef(VAccess::READ),
-                                                      new AstNot{flp, ownp->cloneTreePure(false)}};
-                syncp = new AstAssign{flp, valRef(VAccess::WRITE),
-                                      new AstOr{flp, keptp, new AstAnd{flp, paddedp, ownp}}};
-            } else {
+            AstVarRef* const valWritep = new AstVarRef{flp, info.m_forceValVscp, VAccess::WRITE};
+            if (!isBitwiseDType(varp)) {
                 // if (own) forceVal = rhs;
-                syncp = new AstIf{
-                    flp, ownp,
-                    new AstAssign{flp, valRef(VAccess::WRITE), castToNodeDType(rhsp, varp)}};
+                stmtsp = AstNode::addNextNull(
+                    stmtsp, new AstIf{flp, ownp,
+                                      new AstAssign{flp, valWritep, castToNodeDType(rhsp, varp)}});
+                continue;
             }
-            stmtsp = AstNode::addNextNull(stmtsp, syncp);
+            // forceVal = (forceVal & ~own) | (rhs_padded & own);
+            AstNodeExpr* const paddedp
+                = zeroPadToBaseWidth(rhsp, varp->width(), finfop->m_padLsb, finfop->m_padMsb);
+            AstNodeExpr* const keptp
+                = new AstAnd{flp, new AstVarRef{flp, info.m_forceValVscp, VAccess::READ},
+                             new AstNot{flp, ownp->cloneTreePure(false)}};
+            stmtsp = AstNode::addNextNull(
+                stmtsp, new AstAssign{flp, valWritep,
+                                      new AstOr{flp, keptp, new AstAnd{flp, paddedp, ownp}}});
         }
-        // forceValSeen = forceVal;
-        return AstNode::addNextNull(
-            stmtsp, new AstAssign{flp, seenRef(VAccess::WRITE), valRef(VAccess::READ)});
+        return stmtsp;
     }
 
     void finalizeRhsVars() {
+        if (!doingAssign()) {
+            for (VarForceInfo& info : m_varInfos) createForceOwners(info);
+            for (VarForceInfo& info : m_varInfos) {
+                AstVar* const vpiVarp = info.m_varp->forceVpiVarp();
+                if (!vpiVarp) continue;
+                info.m_forceVpiVscp = new AstVarScope{vpiVarp->fileline(), info.m_scopep, vpiVarp};
+                info.m_scopep->addVarsp(info.m_forceVpiVscp);
+            }
+        }
         for (VarForceInfo& info : m_varInfos) {
             AstVar* const varp = info.m_varp;
             if (info.m_forces.empty()) continue;
@@ -936,7 +964,6 @@ public:
                 // always_comb forceRHS[id] = rhsExpr;
                 AstAssign* const rhsAssignp = new AstAssign{
                     flp, new AstVarRef{flp, finfo.m_rhsVarVscp, VAccess::WRITE}, finfo.m_rhsExprp};
-                createForceOwnVar(info, finfo);
                 AstAlways* const alwaysp
                     = new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, rhsAssignp};
                 AstSenTree* const senTreep
@@ -968,6 +995,13 @@ public:
                     initStmtp = new AstAssign{
                         flp, new AstVarRef{flp, info.m_forceEnVscp, VAccess::WRITE},
                         makeZeroConst(varp, info.m_forceEnVscp->width())};
+                    std::vector<AstVarScope*> zeroVscps = info.m_ownerVscps;
+                    if (info.m_forceVpiVscp) zeroVscps.push_back(info.m_forceVpiVscp);
+                    for (AstVarScope* const vscp : zeroVscps) {
+                        initStmtp->addNext(new AstAssign{flp,
+                                                         new AstVarRef{flp, vscp, VAccess::WRITE},
+                                                         makeZeroConst(varp, vscp->width())});
+                    }
                 }
                 initStmtp->addNext(createForceRdUpdateStmt(info));
                 activeInitp->addProcsp(new AstInitial{flp, initStmtp});
@@ -993,16 +1027,31 @@ public:
                 if (!itemsp) varp->v3fatalSrc("force-rd-update missing force-enable sen item");
                 itemsp->addNext(origItemp);
                 for (ForceInfo* const finfop : forceps) {
-                    if (!finfop->m_isExternal) addSenItem(finfop->m_rhsVarVscp);
+                    if (!finfop->m_isExternal && !finfop->m_ownerId) {
+                        addSenItem(finfop->m_rhsVarVscp);
+                    }
                 }
 
                 AstActive* const activep
                     = new AstActive{flp, "force-rd-update", new AstSenTree{flp, itemsp}};
                 activep->senTreeStorep(activep->sentreep());
-                AstNodeStmt* rdUpdatep = createForceValSyncStmts(info);
-                rdUpdatep = AstNode::addNextNull(rdUpdatep, createForceRdUpdateStmt(info));
-                activep->addProcsp(new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr, rdUpdatep});
+                activep->addProcsp(new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr,
+                                                 createForceRdUpdateStmt(info)});
                 scopep->addBlocksp(activep);
+
+                // Separate from the read-back update, which the sync then triggers once
+                if (!info.m_ownerVscps.empty()) {
+                    itemsp = nullptr;
+                    for (ForceInfo* const finfop : forceps) {
+                        if (finfop->m_ownerId) addSenItem(finfop->m_rhsVarVscp);
+                    }
+                    AstActive* const syncActivep
+                        = new AstActive{flp, "force-val-sync", new AstSenTree{flp, itemsp}};
+                    syncActivep->senTreeStorep(syncActivep->sentreep());
+                    syncActivep->addProcsp(new AstAlways{flp, VAlwaysKwd::ALWAYS, nullptr,
+                                                         createForceValSyncStmts(info)});
+                    scopep->addBlocksp(syncActivep);
+                }
             }
         }
     }
@@ -1408,23 +1457,10 @@ class ForceConvertVisitor final : public VNVisitor {
             tailp->addNextHere(enAssignp);
             tailp = enAssignp;
         }
-        if (info.m_ownVscp) {
-            // This force now owns its bits of the force value: own = mask; others lose them
-            AstAssign* const ownAssignp
-                = new AstAssign{flp, new AstVarRef{flp, info.m_ownVscp, VAccess::WRITE},
-                                ForceState::makeOwnMask(nodep, forcedVarp, info)};
-            if (AstNodeStmt* const disownp
-                = ForceState::makeDisownStmts(flp, nodep, forcedVarp, *varInfop, info, &info)) {
-                AstNode::addNext<AstNode, AstNode>(ownAssignp, disownp);
-            }
-            // The force value this statement wrote is not a write from outside
-            AstNode::addNext<AstNode, AstNode>(
-                ownAssignp,
-                new AstAssign{flp,
-                              new AstVarRef{flp, varInfop->m_forceValSeenVscp, VAccess::WRITE},
-                              new AstVarRef{flp, varInfop->m_forceValVscp, VAccess::READ}});
-            tailp->addNextHere(ownAssignp);
-            tailp = ownAssignp;
+        if (info.m_ownerId) {
+            // This force now owns its bits of the force value, which the VPI no longer forces
+            tailp->addNextHere(ForceState::makeOwnerStmts(flp, nodep, forcedVarp, *varInfop, info,
+                                                          info.m_ownerId));
             while (tailp->nextp()) tailp = tailp->nextp();
         }
         tailp->addNextHere(stmtp);
@@ -1523,13 +1559,11 @@ class ForceConvertVisitor final : public VNVisitor {
             clearEnp->addNextHere(stmtListp);
             stmtListp = clearEnp;
         }
-        if (!rangeInfo.m_hasArraySel) {
-            // The released bits are no longer kept in sync by any force
-            if (AstNodeStmt* const disownp = ForceState::makeDisownStmts(
-                    flp, nodep, releasedVarp, *varInfop, rangeInfo, nullptr)) {
-                AstNode::addNext<AstNode, AstNode>(disownp, stmtListp);
-                stmtListp = disownp;
-            }
+        // No force owns the released bits, nor does the VPI force them
+        if (AstNodeStmt* const ownerp
+            = ForceState::makeOwnerStmts(flp, nodep, releasedVarp, *varInfop, rangeInfo, 0)) {
+            AstNode::addNext<AstNode, AstNode>(ownerp, stmtListp);
+            stmtListp = ownerp;
         }
 
         // IEEE 1800-2023 10.6.2: When released, if the variable is not continuously driven,

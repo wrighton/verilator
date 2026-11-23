@@ -1038,7 +1038,8 @@ public:  // But internals only - called from verilated modules, VerilatedSyms
                                      VerilatedVarType vltype, int vlflags,
                                      void* forceReadSignalDatap, const char* forceReadSignalName,
                                      std::pair<VerilatedVar*, VerilatedVar*> forceControlSignals,
-                                     int udims, int pdims, ...) VL_MT_UNSAFE;
+                                     VerilatedVar* forceVpiSignalp, int udims, int pdims,
+                                     ...) VL_MT_UNSAFE;
     void varsInsertFromTable(const VlVarTableEntry* entp, size_t n, void* basep) VL_MT_UNSAFE;
     void paramsInsertFromTable(const VlVarTableEntry* entp, size_t n,
                                const void* const* paramPtrsp) VL_MT_UNSAFE;
