@@ -183,11 +183,9 @@ struct AssertCtlTableKeyHash final {
     size_t operator()(const AssertCtlTableKey& key) const {
         V3Hash hash{static_cast<uint32_t>(key.overlay)};
         for (const AssertCtlTableRow& row : key.rows) {
-            hash += row.statep;
-            hash += row.depth;
-            hash += row.ordinal;
+            hash = hash + row.statep + row.depth + row.ordinal;
         }
-        for (uint32_t slot : key.skips) hash += slot;
+        for (uint32_t slot : key.skips) hash = hash + slot;
         return hash.value();
     }
 };
@@ -197,11 +195,9 @@ struct AssertCtlBoundTable final {
 };
 struct AssertCtlSignatureHash final {
     size_t operator()(const AssertCtlSignature& sig) const {
-        V3Hash hash{sig.scopep};
-        hash += sig.mask;
+        V3Hash hash = V3Hash{sig.scopep} + sig.mask;
         for (const auto& entry : sig.history) {
-            hash += static_cast<uint64_t>(entry.first);
-            hash += entry.second;
+            hash = hash + static_cast<uint64_t>(entry.first) + entry.second;
         }
         return hash.value();
     }
@@ -224,14 +220,15 @@ class AssertCtlTableBindings final {
     // Index base rows once, then build each overlay without scanning the base again.
     std::unordered_map<const AstAssertCtlTargetSet*, IndexedTable> m_absolute;
 
+    struct InputRow final {
+        AssertCtlTableRow row;
+        AstNodeVarRef* refp;
+    };
+
     template <typename T_Rebind>
     AssertCtlBoundTable bindingFor(FileLine* flp, AstAssertCtlTarget* targetsp,
                                    const T_Rebind& rebind, IndexedTable* outputp = nullptr,
                                    const IndexedTable* sharedp = nullptr) {
-        struct InputRow final {
-            AssertCtlTableRow row;
-            AstNodeVarRef* refp;
-        };
         std::unordered_map<const AstVarScope*, size_t> seen;
         std::vector<InputRow> inputs;
         AssertCtlTableKey key{{}, {}, sharedp != nullptr};
@@ -278,9 +275,8 @@ class AssertCtlTableBindings final {
         return binding;
     }
 
-    template <typename T_Rows>
     AssertCtlBoundTable newBinding(FileLine* flp, const AssertCtlTableKey& key,
-                                   const T_Rows& rows) {
+                                   const std::vector<InputRow>& rows) {
         if (!m_tableDtp) {
             m_tableDtp = new AstCDType{flp, "VlAssertCtlTable"};
             m_rootp->typeTablep()->addTypesp(m_tableDtp);
@@ -301,7 +297,7 @@ class AssertCtlTableBindings final {
         bindp->argTypes(args);
         m_topScopep->addBlocksp(bindp);
         AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
-        for (const auto& input : rows) {
+        for (const InputRow& input : rows) {
             initp->add("{&");
             initp->add(input.refp->unlinkFrBack());
             initp->add(", " + std::to_string(input.row.depth) + ", "
