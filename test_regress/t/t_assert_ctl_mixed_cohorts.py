@@ -17,8 +17,8 @@ test.compile(verilator_flags2=[
     '--binary', '--assert', '--stats', '+define+VIA_PORT+VIA_FORWARD+VIA_COHORTS', f'+define+N={n}'
 ] + order, threads=2 if test.vltmt else 1)
 test.execute()
-# Two banks with N sites and N two-row overlays each, plus two hierarchical callers.
-test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 6 * n + 2 * (n + 1))
+# Two hosts each have one two-bank list and N caller-local rows, plus two hierarchical callers.
+test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 6 * n + 2 * (2 * n + 1))
 test.file_grep(test.stats, r'Assertions, Shared absolute target lists\s+(\d+)', 2)
 
 test.passes()
