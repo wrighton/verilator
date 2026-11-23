@@ -181,12 +181,12 @@ struct AssertCtlTableKey final {
 };
 struct AssertCtlTableKeyHash final {
     size_t operator()(const AssertCtlTableKey& key) const {
-        V3Hash hash{static_cast<uint32_t>(key.overlay)};
+        uint32_t hash = static_cast<uint32_t>(key.overlay);
         for (const AssertCtlTableRow& row : key.rows) {
-            hash = hash + row.statep + row.depth + row.ordinal;
+            hash = (V3Hash{hash} + row.statep + row.depth + row.ordinal).value();
         }
-        for (uint32_t slot : key.skips) hash = hash + slot;
-        return hash.value();
+        for (uint32_t slot : key.skips) hash = (V3Hash{hash} + slot).value();
+        return hash;
     }
 };
 struct AssertCtlBoundTable final {
@@ -195,11 +195,11 @@ struct AssertCtlBoundTable final {
 };
 struct AssertCtlSignatureHash final {
     size_t operator()(const AssertCtlSignature& sig) const {
-        V3Hash hash = V3Hash{sig.scopep} + sig.mask;
+        uint32_t hash = (V3Hash{sig.scopep} + sig.mask).value();
         for (const auto& entry : sig.history) {
-            hash = hash + static_cast<uint64_t>(entry.first) + entry.second;
+            hash = (V3Hash{hash} + static_cast<uint64_t>(entry.first) + entry.second).value();
         }
-        return hash.value();
+        return hash;
     }
 };
 
