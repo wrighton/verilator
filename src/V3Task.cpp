@@ -2061,7 +2061,10 @@ class TaskVisitor final : public VNVisitor {
         // Replace variable refs
         relink(cfuncp);
 
-        if (cfuncp->dpiExportImpl()) {
+        // The model using a library calls the export of the library's wrapper outside of its
+        // evaluation, and a process of the wrapper detects the change of what it writes, so it
+        // has no effect on readers of variables written through other exports
+        if (cfuncp->dpiExportImpl() && !m_modp->verilatorLib()) {
             // Mark all non-local variables written by the DPI exported function as being updated
             // by DPI exports. This ensures correct ordering and change detection later.
 

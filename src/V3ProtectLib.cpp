@@ -67,6 +67,18 @@ class ProtectVisitor final : public VNVisitor {
     AstTextBlock* m_cSeqClksp = nullptr;  // Sequential clock copy list
     AstTextBlock* m_cSeqOutsp = nullptr;  // Sequential output copy list
     AstTextBlock* m_cIgnoreParamsp = nullptr;  // Combo ignore parameter list
+    // With --vpi, the update after a write through the VPI into the library module
+    AstTextBlock* m_vpiPortsp = nullptr;  // VPI update function port list
+    AstTextBlock* m_vpiParamsp = nullptr;  // VPI update parameter list
+    AstTextBlock* m_vpiDeclsp = nullptr;  // VPI update signal declaration list
+    AstTextBlock* m_vpiAssignsp = nullptr;  // VPI update assignment list
+    AstTextBlock* m_cVpiParamsp = nullptr;  // VPI update parameter list
+    AstTextBlock* m_cVpiInsp = nullptr;  // VPI update input copy list
+    AstTextBlock* m_cVpiOutsp = nullptr;  // VPI update output copy list
+    std::set<std::string> m_usedNames;  // Names of the wrapper's ports and local signals
+    std::string m_vpiWritesName;  // Count of writes through the VPI into the library module
+    std::string m_vpiWrittenName;  // Export counting them
+    std::string m_vpiSeqnumName;  // Sequence number of the update after them
     const string m_libName;
     const string m_topName;
     bool m_foundTop = false;  // Have seen the top module
@@ -93,6 +105,20 @@ class ProtectVisitor final : public VNVisitor {
         FileLine* const fl = nodep->fileline();
         // Need to know the existence of clk before createSvFile()
         m_hasClk = checkIfClockExists(nodep);
+        if (v3Global.opt.vpi()) {
+            // The wrapper's own signals must not take the name of a port or local signal
+            for (const AstNode* stmtp = nodep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                const AstVar* const varp = VN_CAST(stmtp, Var);
+                if (!varp || !varp->isIO()) continue;
+                m_usedNames.emplace(svPortName(varp));
+                for (const char* const suffixp : {"_combo__V", "_seq__V", "_tmp__V"}) {
+                    m_usedNames.emplace(varp->name() + suffixp);
+                }
+            }
+            m_vpiWritesName = uniqueName("vpi_writes__V");
+            m_vpiWrittenName = uniqueName(m_libName + "_protectlib_vpi_written");
+            m_vpiSeqnumName = uniqueName("last_vpi_seqnum__V");
+        }
         createSvFile(fl, nodep);
         createCppFile(fl);
 
@@ -105,6 +131,15 @@ class ProtectVisitor final : public VNVisitor {
         m_hashValuep->add(cvtToStr(hash.value()) + ";\n");
         m_cHashValuep->add(cvtToStr(hash.value()) + "U;\n");
         m_foundTop = true;
+    }
+
+    // 'base', or 'base' with a suffix, not the name of another port or signal of the wrapper
+    std::string uniqueName(const std::string& base) {
+        std::string name = base;
+        for (int suffix = 1; !m_usedNames.emplace(name).second; ++suffix) {
+            name = base + "_" + std::to_string(suffix);
+        }
+        return name;
     }
 
     void addComment(AstTextBlock* txtp, FileLine* fl, const string& comment) {
@@ -139,6 +174,14 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("hier_workers -hier-dpi \"" + m_libName
                   + "_protectlib_seq_update\" -workers 16'd"
                   + std::to_string(V3Control::getHierWorkers(m_libName)) + "\n");
+        if (v3Global.opt.vpi()) {
+            txtp->add("profile_data -hier-dpi \"" + m_libName
+                      + "_protectlib_vpi_update\" -cost 64'd"
+                      + std::to_string(v3Global.currentHierBlockCost()) + "\n");
+            txtp->add("hier_workers -hier-dpi \"" + m_libName
+                      + "_protectlib_vpi_update\" -workers 16'd"
+                      + std::to_string(V3Control::getHierWorkers(m_libName)) + "\n");
+        }
         // No workers for combo_ignore
         txtp->add("`verilog\n");
         txtp->add("`endif\n");
@@ -219,7 +262,6 @@ class ProtectVisitor final : public VNVisitor {
                                          ", ",  //
                                          ");\n\n"};
         m_comboPortsp->add("chandle handle__V\n");
-        if (v3Global.opt.vpi()) m_comboPortsp->add("int vpi_writes__V\n");
         txtp->add(m_comboPortsp);
         seqComment(txtp, fl);
         if (m_hasClk) {
@@ -245,13 +287,15 @@ class ProtectVisitor final : public VNVisitor {
                   + "_protectlib_final(chandle handle__V);\n\n");
 
         if (v3Global.opt.vpi()) {
-            addComment(txtp, fl, "Counts the writes through the VPI into the library module,");
-            addComment(txtp, fl, "after which it is evaluated again");
-            txtp->add("export \"DPI-C\" function " + m_libName + "_protectlib_vpi_written;\n");
-            txtp->add("int vpi_writes__V = 0;\n");
-            txtp->add("function void " + m_libName + "_protectlib_vpi_written();\n");
-            txtp->add(/**/ "vpi_writes__V = vpi_writes__V + 1;\n");
-            txtp->add("endfunction\n\n");
+            addComment(txtp, fl, "Updates all inputs and retrieves the results, after a write");
+            addComment(txtp, fl, "through the VPI into the library module");
+            m_vpiPortsp = new AstTextBlock{fl,  //
+                                           "import \"DPI-C\" function longint " + m_libName
+                                               + "_protectlib_vpi_update(\n",  //
+                                           ", ",  //
+                                           ");\n\n"};
+            m_vpiPortsp->add("chandle handle__V\n");
+            txtp->add(m_vpiPortsp);
         }
 
         // Local variables
@@ -261,6 +305,16 @@ class ProtectVisitor final : public VNVisitor {
 
         txtp->add("chandle handle__V;\n");
         txtp->add("time last_combo_seqnum__V;\n");
+        if (v3Global.opt.vpi()) {
+            // Written by the export, called after a write through the VPI into the library
+            // module, so the update below sees a change of this instance alone
+            txtp->add("export \"DPI-C\" function " + m_vpiWrittenName + ";\n");
+            txtp->add("int " + m_vpiWritesName + " = 0;\n");
+            txtp->add("function void " + m_vpiWrittenName + "();\n");
+            txtp->add(/**/ m_vpiWritesName + " = " + m_vpiWritesName + " + 1;\n");
+            txtp->add("endfunction\n");
+            txtp->add("time " + m_vpiSeqnumName + " = 0;\n");
+        }
         if (m_hasClk) {
             txtp->add("time last_seq_seqnum__V;\n");
             txtp->add("bit init__V = 1'b0;\n");
@@ -275,6 +329,10 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add(m_tmpDeclsp);
         m_inoutDeclsp = new AstTextBlock{fl};
         txtp->add(m_inoutDeclsp);
+        if (v3Global.opt.vpi()) {
+            m_vpiDeclsp = new AstTextBlock{fl};
+            txtp->add(m_vpiDeclsp);
+        }
 
         // CPP hash value
         addComment(txtp, fl, "Hash value to make sure this file and the corresponding");
@@ -301,7 +359,6 @@ class ProtectVisitor final : public VNVisitor {
                                           ",\n",  //
                                           "\n);\n"};
         m_comboParamsp->add("handle__V");
-        if (v3Global.opt.vpi()) m_comboParamsp->add("vpi_writes__V");
         txtp->add(m_comboParamsp);
         txtp->add("end\n\n");
 
@@ -329,9 +386,31 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add("end\n\n");
         }
 
+        if (v3Global.opt.vpi()) {
+            addComment(txtp, fl, "Evaluate after a write through the VPI into the library module");
+            txtp->add("always @(" + m_vpiWritesName + ") begin\n");
+            m_vpiParamsp = new AstTextBlock{fl,  //
+                                            m_vpiSeqnumName + " = " + m_libName
+                                                + "_protectlib_vpi_update(\n",  //
+                                            ",\n",  //
+                                            "\n);\n"};
+            m_vpiParamsp->add("handle__V");
+            txtp->add(m_vpiParamsp);
+            txtp->add("end\n\n");
+        }
+
         // Select between combinatorial and sequential results
         addComment(txtp, fl, "Select between combinatorial and sequential results");
         txtp->add("always_comb begin\n");
+        if (v3Global.opt.vpi()) {
+            // The results of the latest evaluation
+            txtp->add("if (" + m_vpiSeqnumName + " > last_combo_seqnum__V"
+                      + (m_hasClk ? " && " + m_vpiSeqnumName + " > last_seq_seqnum__V" : "")
+                      + ") begin\n");
+            m_vpiAssignsp = new AstTextBlock{fl};
+            txtp->add(m_vpiAssignsp);
+            txtp->add("end else ");
+        }
         if (m_hasClk) {
             txtp->add("if (last_seq_seqnum__V > last_combo_seqnum__V) begin\n");
             m_seqAssignsp = new AstTextBlock{fl};
@@ -341,8 +420,10 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(m_comboAssignsp);
             txtp->add("end\n");
         } else {
+            if (v3Global.opt.vpi()) txtp->add("begin\n");
             m_comboAssignsp = new AstTextBlock{fl};
             txtp->add(m_comboAssignsp);
+            if (v3Global.opt.vpi()) txtp->add("end\n");
         }
         txtp->add("end\n\n");
 
@@ -446,7 +527,9 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add("}\n\n");
             addComment(txtp, fl,
                        "Called by a Verilator model using the library with the function");
-            addComment(txtp, fl, "of the instance that has it evaluate the instance again");
+            addComment(txtp, fl,
+                       "of the instance that has it evaluate the instance again, or with");
+            addComment(txtp, fl, "none when that model is deleted");
             txtp->add(
                 "void " + m_libName
                 + "_protectlib_on_vpi_write(void* vhandlep__V, void (*cbp__V)(VerilatedSyms*), "
@@ -454,8 +537,12 @@ class ProtectVisitor final : public VNVisitor {
             castPtr(fl, txtp);
             txtp->add(/**/ "handlep__V->m_vpiWriteCbp = cbp__V;\n");
             txtp->add(/**/ "handlep__V->m_vpiWriteSymsp = symsp__V;\n");
-            txtp->add(/**/ "handlep__V->__VvpiOnWrite(" + m_libName
+            txtp->add(/**/ "if (cbp__V) {\n");
+            txtp->add(/****/ "handlep__V->__VvpiOnWrite(" + m_libName
                       + "_protectlib_vpi_write, handlep__V);\n");
+            txtp->add(/**/ "} else {\n");
+            txtp->add(/****/ "handlep__V->__VvpiOnWrite(nullptr, nullptr);\n");
+            txtp->add(/**/ "}\n");
             txtp->add("}\n\n");
         }
 
@@ -464,7 +551,6 @@ class ProtectVisitor final : public VNVisitor {
         m_cComboParamsp = new AstTextBlock{
             fl, "long long " + m_libName + "_protectlib_combo_update(\n", ",\n", "\n) {\n"};
         m_cComboParamsp->add("void* vhandlep__V");
-        if (v3Global.opt.vpi()) m_cComboParamsp->add("int /*vpi_writes__V*/");
         txtp->add(m_cComboParamsp);
         m_cComboInsp = new AstTextBlock{fl};
         castPtr(fl, m_cComboInsp);
@@ -487,6 +573,23 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add("handlep__V->eval();\n");
             m_cSeqOutsp = new AstTextBlock{fl};
             txtp->add(m_cSeqOutsp);
+            txtp->add("return handlep__V->m_seqnum++;\n");
+            txtp->add("}\n\n");
+        }
+
+        if (v3Global.opt.vpi()) {
+            addComment(txtp, fl, "Updates all inputs and retrieves the results, after a write");
+            addComment(txtp, fl, "through the VPI into the library module");
+            m_cVpiParamsp = new AstTextBlock{
+                fl, "long long " + m_libName + "_protectlib_vpi_update(\n", ",\n", "\n) {\n"};
+            m_cVpiParamsp->add("void* vhandlep__V");
+            txtp->add(m_cVpiParamsp);
+            m_cVpiInsp = new AstTextBlock{fl};
+            castPtr(fl, m_cVpiInsp);
+            txtp->add(m_cVpiInsp);
+            txtp->add("handlep__V->eval();\n");
+            m_cVpiOutsp = new AstTextBlock{fl};
+            txtp->add(m_cVpiOutsp);
             txtp->add("return handlep__V->m_seqnum++;\n");
             txtp->add("}\n\n");
         }
@@ -563,6 +666,16 @@ class ProtectVisitor final : public VNVisitor {
         }
         m_cSeqParamsp->add(varp->dpiArgType(true, false));
         m_cSeqClksp->add(cInputConnection(varp));
+        handleVpiInput(varp);
+    }
+
+    // All inputs, clocks included, are updated after a write through the VPI
+    void handleVpiInput(AstVar* varp) {
+        if (!v3Global.opt.vpi()) return;
+        m_vpiPortsp->add(varp->cloneTree(false));
+        m_vpiParamsp->add(svPortName(varp));
+        m_cVpiParamsp->add(varp->dpiArgType(true, false));
+        m_cVpiInsp->add(cInputConnection(varp));
     }
 
     void handleDataInput(AstVar* varp) {
@@ -574,6 +687,7 @@ class ProtectVisitor final : public VNVisitor {
         m_cComboParamsp->add(varp->dpiArgType(true, false));
         m_cComboInsp->add(cInputConnection(varp));
         m_cIgnoreParamsp->add(varp->dpiArgType(true, false));
+        handleVpiInput(varp);
     }
 
     static bool restoreInout(const AstVar* varp) {
@@ -672,6 +786,16 @@ class ProtectVisitor final : public VNVisitor {
             m_seqAssignsp->add(portName + " = " + seqName + ";\n");
         }
         m_comboAssignsp->add(portName + " = " + comboName + ";\n");
+        if (v3Global.opt.vpi()) {
+            const std::string vpiName = uniqueName(varp->name() + "_vpi__V");
+            m_vpiDeclsp->add(new AstVar{varp->fileline(), VVarType::VAR, vpiName, varp->dtypep()});
+            m_vpiPortsp->add(varp->cloneTree(false));
+            m_vpiParamsp->add(AstNode::verilogIdent(vpiName));
+            m_vpiAssignsp->add(portName + " = " + AstNode::verilogIdent(vpiName) + ";\n");
+            m_cVpiParamsp->add(varp->dpiArgType(true, false));
+            m_cVpiOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->")
+                             + "\n");
+        }
         m_cComboParamsp->add(varp->dpiArgType(true, false));
         m_cComboOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->") + "\n");
         if (m_hasClk) {

@@ -133,6 +133,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     // The export of the wrapper of each library instance, which has it evaluated again after a
     // write through the VPI into the library
     std::unordered_map<const AstScope*, const AstCFunc*> m_libExportImpls;
+    // Library instances with such an export, and their handles, set up by the constructor
+    std::vector<std::pair<const AstScope*, const AstVar*>> m_vpiLibHandles;
     ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
     int m_scopeArraySize = 0;  // Number of scopes held in __Vscopesp
     ScopeNames m_vpiScopeCandidates;  // Scopes for VPI
@@ -1058,7 +1060,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         nameCheck(nodep);
         if (nodep->dpiImportPrototype() || nodep->dpiExportDispatcher()) m_dpis.push_back(nodep);
         if (nodep->dpiExportImpl() && m_modp->verilatorLib()) {
-            m_libExportImpls.emplace(nodep->scopep(), nodep);
+            const bool newScope = m_libExportImpls.emplace(nodep->scopep(), nodep).second;
+            UASSERT_OBJ(newScope, nodep, "Library instance with more than one export");
         }
         VL_RESTORER(m_cfuncp);
         m_cfuncp = nodep;
@@ -1618,6 +1621,7 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
         // A write through the VPI into the library model has this instance evaluated again
         const auto it = m_libExportImpls.find(scopep);
         if (it != m_libExportImpls.end()) {
+            m_vpiLibHandles.emplace_back(scopep, handlep);
             stmts.add(modp->origName() + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->"
                       + instName(scopep) + "." + varName(handlep)
                       + "), [](VerilatedSyms* symsp) { " + EmitCUtil::prefixNameProtect(modp)
@@ -1754,6 +1758,16 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
 
 EmitCSyms::TextStmts EmitCSyms::getSymDtorStmts() {
     TextStmts stmts;
+
+    // A model using an instance of a library leaves it no callback into its state. A model
+    // that is an instance of a library itself is deleted when its context ends, after its own
+    // library instances, through which no write can then happen.
+    for (const std::pair<const AstScope*, const AstVar*>& itpair : m_vpiLibHandles) {
+        const AstScope* const scopep = itpair.first;
+        stmts.add("if (vlSymsp->__Vm_isRoot) " + scopep->modp()->origName()
+                  + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->" + instName(scopep) + "."
+                  + varName(itpair.second) + "), nullptr, nullptr);");
+    }
 
     emitScopeHier(stmts, true);
     if (v3Global.needTraceDumper()) {
