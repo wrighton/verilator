@@ -247,6 +247,7 @@ class AssertCtlTableBindings final {
             } else {
                 AssertCtlTableRow& row = inputs[result.first->second].row;
                 row.depth = std::min(row.depth, targetp->depth());
+                if (outputp || sharedp) row.ordinal = std::min(row.ordinal, targetp->ordinal());
             }
         }
         if (sharedp) {
@@ -396,6 +397,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
             if (!target.second) {
                 AstAssertCtlTarget* const firstp = target.first->second;
                 firstp->depth(std::min(firstp->depth(), targetp->depth()));
+                firstp->ordinal(std::min(firstp->ordinal(), targetp->ordinal()));
                 duplicates.push_back(targetp);
             } else if (selected.emplace(statep).second) {
                 selectedInOrder.push_back(statep);
