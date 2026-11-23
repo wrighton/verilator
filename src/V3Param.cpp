@@ -5133,6 +5133,9 @@ class ParamVisitor final : public VNVisitor {
                     if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
                         return !refp->varp();
                     }
+                    if (const AstEnumItemRef* const refp = VN_CAST(subp, EnumItemRef)) {
+                        return !refp->itemp();
+                    }
                     return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
                            || VN_IS(subp, UnlinkedRef);
                 })) {
