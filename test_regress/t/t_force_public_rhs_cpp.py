@@ -13,7 +13,7 @@ test.scenarios('vlt')
 
 test.compile(make_top_shell=False,
              make_main=False,
-             verilator_flags2=["--exe --timing", test.pli_filename])
+             verilator_flags2=["--exe --timing --vpi", test.pli_filename])
 
 test.execute(check_finished=True)
 
