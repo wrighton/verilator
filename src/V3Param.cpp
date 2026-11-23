@@ -5113,9 +5113,40 @@ class ParamVisitor final : public VNVisitor {
         nodep->replaceWith(nodep->refp()->unlinkFrBack());
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
+    static void foldDottedIndex(AstNode* indexp, bool required) {
+        if (required) {
+            V3Const::constifyParamsEdit(indexp);
+        } else {
+            // The scope selector reports its own diagnostic after name resolution.
+            V3Const::constifyParamsNoWarnEdit(indexp);
+        }
+    }
+    static void foldAssertCtlPath(AstNode* nodep) {
+        if (AstDot* const dotp = VN_CAST(nodep, Dot)) {
+            foldAssertCtlPath(dotp->lhsp());
+            foldAssertCtlPath(dotp->rhsp());
+        } else if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
+            foldAssertCtlPath(selp->fromp());
+            AstNodeExpr* const indexp = selp->bitp();
+            // Leave unsupported calls and names needing relink for the selector diagnostic.
+            if (!VN_IS(indexp, Const) && !indexp->exists([](const AstNode* subp) {
+                    if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                        return !refp->varp();
+                    }
+                    return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, ParseRef) || VN_IS(subp, Dot)
+                           || VN_IS(subp, UnlinkedRef);
+                })) {
+                foldDottedIndex(indexp, false);
+            }
+        }
+    }
+    void visit(AstAssertCtlArgs* nodep) override {
+        iterateChildren(nodep);
+        for (AstNodeExpr* const itemp : nodep->itemspList()) foldAssertCtlPath(itemp);
+    }
     void visit(AstCellArrayRef* nodep) override {
         // Multi-dim iface arrays chain multiple selps via nextp(); constify each in place.
-        for (AstNode* const sp : nodep->selpList()) { V3Const::constifyParamsEdit(sp); }
+        for (AstNode* const sp : nodep->selpList()) foldDottedIndex(sp, true);
         std::vector<int> indices;
         for (AstNode* const sp : nodep->selpList()) {
             const AstConst* const constp = VN_CAST(sp, Const);
