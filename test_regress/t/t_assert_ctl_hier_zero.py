@@ -11,6 +11,9 @@ import vltest_bootstrap
 
 test.scenarios('vlt')
 
-test.lint(verilator_flags2=['--hierarchical', '--assert'])
+test.compile(verilator_make_gmake=False,
+             make_top_shell=False,
+             make_main=False,
+             verilator_flags2=['--hierarchical', '--assert'])
 
 test.passes()

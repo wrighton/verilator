@@ -39,13 +39,13 @@ module t;
     $assertoff(0, g[cfg.SELECTED[0]]);
     $assertoff(0, g[(choice.IDX < 32'sd0) ? i : 0]);
     // Runtime references are illegal even when the expression's value is fixed.
-    $assertoff(0, g[1'b0 && i]);
-    $assertoff(0, g[1'b1 || i]);
+    $assertoff(0, g[1'b0 && i[0]]);
+    $assertoff(0, g[1'b1 || i[0]]);
     $assertoff(0, g[i & 0]);
     $assertoff(0, g[0 * i]);
     $assertoff(0, g[1'b1 ? 0 : i]);
     $assertoff(0, g[i ^ i]);
-    $assertoff(0, g[1'b0 && ($bits(i) + i)]);
+    $assertoff(0, g[1'b0 && (($bits(i) + i) != 0)]);
     // Out-of-range indices must not wrap to a valid hierarchy element.
     $assertoff(0, g[64'sd2147483648]);
     $assertoff(0, g[-64'sd2147483649]);
