@@ -110,6 +110,9 @@ public:
     static std::string topNameExpr(size_t index, bool protect) {
         return "vlSymsp->" + topNamesVar(protect) + "[" + std::to_string(index) + "].c_str()";
     }
+    // Whether the model is a library with VPI, whose top level VPI scopes the model using an
+    // instance of it places
+    static bool isVpiLibrary() { return v3Global.opt.vpi() && !v3Global.opt.libCreate().empty(); }
     // Expression for the run-time name of the given path below the model
     static std::string instNameExpr(const std::string& path, bool protect) {
         const std::pair<size_t, std::string> top = splitTopPath(path);
