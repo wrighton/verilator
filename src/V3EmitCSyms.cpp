@@ -130,6 +130,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         m_scopeVarsByVar;  // Registered variable identities
     ScopeNames m_scopeNames;  // Each unique AstScopeName. Dpi scopes added later
     ScopeNames m_dpiScopeNames;  // Each unique AstScopeName for a DPI context import or export
+    // The export of the wrapper of each library instance, which has it evaluated again after a
+    // write through the VPI into the library
+    std::unordered_map<const AstScope*, const AstCFunc*> m_libExportImpls;
     ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
     int m_scopeArraySize = 0;  // Number of scopes held in __Vscopesp
     ScopeNames m_vpiScopeCandidates;  // Scopes for VPI
@@ -1054,6 +1057,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     void visit(AstCFunc* nodep) override {
         nameCheck(nodep);
         if (nodep->dpiImportPrototype() || nodep->dpiExportDispatcher()) m_dpis.push_back(nodep);
+        if (nodep->dpiExportImpl() && m_modp->verilatorLib()) {
+            m_libExportImpls.emplace(nodep->scopep(), nodep);
+        }
         VL_RESTORER(m_cfuncp);
         m_cfuncp = nodep;
         iterateChildrenConst(nodep);
@@ -1276,17 +1282,31 @@ void EmitCSyms::emitSymImpPreamble() {
         emitCFuncDecl(funcp, itpair.second.m_modp);
         needsNewLine = true;
     }
+    for (const ScopeModPair& itpair : m_scopes) {
+        const auto it = m_libExportImpls.find(itpair.first);
+        if (it == m_libExportImpls.end()) continue;
+        emitCFuncDecl(it->second, itpair.second);
+        needsNewLine = true;
+    }
     if (needsNewLine) puts("\n");
     // Declarations of the Verilator library functions called at construction
     std::set<std::string> libNames;
+    std::set<std::string> vpiLibNames;
     for (const ScopeModPair& itpair : m_scopes) {
-        if (itpair.second->verilatorLib()) libNames.emplace(itpair.second->origName());
+        if (!itpair.second->verilatorLib()) continue;
+        libNames.emplace(itpair.second->origName());
+        if (m_libExportImpls.count(itpair.first)) vpiLibNames.emplace(itpair.second->origName());
     }
     for (const std::string& libName : libNames) {
         puts("extern \"C\" void " + libName + "_protectlib_check_hash(int protectlib_hash__V);\n");
         puts("extern \"C\" void* " + libName
              + "_protectlib_create_under(const char* scopep__V, const VerilatedScope* "
                "abovep__V);\n");
+        if (vpiLibNames.count(libName)) {
+            puts("extern \"C\" void " + libName
+                 + "_protectlib_on_vpi_write(void* vhandlep__V, void (*cbp__V)(VerilatedSyms*), "
+                   "VerilatedSyms* symsp__V);\n");
+        }
     }
     if (!libNames.empty()) puts("\n");
 
@@ -1595,6 +1615,15 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
                   + EmitCUtil::instNameExpr(scopep->prettyName(), false) + "}.c_str(), "
                   + (above.empty() ? "nullptr" : "vlSymsp->" + scopeMember(m_scopeNames.at(above)))
                   + "));");
+        // A write through the VPI into the library model has this instance evaluated again
+        const auto it = m_libExportImpls.find(scopep);
+        if (it != m_libExportImpls.end()) {
+            stmts.add(modp->origName() + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->"
+                      + instName(scopep) + "." + varName(handlep)
+                      + "), [](VerilatedSyms* symsp) { " + EmitCUtil::prefixNameProtect(modp)
+                      + "__" + it->second->nameProtect() + "(static_cast<" + symClassName()
+                      + "*>(symsp)); }, vlSymsp);");
+        }
     }
 
     if (v3Global.dpi()) {
@@ -1832,6 +1861,10 @@ void EmitCSyms::emitSymImp(const AstNetlist* netlistp) {
             puts("vlSymsp->__Vhier.addFromTable(" + hierTableName() + ", "
                  + std::to_string(m_hierTableRows.size()) + ", vlSymsp, abovep);\n");
         }
+        puts("}\n");
+        puts("\nvoid " + topClassName() + "::__VvpiOnWrite(void (*cbp)(void*), void* datap) {\n");
+        puts("vlSymsp->__Vm_vpiWriteCbp = cbp;\n");
+        puts("vlSymsp->__Vm_vpiWriteCbDatap = datap;\n");
         puts("}\n");
     }
 

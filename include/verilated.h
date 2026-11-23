@@ -959,6 +959,10 @@ public:  // But for internal use only
     static std::atomic<uint64_t> s_nextGeneration;
     // Identifies this model, as no other model of the process has it, unlike its address
     const uint64_t __Vm_generation = s_nextGeneration++;
+    // Called with __Vm_vpiWriteCbDatap after a write through the VPI into a variable of the
+    // model, if set, so the model using this library instance evaluates it again
+    void (*__Vm_vpiWriteCbp)(void*) = nullptr;
+    void* __Vm_vpiWriteCbDatap = nullptr;  // Argument of __Vm_vpiWriteCbp
     explicit VerilatedSyms(VerilatedContext* contextp);  // Pass null for default context
     ~VerilatedSyms();
     VL_UNCOPYABLE(VerilatedSyms);

@@ -1497,6 +1497,10 @@ Summary:
    A Verilator model using the library must be built with the same version of
    Verilator as the library.
 
+   With :vlopt:`--vpi`, a write through the VPI into the library model, such
+   as a force of one of its ports, has the Verilator model using the library
+   evaluate that instance of the library again at its next evaluation.
+
    See also :vlopt:`--protect-lib`.
 
 .. option:: +libext+<ext>[+<ext>][...]

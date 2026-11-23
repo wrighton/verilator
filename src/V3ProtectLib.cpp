@@ -219,6 +219,7 @@ class ProtectVisitor final : public VNVisitor {
                                          ", ",  //
                                          ");\n\n"};
         m_comboPortsp->add("chandle handle__V\n");
+        if (v3Global.opt.vpi()) m_comboPortsp->add("int vpi_writes__V\n");
         txtp->add(m_comboPortsp);
         seqComment(txtp, fl);
         if (m_hasClk) {
@@ -242,6 +243,16 @@ class ProtectVisitor final : public VNVisitor {
         finalComment(txtp, fl);
         txtp->add("import \"DPI-C\" function void " + m_libName
                   + "_protectlib_final(chandle handle__V);\n\n");
+
+        if (v3Global.opt.vpi()) {
+            addComment(txtp, fl, "Counts the writes through the VPI into the library module,");
+            addComment(txtp, fl, "after which it is evaluated again");
+            txtp->add("export \"DPI-C\" function " + m_libName + "_protectlib_vpi_written;\n");
+            txtp->add("int vpi_writes__V = 0;\n");
+            txtp->add("function void " + m_libName + "_protectlib_vpi_written();\n");
+            txtp->add(/**/ "vpi_writes__V = vpi_writes__V + 1;\n");
+            txtp->add("endfunction\n\n");
+        }
 
         // Local variables
         // Avoid tracing handle, as it is not a stable value, so breaks wavediff
@@ -290,6 +301,7 @@ class ProtectVisitor final : public VNVisitor {
                                           ",\n",  //
                                           "\n);\n"};
         m_comboParamsp->add("handle__V");
+        if (v3Global.opt.vpi()) m_comboParamsp->add("vpi_writes__V");
         txtp->add(m_comboParamsp);
         txtp->add("end\n\n");
 
@@ -368,6 +380,10 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("class " + m_topName + "_container: public " + m_topName + " {\n");
         txtp->add("public:\n");
         txtp->add("long long m_seqnum;\n");
+        if (v3Global.opt.vpi()) {
+            txtp->add("void (*m_vpiWriteCbp)(VerilatedSyms*) = nullptr;\n");
+            txtp->add("VerilatedSyms* m_vpiWriteSymsp = nullptr;\n");
+        }
         txtp->add(m_topName + "_container(const char* scopep__V):\n");
         txtp->add(m_topName + "(Verilated::threadContextp(), scopep__V, false) {}\n");
         txtp->add("};\n\n");
@@ -417,11 +433,38 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add(/**/ "return " + m_libName + "_protectlib_create_under(scopep__V, nullptr);\n");
         txtp->add("}\n\n");
 
+        if (v3Global.opt.vpi()) {
+            addComment(txtp, fl, "Has the model using the library evaluate this instance again,");
+            addComment(txtp, fl, "after a write through the VPI into its model");
+            txtp->add("static void " + m_libName + "_protectlib_vpi_write(void* vhandlep__V) {\n");
+            castPtr(fl, txtp);
+            txtp->add(/**/ "handlep__V->m_vpiWriteCbp(handlep__V->m_vpiWriteSymsp);\n");
+            addComment(txtp, fl, "That model may itself be an instance of a library");
+            txtp->add(/**/ "const VerilatedSyms* const symsp__V = handlep__V->m_vpiWriteSymsp;\n");
+            txtp->add(/**/ "if (symsp__V->__Vm_vpiWriteCbp) "
+                           "symsp__V->__Vm_vpiWriteCbp(symsp__V->__Vm_vpiWriteCbDatap);\n");
+            txtp->add("}\n\n");
+            addComment(txtp, fl,
+                       "Called by a Verilator model using the library with the function");
+            addComment(txtp, fl, "of the instance that has it evaluate the instance again");
+            txtp->add(
+                "void " + m_libName
+                + "_protectlib_on_vpi_write(void* vhandlep__V, void (*cbp__V)(VerilatedSyms*), "
+                  "VerilatedSyms* symsp__V) {\n");
+            castPtr(fl, txtp);
+            txtp->add(/**/ "handlep__V->m_vpiWriteCbp = cbp__V;\n");
+            txtp->add(/**/ "handlep__V->m_vpiWriteSymsp = symsp__V;\n");
+            txtp->add(/**/ "handlep__V->__VvpiOnWrite(" + m_libName
+                      + "_protectlib_vpi_write, handlep__V);\n");
+            txtp->add("}\n\n");
+        }
+
         // Updates
         comboComment(txtp, fl);
         m_cComboParamsp = new AstTextBlock{
             fl, "long long " + m_libName + "_protectlib_combo_update(\n", ",\n", "\n) {\n"};
         m_cComboParamsp->add("void* vhandlep__V");
+        if (v3Global.opt.vpi()) m_cComboParamsp->add("int /*vpi_writes__V*/");
         txtp->add(m_cComboParamsp);
         m_cComboInsp = new AstTextBlock{fl};
         castPtr(fl, m_cComboInsp);
