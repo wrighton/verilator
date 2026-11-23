@@ -14,7 +14,7 @@ test.scenarios('simulator')
 test.compile(verilator_flags2=["--binary", "--stats", test.pli_filename])
 
 if test.vlt or test.vltmt:
-    test.file_grep(test.stats, r'Optimizations, Prelim temporary variables created\s+(\d+)', 3)
+    test.file_grep(test.stats, r'Optimizations, Prelim temporary variables created\s+(\d+)', 6)
 
 test.execute()
 
