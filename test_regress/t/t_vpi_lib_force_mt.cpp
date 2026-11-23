@@ -12,6 +12,8 @@
 #include "verilated.h"
 #include "verilated_vpi.h"
 
+#include "TestVpi.h"
+
 #include VM_PREFIX_INCLUDE
 
 #include <atomic>
@@ -41,7 +43,7 @@ int main(int argc, char** argv) {
     topp->clk = 0;
     topp->drv = 0x11;
     topp->eval();
-    const vpiHandle op = vpi_handle_by_name(const_cast<PLI_BYTE8*>("top.t.u1.o"), nullptr);
+    const TestVpiHandle op{vpi_handle_by_name(const_cast<PLI_BYTE8*>("top.t.u1.o"), nullptr)};
     if (!op) {
         printf("%%Error: cannot find top.t.u1.o\n");
         return 1;

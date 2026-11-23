@@ -27,6 +27,7 @@ module t (
       .i(drv),
       .sel,
       .vpi_writes__V(1),
+      .last_seq_seqnum__V(0),
       .o(out1),
       .q(q1),
       .n(n1),
@@ -38,6 +39,7 @@ module t (
       .i(~drv),
       .sel,
       .vpi_writes__V(2),
+      .last_seq_seqnum__V(0),
       .o(out2),
       .q(q2),
       .n(n2),
@@ -52,7 +54,7 @@ module t (
   logic [6:0] pflop;
   always_ff @(posedge clk) pflop <= drv;
   cmb c (
-      .y(pflop),
+      .init__V(pflop),
       .z(zc)
   );
 
@@ -70,8 +72,9 @@ module sub (
     input logic clk  /*verilator public_flat_rw*/  /*verilator forceable*/,
     input logic [6:0] i  /*verilator public_flat_rw*/  /*verilator forceable*/,
     input int sel,
-    // A port with the name of a signal of the library's wrapper, identifying the instance
+    // Ports with the names of signals of the library's wrapper
     input int vpi_writes__V,
+    input int last_seq_seqnum__V,
     output logic [6:0] o  /*verilator public_flat_rw*/  /*verilator forceable*/,
     output logic [6:0] q  /*verilator public_flat_rw*/,
     output logic [6:0] n  /*verilator public_flat_rw*/,
@@ -115,11 +118,12 @@ endmodule
 `endif
 
 module cmb (
-    input logic [6:0] y,
+    // A port with the name of a signal of the library's wrapper
+    input logic [6:0] init__V,
     output logic [6:0] z
 );
   /*verilator hier_block*/
   logic [6:0] memc[0:3]  /*verilator public_flat_rw*/;
   initial for (int k = 0; k < 4; ++k) memc[k] = 7'(k + 9);
-  assign z = memc[y[1:0]] + y;
+  assign z = memc[init__V[1:0]] + init__V;
 endmodule
