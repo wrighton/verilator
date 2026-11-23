@@ -12,4 +12,11 @@ module t;
     initial chk: assert (1'b1);
   end
   initial $assertoff(0, g[int'(cfg[1].IDX)].chk);
+
+  if (1) begin : choice
+    localparam int IDX = 1;
+  end else begin : choice
+    localparam int IDX = 0;
+  end
+  initial $assertoff(0, g[int'(choice.IDX)].chk);
 endmodule
