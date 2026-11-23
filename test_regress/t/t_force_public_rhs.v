@@ -114,6 +114,27 @@ module t;
     #2 `checkr(r, rdrv);
   end
 
+  // A whole forced value of an unpacked type keeps following its value
+  typedef struct {
+    int a;
+    int b;
+  } pair_t;
+  pair_t psrc;
+  pair_t pdrv;
+  pair_t p;
+  assign p = pdrv;
+  initial begin
+    pdrv = '{6, 7};
+    psrc = '{1, 2};
+    #1 force p = psrc;
+    #2 psrc = '{3, 4};
+    #2 `checkd(p.a, 3);
+    `checkd(p.b, 4);
+    release p;
+    #1 `checkd(p.a, 6);
+    `checkd(p.b, 7);
+  end
+
   // A forced real keeps following its value after the value was not a number
   real nsrc = 1.0;
   real ndrv = -1.0;
