@@ -747,6 +747,32 @@ public:
     bool cleanOut() const override { return true; }
     AstCFunc* funcp() const { return m_funcp; }
 };
+class AstAssertCtlRead final : public AstNodeExpr {
+    // A control query whose per-instance binding is decided after scoped linking.
+    // @astgen op1 := globalp : AstNodeExpr
+    // @astgen op2 := statep : AstVarRef
+    const VAssertCtlQuery m_query;  // Runtime query enumerator
+
+public:
+    AstAssertCtlRead(FileLine* fl, AstNodeExpr* globalp, AstVarRef* statep, VAssertCtlQuery query)
+        : ASTGEN_SUPER_AssertCtlRead(fl)
+        , m_query{query} {
+        dtypeFrom(globalp);
+        this->globalp(globalp);
+        this->statep(statep);
+    }
+    ASTGEN_MEMBERS_AstAssertCtlRead;
+    VAssertCtlQuery query() const { return m_query; }
+    bool sameNode(const AstNode* samep) const override {
+        return query() == VN_DBG_AS(samep, AssertCtlRead)->query();
+    }
+    void dump(std::ostream& str) const override;
+    void dumpJson(std::ostream& str) const override;
+    string emitVerilog() override { V3ERROR_NA_RETURN(""); }
+    string emitC() override { V3ERROR_NA_RETURN(""); }
+    bool cleanOut() const override { return true; }
+    bool isPure() override { return true; }
+};
 class AstAttrOf final : public AstNodeExpr {
     // Return a value of a attribute, for example a LSB or array LSB of a signal
     // @astgen op1 := fromp : Optional[AstNode<AstNodeExpr|AstNodeDType>]
@@ -6909,6 +6935,8 @@ class AstVarXRef final : public AstNodeVarRef {
     string m_inlinedDots;  // Dotted hierarchy flattened out
     bool m_containsGenBlock = false;  // Contains gen block reference
     bool m_readOnlyModport = false;  // Linked via an input-only modport
+    bool m_assertCtlOptional = false;  // Assertion control site of another elaboration
+    bool m_assertCtlAbsolute = false;  // Assertion control site named by an absolute path
 public:
     AstVarXRef(FileLine* fl, const string& name, const string& dotted, const VAccess& access)
         : ASTGEN_SUPER_VarXRef(fl, nullptr, access)
@@ -6928,6 +6956,10 @@ public:
     void containsGenBlock(const bool flag) { m_containsGenBlock = flag; }
     bool readOnlyModport() const { return m_readOnlyModport; }
     void readOnlyModport(const bool flag) { m_readOnlyModport = flag; }
+    bool assertCtlOptional() const { return m_assertCtlOptional; }
+    void assertCtlOptional(const bool flag) { m_assertCtlOptional = flag; }
+    bool assertCtlAbsolute() const { return m_assertCtlAbsolute; }
+    void assertCtlAbsolute(const bool flag) { m_assertCtlAbsolute = flag; }
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }
@@ -6937,7 +6969,9 @@ public:
         return (selfPointer() == asamep->selfPointer() && varp() == asamep->varp()
                 && name() == asamep->name() && dotted() == asamep->dotted()
                 && inlinedDots() == asamep->inlinedDots()
-                && readOnlyModport() == asamep->readOnlyModport());
+                && readOnlyModport() == asamep->readOnlyModport()
+                && assertCtlOptional() == asamep->assertCtlOptional()
+                && assertCtlAbsolute() == asamep->assertCtlAbsolute());
     }
 };
 

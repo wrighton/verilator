@@ -39,6 +39,9 @@ public:
     // constant; return false if a component has other than one index
     static bool pathSegments(AstNode* pathp, PathSegments& segs) VL_MT_DISABLED;
 
+    // A value dependency forbidden in an assertion selector index, even if folded away.
+    static bool assertCtlRuntimeIndexNode(const AstNode* nodep) VL_MT_DISABLED;
+
     static void linkDotPrimary(AstNetlist* nodep) VL_MT_DISABLED;
     static void linkDotParamed(AstNetlist* nodep) VL_MT_DISABLED;
     static void linkDotScope(AstNetlist* nodep) VL_MT_DISABLED;

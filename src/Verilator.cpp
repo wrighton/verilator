@@ -358,6 +358,7 @@ static void process() {
             V3Scope::scopeAll(v3Global.rootp());
             V3LinkDot::linkDotScope(v3Global.rootp());
             V3Error::abortIfErrors();
+            if (v3Global.hasAssertCtlReads()) V3AssertCommon::bindControlQueries(v3Global.rootp());
 
             // Finish the run time model descriptors now they are scoped
             if (v3Global.opt.rtmd() && !v3Global.opt.serializeOnly()) {

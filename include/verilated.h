@@ -54,6 +54,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
@@ -223,6 +224,69 @@ enum class VerilatedRandSampler : uint8_t {
 
 using VerilatedAssertType_t = std::underlying_type<VerilatedAssertType>::type;
 using VerilatedAssertDirectiveType_t = std::underlying_type<VerilatedAssertDirectiveType>::type;
+
+class VerilatedSerialize;
+class VerilatedDeserialize;
+class VerilatedMutex;
+
+/// Internal per-assertion state, owned by a generated model instance.
+/// Registration is construction-time only; the context must outlive the model.
+class VlAssertControl final {
+    friend class VerilatedContext;
+    friend VerilatedSerialize& operator<<(VerilatedSerialize&, const VlAssertControl&);
+    friend VerilatedDeserialize& operator>>(VerilatedDeserialize&, VlAssertControl&);
+    static constexpr uint32_t ON = 1;
+    static constexpr uint32_t PASS_VACUOUS = 2;
+    static constexpr uint32_t PASS_NONVACUOUS = 4;
+    static constexpr uint32_t FAIL = 8;
+    static constexpr uint32_t LOCK = 16;
+    static constexpr uint32_t KILL = 32;
+    static constexpr uint32_t BOOL_FLAGS = ON | PASS_VACUOUS | PASS_NONVACUOUS | FAIL | LOCK;
+    static constexpr uint32_t OWN_SHIFT = 8;  // One ownership bit per field, including Kill
+    VerilatedContext* m_contextp = nullptr;  // Owning context; null before registration
+    uint32_t m_mask = 0;  // One known assertion-type/directive bit
+    std::atomic<uint32_t> m_flags{0};  // Boolean values and per-field ownership
+    std::atomic<uint32_t> m_kill{0};  // Generation aborting this assertion's active attempts
+    void control(uint32_t controlType, bool contextApplies, VerilatedMutex& mutex)
+        VL_REQUIRES(mutex);
+    VL_UNCOPYABLE(VlAssertControl);
+
+public:
+    VlAssertControl() = default;
+    ~VlAssertControl();
+    /// Register before any user static initialization or assertion evaluation.
+    void configure(VerilatedContext* contextp, uint32_t mask) VL_MT_SAFE;
+    /// Read only this assertion's atomics; no lock or registry lookup on the hot path.
+    VL_ATTR_ALWINLINE uint32_t get(VerilatedAssertCtlQuery query) const VL_MT_SAFE {
+        if (query == VerilatedAssertCtlQuery::ASSERT_CTL_KILL) return m_kill.load();
+        static constexpr uint32_t flags[] = {ON, 0, PASS_VACUOUS, PASS_NONVACUOUS, FAIL};
+        const uint32_t index = static_cast<uint32_t>(query);
+        assert(index < sizeof(flags) / sizeof(flags[0]));
+        return (m_flags.load() & flags[index]) != 0;
+    }
+};
+
+// A table belongs to a concrete model instance and is bound under the context lock.
+class VlAssertCtlTable final {
+    friend class VerilatedContext;
+
+public:
+    struct Target final {
+        VlAssertControl* statep;
+        uint32_t depth;
+        uint32_t ordinal = 0;  // Position in the original selector target order
+    };
+
+private:
+    std::vector<Target> m_targets;
+    std::vector<uint32_t> m_skipShared;  // Slots replaced by this caller's mixed targets
+    uint32_t m_minDepth = std::numeric_limits<uint32_t>::max();  // Cached under the context lock
+
+    void cacheMinDepth(VerilatedMutex& mutex) VL_REQUIRES(mutex) {
+        (void)mutex;
+        for (const Target& target : m_targets) m_minDepth = std::min(m_minDepth, target.depth);
+    }
+};
 
 // Type trait: whether T is a user-defined custom struct
 template <typename>
@@ -583,6 +647,19 @@ protected:
         ~Serialized() = default;
     } m_s;
 
+    friend class VlAssertControl;
+    friend VerilatedDeserialize& operator>>(VerilatedDeserialize&, VerilatedContext*);
+    mutable VerilatedMutex m_assertCtlMutex;  // Protect assertion control registration and updates
+    std::unordered_set<VlAssertControl*> m_assertControls VL_GUARDED_BY(m_assertCtlMutex);
+    void assertCtlRefresh(VlAssertControl& state) VL_REQUIRES(m_assertCtlMutex);
+    void assertOnForce(bool flag) VL_MT_SAFE_EXCLUDES(m_assertCtlMutex);
+    void assertCtlApplyTable(uint32_t effect, VerilatedAssertType_t types,
+                             VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                             const VlAssertCtlTable& table) VL_REQUIRES(m_assertCtlMutex);
+    void assertCtlApplyMixedTable(uint32_t effect, VerilatedAssertType_t types,
+                                  VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                                  const VlAssertCtlTable& shared, const VlAssertCtlTable& local)
+        VL_REQUIRES(m_assertCtlMutex);
     mutable VerilatedMutex m_timeDumpMutex;  // Protect misc slow strings
     std::string m_timeFormatSuffix VL_GUARDED_BY(m_timeDumpMutex);  // $timeformat printf format
     std::string m_dumpfile VL_GUARDED_BY(m_timeDumpMutex);  // $dumpfile setting
@@ -680,6 +757,49 @@ public:
     /// Apply assertion control for given control, assertion, and directive types
     void assertCtl(uint32_t controlType, VerilatedAssertType_t types,
                    VerilatedAssertDirectiveType_t directives) VL_MT_SAFE;
+    /// Internal: validate the effect once, even if static selection is empty.
+    bool assertCtlValid(uint32_t controlType) VL_MT_SAFE;
+    // Apply a scoped effect to a table bound on its first use. Depth is exclusive.
+    template <typename T_Bind>
+    void assertCtlTable(uint32_t effect, VerilatedAssertType_t types,
+                        VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                        VlAssertCtlTable& table, const T_Bind& bind)
+        VL_MT_SAFE_EXCLUDES(m_assertCtlMutex) {
+        if (!assertCtlValid(effect) || !depthLimit) return;
+        const VerilatedLockGuard lock{m_assertCtlMutex};
+        if (table.m_targets.empty()) {
+            bind(table.m_targets);
+            table.cacheMinDepth(m_assertCtlMutex);
+        }
+        if (depthLimit > table.m_minDepth) {
+            assertCtlApplyTable(effect, types, directives, depthLimit, table);
+        }
+    }
+    // Apply the caller-independent part and sparse caller-local entries as one selection.
+    template <typename T_Bind, typename T_BindLocal>
+    void assertCtlMixedTable(uint32_t effect, VerilatedAssertType_t types,
+                             VerilatedAssertDirectiveType_t directives, uint32_t depthLimit,
+                             VlAssertCtlTable& shared, const T_Bind& bindShared,
+                             VlAssertCtlTable& local, const T_BindLocal& bindLocal)
+        VL_MT_SAFE_EXCLUDES(m_assertCtlMutex) {
+        if (!assertCtlValid(effect) || !depthLimit) return;
+        const VerilatedLockGuard lock{m_assertCtlMutex};
+        if (shared.m_targets.empty()) {
+            bindShared(shared.m_targets);
+            shared.cacheMinDepth(m_assertCtlMutex);
+        }
+        if (local.m_targets.empty()) {
+            bindLocal(local.m_targets, local.m_skipShared);
+            local.cacheMinDepth(m_assertCtlMutex);
+        }
+        if (depthLimit <= shared.m_minDepth) {
+            if (depthLimit > local.m_minDepth) {
+                assertCtlApplyTable(effect, types, directives, depthLimit, local);
+            }
+        } else {
+            assertCtlApplyMixedTable(effect, types, directives, depthLimit, shared, local);
+        }
+    }
     /// Return if calculating of unused signals (for traces)
     bool calcUnusedSigs() const VL_MT_SAFE { return m_s.m_calcUnusedSigs; }
     /// Enable calculation of unused signals (for traces)

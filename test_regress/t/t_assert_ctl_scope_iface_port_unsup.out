@@ -1,0 +1,22 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_iface_port_unsup.v:40:25: Unsupported: assertion control scope through a modport port: 'p'
+                                                                 : ... note: In instance 't.sm2'
+   40 |   initial $assertoff(0, p);
+      |                         ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_iface_port_unsup.v:32:26: Unsupported: assertion control scope through a modport port: 'p.tsk'
+                                                                 : ... note: In instance 't.sm'
+   32 |   initial $assertoff(0, p.tsk);
+      |                          ^
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_iface_port_unsup.v:55:22: Unsupported: assertion control scope through a virtual interface: 'vif.a1'
+                                                                 : ... note: In instance 't'
+   55 |     $assertoff(0, vif.a1);
+      |                      ^
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_iface_port_unsup.v:56:24: Unsupported: assertion control scope through a virtual interface: 'c.vif.a1'
+                                                                 : ... note: In instance 't'
+   56 |     $assertoff(0, c.vif.a1);
+      |                        ^
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_iface_port_unsup.v:57:26: Unsupported: assertion control scope through a virtual interface: 'vifs[0].a1'
+                                                                 : ... note: In instance 't'
+   57 |     $assertoff(0, vifs[0].a1);
+      |                          ^
+%Error: Exiting due to

@@ -13,6 +13,13 @@ interface my_if;
 
   modport master_mp(output valid, output data);
 
+  if (1) begin : checks
+    initial begin
+      $assertoff(0, check_data);
+      check_data : assert (data != 0);
+    end
+  end
+
 endinterface
 
 module t (

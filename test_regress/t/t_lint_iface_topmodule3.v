@@ -38,6 +38,12 @@ interface my_if #(
 
 endinterface
 
+module top_iface_ctl (
+    my_if p
+);
+  initial $assertoff(0, p);
+endmodule
+
 module t (
     input wire clk,
     my_if in_if,
@@ -48,6 +54,8 @@ module t (
   assign out_if.data = in_if.data;
 
   my_if my_i (.clk(clk));
+  top_iface_ctl input_ctl (.p(in_if));
+  top_iface_ctl output_ctl (.p(out_if));
 
   initial begin
     $display(in_if.DW_LOCAL);
