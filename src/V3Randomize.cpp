@@ -1394,7 +1394,7 @@ class CaptureVisitor final : public VNVisitor {
     std::map<const AstVar*, AstVar*> m_varCloneMap;  // Map original var nodes to their clones
     std::set<AstNode*> m_ignore;  // Nodes to ignore for capturing
     std::unordered_set<const AstVar*> m_constraintIterators;  // Enclosing foreach loop variables
-    std::unordered_set<const AstVar*> m_localVars;  // Declarations inside the captured expression
+    std::unordered_set<const AstVar*> m_ownedDecls;  // Declarations owned by the expression
     AstVar* m_thisp = nullptr;  // Variable for outer context's object, if necessary
     const bool m_randomizesThis;  // True for randomize() in class method
 
@@ -1451,19 +1451,22 @@ class CaptureVisitor final : public VNVisitor {
     }
 
     CaptureMode getVarRefCaptureMode(AstNodeVarRef* varRefp) {
-        if (m_localVars.count(varRefp->varp())) return CaptureMode::CAP_NO;
+        if (VN_IS(varRefp, VarXRef)) return CaptureMode::CAP_VALUE | CaptureMode::CAP_F_XREF;
+        if (m_ownedDecls.count(varRefp->varp())) {
+            // The declaration moves with the expression, not with its caller's scope.
+            varRefp->classOrPackagep(nullptr);
+            return CaptureMode::CAP_NO;
+        }
         AstNodeModule* const varModp = VN_AS(varRefp->varp()->user2p(), NodeModule);
         AstClass* const varClassp = VN_CAST(varModp, Class);
         AstClass* const callerClassp = VN_CAST(m_callerp, Class);
 
         const bool callerIsClass = callerClassp;
-        const bool refIsXref = VN_IS(varRefp, VarXRef);
         const bool varIsFuncLocal = varRefp->varp()->isFuncLocal();
         const bool varHasAutomaticLifetime = varRefp->varp()->lifetime().isAutomatic();
         const bool varIsFieldOfCaller = AstClass::isClassExtendedFrom(callerClassp, varClassp);
         const bool varIsParam = varRefp->varp()->isParam();
         const bool varIsConstraintIterator = m_constraintIterators.count(varRefp->varp());
-        if (refIsXref) return CaptureMode::CAP_VALUE | CaptureMode::CAP_F_XREF;
         if (varIsConstraintIterator) return CaptureMode::CAP_NO;
         if (varIsFuncLocal && varHasAutomaticLifetime) return CaptureMode::CAP_VALUE;
         if (varIsParam) return CaptureMode::CAP_VALUE;
@@ -1526,7 +1529,7 @@ class CaptureVisitor final : public VNVisitor {
 
     void visit(AstVar* const nodep) override {
         // Register before its initializer and the block's later references.
-        m_localVars.insert(nodep);
+        m_ownedDecls.emplace(nodep);
         iterateChildren(nodep);
     }
     void visit(AstConstraintForeach* const nodep) override {
