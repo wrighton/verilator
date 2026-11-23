@@ -14,6 +14,5 @@ test.top_filename = 't/t_assert_ctl_scope_root.v'
 test.compile(verilator_flags2=['--binary', '--assert', '--stats', '+define+WHOLE_MODEL'],
              threads=2 if test.vltmt else 1)
 test.execute()
-test.file_grep_not(test.stats, r'Assertion control states\s+[1-9]\d*')
-test.file_grep_not(test.stats, r'Assertions, Scoped state instances\s+[1-9]\d*')
+test.file_grep(test.stats, r'Assertions, Shared absolute target lists\s+(\d+)', 1)
 test.passes()
