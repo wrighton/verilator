@@ -9037,7 +9037,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
             }
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
-            const AstConst* const constp = VN_CAST(indexp, Const);
+            AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
             if (!constp || constp->num().isOpaque() || constp->num().isFourState()) {
