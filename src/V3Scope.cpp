@@ -105,6 +105,7 @@ class ScopeVisitor final : public VNVisitor {
         std::unordered_map<const AstAssertCtlCaller*, AssertCtlCallerRoutes> byCaller;
         size_t sourceUses = 0;  // Surviving operation templates before scoping clones them
         AstAssertCtlTargetSet* sharedp = nullptr;  // Absolute targets common to all callers
+        std::unordered_map<AssertCtlComponents, size_t, AssertCtlComponentsHash> cohortUses;
         std::unordered_map<AssertCtlComponents, AstAssertCtlTargetSet*, AssertCtlComponentsHash>
             unions;  // One absolute target list per distinct combination of components
     };
@@ -150,6 +151,9 @@ class ScopeVisitor final : public VNVisitor {
                         }
                     }
                     ++ordinal;
+                }
+                for (const auto& entry : index.byCaller) {
+                    if (!entry.second.cohorts.empty()) ++index.cohortUses[entry.second.cohorts];
                 }
             }
         }
@@ -339,13 +343,16 @@ class ScopeVisitor final : public VNVisitor {
         const size_t sourceRows = assertionTargetRows(sourcep);
         const size_t commonRows = assertionTargetRows(commonp);
         if (!cohorts.empty() && (sourceRows || commonRows)) {
-            size_t largestCohort = 0;
+            const bool preferSource = sourceRows >= commonRows;
+            const size_t baseRows = preferSource ? sourceRows : commonRows;
+            size_t overlayRows = preferSource ? commonRows : sourceRows;
             for (const AstAssertCtlTargetSet* const routep : cohorts) {
-                largestCohort = std::max(largestCohort, assertionTargetRows(routep));
+                overlayRows += assertionTargetRows(routep);
             }
-            if (std::max(sourceRows, commonRows) >= largestCohort) {
-                // Keep a dominant common list shared across distinct cohort combinations.
-                const bool preferSource = sourceRows >= commonRows;
+            // Compare one base copy in the interned union against the extra private
+            // copies of the overlay if the base stays separate.
+            const size_t copies = index.cohortUses.at(cohorts);
+            if (baseRows / overlayRows >= copies - 1) {
                 const AstAssertCtlTargetSet* const residualp = preferSource ? commonp : sourcep;
                 if (residualp && residualp->targetsp()) {
                     applyp->addTargetsp(residualp->targetsp()->cloneTree(true));
