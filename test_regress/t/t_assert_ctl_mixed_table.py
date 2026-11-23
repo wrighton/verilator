@@ -12,6 +12,7 @@ import vltest_bootstrap
 test.scenarios('vlt_all')
 test.compile(verilator_flags2=['--binary', '--assert', '--stats'], threads=2 if test.vltmt else 1)
 test.execute()
-test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 8)
-test.file_grep(test.stats, r'Assertions, Shared absolute target lists\s+(\d+)', 1)
+# Four bank sites, four first-call overlays, eight top sites, and four alias overlays.
+test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 20)
+test.file_grep(test.stats, r'Assertions, Shared absolute target lists\s+(\d+)', 2)
 test.passes()

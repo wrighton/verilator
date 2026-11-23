@@ -45,6 +45,8 @@ module caller (input bit clk, input bit good, input bit off, output int reports
 `endif
 `ifdef VIA_PORT
                , bank_group port_bank
+`else
+               , input bit alias_off, input int alias_level
 `endif
 `ifdef VIA_COHORTS
                , bank_group other_bank
@@ -69,6 +71,8 @@ module caller (input bit clk, input bit good, input bit off, output int reports
   always @(posedge off) $assertoff(0, port_bank.payload, local_check);
 `else
   always @(posedge off) $assertoff(0, $root.t.bank, local_check);
+  // local_check is also in the top selection, but at depth one instead of zero.
+  always @(posedge alias_off) $assertoff(alias_level, $root.t, local_check);
 `endif
 endmodule
 
@@ -126,8 +130,9 @@ module t;
   wire [31:0] fallback_reports [2];
   wire [31:0] bank_reports [3][2][N];
 `ifdef VIA_COMMON
-  wire [31:0] common_reports [N+1];
-  bank_group #(.N(N+1)) common (.clk, .good, .reports(common_reports));
+  localparam int COMMON = `COMMON_N;
+  wire [31:0] common_reports [COMMON];
+  bank_group #(.N(COMMON)) common (.clk, .good, .reports(common_reports));
 `endif
   // Each host's callers share two banks, neither shared with the other host.
   for (genvar b = 0; b < 2; ++b) begin : hosts
@@ -201,6 +206,10 @@ module t;
   bit [3:0] off;
   wire [31:0] local_reports [4];
   wire [31:0] bank_reports [4];
+`ifndef VIA_PORT
+  bit alias_off;
+  int alias_level;
+`endif
 `ifdef VIA_PORT
   bank_group bank (.clk, .good, .reports(bank_reports));
 `else
@@ -220,6 +229,8 @@ module t;
     caller u (.clk, .good, .off(off[i]), .reports(local_reports[i])
 `ifdef VIA_PORT
               , .port_bank(bank)
+`else
+              , .alias_off(alias_off && i == 1), .alias_level
 `endif
     );
   end
@@ -233,6 +244,18 @@ module t;
     #1;
     foreach (bank_reports[i]) `checkd(bank_reports[i], 0);
     foreach (local_reports[i]) `checkd(local_reports[i], i == 0 ? 0 : 1);
+`ifndef VIA_PORT
+    clk = 0;
+    $asserton;
+    alias_level = int'(local_reports[1]);
+    alias_off = 1;
+    #1 good = 0;
+    #1 clk = 1;
+    #1;
+    foreach (bank_reports[i]) `checkd(bank_reports[i], 1);
+    // The direct target still applies at level one, despite the deeper top selection.
+    foreach (local_reports[i]) `checkd(local_reports[i], i < 2 ? 1 : 2);
+`endif
     $display("*-* All Finished *-*");
     $finish;
   end
