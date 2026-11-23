@@ -80,6 +80,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -8368,6 +8369,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         string instancePath;
         string childPath;
         std::vector<const VSymEnt*> callers{};  // Concrete callers reaching this route
+        bool concreteIface = false;  // Proven interface occurrence, not a type representative
     };
     using AssertCtlReachKeys
         = std::unordered_map<const AstNode*, std::unordered_map<string, size_t>>;
@@ -8450,8 +8452,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                        reach.instancePath,
                                        reach.childPath,
                                        targets,
-                                       sparse,
-                                       absolute};
+                                       sparse && !reach.concreteIface,
+                                       absolute || reach.concreteIface};
             if (!sparse) continue;
             AstAssertCtlTargetSet* setp = flushAssertCtlTargets(argsp, targets);
             if (!setp) {
@@ -8519,18 +8521,19 @@ class LinkDotResolveVisitor final : public VNVisitor {
     // Resolve a scope name component by component. Past a port of interface type, the rest of
     // the name is resolved within the interface instance the symbols reach through that port.
     AssertCtlPortCrossing assertControlPortCrossing(FileLine* flp, VSymEnt* lookupSymp,
-                                                    const std::vector<string>& names) {
+                                                    const std::vector<string>& names,
+                                                    const size_t start = 0) {
         AssertCtlPortCrossing crossing;
         VSymEnt* basep = lookupSymp;
-        size_t baseIndex = 0;
+        bool allowUpward = start == 0;
         string rest;
-        for (size_t i = 0; i < names.size(); ++i) {
+        for (size_t i = start; i < names.size(); ++i) {
             rest = VString::dot(rest, ".", names[i]);
             string baddot;
             VSymEnt* okSymp = nullptr;
             // Past a port, only names within the interface instance (or modport) reached
             const VSymEnt* const symp = m_statep->findAssertCtlDotted(
-                flp, basep, rest, baddot, okSymp, baseIndex == 0, &crossing.boundaryp);
+                flp, basep, rest, baddot, okSymp, allowUpward, &crossing.boundaryp);
             if (!symp) {
                 // Virtual interface arrays have no elaborated element symbols. Probe their
                 // declaration only for the diagnostic, not for target resolution.
@@ -8542,7 +8545,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 if (!crossing.boundaryp && declaration != rest) {
                     const VSymEnt* const arrayp = m_statep->findAssertCtlDotted(
-                        flp, basep, declaration, baddot, okSymp, baseIndex == 0);
+                        flp, basep, declaration, baddot, okSymp, allowUpward);
                     AstVar* const varp = arrayp ? VN_CAST(arrayp->nodep(), Var) : nullptr;
                     AstNodeDType* const dtypep = varp ? varp->subDTypep() : nullptr;
                     if (VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, BracketArrayDType)) {
@@ -8558,6 +8561,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (!varp) continue;
             AstIfaceRefDType* const ifacerefp = LinkDotState::ifaceRefFromArray(varp->subDTypep());
             if (!ifacerefp) continue;
+            // A concrete suffix must not cross another interface variable via its type.
+            if (start != 0) {
+                crossing.components = i + 1;
+                return crossing;
+            }
             if (ifacerefp->isVirtual()) {
                 crossing.isVirtual = true;
                 continue;
@@ -8580,7 +8588,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (i + 1 < names.size() && !modportSymp->findIdFlat(names[i + 1])) break;
                 basep = modportSymp;
             }
-            baseIndex = i + 1;
+            allowUpward = false;
             rest.clear();
         }
         return crossing;
@@ -8788,43 +8796,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         if (!crossingCount) return false;
-        if (scopes.size() > 1 && crossingCount == scopes.size() && !VN_IS(m_modp, Class)
-            && crossings.front().components == 1 && !crossings.front().modport) {
-            VSymEnt* const sharedp = assertCtlStaticIface(flp, scopes.front(), names.front());
-            bool shared = sharedp != nullptr;
-            for (size_t i = 1; shared && i < scopes.size(); ++i) {
-                shared = crossings[i].components == 1 && !crossings[i].modport
-                         && assertCtlStaticIface(flp, scopes[i], names.front()) == sharedp;
-            }
-            if (shared) {
-                AssertCtlPortCrossing concrete = crossings.front();
-                concrete.anchorp = sharedp;
-                if (names.size() > 1) {
-                    string suffix;
-                    for (size_t i = 1; i < names.size(); ++i) {
-                        suffix = VString::dot(suffix, ".", names[i]);
-                    }
-                    string baddot;
-                    VSymEnt* okp = nullptr;
-                    concrete.foundp = m_statep->findAssertCtlDotted(
-                        flp, sharedp, suffix, baddot, okp, false, &concrete.boundaryp);
-                }
-                if (concrete.boundaryp) {
-                    warnAssertControlHierarchy(itemp, concrete.boundaryp, path);
-                    return true;
-                }
-                AssertCtlReach reach;
-                if (assertControlPortReach(itemp, scopes.front(), path, names, concrete, reach,
-                                           true)) {
-                    addAssertCtlTargets({std::move(reach)}, argsp, targets, true);
-                }
-                return true;
-            }
-        }
-        // A name from $root, or from a top module in every instance, is the same from every
-        // instance, so it is absolute; AssertControlTargetVisitor prefixes $root, which also keeps
-        // a closer scope of the same name from hiding it. Otherwise each instance resolves the
-        // name as written.
+        // From $root or a top module, an unproven route is resolved as written from $root.
+        // A proven interface route instead uses the actual connected occurrence.
         const bool fromRoot = names[0] == "$root";
         bool absolute = true;
         if (!fromRoot) {
@@ -8843,16 +8816,50 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         std::vector<AssertCtlReach> reaches;
         AssertCtlReachKeys seen;
+        std::unordered_map<const VSymEnt*, size_t> cohorts;
+        constexpr size_t unproven = std::numeric_limits<size_t>::max();
         for (size_t idx = 0; idx < scopes.size(); ++idx) {
             const AssertCtlPortCrossing& crossing = crossings[idx];
+            VSymEnt* const scopep = scopes[idx];
             const VSymEnt* const callerp = callerSyms.empty() ? m_modSymp : callerSyms[idx];
+            if (scopes.size() > 1 && !VN_IS(m_modp, Class) && crossing.components == 1
+                && !crossing.modport) {
+                if (VSymEnt* const anchorp = assertCtlStaticIface(flp, scopep, names.front())) {
+                    // A cohort is keyed by the verified occurrence, not the cell declaration.
+                    const auto cohort = cohorts.try_emplace(anchorp, unproven);
+                    if (cohort.second) {
+                        AssertCtlPortCrossing concrete
+                            = assertControlPortCrossing(flp, anchorp, names, 1);
+                        if (concrete.boundaryp) {
+                            warnAssertControlHierarchy(itemp, concrete.boundaryp, path);
+                            return true;
+                        }
+                        if (!concrete.components && !concrete.isVirtual) {
+                            concrete.components = 1;
+                            concrete.anchorp = anchorp;
+                            AssertCtlReach reach;
+                            if (!assertControlPortReach(itemp, scopep, path, names, concrete,
+                                                        reach, true)) {
+                                return true;
+                            }
+                            reach.concreteIface = true;
+                            cohort.first->second = reaches.size();
+                            reaches.push_back(std::move(reach));
+                        }
+                    }
+                    if (cohort.first->second != unproven) {
+                        reaches[cohort.first->second].callers.push_back(callerp);
+                        continue;
+                    }
+                }
+            }
             AssertCtlReach reach;
             if (!crossing.components) {
-                if (!assertControlPlainReach(itemp, scopes[idx], path, names.front(), absolute,
+                if (!assertControlPlainReach(itemp, scopep, path, names.front(), absolute,
                                              reach)) {
                     return true;
                 }
-            } else if (!assertControlPortReach(itemp, scopes[idx], path, names, crossing, reach)) {
+            } else if (!assertControlPortReach(itemp, scopep, path, names, crossing, reach)) {
                 return true;
             }
             addAssertCtlReach(reaches, seen, std::move(reach), callerp);
