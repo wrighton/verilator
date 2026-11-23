@@ -492,6 +492,7 @@ public:
         return retp;
     }
     // Create a view of 'varp', which has the layout of this variable, selecting the same bits
+    // at the same offset from its start
     VerilatedVpioVar* withSameLayout(const VerilatedVar* varp) const {
         VerilatedVpioVar* const retp = new VerilatedVpioVar{this};
         retp->m_varp = varp;

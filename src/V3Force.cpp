@@ -857,9 +857,7 @@ public:
     // force value is kept in sync with it, for the bits whose owner index is the force's
     void createForceOwners(VarForceInfo& info) {
         AstVar* const varp = info.m_varp;
-        if (doingAssign() || !info.m_forceValVscp || !(isBitwiseDType(varp) || varp->isDouble())) {
-            return;
-        }
+        if (doingAssign() || !info.m_forceValVscp || isUnpackedArrayDType(varp->dtypep())) return;
         uint32_t ownerId = 0;
         for (ForceInfo* const finfop : forceInfosInIdOrder(info)) {
             if (finfop->m_isExternal || finfop->m_hasArraySel || finfop->m_hasOpaquePath) continue;
@@ -868,8 +866,11 @@ public:
         if (!ownerId) return;
         ++m_statSyncedForceVars;
         AstNodeDType* const enDtypep = info.m_forceEnVscp->dtypep();
-        info.m_forceValSyncedVscp
-            = createHelperVar(info, "__VforceValSynced", info.m_forceValVscp->dtypep());
+        // Writes from outside are seen where the bits of the value can be compared
+        if (isBitwiseDType(varp) || varp->isDouble()) {
+            info.m_forceValSyncedVscp
+                = createHelperVar(info, "__VforceValSynced", info.m_forceValVscp->dtypep());
+        }
         for (uint32_t ids = ownerId; ids; ids >>= 1) {
             info.m_ownerVscps.push_back(createHelperVar(
                 info, "__VforceOwner" + std::to_string(info.m_ownerVscps.size()), enDtypep));
@@ -897,12 +898,15 @@ public:
     AstNodeStmt* createForceValSyncStmts(const VarForceInfo& info, const ForceInfo& finfo) const {
         AstVar* const varp = info.m_varp;
         FileLine* const flp = varp->fileline();
-        // The bits written from outside are forced from outside, as through the VPI
-        // forceVpi = forceVpi | changed(forceVal, forceValSynced);
-        AstNodeStmt* const stmtsp
-            = new AstAssign{flp, new AstVarRef{flp, info.m_forceVpiVscp, VAccess::WRITE},
-                            new AstOr{flp, new AstVarRef{flp, info.m_forceVpiVscp, VAccess::READ},
-                                      createForceValChanged(info, flp)}};
+        AstNodeStmt* stmtsp = nullptr;
+        if (info.m_forceValSyncedVscp) {
+            // The bits written from outside are forced from outside, as through the VPI
+            // forceVpi = forceVpi | changed(forceVal, forceValSynced);
+            stmtsp = new AstAssign{
+                flp, new AstVarRef{flp, info.m_forceVpiVscp, VAccess::WRITE},
+                new AstOr{flp, new AstVarRef{flp, info.m_forceVpiVscp, VAccess::READ},
+                          createForceValChanged(info, flp)}};
+        }
         // own = forceEn & ~forceVpi & (ownerIndex == ownerId);
         AstNodeExpr* ownp
             = new AstAnd{flp, new AstVarRef{flp, info.m_forceEnVscp, VAccess::READ},
@@ -917,6 +921,7 @@ public:
         AstVarRef* const rhsp = new AstVarRef{flp, finfo.m_rhsVarVscp, VAccess::READ};
         markNonReplaceable(rhsp);
         AstVarRef* const valWritep = new AstVarRef{flp, info.m_forceValVscp, VAccess::WRITE};
+        AstNodeStmt* syncp;
         if (isBitwiseDType(varp)) {
             // forceVal = (forceVal & ~own) | (rhs_padded & own);
             AstNodeExpr* const paddedp
@@ -924,17 +929,20 @@ public:
             AstNodeExpr* const keptp
                 = new AstAnd{flp, new AstVarRef{flp, info.m_forceValVscp, VAccess::READ},
                              new AstNot{flp, ownp->cloneTreePure(false)}};
-            stmtsp->addNext(new AstAssign{flp, valWritep,
-                                          new AstOr{flp, keptp, new AstAnd{flp, paddedp, ownp}}});
+            syncp = new AstAssign{flp, valWritep,
+                                  new AstOr{flp, keptp, new AstAnd{flp, paddedp, ownp}}};
         } else {
             // if (own) forceVal = rhs;
-            stmtsp->addNext(
-                new AstIf{flp, ownp, new AstAssign{flp, valWritep, castToNodeDType(rhsp, varp)}});
+            syncp
+                = new AstIf{flp, ownp, new AstAssign{flp, valWritep, castToNodeDType(rhsp, varp)}};
         }
-        // forceValSynced = forceVal;
-        stmtsp->addNext(
-            new AstAssign{flp, new AstVarRef{flp, info.m_forceValSyncedVscp, VAccess::WRITE},
-                          new AstVarRef{flp, info.m_forceValVscp, VAccess::READ}});
+        stmtsp = AstNode::addNextNull(stmtsp, syncp);
+        if (info.m_forceValSyncedVscp) {
+            // forceValSynced = forceVal;
+            stmtsp->addNext(
+                new AstAssign{flp, new AstVarRef{flp, info.m_forceValSyncedVscp, VAccess::WRITE},
+                              new AstVarRef{flp, info.m_forceValVscp, VAccess::READ}});
+        }
         return stmtsp;
     }
 
@@ -1485,21 +1493,24 @@ class ForceConvertVisitor final : public VNVisitor {
             tailp->addNextHere(ForceState::makeOwnerStmts(flp, nodep, forcedVarp, *varInfop, info,
                                                           info.m_ownerId));
             while (tailp->nextp()) tailp = tailp->nextp();
-            // forceValSynced = (forceValSynced & ~mask) | (forceVal & mask);
-            AstNodeExpr* newSyncedp = new AstVarRef{flp, varInfop->m_forceValVscp, VAccess::READ};
-            if (bitwiseForcedVar) {
-                AstNodeExpr* const maskp = ForceState::makeOwnMask(nodep, forcedVarp, info);
-                newSyncedp = new AstOr{
-                    flp,
-                    new AstAnd{flp,
-                               new AstVarRef{flp, varInfop->m_forceValSyncedVscp, VAccess::READ},
-                               new AstNot{flp, maskp}},
-                    new AstAnd{flp, newSyncedp, maskp->cloneTreePure(false)}};
+            if (varInfop->m_forceValSyncedVscp) {
+                // forceValSynced = (forceValSynced & ~mask) | (forceVal & mask);
+                AstNodeExpr* newSyncedp
+                    = new AstVarRef{flp, varInfop->m_forceValVscp, VAccess::READ};
+                if (bitwiseForcedVar) {
+                    AstNodeExpr* const maskp = ForceState::makeOwnMask(nodep, forcedVarp, info);
+                    newSyncedp = new AstOr{
+                        flp,
+                        new AstAnd{
+                            flp, new AstVarRef{flp, varInfop->m_forceValSyncedVscp, VAccess::READ},
+                            new AstNot{flp, maskp}},
+                        new AstAnd{flp, newSyncedp, maskp->cloneTreePure(false)}};
+                }
+                tailp->addNextHere(new AstAssign{
+                    flp, new AstVarRef{flp, varInfop->m_forceValSyncedVscp, VAccess::WRITE},
+                    newSyncedp});
+                tailp = tailp->nextp();
             }
-            tailp->addNextHere(new AstAssign{
-                flp, new AstVarRef{flp, varInfop->m_forceValSyncedVscp, VAccess::WRITE},
-                newSyncedp});
-            tailp = tailp->nextp();
         }
         tailp->addNextHere(stmtp);
         if (varInfop->m_forceRdVscp && !info.m_skipRdRefresh) {
