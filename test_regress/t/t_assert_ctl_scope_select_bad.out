@@ -84,28 +84,32 @@
                                                : ... note: In instance 't'
    54 |     $assertoff(0, g[1'b0 && ($test$plusargs("SELECT") != 0)]);
       |                    ^
-%Error: t/t_assert_ctl_scope_select_bad.v:56:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+%Error: t/t_assert_ctl_scope_select_bad.v:55:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   56 |     $assertoff(0, g[64'sd2147483648]);
-      |                     ^~~~~~~~~~~~~~~
+   55 |     $assertoff(0, g[1'b0 && ($get_initial_random_seed() != 0)]);
+      |                    ^
 %Error: t/t_assert_ctl_scope_select_bad.v:57:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   57 |     $assertoff(0, g[-64'sd2147483649]);
-      |                     ^
+   57 |     $assertoff(0, g[64'sd2147483648]);
+      |                     ^~~~~~~~~~~~~~~
 %Error: t/t_assert_ctl_scope_select_bad.v:58:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   58 |     $assertoff(0, g[95'sd4294967296]);
-      |                     ^~~~~~~~~~~~~~~
+   58 |     $assertoff(0, g[-64'sd2147483649]);
+      |                     ^
 %Error: t/t_assert_ctl_scope_select_bad.v:59:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   59 |     $assertoff(0, g[-95'sd4294967296]);
-      |                     ^
+   59 |     $assertoff(0, g[95'sd4294967296]);
+      |                     ^~~~~~~~~~~~~~~
 %Error: t/t_assert_ctl_scope_select_bad.v:60:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   60 |     $assertoff(0, g[129'd4294967297]);
-      |                     ^~~~~~~~~~~~~~~
+   60 |     $assertoff(0, g[-95'sd4294967296]);
+      |                     ^
 %Error: t/t_assert_ctl_scope_select_bad.v:61:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
                                                : ... note: In instance 't'
-   61 |     $assertoff(0, g[32'h80000000]);
+   61 |     $assertoff(0, g[129'd4294967297]);
+      |                     ^~~~~~~~~~~~~~~
+%Error: t/t_assert_ctl_scope_select_bad.v:62:21: Assertion control scope index is outside the signed 32-bit hierarchy range.
+                                               : ... note: In instance 't'
+   62 |     $assertoff(0, g[32'h80000000]);
       |                     ^~~~~~~~~~~~
 %Error: Exiting due to
