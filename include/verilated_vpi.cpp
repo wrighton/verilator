@@ -41,7 +41,6 @@
 #include <cstring>
 #include <list>
 #include <map>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -490,6 +489,16 @@ public:
         auto* retp = new VerilatedVpioVar{this};
         retp->m_bitOffset += normalized_lo;
         retp->m_partselBits = width;
+        return retp;
+    }
+    // Create a view of 'varp', which has the layout of this variable, selecting the same bits
+    // at the same offset from its start
+    VerilatedVpioVar* withSameLayout(const VerilatedVar* varp) const {
+        VerilatedVpioVar* const retp = new VerilatedVpioVar{this};
+        retp->m_varp = varp;
+        retp->m_varDatap
+            = static_cast<uint8_t*>(varp->datap())
+              + (static_cast<uint8_t*>(m_varDatap) - static_cast<uint8_t*>(this->varp()->datap()));
         return retp;
     }
     VerilatedVpioVar* withIndex(int32_t index) const {
@@ -984,6 +993,8 @@ class VerilatedVpiCbHolder final {
     s_cb_data m_cbData;  // Callback registration data from the user
     s_vpi_value m_value;  // Value passed to the callback
     VerilatedVpioVar m_varo;  // If a cbValueChange callback, the object we will return
+    // If a cbValueChange callback on a forceable signal, its read-back, which holds its value
+    std::shared_ptr<VerilatedVpioVar> m_readVarop;
 
 public:
     // cppcheck-suppress uninitVar  // m_value
@@ -1001,6 +1012,12 @@ public:
         }
     }
     ~VerilatedVpiCbHolder() = default;
+    // The object whose changes are value changes of the callback's object
+    VerilatedVpioVar* valueVarop() { return m_readVarop ? m_readVarop.get() : &m_varo; }
+    void readVarop(std::unique_ptr<VerilatedVpioVar> varop) {
+        m_readVarop = std::move(varop);
+        m_readVarop->createPrevDatap();
+    }
     VerilatedPliCb cb_rtnp() const { return m_cbData.cb_rtn; }
     s_cb_data* cb_datap() { return &m_cbData; }
     uint64_t id() const { return m_id; }
@@ -1211,7 +1228,15 @@ public:
                                     cb_data_p->reason, id, cb_data_p->obj););
         VerilatedVpioVar* varop = nullptr;
         if (cb_data_p->reason == cbValueChange) varop = VerilatedVpioVar::castp(cb_data_p->obj);
-        s().m_cbCurrentLists[cb_data_p->reason].emplace_back(id, cb_data_p, varop);
+        VpioCbList& cbList = s().m_cbCurrentLists[cb_data_p->reason];
+        cbList.emplace_back(id, cb_data_p, varop);
+        // A forced value is not in the signal's own storage, so watch its read-back instead
+        if (varop && varop->varp()->isForceable()) {
+            if (std::unique_ptr<VerilatedVpioVar> readVarop
+                = std::move(getForceControlSignals(varop).forceRead)) {
+                cbList.back().readVarop(std::move(readVarop));
+            }
+        }
     }
     static void cbFutureAdd(uint64_t id, const s_cb_data* cb_data_p, QData time) {
         // The passed cb_data_p was property of the user, so need to recreate
@@ -1364,7 +1389,6 @@ public:
         assertOneCheck();
         VpioCbList& cbObjList = s().m_cbCurrentLists[cbValueChange];
         bool called = false;
-        std::set<VerilatedVpioVar*> update;  // set of objects to update after callbacks
         if (cbObjList.empty()) return called;
         const auto last = std::prev(cbObjList.end());  // prevent looping over newly added elements
         for (auto it = cbObjList.begin(); true;) {
@@ -1376,20 +1400,19 @@ public:
                 continue;
             }
             VerilatedVpiCbHolder& ho = *it++;
-            VerilatedVpioVar* const varop
-                = reinterpret_cast<VerilatedVpioVar*>(ho.cb_datap()->obj);
+            VerilatedVpioVar* const varop = ho.valueVarop();
             if (valueDiffersFromPrev(varop)) {
                 VL_DEBUG_IF_PLI(VL_DBG_MSGF("- vpi: value_callback %" PRId64 " %s v[0]=%d\n",
                                             ho.id(), varop->fullname(),
                                             *(static_cast<CData*>(varop->readDatap()))););
-                update.insert(varop);
+                // Before the callback, which may change the value again
+                updatePrev(varop);
                 vpi_get_value(ho.cb_datap()->obj, ho.cb_datap()->value);
                 (ho.cb_rtnp())(ho.cb_datap());
                 called = true;
             }
             if (was_last) break;
         }
-        for (const VerilatedVpioVar* const varop : update) updatePrev(varop);
         return called;
     }
     static void dumpCbs() VL_MT_UNSAFE_ONE;
@@ -1409,6 +1432,7 @@ public:
         std::unique_ptr<VerilatedVpioVar> forceEnable;
         std::unique_ptr<VerilatedVpioVar> forceValue;
         std::unique_ptr<VerilatedVpioVar> forceRead;
+        std::unique_ptr<VerilatedVpioVar> forceVpi;  // Null if no force in code needs it
     };
     static ForceControlSignalVops getForceControlSignals(const VerilatedVpioVar* vop);
 
@@ -1737,10 +1761,15 @@ VerilatedVpiImp::getForceControlSignals(const VerilatedVpioVar* const baseSignal
     assert(forceReadSignalVop->readDatap() == forceReadSignalVarp->datap());
 #endif  // VL_DEBUG
 
+    // The VPI-forced bits have the layout of the force enable
+    const VerilatedVar* const forceVpiSignalVarp = forceControlSignalsp->forceVpiSignalp;
     return VerilatedVpiImp::ForceControlSignalVops{
         std::unique_ptr<VerilatedVpioVar>{forceEnableSignalVop},
         std::unique_ptr<VerilatedVpioVar>{forceValueSignalVop},
-        std::unique_ptr<VerilatedVpioVar>{forceReadSignalVop}};
+        std::unique_ptr<VerilatedVpioVar>{forceReadSignalVop},
+        std::unique_ptr<VerilatedVpioVar>{
+            forceVpiSignalVarp ? forceEnableSignalVop->withSameLayout(forceVpiSignalVarp)
+                               : nullptr}};
 }
 
 QData vl_vpi_get_word(const VerilatedVpioVarBase* vop, size_t bitCount, size_t addOffset);
@@ -3906,6 +3935,13 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value valuep, p_vpi_time /*time_
         const std::function<void(const VerilatedVpioVar*, QData, size_t, size_t)> put_word
             = baseSignalVop->varp()->isForceable() ? putForceableSignalWord : vl_vpi_put_word;
 
+        // A force or release through the VPI overrides the forces in code
+        if (const VerilatedVpioVar* const forceVpiSignalVop = forceControlSignals.forceVpi.get()) {
+            if (forceFlag == vpiForceFlag || forceFlag == vpiReleaseFlag) {
+                VerilatedVpiImp::setAllBitsToValue(forceVpiSignalVop,
+                                                   forceFlag == vpiForceFlag ? 1 : 0);
+            }
+        }
         if (forceFlag == vpiForceFlag) {
             // Enable __VforceEn
             VerilatedVpiImp::setAllBitsToValue(forceEnableSignalVop, 1);
