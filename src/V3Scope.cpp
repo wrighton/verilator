@@ -85,6 +85,7 @@ class ScopeVisitor final : public VNVisitor {
     struct AssertCtlCallerRoutes final {
         AssertCtlRoutes routes;  // Applicable routes in source order
         size_t uses = 0;  // Copies of the live source operations materialized for this caller
+        AstAssertCtlTargetSet* sharedp = nullptr;  // Absolute targets for this caller's cohort
     };
     struct AssertCtlPlanIndex final {
         AssertCtlRoutes common;  // Routes used by every caller
@@ -274,16 +275,49 @@ class ScopeVisitor final : public VNVisitor {
         return blocks;
     }
 
-    // Preserve the first-occurrence order across the shared and concrete lists.
+    // Assign first-occurrence order before partitioning the targets.
     static void separateAbsoluteTargets(AstAssertCtlTarget* targetsp, uint32_t& ordinal,
-                                        AstAssertCtlTargetSet& shared, bool common) {
+                                        AstAssertCtlTargetSet* sharedp) {
         for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
             targetp->ordinal(ordinal++);
+            if (!sharedp) continue;
             AstVarXRef* const refp = VN_CAST(targetp->statep(), VarXRef);
-            if (!common || !refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional())
-                continue;
+            if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) continue;
             refp->inlinedDots("");
-            shared.addTargetsp(targetp->unlinkFrBack());
+            sharedp->addTargetsp(targetp->unlinkFrBack());
+        }
+    }
+
+    static void shareAssertionCohorts(AstNetlist* rootp, AstAssertCtlPlan* planp,
+                                      AssertCtlPlanIndex& index,
+                                      std::vector<AstAssertCtlTargetSet*>& sets) {
+        for (AstAssertCtlTargetSet* const routep : planp->setspList()) {
+            if (!routep->callersp() || !routep->callersp()->nextp() || !routep->targetsp())
+                continue;
+            // The selector emits a whole route of non-optional absolute references only
+            // after proving the interface occurrence for every caller in this route.
+            const AstVarXRef* const refp = VN_CAST(routep->targetsp()->statep(), VarXRef);
+            if (!refp || !refp->assertCtlAbsolute() || refp->assertCtlOptional()) continue;
+            // Each apply has one shared base. Overlapping routes stay in the local overlay;
+            // never detach a route that only some of its callers can use as their base.
+            bool disjoint = true;
+            for (const AstAssertCtlCallerRef* const memberp : routep->callerspList()) {
+                if (index.byCaller[memberp->callerp()].sharedp) {
+                    disjoint = false;
+                    break;
+                }
+            }
+            if (!disjoint) continue;
+            for (AstAssertCtlTarget* const targetp : routep->targetspList()) {
+                VN_AS(targetp->statep(), VarXRef)->inlinedDots("");
+            }
+            AstAssertCtlTargetSet* const sharedp = new AstAssertCtlTargetSet{
+                routep->fileline(), routep->targetsp()->unlinkFrBackWithNext()};
+            rootp->addMiscsp(sharedp);
+            sets.push_back(sharedp);
+            for (const AstAssertCtlCallerRef* const memberp : routep->callerspList()) {
+                index.byCaller.at(memberp->callerp()).sharedp = sharedp;
+            }
         }
     }
 
@@ -293,26 +327,32 @@ class ScopeVisitor final : public VNVisitor {
         // Capture the live operations before changing their tree ownership.
         std::vector<AstAssertCtlApply*> applies;
         rootp->foreach([&](AstAssertCtlApply* applyp) { applies.push_back(applyp); });
-        std::unordered_set<AstAssertCtlTargetSet*> sourceSets;
+        std::unordered_map<AstAssertCtlTargetSet*, uint32_t> sourceSets;
         for (AstAssertCtlApply* const applyp : applies) {
-            if (AstAssertCtlTargetSet* const setp = applyp->targetSetp()) {
-                if (sourceSets.emplace(setp).second) sets.push_back(setp);
-                continue;
+            AstAssertCtlTargetSet* const sourcep = applyp->targetSetp();
+            uint32_t ordinal = 0;
+            if (sourcep) {
+                const auto source = sourceSets.try_emplace(sourcep, 0);
+                if (source.second) {
+                    sets.push_back(sourcep);
+                    separateAbsoluteTargets(sourcep->targetsp(), source.first->second, nullptr);
+                }
+                ordinal = source.first->second;
             }
             AstAssertCtlPlan* const planp = applyp->planp();
             if (planp && m_assertCtlPlans[planp].sourceUses++) continue;
             if (!planp && !applyp->targetsp()) continue;
             AstAssertCtlTargetSet* const sharedp
-                = new AstAssertCtlTargetSet{applyp->fileline(), nullptr};
-            uint32_t ordinal = 0;
+                = sourcep ? nullptr : new AstAssertCtlTargetSet{applyp->fileline(), nullptr};
+            separateAbsoluteTargets(applyp->targetsp(), ordinal, sharedp);
             if (planp) {
                 for (AstAssertCtlTargetSet* const setp : planp->setspList()) {
-                    separateAbsoluteTargets(setp->targetsp(), ordinal, *sharedp,
-                                            !setp->callersp());
+                    separateAbsoluteTargets(setp->targetsp(), ordinal,
+                                            setp->callersp() ? nullptr : sharedp);
                 }
-            } else {
-                separateAbsoluteTargets(applyp->targetsp(), ordinal, *sharedp, true);
             }
+            // A source-provided shared list has priority over any plan route.
+            if (sourcep) continue;
             if (sharedp->targetsp()) {
                 rootp->addMiscsp(sharedp);
                 sets.push_back(sharedp);
@@ -323,6 +363,7 @@ class ScopeVisitor final : public VNVisitor {
                 }
             } else {
                 VL_DO_DANGLING(sharedp->deleteTree(), sharedp);
+                if (planp) shareAssertionCohorts(rootp, planp, m_assertCtlPlans.at(planp), sets);
             }
         }
         return sets;
@@ -508,7 +549,6 @@ class ScopeVisitor final : public VNVisitor {
             const auto found = index.byCaller.find(m_assertCtlCallerp);
             UASSERT_OBJ(found != index.byCaller.end(), nodep,
                         "Assertion selector plan has no route for this caller");
-            UASSERT_OBJ(!nodep->targetsp(), nodep, "Assertion selector plan already materialized");
             AssertCtlCallerRoutes& caller = found->second;
             ++caller.uses;
             UASSERT_OBJ(caller.uses <= index.sourceUses, nodep,
@@ -524,7 +564,9 @@ class ScopeVisitor final : public VNVisitor {
                     nodep->addTargetsp(targetsp->cloneTree(true));
                 }
             }
-            nodep->targetSetp(index.sharedp);
+            if (!nodep->targetSetp()) {
+                nodep->targetSetp(caller.sharedp ? caller.sharedp : index.sharedp);
+            }
             nodep->planp(nullptr);
         }
         iterateChildren(nodep);
