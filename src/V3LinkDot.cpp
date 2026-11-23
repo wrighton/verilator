@@ -114,33 +114,14 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     int m_number = 0;
     std::unordered_map<const AstNodeStmt*, Site> m_sites;
     std::vector<std::pair<AstNodeModule*, AstVar*>> m_declarations;
-    size_t m_selectors = 0;  // Selectors with hierarchy arguments
-    bool m_hasUntypedChecks = false;  // Global effects can also change unselected checks
-    std::vector<AstAssertCtlArgs*> m_wholeModel;  // Proven top selectors, not expanded yet
+    // Proven top selectors in encounter order, not expanded yet.
+    std::vector<std::pair<AstModule*, AstAssertCtlArgs*>> m_wholeModel;
     // Interned structural occurrences, independent of lexical blocks and flattened names.
     std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
-    AstModule* m_standaloneTopp = nullptr;
 
     void addSite(AstNodeStmt* nodep, VAssertType type, VAssertDirectiveType directive) {
         if (type == VAssertType::INTERNAL) return;
         m_sites.emplace(nodep, Site{m_modp, type, directive});
-        if (VN_IS(m_modp, Package) || VN_IS(m_modp, Class)) m_standaloneTopp = nullptr;
-    }
-    void visit(AstAssertCtl* nodep) override {
-        if (nodep->argsp()) ++m_selectors;
-        iterateChildren(nodep);
-    }
-    void visit(AstNodeFTask* nodep) override {
-        if (nodep->dpiImport() || nodep->dpiExport()) m_standaloneTopp = nullptr;
-        iterateChildren(nodep);
-    }
-    void visit(AstCStmtUser* nodep) override {
-        m_standaloneTopp = nullptr;
-        iterateChildren(nodep);
-    }
-    void visit(AstCExprUser* nodep) override {
-        m_standaloneTopp = nullptr;
-        iterateChildren(nodep);
     }
     void visit(AstNodeModule* nodep) override {
         VL_RESTORER(m_modp);
@@ -167,9 +148,6 @@ class LinkDotAssertCtlSites final : public VNVisitor {
                                  : nodep->uniquePragma()  ? VAssertType::UNIQUE
                                  : nodep->unique0Pragma() ? VAssertType::UNIQUE0
                                                           : VAssertType::INTERNAL;
-        if (type == VAssertType::INTERNAL && (nodep->fullPragma() || nodep->parallelPragma())) {
-            m_hasUntypedChecks = true;
-        }
         addSite(nodep, type, VAssertDirectiveType::ASSERT);
         iterateChildren(nodep);
     }
@@ -178,24 +156,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
 public:
     explicit LinkDotAssertCtlSites(AstNetlist* rootp)
         : m_rootp{rootp} {
-        // A library model can share its context with other models, whose state
-        // an explicit top-level selector must not change.
-        if (v3Global.opt.main() && v3Global.opt.cppFiles().empty() && !v3Global.opt.vpi()
-            && !v3Global.opt.systemC() && !v3Global.opt.hierarchical() && !v3Global.opt.hierChild()
-            && v3Global.opt.libCreate().empty()) {
-            for (AstNodeModule* const modp : rootp->modulespList()) {
-                if (!modp->isTop()) continue;
-                AstModule* const modulep = VN_CAST(modp, Module);
-                if (m_standaloneTopp || !modulep) {
-                    m_standaloneTopp = nullptr;
-                    break;
-                }
-                m_standaloneTopp = modulep;
-            }
-        }
         iterate(rootp);
     }
-    AstModule* standaloneTopp() const { return m_standaloneTopp; }
     AstAssertCtlCaller* callerp(const VSymEnt* symp) {
         if (!symp) return nullptr;
         AstNode* const nodep = symp->nodep();
@@ -213,7 +175,9 @@ public:
         m_callers.emplace(symp, resultp);
         return resultp;
     }
-    void deferWholeModel(AstAssertCtlArgs* argsp) { m_wholeModel.push_back(argsp); }
+    void deferWholeModel(AstModule* topp, AstAssertCtlArgs* argsp) {
+        m_wholeModel.emplace_back(topp, argsp);
+    }
     // Delay enumeration of proven whole-model scopes and insertion of state declarations.
     void attach();
     AstVar* select(AstNodeStmt* nodep, AstNodeModule*& ownerpr) {
@@ -357,26 +321,24 @@ public:
 };
 
 void LinkDotAssertCtlSites::attach() {
-    // Whole-model selectors can share the global path only if no other selector can
-    // establish a distinct history for an individual site.
-    if (!m_hasUntypedChecks && m_wholeModel.size() == m_selectors) {
-        VNDeleter deleter;
-        for (AstAssertCtlArgs* const argsp : m_wholeModel) {
-            VL_DO_DANGLING(deleter.pushDeletep(argsp->unlinkFrBack()), argsp);
+    // Explicit top selectors are model-local even if Verilator also emits a main.
+    std::unordered_map<const AstModule*, AstAssertCtlTargetSet*> shared;
+    for (const auto& selector : m_wholeModel) {
+        AstModule* const topp = selector.first;
+        AstAssertCtlArgs* const argsp = selector.second;
+        const auto entry = shared.try_emplace(topp, nullptr);
+        if (entry.second) {
+            const string& top = topp->name();
+            std::unordered_map<string, AstAssertCtlTarget*> targets;
+            AssertControlTargetVisitor{*this, topp, argsp, top, top, targets, false, true};
+            if (argsp->targetsp()) {
+                AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
+                    argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
+                m_rootp->addMiscsp(setp);
+                entry.first->second = setp;
+            }
         }
-    } else if (!m_wholeModel.empty()) {
-        // The concrete top and unlimited depth agree across these selectors.
-        AstAssertCtlArgs* const firstp = m_wholeModel.front();
-        const string& top = m_standaloneTopp->name();
-        std::unordered_map<string, AstAssertCtlTarget*> targets;
-        AssertControlTargetVisitor{*this, m_standaloneTopp, firstp, top,
-                                   top,   targets,          false,  true};
-        if (firstp->targetsp()) {
-            AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
-                firstp->fileline(), firstp->targetsp()->unlinkFrBackWithNext()};
-            m_rootp->addMiscsp(setp);
-            for (AstAssertCtlArgs* const argsp : m_wholeModel) argsp->sharedp(setp);
-        }
+        argsp->sharedp(entry.first->second);
     }
     for (const auto& declaration : m_declarations) {
         declaration.first->addStmtsp(declaration.second);
@@ -9003,22 +8965,25 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Scope names must not resolve as ordinary value expressions. Resolve them after
         // parameter and generate expansion, but before assertion lowering removes labels.
         if (!m_statep->forParamed()) return;
-        // Confirm the top name from this lexical scope; a nearer declaration can shadow it.
-        if (AstModule* const topp = m_statep->assertCtlSites().standaloneTopp()) {
+        // Resolve the top name at the statement, where a nearer declaration may shadow it.
+        // Partitioned designs use ordinary selection so each crossing reports its own error.
+        if (!v3Global.opt.hierarchical()) {
             AstNodeExpr* const itemp = nodep->itemsp();
             const AstConst* const levelp = VN_CAST(nodep->levelp(), Const);
             if (nodep->scoped() && itemp && !itemp->nextp()
                 && (!nodep->levelp()
                     || (levelp && !levelp->num().isOpaque() && levelp->num().isEqZero()))) {
                 const string path = assertControlPath(itemp);
-                if (path == "$root." + topp->origName()
-                    || (m_modp == topp && path == topp->origName())) {
+                const bool rootedTop = VString::startsWith(path, "$root.")
+                                       && path.find('.', sizeof("$root.") - 1) == string::npos;
+                if (rootedTop || (m_modp->isTop() && path == m_modp->origName())) {
                     string baddot;
                     VSymEnt* okp = nullptr;
                     const VSymEnt* const foundp = m_statep->findAssertCtlDotted(
                         itemp->fileline(), m_curSymp, path, baddot, okp, true);
-                    if (foundp && foundp->nodep() == topp) {
-                        m_statep->assertCtlSites().deferWholeModel(nodep);
+                    AstModule* const topp = foundp ? VN_CAST(foundp->nodep(), Module) : nullptr;
+                    if (topp && topp->isTop()) {
+                        m_statep->assertCtlSites().deferWholeModel(topp, nodep);
                         VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
                         return;
                     }
