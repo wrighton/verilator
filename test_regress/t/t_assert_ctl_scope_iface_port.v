@@ -205,9 +205,10 @@ module subgb (
   initial $assertoff(0, p.gb.a1);
 endmodule
 module subsub (
-    ifcg p
+    ifcg p,
+    input bit off
 );
-  initial $assertoff(0, p.sub.a1);
+  initial if (off) $assertoff(0, p.sub.a1);
 endmodule
 module sublev (
     ifcg p
@@ -463,7 +464,18 @@ module t;
   ifcg q2 (.clk(clk));
   ifcg q3 (.clk(clk));
   subgb sq0 (.p(q0));
-  subsub sq1 (.p(q1));
+  subsub sq1 (
+      .p(q1),
+      .off(1'b1)
+  );
+  subsub sq1b (
+      .p(q1),
+      .off(1'b0)
+  );
+  subsub sq3 (
+      .p(q3),
+      .off(1'b0)
+  );
   sublev sq2 (.p(q2));
   ifcg q4 (.clk(clk));
   sublev2 sq4 (.p(q4));
