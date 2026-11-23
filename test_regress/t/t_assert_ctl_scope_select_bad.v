@@ -38,5 +38,13 @@ module t;
     $assertoff(0, g[int'(cfg.SELECTED)]);
     $assertoff(0, g[cfg.SELECTED[0]]);
     $assertoff(0, g[(choice.IDX < 32'sd0) ? i : 0]);
+    // Runtime references are illegal even when the expression's value is fixed.
+    $assertoff(0, g[1'b0 && i]);
+    $assertoff(0, g[1'b1 || i]);
+    $assertoff(0, g[i & 0]);
+    $assertoff(0, g[0 * i]);
+    $assertoff(0, g[1'b1 ? 0 : i]);
+    $assertoff(0, g[i ^ i]);
+    $assertoff(0, g[1'b0 && ($bits(i) + i)]);
   end
 endmodule
