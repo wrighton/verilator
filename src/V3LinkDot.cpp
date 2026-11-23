@@ -8876,19 +8876,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
             symIterateNull(selp->bitp(), m_curSymp);
-            AstNodeExpr* const bitp = selp->bitp();
-            // Width elaborated constant expressions (including pre-selects), but do not
-            // start function simulation or width runtime references inside LinkDot.
-            const bool foldIndex
-                = m_statep->forParamed() && !VN_IS(bitp, Const)
-                  && !bitp->exists([](const AstNode* nodep) {
-                         if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
-                             return !refp->varp() || !refp->varp()->isParam()
-                                    || !VN_IS(refp->varp()->valuep(), Const);
-                         }
-                         return VN_IS(nodep, NodeFTaskRef);
-                     });
-            if (foldIndex) V3Const::constifyParamsNoWarnEdit(bitp);
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             const AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
