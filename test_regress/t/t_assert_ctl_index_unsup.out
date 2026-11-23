@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_assert_ctl_index_unsup.v:14:30: Unsupported: Generate-array-qualified parameter in assertion control scope index.
+                                                      : ... note: In instance 't'
+   14 |   initial $assertoff(0, g[int'(cfg[1].IDX)].chk);
+      |                              ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=5.055
+%Error: Exiting due to 1 error(s)
