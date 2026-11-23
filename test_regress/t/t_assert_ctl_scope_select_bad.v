@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: 2026 Wilson Snyder
 // SPDX-License-Identifier: CC0-1.0
 
-module t;
+module t(input bit clk);
+  default clocking cb @(posedge clk);
+  endclocking
   for (genvar gi = 0; gi < 2; ++gi) begin : g
     initial check : assert (1'b1);
   end
@@ -53,6 +55,8 @@ module t;
     $assertoff(0, g[1'b0 && ($urandom != 0)]);
     $assertoff(0, g[1'b0 && ($test$plusargs("SELECT") != 0)]);
     $assertoff(0, g[1'b0 && ($get_initial_random_seed() != 0)]);
+    $assertoff(0, g[1'b0 && $past(1'b1)]);
+    $assertoff(0, g[1'b0 && $stable(1'b1)]);
     // Out-of-range indices must not wrap to a valid hierarchy element.
     $assertoff(0, g[64'sd2147483648]);
     $assertoff(0, g[-64'sd2147483649]);

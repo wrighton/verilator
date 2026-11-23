@@ -9074,11 +9074,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
             // Check before folding can erase a runtime value or an unsupported call.
             if (selp->bitp()->exists([](const AstNode* subp) {
-                    if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
-                        return !refp->varp() || !refp->varp()->isParam();
-                    }
-                    return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, GetInitialRandomSeed)
-                           || !subp->isPredictOptimizable();
+                    return V3LinkDot::assertCtlRuntimeIndexNode(subp);
                 })) {
                 if (nonconstantp) *nonconstantp = true;
                 return "";
@@ -9602,6 +9598,24 @@ bool V3LinkDot::pathSegments(AstNode* pathp, PathSegments& segs) {
     if (constants) V3Const::constifyParamsEdit(selp->bitp());  // bitp may change
     segs.emplace_back(fromp->name(), selp->bitp());
     return true;
+}
+
+bool V3LinkDot::assertCtlRuntimeIndexNode(const AstNode* nodep) {
+    if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
+        return !refp->varp() || !refp->varp()->isParam();
+    }
+    if (VN_IS(nodep, NodeFTaskRef) || !nodep->isPredictOptimizable()) return true;
+    if (!nodep->isSystemFunc()) return false;
+    // Predictability is not enough: sampled values and context queries are runtime
+    // functions even with constant inputs. Allow the constant numeric system functions
+    // and compilation-unit queries; their operand values are checked separately.
+    return !VN_IS(nodep, NodeSystemUniopD) && !VN_IS(nodep, NodeSystemBiopD)
+           && !VN_IS(nodep, BitsToRealD) && !VN_IS(nodep, CLog2) && !VN_IS(nodep, CountBits)
+           && !VN_IS(nodep, CountOnes) && !VN_IS(nodep, ISToRD) && !VN_IS(nodep, IToRD)
+           && !VN_IS(nodep, IsUnbounded) && !VN_IS(nodep, IsUnknown) && !VN_IS(nodep, OneHot)
+           && !VN_IS(nodep, OneHot0) && !VN_IS(nodep, RealToBits) && !VN_IS(nodep, RToIRoundS)
+           && !VN_IS(nodep, RToIS) && !VN_IS(nodep, Signed) && !VN_IS(nodep, TimeUnit)
+           && !VN_IS(nodep, Unsigned);
 }
 
 void V3LinkDot::linkDotGuts(AstNetlist* rootp, VLinkDotStep step) {
