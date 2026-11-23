@@ -192,8 +192,21 @@ module t;
       .N(1),
       .OFF(1)
   ) r3 ();
+  par #(
+      .N(0),
+      .OFF(1)
+  ) p4 ();
+  par #(
+      .N(0),
+      .OFF(0)
+  ) p5 ();
   initial begin
     #2;
+    // An empty selected block is a no-op, not a global control or a missing caller.
+    `checkd(p4.gb_failures, 0);
+    `checkd(p5.gb_failures, 0);
+    `checkd(p4.sib.failures, 0);
+    `checkd(p5.sib.failures, 1);
     `checkd(s0.gb_failures, 0);
     `checkd(s1.gb_failures, 2);
     `checkd(s2.gb_failures, 0);
