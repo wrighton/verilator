@@ -228,6 +228,11 @@ class EmitCModel final : public EmitCFunc {
         }
         ofp()->putsPrivate(false);  // public:
         puts("void final();\n");
+        if (EmitCUtil::isVpiLibrary()) {
+            puts("/// Internal: add the VPI scopes of this library instance, the top level\n");
+            puts("/// ones under 'abovep', the VPI scope above it in the model using it\n");
+            puts("void __VvpiAttach(const VerilatedScope* abovep);\n");
+        }
 
         puts("/// Are there scheduled events to handle?\n");
         puts("bool eventsPending();\n");
