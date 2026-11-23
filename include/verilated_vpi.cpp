@@ -3790,6 +3790,13 @@ void vpi_get_value(vpiHandle object, p_vpi_value valuep) {
     VL_VPI_ERROR_(__FILE__, __LINE__, "%s: Unsupported vpiHandle '%p'", __func__, object);
 }
 
+// After a write through the VPI into 'vop', have the model using the instance of a library that
+// holds it evaluate the instance again
+static void vl_vpi_written(const VerilatedVpioVar* vop) {
+    const VerilatedSyms* const symsp = vop->scopep()->symsp();
+    if (VL_UNLIKELY(symsp->__Vm_vpiWriteCbp)) symsp->__Vm_vpiWriteCbp(symsp->__Vm_vpiWriteCbDatap);
+}
+
 vpiHandle vpi_put_value(vpiHandle object, p_vpi_value valuep, p_vpi_time /*time_p*/,
                         PLI_INT32 flags) {
     VL_DEBUG_IF_PLI(VL_DBG_MSGF("- vpi: vpi_put_value %p %p\n", object, valuep););
@@ -3847,11 +3854,9 @@ vpiHandle vpi_put_value(vpiHandle object, p_vpi_value valuep, p_vpi_time /*time_
             return object;
         }
         VerilatedVpiImp::evalNeeded(true);
-        // A model using this instance of a library evaluates it again
-        const VerilatedSyms* const symsp = baseSignalVop->scopep()->symsp();
-        if (VL_UNLIKELY(symsp->__Vm_vpiWriteCbp)) {
-            symsp->__Vm_vpiWriteCbp(symsp->__Vm_vpiWriteCbDatap);
-        }
+        // Before the write, as the paths below return in many places; a write rejected below
+        // costs one more evaluation of the instance
+        vl_vpi_written(baseSignalVop);
         const int varBits = baseSignalVop->bitSize();
 
         const auto forceControlSignals
@@ -4774,6 +4779,7 @@ void vpi_put_value_array(vpiHandle object, p_vpi_arrayvalue arrayvalue_p, PLI_IN
     }
     if (num == 0) return;
     vl_put_value_array(object, arrayvalue_p, index_p, num);
+    vl_vpi_written(vop);
 }
 
 // time processing
