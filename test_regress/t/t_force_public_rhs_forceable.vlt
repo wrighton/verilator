@@ -1,0 +1,30 @@
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain.
+// SPDX-FileCopyrightText: 2026 Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+
+`verilator_config
+
+public_flat_rw -module "t" -var "y"
+public_flat_rw -module "t" -var "w"
+public_flat_rw -module "t" -var "m"
+public_flat_rw -module "t" -var "v"
+public_flat_rw -module "t" -var "r"
+public_flat_rw -module "t" -var "n"
+public_flat_rw -module "t" -var "p"
+public_flat_rw -module "t" -var "c"
+public_flat_rw -module "t" -var "ca"
+public_flat_rw -module "t" -var "cy"
+public_flat_rw -module "t" -var "vpi_changes"
+public_flat_rw -module "t" -var "vpi_c_changes"
+forceable -module "t" -var "y"
+forceable -module "t" -var "w"
+forceable -module "t" -var "m"
+forceable -module "t" -var "v"
+forceable -module "t" -var "r"
+forceable -module "t" -var "n"
+forceable -module "t" -var "p"
+forceable -module "t" -var "c"
+forceable -module "t" -var "ca"
+forceable -module "t" -var "cy"
