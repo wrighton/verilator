@@ -116,6 +116,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     std::vector<std::pair<AstNodeModule*, AstVar*>> m_declarations;
     // Proven top selectors in encounter order, not expanded yet.
     std::vector<std::pair<AstModule*, AstAssertCtlArgs*>> m_wholeModel;
+    // Repeated references to the same top within one selector select it only once.
+    std::unordered_map<const AstAssertCtlArgs*, const AstModule*> m_wholeModelTop;
     // Interned structural occurrences, independent of lexical blocks and flattened names.
     std::unordered_map<const VSymEnt*, AstAssertCtlCaller*> m_callers;
 
@@ -175,8 +177,10 @@ public:
         m_callers.emplace(symp, resultp);
         return resultp;
     }
-    void deferWholeModel(AstModule* topp, AstAssertCtlArgs* argsp) {
-        m_wholeModel.emplace_back(topp, argsp);
+    bool deferWholeModel(AstModule* topp, AstAssertCtlArgs* argsp) {
+        const auto entry = m_wholeModelTop.emplace(argsp, topp);
+        if (entry.second) m_wholeModel.emplace_back(topp, argsp);
+        return entry.first->second == topp;
     }
     // Delay enumeration of proven whole-model scopes and insertion of state declarations.
     void attach();
@@ -235,11 +239,10 @@ class AssertControlTargetVisitor final : public VNVisitor {
     }
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
+        if (!reachesDepth(m_depth + 1)) return;
         if (v3Global.opt.hierarchical() && nodep->modp()->hierBlock()) {
-            if (reachesDepth(m_depth + 1)) {
-                warnAssertControlHierarchy(m_argsp, nodep,
-                                           VString::dot(m_childPath, ".", nodep->name()));
-            }
+            warnAssertControlHierarchy(m_argsp, nodep,
+                                       VString::dot(m_childPath, ".", nodep->name()));
             return;
         }
         VL_RESTORER_COPY(m_instancePath);
@@ -330,13 +333,17 @@ void LinkDotAssertCtlSites::attach() {
         if (entry.second) {
             const string& top = topp->name();
             std::unordered_map<string, AstAssertCtlTarget*> targets;
-            AssertControlTargetVisitor{*this, topp, argsp, top, top, targets, false, true};
-            if (argsp->targetsp()) {
+            // The shared list is independent of any individual call's depth and type filters.
+            AstAssertCtlArgs* const prototypep
+                = new AstAssertCtlArgs{argsp->fileline(), nullptr, nullptr};
+            AssertControlTargetVisitor{*this, topp, prototypep, top, top, targets, false, true};
+            if (prototypep->targetsp()) {
                 AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
-                    argsp->fileline(), argsp->targetsp()->unlinkFrBackWithNext()};
+                    argsp->fileline(), prototypep->targetsp()->unlinkFrBackWithNext()};
                 m_rootp->addMiscsp(setp);
                 entry.first->second = setp;
             }
+            VL_DO_DANGLING(prototypep->deleteTree(), prototypep);
         }
         argsp->sharedp(entry.first->second);
     }
@@ -8944,6 +8951,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                            << AstNode::prettyName(path) << "' (IEEE 1800-2023 20.11).");
             return;
         }
+        // Share the rooted top component even when the selector has other items or a depth
+        // limit. Hierarchical partitions keep per-call diagnostics at the original operand.
+        if (!v3Global.opt.hierarchical()) {
+            const AstModule* const modp = VN_CAST(m_modp, Module);
+            AstModule* const topp = VN_CAST(targetp, Module);
+            if (topp && topp->isTop() && foundp->parentp() == m_statep->rootEntp()
+                && (VString::startsWith(path, "$root.") || topp == modp)
+                && m_statep->assertCtlSites().deferWholeModel(topp, argsp)) {
+                return;
+            }
+        }
         const VSymEnt* ownerSymp = foundp;
         while (ownerSymp && !VN_IS(ownerSymp->nodep(), NodeModule)
                && !VN_IS(ownerSymp->nodep(), Cell)) {
@@ -9022,31 +9040,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // Scope names must not resolve as ordinary value expressions. Resolve them after
         // parameter and generate expansion, but before assertion lowering removes labels.
         if (!m_statep->forParamed()) return;
-        // Resolve the top name at the statement, where a nearer declaration may shadow it.
-        // Partitioned designs use ordinary selection so each crossing reports its own error.
-        if (!v3Global.opt.hierarchical()) {
-            AstNodeExpr* const itemp = nodep->itemsp();
-            const AstConst* const levelp = VN_CAST(nodep->levelp(), Const);
-            if (nodep->scoped() && itemp && !itemp->nextp()
-                && (!nodep->levelp()
-                    || (levelp && !levelp->num().isOpaque() && levelp->num().isEqZero()))) {
-                const string path = assertControlPath(itemp);
-                const bool rootedTop = VString::startsWith(path, "$root.")
-                                       && path.find('.', sizeof("$root.") - 1) == string::npos;
-                if (rootedTop || (m_modp->isTop() && path == m_modp->origName())) {
-                    string baddot;
-                    VSymEnt* okp = nullptr;
-                    const VSymEnt* const foundp = m_statep->findAssertCtlDotted(
-                        itemp->fileline(), m_curSymp, path, baddot, okp, true);
-                    AstModule* const topp = foundp ? VN_CAST(foundp->nodep(), Module) : nullptr;
-                    if (topp && topp->isTop()) {
-                        m_statep->assertCtlSites().deferWholeModel(topp, nodep);
-                        VL_DO_DANGLING(pushDeletep(itemp->unlinkFrBack()), itemp);
-                        return;
-                    }
-                }
-            }
-        }
         std::unordered_map<string, AstAssertCtlTarget*> targets;
         if (!nodep->scoped()) {
             for (AstNodeModule* const modp : v3Global.rootp()->modulespList()) {
