@@ -51,7 +51,7 @@ module t;
     $assertoff(0, g[1'b1 || ($time != 0)]);
     $assertoff(0, g[1'b0 && ($realtime != 0.0)]);
     $assertoff(0, g[1'b0 && ($urandom != 0)]);
-    $assertoff(0, g[1'b0 && $test$plusargs("SELECT")]);
+    $assertoff(0, g[1'b0 && ($test$plusargs("SELECT") != 0)]);
     // Out-of-range indices must not wrap to a valid hierarchy element.
     $assertoff(0, g[64'sd2147483648]);
     $assertoff(0, g[-64'sd2147483649]);
