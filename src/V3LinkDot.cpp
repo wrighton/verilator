@@ -77,7 +77,6 @@
 #include "V3String.h"
 #include "V3SymTable.h"
 #include "V3UniqueNames.h"
-#include "V3Width.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -8876,30 +8875,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
             return lhs.empty() || rhs.empty() ? "" : VString::dot(lhs, ".", rhs);
         }
         if (AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
-            const bool deferred
-                = m_statep->forParamed() && selp->bitp()->exists([](const AstEnumItemRef* refp) {
-                      return !refp->itemp();
-                  });
             const int errors = V3Error::errorCount();
             symIterateNull(selp->bitp(), m_curSymp);
             if (V3Error::errorCount() != errors) return "";
-            AstNodeExpr* indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
-            // An explicit enum value can become a literal only after relinking. Width the
-            // remaining literal expression, without following other declarations or calls.
-            if (deferred && !VN_IS(indexp, Const) && !indexp->exists([](const AstNode* subp) {
-                    return !VN_IS(subp, Const) && !VN_IS(subp, BasicDType)
-                           && !VN_IS(subp, NodeUniop) && !VN_IS(subp, NodeBiop)
-                           && !VN_IS(subp, NodeTriop) && !VN_IS(subp, Cast);
+            if (selp->bitp()->exists([](const AstEnumItemRef* refp) {
+                    return refp->containsGenBlock() && !refp->dotted().empty();
                 })) {
-                // Folding an un-widthed enum reference can leave its literal without a dtype.
-                indexp->foreach([&](AstConst* constp) {
-                    if (constp->dtypep()) return;
-                    AstConst* const typedp = new AstConst{constp->fileline(), constp->num()};
-                    constp->replaceWith(typedp);
-                    VL_DO_DANGLING(pushDeletep(constp), constp);
-                });
-                indexp = V3Const::constifyEdit(VN_AS(V3Width::widthParamsEdit(indexp), NodeExpr));
+                // Unlike parameter names, enum names in a constant primary do not take
+                // a generate hierarchy prefix.
+                if (m_statep->forParamed()) {
+                    selp->bitp()->v3error(
+                        "Generate-qualified enum item in assertion control scope index "
+                        "(IEEE 1800-2023 A.8.4, 11.2.1).");
+                }
+                return "";
             }
+            AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             const AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
