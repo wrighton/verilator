@@ -109,6 +109,7 @@ class ScopeVisitor final : public VNVisitor {
             unions;  // One absolute target list per distinct combination of components
     };
     std::vector<AstAssertCtlTargetSet*> m_assertCtlTargetSets;  // Awaiting attachment to top
+    std::unordered_map<const AstAssertCtlTargetSet*, size_t> m_assertCtlRows;  // Base sizes
     // Lookup of the structural child occurrence by (parent occurrence, declaration).
     std::unordered_map<const AstAssertCtlCaller*,
                        std::unordered_map<const AstNode*, AstAssertCtlCaller*>>
@@ -316,12 +317,46 @@ class ScopeVisitor final : public VNVisitor {
         }
     }
 
+    size_t assertionTargetRows(const AstAssertCtlTargetSet* setp) {
+        if (!setp) return 0;
+        const auto entry = m_assertCtlRows.try_emplace(setp, 0);
+        if (entry.second) {
+            for (const AstAssertCtlTarget* const targetp : setp->targetspList()) {
+                (void)targetp;
+                ++entry.first->second;
+            }
+        }
+        return entry.first->second;
+    }
+
     AstAssertCtlTargetSet* shareAssertionTargets(AstAssertCtlApply* applyp,
                                                  AssertCtlPlanIndex& index,
                                                  const AssertCtlComponents& cohorts) {
         AstAssertCtlTargetSet* const sourcep = applyp->targetSetp();
         AstAssertCtlTargetSet* const commonp = index.sharedp;
         if (cohorts.empty() && !(sourcep && commonp)) return sourcep ? sourcep : commonp;
+
+        const size_t sourceRows = assertionTargetRows(sourcep);
+        const size_t commonRows = assertionTargetRows(commonp);
+        if (!cohorts.empty() && (sourceRows || commonRows)) {
+            size_t largestCohort = 0;
+            for (const AstAssertCtlTargetSet* const routep : cohorts) {
+                largestCohort = std::max(largestCohort, assertionTargetRows(routep));
+            }
+            if (std::max(sourceRows, commonRows) >= largestCohort) {
+                // Keep a dominant common list shared across distinct cohort combinations.
+                const bool preferSource = sourceRows >= commonRows;
+                const AstAssertCtlTargetSet* const residualp = preferSource ? commonp : sourcep;
+                if (residualp && residualp->targetsp()) {
+                    applyp->addTargetsp(residualp->targetsp()->cloneTree(true));
+                }
+                for (const AstAssertCtlTargetSet* const routep : cohorts) {
+                    if (routep->targetsp())
+                        applyp->addTargetsp(routep->targetsp()->cloneTree(true));
+                }
+                return preferSource ? sourcep : commonp;
+            }
+        }
 
         AssertCtlComponents components;
         components.reserve(cohorts.size() + 2);
