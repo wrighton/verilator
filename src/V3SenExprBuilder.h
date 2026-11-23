@@ -289,7 +289,7 @@ private:
                 resultp->dtypeSetBit();
                 return {wrapExprWithNullCheck(flp, resultp, senp), fireAtInit};
             }
-            return {wrapExprWithNullCheck(flp, new AstNeq{flp, currp(), prevp()}, senp),
+            return {wrapExprWithNullCheck(flp, newChangedp(flp, currp(), prevp()), senp),
                     fireAtInit};
         }
         case VEdgeType::ET_BOTHEDGE:  //
@@ -357,6 +357,13 @@ private:
     }
 
 public:
+    // Returns whether a value differs from its previous value. A real compares by its bits, as
+    // -0.0 == 0.0 though they differ, and so that an unchanged NaN is no change.
+    static AstNodeExpr* newChangedp(FileLine* flp, AstNodeExpr* currp, AstNodeExpr* prevp) {
+        if (!currp->dtypep()->skipRefp()->isDouble()) return AstNeq::newTyped(flp, currp, prevp);
+        return new AstNeq{flp, new AstRealToBits{flp, currp}, new AstRealToBits{flp, prevp}};
+    }
+
     // Returns the condition under which evaluating 'exprp' reads through no null class or
     // virtual interface reference, or nullptr if it reads through none
     static AstNodeExpr* newNullGuard(AstNodeExpr* const exprp) {

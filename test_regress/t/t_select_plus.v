@@ -62,7 +62,7 @@ module t (
       8'd00: ;
       8'd01: begin if ((to^from)!==80'h0000000000000000005b) $stop; end
       8'd02: begin if ((to^from)!==80'h0000000000000000006c) $stop; end
-      8'd03: begin if ((to^from)!==80'h0000000000000000000e) $stop; end
+      8'd03: begin if ((to^from)!==80'h0000000000000000000f) $stop; end  // -: writes bit 4 only
       8'd04: begin if ((to^from)!==80'h6d000000000000000000) $stop; end
       8'd05: begin if (((to^from)&~80'hf)!==80'h90000000000000000000) $stop; end  // Exceed bounds, verilator may write index 0
       8'd06: begin if (((to^from)&~80'hf)!==80'h00000000000000000020) $stop; end  // Exceed bounds, verilator may write index 0

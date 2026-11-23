@@ -7,6 +7,7 @@
 // verilog_format: off
 `define stop $stop
 `define checks(gotv,expv) do if ((gotv) != (expv)) begin $write("%%Error: %s:%0d:  got='%s' exp='%s'\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+`define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
 // verilog_format: on
 
 module t;
@@ -45,12 +46,6 @@ module t;
       `checks(iq[2][1], "world");
     end
 
-`ifndef verilator
-    // Need wide conversion into VlUnpacked types
-
-    // If we convert all arrays to VlUnpacked it works, so we need to track
-    // data types and insert conversions perhaps in V3Cast, but we currently
-    // don't know the output datatypes, so work needed.
     begin
       q_warray_t iq;
       warray_t a;
@@ -63,8 +58,37 @@ module t;
       b0 = iq[0];
       `checks(b0[0], "abcdefg_ijkl");
       `checks(b0[1], "012123123128");
+
+      // Test: selects of a wide element of a queued array
+      `checkh(iq[0][0][7:0], 8'h6c);
+      `checkh(iq[0][1][3], 1'b1);
     end
-`endif
+
+    begin
+      // Test: selects of a wide element of a queued array at runtime indices, popped once
+      typedef bit [94:0] w95_t;
+      typedef w95_t w95_array_t[3:1];
+      w95_array_t q[$];
+      w95_array_t row;
+      int j;
+      int b;
+      bit got;
+      bit [6:0] got7;
+      row = '{95'h1, 95'h4000_0000_0000_0000_0000_0002, 95'h4};
+      q.push_back(row);
+      row = '{95'h0, 95'h0, 95'h0};
+      q.push_back(row);
+      j = $urandom_range(2, 2);
+      b = $urandom_range(94, 94);
+      `checkh(q[0][j][b], 1'b1);
+      `checkh(q[0][j][b-:7], 7'h40);
+      got = q.pop_front()[j][1];
+      `checkh(got, 1'b1);
+      `checkh(q.size(), 1);
+      got7 = q.pop_front()[j][b-:7];
+      `checkh(got7, 7'h0);
+      `checkh(q.size(), 0);
+    end
 
     $write("*-* All Finished *-*\n");
     $finish;

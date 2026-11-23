@@ -2731,7 +2731,17 @@ V3Number& V3Number::opSel(const V3Number& lhs, uint32_t msbval, uint32_t lsbval)
 
 V3Number& V3Number::opSelInto(const V3Number& lhs, const V3Number& lsb, int width) {
     if (lsb.isFourState()) return *this;
-    return opSelInto(lhs, lsb.toSInt(), width);
+    // Bits selected outside this number are not written (IEEE 1800-2023 11.5.1)
+    if (lsb.isSigned() && lsb.isNegative()) {
+        V3Number below{lsb};
+        below.opNegate(lsb);
+        if (!below.fitsInUInt() || below.toUInt() >= static_cast<uint32_t>(width)) return *this;
+        V3Number shifted{lhs};
+        shifted.opShiftR(lhs, below);
+        return opSelInto(shifted, 0, width - static_cast<int>(below.toUInt()));
+    }
+    if (!lsb.fitsInUInt() || lsb.toUInt() >= static_cast<uint32_t>(this->width())) return *this;
+    return opSelInto(lhs, static_cast<int>(lsb.toUInt()), width);
 }
 
 V3Number& V3Number::opSelInto(const V3Number& lhs, int lsbval, int width) {

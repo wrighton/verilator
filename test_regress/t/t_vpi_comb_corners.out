@@ -13,6 +13,7 @@ t (vpiModule) t  vpiDefName=t
     frc2 (vpiReg) t.frc2 
     frc2__VforceEn (vpiReg) t.frc2__VforceEn 
     frc2__VforceVal (vpiReg) t.frc2__VforceVal 
+    frc2__VforceVpi (vpiReg) t.frc2__VforceVpi 
     frc2_force (vpiReg) t.frc2_force 
     frc__VforceEn (vpiReg) t.frc__VforceEn 
     frc__VforceVal (vpiReg) t.frc__VforceVal 
@@ -112,6 +113,7 @@ t.frc = 11 vpiSize=7
 t.frc2 = 22 vpiSize=7
 t.frc2__VforceEn = 00 vpiSize=7
 t.frc2__VforceVal = 00 vpiSize=7
+t.frc2__VforceVpi = 00 vpiSize=7
 t.frc2_force = 0 vpiSize=1
 t.frc__VforceEn = 00 vpiSize=7
 t.frc__VforceVal = 00 vpiSize=7
