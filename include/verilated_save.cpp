@@ -262,9 +262,28 @@ VerilatedSerialize& operator<<(VerilatedSerialize& os, VerilatedContext* rhsp) {
 VerilatedDeserialize& operator>>(VerilatedDeserialize& os, VerilatedContext* rhsp) {
     {
         const VerilatedLockGuard lock{rhsp->m_assertCtlMutex};
+        const auto assertDefaults = [rhsp]() VL_REQUIRES(rhsp->m_assertCtlMutex) {
+            const auto& state = rhsp->m_s;
+            constexpr size_t masks = 5;
+            std::array<uint32_t, masks + VerilatedContext::ASSERT_CONTROL_SLOT_COUNT> defaults{{
+                state.m_assertOn.load(),
+                state.m_assertLock.load(),
+                state.m_assertPassOnVacuous.load(),
+                state.m_assertPassOnNonvacuous.load(),
+                state.m_assertFailOn.load(),
+            }};
+            for (size_t i = 0; i < state.m_assertKill.size(); ++i) {
+                defaults[masks + i] = state.m_assertKill[i].load();
+            }
+            return defaults;
+        };
+        const auto before = assertDefaults();
         os.read(rhsp->serialized1Ptr(), VerilatedContext::serialized1Size());
-        for (VlAssertControl* const statep : rhsp->m_assertControls) {
-            rhsp->assertCtlRefresh(*statep);
+        // Generated restore routines may load the same context once per instance.
+        if (before != assertDefaults()) {
+            for (VlAssertControl* const statep : rhsp->m_assertControls) {
+                rhsp->assertCtlRefresh(*statep);
+            }
         }
     }
     std::string s;
