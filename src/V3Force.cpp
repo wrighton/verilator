@@ -866,8 +866,7 @@ public:
         if (!ownerId) return;
         ++m_statSyncedForceVars;
         AstNodeDType* const enDtypep = info.m_forceEnVscp->dtypep();
-        // Writes from outside are seen where the bits of the value can be compared
-        if (isBitwiseDType(varp) || varp->isDouble()) {
+        if (canSeeForceValWrites(varp)) {
             info.m_forceValSyncedVscp
                 = createHelperVar(info, "__VforceValSynced", info.m_forceValVscp->dtypep());
         }
@@ -883,6 +882,11 @@ public:
             varp->forceVpiVarp(vpiVarp);
             varp->addNextHere(vpiVarp);
         }
+    }
+
+    // Whether writes to the force value from outside can be seen, as its bits compare
+    static bool canSeeForceValWrites(const AstVar* varp) {
+        return isBitwiseDType(varp) || varp->isDouble();
     }
 
     // Bits of the force value written from outside the forces in code since they last wrote it
@@ -921,21 +925,22 @@ public:
         AstVarRef* const rhsp = new AstVarRef{flp, finfo.m_rhsVarVscp, VAccess::READ};
         markNonReplaceable(rhsp);
         AstVarRef* const valWritep = new AstVarRef{flp, info.m_forceValVscp, VAccess::WRITE};
-        AstNodeStmt* syncp;
-        if (isBitwiseDType(varp)) {
-            // forceVal = (forceVal & ~own) | (rhs_padded & own);
-            AstNodeExpr* const paddedp
-                = zeroPadToBaseWidth(rhsp, varp->width(), finfo.m_padLsb, finfo.m_padMsb);
-            AstNodeExpr* const keptp
-                = new AstAnd{flp, new AstVarRef{flp, info.m_forceValVscp, VAccess::READ},
-                             new AstNot{flp, ownp->cloneTreePure(false)}};
-            syncp = new AstAssign{flp, valWritep,
-                                  new AstOr{flp, keptp, new AstAnd{flp, paddedp, ownp}}};
-        } else {
-            // if (own) forceVal = rhs;
-            syncp
-                = new AstIf{flp, ownp, new AstAssign{flp, valWritep, castToNodeDType(rhsp, varp)}};
-        }
+        // Bitwise: forceVal = (forceVal & ~own) | (rhs_padded & own);
+        // Otherwise: if (own) forceVal = rhs;
+        AstNodeStmt* const syncp
+            = isBitwiseDType(varp)
+                  ? static_cast<AstNodeStmt*>(new AstAssign{
+                        flp, valWritep,
+                        new AstOr{
+                            flp,
+                            new AstAnd{flp, new AstVarRef{flp, info.m_forceValVscp, VAccess::READ},
+                                       new AstNot{flp, ownp->cloneTreePure(false)}},
+                            new AstAnd{flp,
+                                       zeroPadToBaseWidth(rhsp, varp->width(), finfo.m_padLsb,
+                                                          finfo.m_padMsb),
+                                       ownp}}})
+                  : new AstIf{flp, ownp,
+                              new AstAssign{flp, valWritep, castToNodeDType(rhsp, varp)}};
         stmtsp = AstNode::addNextNull(stmtsp, syncp);
         if (info.m_forceValSyncedVscp) {
             // forceValSynced = forceVal;

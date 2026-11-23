@@ -6,15 +6,35 @@
 
 // verilog_format: off
 `define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
 `define checkh(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got='h%x exp='h%x\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0)
 // verilog_format: on
 
 // A force keeps following its value (IEEE 1800-2023 10.6.2), until a force from C++ (by the
-// .cpp, at 3 ns) overrides it
+// .cpp, at 3 ns) overrides it, and value change callbacks see it change
 
 `timescale 1ns / 1ns
 
-module t;
+module t (
+    input logic clk_in
+);
+  // A force applied again on each change of its value, of a variable driven from a top-level
+  // input, is seen by value change callbacks, whose rising edges the .cpp counts
+  int vpi_rises /*verilator public_flat_rw*/ = 0;
+  logic ysrc = 1'b0;
+  always #1 ysrc = ~ysrc;
+  logic y /*verilator public_flat_rw*/;
+  assign y = clk_in;
+  bit en = 1'b0;
+  always @(en or ysrc) if (en) force y = ysrc;
+  int edges = 0;
+  always @(posedge y) ++edges;
+  initial begin
+    #5 en = 1'b1;
+    #50 `checkd(edges, 25);
+    `checkd(vpi_rises, 25);
+  end
+
   // A force from C++ to values all bits do not have overrides all bits, until a later force in
   // code takes some back. The .cpp forces 'hcc.
   logic [7:0] xsrc = 8'h11;
@@ -57,7 +77,7 @@ module t;
   end
 
   initial begin
-    #12;
+    #60;
     $write("*-* All Finished *-*\n");
     $finish;
   end
