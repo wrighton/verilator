@@ -9393,6 +9393,8 @@ void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
             VL_DO_DANGLING(unusedArgs.pushDeletep(argsp->unlinkFrBack()), argsp);
         }
     });
+    // The stage check treats detached, still-allocated nodes as leaks.
+    unusedArgs.doDeletes();
     linkDotGuts(nodep, LDS_PARAMED);
     V3Global::dumpCheckGlobalTree("linkdotparam", 0, dumpTreeEitherLevel() >= 3);
 }
