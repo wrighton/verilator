@@ -1112,9 +1112,11 @@ struct VlHierTableEntry final {
 
 class VerilatedHierarchy final {
 public:
-    static void addFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp);
-    static void removeFromTable(const VlHierTableEntry* entp, size_t n,
-                                const VerilatedSyms* symsp);
+    // The top level scopes other than packages are under 'abovep', nullptr for the top level
+    static void addFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp,
+                             const VerilatedScope* abovep = nullptr);
+    static void removeFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp,
+                                const VerilatedScope* abovep = nullptr);
     static void clear();
 };
 
