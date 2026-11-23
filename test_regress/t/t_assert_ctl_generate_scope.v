@@ -8,6 +8,9 @@
 // verilog_format: on
 `timescale 1ns / 1ps
 module t;
+  bit idx;
+  typedef bit [6:0] fixed_t;
+  fixed_t fixed_value;
   for (genvar i = 0; i < 2; ++i) begin : g
     int failures = 0;
     initial begin
@@ -19,7 +22,14 @@ module t;
   end
   initial begin
     if ($test$plusargs("GLOBAL")) $assertoff;
-    else $assertoff(0, g[0].labelled_check);
+    else begin
+      // Fixed type queries do not read the runtime value of their operands.
+      $assertoff(0, g[$bits(idx) - 1].labelled_check);
+      $assertoff(0, g[$bits(fixed_t) - 7].labelled_check);
+      $assertoff(0, g[$bits(fixed_value) - 7].labelled_check);
+      $assertoff(0, g[$bits(type(fixed_value)) - 7].labelled_check);
+      $assertoff(0, g[$size(fixed_value) - 7].labelled_check);
+    end
     #2;
     `checkd(g[0].failures, 0);
     if ($test$plusargs("GLOBAL")) begin
