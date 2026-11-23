@@ -872,7 +872,7 @@ module escapes;
   int esc_q[$];
   int esc_dpi_out;
   \esc.ifc \i.f ();
-  \esc.sub \u.s (.\port.p (\i.f ));
+  \esc.sub \u.s (.\port.p (\i.f .\mp.m ));
   function int \f.e ();
     \f.e = 1;
   endfunction
