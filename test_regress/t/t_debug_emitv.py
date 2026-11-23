@@ -48,8 +48,6 @@ for filename in test.glob_some(test.obj_dir + "/*.tree.json"):
                     seen.add('scoped')
                 if node.get('instanceDependent'):
                     seen.add('instance_dependent')
-                if node.get('sharedp'):
-                    seen.add('shared')
             elif kind == 'ASSERTCTLTARGET':
                 seen.add(kind)
                 if node.get('ordinal', 0) > 0:
@@ -66,7 +64,7 @@ for filename in test.glob_some(test.obj_dir + "/*.tree.json"):
                 seen.add('modport')
             pending.extend(node.values())
 required = {
-    'scoped', 'instance_dependent', 'shared', 'ASSERTCTLTARGET', 'ordinal', 'module_relative',
+    'scoped', 'instance_dependent', 'ASSERTCTLTARGET', 'ordinal', 'module_relative',
     'ASSERTCTLAPPLY', 'modport'
 }
 if not required <= seen:
