@@ -2554,6 +2554,7 @@ class ConstVisitor final : public VNVisitor {
         if (nodep->type() != nextp->type()) return false;
         const AstSel* const sel2p = VN_CAST(nextp->lhsp(), Sel);
         if (!sel2p) return false;
+        if (sel1p->partialWrite() || sel2p->partialWrite()) return false;
         AstVarRef* const varref1p = VN_CAST(sel1p->fromp(), VarRef);
         if (!varref1p) return false;
         const AstVarRef* const varref2p = VN_CAST(sel2p->fromp(), VarRef);
@@ -3428,12 +3429,15 @@ class ConstVisitor final : public VNVisitor {
         VL_DO_DANGLING(pushDeletep(nodep), nodep);
     }
 
-    // Whether a select of a select can be one select: a write, which writes through the lower
-    // select, or a read at a position known to lie within the lower select, or reading past it
-    // only out of range of the value. Otherwise each is guarded by V3Unknown, as one select
-    // could read bits beyond the lower select.
+    // Whether a select of a select can be one select: at a position known to lie within the
+    // lower select, a read reading past it only out of range of the value, or a write once
+    // V3Unknown made it write only its bits within the lower select. Otherwise each is guarded
+    // by V3Unknown, as one select could read or write bits beyond the lower select.
     static bool operandSelSelComposable(AstSel* nodep) {
-        if (nodep->isLValue()) return true;
+        if (nodep->isLValue()) {
+            if (v3Global.fourstateResolved() && !nodep->partialWrite()) return true;
+            return withinLower(nodep->lsbp(), VN_AS(nodep->fromp(), Sel), nodep);
+        }
         return withinLower(nodep->lsbp(), VN_AS(nodep->fromp(), Sel), nodep)
                || readsPastLower(nodep);
     }
