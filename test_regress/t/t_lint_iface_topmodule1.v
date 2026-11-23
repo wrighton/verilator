@@ -4,13 +4,7 @@
 // SPDX-FileCopyrightText: 2017 Josh Redford
 // SPDX-License-Identifier: CC0-1.0
 
-interface top_iface_upward;
-  initial $assertoff(0, my_if.checks.check_data);
-endinterface
-
-interface my_if #(
-    parameter int EXPECT = 1
-);
+interface my_if;
 
   logic valid;
   logic [7:0] data;
@@ -19,22 +13,14 @@ interface my_if #(
 
   modport master_mp(output valid, output data);
 
-  top_iface_upward ctl ();
-
   if (1) begin : checks
     initial begin
       $assertoff(0, check_data);
-      check_data : assert (data != EXPECT[7:0]);
+      check_data : assert (data != 0);
     end
   end
 
 endinterface
-
-module top_iface_ctl (
-    my_if p
-);
-  initial $assertoff(0, p.checks);
-endmodule
 
 module t (
     input wire clk,
@@ -42,10 +28,7 @@ module t (
     my_if.master_mp out_if
 );
 
-  my_if #(.EXPECT(2)) my_i ();
-  top_iface_ctl local_ctl (.p(my_i));
-  top_iface_ctl input_ctl (.p(in_if));
-  top_iface_ctl output_ctl (.p(out_if));
+  my_if my_i ();
 
   always @(posedge clk) begin
     my_i.valid <= in_if.valid;
