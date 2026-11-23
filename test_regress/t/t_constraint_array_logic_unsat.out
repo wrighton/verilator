@@ -1,0 +1,6 @@
+%Warning-UNSATCONSTR: t/t_constraint_array_logic_unsat.v:16: Unsatisfied constraint: 'constraint c_idx {idx == 1;}'
+%Warning-UNSATCONSTR: t/t_constraint_array_logic_unsat.v:17: Unsatisfied constraint: 'constraint c_array {v == a[idx];}'
+%Warning-UNSATCONSTR: t/t_constraint_array_logic_unsat.v:18: Unsatisfied constraint: 'constraint c_conflict {v != 5;}'
+%Warning-UNSATCONSTR: t/t_constraint_array_logic_unsat.v:26: Unsatisfied constraint: 'constraint c_zero {soft_v == 0;}'
+%Warning-UNSATCONSTR: t/t_constraint_array_logic_unsat.v:27: Unsatisfied constraint: 'constraint c_one {soft_v == 1;}'
+*-* All Finished *-*

@@ -1816,6 +1816,14 @@ void VlRandomizer::emitAsserts(std::ostream& os, const std::vector<std::string>&
     }
 }
 
+// Constant-array constructors are outside the restricted array/bit-vector logics.
+static bool constraintsUseConstArray(const std::vector<std::string>& constraints) {
+    for (const std::string& constraint : constraints) {
+        if (constraint.find("(as const (Array ") != std::string::npos) return true;
+    }
+    return false;
+}
+
 bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
                             const std::vector<std::string>& uniqueExprs)
     VL_REQUIRES(sess.m_mutex) {
@@ -2555,7 +2563,7 @@ void VlRandomizer::reportUnsatSetup(VlSolverSession& sess,
     VL_REQUIRES(sess.m_mutex) {
     std::iostream& os = sess.os();
     os << "(set-option :produce-unsat-cores true)\n";
-    os << "(set-logic QF_ABV)\n";
+    os << "(set-logic " << (constraintsUseConstArray(m_constraints) ? "ALL" : "QF_ABV") << ")\n";
     emitDefines(os);
     emitDeclares(os, false);
     emitAsserts(os, uniqueExprs, true);
@@ -3076,6 +3084,9 @@ bool VlRandomizer::solveBeforeBits(const SolveBeforeRef& ref, SolveBeforeBits& b
 }
 
 const char* VlRandomizer::solverLogic() const {
+    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)) {
+        return "ALL";
+    }
     // Without arrays, QF_BV lets z3 answer the incremental checks of the sampling with
     // its bit-blasting SAT solver, which is several times faster than the SMT core it
     // uses for QF_ABV. Phased solves keep phasedLogic(): their XOR rounds solve slower
@@ -3093,6 +3104,9 @@ const char* VlRandomizer::solverLogic() const {
 }
 
 const char* VlRandomizer::phasedLogic() const {
+    if (constraintsUseConstArray(m_constraints) || constraintsUseConstArray(m_softConstraints)) {
+        return "ALL";
+    }
     for (const auto& var : m_vars) {
         if (var.second->dimension() == 0) continue;
         if (!var.second->hasMatchingElements(m_arr_vars, var.second->name())) return "ALL";
