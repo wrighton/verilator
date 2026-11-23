@@ -126,6 +126,18 @@ module t;
     #2 `checkr(n, 4.0);
   end
 
+  // A force of a value that is already forced starts from its forced value
+  bit csrc = 1'b1;
+  wire ca = 1'b0;
+  wire cy = 1'b0;
+  initial begin
+    #1 force ca = csrc;
+    #2 force cy = ca;
+    #2 `checkh(cy, 1'b1);
+    csrc = 1'b0;
+    #2 `checkh(cy, 1'b0);
+  end
+
   // A value change a value change callback makes itself is seen as well: at 31 ns the VPI
   // forces 'c' to 1, and the callback seeing that forces it to 0
   int vpi_c_changes = 0;  // Value changes of 'c' seen through the VPI, written by the VPI

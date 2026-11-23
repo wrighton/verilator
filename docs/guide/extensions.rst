@@ -351,6 +351,12 @@ or "`ifdef`"'s may break other tools.
    target signal, set `__VforceEn` to all ones. To release the signal (or part
    thereof), set appropriate bits of the `__VforceEn` signal to zero.
 
+   A force from C++ overrides a `force` statement in the design on the bits
+   whose value it changes. Bits it sets to the value they already have stay
+   forced by the `force` statement, which keeps following its right-hand side.
+   A force through :code:`vpi_put_value` with :code:`vpiForceFlag` overrides
+   all bits it forces.
+
    Same as :option:`forceable` in configuration  files.
 
 .. option:: /*verilator&32;fsm_state*/
