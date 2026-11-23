@@ -26,18 +26,23 @@ module mid;
 endmodule
 
 module t;
+  localparam logic [1:0] IDX = 2'b01;
   mid a ();
   mid b ();
   leaf neg[-1:-2] ();
+  leaf pos[1:0] ();
   initial begin
     // An omitted levels argument selects every level below the scope (IEEE 1800-2023 20.11)
     $assertcontrol(4, 15, 7,, t.a);
     $assertoff(0, neg[int'(-1)].check);
+    $assertoff(0, pos[IDX[0]].check);
     #2;
     `checkd(a.l.failures, 0);
     `checkd(b.l.failures, 1);
     `checkd(neg[-1].failures, 0);
     `checkd(neg[-2].failures, 1);
+    `checkd(pos[1].failures, 0);
+    `checkd(pos[0].failures, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
