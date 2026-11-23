@@ -9040,10 +9040,34 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const AstConst* const constp = VN_CAST(indexp, Const);
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
-            if (!constp || constp->num().isFourState()) {
+            if (!constp || constp->num().isOpaque() || constp->num().isFourState()) {
                 if (nonconstantp) *nonconstantp = true;
             } else if (!base.empty()) {
-                path = base + "__BRA__" + AstNode::encodeNumber(constp->toSInt()) + "__KET__";
+                const V3Number& num = constp->num();
+                // Complement negative values to check the non-sign bits before narrowing.
+                V3Number significant{constp, num.width()};
+                if (constp->isSigned() && num.isNegative()) {
+                    significant.opNot(num);
+                } else {
+                    significant.opAssign(num);
+                }
+                if (significant.widthToFit() > VL_IDATASIZE - 1) {
+                    if (m_statep->forParamed()) {
+                        selp->bitp()->v3error(
+                            "Assertion control scope index is outside the signed 32-bit "
+                            "hierarchy range.");
+                    }
+                } else {
+                    V3Number index{constp, VL_IDATASIZE};
+                    if (constp->isSigned()) {
+                        index.opExtendS(num, num.width());
+                    } else {
+                        index.opAssign(num);
+                    }
+                    path = base + "__BRA__"
+                           + AstNode::encodeNumber(static_cast<int32_t>(index.toUInt()))
+                           + "__KET__";
+                }
             }
             VL_DO_DANGLING(pushDeletep(indexp), indexp);
             return path;

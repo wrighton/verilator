@@ -46,5 +46,12 @@ module t;
     $assertoff(0, g[1'b1 ? 0 : i]);
     $assertoff(0, g[i ^ i]);
     $assertoff(0, g[1'b0 && ($bits(i) + i)]);
+    // Out-of-range indices must not wrap to a valid hierarchy element.
+    $assertoff(0, g[64'sd2147483648]);
+    $assertoff(0, g[-64'sd2147483649]);
+    $assertoff(0, g[95'sd4294967296]);
+    $assertoff(0, g[-95'sd4294967296]);
+    $assertoff(0, g[129'd4294967297]);
+    $assertoff(0, g[32'h80000000]);
   end
 endmodule
