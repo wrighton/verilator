@@ -56,21 +56,24 @@ module t;
   end
 `else
   int top_failures = 0;
+  task automatic check_top();
+    top_check : assert (1'b0) else top_failures++;
+  endtask
   scope_off ctl [2] ();
   if (1) begin : empty_scope
   end
   initial begin
     // Depth one reaches the top, not the two child instances.
     $assertoff(1, $root.t);
+    check_top();
+    `checkd(top_failures, 0);
     #2;
     `checkd(a.failures, 0);
     `checkd(b.failures, 1);
     $assertoff(0, $root.t, $root.t.empty_scope);
     $assertoff(0, $root.t, $root.t.empty_scope);
     #2;
-    top_check :
-    assert (1'b0)
-    else top_failures++;
+    check_top();
     #1;
     `checkd(a.late_failures, 0);
     `checkd(b.late_failures, 0);

@@ -280,6 +280,12 @@ public:
 private:
     std::vector<Target> m_targets;
     std::vector<uint32_t> m_skipShared;  // Slots replaced by this caller's mixed targets
+    uint32_t m_minDepth = std::numeric_limits<uint32_t>::max();  // Cached under the context lock
+
+    void cacheMinDepth(VerilatedMutex& mutex) VL_REQUIRES(mutex) {
+        (void)mutex;
+        for (const Target& target : m_targets) m_minDepth = std::min(m_minDepth, target.depth);
+    }
 };
 
 // Type trait: whether T is a user-defined custom struct
@@ -764,8 +770,13 @@ public:
         VL_MT_SAFE_EXCLUDES(m_assertCtlMutex) {
         if (!assertCtlValid(effect) || !depthLimit) return;
         const VerilatedLockGuard lock{m_assertCtlMutex};
-        if (table.m_targets.empty()) bind(table.m_targets);
-        assertCtlApplyTable(effect, types, directives, depthLimit, table);
+        if (table.m_targets.empty()) {
+            bind(table.m_targets);
+            table.cacheMinDepth(m_assertCtlMutex);
+        }
+        if (depthLimit > table.m_minDepth) {
+            assertCtlApplyTable(effect, types, directives, depthLimit, table);
+        }
     }
     // Apply the caller-independent part and sparse caller-local entries as one selection.
     template <typename T_Bind, typename T_BindLocal>
@@ -776,9 +787,21 @@ public:
         VL_MT_SAFE_EXCLUDES(m_assertCtlMutex) {
         if (!assertCtlValid(effect) || !depthLimit) return;
         const VerilatedLockGuard lock{m_assertCtlMutex};
-        if (shared.m_targets.empty()) bindShared(shared.m_targets);
-        if (local.m_targets.empty()) bindLocal(local.m_targets, local.m_skipShared);
-        assertCtlApplyMixedTable(effect, types, directives, depthLimit, shared, local);
+        if (shared.m_targets.empty()) {
+            bindShared(shared.m_targets);
+            shared.cacheMinDepth(m_assertCtlMutex);
+        }
+        if (local.m_targets.empty()) {
+            bindLocal(local.m_targets, local.m_skipShared);
+            local.cacheMinDepth(m_assertCtlMutex);
+        }
+        if (depthLimit <= shared.m_minDepth) {
+            if (depthLimit > local.m_minDepth) {
+                assertCtlApplyTable(effect, types, directives, depthLimit, local);
+            }
+        } else {
+            assertCtlApplyMixedTable(effect, types, directives, depthLimit, shared, local);
+        }
     }
     /// Return if calculating of unused signals (for traces)
     bool calcUnusedSigs() const VL_MT_SAFE { return m_s.m_calcUnusedSigs; }
