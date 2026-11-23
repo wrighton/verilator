@@ -19,4 +19,13 @@ module t (
   always @(negedge clk) begin
     $write("Bad select %x\n", o);
   end
+
+  // A wide position of a member, folded only after the width pass
+  typedef struct packed {
+    bit pad;
+    bit [14:0][3:0] f;
+  } wrap_t;
+  wrap_t wrap;
+  logic [3:0] lane;
+  always @(posedge clk) lane = wrap.f[40'(40'h10_0000_0005)];
 endmodule

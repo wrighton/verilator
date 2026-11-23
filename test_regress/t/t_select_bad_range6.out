@@ -8,4 +8,8 @@
                                                 : ... note: In instance 't'
    14 |   assign o = i[31:1];
       |               ^
+%Warning-SELRANGE: t/t_select_bad_range6.v:30:38: Selection index out of range: 68719476741:68719476741 outside 14:0
+                                                : ... note: In instance 't'
+   30 |   always @(posedge clk) lane = wrap.f[40'(40'h10_0000_0005)];
+      |                                      ^
 %Error: Exiting due to
