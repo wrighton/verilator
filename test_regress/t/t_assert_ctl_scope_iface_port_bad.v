@@ -166,6 +166,7 @@ module t;
   ifc i0 (.clk(clk));
   subm sm (.p(i0));
   subu su (.p(i0));
+  subu su2 (.p(i0));
   ifcpk k0 (.clk(clk));
   subpk spk (.p(k0));
   ifcpe e0 (.clk(clk));

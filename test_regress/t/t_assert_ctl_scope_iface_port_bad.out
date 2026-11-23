@@ -24,7 +24,7 @@
    65 |     $assertoff(0, p.C.tk);
       |                      ^
 %Error: t/t_assert_ctl_scope_iface_port_bad.v:55:26: Assertion control target is not a scope or assertion from 't.su': 'p.unit_tsk' (IEEE 1800-2023 20.11).
-                                                   : ... note: In instance 't.su'
+                                                   : ... note: In instance 't.su2'
    55 |   initial $assertoff(0, p.unit_tsk);
       |                          ^
 %Error: t/t_assert_ctl_scope_iface_port_bad.v:48:26: Assertion control target is not a scope or assertion: 'p.a1' (IEEE 1800-2023 20.11).
