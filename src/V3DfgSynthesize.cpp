@@ -167,9 +167,9 @@ class AstToDfgConverter final : public VNVisitor {
         }
 
         if (const AstSel* selp = VN_CAST(nodep, Sel)) {
-            // Only handle constant selects
+            // Only handle constant selects, written wholly in range
             const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
-            if (!lsbp) {
+            if (!lsbp || selp->partialWrite()) {
                 ++m_ctx.m_conv.nonRepLValue;
                 return {nullptr, 0};
             }
@@ -461,8 +461,7 @@ class AstToDfgConverter final : public VNVisitor {
             const uint32_t lsb = constp->toUInt();
             const uint32_t msb = lsb + nodep->widthConst() - 1;
             DfgVertex* const fromp = nodep->fromp()->user2u().to<DfgVertex*>();
-            // Unfortunately we can still have out of bounds selects due to how
-            // indices are truncated for speed reasons in V3Width/V3Unknown.
+            // A part-select can still extend above its operand, as V3Unknown only checks its lsb
             if (msb >= fromp->size()) {
                 m_foundUnhandled = true;
                 ++m_ctx.m_conv.nonRepOOBSel;

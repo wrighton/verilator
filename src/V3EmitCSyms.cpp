@@ -130,6 +130,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         m_scopeVarsByVar;  // Registered variable identities
     ScopeNames m_scopeNames;  // Each unique AstScopeName. Dpi scopes added later
     ScopeNames m_dpiScopeNames;  // Each unique AstScopeName for a DPI context import or export
+    // The export of the wrapper of each library instance, which has it evaluated again after a
+    // write through the VPI into the library
+    std::unordered_map<const AstScope*, const AstCFunc*> m_libExportImpls;
     ScopeNames m_fmtScopeNames;  // Each unique AstScopeName for a format %m
     int m_scopeArraySize = 0;  // Number of scopes held in __Vscopesp
     ScopeNames m_vpiScopeCandidates;  // Scopes for VPI
@@ -137,6 +140,7 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     // collected on demand, and become candidates only when looked up.
     // Scopes whose inlined scopes are not collected yet:
     std::unordered_set<const AstScope*> m_pendingScopeps;
+    std::vector<const AstScope*> m_libStubScopeps;  // Scopes of library stub instances, for VPI
     // Collected inlined scopes and the scope holding each, by symbol name
     std::unordered_map<std::string, std::pair<const AstScope*, const AstCellInlineScope*>>
         m_inlinedScopes;
@@ -340,13 +344,27 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         return out + ')';
     }
 
+    // The given scope's pointer member of the Syms class
+    static std::string scopeMember(const ScopeData& sd) {
+        return sd.m_arrayIndex < 0
+                   ? protect("__Vscopep_" + sd.m_symName)
+                   : protect("__Vscopesp") + "[" + std::to_string(sd.m_arrayIndex) + "]";
+    }
     // Offset of the given scope's pointer within the Syms class
     static std::string scopeOffset(const ScopeData& sd) {
-        const std::string member
-            = sd.m_arrayIndex < 0
-                  ? protect("__Vscopep_" + sd.m_symName)
-                  : protect("__Vscopesp") + "[" + std::to_string(sd.m_arrayIndex) + "]";
-        return "offsetof(" + symClassName() + ", " + member + ")";
+        return "offsetof(" + symClassName() + ", " + scopeMember(sd) + ")";
+    }
+    // Symbol name of the VPI scope above the scope named 'symName', or empty if none
+    std::string vpiScopeAbove(const std::string& symName) const {
+        std::string above = symName;
+        if (VString::startsWith(above, "TOP.")) above.replace(0, 4, "");
+        while (!above.empty()) {
+            const std::string::size_type pos = above.rfind("__");
+            if (pos == std::string::npos) break;
+            above.resize(pos);
+            if (m_vpiScopeHierarchy.find(above) != m_vpiScopeHierarchy.end()) return above;
+        }
+        return "";
     }
 
     // A string parameter's VPI data is its runtime .c_str()
@@ -669,7 +687,15 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         stmt += insertVarStatement(value, value.m_scopep, value.m_varp, valueDims.udim,
                                    valueDims.pdim, boundsString(valueDims));
 
-        stmt += "}";
+        stmt += "}, ";
+        if (const AstVar* const vpiVarp = varp->forceVpiVarp()) {
+            const ScopeVarData& vpi = forceControlScopeVar(scopep, varp, vpiVarp);
+            const VarDims vpiDims = dimsFor(vpi);
+            stmt += insertVarStatement(vpi, vpi.m_scopep, vpi.m_varp, vpiDims.udim, vpiDims.pdim,
+                                       boundsString(vpiDims));
+        } else {
+            stmt += "nullptr";
+        }
         stmt += ", ";
         stmt += std::to_string(udim);
         stmt += ", ";
@@ -702,7 +728,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
             if (!varp->isForceable()) continue;
             UASSERT_OBJ(varp->forceRdVarp() && varp->forceEnVarp() && varp->forceValVarp(), varp,
                         "Forceable variable has incomplete force helper links.");
-            for (const AstVar* const controlVarp : {varp->forceEnVarp(), varp->forceValVarp()}) {
+            for (const AstVar* const controlVarp :
+                 {varp->forceEnVarp(), varp->forceValVarp(), varp->forceVpiVarp()}) {
+                if (!controlVarp) continue;
                 forceControlScopeVar(svd.m_scopep, varp, controlVarp).m_isForceControl = true;
             }
         }
@@ -873,18 +901,8 @@ class EmitCSyms final : EmitCBaseVisitorConst {
     void buildVpiHierarchy() {
         for (const auto& itpair : m_scopeNames) {
             const std::string symName = itpair.second.m_symName;
-            std::string above = symName;
-            if (VString::startsWith(above, "TOP.")) above.replace(0, 4, "");
-
-            while (!above.empty()) {
-                const std::string::size_type pos = above.rfind("__");
-                if (pos == std::string::npos) break;
-                above.resize(pos);
-                if (m_vpiScopeHierarchy.find(above) != m_vpiScopeHierarchy.end()) {
-                    m_vpiScopeHierarchy[above].push_back(symName);
-                    break;
-                }
-            }
+            const std::string above = vpiScopeAbove(symName);
+            if (!above.empty()) m_vpiScopeHierarchy[above].push_back(symName);
             m_vpiScopeHierarchy[symName] = std::vector<string>();
         }
     }
@@ -895,6 +913,10 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         iterateChildrenConst(nodep);
         varsExpand();
         if (v3Global.opt.vpi()) {
+            for (const AstScope* const scopep : m_libStubScopeps) {
+                collectInlinedScopes(scopep);
+                varHierarchyScopes(scopep->name());
+            }
             V3Stats::addStat("VPI, Inlined scope candidates", m_statInlinedScopes);
         }
         collectForceControls();
@@ -963,7 +985,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         if (VN_IS(nodep->modp(), Package))
             m_packageScopeNames.emplace(scopeSymString(nodep->name()));
 
-        // The scopes of the instance of a library are its own, so register none for its stub
+        // The scopes of the instance of a library are its own, so register none for its stub,
+        // but do register the scopes above it, as for the scope of a public variable
+        if (v3Global.opt.vpi() && nodep->modp()->verilatorLib()) m_libStubScopeps.push_back(nodep);
         if (v3Global.opt.vpi() && !nodep->isTop() && !nodep->modp()->verilatorLib()) {
             const std::string type = VN_IS(nodep->modp(), Package) ? "SCOPE_PACKAGE"  //
                                      : VN_IS(nodep->modp(), Iface) ? "SCOPE_INTERFACE"  //
@@ -1029,9 +1053,25 @@ class EmitCSyms final : EmitCBaseVisitorConst {
             m_modCoverBins += nodep->size();
         }
     }
+
+    // The variable of the wrapper of a library with the given name
+    static const AstVar* libWrapperVar(const AstNodeModule* modp, const std::string& name) {
+        const AstVar* resultp = nullptr;
+        for (const AstNode* const nodep : modp->stmtspList()) {
+            const AstVar* const varp = VN_CAST(nodep, Var);
+            if (varp && varp->prettyName() == name) resultp = varp;
+        }
+        UASSERT_OBJ(resultp, modp, "Verilator library wrapper without '" << name << "'");
+        return resultp;
+    }
+
     void visit(AstCFunc* nodep) override {
         nameCheck(nodep);
         if (nodep->dpiImportPrototype() || nodep->dpiExportDispatcher()) m_dpis.push_back(nodep);
+        if (nodep->dpiExportImpl() && m_modp->verilatorLib()) {
+            const bool newScope = m_libExportImpls.emplace(nodep->scopep(), nodep).second;
+            UASSERT_OBJ(newScope, nodep, "Library instance with more than one export");
+        }
         VL_RESTORER(m_cfuncp);
         m_cfuncp = nodep;
         iterateChildrenConst(nodep);
@@ -1186,6 +1226,9 @@ void EmitCSyms::emitSymHdr() {
     if (v3Global.opt.vpi()) {
         puts("\n// SCOPE HIERARCHY\n");
         puts("VerilatedHierarchy __Vhier;\n");
+        if (EmitCUtil::isVpiLibrary()) {
+            puts("const VerilatedScope* __Vm_vpiAbovep = nullptr;  // VPI scope above\n");
+        }
     }
 
     puts("\n// CONSTRUCTORS\n");
@@ -1251,15 +1294,31 @@ void EmitCSyms::emitSymImpPreamble() {
         emitCFuncDecl(funcp, itpair.second.m_modp);
         needsNewLine = true;
     }
+    for (const ScopeModPair& itpair : m_scopes) {
+        const auto it = m_libExportImpls.find(itpair.first);
+        if (it == m_libExportImpls.end()) continue;
+        emitCFuncDecl(it->second, itpair.second);
+        needsNewLine = true;
+    }
     if (needsNewLine) puts("\n");
     // Declarations of the Verilator library functions called at construction
     std::set<std::string> libNames;
+    std::set<std::string> vpiLibNames;
     for (const ScopeModPair& itpair : m_scopes) {
-        if (itpair.second->verilatorLib()) libNames.emplace(itpair.second->origName());
+        if (!itpair.second->verilatorLib()) continue;
+        libNames.emplace(itpair.second->origName());
+        if (m_libExportImpls.count(itpair.first)) vpiLibNames.emplace(itpair.second->origName());
     }
     for (const std::string& libName : libNames) {
         puts("extern \"C\" void " + libName + "_protectlib_check_hash(int protectlib_hash__V);\n");
-        puts("extern \"C\" void* " + libName + "_protectlib_create(const char* scopep__V);\n");
+        puts("extern \"C\" void* " + libName
+             + "_protectlib_create_under(const char* scopep__V, const VerilatedScope* "
+               "abovep__V);\n");
+        if (vpiLibNames.count(libName)) {
+            puts("extern \"C\" void " + libName
+                 + "_protectlib_on_vpi_write(void* vhandlep__V, void (*cbp__V)(VerilatedSyms*), "
+                   "VerilatedSyms* symsp__V);\n");
+        }
     }
     if (!libNames.empty()) puts("\n");
 
@@ -1372,9 +1431,17 @@ void EmitCSyms::emitScopeHier(TextStmts& stmts, bool destroy) {
         stmts.add("// Set up scope hierarchy");
     }
     if (!m_hierTableRows.empty()) {
-        stmts.add("vlSymsp->__Vhier." + std::string{destroy ? "removeFromTable(" : "addFromTable("}
-                  + hierTableName() + ", " + std::to_string(m_hierTableRows.size())
-                  + ", vlSymsp);");
+        const std::string args
+            = hierTableName() + ", " + std::to_string(m_hierTableRows.size()) + ", vlSymsp";
+        if (destroy) {
+            stmts.add("vlSymsp->__Vhier.removeFromTable(" + args
+                      + (EmitCUtil::isVpiLibrary() ? ", vlSymsp->__Vm_vpiAbovep" : "") + ");");
+        } else if (EmitCUtil::isVpiLibrary()) {
+            // The model using an instance of a library adds its scopes, see __VvpiAttach
+            stmts.add("if (vlSymsp->__Vm_isRoot) vlSymsp->__Vhier.addFromTable(" + args + ");");
+        } else {
+            stmts.add("vlSymsp->__Vhier.addFromTable(" + args + ");");
+        }
     }
 
     if (destroy) {
@@ -1489,32 +1556,6 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
         }
     }
 
-    // Check the hash and create the library model of each Verilator library wrapper, as its
-    // initial process would, but already at construction, so the library model exists before
-    // the first evaluation
-    for (const ScopeModPair& i : m_scopes) {
-        const AstScope* const scopep = i.first;
-        const AstNodeModule* const modp = i.second;
-        if (!modp->verilatorLib()) continue;
-        const AstVar* hashp = nullptr;
-        const AstVar* handlep = nullptr;
-        for (const AstNode* const nodep : modp->stmtspList()) {
-            const AstVar* const varp = VN_CAST(nodep, Var);
-            if (!varp) continue;
-            if (varp->prettyName() == "protectlib_hash__V") hashp = varp;
-            if (varp->prettyName() == "handle__V") handlep = varp;
-        }
-        UASSERT_OBJ(hashp, modp, "Verilator library wrapper without 'protectlib_hash__V'");
-        UASSERT_OBJ(handlep, modp, "Verilator library wrapper without 'handle__V'");
-        const uint32_t hash = VN_AS(hashp->valuep(), Const)->toUInt();
-        stmts.add(modp->origName() + "_protectlib_check_hash(static_cast<int>("
-                  + std::to_string(hash) + "U));");
-        // The library model is named after the %m of the instance
-        stmts.add("vlSymsp->" + instName(scopep) + "." + varName(handlep) + " = VL_CVT_VP_Q("
-                  + modp->origName() + "_protectlib_create(std::string{"
-                  + EmitCUtil::instNameExpr(scopep->prettyName(), false) + "}.c_str()));");
-    }
-
     // Every scope has the same construction shape, so all fold into one table with no
     // residual; offsetof bakes the target scope pointer's address into each row.
     if (!m_scopeNames.empty()) {
@@ -1556,6 +1597,38 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
     }
 
     emitScopeHier(stmts, false);
+
+    // Check the hash and create the library model of each Verilator library wrapper, as its
+    // initial process would, but already at construction, so the library model exists before
+    // the first evaluation. After the scopes above, as the top level VPI scopes of the library
+    // model are under the VPI scope above its instance, or at the top level without VPI.
+    for (const ScopeModPair& i : m_scopes) {
+        const AstScope* const scopep = i.first;
+        const AstNodeModule* const modp = i.second;
+        if (!modp->verilatorLib()) continue;
+        const AstVar* const hashp = libWrapperVar(modp, "protectlib_hash__V");
+        const AstVar* const handlep = libWrapperVar(modp, "handle__V");
+        const uint32_t hash = VN_AS(hashp->valuep(), Const)->toUInt();
+        stmts.add(modp->origName() + "_protectlib_check_hash(static_cast<int>("
+                  + std::to_string(hash) + "U));");
+        const std::string above
+            = v3Global.opt.vpi() ? vpiScopeAbove(scopeSymString(scopep->name())) : "";
+        // The library model is named after the %m of the instance
+        stmts.add("vlSymsp->" + instName(scopep) + "." + varName(handlep) + " = VL_CVT_VP_Q("
+                  + modp->origName() + "_protectlib_create_under(std::string{"
+                  + EmitCUtil::instNameExpr(scopep->prettyName(), false) + "}.c_str(), "
+                  + (above.empty() ? "nullptr" : "vlSymsp->" + scopeMember(m_scopeNames.at(above)))
+                  + "));");
+        // A write through the VPI into the library model has this instance evaluated again
+        const auto it = m_libExportImpls.find(scopep);
+        if (it != m_libExportImpls.end()) {
+            stmts.add(modp->origName() + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->"
+                      + instName(scopep) + "." + varName(handlep)
+                      + "), [](VerilatedSyms* symsp) { " + EmitCUtil::prefixNameProtect(modp)
+                      + "__" + it->second->nameProtect() + "(static_cast<" + symClassName()
+                      + "*>(symsp)); }, vlSymsp);");
+        }
+    }
 
     if (v3Global.dpi()) {
         for (const std::string vfinal : {"0", "1"}) {
@@ -1686,6 +1759,17 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
 EmitCSyms::TextStmts EmitCSyms::getSymDtorStmts() {
     TextStmts stmts;
 
+    // A model using an instance of a library leaves it no callback into its state. A model
+    // that is an instance of a library itself is deleted when its context ends, after its own
+    // library instances, through which no write can then happen.
+    for (const ScopeModPair& itpair : m_scopes) {
+        const AstScope* const scopep = itpair.first;
+        if (!m_libExportImpls.count(scopep)) continue;
+        stmts.add("if (vlSymsp->__Vm_isRoot) " + itpair.second->origName()
+                  + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->" + instName(scopep) + "."
+                  + varName(libWrapperVar(itpair.second, "handle__V")) + "), nullptr, nullptr);");
+    }
+
     emitScopeHier(stmts, true);
     if (v3Global.needTraceDumper()) {
         stmts.add("if (vlSymsp->__Vm_dumping) vlSymsp->_traceDumpClose();");
@@ -1784,6 +1868,20 @@ void EmitCSyms::emitSymImp(const AstNetlist* netlistp) {
     puts("{\n");
     puts(symClassName() + "__ctor(this, namep);\n");
     puts("}\n");
+
+    if (EmitCUtil::isVpiLibrary()) {
+        puts("\nvoid " + topClassName() + "::__VvpiAttach(const VerilatedScope* abovep) {\n");
+        puts("vlSymsp->__Vm_vpiAbovep = abovep;\n");
+        if (!m_hierTableRows.empty()) {
+            puts("vlSymsp->__Vhier.addFromTable(" + hierTableName() + ", "
+                 + std::to_string(m_hierTableRows.size()) + ", vlSymsp, abovep);\n");
+        }
+        puts("}\n");
+        puts("\nvoid " + topClassName() + "::__VvpiOnWrite(void (*cbp)(void*), void* datap) {\n");
+        puts("vlSymsp->__Vm_vpiWriteCbp = cbp;\n");
+        puts("vlSymsp->__Vm_vpiWriteCbDatap = datap;\n");
+        puts("}\n");
+    }
 
     // Destructor contents, in a loose function, see constructor
     if (!splitCtorDtorDecls.second.empty()) puts("\n" + splitCtorDtorDecls.second + "\n");
