@@ -102,6 +102,44 @@ static string extractDottedPath(AstNode* nodep, bool& hasPartSelect) {
     }
     return "";
 }
+static string assertCtlIndexSuffix(AstConst* const constp) {
+    const V3Number& num = constp->num();
+    if (num.isOpaque() || num.isFourState()) return "";
+    // Complement negative values to check the non-sign bits before narrowing.
+    V3Number significant{constp, num.width()};
+    if (constp->isSigned() && num.isNegative()) {
+        significant.opNot(num);
+    } else {
+        significant.opAssign(num);
+    }
+    if (significant.widthToFit() > VL_IDATASIZE - 1) return "";
+    V3Number index{constp, VL_IDATASIZE};
+    if (constp->isSigned()) {
+        index.opExtendS(num, num.width());
+    } else {
+        index.opAssign(num);
+    }
+    return "__BRA__" + AstNode::encodeNumber(static_cast<int32_t>(index.toUInt())) + "__KET__";
+}
+
+// Use only already-folded indices for the cache probe, without resolving or diagnosing them.
+static string constantAssertCtlPath(AstNode* nodep) {
+    if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
+    if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
+        const string lhs = constantAssertCtlPath(dotp->lhsp());
+        const string rhs = constantAssertCtlPath(dotp->rhsp());
+        return lhs.empty() || rhs.empty() ? "" : VString::dot(lhs, ".", rhs);
+    }
+    if (const AstSelBit* const selp = VN_CAST(nodep, SelBit)) {
+        AstConst* const constp = VN_CAST(selp->bitp(), Const);
+        if (!constp) return "";
+        const string suffix = assertCtlIndexSuffix(constp);
+        const string base = constantAssertCtlPath(selp->fromp());
+        return base.empty() || suffix.empty() ? "" : base + suffix;
+    }
+    return "";
+}
+
 // Record declaration owners after parameter elaboration, but materialize state
 // only when a control statement selects a site.
 class LinkDotAssertCtlSites final : public VNVisitor {
@@ -9039,7 +9077,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
                         return !refp->varp() || !refp->varp()->isParam();
                     }
-                    return VN_IS(subp, NodeFTaskRef) || !subp->isPredictOptimizable();
+                    return VN_IS(subp, NodeFTaskRef) || VN_IS(subp, GetInitialRandomSeed)
+                           || !subp->isPredictOptimizable();
                 })) {
                 if (nonconstantp) *nonconstantp = true;
                 return "";
@@ -9069,30 +9108,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (!constp || constp->num().isOpaque() || constp->num().isFourState()) {
                 if (nonconstantp) *nonconstantp = true;
             } else if (!base.empty()) {
-                const V3Number& num = constp->num();
-                // Complement negative values to check the non-sign bits before narrowing.
-                V3Number significant{constp, num.width()};
-                if (constp->isSigned() && num.isNegative()) {
-                    significant.opNot(num);
-                } else {
-                    significant.opAssign(num);
-                }
-                if (significant.widthToFit() > VL_IDATASIZE - 1) {
-                    if (m_statep->forParamed()) {
-                        selp->bitp()->v3error(
-                            "Assertion control scope index is outside the signed 32-bit "
-                            "hierarchy range.");
-                    }
-                } else {
-                    V3Number index{constp, VL_IDATASIZE};
-                    if (constp->isSigned()) {
-                        index.opExtendS(num, num.width());
-                    } else {
-                        index.opAssign(num);
-                    }
-                    path = base + "__BRA__"
-                           + AstNode::encodeNumber(static_cast<int32_t>(index.toUInt()))
-                           + "__KET__";
+                const string suffix = assertCtlIndexSuffix(constp);
+                if (!suffix.empty()) {
+                    path = base + suffix;
+                } else if (m_statep->forParamed()) {
+                    selp->bitp()->v3error(
+                        "Assertion control scope index is outside the signed 32-bit "
+                        "hierarchy range.");
                 }
             }
             VL_DO_DANGLING(pushDeletep(indexp), indexp);
@@ -9266,11 +9288,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
         // The leading NUL separates compound keys from canonical single-scope paths.
         string key(1, '\0');
         for (AstNodeExpr* const itemp : argsp->itemspList()) {
-            if (itemp->exists([](const AstNode* p) { return !VN_IS(p, Dot) && !VN_IS(p, ParseRef); })) {
-                return "";
-            }
-            bool hasPartSelect = false;
-            const string path = extractDottedPath(itemp, hasPartSelect);
+            const string path = constantAssertCtlPath(itemp);
             if (!VString::startsWith(path, "$root.")) return "";
             VSymEnt* symp = m_statep->rootEntp();
             for (const string& name : VString::split(path.substr(6), '.')) {

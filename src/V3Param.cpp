@@ -5204,7 +5204,7 @@ class ParamVisitor final : public VNVisitor {
                         if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
                             return !refp->varp() || !refp->varp()->isParam();
                         }
-                        return !subp->isPredictOptimizable();
+                        return VN_IS(subp, GetInitialRandomSeed) || !subp->isPredictOptimizable();
                     })) {
                     foldDottedIndex(selp->bitp(), false);
                 }

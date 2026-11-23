@@ -25,7 +25,9 @@ module t;
   wire [31:0] peer;
   wire [31:0] deeper;
   if (1) begin : hub
-    leaf u(.clk, .reports(selected));
+    for (genvar i = 0; i < 1; ++i) begin : bank
+      leaf u(.clk, .reports(selected));
+    end
   end
   leaf other(.clk, .reports(peer));
   mid deep(.clk, .reports(deeper));
@@ -56,12 +58,12 @@ module t;
     `checkd(selected, 2);
     `checkd(peer, 3);
     `checkd(deeper, 4);
-    $assertoff(0, $root.t.hub, $root.t.other);
+    $assertoff(0, $root.t.hub.bank[0], $root.t.other);
     tick();
     `checkd(selected, 2);
     `checkd(peer, 3);
     `checkd(deeper, 5);
-    $asserton(0, $root.t.hub, $root.t.other);
+    $asserton(0, $root.t.hub.bank[0], $root.t.other);
     tick();
     `checkd(selected, 3);
     `checkd(peer, 4);
