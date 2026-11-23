@@ -167,9 +167,9 @@ class AstToDfgConverter final : public VNVisitor {
         }
 
         if (const AstSel* selp = VN_CAST(nodep, Sel)) {
-            // Only handle constant selects
+            // Only handle constant selects, written wholly in range
             const AstConst* const lsbp = VN_CAST(selp->lsbp(), Const);
-            if (!lsbp) {
+            if (!lsbp || selp->partialWrite()) {
                 ++m_ctx.m_conv.nonRepLValue;
                 return {nullptr, 0};
             }
