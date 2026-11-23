@@ -4149,6 +4149,7 @@ void AstPin::dump(std::ostream& str) const {
     if (defparamGenAlt()) str << " [GENALT]";
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
+    if (explicitModport()) str << " [MODPORT]";
     if (returnWrittenInput()) str << " [RETURNWRITTENINPUT]";
 }
 void AstPin::dumpJson(std::ostream& str) const {
@@ -4156,6 +4157,7 @@ void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, defparamGenAlt);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
+    dumpJsonBoolFuncIf(str, explicitModport);
     dumpJsonBoolFuncIf(str, returnWrittenInput);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
     dumpJsonGen(str);
