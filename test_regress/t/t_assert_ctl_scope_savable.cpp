@@ -75,7 +75,7 @@ static void testSharedFields(const std::string& filename) {
     VerilatedSave output;
     output.open(filename);
     require(output.isOpen(), "Context save open failed");
-    output << partial << &saved << &saved;
+    output << partial << &saved << &saved << &saved;
     saved.assertOn(true);
     output << &saved;
     output.close();
@@ -93,6 +93,12 @@ static void testSharedFields(const std::string& filename) {
             "Shared Kill erased a scoped generation or global FailOn retained ownership");
     require(queries(locked) == std::array<uint32_t, 5>{{1, 0, 0, 0, 0}},
             "A default-only Kill or no-op assignment affected a locally locked site");
+
+    input >> &live;  // A repeated context record leaves inherited and owned fields unchanged.
+    require(queries(partial) == std::array<uint32_t, 5>{{0, 4, 0, 1, 1}},
+            "Repeated context restore changed the partial site");
+    require(queries(inherited) == std::array<uint32_t, 5>{{0, 4, 0, 0, 0}},
+            "Repeated context restore changed the inherited site");
 
     scoped(live, inherited, {On});
     scoped(live, partial, {On});
