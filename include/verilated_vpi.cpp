@@ -984,6 +984,8 @@ class VerilatedVpiCbHolder final {
     s_cb_data m_cbData;  // Callback registration data from the user
     s_vpi_value m_value;  // Value passed to the callback
     VerilatedVpioVar m_varo;  // If a cbValueChange callback, the object we will return
+    // If a cbValueChange callback on a forceable signal, its read-back, which holds its value
+    std::shared_ptr<VerilatedVpioVar> m_readVarop;
 
 public:
     // cppcheck-suppress uninitVar  // m_value
@@ -1001,6 +1003,12 @@ public:
         }
     }
     ~VerilatedVpiCbHolder() = default;
+    // The object whose changes are value changes of the callback's object
+    VerilatedVpioVar* valueVarop() { return m_readVarop ? m_readVarop.get() : &m_varo; }
+    void readVarop(std::unique_ptr<VerilatedVpioVar> varop) {
+        m_readVarop = std::move(varop);
+        m_readVarop->createPrevDatap();
+    }
     VerilatedPliCb cb_rtnp() const { return m_cbData.cb_rtn; }
     s_cb_data* cb_datap() { return &m_cbData; }
     uint64_t id() const { return m_id; }
@@ -1211,7 +1219,15 @@ public:
                                     cb_data_p->reason, id, cb_data_p->obj););
         VerilatedVpioVar* varop = nullptr;
         if (cb_data_p->reason == cbValueChange) varop = VerilatedVpioVar::castp(cb_data_p->obj);
-        s().m_cbCurrentLists[cb_data_p->reason].emplace_back(id, cb_data_p, varop);
+        VpioCbList& cbList = s().m_cbCurrentLists[cb_data_p->reason];
+        cbList.emplace_back(id, cb_data_p, varop);
+        // A forced value is not in the signal's own storage, so watch its read-back instead
+        if (varop && varop->varp()->isForceable()) {
+            if (std::unique_ptr<VerilatedVpioVar> readVarop
+                = std::move(getForceControlSignals(varop).forceRead)) {
+                cbList.back().readVarop(std::move(readVarop));
+            }
+        }
     }
     static void cbFutureAdd(uint64_t id, const s_cb_data* cb_data_p, QData time) {
         // The passed cb_data_p was property of the user, so need to recreate
@@ -1376,8 +1392,7 @@ public:
                 continue;
             }
             VerilatedVpiCbHolder& ho = *it++;
-            VerilatedVpioVar* const varop
-                = reinterpret_cast<VerilatedVpioVar*>(ho.cb_datap()->obj);
+            VerilatedVpioVar* const varop = ho.valueVarop();
             if (valueDiffersFromPrev(varop)) {
                 VL_DEBUG_IF_PLI(VL_DBG_MSGF("- vpi: value_callback %" PRId64 " %s v[0]=%d\n",
                                             ho.id(), varop->fullname(),
