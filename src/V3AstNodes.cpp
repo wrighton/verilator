@@ -645,6 +645,120 @@ static const AstNode* instanceStateRefp(const AstNode* nodep,
     return foundp;
 }
 
+static void assertCtlSelectionSelfTest(FileLine* const flp) {
+    AstAssertCtlArgs* const implicitp = new AstAssertCtlArgs{flp, nullptr, nullptr};
+    AstAssertCtlArgs* const scopedp = new AstAssertCtlArgs{flp, nullptr, new AstConst{flp, 0}};
+    // Resolving the scope list does not change whether the selection is explicit.
+    scopedp->itemsp()->unlinkFrBack()->deleteTree();
+    AstAssertCtlArgs* const scopedCopyp = scopedp->cloneTree(false);
+    UASSERT_OBJ(scopedp->sameTree(scopedCopyp) && !scopedp->sameTree(implicitp), scopedp,
+                "Assertion control must distinguish explicit and implicit selection");
+    scopedCopyp->instanceDependent(false);
+    UASSERT_OBJ(!scopedp->sameTree(scopedCopyp), scopedp,
+                "Assertion control must distinguish instance-dependent targets");
+    scopedCopyp->instanceDependent(true);
+    AstAssertCtlTargetSet* const sharedp = new AstAssertCtlTargetSet{flp, nullptr};
+    scopedCopyp->sharedp(sharedp);
+    UASSERT_OBJ(!scopedp->sameTree(scopedCopyp), scopedp,
+                "Assertion control must distinguish shared target sets");
+    scopedp->sharedp(sharedp);
+    UASSERT_OBJ(scopedp->sameTree(scopedCopyp), scopedp,
+                "Assertion controls using the same shared target set must match");
+
+    AstAssertCtlTarget* const targetp = new AstAssertCtlTarget{
+        flp, new AstVarXRef{flp, "state", "scope", VAccess::READWRITE}, 0};
+    AstAssertCtlTarget* const targetCopyp = targetp->cloneTree(false);
+    UASSERT_OBJ(targetp->sameTree(targetCopyp), targetp, "Assertion target must survive cloning");
+    targetCopyp->depth(1);
+    UASSERT_OBJ(!targetp->sameTree(targetCopyp), targetp,
+                "Assertion control targets at different depths must differ");
+    targetCopyp->depth(0);
+    targetCopyp->ordinal(1);
+    UASSERT_OBJ(!targetp->sameTree(targetCopyp), targetp,
+                "Assertion control targets in different source positions must differ");
+    AstAssertCtlTarget* const relativep
+        = new AstAssertCtlTarget{flp, targetp->statep()->cloneTree(false), 0, true};
+    UASSERT_OBJ(!targetp->sameTree(relativep), targetp,
+                "Assertion control must distinguish module-relative targets");
+    AstAssertCtlTarget* const relativeCopyp = relativep->cloneTree(false);
+    UASSERT_OBJ(relativep->sameTree(relativeCopyp), relativep,
+                "Module-relative assertion targets must survive cloning");
+    VL_DO_DANGLING(implicitp->deleteTree(), implicitp);
+    VL_DO_DANGLING(scopedp->deleteTree(), scopedp);
+    VL_DO_DANGLING(scopedCopyp->deleteTree(), scopedCopyp);
+    VL_DO_DANGLING(sharedp->deleteTree(), sharedp);
+    VL_DO_DANGLING(targetp->deleteTree(), targetp);
+    VL_DO_DANGLING(targetCopyp->deleteTree(), targetCopyp);
+    VL_DO_DANGLING(relativep->deleteTree(), relativep);
+    VL_DO_DANGLING(relativeCopyp->deleteTree(), relativeCopyp);
+}
+static void assertCtlBindingSelfTest(FileLine* const flp) {
+    AstModule* const anchorp = new AstModule{flp, "anchor", ""};
+    AstModule* const otherAnchorp = new AstModule{flp, "other", ""};
+    AstAssertCtlCaller* const parentp = new AstAssertCtlCaller{flp, nullptr, anchorp};
+    AstAssertCtlCaller* const otherParentp = new AstAssertCtlCaller{flp, nullptr, otherAnchorp};
+    AstAssertCtlCaller* const callerp = new AstAssertCtlCaller{flp, parentp, anchorp};
+    AstAssertCtlCaller* const callerCopyp = callerp->cloneTree(false);
+    AstAssertCtlCaller* const otherp = new AstAssertCtlCaller{flp, otherParentp, anchorp};
+    AstAssertCtlCaller* const otherChildp = new AstAssertCtlCaller{flp, parentp, otherAnchorp};
+    UASSERT_OBJ(callerp->sameTree(callerCopyp), callerp,
+                "Assertion caller identity must survive cloning");
+    UASSERT_OBJ(!callerp->sameTree(otherp) && !callerp->sameTree(otherChildp), callerp,
+                "Assertion callers must distinguish parent and anchor occurrences");
+    AstAssertCtlCallerRef* const refp = new AstAssertCtlCallerRef{flp, callerp};
+    AstAssertCtlCallerRef* const refCopyp = refp->cloneTree(false);
+    AstAssertCtlCallerRef* const otherRefp = new AstAssertCtlCallerRef{flp, otherp};
+    UASSERT_OBJ(refp->sameTree(refCopyp) && !refp->sameTree(otherRefp), refp,
+                "Assertion caller membership must retain its occurrence identity");
+
+    AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{flp, nullptr};
+    setp->addCallersp(refp);
+    AstAssertCtlPlan* const planp = new AstAssertCtlPlan{flp, setp};
+    AstAssertCtlPlan* const planCopyp = planp->cloneTree(false);
+    UASSERT_OBJ(planp->sameTree(planCopyp), planp,
+                "Assertion plans and target sets must survive cloning");
+    const auto newApplyp = [&](const VAssertDirectiveType directives) {
+        return new AstAssertCtlApply{
+            flp,    new AstConst{flp, 1}, new AstConst{flp, 1}, new AstConst{flp, 0}, directives,
+            nullptr};
+    };
+    AstAssertCtlApply* const applyp = newApplyp(VAssertDirectiveType::ASSERT);
+    AstAssertCtlApply* const applyCopyp = applyp->cloneTree(false);
+    AstAssertCtlApply* const otherApplyp = newApplyp(VAssertDirectiveType::COVER);
+    UASSERT_OBJ(applyp->sameTree(applyCopyp) && !applyp->sameTree(otherApplyp), applyp,
+                "Assertion operations must distinguish directive filters");
+    applyCopyp->targetSetp(setp);
+    UASSERT_OBJ(!applyp->sameTree(applyCopyp), applyp,
+                "Assertion operations must distinguish shared target sets");
+    applyp->targetSetp(setp);
+    UASSERT_OBJ(applyp->sameTree(applyCopyp), applyp,
+                "Assertion operations using the same shared target set must match");
+    applyCopyp->planp(planp);
+    UASSERT_OBJ(!applyp->sameTree(applyCopyp), applyp,
+                "Assertion operations must distinguish caller plans");
+    applyp->planp(planp);
+    UASSERT_OBJ(applyp->sameTree(applyCopyp), applyp,
+                "Assertion operations using the same caller plan must match");
+    applyCopyp->planp(planCopyp);
+    UASSERT_OBJ(!applyp->sameTree(applyCopyp), applyp,
+                "Structurally equal assertion plans have distinct occurrence identities");
+    VL_DO_DANGLING(applyp->deleteTree(), applyp);
+    VL_DO_DANGLING(applyCopyp->deleteTree(), applyCopyp);
+    VL_DO_DANGLING(otherApplyp->deleteTree(), otherApplyp);
+    VL_DO_DANGLING(planp->deleteTree(), planp);
+    VL_DO_DANGLING(planCopyp->deleteTree(), planCopyp);
+    VL_DO_DANGLING(refCopyp->deleteTree(), refCopyp);
+    VL_DO_DANGLING(otherRefp->deleteTree(), otherRefp);
+    VL_DO_DANGLING(callerp->deleteTree(), callerp);
+    VL_DO_DANGLING(callerCopyp->deleteTree(), callerCopyp);
+    VL_DO_DANGLING(otherp->deleteTree(), otherp);
+    VL_DO_DANGLING(otherChildp->deleteTree(), otherChildp);
+    VL_DO_DANGLING(parentp->deleteTree(), parentp);
+    VL_DO_DANGLING(otherParentp->deleteTree(), otherParentp);
+    VL_DO_DANGLING(anchorp->deleteTree(), anchorp);
+    VL_DO_DANGLING(otherAnchorp->deleteTree(), otherAnchorp);
+}
+
 //======================================================================
 // Ast* methods (except AstNode:: tree methods which generally go in V3Ast.cpp)
 // dist-ast-style-sort
@@ -738,29 +852,72 @@ void AstAssert::selfTest() {
     VL_DO_DANGLING(loweredp->deleteTree(), loweredp);
     VL_DO_DANGLING(loweredCopyp->deleteTree(), loweredCopyp);
 
-    AstAssertCtlArgs* const implicitp = new AstAssertCtlArgs{flp, nullptr, nullptr};
-    AstAssertCtlArgs* const scopedp = new AstAssertCtlArgs{flp, nullptr, new AstConst{flp, 0}};
-    // Resolving the scope list does not change whether the selection is explicit.
-    scopedp->itemsp()->unlinkFrBack()->deleteTree();
-    AstAssertCtlArgs* const scopedCopyp = scopedp->cloneTree(false);
-    UASSERT_OBJ(scopedp->sameTree(scopedCopyp) && !scopedp->sameTree(implicitp), scopedp,
-                "Assertion control must distinguish explicit and implicit selection");
-    scopedCopyp->instanceDependent(false);
-    UASSERT_OBJ(!scopedp->sameTree(scopedCopyp), scopedp,
-                "Assertion control must distinguish instance-dependent targets");
+    assertCtlSelectionSelfTest(flp);
+    assertCtlBindingSelfTest(flp);
 
-    AstAssertCtlTarget* const targetp = new AstAssertCtlTarget{
-        flp, new AstVarXRef{flp, "state", "scope", VAccess::READWRITE}, 0};
-    AstAssertCtlTarget* const targetCopyp = targetp->cloneTree(false);
-    UASSERT_OBJ(targetp->sameTree(targetCopyp), targetp, "Assertion target must survive cloning");
-    targetCopyp->depth(1);
-    UASSERT_OBJ(!targetp->sameTree(targetCopyp), targetp,
-                "Assertion control targets at different depths must differ");
-    VL_DO_DANGLING(implicitp->deleteTree(), implicitp);
-    VL_DO_DANGLING(scopedp->deleteTree(), scopedp);
-    VL_DO_DANGLING(scopedCopyp->deleteTree(), scopedCopyp);
-    VL_DO_DANGLING(targetp->deleteTree(), targetp);
-    VL_DO_DANGLING(targetCopyp->deleteTree(), targetCopyp);
+    AstAssertCtl* const controlp = new AstAssertCtl{
+        flp, VAssertCtlType::ON, VAssertType::CONCURRENT, VAssertDirectiveType::ASSERT};
+    AstAssertCtl* const controlCopyp = controlp->cloneTree(false);
+    UASSERT_OBJ(controlp->sameTree(controlCopyp), controlp,
+                "Assertion controls must survive cloning");
+    controlCopyp->ctlType(VAssertCtlType::OFF);
+    UASSERT_OBJ(!controlp->sameTree(controlCopyp), controlp,
+                "Assertion controls must distinguish effects");
+    controlCopyp->ctlType(controlp->ctlType());
+    controlCopyp->assertTypes(VAssertType::CONCURRENT);
+    UASSERT_OBJ(!controlp->sameTree(controlCopyp), controlp,
+                "Assertion controls must distinguish assertion filters");
+    controlCopyp->assertTypes(controlp->assertTypes());
+    controlCopyp->directiveTypes(VAssertDirectiveType::COVER);
+    UASSERT_OBJ(!controlp->sameTree(controlCopyp), controlp,
+                "Assertion controls must distinguish directive filters");
+    // Evaluated controls are lowered in the same pass, before the next tree dump.
+    controlp->ctlType(VAssertCtlType::ON);
+    controlp->assertTypes(VAssertType::CONCURRENT);
+    controlp->directiveTypes(VAssertDirectiveType::ASSERT);
+    std::ostringstream controlJson;
+    controlp->dumpJson(controlJson);
+    UASSERT_OBJ(controlJson.str().find("\"ctlType\":\"$asserton\"") != string::npos
+                    && controlJson.str().find("\"assertTypes\":\"CONCURRENT\"") != string::npos
+                    && controlJson.str().find("\"directiveTypes\":\"ASSERT\"") != string::npos,
+                controlp, "Evaluated assertion controls must dump all three filters");
+    VL_DO_DANGLING(controlp->deleteTree(), controlp);
+    VL_DO_DANGLING(controlCopyp->deleteTree(), controlCopyp);
+
+    for (const VAssertCtlQuery query :
+         {VAssertCtlQuery::ON, VAssertCtlQuery::KILL, VAssertCtlQuery::PASS_VACUOUS,
+          VAssertCtlQuery::PASS_NONVACUOUS, VAssertCtlQuery::FAIL_ON}) {
+        AstAssertCtlRead* const readp
+            = new AstAssertCtlRead{flp, new AstConst{flp, AstConst::BitTrue{}},
+                                   new AstVarRef{flp, "state", VAccess::READ}, query};
+        AstAssertCtlRead* const readCopyp = readp->cloneTree(false);
+        AstAssertCtlRead* const otherReadp = new AstAssertCtlRead{
+            flp, readp->globalp()->cloneTree(false), readp->statep()->cloneTree(false),
+            query == VAssertCtlQuery::ON ? VAssertCtlQuery::KILL : VAssertCtlQuery::ON};
+        UASSERT_OBJ(readp->sameTree(readCopyp) && !readp->sameTree(otherReadp), readp,
+                    "Assertion state queries must distinguish the queried control bit");
+        std::ostringstream queryJson;
+        readp->dumpJson(queryJson);
+        UASSERT_OBJ(queryJson.str().find("\"query\":\""s + assertCtlQueryName(query) + '"')
+                        != string::npos,
+                    readp, "Assertion state queries must dump the queried control bit");
+        VL_DO_DANGLING(readp->deleteTree(), readp);
+        VL_DO_DANGLING(readCopyp->deleteTree(), readCopyp);
+        VL_DO_DANGLING(otherReadp->deleteTree(), otherReadp);
+    }
+
+    // Interface pins retain explicit modport selection for assertion-scope resolution.
+    AstPin* const pinp = new AstPin{flp, 1, "p", nullptr};
+    AstPin* const pinCopyp = pinp->cloneTree(false);
+    UASSERT_OBJ(pinp->sameTree(pinCopyp), pinp, "Interface pin identity must survive cloning");
+    pinCopyp->explicitModport(true);
+    UASSERT_OBJ(!pinp->sameTree(pinCopyp), pinp,
+                "Interface pins must distinguish explicit modport selection");
+    pinp->explicitModport(true);
+    UASSERT_OBJ(pinp->sameTree(pinCopyp), pinp,
+                "Interface pins selecting the same explicit modport must match");
+    VL_DO_DANGLING(pinp->deleteTree(), pinp);
+    VL_DO_DANGLING(pinCopyp->deleteTree(), pinCopyp);
 }
 AstAssertCtl::AstAssertCtl(FileLine* fl, VAssertCtlType ctlType, uint32_t assertType,
                            uint32_t directiveType, AstNodeExpr* levelp, AstNodeExpr* itemsp)
