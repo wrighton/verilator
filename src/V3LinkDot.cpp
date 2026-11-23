@@ -4147,10 +4147,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     std::map<const AstSequence*, AstVar*> m_seqTriggeredEvents;
     V3UniqueNames m_seqTriggeredNames{"__Vtriggered"};  // Names of those events
     int m_modportNum = 0;  // Uniqueify modport numbers
-    bool m_inAssertCtlTarget = false;  // Resolving the target's single state reference
-    bool m_assertCtlTargetAbsent = false;  // This elaboration does not contain the site
     bool m_assertCtlModuleRelative = false;  // Normalized selector path starts at module scope
-    VDouble0 m_statAssertCtlDropped;  // Optional targets removed after concrete binding
     // Lexical children indexed by declaration identity for replay in another instance.
     std::unordered_map<const VSymEnt*, std::unordered_map<const AstNode*, VSymEnt*>>
         m_assertCtlChildren;
@@ -6681,22 +6678,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
     }
     void visit(AstAssertCtlTarget* nodep) override {
-        VL_RESTORER(m_inAssertCtlTarget);
-        VL_RESTORER(m_assertCtlTargetAbsent);
         VL_RESTORER(m_assertCtlModuleRelative);
-        m_inAssertCtlTarget = true;
-        m_assertCtlTargetAbsent = false;
         m_assertCtlModuleRelative = nodep->moduleRelative();
         iterateChildren(nodep);
-        if (m_assertCtlTargetAbsent) {
-            ++m_statAssertCtlDropped;
-            VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
-        }
-    }
-    void assertCtlSiteAbsent(AstVarXRef* nodep) {
-        if (!m_statep->forScopeCreation()) return;  // Resolved again for each instance
-        UASSERT_OBJ(m_inAssertCtlTarget, nodep, "Assertion control site outside its target");
-        m_assertCtlTargetAbsent = true;
     }
     void visit(AstVarXRef* nodep) override {
         // VarRef: Resolve its reference
@@ -6719,11 +6703,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (nodep->assertCtlOptional()) {
                 string baddot;
                 VSymEnt* okSymp = nullptr;
-                if (!m_statep->findDotted(nodep->fileline(), lookupSymp, nodep->dotted(), baddot,
-                                          okSymp, firstId)) {
-                    assertCtlSiteAbsent(nodep);
-                    return;
-                }
+                VSymEnt* const optionalp = m_statep->findDotted(
+                    nodep->fileline(), lookupSymp, nodep->dotted(), baddot, okSymp, firstId);
+                // Scoping materializes only the routes selected for this concrete caller.
+                UASSERT_OBJ(optionalp || !m_statep->forScopeCreation(), nodep,
+                            "Assertion control route missing from its caller");
+                if (!optionalp) return;
             }
             string baddot;
             VSymEnt* okSymp;
@@ -6805,11 +6790,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (vscp && errorHierNonPort(nodep, vscp->varp(), dotSymp)) return;
-                if (!vscp && nodep->assertCtlOptional()) {
-                    assertCtlSiteAbsent(nodep);
-                    return;
-                }
-                if (vscp && nodep->assertCtlOptional()) {
+                if (nodep->assertCtlOptional()) {
+                    UASSERT_OBJ(vscp, nodep, "Assertion control site missing from its caller");
                     UASSERT_OBJ(vscp->varp() == nodep->varp(), nodep,
                                 "Assertion control site bound to another elaboration");
                     nodep->assertCtlOptional(false);
@@ -9293,10 +9275,6 @@ public:
             AstNodeModule* const modp = p.second;
             modp->foreach([](AstNode* const nodep) { nodep->user3(false); });
             iterate(modp);
-        }
-        if (m_statep->forScopeCreation() && v3Global.opt.stats()) {
-            V3Stats::addStatSum("LinkDot, Assertion control dropped targets",
-                                m_statAssertCtlDropped);
         }
         // A wildcard export only exports names its package references (IEEE 1800-2023 26.6)
         std::stable_sort(m_wildcardExportRefs.begin(), m_wildcardExportRefs.end(),
