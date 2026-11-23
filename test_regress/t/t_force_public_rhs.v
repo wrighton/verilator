@@ -34,10 +34,10 @@ module t;
   always @(posedge y) ++edges;
   initial begin
     #5 en = 1'b1;
-    #50;
+    #49;  // 54 ns: no edge of src at this time
     `checkd(edges, 25);
-    // Each of its 50 toggles was seen through the VPI too
-    `checkd(vpi_changes, 50);
+    // Each of its 49 toggles so far was seen through the VPI too
+    `checkd(vpi_changes, 49);
     en = 1'b0;
     #1;
     `checkh(y, drv);
