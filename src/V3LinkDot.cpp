@@ -8900,6 +8900,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             const AstConst* const constp = VN_CAST(indexp, Const);
+            if (m_statep->forParamed() && !constp
+                && selp->bitp()->exists([](const AstVarXRef* refp) {
+                       return refp->containsGenBlock() && refp->varp() && refp->varp()->isParam();
+                   })
+                && !selp->bitp()->exists([](const AstNode* subp) {
+                       if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                           return !refp->varp() || !refp->varp()->isParam();
+                       }
+                       return VN_IS(subp, NodeFTaskRef);
+                   })) {
+                // The ordinary dotted-index fold runs before the final generate relink.
+                selp->bitp()->v3warn(E_UNSUPPORTED,
+                                     "Unsupported: Assertion control scope index "
+                                     "requires folding a relinked generate parameter.");
+                VL_DO_DANGLING(pushDeletep(indexp), indexp);
+                return "";
+            }
             const string base = assertControlPath(selp->fromp(), nonconstantp);
             string path;
             if (!constp || constp->num().isFourState()) {
