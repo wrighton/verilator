@@ -232,6 +232,10 @@ class EmitCModel final : public EmitCFunc {
             puts("/// Internal: add the VPI scopes of this library instance, the top level\n");
             puts("/// ones under 'abovep', the VPI scope above it in the model using it\n");
             puts("void __VvpiAttach(const VerilatedScope* abovep);\n");
+            puts(
+                "/// Internal: have 'cbp' called with 'datap' after each write through the VPI\n");
+            puts("/// into this library instance\n");
+            puts("void __VvpiOnWrite(void (*cbp)(void*), void* datap);\n");
         }
 
         puts("/// Are there scheduled events to handle?\n");

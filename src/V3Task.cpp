@@ -1942,10 +1942,14 @@ class TaskVisitor final : public VNVisitor {
         if (nodep->dpiImport() || nodep->dpiExport()) {
             UASSERT_OBJ(!(nodep->dpiOpenParent() && nodep->dpiOpenChild()), nodep,
                         "DPI task should not be both parent and child");
-            dpiFuncp = checkDpiStructArgs(nodep) && checkDpiArgTypes(nodep)
-                           ? getDpiFunc(nodep, rtnvarp)
-                           : nullptr;
-            if (!dpiFuncp || (nodep->dpiImport() && nodep->dpiOpenParent())) {
+            const bool argsOk = checkDpiStructArgs(nodep) && checkDpiArgTypes(nodep);
+            // The model using a library calls the export of the library's wrapper through the
+            // library, not by name, so it has no entry point, which would collide with that of
+            // other models using the library
+            const bool libExport = nodep->dpiExport() && m_modp->verilatorLib();
+            if (argsOk && !libExport) dpiFuncp = getDpiFunc(nodep, rtnvarp);
+            if (!argsOk || (!libExport && !dpiFuncp)
+                || (nodep->dpiImport() && nodep->dpiOpenParent())) {
                 // No need to make more than just the DPI Import prototype, the children will
                 // create the wrapper implementations.
                 if (rtnvarp) VL_DO_DANGLING(pushDeletep(rtnvarp), rtnvarp);
@@ -2070,7 +2074,10 @@ class TaskVisitor final : public VNVisitor {
         // Replace variable refs
         relink(cfuncp);
 
-        if (cfuncp->dpiExportImpl()) {
+        // The model using a library calls the export of the library's wrapper outside of its
+        // evaluation, and a process of the wrapper detects the change of what it writes, so it
+        // has no effect on readers of variables written through other exports
+        if (cfuncp->dpiExportImpl() && !m_modp->verilatorLib()) {
             // Mark all non-local variables written by the DPI exported function as being updated
             // by DPI exports. This ensures correct ordering and change detection later.
 
