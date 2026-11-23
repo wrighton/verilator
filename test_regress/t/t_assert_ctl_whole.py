@@ -11,9 +11,13 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 test.top_filename = 't/t_assert_ctl_scope_root.v'
-test.compile(verilator_flags2=['--binary', '--assert', '--stats', '+define+WHOLE_MODEL'],
-             threads=2 if test.vltmt else 1)
+test.compile(verilator_flags2=[
+    '--binary', '--assert', '--stats', '+define+WHOLE_MODEL', '--dumpi-tree-json 3', '--no-json-ids'
+], threads=2 if test.vltmt else 1)
 test.execute()
+# Explicit whole-model selection keeps a shared list through parameterized linking.
+test.file_grep(test.glob_one(test.obj_dir + '/*_linkdotparam.tree.json'),
+               r'"type":"ASSERTCTLARGS"[^\n]*"sharedp":"[^"\n]+"')
 test.file_grep(test.stats, r'Assertions, Shared absolute target lists\s+(\d+)', 1)
 test.file_grep(test.stats, r'Assertions, Scoped state instances\s+(\d+)', 2)
 test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 2)
