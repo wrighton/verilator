@@ -27,15 +27,21 @@ endmodule
 
 module t;
   localparam logic [1:0] IDX = 2'b01;
+  localparam int INDEX_TABLE [0:1] = '{0, 1};
+  logic width_probe;
   mid a ();
   mid b ();
   leaf neg[-1:-2] ();
   leaf pos[1:0] ();
+  leaf bits_target[1:0] ();
+  leaf param_target[1:0] ();
   initial begin
     // An omitted levels argument selects every level below the scope (IEEE 1800-2023 20.11)
     $assertcontrol(4, 15, 7,, t.a);
     $assertoff(0, neg[int'(-1)].check);
     $assertoff(0, pos[IDX[0]].check);
+    $assertoff(0, bits_target[$bits(width_probe)].check);
+    $assertoff(0, param_target[INDEX_TABLE[1]].check);
     #2;
     `checkd(a.l.failures, 0);
     `checkd(b.l.failures, 1);
@@ -43,6 +49,11 @@ module t;
     `checkd(neg[-2].failures, 1);
     `checkd(pos[1].failures, 0);
     `checkd(pos[0].failures, 1);
+    // Ordinary hierarchical reads and assertion selectors use the same index expressions.
+    `checkd(bits_target[$bits(width_probe)].failures, 0);
+    `checkd(bits_target[0].failures, 1);
+    `checkd(param_target[INDEX_TABLE[1]].failures, 0);
+    `checkd(param_target[0].failures, 1);
     $display("*-* All Finished *-*");
     $finish;
   end
