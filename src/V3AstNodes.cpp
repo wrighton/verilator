@@ -2226,9 +2226,13 @@ void AstCvtArrayToArray::dumpJson(std::ostream& str) const {
 void AstDefParam::dump(std::ostream& str) const {
     Super::dump(str);
     if (fromBind()) str << " [FROMBIND]";
+    if (checkTarget()) str << " [CHECKTARGET]";
+    if (sharedName()) str << " [SHAREDNAME]";
 }
 void AstDefParam::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, fromBind);
+    dumpJsonBoolFuncIf(str, checkTarget);
+    dumpJsonBoolFuncIf(str, sharedName);
     dumpJsonGen(str);
 }
 string AstDefParam::name() const VL_MT_STABLE {
@@ -3770,6 +3774,9 @@ const AstNodeExpr* AstNodeExpr::getVAccessTargetRecurse() const {
     if (const AstSliceSel* const anodep = VN_CAST(this, SliceSel)) {
         return anodep->fromp()->getVAccessTargetRecurse();
     }
+    if (const AstSliceSel* const anodep = VN_CAST(this, SliceSel)) {
+        return anodep->fromp()->getVAccessTargetRecurse();
+    }
     if (const AstConcat* const anodep = VN_CAST(this, Concat)) {
         // Enough to check only one side, as both must be same otherwise malformed
         return anodep->lhsp()->getVAccessTargetRecurse();
@@ -4298,6 +4305,8 @@ void AstPin::dump(std::ostream& str) const {
     if (param()) str << " [PAR]";
     if (!paramPath().empty()) str << " paramPath=" << paramPath();
     if (defparamGenAlt()) str << " [GENALT]";
+    if (defparamSharedName()) str << " [SHAREDNAME]";
+    if (defparamScope()) str << " defparamScope=" << defparamScope();
     if (svDotName()) str << " [.n]";
     if (svImplicit()) str << " [.SV]";
     if (explicitModport()) str << " [MODPORT]";
@@ -4306,6 +4315,8 @@ void AstPin::dump(std::ostream& str) const {
 void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
     dumpJsonBoolFuncIf(str, defparamGenAlt);
+    dumpJsonBoolFuncIf(str, defparamSharedName);
+    if (defparamScope()) dumpJsonNumFunc(str, defparamScope);
     dumpJsonBoolFuncIf(str, svDotName);
     dumpJsonBoolFuncIf(str, svImplicit);
     dumpJsonBoolFuncIf(str, explicitModport);
@@ -4779,6 +4790,18 @@ std::string AstScopeName::scopePrettyNameFormatter(const std::string& text) {
     if (out.substr(0, 1) == ".") out.replace(0, 1, "");
     return AstNode::prettyName(out);
 }
+std::pair<uint64_t, int> AstSel::constSelectedBits() const {
+    const AstConst* const constp = VN_AS(lsbp(), Const);
+    V3Number narrow{constp->fileline(), VL_IDATASIZE, 0};
+    const bool narrowed = narrowPosition(constp->num(), constp->isSigned(), narrow);
+    const V3Number& pos = narrowed ? narrow : constp->num();
+    // Read as lsbConstInt() reads it, with the signedness of its number
+    if (pos.isSigned() && pos.isNegative()) {
+        const int64_t lsb = static_cast<int64_t>(pos.toUInt()) - (int64_t{1} << pos.width());
+        return {0, static_cast<int>(std::max<int64_t>(widthConst() + lsb, 0))};
+    }
+    return {pos.toUInt(), widthConst()};
+}
 void AstSel::dump(std::ostream& str) const {
     Super::dump(str);
     str << " widthConst=" << this->widthConst();
@@ -4786,6 +4809,8 @@ void AstSel::dump(std::ostream& str) const {
         str << " decl" << declRange() << "]";
         if (declElWidth() != 1) str << "/" << declElWidth();
     }
+    if (valueWidth()) str << " valueWidth=" << valueWidth();
+    if (partialWrite()) str << " [PARTIALW]";
 }
 void AstSel::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, widthConst);
@@ -4793,7 +4818,99 @@ void AstSel::dumpJson(std::ostream& str) const {
         dumpJsonStr(str, "declRange", cvtToStr(declRange()));
         dumpJsonNumFunc(str, declElWidth);
     }
+    if (valueWidth()) dumpJsonNumFunc(str, valueWidth);
+    dumpJsonBoolFuncIf(str, partialWrite);
     dumpJsonGen(str);
+}
+int AstSel::lsbConstInt() const {
+    const AstConst* const constp = VN_AS(lsbp(), Const);
+    V3Number narrow{constp->fileline(), VL_IDATASIZE, 0};
+    return narrowPosition(constp->num(), constp->isSigned(), narrow) ? narrow.toSInt()
+                                                                     : constp->toSInt();
+}
+bool AstSel::lsbConstOutOfRange(int maxBit) const {
+    const V3Number& num = VN_AS(lsbp(), Const)->num();
+    if (num.isFourState()) return false;
+    if (!num.fitsInUInt() || (num.isSigned() && num.isNegative())) return true;
+    return static_cast<int64_t>(num.toUInt()) + widthConst() - 1 > maxBit;
+}
+string AstSel::lsbConstStr(int offset, int scale) const {
+    const V3Number& num = VN_AS(lsbp(), Const)->num();
+    if (num.width() > 64) return num.ascii();
+    if (num.isSigned() && num.isNegative()) return cvtToStr((num.toSQuad() + offset) / scale);
+    return cvtToStr((num.toUQuad() + offset) / scale);
+}
+AstConst* AstSel::narrowLsbConst() {
+    AstConst* const constp = VN_CAST(lsbp(), Const);
+    if (!constp) return nullptr;
+    V3Number narrow{constp, VL_IDATASIZE, 0};
+    if (partialWrite()) {
+        if (constp->num().isFourState()) return nullptr;
+        narrow.setLongS(static_cast<int32_t>(partialWritePos()));
+        narrow.isSigned(true);
+        if (constp->num().isCaseEq(narrow) && constp->isSigned()) return nullptr;
+    } else if (!narrowPosition(constp->num(), constp->isSigned(), narrow)) {
+        return nullptr;
+    }
+    constp->replaceWith(new AstConst{constp->fileline(), narrow});
+    return constp;
+}
+bool AstSel::narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow) {
+    if (num.isFourState()) return false;
+    const bool negative = isSigned && num.bitIs1(num.width() - 1);
+    const bool farAbove
+        = !negative && num.mostSetBitP1() > static_cast<uint32_t>(V3Number::log2b(FAR_POSITION));
+    if (num.width() <= VL_IDATASIZE && !farAbove) return false;
+    if (num.width() == VL_IDATASIZE && num.isEqAllOnes()) return false;
+    if (farAbove) {
+        narrow.setAllBits1();
+    } else if (negative) {
+        const bool fits
+            = num.width() <= VL_QUADSIZE && num.toSQuad() >= std::numeric_limits<int32_t>::min();
+        narrow.setLong(fits ? static_cast<uint32_t>(num.toSQuad())
+                            : static_cast<uint32_t>(std::numeric_limits<int32_t>::min()));
+        narrow.isSigned(true);
+    } else if (num.mostSetBitP1() < VL_IDATASIZE) {
+        narrow.opAssign(num);
+    } else {
+        narrow.setAllBits1();
+    }
+    return true;
+}
+int64_t AstSel::partialWritePos() const {
+    // A position is signed, but folding may leave either the constant or its type unsigned;
+    // narrowPosition() narrows one far above to all ones, both unsigned
+    const AstConst* const constp = VN_AS(lsbp(), Const);
+    const V3Number& num = constp->num();
+    const int64_t width = widthConst();
+    if ((constp->isSigned() || num.isSigned()) && num.bitIs1(num.width() - 1)) {
+        V3Number magnitude{num};
+        magnitude.opNegate(num);
+        if (!magnitude.fitsInUInt()) return -width;
+        return std::max<int64_t>(-int64_t{magnitude.toUInt()}, -width);
+    }
+    if (num.fitsInUInt() && num.toUInt() < static_cast<uint32_t>(fromp()->width())) {
+        return num.toUInt();
+    }
+    return -width;
+}
+void AstSel::selectBelow(V3Number& out, const V3Number& from, const V3Number& bit) const {
+    const int64_t below = (int64_t{1} << bit.width()) - static_cast<int64_t>(bit.toUInt());
+    const char outside = v3Global.constRemoveXs() ? '0' : 'x';
+    out.setZero();
+    for (int i = 0; i < widthConst(); ++i) {
+        const int64_t srcBit = i - below;
+        const int src = static_cast<int>(srcBit);
+        if (srcBit < 0 || srcBit >= from.width()) {
+            out.setBit(i, outside);
+        } else if (from.bitIs1(src)) {
+            out.setBit(i, '1');
+        } else if (from.bitIsX(src)) {
+            out.setBit(i, 'x');
+        } else if (from.bitIsZ(src)) {
+            out.setBit(i, 'z');
+        }
+    }
 }
 void AstSelBit::dump(std::ostream& str) const {
     Super::dump(str);
@@ -5446,6 +5563,7 @@ void AstVar::dump(std::ostream& str) const {
     if (forceRdVarp()) str << " forceRdVarp=" << nodeAddr(forceRdVarp());
     if (forceEnVarp()) str << " forceEnVarp=" << nodeAddr(forceEnVarp());
     if (forceValVarp()) str << " forceValVarp=" << nodeAddr(forceValVarp());
+    if (forceVpiVarp()) str << " forceVpiVarp=" << nodeAddr(forceVpiVarp());
 }
 void AstVar::dumpJson(std::ostream& str) const {
     if (libInoutId()) dumpJsonNumFunc(str, libInoutId);

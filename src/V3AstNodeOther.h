@@ -1428,6 +1428,8 @@ class AstDefParam final : public AstNode {
     // @astgen op2 := pathp : Optional[AstNodeExpr]  // nullptr if own scope or after V3LinkDot
     // @astgen op3 := targetp : AstNodeExpr // After V3LinkDot, AstVarXRef from this scope
     bool m_fromBind = false;  // From a bind to an instance path (see V3LinkCells)
+    bool m_checkTarget = false;  // Kept only for V3LinkDot to check its target once elaborated
+    bool m_sharedName = false;  // Also checked by V3Param, see AstPin::defparamSharedName
 public:
     AstDefParam(FileLine* fl, AstNodeExpr* pathp, AstNodeExpr* targetp, AstNode* rhsp)
         : ASTGEN_SUPER_DefParam(fl) {
@@ -1440,10 +1442,16 @@ public:
     void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE;  // Name of the parameter set, from targetp
     bool sameNode(const AstNode* samep) const override {
-        return m_fromBind == VN_DBG_AS(samep, DefParam)->m_fromBind;
+        const AstDefParam* const sp = VN_DBG_AS(samep, DefParam);
+        return m_fromBind == sp->m_fromBind && m_checkTarget == sp->m_checkTarget
+               && m_sharedName == sp->m_sharedName;
     }
     bool fromBind() const { return m_fromBind; }
     void fromBind(bool flag) { m_fromBind = flag; }
+    bool checkTarget() const { return m_checkTarget; }
+    void checkTarget(bool flag) { m_checkTarget = flag; }
+    bool sharedName() const { return m_sharedName; }
+    void sharedName(bool flag) { m_sharedName = flag; }
 };
 class AstDefaultClocking final : public AstNode {
     std::string m_name;  // Clocking block name
@@ -1859,6 +1867,8 @@ class AstPin final : public AstNode {
     string m_paramPath;  // Defparam cell path, from the module it is relative to, if a defparam
     bool m_param = false;  // Pin connects to parameter
     bool m_defparamGenAlt = false;  // Defparam into generate block, also resolves without it
+    bool m_defparamSharedName = false;  // Defparam select through blocks sharing a name
+    int m_defparamScope = 0;  // Scope of its defparam, by an ID unique to it
     bool m_svDotName = false;  // Pin is SystemVerilog .name'ed
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
     bool m_explicitModport = false;  // Actual expression explicitly selected a modport
@@ -1893,6 +1903,10 @@ public:
     void paramPath(const string& path) { m_paramPath = path; }
     bool defparamGenAlt() const { return m_defparamGenAlt; }
     void defparamGenAlt(bool flag) { m_defparamGenAlt = flag; }
+    bool defparamSharedName() const { return m_defparamSharedName; }
+    void defparamSharedName(bool flag) { m_defparamSharedName = flag; }
+    int defparamScope() const { return m_defparamScope; }
+    void defparamScope(int id) { m_defparamScope = id; }
     bool svDotName() const { return m_svDotName; }
     void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
@@ -2478,6 +2492,7 @@ class AstVar final : public AstNode {
     // @astgen ptr := m_forceRdVarp : Optional[AstVar]  // [AfterForce] Generated force read signal
     // @astgen ptr := m_forceEnVarp : Optional[AstVar]  // [AfterForce] Generated force enable
     // @astgen ptr := m_forceValVarp : Optional[AstVar]  // [AfterForce] Generated force value
+    // @astgen ptr := m_forceVpiVarp : Optional[AstVar]  // [AfterForce] Generated VPI-forced bits
 
     string m_name;  // Name of variable
     string m_origName;  // Original name before dot addition
@@ -2832,6 +2847,8 @@ public:
     void forceEnVarp(AstVar* const nodep) { m_forceEnVarp = nodep; }
     AstVar* forceValVarp() const { return m_forceValVarp; }
     void forceValVarp(AstVar* const nodep) { m_forceValVarp = nodep; }
+    AstVar* forceVpiVarp() const { return m_forceVpiVarp; }
+    void forceVpiVarp(AstVar* const nodep) { m_forceVpiVarp = nodep; }
     void setForceable() { m_isForceable = true; }
     void setForcedByCode() { m_isForcedByCode = true; }
     bool isForced() const { return m_isForceable || m_isForcedByCode; }

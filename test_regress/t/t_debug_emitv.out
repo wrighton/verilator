@@ -91,8 +91,7 @@ module t;
             if (downto_32[33]) begin
                 $write("");
             end
-            if (downto_32[$unsigned(6'((ident(32'sh21) 
-                                        - 32'h20))) + 32
+            if (downto_32[(ident(32'sh21) - 32'h20) + 32
                 +:1]) begin
                 $write("");
             end
@@ -459,12 +458,17 @@ module t;
             if (after_struct_packed) begin
                 $write("");
             end
-            if (ascending_packed[$unsigned(2'((32'h3 
-                                               - 32'sh2))) + 2
-                +:1]) begin
+            if (ascending_packed[3]) begin
                 $write("");
             end
             if ((uns_int > 32'sh0)) begin
+                $write("");
+            end
+            if (($unsigned(4'(({3'bx, ascending_packed}) >> (
+                                                             (64'sh0 
+                                                              - 
+                                                              uns_int)))) 
+                 != 32'sh0)) begin
                 $write("");
             end
             if (((usarr.marr[32'sh0]) != 32'sh0)) begin
@@ -2147,6 +2151,19 @@ endmodule
 module defparam_gen__pie9c2606d;
     /* generate */ begin : dpg
     end : dpg
+    /* generate */ begin : dpl
+        integer i;
+    end : dpl
+    /* generate */ begin : dpl[0]
+        localparam integer i = 32'sh0;
+        /* generate */ begin : alt
+        end : alt
+    end : dpl[0]
+    /* generate */ begin : dpl[1]
+        localparam integer i = 32'sh1;
+        /* generate */ begin : alt
+        end : alt
+    end : dpl[1]
 endmodule
 module param_mod__Tzc7cce3e0_P3;
     parameter int PW = 32'sh3;
@@ -2407,6 +2424,8 @@ interface Iface;
         input logic ifsig
     );
 endinterface
+module defparam_cfg;
+endmodule
 module defparam_leaf;
     parameter bit signed [31:0]  P = 32'sh1;
 endmodule
@@ -2422,8 +2441,14 @@ module dump_value_driver;
     input logic value;
     assign p = value;
 endmodule
+module defparam_leaf__P4;
+    parameter bit signed [31:0]  P = 32'sh4;
+endmodule
 module defparam_leaf__P2;
     parameter bit signed [31:0]  P = 32'sh2;
+endmodule
+module defparam_leaf__P3;
+    parameter bit signed [31:0]  P = 32'sh3;
 endmodule
 interface \esc.ifc ;
     logic \sig.i ;

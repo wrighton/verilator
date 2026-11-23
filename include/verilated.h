@@ -1076,6 +1076,10 @@ public:  // But for internal use only
     static std::atomic<uint64_t> s_nextGeneration;
     // Identifies this model, as no other model of the process has it, unlike its address
     const uint64_t __Vm_generation = s_nextGeneration++;
+    // Called with __Vm_vpiWriteCbDatap after a write through the VPI into a variable of the
+    // model, if set, so the model using this library instance evaluates it again
+    void (*__Vm_vpiWriteCbp)(void*) = nullptr;
+    void* __Vm_vpiWriteCbDatap = nullptr;  // Argument of __Vm_vpiWriteCbp
     explicit VerilatedSyms(VerilatedContext* contextp);  // Pass null for default context
     ~VerilatedSyms();
     VL_UNCOPYABLE(VerilatedSyms);
@@ -1155,7 +1159,8 @@ public:  // But internals only - called from verilated modules, VerilatedSyms
                                      VerilatedVarType vltype, int vlflags,
                                      void* forceReadSignalDatap, const char* forceReadSignalName,
                                      std::pair<VerilatedVar*, VerilatedVar*> forceControlSignals,
-                                     int udims, int pdims, ...) VL_MT_UNSAFE;
+                                     VerilatedVar* forceVpiSignalp, int udims, int pdims,
+                                     ...) VL_MT_UNSAFE;
     void varsInsertFromTable(const VlVarTableEntry* entp, size_t n, void* basep) VL_MT_UNSAFE;
     void paramsInsertFromTable(const VlVarTableEntry* entp, size_t n,
                                const void* const* paramPtrsp) VL_MT_UNSAFE;
@@ -1229,9 +1234,11 @@ struct VlHierTableEntry final {
 
 class VerilatedHierarchy final {
 public:
-    static void addFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp);
-    static void removeFromTable(const VlHierTableEntry* entp, size_t n,
-                                const VerilatedSyms* symsp);
+    // The top level scopes other than packages are under 'abovep', nullptr for the top level
+    static void addFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp,
+                             const VerilatedScope* abovep = nullptr);
+    static void removeFromTable(const VlHierTableEntry* entp, size_t n, const VerilatedSyms* symsp,
+                                const VerilatedScope* abovep = nullptr);
     static void clear();
 };
 

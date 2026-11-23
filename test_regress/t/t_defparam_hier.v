@@ -83,6 +83,19 @@ package pkg;
   endclass
 endpackage
 
+// Under the scope, through a generate block with an escaped name containing '.'
+module M7;
+  if (1) begin : \e.f
+    M0 m0 (.value());
+    M0 m1 (.value());
+    M0 m2 (.value());
+    M0 m3 (.value());
+  end
+  defparam \e.f .m0.PRMTR = 36;
+  defparam M7.\e.f .m1.PRMTR = 41;
+  defparam top.esc_under.\e.f .m3.PRMTR = 43;
+endmodule
+
 // Instances outside the module declaring the defparams
 module M6;
   import pkg::*;
@@ -129,6 +142,35 @@ module top;
   defparam m3.m2b.PRMTR = 9;
 
   defparam m3.PRMTR = 10;
+
+  // A generate block with an escaped name containing '.', and nested blocks spelled the same
+  if (1) begin : \j.k
+    M0 u (.value());
+  end
+  if (1) begin : j
+    if (1) begin : k
+      M0 u (.value());
+    end
+  end
+  defparam top.\j.k .u.PRMTR = 31;
+  defparam j.k.u.PRMTR = 32;
+  M7 esc_under ();
+  defparam top.esc_under.\e.f .m2.PRMTR = 42;
+  initial begin
+    int esc_prmtr[6];
+    esc_prmtr[0] = \j.k .u.PRMTR;
+    esc_prmtr[1] = j.k.u.PRMTR;
+    esc_prmtr[2] = esc_under.\e.f .m0.PRMTR;
+    esc_prmtr[3] = esc_under.\e.f .m1.PRMTR;
+    esc_prmtr[4] = esc_under.\e.f .m2.PRMTR;
+    esc_prmtr[5] = esc_under.\e.f .m3.PRMTR;
+    `checkh(esc_prmtr[0], 31);
+    `checkh(esc_prmtr[1], 32);
+    `checkh(esc_prmtr[2], 36);
+    `checkh(esc_prmtr[3], 41);
+    `checkh(esc_prmtr[4], 42);
+    `checkh(esc_prmtr[5], 43);
+  end
 
   initial begin
     `checkh(m3.m2a.m1.m0a.PRMTR, 2);

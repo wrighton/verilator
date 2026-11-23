@@ -4812,8 +4812,8 @@ VerilatedVar* VerilatedScope::varInsertSized(const char* namep, void* datap, boo
 VerilatedVar* VerilatedScope::forceableVarInsert(
     const char* namep, void* datap, bool isParam, VerilatedVarType vltype, int vlflags,
     void* forceReadSignalDatap, const char* const forceReadSignalName,
-    std::pair<VerilatedVar*, VerilatedVar*> forceControlSignals, int udims, int pdims,
-    ...) VL_MT_UNSAFE {
+    std::pair<VerilatedVar*, VerilatedVar*> forceControlSignals, VerilatedVar* forceVpiSignalp,
+    int udims, int pdims, ...) VL_MT_UNSAFE {
     if (!m_varsp) m_varsp = new VerilatedVarNameMap;
 
     // TODO: While the force read signal would be *expected* to have the same vltype and vlflags
@@ -4848,8 +4848,9 @@ VerilatedVar* VerilatedScope::forceableVarInsert(
     va_end(ap);
 
     std::unique_ptr<VerilatedForceControlSignals> verilatedForceControlSignalsp
-        = std::unique_ptr<VerilatedForceControlSignals>(new VerilatedForceControlSignals{
-            forceControlSignals.first, forceControlSignals.second, std::move(forceReadSignal)});
+        = std::unique_ptr<VerilatedForceControlSignals>(
+            new VerilatedForceControlSignals{forceControlSignals.first, forceControlSignals.second,
+                                             forceVpiSignalp, std::move(forceReadSignal)});
 
     VerilatedVar var(namep, datap, vltype, static_cast<VerilatedVarFlags>(vlflags), udims, pdims,
                      isParam, std::move(verilatedForceControlSignalsp));
@@ -4944,18 +4945,30 @@ static const VerilatedScope* vl_hierScope(const VerilatedSyms* symsp, uint32_t o
                                                            + offset);
 }
 
+// The scope above the scope of row 'ent', which is 'abovep' for a top level scope other than a
+// package
+static const VerilatedScope* vl_hierAbove(const VlHierTableEntry& ent, const VerilatedSyms* symsp,
+                                          const VerilatedScope* abovep) {
+    if (ent.fromOffset) return vl_hierScope(symsp, ent.fromOffset);
+    if (!abovep || vl_hierScope(symsp, ent.toOffset)->type() == VerilatedScope::SCOPE_PACKAGE) {
+        return nullptr;
+    }
+    return abovep;
+}
+
 void VerilatedHierarchy::addFromTable(const VlHierTableEntry* entp, size_t n,
-                                      const VerilatedSyms* symsp) {
+                                      const VerilatedSyms* symsp, const VerilatedScope* abovep) {
     for (size_t i = 0; i < n; ++i) {
-        VerilatedImp::hierarchyAdd(vl_hierScope(symsp, entp[i].fromOffset),
+        VerilatedImp::hierarchyAdd(vl_hierAbove(entp[i], symsp, abovep),
                                    vl_hierScope(symsp, entp[i].toOffset));
     }
 }
 
 void VerilatedHierarchy::removeFromTable(const VlHierTableEntry* entp, size_t n,
-                                         const VerilatedSyms* symsp) {
+                                         const VerilatedSyms* symsp,
+                                         const VerilatedScope* abovep) {
     for (size_t i = 0; i < n; ++i) {
-        VerilatedImp::hierarchyRemove(vl_hierScope(symsp, entp[i].fromOffset),
+        VerilatedImp::hierarchyRemove(vl_hierAbove(entp[i], symsp, abovep),
                                       vl_hierScope(symsp, entp[i].toOffset));
     }
 }
