@@ -9378,7 +9378,8 @@ void V3LinkDot::linkDotGuts(AstNetlist* rootp, VLinkDotStep step) {
     state.computeScopeAliases();
     state.dumpSelf("linkdot-preresolve");
     state.indexAssertCtlSites(rootp);
-    { const LinkDotResolveVisitor visitor{rootp, &state}; }
+    // The final symbol dump still refers to inline scopes queued for deletion by the resolver.
+    const LinkDotResolveVisitor visitor{rootp, &state};
     state.attachAssertCtlSites();
     state.dumpSelf("linkdot-done");
     if (v3Global.opt.stats()) {
