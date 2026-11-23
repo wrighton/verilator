@@ -884,12 +884,13 @@ void AstAssert::selfTest() {
     VL_DO_DANGLING(controlp->deleteTree(), controlp);
     VL_DO_DANGLING(controlCopyp->deleteTree(), controlCopyp);
 
+    AstVar* const statep = new AstVar{flp, VVarType::MODULETEMP, "state", VFlagBitPacked{}, 1};
     for (const VAssertCtlQuery query :
          {VAssertCtlQuery::ON, VAssertCtlQuery::KILL, VAssertCtlQuery::PASS_VACUOUS,
           VAssertCtlQuery::PASS_NONVACUOUS, VAssertCtlQuery::FAIL_ON}) {
         AstAssertCtlRead* const readp
             = new AstAssertCtlRead{flp, new AstConst{flp, AstConst::BitTrue{}},
-                                   new AstVarRef{flp, "state", VAccess::READ}, query};
+                                   new AstVarRef{flp, statep, VAccess::READ}, query};
         AstAssertCtlRead* const readCopyp = readp->cloneTree(false);
         AstAssertCtlRead* const otherReadp = new AstAssertCtlRead{
             flp, readp->globalp()->cloneTree(false), readp->statep()->cloneTree(false),
@@ -905,6 +906,7 @@ void AstAssert::selfTest() {
         VL_DO_DANGLING(readCopyp->deleteTree(), readCopyp);
         VL_DO_DANGLING(otherReadp->deleteTree(), otherReadp);
     }
+    VL_DO_DANGLING(statep->deleteTree(), statep);
 
     // Interface pins retain explicit modport selection for assertion-scope resolution.
     AstPin* const pinp = new AstPin{flp, 1, "p", nullptr};
