@@ -8891,6 +8891,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                            && !VN_IS(subp, NodeUniop) && !VN_IS(subp, NodeBiop)
                            && !VN_IS(subp, NodeTriop) && !VN_IS(subp, Cast);
                 })) {
+                // Folding an un-widthed enum reference can leave its literal without a dtype.
+                indexp->foreach([&](AstConst* constp) {
+                    if (constp->dtypep()) return;
+                    AstConst* const typedp = new AstConst{constp->fileline(), constp->num()};
+                    constp->replaceWith(typedp);
+                    VL_DO_DANGLING(pushDeletep(constp), constp);
+                });
                 indexp = V3Const::constifyEdit(VN_AS(V3Width::widthParamsEdit(indexp), NodeExpr));
             }
             const AstConst* const constp = VN_CAST(indexp, Const);
