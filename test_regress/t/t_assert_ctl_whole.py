@@ -15,4 +15,6 @@ test.compile(verilator_flags2=['--binary', '--assert', '--stats', '+define+WHOLE
              threads=2 if test.vltmt else 1)
 test.execute()
 test.file_grep(test.stats, r'Assertions, Shared absolute target lists\s+(\d+)', 1)
+test.file_grep(test.stats, r'Assertions, Scoped state instances\s+(\d+)', 2)
+test.file_grep(test.stats, r'Assertions, Scoped table entries\s+(\d+)', 2)
 test.passes()
