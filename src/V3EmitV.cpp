@@ -974,13 +974,8 @@ class EmitVBaseVisitorConst VL_NOT_FINAL : public VNVisitorConst {
             iterateConst(itemp);
         }
     }
-    void visit(AstAssertCtlTarget* nodep) override {
-        putfs(nodep,
-              "/* assertion control target at depth " + std::to_string(nodep->depth()) + " */");
-    }
-    void visit(AstAssertCtlCaller*) override {}  // Structural selector metadata
-    void visit(AstAssertCtlPlan*) override {}  // Prototype targets before scoping
-    void visit(AstAssertCtlTargetSet*) override {}  // Shared compiler metadata
+    // Assertion targets and route metadata have no Verilog representation: Netlist emits
+    // only modules, and Args/Apply emit operands rather than their resolved target lists.
     void visit(AstAssertCtlApply* nodep) override {
         putfs(nodep, "$_ASSERT_CTL_APPLY(");
         iterateConst(nodep->effectp());

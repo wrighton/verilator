@@ -7,6 +7,8 @@
 # SPDX-FileCopyrightText: 2024 Wilson Snyder
 # SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
+import json
+
 import vltest_bootstrap
 
 test.scenarios("vlt")
@@ -28,6 +30,52 @@ output_vs = test.glob_some(test.obj_dir + "/" + test.vm_prefix + "_*_widthcommit
 
 for output_v in output_vs:
     test.files_identical(output_v, test.golden_filename)
+
+# Retained assertion-control nodes describe the resolved selection in both dump formats.
+seen = set()
+queries = set()
+for filename in test.glob_some(test.obj_dir + "/*.tree.json"):
+    with open(filename, encoding='utf-8') as fh:
+        pending = [json.load(fh)]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(node)
+        elif isinstance(node, dict):
+            kind = node.get('type')
+            if kind == 'ASSERTCTLARGS':
+                if node.get('scoped'):
+                    seen.add('scoped')
+                if node.get('instanceDependent'):
+                    seen.add('instance_dependent')
+                if node.get('sharedp'):
+                    seen.add('shared')
+            elif kind == 'ASSERTCTLTARGET':
+                seen.add(kind)
+                if node.get('ordinal', 0) > 0:
+                    seen.add('ordinal')
+                if node.get('moduleRelative'):
+                    seen.add('module_relative')
+            elif kind == 'ASSERTCTLAPPLY':
+                if not node.get('directives'):
+                    test.error('Assertion operation JSON is missing its directive filter')
+                seen.add(kind)
+            elif kind == 'ASSERTCTLREAD':
+                queries.add(node.get('query'))
+            elif kind == 'PIN' and node.get('explicitModport'):
+                seen.add('modport')
+            pending.extend(node.values())
+required = {
+    'scoped', 'instance_dependent', 'shared', 'ASSERTCTLTARGET', 'ordinal', 'module_relative',
+    'ASSERTCTLAPPLY', 'modport'
+}
+if not required <= seen:
+    test.error('Missing assertion-control JSON fields: ' + str(sorted(required - seen)))
+required_queries = {
+    'ASSERT_CTL_ON', 'ASSERT_CTL_KILL', 'ASSERT_CTL_PASS_ON_NONVACUOUS', 'ASSERT_CTL_FAIL_ON'
+}
+if not required_queries <= queries:
+    test.error('Missing assertion-control JSON queries: ' + str(sorted(required_queries - queries)))
 
 if test.verbose:
     # Print if that the output Verilog is clean
