@@ -8525,17 +8525,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const VSymEnt* const symp = m_statep->findAssertCtlDotted(
                 flp, basep, rest, baddot, okSymp, baseIndex == 0, &crossing.boundaryp);
             if (!symp) {
-                // Virtual interface arrays are not elaborated into scope symbols. Inspect only
-                // the failed component's unindexed declaration to retain the diagnostic.
-                const size_t bra = rest.rfind("__BRA__");
-                if (!crossing.boundaryp && bra != string::npos
-                    && VString::endsWith(rest, "__KET__") && rest.find('.', bra) == string::npos) {
+                // Virtual interface arrays have no elaborated element symbols. Probe their
+                // declaration only for the diagnostic, not for target resolution.
+                string declaration = rest;
+                while (VString::endsWith(declaration, "__KET__")) {
+                    const size_t bra = declaration.rfind("__BRA__");
+                    if (bra == string::npos || declaration.find('.', bra) != string::npos) break;
+                    declaration.resize(bra);
+                }
+                if (!crossing.boundaryp && declaration != rest) {
                     const VSymEnt* const arrayp = m_statep->findAssertCtlDotted(
-                        flp, basep, rest.substr(0, bra), baddot, okSymp, baseIndex == 0);
+                        flp, basep, declaration, baddot, okSymp, baseIndex == 0);
                     AstVar* const varp = arrayp ? VN_CAST(arrayp->nodep(), Var) : nullptr;
-                    if (varp && VN_IS(varp->subDTypep(), UnpackArrayDType)) {
+                    AstNodeDType* const dtypep = varp ? varp->subDTypep() : nullptr;
+                    if (VN_IS(dtypep, UnpackArrayDType) || VN_IS(dtypep, BracketArrayDType)) {
                         const AstIfaceRefDType* const ifp
-                            = LinkDotState::ifaceRefFromArray(varp->subDTypep());
+                            = LinkDotState::ifaceRefFromArray(dtypep);
                         crossing.isVirtual = ifp && ifp->isVirtual();
                     }
                 }
