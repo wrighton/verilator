@@ -8890,29 +8890,36 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
                 return "";
             }
-            if (m_statep->forParamed() && selp->bitp()->exists([](const AstVarXRef* refp) {
-                    return refp->containsGenBlock() && refp->varp() && refp->varp()->isParam()
-                           && refp->dotted().find("__BRA__") != string::npos;
-                })) {
-                selp->bitp()->v3warn(E_UNSUPPORTED, "Unsupported: Generate-array-qualified "
-                                                    "parameter in assertion control scope index.");
-                return "";
-            }
-            if (m_statep->forParamed() && !VN_IS(selp->bitp(), VarXRef)
-                && selp->bitp()->exists([](const AstVarXRef* refp) {
-                       return refp->containsGenBlock() && refp->varp() && refp->varp()->isParam();
-                   })
-                && !selp->bitp()->exists([](const AstNode* subp) {
-                       if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
-                           return !refp->varp() || !refp->varp()->isParam();
-                       }
-                       return VN_IS(subp, NodeFTaskRef);
-                   })) {
-                // Never fold operators on a relinked parameter before applying SV widths.
-                selp->bitp()->v3warn(E_UNSUPPORTED,
-                                     "Unsupported: Assertion control scope index "
-                                     "requires folding a relinked generate parameter.");
-                return "";
+            const auto generatedParameter = [](const AstVarXRef* refp) {
+                return refp->containsGenBlock() && refp->varp() && refp->varp()->isParam();
+            };
+            if (m_statep->forParamed() && selp->bitp()->exists(generatedParameter)) {
+                // Late relinking must not expose an un-widthed expression to constant folding.
+                // In particular, do not let the fold erase a runtime dependency.
+                if (selp->bitp()->exists([](const AstNode* subp) {
+                        if (const AstNodeVarRef* const refp = VN_CAST(subp, NodeVarRef)) {
+                            return !refp->varp() || !refp->varp()->isParam();
+                        }
+                        return VN_IS(subp, NodeFTaskRef);
+                    })) {
+                    if (nonconstantp) *nonconstantp = true;
+                    return "";
+                }
+                if (selp->bitp()->exists([&](const AstVarXRef* refp) {
+                        return generatedParameter(refp)
+                               && refp->dotted().find("__BRA__") != string::npos;
+                    })) {
+                    selp->bitp()->v3warn(E_UNSUPPORTED,
+                                         "Unsupported: Generate-array-qualified "
+                                         "parameter in assertion control scope index.");
+                    return "";
+                }
+                if (!VN_IS(selp->bitp(), VarXRef)) {
+                    selp->bitp()->v3warn(E_UNSUPPORTED,
+                                         "Unsupported: Assertion control scope index "
+                                         "requires folding a relinked generate parameter.");
+                    return "";
+                }
             }
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             const AstConst* const constp = VN_CAST(indexp, Const);
