@@ -685,7 +685,15 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         stmt += insertVarStatement(value, value.m_scopep, value.m_varp, valueDims.udim,
                                    valueDims.pdim, boundsString(valueDims));
 
-        stmt += "}";
+        stmt += "}, ";
+        if (const AstVar* const vpiVarp = varp->forceVpiVarp()) {
+            const ScopeVarData& vpi = forceControlScopeVar(scopep, varp, vpiVarp);
+            const VarDims vpiDims = dimsFor(vpi);
+            stmt += insertVarStatement(vpi, vpi.m_scopep, vpi.m_varp, vpiDims.udim, vpiDims.pdim,
+                                       boundsString(vpiDims));
+        } else {
+            stmt += "nullptr";
+        }
         stmt += ", ";
         stmt += std::to_string(udim);
         stmt += ", ";
@@ -718,7 +726,9 @@ class EmitCSyms final : EmitCBaseVisitorConst {
             if (!varp->isForceable()) continue;
             UASSERT_OBJ(varp->forceRdVarp() && varp->forceEnVarp() && varp->forceValVarp(), varp,
                         "Forceable variable has incomplete force helper links.");
-            for (const AstVar* const controlVarp : {varp->forceEnVarp(), varp->forceValVarp()}) {
+            for (const AstVar* const controlVarp :
+                 {varp->forceEnVarp(), varp->forceValVarp(), varp->forceVpiVarp()}) {
+                if (!controlVarp) continue;
                 forceControlScopeVar(svd.m_scopep, varp, controlVarp).m_isForceControl = true;
             }
         }

@@ -5168,6 +5168,7 @@ void AstVar::dump(std::ostream& str) const {
     if (forceRdVarp()) str << " forceRdVarp=" << nodeAddr(forceRdVarp());
     if (forceEnVarp()) str << " forceEnVarp=" << nodeAddr(forceEnVarp());
     if (forceValVarp()) str << " forceValVarp=" << nodeAddr(forceValVarp());
+    if (forceVpiVarp()) str << " forceVpiVarp=" << nodeAddr(forceVpiVarp());
 }
 void AstVar::dumpJson(std::ostream& str) const {
     if (libInoutId()) dumpJsonNumFunc(str, libInoutId);

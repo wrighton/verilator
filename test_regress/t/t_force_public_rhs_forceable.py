@@ -14,7 +14,7 @@ test.top_filename = "t/t_force_public_rhs.v"
 test.pli_filename = "t/t_force_public_rhs.cpp"
 
 test.compile(make_pli=True,
-             verilator_flags2=["--binary --vpi", test.t_dir + "/t_force_public_rhs_forceable.vlt"])
+             verilator_flags2=["--binary --vpi", test.t_dir + "/" + test.name + ".vlt"])
 
 test.execute(all_run_flags=["+verilator+vpi+" + test.obj_dir + "/libvpi.so"], check_finished=True)
 

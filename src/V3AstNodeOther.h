@@ -2474,6 +2474,7 @@ class AstVar final : public AstNode {
     // @astgen ptr := m_forceRdVarp : Optional[AstVar]  // [AfterForce] Generated force read signal
     // @astgen ptr := m_forceEnVarp : Optional[AstVar]  // [AfterForce] Generated force enable
     // @astgen ptr := m_forceValVarp : Optional[AstVar]  // [AfterForce] Generated force value
+    // @astgen ptr := m_forceVpiVarp : Optional[AstVar]  // [AfterForce] Generated VPI-forced bits
 
     string m_name;  // Name of variable
     string m_origName;  // Original name before dot addition
@@ -2827,6 +2828,8 @@ public:
     void forceEnVarp(AstVar* const nodep) { m_forceEnVarp = nodep; }
     AstVar* forceValVarp() const { return m_forceValVarp; }
     void forceValVarp(AstVar* const nodep) { m_forceValVarp = nodep; }
+    AstVar* forceVpiVarp() const { return m_forceVpiVarp; }
+    void forceVpiVarp(AstVar* const nodep) { m_forceVpiVarp = nodep; }
     void setForceable() { m_isForceable = true; }
     void setForcedByCode() { m_isForcedByCode = true; }
     bool isForced() const { return m_isForceable || m_isForcedByCode; }
