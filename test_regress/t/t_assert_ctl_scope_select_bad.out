@@ -1,19 +1,23 @@
-%Error: t/t_assert_ctl_scope_select_bad.v:21:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
-                                               : ... note: In instance 't'
-   21 |     $assertoff(0, g[i]);
-      |                    ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
-%Error: t/t_assert_ctl_scope_select_bad.v:22:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
-                                               : ... note: In instance 't'
-   22 |     $assertoff(0, scalar[0]);
-      |                         ^
-%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:23:20: Unsupported: Function call in assertion control scope index.
-                                                           : ... note: In instance 't'
-   23 |     $assertoff(0, g[selected_index()]);
-      |                    ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: t/t_assert_ctl_scope_select_bad.v:24:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
-   24 |     $assertoff(0, g[selected_index() + i]);
+   24 |     $assertoff(0, g[i]);
       |                    ^
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_assert_ctl_scope_select_bad.v:25:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   25 |     $assertoff(0, scalar[0]);
+      |                         ^
+%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:26:20: Unsupported: Function call in assertion control scope index.
+                                                           : ... note: In instance 't'
+   26 |     $assertoff(0, g[selected_index()]);
+      |                    ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: t/t_assert_ctl_scope_select_bad.v:27:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   27 |     $assertoff(0, g[selected_index() + i]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:28:33: Can't find definition of 'omitted_cfg'
+                                               : ... note: In instance 't'
+   28 |     $assertoff(0, g[omitted_cfg.SELECTED]);
+      |                                 ^~~~~~~~
 %Error: Exiting due to
