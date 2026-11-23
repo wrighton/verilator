@@ -569,6 +569,10 @@ class ExpandVisitor final : public VNVisitor {
         if (AstNodeAssign* const assignp = VN_CAST(nodep->backp(), NodeAssign)) {
             if (nodep == assignp->lhsp()) return;
         }
+        // ... or the select a write partly out of range is within (VL_ASSIGNSEL_PARTIAL_*)
+        if (const AstSel* const abovep = VN_CAST(nodep->backp(), Sel)) {
+            if (abovep->partialWrite() && nodep == abovep->fromp()) return;
+        }
 
         // Skip if wide: See under ASSIGN(WIDE)
         if (nodep->isWide()) return;
@@ -1268,7 +1272,8 @@ class ExpandVisitor final : public VNVisitor {
                 did = expandWide(nodep, rhsp);
             }
         } else if (AstSel* const lhsp = VN_CAST(nodep->lhsp(), Sel)) {
-            did = expandLhs(nodep, lhsp);
+            // A write partly out of range is emitted as one call (VL_ASSIGNSEL_PARTIAL_*)
+            if (!lhsp->partialWrite()) did = expandLhs(nodep, lhsp);
         }
         // Cleanup common code
         if (did) VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);

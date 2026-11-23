@@ -4308,6 +4308,9 @@ class AstSel final : public AstNodeBiop {
     int m_widthConst;
     // Width of a value V3Width padded to the selection's width, else 0
     int m_valueWidth = 0;
+    // The target of an assignment at a position that may put it partly out of range, which
+    // writes only its bits in range (see V3Unknown)
+    bool m_partialWrite = false;
 
 public:
     // A constant position from here up is out of range of any value, and far enough from the
@@ -4362,13 +4365,16 @@ public:
     bool sizeMattersRhs() const override { return false; }
     bool sameNode(const AstNode* otherp) const override {
         const AstSel* const selp = VN_DBG_AS(otherp, Sel);
-        return widthConst() == selp->widthConst() && valueWidth() == selp->valueWidth();
+        return widthConst() == selp->widthConst() && valueWidth() == selp->valueWidth()
+               && partialWrite() == selp->partialWrite();
     }
     int instrCount() const override {
         return widthInstrs() * (VN_CAST(lsbp(), Const) ? 3 : 10) + 1;
     }
     int widthConst() const { return m_widthConst; }
     void widthConst(int value) { m_widthConst = value; }
+    bool partialWrite() const { return m_partialWrite; }
+    void partialWrite(bool flag) { m_partialWrite = flag; }
     // A constant lsbp() is an integer from V3WidthCommit on, or once V3Const::warnSelect sees one
     // folded later
     int lsbConst() const { return VN_AS(lsbp(), Const)->toSInt(); }
@@ -4386,6 +4392,9 @@ public:
     AstConst* narrowLsbConst();
     // Constant lsbp() as an integer, as narrowLsbConst() would give it
     int lsbConstInt() const;
+    // Constant lsbp() of a partialWrite() select, from -width, where it writes no bit, up to
+    // the width of fromp(), which narrowLsbConst() gives it instead
+    int64_t partialWritePos() const;
     // Set 'narrow' to constant position 'num', signed if 'isSigned', as an integer, as
     // narrowLsbConst() describes; return whether that changes it
     static bool narrowPosition(const V3Number& num, bool isSigned, V3Number& narrow);

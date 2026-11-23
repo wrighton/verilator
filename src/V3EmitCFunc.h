@@ -656,13 +656,33 @@ public:
         bool paren = true;
         bool decind = false;
         bool rhs = true;
+        const AstSel* partialSelp = nullptr;  // Target of VL_ASSIGNSEL_PARTIAL_*
         // Set for CvtPackedToArray/CvtArrayToArray with descending dimensions
         std::string reverseUnpackCall;
         const AstUnpackArrayDType* const unpackDtp
             = VN_CAST(nodep->dtypep()->skipRefp(), UnpackArrayDType);
         if (AstSel* const selp = VN_CAST(nodep->lhsp(), Sel)) {
             UASSERT_OBJ(selp->widthMin() == selp->widthConst(), selp, "Width mismatch");
-            if (selp->widthMin() == 1) {
+            if (selp->partialWrite()) {
+                // Within the select below it, if any, of the variable written; at a signed
+                // 64-bit position, or a narrowed constant one
+                partialSelp = selp;
+                const AstSel* const lowerp = VN_CAST(selp->fromp(), Sel);
+                AstNodeExpr* const basep = lowerp ? lowerp->fromp() : selp->fromp();
+                putnbs(nodep, "VL_ASSIGNSEL_PARTIAL_");
+                emitIQW(basep);
+                emitIQW(nodep->rhsp());
+                puts("(");
+                putns(basep, cvtToStr(basep->widthMin()) + ", ");
+                puts(cvtToStr(nodep->widthMin()) + ", ");
+                const int lsbWidth = selp->lsbp()->widthMin();
+                if (lsbWidth < VL_QUADSIZE) puts("VL_EXTENDS_QI(64, " + cvtToStr(lsbWidth) + ", ");
+                iterateAndNextConstNull(selp->lsbp());
+                if (lsbWidth < VL_QUADSIZE) puts(")");
+                puts(", ");
+                iterateAndNextConstNull(basep);
+                puts(", ");
+            } else if (selp->widthMin() == 1) {
                 putnbs(nodep, "VL_ASSIGNBIT_");
                 emitIQW(selp->fromp());
                 if (nodep->rhsp()->isAllOnesV()) {
@@ -789,6 +809,17 @@ public:
             putns(nodep, "= ");
         }
         if (rhs) iterateAndNextConstNull(nodep->rhsp());
+        if (partialSelp) {
+            // The window written within
+            puts(", ");
+            if (const AstSel* const lowerp = VN_CAST(partialSelp->fromp(), Sel)) {
+                UASSERT_OBJ(!VN_IS(lowerp->fromp(), Sel), lowerp, "Select of a select");
+                iterateAndNextConstNull(lowerp->lsbp());
+                puts(", " + cvtToStr(lowerp->widthConst()));
+            } else {
+                puts("0, " + cvtToStr(partialSelp->fromp()->widthMin()));
+            }
+        }
         if (paren) puts(")");
         if (decind) ofp()->blockDec();
         puts(";\n");

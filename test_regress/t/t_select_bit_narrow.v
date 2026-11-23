@@ -61,6 +61,10 @@ module t;
     ++calls;
     return 2'd2;
   endfunction
+  function automatic int pick_int();
+    ++calls;
+    return 2;
+  endfunction
 
   function automatic int set_one(output bit b);
     b = 1'b1;
@@ -88,18 +92,300 @@ module t;
     return value;
   endfunction
 
+  // A continuous assignment of a part-select partly below the vector
+  bit [7:0] part_cont;
+  // verilator lint_off SELRANGE
+  assign part_cont[1-:3] = 3'b101;
+  // verilator lint_on SELRANGE
+  typedef struct packed {
+    bit [3:0] hi;
+    bit [7:0] f;
+    bit [3:0] lo;
+  } part_s;
+
+  // Clocked nonblocking assignments of part-selects partly below the vector, among others to
+  // the same vector, of a vector also written by blocking assignments, of array elements, and
+  // in a loop
+  logic part_clk = 0;
+  int part_k;
+  int part_n;
+  bit [7:0] part_nba;
+  bit [7:0] part_mixed;
+  bit [7:0] part_big[64];
+  bit [7:0] part_loop[64];
+  always @(posedge part_clk) begin
+    part_nba[7] <= 1'b1;
+    part_nba[part_k-:3] <= 3'b011;
+    part_nba[2] <= 1'b1;
+  end
+  always @(posedge part_clk) begin
+    part_mixed[part_k-:3] <= 3'b011;
+    part_mixed[6] <= 1'b1;
+  end
+  always @(posedge part_clk) begin
+    part_big[3][7] <= 1'b1;
+    part_big[part_n][part_k-:3] <= 3'b011;
+    part_big[3][5] <= 1'b1;
+  end
+  always @(posedge part_clk) begin
+    for (int i = 0; i < part_n; ++i) part_loop[i][part_k-:3] <= 3'b011;
+    part_loop[1][7] <= 1'b1;
+  end
+  // A combinational part-select of a packed array element, partly below it
+  bit [1:0] part_sel;
+  bit [1:0][3:0] part_comb;
+  always_comb begin
+    part_comb = '0;
+    part_comb[1][int'(part_sel)-1-:3] = 3'b111;
+  end
+  // ... and in a loop, at positions known once unrolled
+  bit [7:0] part_comb_loop;
+  always_comb begin
+    part_comb_loop = '0;
+    for (int i = -1; i < 2; ++i) part_comb_loop[i*2-:3] = {part_sel[0], 2'b11};
+  end
+  // Part-selects written at positions known once propagated: partly below the vector, and by a
+  // nonblocking assignment, far above it once the function is inlined
+  function automatic bit [39:0] part_id(bit [39:0] x);
+    return x;
+  endfunction
+  initial begin
+    int known;
+    bit [7:0] known_v;
+    bit [39:0] far_idx;
+    bit [36:0] shifted_idx;
+    // verilator lint_off ASCRANGE
+    logic [-2147483631:-2147483638] far_v;
+    bit [-76:-45] far_w;
+    // verilator lint_on ASCRANGE
+    known = -1;
+    known_v = 8'h00;
+    known_v[known+:3] = 3'b110;
+    `checkh(known_v, 8'h03);
+    // ... far below, of an offset vector, by a position whose low bits are known zero
+    shifted_idx = '1;
+    far_v = 8'h5a;
+    far_v[(shifted_idx << 64'h20)-:3] = 3'b111;
+    `checkh(far_v, 8'h5a);
+    // ... a constant one below an ascending offset vector, by a value wider than it
+    far_w = 32'h97f6_b1c8;
+    // verilator lint_off SELRANGE
+    far_w[-40'sd64-:33] <= 33'h1_9f65_1be3;
+    // verilator lint_on SELRANGE
+    #1;
+    `checkh(far_w, 32'hdf1e_b1c8);
+    far_idx = '0;
+    far_v = 8'h90;
+    far_v[part_id(far_idx << 64'h1_0000_0000)-:3] <= 3'b010;
+    #1;
+    `checkh(far_v, 8'h90);
+  end
+  // Continuous assignments of part-selects at variable positions partly out of range, of a
+  // packed array element and of a vector
+  logic [1:0] cont_k2;
+  int cont_ks;
+  logic [3:0][3:0] cont_pa;
+  logic [3:0][3:0] cont_pb;
+  bit [7:0] cont_v;
+  assign cont_pa[2][cont_k2+:3] = 3'b111;
+  assign cont_pb[2][cont_ks-:3] = 3'b111;
+  assign cont_v[cont_ks-:3] = 3'b111;
+  initial begin
+    cont_k2 = 2'(pos[0] - 6);
+    cont_ks = pos[0] - 8;
+    #1;
+    `checkh(cont_pa, 16'h0800);
+    `checkh(cont_pb, 16'h0300);
+    `checkh(cont_v, 8'h03);
+  end
+  // Forcing and releasing a constant part-select partly out of range, also of a packed array
+  // element next to a forced bit of another
+  logic [7:0] force_v;
+  logic [3:0][7:0] force_pa;
+  initial begin
+    force_v = 0;
+    // verilator lint_off SELRANGE
+    force force_v[1-:3] = 3'b111;
+    #1;
+    `checkh(force_v, 8'h03);
+    release force_v[1-:3];
+    // verilator lint_on SELRANGE
+    force_v = 8'h00;
+    #1;
+    `checkh(force_v, 8'h00);
+    force_pa = 0;
+    force force_pa[3][0] = 1'b1;
+    // verilator lint_off SELRANGE
+    force force_pa[2][6+:3] = 3'b111;
+    #1;
+    `checkh(force_pa, 32'h01c0_0000);
+    release force_pa[2][6+:3];
+    // verilator lint_on SELRANGE
+    force_pa = 0;
+    #1;
+    `checkh(force_pa, 32'h0100_0000);
+  end
+  // Nonblocking assignments with an intra-assignment delay of part-selects partly out of range
+  logic [7:0] dly_v;
+  logic [3:0][7:0] dly_pa;
+  int dly_k;
+  initial begin
+    dly_v = 0;
+    dly_pa = 0;
+    dly_k = pos[0] - 8;
+    dly_v[dly_k-:3] <= #1 3'b111;
+    dly_pa[2][dly_k-:3] <= #1 3'b111;
+    #2;
+    `checkh(dly_v, 8'h03);
+    `checkh(dly_pa, 32'h0003_0000);
+    dly_k = pos[0] - 3;
+    dly_pa = 0;
+    dly_pa[2][dly_k+:3] <= #1 3'b111;
+    #2;
+    `checkh(dly_pa, 32'h00c0_0000);
+  end
+  // Part-selects at unsigned positions known once a loop is unrolled, partly above a narrow
+  // vector and an element of an unpacked array
+  logic [2:0] late_v;
+  logic [2:0] late_mem[3];
+  logic [2:0] late_val;
+  logic [1:0] late_p;
+  initial begin
+    late_val = 3'(pos[0]) | 3'b100;
+    for (int i = 0; i < 3; ++i) begin
+      late_p = 2'(i);
+      late_v = 3'b000;
+      late_v[late_p+:3] = late_val;
+      `checkh(late_v, 3'(late_val << i));
+      late_mem[1] = 3'b000;
+      late_mem[1][late_p+:3] = late_val;
+      `checkh(late_mem[1], 3'(late_val << i));
+    end
+  end
+  // Adjacent continuous assignments of part-selects of one vector, one partly below it at a
+  // position known once the function is inlined
+  function automatic int gate_neg();
+    return -1;
+  endfunction
+  logic [7:0] gate_v;
+  logic [2:0] gate_a;
+  logic [5:0] gate_b;
+  assign gate_v[7:2] = gate_b;
+  assign gate_v[gate_neg()+:3] = gate_a;
+  initial begin
+    gate_a = 3'b101;
+    gate_b = 6'b110011;
+    #1;
+    `checkh(gate_v, 8'b1100_1110);
+  end
+  // A random element index evaluated once, though the part-select of the element written is
+  // wholly out of range, also as the argument of a function
+  int drop_seed;
+  int unsigned drop_first;
+  int unsigned drop_second;
+  int unsigned drop_third;
+  bit [3:0][3:0] drop_a;
+  int drop_ids[$];
+  function automatic int drop_id(int id, int value);
+    drop_ids.push_back(id);
+    return value;
+  endfunction
+  initial begin
+    drop_seed = pos[0];
+    void'($urandom(drop_seed));
+    drop_first = $urandom;
+    drop_second = $urandom;
+    drop_third = $urandom;
+    drop_seed = pos[0];
+    void'($urandom(drop_seed));
+    drop_a = '0;
+    // verilator lint_off SELRANGE
+    drop_a[$urandom%4][10+:3] = 3'b111;
+    // verilator lint_on SELRANGE
+    `checkh(drop_a, 16'h0);
+    `checkh($urandom, drop_second);
+    drop_seed = pos[0];
+    void'($urandom(drop_seed));
+    // verilator lint_off SELRANGE
+    drop_a[drop_id(1, $urandom % 4)][10+:3] = 3'b111;
+    drop_a[drop_id(2, $urandom % 4)][10+:3] <= 3'b111;
+    // verilator lint_on SELRANGE
+    `checkh(drop_a, 16'h0);
+    `checkh(drop_ids.size(), 2);
+    `checkh($urandom, drop_third);
+    if (drop_first == drop_second) $write("");
+  end
+  // Part-selects wider than a vector of a negative descending range, at variable and constant
+  // positions, by blocking and nonblocking assignments
+  int wide_k;
+  bit [-83:-115] wide_v1;
+  bit [-83:-115] wide_v2;
+  bit [-83:-115] wide_v3;
+  bit [-83:-115] wide_v4;
+  initial begin
+    wide_k = -91 - pos[0];
+    wide_v1 = '1;
+    wide_v2 = '1;
+    wide_v3 = '1;
+    wide_v4 = '1;
+    // verilator lint_off SELRANGE
+    wide_v1[wide_k+:70] <= 70'h0;
+    wide_v2[wide_k-:70] = 70'h0;
+    wide_v3[-90+:70] <= 70'h0;
+    wide_v4[-90-:70] = 70'h0;
+    // verilator lint_on SELRANGE
+    #1;
+    `checkh(wide_v1, 33'h0_0000_7fff);
+    `checkh(wide_v2, 33'h1_ffff_0000);
+    `checkh(wide_v3, 33'h0_01ff_ffff);
+    `checkh(wide_v4, 33'h1_fc00_0000);
+  end
+  // A signed position whose arithmetic wraps is not known to be in range
+  initial begin
+    bit [3:0] wrap_u;
+    bit [7:0] wrap_v;
+    wrap_u = 4'(pos[0]);
+    wrap_v = 8'h00;
+    // verilator lint_off WIDTHEXPAND
+    wrap_v[4'sd7+$signed(wrap_u[2:0])+:3] = 3'b111;
+    // verilator lint_on WIDTHEXPAND
+    `checkh(wrap_v, 8'h00);
+  end
+  // A position evaluated once, though a random one can be read again
+  int once_seed;
+  int once_p;
+  bit [7:0] once_v;
+  initial begin
+    once_seed = pos[0];
+    void'($urandom(once_seed));
+    once_p = int'($urandom % 6);
+    once_seed = pos[0];
+    void'($urandom(once_seed));
+    once_v = 0;
+    once_v[(int'($urandom % 6)+2)-:3] = 3'b111;
+    `checkh(once_v, 8'(7 << once_p));
+  end
+  class part_c;
+    bit [7:0] m;
+    task automatic set(int k);
+      m <= 8'h80;
+      m[k-:3] <= 3'b011;
+    endtask
+  endclass
+
   initial begin
     foreach (pos[n]) void'($value$plusargs($sformatf("pos%0d=%%d", n), pos[n]));
 
     begin
-      // Test: bit and part-select writes out of range are ignored, reads give zero
+      // Test: bit and part-select writes out of range are ignored, reads give zero; a
+      // part-select at -1 writes its bit 0 only
       bit [7:0] v;
       foreach (pos[n]) begin
         v = 8'h5a;
         v[pos[n]] = 1'b1;
         `checkh(v, 8'h5a);
         v[pos[n]+:2] = 2'b11;
-        `checkh(v, 8'h5a);
+        `checkh(v, pos[n] == -1 ? 8'h5b : 8'h5a);
         `checkh(v[pos[n]], 1'b0);
       end
     end
@@ -1322,6 +1608,179 @@ module t;
       // verilator lint_off SELRANGE
       `checkh(low_nibble(v[-2+:8]), 4'b1000);
       // verilator lint_on SELRANGE
+    end
+
+    begin
+      // Test: a part-select written partly out of range writes only its bits in range, with
+      // the matching bits of the value (IEEE 1800-2023 11.5.1)
+      int k1;
+      int k6;
+      int k60;
+      int kneg;
+      bit [5:0] k2;
+      longint kl;
+      bit [7:0] v;
+      // verilator lint_off ASCRANGE
+      bit [0:7] u;
+      // verilator lint_on ASCRANGE
+      logic [7:0] l;
+      bit [1:0] n;
+      bit [99:0] w;
+      bit [3:0][7:0] pa;
+      bit [7:0] mem[4];
+      part_s s;
+      k1 = pos[0] - 8;
+      k6 = pos[0] - 3;
+      k60 = pos[0] + 51;
+      kneg = pos[0] - 10;
+      k2 = 6'(pos[0] - 7);
+      kl = longint'(pos[0]) - 8;
+      v = 8'h00;
+      v[k1-:3] = 3'b100;
+      `checkh(v, 8'h02);
+      v = 8'h00;
+      v[kl-:3] = 3'b100;
+      `checkh(v, 8'h02);
+      v = 8'hff;
+      v[k1-:3] = 3'b000;
+      `checkh(v, 8'hfc);
+      v = 8'h00;
+      v[kneg+:3] = 3'b110;
+      `checkh(v, 8'h03);
+      v = 8'h00;
+      v[k6+:3] = 3'b011;
+      `checkh(v, 8'hc0);
+      // verilator lint_off SELRANGE
+      v = 8'h00;
+      v[1-:3] = 3'b100;
+      `checkh(v, 8'h02);
+      v = 8'h00;
+      v[-1+:3] = 3'b110;
+      `checkh(v, 8'h03);
+      // verilator lint_on SELRANGE
+      u = 8'h00;
+      u[kneg+:3] = 3'b011;
+      `checkh(u, 8'hc0);
+      l = 8'h00;
+      l[k1-:3] = 3'b111;
+      `checkh(l, 8'h03);
+      n = 2'b00;
+      // verilator lint_off SELRANGE
+      n[k2-:5] = 5'b01000;
+      // verilator lint_on SELRANGE
+      `checkh(n, 2'b10);
+      w = '0;
+      w[k60-:70] = '1;
+      `checkh(w, {39'b0, {61{1'b1}}});
+      v = 8'h80;
+      v[0] <= 1'b1;
+      v[k1-:3] <= 3'b010;
+      #1;
+      `checkh(v, 8'h81);
+      v = 8'h00;
+      v[k1-:3] = #1 3'b111;
+      `checkh(v, 8'h03);
+      mem = '{default: '0};
+      mem[2][7] <= 1'b1;
+      mem[2][k1-:3] <= 3'b011;
+      #1;
+      `checkh(mem[2], 8'h81);
+      // Of a packed array element and of a packed struct member, not reaching the others
+      pa = '0;
+      pa[2][k1-:3] = 3'b111;
+      `checkh(pa, 32'h0003_0000);
+      pa = '0;
+      pa[2][k6+:3] = 3'b111;
+      `checkh(pa, 32'h00c0_0000);
+      s = '0;
+      s.f[k1-:3] = 3'b111;
+      `checkh(s, 16'h0030);
+      s = '0;
+      s.f[k6+:3] = 3'b111;
+      `checkh(s, 16'h0c00);
+      // verilator lint_off SELRANGE
+      pa = '0;
+      pa[2][1-:3] = 3'b111;
+      `checkh(pa, 32'h0003_0000);
+      s = '0;
+      s.f[6+:3] = 3'b111;
+      `checkh(s, 16'h0c00);
+      // verilator lint_on SELRANGE
+      `checkh(part_cont, 8'h02);
+    end
+
+    begin
+      // Test: a part-select written partly out of range by nonblocking assignments writes only
+      // its bits in range, after earlier ones to the same vector
+      part_c c;
+      c = new;
+      part_k = pos[0] - 8;
+      part_n = pos[0] - 6;
+      part_mixed[5] = 1'b1;
+      #1 part_clk = 1;
+      #1;
+      `checkh(part_nba, 8'h85);
+      `checkh(part_mixed, 8'h61);
+      `checkh(part_big[3], 8'ha1);
+      `checkh(part_loop[0], 8'h01);
+      `checkh(part_loop[1], 8'h81);
+      `checkh(part_loop[2], 8'h01);
+      `checkh(part_loop[3], 8'h00);
+      c.set(part_k);
+      #1;
+      `checkh(c.m, 8'h81);
+      part_sel = 2'd0;
+      #1;
+      `checkh(part_comb, 8'h00);
+      part_sel = 2'd1;
+      #1;
+      `checkh(part_comb, 8'h10);
+      `checkh(part_comb_loop, 8'h07);
+      part_sel = 2'd2;
+      #1;
+      `checkh(part_comb, 8'h30);
+      `checkh(part_comb_loop, 8'h03);
+    end
+
+    begin
+      // Test: part-selects at signed positions known to be within the vector, written and read
+      bit [1:0] i;
+      bit [31:0] w;
+      i = 2'(pos[0]);
+      w = '0;
+      w[i*8+7-:8] = 8'ha5;
+      `checkh(w, 32'h0000_a500);
+      `checkh(w[i*8+7-:8], 8'ha5);
+      `checkh(w[(int'(i)*8+2)-:3], 3'h5);
+      w[(int'(i)*8+2)-:3] = 3'h2;
+      `checkh(w, 32'h0000_a200);
+    end
+
+    begin
+      // Test: a position is evaluated once though a select within its element is out of range,
+      // also after an intra-assignment delay
+      bit [3:0] arr[4];
+      bit [3:0][3:0] pk;
+      bit [3:0][2:0] p3;
+      int kneg;
+      kneg = pos[0] - 10;
+      arr = '{default: '0};
+      pk = '0;
+      calls = 0;
+      arr[pick()][kneg] = #1 1'b1;
+      `checkh(calls, 1);
+      calls = 0;
+      pk[pick()][kneg] = #1 1'b1;
+      `checkh(calls, 1);
+      p3 = '0;
+      calls = 0;
+      // verilator lint_off SELRANGE
+      p3[pick_int()][-1] = #1 1'b1;
+      // verilator lint_on SELRANGE
+      `checkh(calls, 1);
+      `checkh(p3, 12'h0);
+      `checkh(pk, 16'h0);
+      `checkh(arr[2], 4'h0);
     end
 
     $write("*-* All Finished *-*\n");

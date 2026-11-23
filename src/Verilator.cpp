@@ -508,6 +508,9 @@ static void process() {
 
             if (v3Global.opt.fLifePost()) V3LifePost::lifepostAll(v3Global.rootp());
 
+            // Writes of part-selects that may be partly out of range
+            V3Unknown::partialWritesAll(v3Global.rootp());
+
             // Remove unused vars
             V3Const::constifyAll(v3Global.rootp());
             V3Dead::deadifyAllScoped(v3Global.rootp());

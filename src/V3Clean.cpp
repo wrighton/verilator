@@ -255,7 +255,14 @@ class CleanVisitor final : public VNVisitor {
         setClean(nodep, true);
     }
     void visit(AstSel* nodep) override {
-        operandBiop(nodep);
+        if (nodep->partialWrite()) {
+            // Written within the select below it, which is not read (VL_ASSIGNSEL_PARTIAL_*)
+            iterateChildren(nodep);
+            computeCppWidth(nodep);
+            ensureClean(nodep->lsbp());
+        } else {
+            operandBiop(nodep);
+        }
         setClean(nodep, nodep->cleanOut());
     }
     void visit(AstCExprUser* nodep) override {

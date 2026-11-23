@@ -153,7 +153,8 @@ class LifePostDlyVisitor final : public VNVisitorConst {
         int end = 0;
         for (size_t i = 1; i < writes.size(); ++i) {
             const AstSel* const selp = VN_CAST(writes[i].nodep()->backp(), Sel);
-            if (!selp || !VN_IS(selp->lsbp(), Const)) return;
+            // A write partly out of range may write bits below its position
+            if (!selp || !VN_IS(selp->lsbp(), Const) || selp->partialWrite()) return;
             const int start = selp->lsbConst();
             if (start > dVscp->width() - selp->width()) return;
             lsb = std::min(lsb, start);
