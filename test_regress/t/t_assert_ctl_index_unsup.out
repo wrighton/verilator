@@ -3,4 +3,8 @@
    14 |   initial $assertoff(0, g[int'(cfg[1].IDX)].chk);
       |                              ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_assert_ctl_index_unsup.v:21:30: Unsupported: Assertion control scope index requires folding a relinked generate parameter.
+                                                      : ... note: In instance 't'
+   21 |   initial $assertoff(0, g[int'(choice.IDX)].chk);
+      |                              ^
 %Error: Exiting due to
