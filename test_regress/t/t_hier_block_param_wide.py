@@ -11,11 +11,7 @@ import vltest_bootstrap
 
 test.scenarios('vlt_all')
 
-# Neither lint_off nor -Wno-WIDTH disables this WIDTH warning
-test.compile(verilator_flags2=['--binary', '--hierarchical', '-Wno-fatal'])
-
-test.file_grep(test.compile_log_filename,
-               r'%Warning-WIDTH: .*Assigning >32 bit to unranged parameter')
+test.compile(verilator_flags2=['--binary', '--hierarchical'])
 
 test.execute()
 

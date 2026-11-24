@@ -69,6 +69,15 @@ module t;
   // A nested cast's type expression is checked independently of its operand.
   initial $display("%0d", int'(type(6'd45 == 5'd25)'(1'b1)));
 
+  // A value wider than 32 bits is truncated to an unranged parameter's 32 bits
+  localparam UNRANGED = 'h1_0000_0005;
+  // verilator lint_off WIDTHTRUNC
+  localparam UNRANGED_OFF = 'h1_0000_0005;
+  // verilator lint_on WIDTHTRUNC
+  // verilator lint_off WIDTH
+  localparam UNRANGED_OFF_WIDTH = 'h1_0000_0005;
+  // verilator lint_on WIDTH
+
 endmodule
 
 module p #(
