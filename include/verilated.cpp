@@ -3745,18 +3745,20 @@ void VerilatedContext::addModel(VerilatedModel* modelp) {
     }
 
     // Record the model under its hierarchical path
+    bool newEntry;
     {
         const VerilatedLockGuard lock{m_impdatap->m_modelsMutex};
         // Ids are in the order models are added, unique even after a model is removed
         modelp->m_id = m_impdatap->m_nextModelId++;
-        const bool newEntry = m_impdatap->m_models.emplace(modelp->hierName(), modelp).second;
-        if (VL_UNLIKELY(!newEntry)) {
-            std::ostringstream msg;
-            msg << "VerilatedContext already has a model registered under hierarchical path '"
-                << modelp->hierName() << "'\n";
-            const std::string str = msg.str();
-            VL_FATAL_MT(__FILE__, __LINE__, modelp->hierName(), str.c_str());
-        }
+        newEntry = m_impdatap->m_models.emplace(modelp->hierName(), modelp).second;
+    }
+    // Not under the lock, as exiting destroys models, which take it
+    if (VL_UNLIKELY(!newEntry)) {
+        std::ostringstream msg;
+        msg << "VerilatedContext already has a model registered under hierarchical path '"
+            << modelp->hierName() << "'\n";
+        const std::string str = msg.str();
+        VL_FATAL_MT(__FILE__, __LINE__, modelp->hierName(), str.c_str());
     }
 }
 

@@ -1314,6 +1314,7 @@ void EmitCSyms::emitSymImpPreamble() {
         puts("extern \"C\" void* " + libName
              + "_protectlib_create_under(const char* scopep__V, const VerilatedScope* "
                "abovep__V);\n");
+        puts("extern \"C\" void " + libName + "_protectlib_delete(void* vhandlep__V);\n");
         if (vpiLibNames.count(libName)) {
             puts("extern \"C\" void " + libName
                  + "_protectlib_on_vpi_write(void* vhandlep__V, void (*cbp__V)(VerilatedSyms*), "
@@ -1766,15 +1767,12 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
 EmitCSyms::TextStmts EmitCSyms::getSymDtorStmts() {
     TextStmts stmts;
 
-    // A model using an instance of a library leaves it no callback into its state. A model
-    // that is an instance of a library itself is deleted when its context ends, after its own
-    // library instances, through which no write can then happen.
+    // Delete the library model of each Verilator library wrapper, created at construction
     for (const ScopeModPair& itpair : m_scopes) {
-        const AstScope* const scopep = itpair.first;
-        if (!m_libExportImpls.count(scopep)) continue;
-        stmts.add("if (vlSymsp->__Vm_isRoot) " + itpair.second->origName()
-                  + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->" + instName(scopep) + "."
-                  + varName(libWrapperVar(itpair.second, "handle__V")) + "), nullptr, nullptr);");
+        if (!itpair.second->verilatorLib()) continue;
+        stmts.add(itpair.second->origName() + "_protectlib_delete(VL_CVT_Q_VP(vlSymsp->"
+                  + instName(itpair.first) + "."
+                  + varName(libWrapperVar(itpair.second, "handle__V")) + "));");
     }
 
     emitScopeHier(stmts, true);
