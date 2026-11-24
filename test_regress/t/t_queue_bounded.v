@@ -112,6 +112,65 @@ module t;
       `checks(s[1], "e");
     end
 
+    begin  // Bounded queues as elements of a queue of queues (IEEE 1800-2023 7.10)
+      typedef int bq1_t[$:1];
+      int qb[$:4];
+      int src[$];
+      int qq[$][$];
+      bq1_t qbq[$];
+      qb = '{1, 2};
+      qq.push_back(qb);
+      qq.push_front(qb);
+      qq.insert(1, qb);
+      `checkd(qq.size(), 3);
+      `checkd(qq[2][1], 2);
+      src = '{3, 4, 5};
+      qbq.push_back(src);  // Discards the element beyond the bound
+      `checkd(qbq[0].size(), 2);
+      `checkd(qbq[0][1], 4);
+    end
+
+    begin  // A bounded queue pushed into a queue of queues keeps its elements' default value
+      typedef struct {
+        int a = 5;
+        int b;
+      } s_t;
+      s_t sb[$:3];
+      s_t sq[$][$];
+      s_t e;
+      int idx;
+      sb.push_back(e);
+      sq.push_back(sb);
+      idx = sb.size() + 6;
+      `checkd(sq[0][idx].a, 5);
+    end
+
+    begin  // Comparing and assigning queues of different bounds compares the elements
+      int qb[$:1];
+      int qu[$];
+      qb = '{1, 2};
+      qu = '{1, 2, 3};
+      `checkd(qb == qu, 1'b0);
+      `checkd(qu == qb, 1'b0);
+      `checkd(qb != qu, 1'b1);
+      `checkd(qu != qb, 1'b1);
+      qu = '{1, 2};
+      `checkd(qb == qu, 1'b1);
+      `checkd(qu == qb, 1'b1);
+      `checkd(qb != qu, 1'b0);
+      `checkd(qu != qb, 1'b0);
+      qu = '{1, 3};
+      `checkd(qb == qu, 1'b0);
+      `checkd(qu != qb, 1'b1);
+      qu = '{7, 8, 9};
+      qb = qu;  // Discards the element beyond the bound
+      `checkd(qb.size(), 2);
+      `checkd(qb[1], 8);
+      qu = qb;
+      `checkd(qu.size(), 2);
+      `checkd(qu == qb, 1'b1);
+    end
+
     begin
       Base bq[$:1];
       Derived dq[$];
