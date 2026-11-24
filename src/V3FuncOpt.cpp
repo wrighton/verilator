@@ -273,6 +273,8 @@ class FuncOptVisitor final : public VNVisitor {
         // Check for a Sel on the LHS if present, and skip over it
         uint32_t lsb = 0;
         if (AstSel* const selp = VN_CAST(lhsp, Sel)) {
+            // A partial write has a signed position and must write only its bits in range
+            if (selp->partialWrite()) return false;
             if (AstConst* const lsbp = VN_CAST(selp->lsbp(), Const)) {
                 lhsp = selp->fromp();
                 lsb = lsbp->toUInt();
