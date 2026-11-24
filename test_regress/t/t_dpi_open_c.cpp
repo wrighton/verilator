@@ -72,6 +72,13 @@ extern void dpii_open_int_u3(int u, const svOpenArrayHandle i, const svOpenArray
 
 extern void dpii_oba(const svOpenArrayHandle i, const svOpenArrayHandle o);
 
+extern void dpii_open_bv1(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
+extern void dpii_open_bv7(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
+extern void dpii_open_bv16(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
+extern void dpii_open_bv17(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
+extern void dpii_open_bvs7(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
+extern void dpii_open_bve3(int width, const svOpenArrayHandle i, const svOpenArrayHandle o);
+
 extern int dpii_failure();
 }
 #endif
@@ -308,4 +315,48 @@ void dpii_oba(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
         svBitVecVal* const obvp = static_cast<svBitVecVal*>(svGetArrayPtr(o));
         svPutBitselBit(obvp, bit, svGetBitselBit(ibvp, bit) ? 0 : 1);
     }
+}
+
+// An element pointer, if given, is to the svBitVecVal form of an individual value
+static void _dpii_open_bv(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    const svBitVecVal mask = (1U << width) - 1;
+#ifdef VERILATOR
+    // Elements narrower than an svBitVecVal word are not in C layout, so neither is the array
+    const bool cLayout = width > 16;
+    TEST_CHECK_EQ(svGetArrayPtr(i) != nullptr, cLayout);
+    TEST_CHECK_EQ(svSizeOfArray(i) != 0, cLayout);
+    TEST_CHECK_EQ(svGetArrElemPtr1(i, svLow(i, 1)) != nullptr, cLayout);
+#endif
+    // Highest index first, so writing past an element clobbers one already written
+    for (int a = svHigh(i, 1); a >= svLow(i, 1); --a) {
+        const svBitVecVal* const ip = static_cast<const svBitVecVal*>(svGetArrElemPtr1(i, a));
+        svBitVecVal* const op = static_cast<svBitVecVal*>(svGetArrElemPtr1(o, a));
+        TEST_CHECK_EQ(!ip, !op);
+        if (ip && op) {
+            *op = ~*ip & mask;
+        } else {
+            svBitVecVal v;
+            svGetBitArrElem1VecVal(&v, i, a);
+            v = ~v & mask;
+            svPutBitArrElem1VecVal(o, &v, a);
+        }
+    }
+}
+void dpii_open_bv1(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    _dpii_open_bv(width, i, o);
+}
+void dpii_open_bv7(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    _dpii_open_bv(width, i, o);
+}
+void dpii_open_bv16(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    _dpii_open_bv(width, i, o);
+}
+void dpii_open_bv17(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    _dpii_open_bv(width, i, o);
+}
+void dpii_open_bvs7(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    _dpii_open_bv(width, i, o);
+}
+void dpii_open_bve3(int width, const svOpenArrayHandle i, const svOpenArrayHandle o) {
+    _dpii_open_bv(width, i, o);
 }
