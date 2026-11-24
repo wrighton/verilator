@@ -1,0 +1,30 @@
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:61:16: Unsupported: Force/release of inout port 't.high.p' not connected as one plain net.
+                                                : ... note: In instance 't'
+   61 |     force high.p = '0;
+      |                ^
+                    t/t_force_inout_pull.v:38:8: ... Inout port connection.
+   38 |       .p(hi),
+      |        ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:62:15: Unsupported: Force/release of inout port 't.low.p' not connected as one plain net.
+                                                : ... note: In instance 't'
+   62 |     force low.p = '0;
+      |               ^
+                    t/t_force_inout_pull.v:42:8: ... Inout port connection.
+   42 |       .p(lo),
+      |        ^
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:63:20: Unsupported: Force/release of inout port 't.selected.p' not connected as one plain net.
+                                                : ... note: In instance 't'
+   63 |     force selected.p = '0;
+      |                    ^
+                    t/t_force_inout_pull.v:46:8: ... Inout port connection.
+   46 |       .p(partial),
+      |        ^
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:64:21: Unsupported: Force/release of inout port 't.sibling.p' not connected as one plain net.
+                                                : ... note: In instance 't'
+   64 |     release sibling.p;
+      |                     ^
+                    t/t_force_inout_pull.v:50:8: ... Inout port connection.
+   50 |       .p(propagated),
+      |        ^
+%Error: Exiting due to
