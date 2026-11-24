@@ -146,6 +146,35 @@ module t;
     `checkh(index_target === 1'bz, 1'b0);
   end
 
+  // A deterministic function index selects the same bit for its value and drive state.
+  function automatic int mirrored_index(int position);
+    int result;
+    result = 6 - position;
+    return result;
+  endfunction
+  wire function_target;
+  assign function_target = index_target_en ? 1'b1 : 1'bz;
+  int function_index = 6;
+  initial begin
+    #1;
+    force function_target = index_source[mirrored_index(function_index)];
+    #0.1;
+    `checkh(function_target, 1'b1);
+    `checkh(function_target === 1'bz, 1'b0);
+    function_index = 5;
+    force function_target = index_source[mirrored_index(function_index)];
+    #0.1;
+    `checkh(function_target === 1'bz, 1'b1);
+    function_index = 4;
+    force function_target = index_source[mirrored_index(function_index)];
+    #0.1;
+    `checkh(function_target, 1'b0);
+    `checkh(function_target === 1'bz, 1'b0);
+    release function_target;
+    #0.1;
+    `checkh(function_target, 1'b1);
+  end
+
   // A part select partly out of range drives its out of range bits.
   wire [1:0] part_target;
   assign part_target = index_target_en ? 2'b11 : 2'bzz;

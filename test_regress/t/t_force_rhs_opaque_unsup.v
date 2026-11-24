@@ -32,6 +32,14 @@ module t;
   endfunction
   initial #1 force selected = source[next_index()];
   initial #1 force selected = source[$urandom&1];
+  function automatic int random_index();
+    random_index = $urandom & 1;
+  endfunction
+  function automatic int nested_random_index();
+    return random_index();
+  endfunction
+  initial #1 force selected = source[random_index()];
+  initial #1 force selected = source[nested_random_index()];
 
   function automatic void set_z(output logic value);
     value = 1'bz;

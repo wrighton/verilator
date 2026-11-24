@@ -109,7 +109,9 @@ module t;
   );
   initial begin
     #1 force sampler.p = 7'h01;
-    #1 sample_clk = 1;
+    #0.5;
+    `checkh(sampler.continuously_sampled, 7'h01);
+    #0.5 sample_clk = 1;
     #1;
     `checkh(sampler.state, 7'h01);
     release sampler.p;
@@ -121,9 +123,10 @@ module t;
     force sampler.p = 7'bzzzzzzz;
     #1;
     `checkh(sampler.p === 7'bzzzzzzz, 1'b1);
-    // Continuous variable forwarding preserves the sampled net's Z state.
-    `checkh(sampler.continuously_sampled === 7'bzzzzzzz, 1'b1);
     release sampler.p;
+    #1;
+    `checkh(sampler.p === 7'bzzzzzzz, 1'b0);
+    `checkh(sampler.continuously_sampled, 7'h03);
   end
 
   // An interface net connection reads the resolved interface net.

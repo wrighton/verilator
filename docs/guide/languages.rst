@@ -367,10 +367,12 @@ forces or releases whether each bit is high impedance (IEEE 1800-2023
 10.6.2), also through a hierarchical reference from any module. Supported
 force values include two-state expressions and direct net reads with
 tracked drive state, including packed selects with deterministic,
-side-effect-free indices. A value whose high impedance bits cannot be represented is
-unsupported from either a local or hierarchical reference. Without such an
-enable, literal high-impedance force values are unsupported; dynamically
-produced high-impedance bits are not tracked by the value-only lowering.
+side-effect-free indices. A value whose high impedance bits cannot be
+represented is unsupported from either a local or hierarchical reference.
+Without such an enable, literal high-impedance force values are
+unsupported; dynamically produced high-impedance bits are not tracked by
+the value-only lowering. A variable continuously assigned from such a net
+holds a two-state value without tracked drive state.
 
 An inout net port and its whole local wire or tri connection share a force
 domain (IEEE 1800-2023 10.6.2, 23.3.3.7), so forcing or releasing either

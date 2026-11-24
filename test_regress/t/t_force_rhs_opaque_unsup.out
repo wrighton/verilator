@@ -11,8 +11,16 @@
                                                       : ... note: In instance 't'
    34 |   initial #1 force selected = source[$urandom&1];
       |                                     ^
-%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:45:31: Unsupported: Force of tristate net with a value that may be high impedance: 'indirect'
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:41:37: Unsupported: Force of tristate net with a value that may be high impedance: 'selected'
                                                       : ... note: In instance 't'
-   45 |   initial #1 force indirect = indirect_value();
+   41 |   initial #1 force selected = source[random_index()];
+      |                                     ^
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:42:37: Unsupported: Force of tristate net with a value that may be high impedance: 'selected'
+                                                      : ... note: In instance 't'
+   42 |   initial #1 force selected = source[nested_random_index()];
+      |                                     ^
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:53:31: Unsupported: Force of tristate net with a value that may be high impedance: 'indirect'
+                                                      : ... note: In instance 't'
+   53 |   initial #1 force indirect = indirect_value();
       |                               ^~~~~~~~~~~~~~
 %Error: Exiting due to
