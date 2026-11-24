@@ -93,6 +93,21 @@ module t;
 
   import "DPI-C" function void dpii_oba(int width, input int i [], output int o []);
 
+  typedef struct packed {
+    bit [2:0] a;
+    bit [3:0] b;
+  } bvs7_t;
+  typedef enum bit [2:0] {E0, E1, E2, E3, E4, E5, E6, E7} bve3_t;
+  typedef bit [6:0] bv7_t;
+  import "DPI-C" function void dpii_open_bv1(int width, input bit [0:0] i [], output bit [0:0] o []);
+  import "DPI-C" function void dpii_open_bv7(int width, input bit [6:0] i [], output bit [6:0] o []);
+  import "DPI-C" function void dpii_open_bv16(int width, input bit [15:0] i [],
+                                              output bit [15:0] o []);
+  import "DPI-C" function void dpii_open_bv17(int width, input bit [16:0] i [],
+                                              output bit [16:0] o []);
+  import "DPI-C" function void dpii_open_bvs7(int width, input bvs7_t i [], output bvs7_t o []);
+  import "DPI-C" function void dpii_open_bve3(int width, input bve3_t i [], output bve3_t o []);
+
   // verilator lint_on UNUSED
 
   reg [95:0] crc;
@@ -188,6 +203,66 @@ module t;
     `checkh(o_oba_b17, ~crc[16:0]);
     `checkh(o_oba_b32, ~crc[31:0]);
     `checkh(o_oba_b64, ~crc[63:0]);
+
+    begin
+      // Open arrays with elements of narrow bit vectors, packed structures and enums
+      bit [0:0] i_bv1 [3:0];
+      bit [0:0] o_bv1 [3:0];
+      bit [6:0] i_bv7 [3:0];
+      bit [6:0] o_bv7 [3:0];
+      bit [15:0] i_bv16 [1:4];
+      bit [15:0] o_bv16 [1:4];
+      bit [16:0] i_bv17 [3:0];
+      bit [16:0] o_bv17 [3:0];
+      bvs7_t i_bvs7 [-1:2];
+      bvs7_t o_bvs7 [-1:2];
+      bve3_t i_bve3 [3:0];
+      bve3_t o_bve3 [3:0];
+      for (int a = 0; a < 4; ++a) begin
+        i_bv1[a] = crc[0];
+        i_bv7[a] = crc[6:0];
+        i_bv16[a+1] = crc[15:0];
+        i_bv17[a] = crc[16:0];
+        i_bvs7[a-1] = crc[6:0];
+        i_bve3[a] = bve3_t'(crc[2:0]);
+        crc = {crc[94:0], crc[95] ^ crc[2] ^ crc[0]};
+      end
+      dpii_open_bv1(1, i_bv1, o_bv1);
+      dpii_open_bv7(7, i_bv7, o_bv7);
+      dpii_open_bv16(16, i_bv16, o_bv16);
+      dpii_open_bv17(17, i_bv17, o_bv17);
+      dpii_open_bvs7(7, i_bvs7, o_bvs7);
+      dpii_open_bve3(3, i_bve3, o_bve3);
+      for (int a = 0; a < 4; ++a) begin
+        `checkh(o_bv1[a], ~i_bv1[a]);
+        `checkh(o_bv7[a], ~i_bv7[a]);
+        `checkh(o_bv16[a+1], ~i_bv16[a+1]);
+        `checkh(o_bv17[a], ~i_bv17[a]);
+        `checkh(o_bvs7[a-1], ~i_bvs7[a-1]);
+        `checkh(o_bve3[a], ~i_bve3[a]);
+      end
+    end
+
+    begin
+      // Dynamic array inputs with elements of narrow bit vectors
+      bit [6:0] i_bv7d [];
+      bv7_t i_bv7t [];
+      bit [6:0] o_bv7d [0:3];
+      bv7_t o_bv7t [0:3];
+      i_bv7d = new[4];
+      i_bv7t = new[4];
+      for (int a = 0; a < 4; ++a) begin
+        i_bv7d[a] = crc[6:0];
+        i_bv7t[a] = crc[13:7];
+        crc = {crc[94:0], crc[95] ^ crc[2] ^ crc[0]};
+      end
+      dpii_open_bv7(7, i_bv7d, o_bv7d);
+      dpii_open_bv7(7, i_bv7t, o_bv7t);
+      for (int a = 0; a < 4; ++a) begin
+        `checkh(o_bv7d[a], ~i_bv7d[a]);
+        `checkh(o_bv7t[a], ~i_bv7t[a]);
+      end
+    end
 
     if (dpii_failure()!=0) begin
       $write("%%Error: Failure in DPI tests\n");
