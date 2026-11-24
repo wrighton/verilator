@@ -204,10 +204,6 @@ public:
             = m_hierBlockOptsByOrigName.equal_range(origName);
         const auto paramsIt = m_modParams.find(origName);
         UASSERT_OBJ(paramsIt != m_modParams.end(), modp, origName << " must be registered");
-        // An untyped parameter takes the type of its value, but libraries are distinguished
-        // only by parameter values. This is a pin whose value equals that of a library or the
-        // default, but whose type differs.
-        const AstPin* typeMismatchPinp = nullptr;
         HierMapIt hierIt;
         for (hierIt = candidates.first; hierIt != candidates.second; ++hierIt) {
             bool found = true;
@@ -222,14 +218,13 @@ public:
                                 "parameter for a hierarchical block must have been constified");
                     const auto paramIt = paramsIt->second.find(modvarp->name());
                     UASSERT_OBJ(paramIt != paramsIt->second.end(), modvarp, "must be registered");
+                    // An untyped parameter takes the type of its value
                     const bool untyped = m_untypedParams.count(paramIt->second);
                     AstConst* const defValuep = VN_CAST(paramIt->second->valuep(), Const);
-                    if (defValuep && areSame(constp, defValuep)) {
-                        if (!untyped || constp->sameValueType(defValuep)) {
-                            UINFO(5, "Setting default value of " << constp << " to " << modvarp);
-                            continue;  // Skip this parameter because setting the same value
-                        }
-                        typeMismatchPinp = pinp;
+                    if (defValuep && areSame(constp, defValuep)
+                        && (!untyped || constp->sameValueType(defValuep))) {
+                        UINFO(5, "Setting default value of " << constp << " to " << modvarp);
+                        continue;  // Skip this parameter because setting the same value
                     }
                     const auto pIt = vlstd::as_const(params).find(modvarp->name());
                     UINFO(5, "Comparing " << modvarp->name() << " " << constp);
@@ -239,7 +234,6 @@ public:
                         break;
                     }
                     if (untyped && !constp->sameValueType(pIt->second.get())) {
-                        typeMismatchPinp = pinp;
                         found = false;
                         break;
                     }
@@ -250,15 +244,6 @@ public:
             }
             if (found && paramIdx == hierIt->second->params().size()) break;
         }
-        if (hierIt == candidates.second && typeMismatchPinp) {
-            typeMismatchPinp->v3warn(
-                E_UNSUPPORTED, "Unsupported: Untyped parameter "
-                                   << typeMismatchPinp->modVarp()->prettyNameQ()
-                                   << " of hierarchical block " << AstNode::prettyNameQ(origName)
-                                   << " given equal values of different width or"
-                                      " signedness");
-            return nullptr;
-        }
         UASSERT_OBJ(hierIt != candidates.second, firstPinp, "No --lib-create wrapper found");
         // parameter settings will be removed in the bottom of caller visitCell().
         const HierBlockModMap::const_iterator modIt
@@ -266,9 +251,7 @@ public:
         UASSERT_OBJ(modIt != m_hierBlockMod.end(), firstPinp,
                     hierIt->second->mangledName() << " is not found");
 
-        const auto it = vlstd::as_const(m_hierBlockMod).find(hierIt->second->mangledName());
-        if (it == m_hierBlockMod.end()) return nullptr;
-        return it->second;
+        return modIt->second;
     }
     static bool areSame(AstConst* pinValuep, AstConst* hierOptParamp) {
         if (pinValuep->isString()) {
@@ -986,6 +969,14 @@ class ParamProcessor final {
                                                 " parameter with newline, double quote, '/*',"
                                                 " or whitespace before '//'");
                 }
+                // A string passed by -G is a number, so cannot give the parameter string type
+                if (constp->num().isString() && modvarp->untypedParam()) {
+                    pinp->v3warn(E_UNSUPPORTED,
+                                 "Unsupported: String-typed value of untyped"
+                                 " parameter "
+                                     << modvarp->prettyNameQ() << " of hierarchical block "
+                                     << AstNode::prettyNameQ(modp->origName()) << ".");
+                }
             }
             if (!supported) {
                 pinp->v3error(
@@ -1018,12 +1009,17 @@ class ParamProcessor final {
         UASSERT_OBJ(modp->hierBlock(), modp, "should be used for hierarchical block");
 
         std::map<string, AstNode*> pins;
+        // Untyped parameters given a value by a pin
+        std::unordered_set<string> untypedPins;
 
         for (AstPin* const pinp : VNList<AstPin>{paramPinsp}) {
             if (!pinp->exprp()) continue;  // An empty override keeps the default
             checkSupportedParam(modp, pinp);
             if (const AstVar* const varp = pinp->modVarp()) {
-                if (varp->isGParam()) pins.emplace(varp->name(), pinp->exprp());
+                if (varp->isGParam()) {
+                    pins.emplace(varp->name(), pinp->exprp());
+                    if (varp->untypedParam()) untypedPins.emplace(varp->name());
+                }
             } else if (VN_IS(pinp->exprp(), BasicDType) || VN_IS(pinp->exprp(), NodeDType)) {
                 pins.emplace(pinp->name(), pinp->exprp());
             }
@@ -1078,8 +1074,16 @@ class ParamProcessor final {
 
             if (const AstConst* const p = VN_CAST(nodep, Const)) {
                 // Treat modules parameterized with the same values but with different type as the
-                // same.
-                longname += p->num().ascii(false);
+                // same, unless the parameter takes the type of the value, which is not that of
+                // the default
+                const AstConst* const defValuep = VN_CAST(defaultValue.second, Const);
+                if (untypedPins.count(defaultValue.first)
+                    && !(defValuep && p->sameValueType(defValuep))) {
+                    longname += cvtToStr(p->untypedParamWidth()) + (p->isSigned() ? "s'" : "'")
+                                + p->num().ascii(false);
+                } else {
+                    longname += p->num().ascii(false);
+                }
             } else if (nodep) {
                 std::stringstream type;
                 V3EmitV::verilogForTree(nodep, type);
@@ -1440,8 +1444,10 @@ class ParamProcessor final {
                     AstNode* const newp = pinp->exprp();  // Const or ConsArray
                     AstConst* const exprp = VN_CAST(newp, Const);
                     AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
+                    // An untyped parameter takes the type of its value
                     const bool overridden
-                        = !(origp && exprp && ParameterizedHierBlocks::areSame(exprp, origp));
+                        = !(origp && exprp && ParameterizedHierBlocks::areSame(exprp, origp)
+                            && (!modvarp->untypedParam() || exprp->sameValueType(origp)));
                     // Remove any existing parameter
                     if (modvarp->valuep()) modvarp->valuep()->unlinkFrBack()->deleteTree();
                     // Set this parameter to value requested by cell
@@ -2615,7 +2621,6 @@ class ParamProcessor final {
         if (m_hierBlocks.hierSubRun() && m_hierBlocks.isHierBlock(srcModp->origName())) {
             AstNodeModule* const paramedModp
                 = m_hierBlocks.findByParams(srcModp->origName(), paramsp, m_modp);
-            if (!paramedModp) return nullptr;  // Unsupported, already reported
             paramedModp->dead(false);
             // We need to relink the pins to the new module
             relinkPinsByName(pinsp, paramedModp);
