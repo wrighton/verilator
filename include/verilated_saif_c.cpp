@@ -285,6 +285,7 @@ void VerilatedSaif::open(const char* filename) VL_MT_SAFE_EXCLUDES(m_mutex) {
                      O_CREAT | O_WRONLY | O_TRUNC | O_LARGEFILE | O_NONBLOCK | O_CLOEXEC, 0666);
     m_isOpen = true;
     m_activityAccumulatorp = std::make_unique<VerilatedSaifActivityAccumulator>();
+    fullDump(true);  // First dump must be full, as activity is accumulated anew
 
     initializeSaifFileContents();
 
