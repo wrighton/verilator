@@ -286,6 +286,10 @@ public:
 
     size_t toSizeT() const { return static_cast<size_t>(num().toUQuad()); }
     uint32_t toU32() const { return num().toUInt(); }
+    // Value as a shift amount, saturated to the largest 32-bit value, above any width
+    uint32_t toShiftAmount() const {
+        return num().fitsInUInt() ? num().toUInt() : std::numeric_limits<uint32_t>::max();
+    }
 
     bool isZero() const { return num().isEqZero(); }
     bool isOnes() const { return num().isEqAllOnes(width()); }
