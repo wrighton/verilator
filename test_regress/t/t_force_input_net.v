@@ -135,6 +135,16 @@ module selected_pull_force_helper (
   end
 endmodule
 
+module expression_rhs_helper (
+    input wire [6:0] p,
+    input bit q
+);
+  initial begin
+    #1 force p = {7{q}};
+    #2 release p;
+  end
+endmodule
+
 module t;
   logic [6:0] raw0 = 7'h11, raw1 = 7'h22;
   logic en0 = 1, en1 = 1, take0 = 0, take1 = 0, drop0 = 0, drop1 = 0;
@@ -241,7 +251,7 @@ module t;
   initial begin
     #2;
     `checkh(hq.p, 7'h3c);
-    `checkh(qx, 7'h21);
+    `checkh(qx, 7'h3c);
     `checkh(hw.p, 7'h00);
     `checkh(hm0.p, 7'h00);
     `checkh(mx, 7'h23);
@@ -251,6 +261,7 @@ module t;
     `checkh(pl, 2'b11);
     #2;
     `checkh(hq.p, 7'h21);
+    `checkh(qx, 7'h21);
     `checkh(hm0.p, 7'h23);
     `checkh(hm1.p, 7'h34);
   end
@@ -315,6 +326,26 @@ module t;
     #1;
     `checkh(selected_pull, 7'h15);
     `checkh(hs.p, 7'h15);
+  end
+
+  // A composite RHS keeps its internal-only input-port force behavior.
+  bit expr_value = 0;
+  logic [6:0] expr_raw = 7'h21;
+  wire [6:0] expr_net;
+  assign expr_net = expr_raw;
+  expression_rhs_helper he (.p(expr_net), .q(expr_value));
+  initial begin
+    #2;
+    `checkh(he.p, 7'h00);
+    `checkh(expr_net, 7'h21);
+    expr_value = 1;
+    #0.5;
+    `checkh(he.p, 7'h7f);
+    `checkh(expr_net, 7'h21);
+    #1.5;
+    expr_raw = 7'h35;
+    #1;
+    `checkh(he.p, 7'h35);
   end
 
   initial begin

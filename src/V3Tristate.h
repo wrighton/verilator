@@ -26,6 +26,7 @@ class AstNetlist;
 
 class V3Tristate final {
 public:
+    static void prepareForcePorts(AstNetlist* nodep) VL_MT_DISABLED;
     static void tristateAll(AstNetlist* nodep) VL_MT_DISABLED;
 };
 

@@ -475,7 +475,10 @@ static AstVar* forceNetp(const AstPin* pinp) {
     const AstVar* const portp = pinp->modVarp();
     const AstVarRef* const refp = VN_CAST(pinp->exprp(), VarRef);
     AstVar* const netp = refp ? refp->varp() : nullptr;
-    const bool plain = netp && plainNet(netp) && plainNet(portp) && !netp->isIO()
+    const bool inputChain = netp && netp->isInput() && netp->declDirection() == VDirection::INPUT
+                            && !netp->isPrimaryIO() && !netp->isFuncLocalSticky()
+                            && !findParentModule(netp)->isTop();
+    const bool plain = netp && plainNet(netp) && plainNet(portp) && (!netp->isIO() || inputChain)
                        && portp->dtypep()->skipRefp()->isIntegralOrPacked()
                        && netp->dtypep()->skipRefp()->sameTree(portp->dtypep()->skipRefp())
                        && !netp->isForceable() && !netp->isConst();
@@ -555,8 +558,7 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     void visit(AstPin* nodep) override {
         const AstVar* const portp = nodep->modVarp();
         if (portp && nodep->exprp()) { addPullActuals(VN_AS(nodep->exprp(), NodeExpr), portp); }
-        if (portp && portp->isInput() && portp->isNet() && portp->isForced()
-            && !portp->isForceable()) {
+        if (portp && portp->isInput() && portp->isNet() && !portp->isForceable()) {
             const AstVar* const netp = forceNetp(nodep);
             const auto pair = m_plainps.emplace(portp, true);
             pair.first->second &= netp != nullptr;
@@ -571,7 +573,7 @@ public:
     // wire with no pull, forced in their module with a constant or a variable of the module, and
     // from another module with a constant. Collapsing them is optional coercion (IEEE 1800-2023
     // 23.3.3.1, 23.3.3.7).
-    static std::unordered_set<const AstVar*> collapsibleps(AstNetlist* netlistp) {
+    static std::unordered_set<const AstVar*> eligibleps(AstNetlist* netlistp) {
         TristateForcedInputVisitor visitor;
         visitor.iterateConst(netlistp);
         // Visit each pulled net once; repeated instances or port chains need no rescans.
@@ -595,6 +597,53 @@ public:
         }
         return resultps;
     }
+    static std::unordered_set<const AstVar*> collapsibleps(AstNetlist* netlistp) {
+        std::unordered_set<const AstVar*> resultps = eligibleps(netlistp);
+        for (auto it = resultps.begin(); it != resultps.end();) {
+            if (!(*it)->isForced())
+                it = resultps.erase(it);
+            else
+                ++it;
+        }
+        return resultps;
+    }
+};
+
+//######################################################################
+// Preserve typed force-domain connections before constants erase net identities.
+class TristatePrepareForceVisitor final : public VNVisitor {
+    const std::unordered_set<const AstVar*> m_inputps;
+    std::unordered_map<AstVar*, std::vector<AstVar*>> m_actualps;
+    std::vector<AstVar*> m_pendingps;
+
+    void visit(AstPin* nodep) override {
+        AstVar* const portp = nodep->modVarp();
+        if (portp && !portp->isForceable() && (portp->isInout() || m_inputps.count(portp))) {
+            if (AstVar* const actualp = forceNetp(nodep)) {
+                m_actualps[portp].push_back(actualp);
+                if (portp->isForced()) m_pendingps.push_back(portp);
+            }
+        }
+        iterateChildren(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    explicit TristatePrepareForceVisitor(AstNetlist* nodep)
+        : m_inputps{TristateForcedInputVisitor::eligibleps(nodep)} {
+        iterate(nodep);
+        std::unordered_set<AstVar*> expandedps;
+        for (size_t index = 0; index < m_pendingps.size(); ++index) {
+            AstVar* const portp = m_pendingps[index];
+            if (!expandedps.emplace(portp).second) continue;
+            for (AstVar* const actualp : m_actualps[portp]) {
+                actualp->setForcedByCode();
+                m_pendingps.push_back(actualp);
+            }
+        }
+    }
+
+public:
+    static void apply(AstNetlist* nodep) { TristatePrepareForceVisitor{nodep}; }
 };
 
 //######################################################################
@@ -3790,6 +3839,16 @@ public:
 
 //######################################################################
 // Tristate class functions
+
+void V3Tristate::prepareForcePorts(AstNetlist* nodep) {
+    if (!nodep->exists([](const AstVar* varp) {
+            return varp->isIO() && varp->isForced() && !varp->isForceable()
+                   && !varp->isFuncLocalSticky();
+        })) {
+        return;
+    }
+    TristatePrepareForceVisitor::apply(nodep);
+}
 
 void V3Tristate::tristateAll(AstNetlist* nodep) {
     UINFO(2, __FUNCTION__ << ":");

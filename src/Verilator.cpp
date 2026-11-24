@@ -251,6 +251,7 @@ static void process() {
         } else {
             V3LinkLevel::nonWrapTop(v3Global.rootp());
         }
+        V3Tristate::prepareForcePorts(v3Global.rootp());
 
         if (!v3Global.opt.serializeOnly()) {
             // Insert generic code coverage before dead code elimination and
