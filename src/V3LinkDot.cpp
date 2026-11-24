@@ -6997,6 +6997,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     } else {
                         nodep->v3error("Can't find typedef/interface: " << nodep->prettyNameQ());
                     }
+                    // Prevent errors on the parameters of the unresolved type
+                    if (nodep->paramsp()) pushDeletep(nodep->paramsp()->unlinkFrBackWithNext());
                 }
             }
         }
