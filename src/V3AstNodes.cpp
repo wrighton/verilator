@@ -4933,9 +4933,11 @@ void AstSelBit::dumpJson(std::ostream& str) const {
 void AstSenItem::dump(std::ostream& str) const {
     Super::dump(str);
     str << " [" << edgeType().ascii() << "]";
+    if (forceUpdate()) str << " [FORCEUPD]";
 }
 void AstSenItem::dumpJson(std::ostream& str) const {
     dumpJsonStr(str, "edgeType", edgeType().ascii());
+    dumpJsonBoolFuncIf(str, forceUpdate);
     dumpJsonGen(str);
 }
 bool AstSenTree::hasClocked() const {
