@@ -2117,6 +2117,7 @@ class AstSenItem final : public AstNode {
     // @astgen op1 := sensp : Optional[AstNodeExpr] // Sensitivity expression
     // @astgen op2 := condp : Optional[AstNodeExpr] // Sensitivity condition
     VEdgeType m_edgeType;  // Edge type
+    bool m_forceUpdate = false;  // Of an update V3Force makes for a forceable variable
 public:
     class Combo {};  // for constructor type-overload selection
     class Static {};  // for constructor type-overload selection
@@ -2144,9 +2145,12 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode* samep) const override {
-        return edgeType() == VN_DBG_AS(samep, SenItem)->edgeType();
+        const AstSenItem* const asamep = VN_DBG_AS(samep, SenItem);
+        return edgeType() == asamep->edgeType() && forceUpdate() == asamep->forceUpdate();
     }
     VEdgeType edgeType() const { return m_edgeType; }
+    bool forceUpdate() const { return m_forceUpdate; }
+    void forceUpdate(bool flag) { m_forceUpdate = flag; }
     void edgeType(VEdgeType type) {
         m_edgeType = type;
         editCountInc();
