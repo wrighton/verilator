@@ -304,6 +304,7 @@ private:
     bool m_flatten = false;         // main switch: --flatten
     bool m_fourstate = false;       // main switch: --fourstate
     bool m_hierarchical = false;    // main switch: --hierarchical
+    bool m_hierAssertCtl = false;   // main switch: --hierarchical-assert-control
     bool m_ignc = false;            // main switch: --ignc
     bool m_jsonOnly = false;        // main switch: --json-only
     bool m_lintOnly = false;        // main switch: --lint-only
@@ -861,6 +862,7 @@ public:
     std::vector<std::string> traceSourceBases() const VL_MT_SAFE;
 
     bool hierarchical() const { return m_hierarchical; }
+    bool hierAssertCtl() const { return m_hierAssertCtl; }
     int hierChild() const VL_MT_SAFE { return m_hierChild; }
     int hierThreads() const VL_MT_SAFE { return m_hierThreads == 0 ? m_threads : m_hierThreads; }
     bool hierTop() const VL_MT_SAFE { return !m_hierChild && !m_hierBlocks.empty(); }

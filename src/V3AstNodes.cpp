@@ -991,11 +991,13 @@ void AstAssertCtlTarget::dump(std::ostream& str) const {
     str << " depth=" << depth();
     if (ordinal()) str << " ordinal=" << ordinal();
     if (moduleRelative()) str << " [MODULE_RELATIVE]";
+    if (forward()) str << " [FORWARD]";
 }
 void AstAssertCtlTarget::dumpJson(std::ostream& str) const {
     dumpJsonNumFunc(str, depth);
     if (ordinal()) dumpJsonNumFunc(str, ordinal);
     dumpJsonBoolFuncIf(str, moduleRelative);
+    dumpJsonBoolFuncIf(str, forward);
     dumpJsonGen(str);
 }
 void AstAssignW::dump(std::ostream& str) const {
@@ -3990,6 +3992,7 @@ void AstNodeModule::dump(std::ostream& str) const {
     }
     if (parameterizedTemplate()) str << " [PAR-TEMPL]";
     if (threadsGroup()) str << " [THREADS-GROUP]";
+    if (hierAssertCtl()) str << " [HIER-ASSERTCTL]";
     if (verilatorLib()) str << " [VERILATOR-LIB]";
     if (unconnectedDrive().isTrue()) str << " [UCDRV]";
     if (!lifetime().isNone()) str << " [" << lifetime().ascii() << "] ";
@@ -4008,12 +4011,22 @@ void AstNodeModule::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, recursiveClone);
     dumpJsonBoolFuncIf(str, recursive);
     dumpJsonBoolFuncIf(str, threadsGroup);
+    dumpJsonBoolFuncIf(str, hierAssertCtl);
     dumpJsonBoolFuncIf(str, verilatorLib);
     dumpJsonStr(str, "unconnectedDrive", unconnectedDrive().ascii());
     dumpJsonStr(str, "lifetime", lifetime().ascii());
     dumpJsonStr(str, "timeunit", timeunit().ascii());
     if (libname() != "work") dumpJsonStr(str, "libname=", libname());
     dumpJsonGen(str);
+}
+AstVar* AstNodeModule::libWrapperVarp(const string& name) const {
+    AstVar* resultp = nullptr;
+    for (AstNode* const nodep : stmtspList()) {
+        AstVar* const varp = VN_CAST(nodep, Var);
+        if (varp && varp->prettyName() == name) resultp = varp;
+    }
+    UASSERT_OBJ(resultp, this, "Verilator library wrapper without '" << name << "'");
+    return resultp;
 }
 const char* AstNodePreSel::broken() const {
     BROKEN_RTN(m_purity.isCached() && m_purity.get() != getPurityRecurse());
