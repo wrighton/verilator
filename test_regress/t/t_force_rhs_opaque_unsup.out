@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:10:20: Unsupported: Force of tristate net with a value that may be high impedance: 'n'
+                                                      : ... note: In instance 't.u'
+   10 |     #2 force t.n = unrepresented_value();
+      |                    ^~~~~~~~~~~~~~~~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

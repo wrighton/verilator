@@ -273,6 +273,7 @@ module t;
   initial begin
     #2;
     `checkh(fnet === 7'b0z1z0z1, 1'b1);
+    `checkh(fy === 7'b0z1z0z1, 1'b1);
     #0.1;
     `checkh(early_pattern, 1'b1);
     #1;

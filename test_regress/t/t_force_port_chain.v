@@ -16,7 +16,8 @@ module chain_helper (
 );
   logic [6:0] rhs = 0;
   initial begin
-    force p = rhs;
+    force p = 7'bz;
+    #2 force p = rhs;
     #2 rhs = 7'h5a;
     #2 rhs = 7'h25;
     #2 release p;
@@ -42,9 +43,14 @@ module t;
   input_chain_dut chain_dut (.n(external_net));
   initial begin
     #1;
+    `checkh(local_dut.n === 7'bz, 1'b1);
+    `checkh(chain_dut.n === 7'bz, 1'b1);
+    `checkh(external_net === 7'bz, 1'b1);
+    #2;
     `checkh(local_dut.n, 7'h00);
     `checkh(chain_dut.n, 7'h00);
     `checkh(external_net, 7'h00);
+    `checkh(external_net === 7'bz, 1'b0);
     #2;
     `checkh(local_dut.n, 7'h5a);
     `checkh(chain_dut.n, 7'h5a);

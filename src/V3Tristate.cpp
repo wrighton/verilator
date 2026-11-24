@@ -612,9 +612,9 @@ public:
 //######################################################################
 // Preserve typed force-domain connections before constants erase net identities.
 class TristatePrepareForceVisitor final : public VNVisitor {
-    const std::unordered_set<const AstVar*> m_inputps;
-    std::unordered_map<AstVar*, std::vector<AstVar*>> m_actualps;
-    std::vector<AstVar*> m_pendingps;
+    const std::unordered_set<const AstVar*> m_inputps;  // Input ports eligible for a force domain
+    std::unordered_map<AstVar*, std::vector<AstVar*>> m_actualps;  // Typed port-to-actual edges
+    std::vector<AstVar*> m_pendingps;  // Force propagation worklist
 
     void visit(AstPin* nodep) override {
         AstVar* const portp = nodep->modVarp();
@@ -675,9 +675,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         int selBitCount = 0;  // Number of bits set in selBits
         bool cellOutput = false;  // Written by a cell's port connection, so may carry a z the
                                   // cell's module did not recognise as tristate
+        bool resolvedTristate = false;  // This variable has undergone tristate resolution
         bool elemZ = false;  // An element or member procedurally written with z, stored as x
         bool inIface = false;  // Variable of an interface
-        bool inputForceRhs = false;  // Whole read-only below-top input used as a force value
+        bool forceRhsReadEn = false;  // Direct force RHS whose resolved read enable is prepared
         // Forced port: the enable of the net it connects to, which its force also forces
         AstVar* resolvedEnVarp = nullptr;
     };
@@ -791,6 +792,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     // Retain first-discovery order instead of iterating the unordered lookup map.
     // No absolute address-independent traversal order is claimed here.
     std::vector<AstVar*> m_ifaceContribVarps;
+    std::unordered_map<const AstNodeFTask*, bool> m_forceFuncNoZ;  // Cached return-state proofs
 
     // STATS
     VDouble0 m_statTriSigs;  // stat tracking
@@ -847,9 +849,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     AstNodeExpr* getEnp(AstNode* nodep) {
         if (nodep->user1p()) {
             if (AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
-                if (refp->varp()->isIO()) {
-                    // When reading a tri-state port, we can always use the value
-                    // because such port will have resolution logic in upper module.
+                const AuxAstVar& aux = m_varAux(refp->varp());
+                if (refp->varp()->isIO() && !aux.resolvedEnVarp && !aux.forceRhsReadEn) {
+                    // Unprepared ports retain their value-only path.
                     return newAllZerosOrOnes(nodep, true);
                 }
             }
@@ -876,7 +878,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
         addModportVarRef(modportp, varp, dir);
     }
-    AstVar* getCreateEnVarp(AstVar* invarp, bool isTop) {
+    AstVar* getCreateEnVarp(AstVar* invarp, bool isTop, AstNodeModule* knownOwnerp = nullptr) {
         // Return the master __en for the specified input variable
         if (!invarp->user1p()) {
             AstVar* const newp
@@ -886,7 +888,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             UINFO(9, "       newenv " << newp);
             // If the variable belongs to a different module (e.g. interface),
             // create __en in that module so VarXRefs with the same dotted path can reach it.
-            AstNodeModule* const ownerModp = findParentModule(invarp);
+            AstNodeModule* const ownerModp = knownOwnerp ? knownOwnerp : findParentModule(invarp);
             if (ownerModp && ownerModp != m_modp) {
                 ownerModp->addStmtsp(newp);
                 // Add __en to any modports that reference the original var,
@@ -1212,6 +1214,11 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (!m_tgraph.isTristate(varp)) continue;
             const auto it = m_lhsmap.find(varp);
             if (it != m_lhsmap.end()) continue;
+            // A prepared read-only input gets its resolved enable from its parent.
+            if (varp->isInput() && varp->declDirection() == VDirection::INPUT
+                && m_varAux(varp).resolvedEnVarp) {
+                continue;
+            }
             // This variable is floating, set output enable to always be off on this assign.
             // For pullup/pulldown vars, use pull value with en=0 - the final resolution will
             // apply the pull formula: final = (driven_value & en) | (~en & pull_value)
@@ -1716,6 +1723,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                const string& ifaceInlinedDots, AstModport* ifaceModportp) {
         UINFO(8, "  TRISTATE EXPANDING:" << invarp);
         ++m_statTriSigs;
+        m_varAux(invarp).resolvedTristate = true;
         m_tgraph.didProcess(invarp);
         AstDelay* const netDelayp = invarp->delayp();
         if (netDelayp && netDelayp->fallDelay()) {
@@ -1915,7 +1923,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     // carry a z from another module, and not a net with bits no driver writes
     bool isNeverZVar(AstVar* varp) {
         const AuxAstVar& aux = m_varAux(varp);
-        return !isTristateVar(varp) && !varp->isIO() && !aux.cellOutput
+        return !isTristateVar(varp) && !aux.resolvedTristate && !varp->isIO() && !aux.cellOutput
                && (aux.assigned || !varp->isNet());
     }
     // Net a force or release of which overrides its drivers rather than driving it (IEEE
@@ -1944,6 +1952,13 @@ class TristateVisitor final : public TristateBaseVisitor {
     static AstNodeVarRef* forceTargetRefp(AstNodeExpr* lhsp) {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         return VN_CAST(lhsp, NodeVarRef);
+    }
+    static AstNodeVarRef* forceRhsRefp(AstNodeExpr* rhsp) {
+        while (const AstSel* const selp = VN_CAST(rhsp, Sel)) {
+            if (!VN_IS(selp->lsbp(), Const)) return nullptr;
+            rhsp = selp->fromp();
+        }
+        return VN_CAST(rhsp, NodeVarRef);
     }
     // Give a forced inout port a new input for the enable of the net it connects to, and a
     // forced input net port that may be one net with its connections its own enable, which they
@@ -2784,6 +2799,46 @@ class TristateVisitor final : public TristateBaseVisitor {
     void visit(AstAssign* nodep) override { visitAssign(nodep); }
     void visit(AstAssignDly* nodep) override { visitAssign(nodep); }
 
+    static bool forceExprNeverZ(const AstNodeExpr* exprp) {
+        if (!exprp->dtypep()->skipRefp()->isFourstate()) return true;
+        if (const AstConst* const constp = VN_CAST(exprp, Const)) return !constp->num().hasZ();
+        return VN_IS(exprp, NodeBiCom) || VN_IS(exprp, Not)
+               || (VN_IS(exprp, CReset) && VN_IS(exprp->dtypep()->skipRefp(), BasicDType));
+    }
+    bool forceFunctionNeverZ(const AstNodeFTaskRef* callp) {
+        AstNodeFTask* const taskp = callp->taskp();
+        if (!taskp || !taskp->isFunction() || taskp->dpiImport() || taskp->isVirtual()) {
+            return false;
+        }
+        const auto cached = m_forceFuncNoZ.find(taskp);
+        if (cached != m_forceFuncNoZ.end()) return cached->second;
+        bool sawValue = false;
+        bool unknown = false;
+        std::unordered_set<const AstNodeVarRef*> resultWrites;
+        taskp->foreach([&](const AstReturn* retp) {
+            if (retp->lhsp()) {
+                sawValue = true;
+                unknown |= !forceExprNeverZ(retp->lhsp());
+            }
+        });
+        taskp->foreach([&](const AstNodeAssign* assignp) {
+            const AstNodeVarRef* const refp = forceTargetRefp(assignp->lhsp());
+            if (refp && refp->varp() == taskp->fvarp()) {
+                sawValue = true;
+                unknown |= assignp->lhsp() != refp || !forceExprNeverZ(assignp->rhsp());
+                resultWrites.emplace(refp);
+            }
+        });
+        taskp->foreach([&](const AstNodeVarRef* refp) {
+            if (refp->varp() == taskp->fvarp() && refp->access().isWriteOrRW()
+                && !resultWrites.count(refp)) {
+                unknown = true;
+            }
+        });
+        const bool neverZ = sawValue && !unknown;
+        m_forceFuncNoZ.emplace(taskp, neverZ);
+        return neverZ;
+    }
     // Whether a force value may be z. A two-state value, and the result of an operator that
     // turns z into x, never is. Z bits not lowered here (in functions), calls and class members
     // may be; any other node passes on the z of its operands.
@@ -2795,9 +2850,11 @@ class TristateVisitor final : public TristateBaseVisitor {
             return !isNeverZVar(refp->varp());
         }
         if (const AstConst* const constp = VN_CAST(nodep, Const)) return constp->num().hasZ();
-        if (VN_IS(nodep, NodeFTaskRef) || VN_IS(nodep, CMethodHard) || VN_IS(nodep, MemberRef)) {
-            return true;
+        if (const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef)) {
+            return !forceFunctionNeverZ(callp);
         }
+        if (VN_IS(nodep, CMethodHard) || VN_IS(nodep, MemberRef)) return true;
+        if (const AstSel* const selp = VN_CAST(nodep, Sel)) return mayBeZ(selp->fromp());
         if (VN_IS(nodep, NodeBiCom) || VN_IS(nodep, Not)) return false;
         for (const AstNode* const opp :
              {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
@@ -2816,10 +2873,11 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
         if (refp && isTristateVar(refp->varp())) {
+            if (!forceRhsRefp(rhsp)) return nullptr;
             AstVar* const varp = refp->varp();
             const AuxAstVar& aux = m_varAux(varp);
             if (varp->isIO()) {
-                return rhsp == basep && aux.inputForceRhs && !aux.outVarp
+                return rhsp == basep && aux.forceRhsReadEn && !aux.outVarp
                            ? newEnSelp(rhsp, refp, VAccess::READ)
                            : nullptr;
             }
@@ -2933,13 +2991,12 @@ class TristateVisitor final : public TristateBaseVisitor {
                                            "Unsupported: Force of interface strength net with a "
                                            "value that may be high impedance: "
                                                << refp->prettyNameQ());
-                } else if (!VN_IS(refp, VarXRef)) {
+                } else {
                     forcep->rhsp()->v3warn(E_UNSUPPORTED,
                                            "Unsupported: Force of tristate net with a value that "
                                            "may be high impedance: "
                                                << refp->prettyNameQ());
                 }
-                // The value-only fallback leaves the drive-state resolution unchanged.
                 continue;
             }
             addForceEnable(stmtp, lhsp, refp, enp);
@@ -3547,10 +3604,10 @@ class TristateVisitor final : public TristateBaseVisitor {
                        && m_tgraph.isTristate(nodep->varp())
                        // and in a position where it feeds upstream to another tristate
                        && m_tgraph.feedsTri(nodep)) {
-                // Then propagate the enable from the original variable
+                // Reads follow the resolved force domain, not an outbound contribution.
                 UINFO(9, "     Ref-to-tri " << nodep);
                 FileLine* const fl = nodep->fileline();
-                AstVar* const enVarp = getCreateEnVarp(nodep->varp(), false);
+                AstVar* const enVarp = getCreateForceEnVarp(nodep->varp());
                 if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
                     nodep->user1p(newVarXRef(fl, enVarp, xrefp->dotted(), VAccess::READ,
                                              xrefp->inlinedDots()));
@@ -3585,7 +3642,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                 m_varAux(nodep).ifaceTristate = true;
                 m_tgraph.setTristate(nodep);
             }
-            if (nodep->isInout() || nodep->resolveWrittenInput()) {
+            if (nodep->isInout() || nodep->resolveWrittenInput()
+                || (m_varAux(nodep).forceRhsReadEn && !nodep->isIO())) {
                 // Resolve local drivers of an input without making its value actual writable.
                 UINFO(9, "  setTristate-port " << nodep);
                 m_tgraph.setTristate(nodep);
@@ -3593,8 +3651,9 @@ class TristateVisitor final : public TristateBaseVisitor {
         } else {  // !graphing
             if (m_tgraph.isTristate(nodep)) {
                 // A hierarchical force also needs the local resolver to drive its enable.
-                if (nodep->isForced() && !nodep->isIO() && isForceOverrideNet(nodep)) {
-                    getCreateEnVarp(nodep, false);
+                if ((nodep->isForced() && !nodep->isIO() && isForceOverrideNet(nodep))
+                    || (m_varAux(nodep).forceRhsReadEn && !nodep->isIO())) {
+                    getCreateEnVarp(nodep, false, m_modp);
                 }
                 // nodep->isPulldown() || nodep->isPullup() handled in TristateGraphVisitor
                 m_tgraph.didProcess(nodep);
@@ -3780,17 +3839,30 @@ public:
             }
         }
         // Incoming enables must exist before parent pins are expanded.
+        std::unordered_set<const AstVar*> aliasps;
+        netlistp->foreach([&aliasps](const AstAlias* aliasp) {
+            aliasp->foreach(
+                [&aliasps](const AstNodeVarRef* refp) { aliasps.emplace(refp->varp()); });
+        });
         for (AstNode* const nodep : netlistp->modulespList()) {
             if (VN_IS(nodep, Iface)) continue;
             VL_RESTORER(m_modp);
             m_modp = VN_AS(nodep, NodeModule);
-            if (m_modp->isTop()) continue;
-            m_modp->foreach([this](const AstAssignForce* forcep) {
+            m_modp->foreach([this, &aliasps](const AstAssignForce* forcep) {
                 AstNodeVarRef* const targetp = forceTargetRefp(forcep->lhsp());
                 if (!targetp || !isForceOverrideNet(targetp->varp())) return;
-                if (AstVar* const varp = forceInputRhsVarp(forcep->rhsp())) {
-                    getCreateEnVarp(varp, false);
-                    m_varAux(varp).inputForceRhs = true;
+                if (!m_modp->isTop()) {
+                    if (AstVar* const varp = forceInputRhsVarp(forcep->rhsp())) {
+                        getCreateEnVarp(varp, false);
+                        m_varAux(varp).forceRhsReadEn = true;
+                    }
+                }
+                if (const AstNodeVarRef* const refp = forceRhsRefp(forcep->rhsp())) {
+                    AstVar* const varp = refp->varp();
+                    if (varp->isNet() && !varp->isIO() && !varp->isFuncLocalSticky()
+                        && !varp->isForced() && !varp->isForceable() && !aliasps.count(varp)) {
+                        m_varAux(varp).forceRhsReadEn = true;
+                    }
                 }
             });
         }

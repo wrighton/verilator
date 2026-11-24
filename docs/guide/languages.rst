@@ -364,12 +364,11 @@ connected to overlapping bits of the same net.
 
 A force or release of a net with a tristate driver also forces or releases
 whether each bit is high impedance (IEEE 1800-2023 10.6.2), also through a
-hierarchical reference from any module. A force in the module of the net
-with a value whose high impedance bits are not known, e.g. a function call,
-a port, or a forced net, is unsupported; from another module, such a force
-overrides only the value. A force with high impedance bits of a net that no
-module drives high impedance or reads the high impedance state of is
-unsupported.
+hierarchical reference from any module. Supported force values include
+two-state expressions and direct net reads with tracked drive state,
+including constant packed selects. A value whose high impedance bits cannot
+be represented is unsupported from either the local or a hierarchical
+reference; it cannot override DATA without also overriding ENABLE.
 
 An inout net port and its whole local wire or tri connection share a force
 domain (IEEE 1800-2023 10.6.2, 23.3.3.7), so forcing or releasing either
