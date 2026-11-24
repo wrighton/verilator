@@ -106,6 +106,10 @@ module Test2 (
     output wire [8:0] match2
 );
 
+  // A class before the tristate net
+  class Cls;
+  endclass
+
   wire [2:1] drv_all;
   bufif1 bufa[2:1] (drv_all, drv_a[2:1], drv_e[2:1]);
 

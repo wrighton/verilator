@@ -234,11 +234,14 @@ AstConsArrayItem* AstConsArray::itemsp() const VL_MT_STABLE {
     return VN_DBG_AS(op2p(), ConsArrayItem);
 }
 
-// Walk up the AST via backp() to find the containing AstNodeModule.
+// Walk up the AST via backp() to the containing AstNodeModule, not a module before it in a list.
 // Returns nullptr if not found.
 inline AstNodeModule* findParentModule(AstNode* nodep) {
+    const AstNode* prevp = nodep;
     for (AstNode* curp = nodep; curp; curp = curp->backp()) {
-        if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
+        AstNodeModule* const modp = VN_CAST(curp, NodeModule);
+        if (modp && modp->nextp() != prevp) return modp;
+        prevp = curp;
     }
     return nullptr;
 }
