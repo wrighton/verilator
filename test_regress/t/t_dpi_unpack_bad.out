@@ -102,4 +102,16 @@
                                   : ... note: In instance 't'
    93 |     import_func9(bits_dyn);
       |                  ^~~~~~~~
+%Error: t/t_dpi_unpack_bad.v:103:19: DPI open array argument 'in' with 1 unpacked dimension(s) passed 'bit[7:0]' with 0 (IEEE 1800-2023 35.5.6.1)
+                                   : ... note: In instance 't'
+  103 |     import_func10(bits8);
+      |                   ^~~~~
+%Error: t/t_dpi_unpack_bad.v:104:19: DPI open array argument 'in' with 1 unpacked dimension(s) passed 'int$[0:2][0:1]' with 2 (IEEE 1800-2023 35.5.6.1)
+                                   : ... note: In instance 't'
+  104 |     import_func10(ints32);
+      |                   ^~~~~~
+%Error: t/t_dpi_unpack_bad.v:105:19: DPI open array argument 'in' with 0 unpacked dimension(s) passed 'bit[7:0]$[0:1]' with 1 (IEEE 1800-2023 35.5.6.1)
+                                   : ... note: In instance 't'
+  105 |     import_func11(bits8_u);
+      |                   ^~~~~~~
 %Error: Exiting due to
