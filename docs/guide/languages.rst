@@ -362,15 +362,15 @@ or set by ```unconnected_drive``, if it is a port of the top-level module,
 or if it is public writable. This fallback does not collapse two ports
 connected to overlapping bits of the same net.
 
-A force or release of a net with a tristate driver also forces or releases
-whether each bit is high impedance (IEEE 1800-2023 10.6.2), also through a
-hierarchical reference from any module. Supported force values include
-two-state expressions and direct net reads with tracked drive state,
-including constant packed selects. A value whose high impedance bits cannot
-be represented is unsupported from either a local or hierarchical
-reference. Without such an enable, literal high-impedance force values are
-unsupported; dynamically produced high-impedance bits are not tracked by
-the value-only lowering.
+A force or release of a non-port net with tracked tristate drive state also
+forces or releases whether each bit is high impedance (IEEE 1800-2023
+10.6.2), also through a hierarchical reference from any module. Supported
+force values include two-state expressions and direct net reads with
+tracked drive state, including packed selects whose indices have no side
+effects. A value whose high impedance bits cannot be represented is
+unsupported from either a local or hierarchical reference. Without such an
+enable, literal high-impedance force values are unsupported; dynamically
+produced high-impedance bits are not tracked by the value-only lowering.
 
 An inout net port and its whole local wire or tri connection share a force
 domain (IEEE 1800-2023 10.6.2, 23.3.3.7), so forcing or releasing either
