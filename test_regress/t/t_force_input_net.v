@@ -85,6 +85,20 @@ bind plain_dut force_input_helper h (
     .drop(1'b0)
 );
 
+module xref_driven_helper (
+    input wire [6:0] p
+);
+  initial begin
+    #1 force p = 7'h00;
+    #2 release p;
+  end
+endmodule
+
+module xref_driven_mid;
+  wire [6:0] n;
+  xref_driven_helper h (.p(n));
+endmodule
+
 module collapsed_z_helper (
     input wire [6:0] p,
     input bit drive
@@ -271,7 +285,10 @@ module t;
   logic [6:0] zraw = 7'h06;
   wire [6:0] znet;
   assign znet = zraw;
-  collapsed_z_helper hz (.p(znet), .drive(zdrive));
+  collapsed_z_helper hz (
+      .p(znet),
+      .drive(zdrive)
+  );
   initial begin
     #3;
     `checkh(hz.rhs === 7'bz, 1'b1);
@@ -292,7 +309,11 @@ module t;
   logic [6:0] pull_raw = 7'h15;
   wire [6:0] pulled;
   assign pulled = pull_en ? pull_raw : 7'bz;
-  pulled_force_helper ph (.p(pulled), .take(pull_take), .drop(pull_drop));
+  pulled_force_helper ph (
+      .p(pulled),
+      .take(pull_take),
+      .drop(pull_drop)
+  );
   pull_forwarder pf (.p(pulled));
   initial begin
     #1;
@@ -333,7 +354,10 @@ module t;
   logic [6:0] expr_raw = 7'h21;
   wire [6:0] expr_net;
   assign expr_net = expr_raw;
-  expression_rhs_helper he (.p(expr_net), .q(expr_value));
+  expression_rhs_helper he (
+      .p(expr_net),
+      .q(expr_value)
+  );
   initial begin
     #2;
     `checkh(he.p, 7'h00);
@@ -346,6 +370,22 @@ module t;
     expr_raw = 7'h35;
     #1;
     `checkh(he.p, 7'h35);
+  end
+
+  // A net driven only through a hierarchical reference keeps its input port separate.
+  logic [6:0] xref_raw = 7'h2b;
+  assign xd.n = xref_raw;
+  xref_driven_mid xd ();
+  initial begin
+    #2;
+    `checkh(xd.h.p, 7'h00);
+    `checkh(xd.n, 7'h2b);
+    #2;
+    `checkh(xd.h.p, 7'h2b);
+    xref_raw = 7'h54;
+    #1;
+    `checkh(xd.n, 7'h54);
+    `checkh(xd.h.p, 7'h54);
   end
 
   initial begin

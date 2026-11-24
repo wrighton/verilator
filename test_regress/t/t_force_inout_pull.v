@@ -25,6 +25,13 @@ module selected_pulls (
   pulldown (p[0]);
 endmodule
 
+module output_pulls (
+    output wire [2:0] p
+);
+  pullup (p[2]);
+  pulldown (p[0]);
+endmodule
+
 module t;
   wire [6:0] hi, lo, partial, propagated;
   for (genvar i = 0; i < 7; i++) begin : gen_pulls
@@ -55,6 +62,12 @@ module t;
       .seen(another_seen)
   );
   selected_pulls source (.p(propagated[5:3]));
+  wire [6:0] streamed, streamed_seen;
+  output_pulls stream_source (.p({<<{streamed[2:0]}}));
+  leaf stream_sibling (
+      .p(streamed),
+      .seen(streamed_seen)
+  );
 
 `ifdef FORCE_PULLED
   initial begin
@@ -62,6 +75,7 @@ module t;
     force low.p = '0;
     force selected.p = '0;
     release sibling.p;
+    force stream_sibling.p = '0;
   end
 `else
   wire [6:0] plain = 7'h53;
@@ -84,6 +98,7 @@ module t;
     `checkh(sibling.p === 7'bz1z0zzz, 1'b1);
     `checkh(propagated_seen === 7'bz1z0zzz, 1'b1);
     `checkh(another_seen === 7'bz1z0zzz, 1'b1);
+    `checkh(streamed_seen === 7'bzzzz0z1, 1'b1);
     release good.p;
     #1;
     `checkh(plain, 7'h53);

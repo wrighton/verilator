@@ -1,30 +1,37 @@
-%Error-UNSUPPORTED: t/t_force_inout_pull.v:61:16: Unsupported: Force/release of inout port 't.high.p' not connected as one plain net.
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:74:16: Unsupported: Force/release of inout port 't.high.p' not connected as one plain net.
                                                 : ... note: In instance 't'
-   61 |     force high.p = '0;
+   74 |     force high.p = '0;
       |                ^
-                    t/t_force_inout_pull.v:38:8: ... Inout port connection.
-   38 |       .p(hi),
+                    t/t_force_inout_pull.v:45:8: ... Inout port connection.
+   45 |       .p(hi),
       |        ^
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_force_inout_pull.v:62:15: Unsupported: Force/release of inout port 't.low.p' not connected as one plain net.
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:75:15: Unsupported: Force/release of inout port 't.low.p' not connected as one plain net.
                                                 : ... note: In instance 't'
-   62 |     force low.p = '0;
+   75 |     force low.p = '0;
       |               ^
-                    t/t_force_inout_pull.v:42:8: ... Inout port connection.
-   42 |       .p(lo),
+                    t/t_force_inout_pull.v:49:8: ... Inout port connection.
+   49 |       .p(lo),
       |        ^
-%Error-UNSUPPORTED: t/t_force_inout_pull.v:63:20: Unsupported: Force/release of inout port 't.selected.p' not connected as one plain net.
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:76:20: Unsupported: Force/release of inout port 't.selected.p' not connected as one plain net.
                                                 : ... note: In instance 't'
-   63 |     force selected.p = '0;
+   76 |     force selected.p = '0;
       |                    ^
-                    t/t_force_inout_pull.v:46:8: ... Inout port connection.
-   46 |       .p(partial),
+                    t/t_force_inout_pull.v:53:8: ... Inout port connection.
+   53 |       .p(partial),
       |        ^
-%Error-UNSUPPORTED: t/t_force_inout_pull.v:64:21: Unsupported: Force/release of inout port 't.sibling.p' not connected as one plain net.
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:77:21: Unsupported: Force/release of inout port 't.sibling.p' not connected as one plain net.
                                                 : ... note: In instance 't'
-   64 |     release sibling.p;
+   77 |     release sibling.p;
       |                     ^
-                    t/t_force_inout_pull.v:50:8: ... Inout port connection.
-   50 |       .p(propagated),
+                    t/t_force_inout_pull.v:57:8: ... Inout port connection.
+   57 |       .p(propagated),
+      |        ^
+%Error-UNSUPPORTED: t/t_force_inout_pull.v:78:26: Unsupported: Force/release of inout port 't.stream_sibling.p' not connected as one plain net.
+                                                : ... note: In instance 't'
+   78 |     force stream_sibling.p = '0;
+      |                          ^
+                    t/t_force_inout_pull.v:68:8: ... Inout port connection.
+   68 |       .p(streamed),
       |        ^
 %Error: Exiting due to

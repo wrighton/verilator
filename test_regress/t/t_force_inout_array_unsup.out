@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_force_inout_array_unsup.v:19:38: Unsupported LHS tristate construct: ARRAYSEL
+                                                       : ... note: In instance 't'
+   19 |   force_external element (.p(elements[1]));
+      |                                      ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_inout_array_unsup.v:20:60: Unsupported LHS tristate construct: ARRAYSEL
+                                                       : ... note: In instance 't'
+   20 |   force_external element_concat (.p({element_high, elements[0][3:0]}));
+      |                                                            ^
+%Error: Exiting due to

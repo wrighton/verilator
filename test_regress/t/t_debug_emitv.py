@@ -77,8 +77,7 @@ required_queries = {
     'ASSERT_CTL_ON', 'ASSERT_CTL_KILL', 'ASSERT_CTL_PASS_ON_NONVACUOUS', 'ASSERT_CTL_FAIL_ON'
 }
 if not required_queries <= queries:
-    test.error('Missing assertion-control JSON queries: ' +
-               str(sorted(required_queries - queries)))
+    test.error('Missing assertion-control JSON queries: ' + str(sorted(required_queries - queries)))
 required_force_pins = {'ALIAS', 'UNSUPPORTED_CONNECTION', 'UNSUPPORTED_OPEN_DRIVER'}
 if force_pins != required_force_pins:
     test.error('Unexpected force pin JSON statuses: ' + str(sorted(force_pins)))

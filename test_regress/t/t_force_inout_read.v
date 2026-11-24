@@ -41,6 +41,10 @@ module registered_leaf (
   always @(posedge clk) state <= p;
 endmodule
 
+interface read_if;
+  wire [6:0] n;
+endinterface
+
 module t;
   logic external_en = 1;
   logic external_partial = 0;
@@ -111,6 +115,23 @@ module t;
     #1 sample_clk = 1;
     #1;
     `checkh(sampler.state, 7'h03);
+  end
+
+  // An interface net connection reads the resolved interface net.
+  read_if ifc ();
+  assign ifc.n = external_en ? 7'h00 : 7'bzzzzzzz;
+  wire [6:0] iface_forwarded;
+  leaf iface_ordinary (
+      .p(ifc.n),
+      .local_en(1'b0),
+      .forwarded(iface_forwarded)
+  );
+  initial begin
+    #1.5;
+    `checkh(iface_forwarded === 7'bzzzzzzz, 1'b0);
+    `checkh(iface_forwarded, 7'h00);
+    #1;
+    `checkh(iface_forwarded === 7'bzzzzzzz, 1'b1);
   end
 
   task automatic check_ordinary(logic [6:0] expected);

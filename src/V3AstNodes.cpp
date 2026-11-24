@@ -4335,7 +4335,8 @@ void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, svImplicit);
     dumpJsonBoolFuncIf(str, explicitModport);
     dumpJsonBoolFuncIf(str, returnWrittenInput);
-    if (const char* const statusp = forcePinName(forcePin())) dumpJsonStr(str, "forcePin", statusp);
+    if (const char* const statusp = forcePinName(forcePin()))
+        dumpJsonStr(str, "forcePin", statusp);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
     dumpJsonGen(str);
 }

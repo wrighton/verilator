@@ -97,4 +97,45 @@ module t;
     $write("*-* All Finished *-*\n");
     $finish;
   end
+
+  // A runtime index selects the drive state of one source bit.
+  logic [6:0] index_data = 7'b1010011, index_oe = 7'b0110101;
+  wire [6:0] index_source;
+  for (genvar b = 0; b < 7; ++b) begin : g_index_source
+    assign index_source[b] = index_oe[b] ? index_data[b] : 1'bz;
+  end
+  bit index_target_en = 1;
+  wire index_target;
+  assign index_target = index_target_en ? 1'b1 : 1'bz;
+  int index = 0;
+  initial begin
+    #1;
+    force index_target = index_source[index];
+    #0.1;
+    `checkh(index_target, 1'b1);
+    index = 1;
+    #0.1;
+    `checkh(index_target === 1'bz, 1'b1);
+    index = 2;
+    #0.1;
+    `checkh(index_target, 1'b0);
+    `checkh(index_target === 1'bz, 1'b0);
+    index = 3;
+    #0.1;
+    `checkh(index_target === 1'bz, 1'b1);
+    index_oe[3] = 1;
+    #0.1;
+    `checkh(index_target, 1'b0);
+    `checkh(index_target === 1'bz, 1'b0);
+    index_data[3] = 1;
+    #0.1;
+    `checkh(index_target, 1'b1);
+    index = 6;
+    #0.1;
+    `checkh(index_target === 1'bz, 1'b1);
+    release index_target;
+    #0.1;
+    `checkh(index_target, 1'b1);
+    `checkh(index_target === 1'bz, 1'b0);
+  end
 endmodule

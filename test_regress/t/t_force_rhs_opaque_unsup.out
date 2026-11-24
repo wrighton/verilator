@@ -3,4 +3,12 @@
    10 |     #2 force t.n = unrepresented_value();
       |                    ^~~~~~~~~~~~~~~~~~~
                     ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:33:37: Unsupported: Force of tristate net with a value that may be high impedance: 'selected'
+                                                      : ... note: In instance 't'
+   33 |   initial #1 force selected = source[next_index()];
+      |                                     ^
+%Error-UNSUPPORTED: t/t_force_rhs_opaque_unsup.v:44:31: Unsupported: Force of tristate net with a value that may be high impedance: 'indirect'
+                                                      : ... note: In instance 't'
+   44 |   initial #1 force indirect = indirect_value();
+      |                               ^~~~~~~~~~~~~~
 %Error: Exiting due to

@@ -125,6 +125,21 @@
 // There is a possible problem with equally strong assignments, because multiple assignments with
 // the same strength, but different values should result in x value, but these values are
 // unsupported.
+//
+//----------------------------------------------------------------------
+//
+// Force and release of tristate nets (IEEE 1800-2023 10.6.2) use these terms:
+//
+// A force domain is the set of names one force or release of a net affects: a forced INOUT net
+// port below the design top and its whole plain-wire connection, or an eligible forced INPUT
+// net port and its connections, collapsed by optional port coercion (IEEE 1800-2023 23.3.3.7).
+// A domain pin shares the DATA and ENABLE of its connection instead of adding a driver.
+//
+// A read enable is the resolved ENABLE of a net, received through an extra input port by a
+// module that does not resolve that net itself: __en of an INPUT, __ren of a forced INOUT, or
+// __VpinReadEn of an INOUT relay. Readers of the port and force values taken from it use it to
+// see which bits are high impedance. The __en output of an INOUT instead carries only the
+// module's own drive contribution.
 //*************************************************************************
 
 #include "V3PchAstNoMT.h"  // VL_MT_DISABLED_CODE_UNIT
@@ -518,6 +533,8 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     // before V3Tristate processes the module
     std::unordered_set<const AstVar*> m_writtenps;
     std::unordered_set<const AstVar*> m_pulledps;  // Nets with a pull
+    // Written through a hierarchical reference, which a tristate net cannot resolve
+    std::unordered_set<const AstVar*> m_xrefWrittenps;
     // Input or inout ports reading each variable through a connection of theirs
     std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_readerps;
     // Four-state input actuals whose read state a downstream port may need.
@@ -568,7 +585,9 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
         iterateChildrenConst(nodep);
     }
     void visit(AstNodeVarRef* nodep) override {
-        if (nodep->access().isWriteOrRW()) m_writtenps.emplace(nodep->varp());
+        if (!nodep->access().isWriteOrRW()) return;
+        m_writtenps.emplace(nodep->varp());
+        if (VN_IS(nodep, VarXRef)) m_xrefWrittenps.emplace(nodep->varp());
     }
     void addPullActuals(const AstNodeExpr* exprp, const AstVar* portp) {
         if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
@@ -622,9 +641,9 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
 public:
     struct Eligible final {
         // Input net ports nothing but a force writes, each connection of which is a plain wire
-        // with no pull or alias, forced in their module with a constant, a variable of the
-        // module, or an input of rhsInputps, and from another module with a constant.
-        // Collapsing them is optional coercion (IEEE 1800-2023 23.3.3.1, 23.3.3.7).
+        // with no pull, alias or hierarchical writer, forced in their module with a constant, a
+        // variable of the module, or an input of rhsInputps, and from another module with a
+        // constant. Collapsing them is optional coercion (IEEE 1800-2023 23.3.3.1, 23.3.3.7).
         std::unordered_set<const AstVar*> inputps;
         // Whole force values of inputs nothing writes, reading no pull through any connection,
         // so their incoming enable is their drive state
@@ -670,7 +689,10 @@ public:
                       && !visitor.m_pulledps.count(pair.first)
                       && !visitor.m_aliasedps.count(pair.first);
             for (const AstVar* const netp : visitor.m_netps[pair.first]) {
-                if (visitor.m_pulledps.count(netp) || visitor.m_aliasedps.count(netp)) ok = false;
+                if (visitor.m_pulledps.count(netp) || visitor.m_aliasedps.count(netp)
+                    || visitor.m_xrefWrittenps.count(netp)) {
+                    ok = false;
+                }
             }
             for (const AstVar* const rhsp : visitor.m_rhsInputps[pair.first]) {
                 if (!result.rhsInputps.count(rhsp)) ok = false;
@@ -750,6 +772,10 @@ class TristateVisitor final : public TristateBaseVisitor {
     const VNUser2InUse m_inuser2;
     const VNUser3InUse m_inuser3;
     const VNUser4InUse m_inuser4;
+
+    // V3LinkLevel puts the wrapper at level 1 and the wrapped design tops at level 2. These
+    // retain their primary-INOUT ABI.
+    static constexpr int DESIGN_TOP_LEVEL = 2;
 
     struct AuxAstVar final {
         AstPull* pullp = nullptr;  // pullup/pulldown direction (whole variable)
@@ -895,6 +921,8 @@ class TristateVisitor final : public TristateBaseVisitor {
     VDouble0 m_statTriSigs;  // stat tracking
     VDouble0 m_statIfacePairs;  // External rank pairs, not individual drivers
     VDouble0 m_statSharedDrivers;  // Stat: continuous select drivers sharing variables
+    VDouble0 m_statForceDomainPins;  // Stat: pins sharing a force domain with their connection
+    VDouble0 m_statReadEnPins;  // Stat: INOUT read enable pins added
 
     // METHODS
     string dbgState() const {
@@ -2069,8 +2097,6 @@ class TristateVisitor final : public TristateBaseVisitor {
             m_varAux(varp).resolvedEnVarp = getCreateEnVarp(varp, false, m_modp);
             return;
         }
-        // V3LinkLevel puts the wrapper at level 1 and the wrapped design tops at level 2.
-        static constexpr int DESIGN_TOP_LEVEL = 2;
         if (m_modp->level() <= DESIGN_TOP_LEVEL || !varp->isInout() || !varp->isForced()
             || varp->isForceable() || !varp->dtypep()->skipRefp()->isIntegralOrPacked()) {
             return;
@@ -3492,6 +3518,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (inDeclProcessing && forceNetVarp) {
                 nodep->setForceNet();
                 enpinp->setForceNet();
+                ++m_statForceDomainPins;
             }
             nodep->addNextHere(enpinp);
             if (!inOnly) m_modp->addStmtsp(enVarp);
@@ -3627,12 +3654,12 @@ class TristateVisitor final : public TristateBaseVisitor {
         AstVar* const varp = refp->varp();
         AuxAstVar& aux = m_varAux(varp);
         if (!varp->isInout() || aux.resolvedEnVarp) return nullptr;
-        // The top wrapper and wrapped design tops retain their primary-INOUT ABI.
-        static constexpr int DESIGN_TOP_LEVEL = 2;
         if (m_modp->level() <= DESIGN_TOP_LEVEL) {
-            // No upstream enable at this boundary. At least preserve a nonzero data bit,
-            // which cannot represent Z in the lowered DATA/ENABLE encoding.
-            return new AstOr{refp->fileline(), newInoutPinEnRefp(refp),
+            // No upstream enable: the drivers and pulls of this module resolve the net. A
+            // primary input carries no enable, but a nonzero data bit cannot be Z.
+            AstNodeExpr* const enp = newInoutPinEnRefp(refp);
+            m_inoutReadEnps.emplace_back(varp, enp);
+            return new AstOr{refp->fileline(), enp,
                              new AstVarRef{refp->fileline(), varp, VAccess::READ}};
         }
         if (!aux.inoutReadRelayp) {
@@ -3673,13 +3700,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
             VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
         }
-        if (const AstNodeStream* const streamp = VN_CAST(exprp, NodeStream)) {
-            AstNodeExpr* const enp = newInoutPinReadEnp(streamp->lhsp());
-            if (enp && VN_IS(streamp, StreamL)) {
-                return new AstStreamL{flp, enp, streamp->rhsp()->cloneTreePure(false)};
-            }
-            return enp;
-        }
+        // Other connections, such as unpacked array elements, are unsupported tristate pins.
         return nullptr;
     }
 
@@ -3698,6 +3719,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                 VAccess::READ};
             addInoutReadEnPin(pinp, readVarp, enRefp)->setForceNet();
             pinp->setForceNet();
+            ++m_statForceDomainPins;
             return;
         }
 
@@ -3754,6 +3776,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         enPinp->modVarp(enVarp);
         enPinp->user2Or(U2_BOTH);  // Don't iterate the pin later
         pinp->addNextHere(enPinp);
+        ++m_statReadEnPins;
         return enPinp;
     }
 
@@ -4169,6 +4192,8 @@ public:
         V3Stats::addStat("Tristate, Tristate resolved nets", m_statTriSigs);
         V3Stats::addStat("Tristate, External interface rank pairs", m_statIfacePairs);
         V3Stats::addStat("Tristate, Select drivers sharing variables", m_statSharedDrivers);
+        V3Stats::addStat("Tristate, Force domain pins", m_statForceDomainPins);
+        V3Stats::addStat("Tristate, INOUT read enable pins", m_statReadEnPins);
     }
 };
 

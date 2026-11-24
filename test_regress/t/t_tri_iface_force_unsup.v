@@ -17,8 +17,7 @@ interface tgt_if #(
   wire [1:0] value;
   if (FLOATING) begin : g_floating
     assign (weak0, weak1) value = drv_on ? 2'b00 : 2'bzz;
-  end
-  else begin : g_always
+  end else begin : g_always
     assign (weak0, weak1) value = 2'b10;
     assign value = drv_on ? 2'b01 : 2'bzz;
   end
