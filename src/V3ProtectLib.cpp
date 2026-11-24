@@ -56,6 +56,7 @@ class ProtectVisitor final : public VNVisitor {
     AstTextBlock* m_comboIgnoreParamsp = nullptr;  // Combo ignore parameter list
     AstTextBlock* m_seqParamsp = nullptr;  // Sequential parameter list
     AstTextBlock* m_nbAssignsp = nullptr;  // Non-blocking assignment list
+    AstTextBlock* m_seqInitp = nullptr;  // The first update of clocks, if outputs need its results
     AstTextBlock* m_seqAssignsp = nullptr;  // Sequential assignment list
     AstTextBlock* m_comboAssignsp = nullptr;  // Combo assignment list
     // C text blocks
@@ -65,6 +66,12 @@ class ProtectVisitor final : public VNVisitor {
     AstTextBlock* m_cComboOutsp = nullptr;  // Combo output copy list
     AstTextBlock* m_cSeqParamsp = nullptr;  // Sequential parameter list
     AstTextBlock* m_cSeqClksp = nullptr;  // Sequential clock copy list
+    AstTextBlock* m_settleDeclp = nullptr;  // Where the settle function is declared, if needed
+    AstTextBlock* m_settleCallp = nullptr;  // Where the settle function is called, if needed
+    AstTextBlock* m_cSettlep = nullptr;  // Where the settle function is defined, if needed
+    AstTextBlock* m_settlePortsp = nullptr;  // Settle function's SV declaration ports
+    AstTextBlock* m_cSettleParamsp = nullptr;  // Settle function's C parameters
+    AstTextBlock* m_cSettleOutsp = nullptr;  // Settle function's output copies
     AstTextBlock* m_cSeqOutsp = nullptr;  // Sequential output copy list
     AstTextBlock* m_cIgnoreParamsp = nullptr;  // Combo ignore parameter list
     // With --vpi, the emitted names of the wrapper's ports and local signals
@@ -73,6 +80,10 @@ class ProtectVisitor final : public VNVisitor {
     std::string m_vpiWrittenName;  // Export counting them
     std::string m_initName = "init__V";  // Set at initial time
     std::string m_lastSeqName = "last_seq_seqnum__V";  // Sequence number of the update of clocks
+    std::string m_seqInitName = "seq_init__V";  // Set after the first update of clocks
+    std::string m_seqFirstName = "seq_first__V";  // Set in the first update of clocks
+    std::string m_settleName;  // Function settling the library before the first update of clocks
+    AstTextBlock* m_seqFirstp = nullptr;  // Call of the settle function before the first update
     const string m_libName;
     const string m_topName;
     bool m_foundTop = false;  // Have seen the top module
@@ -101,15 +112,19 @@ class ProtectVisitor final : public VNVisitor {
         FileLine* const fl = nodep->fileline();
         // Need to know the existence of clk before createSvFile()
         m_hasSeqUpdate = checkIfClockExists(nodep) || v3Global.opt.vpi();
+        // The wrapper's signals must not take the name of a port or another of them
+        for (const AstNode* const stmtp : nodep->stmtspList()) {
+            const AstVar* const varp = VN_CAST(stmtp, Var);
+            if (!varp || !varp->isIO()) continue;
+            m_usedNames.emplace(svPortName(varp));
+            m_usedNames.emplace(AstNode::verilogIdent(varp->name() + "_combo__V"));
+        }
+        m_seqInitName = uniqueName(m_seqInitName);
+        m_seqFirstName = uniqueName(m_seqFirstName);
+        m_settleName = uniqueName(m_libName + "_protectlib_settle");
         if (v3Global.opt.vpi()) {
-            // The wrapper's signals and functions that --vpi adds, also to a top module without
-            // sequential logic, must not take the name of a port or another of them
-            for (const AstNode* const stmtp : nodep->stmtspList()) {
-                const AstVar* const varp = VN_CAST(stmtp, Var);
-                if (!varp || !varp->isIO()) continue;
-                m_usedNames.emplace(svPortName(varp));
-                m_usedNames.emplace(AstNode::verilogIdent(varp->name() + "_combo__V"));
-            }
+            // Nor the signals and functions --vpi adds, also to a top module without sequential
+            // logic
             for (const std::string& name :
                  {std::string{"handle__V"}, std::string{"last_combo_seqnum__V"},
                   std::string{"protectlib_hash__V"}, m_libName + "_protectlib_check_hash",
@@ -171,6 +186,7 @@ class ProtectVisitor final : public VNVisitor {
         // Also, specify hierarchical workers for those tasks for scheduling.
         txtp->add("profile_data -hier-dpi \"" + m_libName
                   + "_protectlib_combo_ignore\" -cost 64'd1\n");
+        txtp->add("profile_data -hier-dpi \"" + m_settleName + "\" -cost 64'd1\n");
 
         txtp->add("hier_workers -hier-dpi \"" + m_libName
                   + "_protectlib_combo_update\" -workers 16'd"
@@ -268,6 +284,8 @@ class ProtectVisitor final : public VNVisitor {
                                            ");\n\n"};
             m_seqPortsp->add("chandle handle__V\n");
             txtp->add(m_seqPortsp);
+            m_settleDeclp = new AstTextBlock{fl};
+            txtp->add(m_settleDeclp);
         }
         comboIgnoreComment(txtp, fl);
         m_comboIgnorePortsp = new AstTextBlock{fl,  //
@@ -355,6 +373,8 @@ class ProtectVisitor final : public VNVisitor {
                                    m_libName + "_protectlib_combo_ignore(\n", ",\n", "\n);\n"};
             m_comboIgnoreParamsp->add("handle__V");
             txtp->add(m_comboIgnoreParamsp);
+            m_settleCallp = new AstTextBlock{fl};
+            txtp->add(m_settleCallp);
             m_seqParamsp = new AstTextBlock{fl,  //
                                             m_lastSeqName + " <= " + m_libName
                                                 + "_protectlib_seq_update(\n",  //
@@ -364,6 +384,8 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(m_seqParamsp);
             m_nbAssignsp = new AstTextBlock{fl};
             txtp->add(m_nbAssignsp);
+            m_seqInitp = new AstTextBlock{fl};
+            txtp->add(m_seqInitp);
             txtp->add("end\n\n");
         }
 
@@ -534,6 +556,8 @@ class ProtectVisitor final : public VNVisitor {
             txtp->add(m_cSeqOutsp);
             txtp->add("return handlep__V->m_seqnum++;\n");
             txtp->add("}\n\n");
+            m_cSettlep = new AstTextBlock{fl};
+            txtp->add(m_cSettlep);
         }
 
         comboIgnoreComment(txtp, fl);
@@ -692,11 +716,34 @@ class ProtectVisitor final : public VNVisitor {
         textp->add(new AstVar{varp->fileline(), VVarType::VAR, name, varp->dtypep()});
     }
 
-    // The name of a local signal of the wrapper for an output, with --vpi not the name of a port
-    // or another signal of the wrapper
+    // The name of a local signal of the wrapper for an output
     std::string localName(const AstVar* varp, const char* suffixp) {
-        const std::string name = varp->name() + suffixp;
-        return v3Global.opt.vpi() ? uniqueName(name) : name;
+        return uniqueName(varp->name() + suffixp);
+    }
+
+    // Create the function that settles the library module before the first clock update and
+    // returns its outputs, and its call
+    void newSettle(FileLine* fl) {
+        m_seqDeclsp->add("bit " + m_seqInitName + ";\n");
+        m_seqDeclsp->add("bit " + m_seqFirstName + ";\n");
+        m_seqInitp->add(m_seqInitName + " <= 1'b1;\n");
+        m_settlePortsp = new AstTextBlock{
+            fl, "import \"DPI-C\" function void " + m_settleName + "(\n", ", ", ");\n\n"};
+        m_settlePortsp->add("chandle handle__V\n");
+        m_settleDeclp->add(m_settlePortsp);
+        m_seqFirstp
+            = new AstTextBlock{fl, "if (!" + m_seqFirstName + ") begin\n" + m_settleName + "(\n",
+                               ",\n", "\n);\n" + m_seqFirstName + " = 1'b1;\nend\n"};
+        m_seqFirstp->add("handle__V");
+        m_settleCallp->add(m_seqFirstp);
+        m_cSettleParamsp = new AstTextBlock{fl, "void " + m_settleName + "(\n", ",\n", "\n) {\n"};
+        m_cSettleParamsp->add("void* vhandlep__V");
+        m_cSettlep->add(m_cSettleParamsp);
+        castPtr(fl, m_cSettlep);
+        m_cSettlep->add("handlep__V->eval();\n");
+        m_cSettleOutsp = new AstTextBlock{fl};
+        m_cSettlep->add(m_cSettleOutsp);
+        m_cSettlep->add("}\n\n");
     }
 
     void handleOutput(AstVar* const varp) {
@@ -715,30 +762,45 @@ class ProtectVisitor final : public VNVisitor {
         } else {
             m_modPortsp->add(newSvPortVar(varp));
         }
-        m_comboPortsp->add(varp->cloneTree(false));
-        m_comboParamsp->add(comboName);
+        // An output the combinational update cannot change comes from the clock update alone, so
+        // it does not depend on the data inputs
+        const bool combo = !m_hasSeqUpdate || !varp->isPrimaryRegOut();
+        // Until the first NBA of the clock update's results, such an output has its value in the
+        // library settled before the first clock update, its initial value, so the parent has it
+        // at time zero like the combinational results
+        std::string seqAssign = portName + " = " + seqName + ";\n";
+        if (!combo) {
+            if (!m_seqFirstp) newSettle(varp->fileline());
+            const std::string firstLocal = localName(varp, "_first__V");
+            addLocalVariable(m_seqDeclsp, varp, firstLocal);
+            m_settlePortsp->add(varp->cloneTree(false));
+            m_seqFirstp->add(AstNode::verilogIdent(firstLocal));
+            m_cSettleParamsp->add(varp->dpiArgType(true, false));
+            m_cSettleOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->")
+                                + "\n");
+            seqAssign = "if (" + m_seqInitName + ") " + portName + " = " + seqName + "; else "
+                        + portName + " = " + AstNode::verilogIdent(firstLocal) + ";\n";
+        }
+        if (combo) {
+            m_comboPortsp->add(varp->cloneTree(false));
+            m_comboParamsp->add(comboName);
+            addLocalVariable(m_comboDeclsp, varp, comboLocal);
+            m_cComboParamsp->add(varp->dpiArgType(true, false));
+            m_cComboOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->")
+                               + "\n");
+        }
         if (m_hasSeqUpdate) {
             m_seqPortsp->add(varp->cloneTree(false));
             m_seqParamsp->add(tmpName);
-        }
-
-        addLocalVariable(m_comboDeclsp, varp, comboLocal);
-
-        if (m_hasSeqUpdate) {
             addLocalVariable(m_seqDeclsp, varp, seqLocal);
             addLocalVariable(m_tmpDeclsp, varp, tmpLocal);
-
             m_nbAssignsp->add(seqName + " <= " + tmpName + ";\n");
-            m_seqAssignsp->add(portName + " = " + seqName + ";\n");
-        }
-        m_comboAssignsp->add(portName + " = " + comboName + ";\n");
-        m_cComboParamsp->add(varp->dpiArgType(true, false));
-        m_cComboOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->") + "\n");
-        if (m_hasSeqUpdate) {
+            m_seqAssignsp->add(seqAssign);
             m_cSeqParamsp->add(varp->dpiArgType(true, false));
             m_cSeqOutsp->add(V3Task::assignInternalToDpi(varp, true, "", "", "handlep__V->")
                              + "\n");
         }
+        m_comboAssignsp->add(combo ? portName + " = " + comboName + ";\n" : seqAssign);
     }
 
     static bool checkIfClockExists(const AstNodeModule* modp) {
