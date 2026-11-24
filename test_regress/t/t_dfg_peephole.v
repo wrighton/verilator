@@ -391,6 +391,8 @@ module t (
   `signal(REMOVE_SHIFTR_ZERO, rand_a >> 0);
   `signal(REPLACE_SHIFTR_OVER, rand_a >> 64);
   `signal(REPLACE_SHIFTR_SEL, rand_a[28:1] >> 4);
+  `signal(REPLACE_SHIFTL_OVER_WIDE, rand_a << 40'h1_0000_0000);
+  `signal(REPLACE_SHIFTR_OVER_WIDE, rand_a >> 40'h1_0000_0000);
   `signal(PUSH_BITWISE_OP_THROUGH_COND_AND, 4'd2 & (rand_a[0] ? 4'd7 : 4'd4));
   `signal(PUSH_BITWISE_OP_THROUGH_COND_OR, 4'd2 | (rand_a[0] ? 4'd7 : 4'd4));
   `signal(PUSH_BITWISE_OP_THROUGH_COND_XOR, 4'd2 ^ (rand_a[0] ? 4'd7 : 4'd4));

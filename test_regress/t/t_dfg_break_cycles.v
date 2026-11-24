@@ -111,6 +111,10 @@ module t (
   wire logic [9:0] SHIFTRS_4_B = signed'(SHIFTRS_4_A) >>> 2;
   assign SHIFTRS_4_A = {rand_a[3:0], SHIFTRS_4_B[7:2]};
 
+  `signal(SHIFTRS_5_A, 10);  // UNOPTFLAT
+  wire logic [9:0] SHIFTRS_5_B = signed'(SHIFTRS_5_A) >>> 40'h1_0000_0002;
+  assign SHIFTRS_5_A = {rand_a[1:0], SHIFTRS_5_B[9:2]};
+
   `signal(SHIFTRS_VARIABLE, 2);  // UNOPTFLAT
   assign SHIFTRS_VARIABLE = signed'(rand_a[1:0] ^ ({1'b0, SHIFTRS_VARIABLE[1]}) >>> rand_b[0]);
 
@@ -147,6 +151,10 @@ module t (
   wire logic [9:0] SHIFTR_3_B = SHIFTR_3_A >> 10;
   assign SHIFTR_3_A = {rand_a[1:0], SHIFTR_3_B[9:2]};
 
+  `signal(SHIFTR_4_A, 10);
+  wire logic [9:0] SHIFTR_4_B = SHIFTR_4_A >> 40'h1_0000_0002;
+  assign SHIFTR_4_A = {rand_a[1:0], SHIFTR_4_B[9:2]};
+
   `signal(SHIFTR_VARIABLE, 2);  // UNOPTFLAT
   assign SHIFTR_VARIABLE = rand_a[1:0] ^ ({1'b0, SHIFTR_VARIABLE[1]} >> rand_b[0]);
 
@@ -174,6 +182,10 @@ module t (
   `signal(SHIFTL_3_A, 10);
   wire logic [9:0] SHIFTL_3_B = SHIFTL_3_A << 10;
   assign SHIFTL_3_A = {SHIFTL_3_B[9:2], rand_a[1:0]};
+
+  `signal(SHIFTL_4_A, 10);
+  wire logic [9:0] SHIFTL_4_B = SHIFTL_4_A << 40'h1_0000_0002;
+  assign SHIFTL_4_A = {SHIFTL_4_B[9:2], rand_a[1:0]};
 
   `signal(SHIFTL_VARIABLE, 2);  // UNOPTFLAT
   assign SHIFTL_VARIABLE = rand_a[1:0] ^ ({SHIFTL_VARIABLE[0], 1'b0} << rand_b[0]);
