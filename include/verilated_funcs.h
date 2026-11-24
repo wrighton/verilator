@@ -736,7 +736,7 @@ inline void VL_ASSIGNBIT_WO(int bit, WDataOutP owp) VL_MT_SAFE {
 
 // Right must be clean because otherwise size increase would pick up bad bits
 // EMIT_RULE: VL_EXTEND:  oclean=clean; rclean==clean;
-#define VL_EXTEND_II(obits, lbits, lhs) ((lhs))
+#define VL_EXTEND_II(obits, lbits, lhs) (static_cast<IData>(lhs))
 #define VL_EXTEND_QI(obits, lbits, lhs) (static_cast<QData>(lhs))
 #define VL_EXTEND_QQ(obits, lbits, lhs) ((lhs))
 
@@ -1652,7 +1652,7 @@ inline void _vl_insert_WQ(WDataOutP iowp, QData ld, int hbit, int lbit, int rbit
 
 // EMIT_RULE: VL_REPLICATE:  oclean=clean>width32, dirty<=width32; lclean=clean; rclean==clean;
 // RHS MUST BE CLEAN CONSTANT.
-#define VL_REPLICATE_IOI(lbits, ld, rep) (-(ld))  // Iff lbits==1
+#define VL_REPLICATE_IOI(lbits, ld, rep) (-(static_cast<IData>(ld)))  // Iff lbits==1
 #define VL_REPLICATE_QOI(lbits, ld, rep) (-(static_cast<QData>(ld)))  // Iff lbits==1
 
 inline IData VL_REPLICATE_III(int lbits, IData ld, IData rep) VL_PURE {
