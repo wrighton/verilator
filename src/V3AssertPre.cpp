@@ -945,17 +945,15 @@ private:
         sizep->dtypep(refp->findBasicDType(VBasicDTypeKwd::UINT32));
         return sizep;
     }
-    void visit(AstEventually* nodep) override {
-        if (nodep->exprp()->isMultiCycleSva()) {
-            nodep->v3warn(E_UNSUPPORTED, "Unsupported: property/sequence operator inside "
-                                             << nodep->verilogKwd());
-            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitTrue{}});
+    void visit(AstSEventually* nodep) override {
+        // Tracking of active attempts uses std::process
+        if (!v3Global.rootp()->stdPackageProcessp()) {
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: s_eventually without the std package (--no-std)");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
             VL_DO_DANGLING(pushDeletep(nodep), nodep);
             return;
         }
-        UASSERT(v3Global.rootp()->stdPackagep(), "Should be imported");
-        UASSERT_OBJ(!nodep->loBoundp(), nodep,
-                    "Ranged eventually should be removed by V3AssertNfa");
 
         AstSenTree* const sentreep = newSenTree(nodep);
         if (!sentreep->sensesp()) {
