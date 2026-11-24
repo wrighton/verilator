@@ -2515,6 +2515,7 @@ class AstVar final : public AstNode {
     bool m_primaryIO : 1;  // In/out to top level (or directly assigned from same)
     bool m_primaryClock : 1;  // In/out to top level and is, or combinationally drives a SenItem
     bool m_primaryRegOut : 1;  // Output of top level written only by clocked logic
+    bool m_primaryCombOut : 1;  // Output of top level a function of the inputs alone
     bool m_sc : 1;  // SystemC variable
     bool m_scSensitive : 1;  // SystemC sensitive() needed
     bool m_sigPublic : 1;  // User C code accesses this signal or is top signal
@@ -2588,6 +2589,7 @@ class AstVar final : public AstNode {
         m_primaryIO = false;
         m_primaryClock = false;
         m_primaryRegOut = false;
+        m_primaryCombOut = false;
         m_sc = false;
         m_scSensitive = false;
         m_usedParam = false;
@@ -2900,6 +2902,8 @@ public:
     void setPrimaryClock() { m_primaryClock = true; }
     bool isPrimaryRegOut() const VL_MT_SAFE { return m_primaryRegOut; }
     void setPrimaryRegOut() { m_primaryRegOut = true; }
+    bool isPrimaryCombOut() const VL_MT_SAFE { return m_primaryCombOut; }
+    void setPrimaryCombOut() { m_primaryCombOut = true; }
     bool isIfaceRef() const VL_MT_SAFE { return varType() == VVarType::IFACEREF; }
     void setIfaceRef() {
         m_direction = VDirection::NONE;
