@@ -722,20 +722,10 @@ public:
         applyBound();
     }
 
-    template <typename T_Rhs, size_t N_RhsMaxSize>
-    bool operator==(const VlQueue<T_Rhs, N_RhsMaxSize>& rhs) const {
-        return std::equal(m_deque.begin(), m_deque.end(), rhs.m_deque.begin(), rhs.m_deque.end());
-    }
-    template <typename T_Rhs, size_t N_RhsMaxSize>
-    bool operator!=(const VlQueue<T_Rhs, N_RhsMaxSize>& rhs) const {
-        return !(*this == rhs);
-    }
-    bool operator<(const VlQueue& rhs) const {
-        for (int index = 0; index < m_deque.size(); ++index) {
-            if (m_deque[index] < rhs.m_deque[index]) return true;
-        }
-        return false;
-    }
+    bool operator==(const VlQueue& rhs) const { return m_deque == rhs.m_deque; }
+    bool operator!=(const VlQueue& rhs) const { return m_deque != rhs.m_deque; }
+    // Lexicographic, a strict weak ordering consistent with operator==
+    bool operator<(const VlQueue& rhs) const { return m_deque < rhs.m_deque; }
 
     // Standard copy constructor works. Verilog: assoca = assocb
     // Also must allow conversion from a different N_MaxSize queue
@@ -1691,11 +1681,10 @@ public:
     bool neq(const T_Value that[N_Depth]) const { return neq(*this, that); }
     void assign(const T_Value that[N_Depth]) { std::copy_n(that, N_Depth, m_storage); }
     void operator=(const T_Value that[N_Depth]) { assign(that); }
+    // Lexicographic, a strict weak ordering consistent with operator==
     bool operator<(const VlUnpacked<T_Value, N_Depth>& that) const {
-        for (int index = 0; index < N_Depth; ++index) {
-            if (m_storage[index] < that.m_storage[index]) return true;
-        }
-        return false;
+        return std::lexicographical_compare(std::begin(m_storage), std::end(m_storage),
+                                            std::begin(that.m_storage), std::end(that.m_storage));
     }
 
     // inside (set membership operator)
