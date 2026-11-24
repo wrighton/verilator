@@ -153,10 +153,11 @@ private:
         Shard& m_shard;  // The shard to dump
         Buffer* const m_bufp;  // The buffer to dump it into
         const bool m_full;  // Dump all values, not only the changed ones
-        std::atomic<bool> m_ready{false};  // The ready flag
+        enum : uint8_t { PENDING, READY, WAITING };  // States, see 'parallelWorkerTask'
+        std::atomic<uint8_t> m_state{PENDING};  // Being dumped, dumped, or a thread suspended
         mutable VerilatedMutex m_mutex;  // Mutex for suspension until ready
         std::condition_variable_any m_cv;  // Condition variable for suspension
-        bool m_waiting VL_GUARDED_BY(m_mutex) = false;  // Whether a thread is suspended in wait()
+        bool m_notified VL_GUARDED_BY(m_mutex) = false;  // The suspended thread was woken
 
         void wait();
 
