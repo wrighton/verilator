@@ -371,6 +371,14 @@ overrides only the value. A force with high impedance bits of a net that no
 module drives high impedance or reads the high impedance state of is
 unsupported.
 
+An inout net port and its whole local wire or tri connection share a force
+domain (IEEE 1800-2023 10.6.2, 23.3.3.7), so forcing or releasing either
+name affects the same resolved net. Both sides must be packed nets of the
+same type, without delay, drive strength, public access, or forceable
+storage. Other connected shapes are unsupported. An unconnected forced
+inout port is supported only without local drivers; release leaves it
+floating.
+
 A continuously written net input that any instance connects to a value,
 such as a variable, a hierarchical reference to a variable, a select by a
 runtime position, or a value expression, can also return a drive through

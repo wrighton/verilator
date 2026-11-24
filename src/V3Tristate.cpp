@@ -464,6 +464,26 @@ public:
 
 //######################################################################
 
+// Wire or tri net of the instantiating module a pin connects whole to a wire or tri port, both
+// packed and of the same type, with no delay, drive strength, or public access, the net not
+// forceable or folded to a constant, else nullptr
+static AstVar* forceNetp(const AstPin* pinp) {
+    const auto plainNet = [](const AstVar* varp) {
+        return (varp->varType().isWireNet() || varp->varType() == VVarType::TRIWIRE)
+               && !varp->delayp() && !varp->hasStrengthAssignment() && !varp->isSigPublic();
+    };
+    const AstVar* const portp = pinp->modVarp();
+    const AstVarRef* const refp = VN_CAST(pinp->exprp(), VarRef);
+    AstVar* const netp = refp ? refp->varp() : nullptr;
+    const bool plain = netp && plainNet(netp) && plainNet(portp) && !netp->isIO()
+                       && portp->dtypep()->skipRefp()->isIntegralOrPacked()
+                       && netp->dtypep()->skipRefp()->sameTree(portp->dtypep()->skipRefp())
+                       && !netp->isForceable() && !netp->isConst();
+    return plain ? netp : nullptr;
+}
+
+//######################################################################
+
 class TristateVisitor final : public TristateBaseVisitor {
     // NODE STATE
     //   *::user1p              -> pointer to output enable __en expressions
@@ -493,6 +513,8 @@ class TristateVisitor final : public TristateBaseVisitor {
                                   // cell's module did not recognise as tristate
         bool elemZ = false;  // An element or member procedurally written with z, stored as x
         bool inIface = false;  // Variable of an interface
+        // Forced port: the enable of the net it connects to, which its force also forces
+        AstVar* resolvedEnVarp = nullptr;
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -723,9 +745,10 @@ class TristateVisitor final : public TristateBaseVisitor {
         return VN_AS(invarp->user1p(), Var);
     }
     AstVarRef* newEnVarRefp(const AstVarRef* origp) {
-        // Read of the __en variable of origp, which lives beside the original, e.g. in a package
-        AstVarRef* const refp = new AstVarRef{
-            origp->fileline(), getCreateEnVarp(origp->varp(), false), VAccess::READ};
+        // Read of the enable of origp, which lives beside the original, e.g. in a package; of a
+        // forced inout port, the enable of the net it connects to
+        AstVarRef* const refp
+            = new AstVarRef{origp->fileline(), getCreateForceEnVarp(origp->varp()), VAccess::READ};
         refp->classOrPackagep(origp->classOrPackagep());
         return refp;
     }
@@ -759,7 +782,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
             return newEnVarRefp(varrefp);
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
-            AstVar* const enVarp = getCreateEnVarp(xrefp->varp(), false);
+            AstVar* const enVarp = getCreateForceEnVarp(xrefp->varp());
             return newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(), VAccess::READ,
                               xrefp->inlinedDots());
         } else if (AstConst* const constp = VN_CAST(nodep, Const)) {
@@ -1731,15 +1754,25 @@ class TristateVisitor final : public TristateBaseVisitor {
                && (aux.assigned || !varp->isNet());
     }
     // Net a force or release of which overrides its drivers rather than driving it (IEEE
-    // 1800-2023 10.6.2): an interface strength net, or a net of a module that is not a port
+    // 1800-2023 10.6.2): an interface strength net, a net of a module that is not a port, or a
+    // forced port with the enable of the net it connects to
     bool isForceOverrideNet(AstVar* varp) {
-        return isIfaceStrengthNet(varp)
-               || (varp->isNet() && !varp->isIO() && !m_varAux(varp).inIface);
+        const AuxAstVar& aux = m_varAux(varp);
+        return isIfaceStrengthNet(varp) || (varp->isNet() && !varp->isIO() && !aux.inIface)
+               || aux.resolvedEnVarp;
+    }
+    // Enable forced with a net: of a forced port, the enable of the net it connects to
+    AstVar* getCreateForceEnVarp(AstVar* varp) {
+        AstVar* const resolvedEnVarp = m_varAux(varp).resolvedEnVarp;
+        return resolvedEnVarp ? resolvedEnVarp : getCreateEnVarp(varp, false);
     }
     // Whether a force of a net also forces its enable, known once every module is processed:
-    // an interface strength net, or a net of a module that is not a port and has an enable
+    // an interface strength net, a net of a module that is not a port and has an enable, or a
+    // forced port with the enable of its connection
     bool isForcedEnableNet(AstVar* varp) {
-        return isIfaceStrengthNet(varp) || (isForceOverrideNet(varp) && varp->user1p());
+        const AuxAstVar& aux = m_varAux(varp);
+        return isIfaceStrengthNet(varp) || aux.resolvedEnVarp
+               || (isForceOverrideNet(varp) && varp->user1p());
     }
     // Reference under the constant selects of a force/release target, else nullptr. V3Const
     // already split concatenated targets.
@@ -1747,10 +1780,23 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         return VN_CAST(lhsp, NodeVarRef);
     }
-    // Clone of a reference under constant selects, with the reference retargeted to its __en
+    // Give a forced inout port a new input for the enable of the net it connects to
+    void createResolvedEnVarp(AstVar* varp) {
+        if (!varp->isInout() || !varp->isForced() || varp->isForceable()
+            || !varp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            return;
+        }
+        AstVar* const newp
+            = new AstVar{varp->fileline(), VVarType::MODULETEMP, varp->name() + "__ren", varp};
+        newp->varType2In();
+        m_modp->addStmtsp(newp);
+        m_varAux(varp).resolvedEnVarp = newp;
+    }
+    // Clone of a reference under constant selects, with the reference retargeted to the enable
+    // forced with it
     AstNodeExpr* newEnSelp(AstNodeExpr* exprp, AstNodeVarRef* refp, VAccess access) {
         FileLine* const flp = refp->fileline();
-        AstVar* const enVarp = getCreateEnVarp(refp->varp(), false);
+        AstVar* const enVarp = getCreateForceEnVarp(refp->varp());
         AstNodeVarRef* enRefp;
         if (const AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
             enRefp = newVarXRef(flp, enVarp, xrefp->dotted(), access, xrefp->inlinedDots());
@@ -2617,7 +2663,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                         AstNodeExpr* enValuep) {
         // The enable has a continuous driver, so its release restores the driven value; being
         // forced, it must not be folded into its readers
-        AstVar* const enVarp = getCreateEnVarp(refp->varp(), false);
+        AstVar* const enVarp = getCreateForceEnVarp(refp->varp());
         enVarp->isContinuously(true);
         enVarp->setForcedByCode();
         // A release of a net restores the resolved value of its drivers.
@@ -3018,9 +3064,14 @@ class TristateVisitor final : public TristateBaseVisitor {
                                            // to have this.
                                            && !nodep->modVarp()->declDirection().isWritable());
             const bool resolveWritten = nodep->modVarp()->resolveWrittenInput();
+            // A forced inout port and a plain wire it connects to are one net, see
+            // connectForcedInout
+            const AuxAstVar& portAux = m_varAux(nodep->modVarp());
+            AstVar* const forceNetVarp = portAux.resolvedEnVarp ? forceNetp(nodep) : nullptr;
+            const bool unconnected = !nodep->exprp();
             const bool bufferInput = inDeclProcessing && !nodep->returnWrittenInput();
             AstVar* inVarp = nullptr;  // Tristate variable connected to an input port
-            if (!nodep->exprp()) {  // No-connect; covert to empty connection
+            if (unconnected) {  // No-connect; covert to empty connection
                 UINFO(5, "Unconnected pin terminate " << nodep);
                 AstVar* const ucVarp = getCreateUnconnVarp(nodep, nodep->modVarp()->dtypep());
                 // We converted, so use declaration output state
@@ -3070,6 +3121,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             UINFO(9, "       newpin " << enpinp);
             enpinp->user2Or(U2_BOTH);  // don't iterate the pin later
             nodep->addNextHere(enpinp);
+            if (portAux.resolvedEnVarp) connectForcedInout(nodep, forceNetVarp, unconnected);
             if (!inOnly) m_modp->addStmtsp(enVarp);
             UINFOTREE(9, enpinp, "", "pin-ena");
 
@@ -3181,6 +3233,49 @@ class TristateVisitor final : public TristateBaseVisitor {
             iteratePinGuts(nodep);
         }
     }
+    // A forced inout port and the plain wire it connects to are one net (IEEE 1800-2023
+    // 23.3.3.7), which V3Inst makes of the port and the wire, and of the input of the port for
+    // the enable of the wire and that enable; their pins are marked for it. A port unconnected,
+    // or forced only from other modules and connected otherwise, stays a net of its own, so
+    // its input takes the enable of its connection once the tristate graph is known.
+    void connectForcedInout(AstPin* pinp, AstVar* forceNetVarp, bool unconnected) {
+        if (!forceNetVarp && !unconnected) {
+            pinp->v3warn(E_UNSUPPORTED,
+                         "Unsupported: Force of inout port "
+                             << pinp->modVarp()->prettyNameQ()
+                             << " not connected as one plain net.\n"
+                             << pinp->warnMore()
+                             << "... The port and the wire must be packed wire or tri nets of the"
+                                " same type with no delay, drive strength, or public access, and"
+                                " the wire declared in the instantiating module, connected whole,"
+                                " and not forceable");
+        } else if (!forceNetVarp) {
+            const AuxAstVar& aux = m_varAux(pinp->modVarp());
+            if (aux.assigned || aux.cellOutput || aux.selBitCount || aux.pullp
+                || !aux.bitPulls.empty()) {
+                pinp->v3warn(E_UNSUPPORTED, "Unsupported: Force of unconnected inout port with "
+                                            "local drivers: "
+                                                << pinp->modVarp()->prettyNameQ());
+            } else {
+                addResolvedEnPin(pinp, newAllZerosOrOnes(pinp->modVarp(), false));
+            }
+        } else {
+            AstVarRef* const enRefp = new AstVarRef{
+                pinp->fileline(), getCreateEnVarp(forceNetVarp, false), VAccess::READ};
+            addResolvedEnPin(pinp, enRefp)->setForceNet();
+            pinp->setForceNet();
+        }
+    }
+    AstPin* addResolvedEnPin(AstPin* pinp, AstNodeExpr* enExprp) {
+        AstVar* const enVarp = m_varAux(pinp->modVarp()).resolvedEnVarp;
+        AstPin* const enPinp
+            = new AstPin{pinp->fileline(), pinp->pinNum(), enVarp->name(), enExprp};
+        enPinp->modVarp(enVarp);
+        enPinp->user2Or(U2_BOTH);  // Don't iterate the pin later
+        pinp->addNextHere(enPinp);
+        return enPinp;
+    }
+
     void handleNodeVarRef(AstNodeVarRef* nodep) {
         UINFO(9, dbgState() << nodep);
         UASSERT_OBJ(nodep->varp(), nodep, "Unlinked");
@@ -3483,6 +3578,16 @@ public:
     // CONSTRUCTORS
     explicit TristateVisitor(AstNetlist* netlistp) {
         m_tgraph.clearAndCheck();
+        // Before any module is processed, give each forced port the enable of its connection,
+        // so every reader finds it
+        for (AstNode* const nodep : netlistp->modulespList()) {
+            if (VN_IS(nodep, Iface)) continue;
+            VL_RESTORER(m_modp);
+            m_modp = VN_AS(nodep, NodeModule);
+            for (AstNode* const stmtp : m_modp->stmtspList()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) createResolvedEnVarp(varp);
+            }
+        }
         // Process interface modules first, so an interface tristate net is recorded
         // (AuxAstVar::ifaceTristate) before any module that drives it across hierarchy is
         // graphed. A module driving such a net with a plain (non-Z) assign has no Z in its

@@ -1649,6 +1649,7 @@ module t;
     assign dump_net = (clk ? in : 1'bz);
     assign __Vcellinp__dump_value__p = in;
     logic __Vcellinp__dump_value__p;
+    wire logic dump_forced_net;
     Iface bound_iface ();
     enum logic [2:0] {
         ZERO = 3'h0,
@@ -2122,6 +2123,12 @@ endpackage
 module dump_value_input;
     input logic p;
     input logic value;
+endmodule
+module dump_forced_inout;
+    inout logic p;
+    initial begin
+        force p = 1'h0;
+    end
 endmodule
 module sub__Zz461fae86;
     input logic clk;

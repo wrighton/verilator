@@ -772,6 +772,8 @@ module t (/*AUTOARG*/
   wire dump_net = clk ? in : 1'bz;
   dump_value_input dump_return (.p({dump_net}), .value(in));
   dump_value_input dump_value (.p({1{in}}), .value(in));
+  wire dump_forced_net;
+  dump_forced_inout dump_forced (.p(dump_forced_net));
 
 endmodule
 
@@ -971,6 +973,10 @@ module dump_value_driver(output wire p, input wire value);
   assign p = value;
 endmodule
 bind dump_value_input dump_value_driver dump_driver (.p(p), .value(value));
+
+module dump_forced_inout(inout wire p);
+  initial force p = 1'b0;
+endmodule
 
 `verilator_config
 threads_group -module "sub"

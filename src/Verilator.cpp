@@ -762,6 +762,7 @@ static bool verilate(const string& argString) {
         AstLambdaArgRef::selfTest();
         AstAssert::selfTest();
         AstAlwaysReactive::selfTest();
+        AstPin::selfTest();
         V3Os::selfTest();
         V3Number::selfTest();
         VString::selfTest();

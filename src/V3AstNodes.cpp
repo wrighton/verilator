@@ -4313,6 +4313,7 @@ void AstPin::dump(std::ostream& str) const {
     if (svImplicit()) str << " [.SV]";
     if (explicitModport()) str << " [MODPORT]";
     if (returnWrittenInput()) str << " [RETURNWRITTENINPUT]";
+    if (forceNet()) str << " [FORCENET]";
 }
 void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, param);
@@ -4323,8 +4324,29 @@ void AstPin::dumpJson(std::ostream& str) const {
     dumpJsonBoolFuncIf(str, svImplicit);
     dumpJsonBoolFuncIf(str, explicitModport);
     dumpJsonBoolFuncIf(str, returnWrittenInput);
+    dumpJsonBoolFuncIf(str, forceNet);
     if (!paramPath().empty()) dumpJsonStr(str, "paramPath", paramPath());
     dumpJsonGen(str);
+}
+void AstPin::selfTest() {
+    // Force-domain and explicit-modport connections have distinct pin identities.
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    AstPin* const plainp = new AstPin{flp, 1, "p", nullptr};
+    AstPin* const forcedp = plainp->cloneTree(false);
+    forcedp->setForceNet();
+    AstPin* const copyp = forcedp->cloneTree(false);
+    AstPin* const modportp = plainp->cloneTree(false);
+    modportp->explicitModport(true);
+    UASSERT_OBJ(plainp->sameNode(plainp) && copyp->sameNode(forcedp) && copyp->forceNet(), copyp,
+                "Force-domain pin identity must survive cloning");
+    UASSERT_OBJ(!plainp->sameNode(forcedp) && !forcedp->sameNode(plainp), forcedp,
+                "Force-domain pins must differ from ordinary connections");
+    UASSERT_OBJ(!plainp->sameNode(modportp) && !modportp->sameNode(plainp), modportp,
+                "Explicit-modport pins must have distinct identity");
+    VL_DO_DANGLING(plainp->deleteTree(), plainp);
+    VL_DO_DANGLING(forcedp->deleteTree(), forcedp);
+    VL_DO_DANGLING(copyp->deleteTree(), copyp);
+    VL_DO_DANGLING(modportp->deleteTree(), modportp);
 }
 string AstPin::prettyOperatorName() const {
     return modVarp()

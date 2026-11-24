@@ -106,7 +106,8 @@ class InstVisitor final : public VNVisitor {
         // read in any function or task counts, conservatively, as one might be called from
         // an initial block.
         if (modVarp->direction() == VDirection::INPUT && !m_cellp->modp()->verilatorLib()
-            && !VN_IS(m_cellp->modp(), Iface) && !modVarp->user3() && !modVarp->user4()) {
+            && !VN_IS(m_cellp->modp(), Iface) && !modVarp->user3() && !modVarp->user4()
+            && !nodep->forceNet()) {
             modVarp->keepPort(true);
             // A port connected to anything but a whole variable needs an assignment, and
             // stays kept; the port of a module instantiated once is otherwise aliased as
@@ -119,8 +120,8 @@ class InstVisitor final : public VNVisitor {
         AstVar* const exprVarp = refp->varp();
         // A virtual interface port connected to a real interface can't be an alias
         if (exprVarp->isIfaceRef()) return false;
-        // A ref port must become an alias
-        if (!modVarp->direction().isRef()) {
+        // A ref port must become an alias, and so must one net V3Tristate proved
+        if (!modVarp->direction().isRef() && !nodep->forceNet()) {
             // V3FsmDetect recognizes the registers of an fsm_register_wrapper instance via
             // the assignments of its pins, so leave those as assignments
             AstNodeModule* const cellModp = m_cellp->modp();
@@ -199,7 +200,9 @@ class InstVisitor final : public VNVisitor {
                     m_cellp->addNextHere(new AstAlways{assp});
                 }
             } else if (nodep->modVarp()->isNonOutput()) {
-                if (!tryAliasPin(nodep, exprp)) {
+                const bool aliased = tryAliasPin(nodep, exprp);
+                UASSERT_OBJ(aliased || !nodep->forceNet(), nodep, "One net pin not aliased");
+                if (!aliased) {
                     // Don't bother moving constants now,
                     // we'll be pushing the const down to the cell soon enough.
                     AstVarXRef* const lhsp = new AstVarXRef{exprp->fileline(), nodep->modVarp(),

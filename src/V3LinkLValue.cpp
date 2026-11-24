@@ -119,6 +119,16 @@ class LinkLValueVisitor final : public VNVisitor {
     // Nodes that start propagating down lvalues
     void visit(AstPin* nodep) override {
         VL_RESTORER(m_setRefLvalue);
+        // A force statement of an inout port forces a wire it is connected to, see V3Tristate
+        const AstVar* const portp = nodep->modVarp();
+        if (portp && portp->isInout() && portp->isForced() && !portp->isForceable()) {
+            const AstVarRef* const refp = VN_CAST(nodep->exprp(), VarRef);
+            AstVar* const netp = refp ? refp->varp() : nullptr;
+            if (netp && netp->isNet() && !netp->isIO() && !netp->isSigPublic()
+                && !netp->isForceable()) {
+                netp->setForcedByCode();
+            }
+        }
         if (nodep->modVarp() && nodep->modVarp()->isWritable()) {
             // When the varref's were created, we didn't know the I/O state
             // Now that we do, and it's from a output, we know it's a lvalue
