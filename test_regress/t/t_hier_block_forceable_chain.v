@@ -76,6 +76,19 @@ module t;
       .q(qk)
   );
 
+  // A clock through a block with a forceable input
+  logic [6:0] co, qz;
+  sub_p up (
+      .i({6'b0, clk}),
+      .o(co)
+  );
+  sub_i uz (
+      .clk(co[0]),
+      .i(d),
+      .o(),
+      .q(qz)
+  );
+
   initial begin
     #1;
     repeat (3) begin
@@ -92,6 +105,7 @@ module t;
       `checkh(qc, cnt - 1);
       `checkh(qf2, of1);
       `checkh(qk, d);
+      `checkh(qz, d);
       clk = 0;
       #1;
     end
@@ -154,4 +168,12 @@ module sub_k (
 );
   /*verilator hier_block*/
   always @(posedge clk) q <= i;
+endmodule
+
+module sub_p (
+    input logic [6:0] i  /*verilator forceable*/,
+    output logic [6:0] o
+);
+  /*verilator hier_block*/
+  assign o = i;
 endmodule
