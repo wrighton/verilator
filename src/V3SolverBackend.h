@@ -133,7 +133,7 @@ public:
     static AstNodeExpr* newElemSelp(FileLine* fl, AstNodeExpr* arrp,
                                     const std::vector<AstVar*>& idxVarps) VL_MT_DISABLED;
     // Whether varp is an unpacked array of class handles
-    static bool isClassHandleArray(AstVar* varp) VL_MT_DISABLED;
+    static bool isClassHandleArray(const AstVar* varp) VL_MT_DISABLED;
     // Return the random index select into a non-random array that exprp reads through
     static AstNodeExpr*
     randIndexSelp(AstNodeExpr* exprp,
@@ -194,22 +194,21 @@ public:
 
     // Per site
     // Class randomize(): add the solver setup to randomizep, and return the
-    // solver result (also when the class has no constraints)
+    // solver result (also when the class has no constraints). If keepSolution, basic
+    // randomization does not change the solved values, nor a failure of it the variables.
     virtual AstNodeExpr* lowerClassRandomize(AstClass* classp, AstFunc* randomizep,
-                                             AstVar* randModeVarp)
+                                             AstVar* randModeVarp, bool keepSolution)
         = 0;
-    // Class randomize(): whether the solver result lowerClassRandomize returned
-    // already includes __VBasicRand, run between a solve of array sizes and the
-    // final solve. The front end then emits only the assignment of the result.
-    virtual bool basicInClassSolve(AstClass* classp) = 0;
     // Class randomize(): add statements that must follow the solver result,
     // after the front end has emitted the assignment that evaluates it
     virtual void addAfterClassSolve(AstClass* classp, AstFunc* randomizep) = 0;
-    // Complete class solver lowering after both result and basic-randomization assignments,
-    // before the front end emits post_randomize callbacks. basicRandomizep is __VBasicRand, or
-    // __VBasicRandVars of a class whose member objects are randomized after the solve.
+    // Complete class solver lowering after the result assignment, before the front end emits
+    // post_randomize callbacks, then call basicRandomizep only if the solve succeeded:
+    // __VBasicRand, or __VBasicRandVars of a class whose member objects are randomized after
+    // the solve, then afterp, if any. If the solve failed, run failp, if any.
     virtual void finishClassRandomize(AstClass* classp, AstFunc* randomizep,
-                                      const AstFunc* basicRandomizep)
+                                      AstFunc* basicRandomizep, AstNodeStmt* afterp,
+                                      AstNodeStmt* failp)
         = 0;
     // Ensure backend-required related classes are lowered before an inline site. The callback
     // remains front-end-owned so its visitor context is restored across nested class lowering.
@@ -218,11 +217,16 @@ public:
         = 0;
     // randomize() with {...} called by nodep: lower the captured constraints
     // into randomizeFuncp, and assign its return value from the solver result
-    // and basicRandomizeCallp (__VBasicRand(), or __VBasicRandVars() of such a class).
+    // and, after a successful solve, basicp, the basic randomization updating it, and elemsp,
+    // if any, then afterp, if any; if the solve failed, failp, and elemsFailp, the pre_randomize
+    // of what elemsp randomizes, unless elemsp ran. With a solve of array sizes, elemsp runs after
+    // the arrays are resized, in the final function-call round; its failure skips the final solve.
     // thisVarp is the captured 'this' of the caller.
     virtual void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp,
                                       AstFunc* randomizeFuncp, AstNode* capturedTreep,
-                                      const AstVar* thisVarp, AstNodeExpr* basicRandomizeCallp)
+                                      const AstVar* thisVarp, AstNodeStmt* basicp,
+                                      AstNodeExpr* elemsp, AstNodeStmt* elemsFailp,
+                                      AstNodeStmt* afterp, AstNodeStmt* failp)
         = 0;
     // std::randomize() with {...} called by nodep: lower the captured
     // constraints into randomizeFuncp, and return the solver result. stdrandp

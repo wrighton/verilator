@@ -36,10 +36,11 @@
 //    constraints; a back-end sets it on any other variable it assigns, before
 //    the front end emits __VBasicRand for the class.
 //  * Output: a site hook either returns the solver result for the front end
-//    to combine with __VBasicRand, or for inline sites, where the order of
-//    __VBasicRand against the solver call matters, assigns the function's
-//    return value itself. All other statements go into the given function,
-//    or into members the back-end creates.
+//    to assign, or for inline sites assigns the function's return value
+//    itself. __VBasicRand runs only after a successful solve (IEEE 1800-2023
+//    18.6.3), emitted by the back-end after any function-call solve rounds.
+//    All other statements go into the given function, or into members the
+//    back-end creates.
 //  * Constraint items are consumed: the front end deletes every AstConstraint
 //    once all sites are lowered, so a back-end may unlink or rewrite items.
 //  * A back-end runs within the V3Randomize pass, and may use the AstNode
@@ -161,7 +162,7 @@ AstNodeExpr* RandomizeUtil::newElemSelp(FileLine* const fl, AstNodeExpr* arrp,
     return arrp;
 }
 
-bool RandomizeUtil::isClassHandleArray(AstVar* varp) {
+bool RandomizeUtil::isClassHandleArray(const AstVar* varp) {
     return varp->dtypep()->skipRefp()->isNonPackedArray()
            && VN_IS(RandomizeUtil::arrayElementDTypep(varp->dtypep()), ClassRefDType);
 }

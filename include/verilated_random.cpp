@@ -25,6 +25,7 @@
 
 #include <cassert>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -1390,6 +1391,91 @@ bool VlRandomizer::next(VlRNGReseeds& rngr) { return nextRandomize(rngr, false);
 
 bool VlRandomizer::next_size(VlRNGReseeds& rngr) { return nextRandomize(rngr, false, true); }
 
+// Bytes of an element of var, whole, as set() writes it
+static size_t elemBytes(const VlRandomVar& var) {
+    const int w = var.width();
+    return w <= VL_BYTESIZE    ? sizeof(CData)
+           : w <= VL_SHORTSIZE ? sizeof(SData)
+           : w <= VL_IDATASIZE ? sizeof(IData)
+           : w <= VL_QUADSIZE  ? sizeof(QData)
+                               : VL_WORDS_I(w) * sizeof(EData);
+}
+
+// Append the name and the bytes of all elements of var to valuesr
+void VlRandomizer::keepValues(const VlRandomVar& var, KeptValues& valuesr) {
+    const size_t bytes = elemBytes(var);
+    std::string values;
+    for (int j = 0; j < var.totalWidth() / var.width(); ++j) {
+        values.append(static_cast<const char*>(var.datap(j)), bytes);
+    }
+    valuesr.emplace_back(var.name(), std::move(values));
+}
+
+void VlRandomizer::keepVars(KeptValues& valuesr) const {
+    // Not those with rand_mode off, which the solve does not set and callbacks may change or
+    // free (IEEE 1800-2023 18.8)
+    const auto arrVarsp = std::make_shared<const ArrayInfoMap>(m_arr_vars);
+    for (const auto& var : m_vars) {
+        if (isFrozenVar(var.first, *var.second)) continue;
+        if (var.second->dimension() > 0) var.second->setArrayInfo(arrVarsp);
+        keepValues(*var.second, valuesr);
+    }
+}
+
+void VlRandomizer::setValues(const KeptValues& values) const {
+    // Through the storage registered last, as arrays resized since may have moved, by element
+    // position, skipping the elements an array no longer holds, and the variables no longer
+    // registered: those of an object a callback detached, whose handle it set to null
+    for (const auto& kept : values) {
+        const auto it = m_vars.find(kept.first);
+        if (it == m_vars.end()) continue;
+        const VlRandomVar& var = *it->second;
+        const size_t bytes = elemBytes(var);
+        for (size_t j = 0; j < kept.second.size() / bytes; ++j) {
+            void* datap;
+            if (var.dimension() > 0) {
+                const auto elemIt = m_arr_vars.find({kept.first, static_cast<int>(j)});
+                if (elemIt == m_arr_vars.end()) continue;
+                datap = elemIt->second->m_datap;
+            } else {
+                datap = var.datap(0);
+            }
+            std::memcpy(datap, kept.second.data() + j * bytes, bytes);
+        }
+    }
+}
+
+void VlRandomizer::keep_solution() { keepVars(m_solution); }
+
+void VlRandomizer::restore_solution() {
+    setValues(m_solution);
+    m_solution.clear();
+}
+
+void VlRandomizer::keep_prior() {
+    // Once per call: later function-call solve rounds must not overwrite it
+    if (m_prior.empty()) {
+        keepVars(m_prior);
+        m_priorRandc = m_randcUsedValues;
+    }
+}
+
+void VlRandomizer::end_prior(bool ok) {
+    // A failed call leaves the values and the randc cycles (IEEE 1800-2023 18.6.3)
+    if (!ok) {
+        setValues(m_prior);
+        m_randcUsedValues.swap(m_priorRandc);
+    }
+    m_prior.clear();
+    m_priorRandc.clear();
+}
+
+void VlRandomizer::keepRoundValues(const VlRandomVar& var) {
+    if (funcPreRound() && m_roundKept.insert(var.name()).second) {
+        keepValues(var, m_roundValues);
+    }
+}
+
 // Normalize a union without changing its set of legal values. Weights are only
 // used by the original dist buckets, never by the intersected membership domains.
 VlRandomizer::FastRanges VlRandomizer::fastUnion(FastRanges ranges) {
@@ -1836,6 +1922,7 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
     std::iostream& os = sess.os();
     // Randc retry: if unsat due to randc exhaustion, clear history and retry once
     const bool hasRandc = !m_randcVarNames.empty();
+    decltype(m_randcUsedValues) usedValues;  // The history cleared for the retry
     for (int attempt = 0; attempt < (hasRandc ? 2 : 1); ++attempt) {
         os << "(set-option :produce-models true)\n";
         if (!solverSamples()) {
@@ -1863,9 +1950,11 @@ bool VlRandomizer::nextFlat(VlRNG& rngr, VlSolverSession& sess,
             os << "(reset)\n";
             // If randc vars have used values, this may be cycle exhaustion - retry
             if (hasRandc && !m_randcUsedValues.empty() && attempt == 0) {
-                m_randcUsedValues.clear();
+                usedValues.swap(m_randcUsedValues);
                 continue;  // Retry without exclusions
             }
+            // A failed call does not change the randc cycles (IEEE 1800-2023 18.6.3)
+            if (attempt) m_randcUsedValues.swap(usedValues);
             // Skip the unsat-core path in check-only: it re-declares vars
             // without pinning, so the solver's free assignment would clobber
             // user state.
@@ -1961,7 +2050,9 @@ bool VlRandomizer::unigen2(VlRNG& rngr, VlSolverSession& sess,
 
 void VlRandomizer::writeBackWitness(const Witness& witness) {
     for (const auto& varEntry : witness) {
+        if (m_sizeSolve && !m_sizeVars.count(varEntry.first)) continue;
         const auto& varp = m_vars.at(varEntry.first);
+        keepRoundValues(*varp);
         for (const auto& elemEntry : varEntry.second) {
             if (varp->dimension() > 0) {
                 // set() needs current array info, and a witness from the
@@ -2744,6 +2835,7 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
             if (modep && !modep->at(varr.randModeIdx())) continue;
         }
         if (m_disabledVars.count(name)) continue;
+        if (m_sizeSolve && !m_sizeVars.count(name)) continue;
         staged.emplace_back(&varr, idx, value);
     }
     if (answered.size() != requested) {
@@ -2751,8 +2843,10 @@ bool VlRandomizer::parseModel(std::istream& is, size_t requested) {
                    "Internal: Unable to parse solver's response: incomplete model");
         return false;
     }
-    for (const auto& entry : staged)
+    for (const auto& entry : staged) {
+        keepRoundValues(*std::get<0>(entry));
         std::get<0>(entry)->set(std::get<1>(entry), std::get<2>(entry));
+    }
     return true;
 }
 
@@ -2852,6 +2946,15 @@ void VlRandomizer::clear_elem_vars(const std::string& arrayName) {
 
 void VlRandomizer::markRandc(const std::string& name) { m_randcVarNames.insert(name); }
 
+void VlRandomizer::func_round_end(bool ok, const VlRandomizer& solvedr) {
+    m_funcArgRounds.clear();
+    m_funcRound = m_funcRoundLast = 0;
+    // A failed call leaves the values (IEEE 1800-2023 18.6.3)
+    if (!ok) solvedr.setValues(m_roundValues);
+    m_roundValues.clear();
+    m_roundKept.clear();
+}
+
 void VlRandomizer::func_round_start(int lastRound,
                                     std::initializer_list<std::pair<const char*, int>> argRounds) {
     m_funcArgRounds.clear();
@@ -2863,6 +2966,9 @@ void VlRandomizer::func_round_start(int lastRound,
 }
 
 bool VlRandomizer::func_round_next(const VlRandomizer& solvedr) {
+    // The values before the rounds, which another randomizer may have solved
+    m_roundValues = solvedr.m_roundValues;
+    m_roundKept = solvedr.m_roundKept;
     // Take the values now: code after the solve may randomize the variables again
     for (FuncArgRound& argRound : m_funcArgRounds) {
         if (argRound.round != m_funcRound) continue;

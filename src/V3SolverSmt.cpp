@@ -2661,11 +2661,16 @@ private:
                                             << " bits (IEEE 1800-2023 18.4.2).");
             return;
         }
+        addMarkStmt(VCMethod::RANDOMIZER_MARK_RANDC, varp, smtName, initp);
+    }
+    // Register the kind of the variable varp registered as smtName, by method
+    void addMarkStmt(const VCMethod method, AstVar* const varp, const std::string& smtName,
+                     AstBegin* const initp) {
         AstCMethodHard* const markp = new AstCMethodHard{
             varp->fileline(),
             new AstVarRef{varp->fileline(), VN_AS(m_genp->user2p(), NodeModule), m_genp,
                           VAccess::READWRITE},
-            VCMethod::RANDOMIZER_MARK_RANDC};
+            method};
         markp->dtypeSetVoid();
         AstNodeExpr* const nameExprp
             = m_nestedAccessp ? m_nestedAccessp->cloneName()
@@ -3004,6 +3009,10 @@ private:
         }
         // If randc, also emit markRandc() for cyclic tracking
         if (varp->isRandC()) markRandc(varp, smtName, initp);
+        // A solve of array sizes sets them alone
+        if (varp->isRandSizeVar()) {
+            addMarkStmt(VCMethod::RANDOMIZER_MARK_SIZE_VAR, varp, smtName, initp);
+        }
     }
 
     AstNodeExpr* createVarExprp(AstNodeVarRef* nodep, const RandomizeMode randMode,
@@ -6902,6 +6911,8 @@ class SolverSmtLowering final : public V3SolverLowering {
         bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
         AstNodeStmt* roundsFirstp = nullptr;  // First statement of the solve, if any
         AstVar* genp = nullptr;  // Randomizer of the class
+        AstNodeStmt* undoResizep = nullptr;  // Undoes the size phase of a failed call
+        bool keepSolution = false;  // See lowerClassRandomize
     };
     std::map<const AstClass*, ClassSolve> m_classSolves;  // Per class
     // The solve lowerStdRandomizeWith added, for finishStdRandomizeWith
@@ -7390,6 +7401,7 @@ class SolverSmtLowering final : public V3SolverLowering {
         classp->addMembersp(sizeVarp);
         m_memberMap.insert(classp, sizeVarp);
         sizeVarp->user2p(classp);
+        sizeVarp->setRandSizeVar();
         return sizeVarp;
     }
     // Get or create the size variable of an array sized through a member select
@@ -8508,7 +8520,6 @@ class SolverSmtLowering final : public V3SolverLowering {
     // Repeat the statements from firstp on in rounds that solve function arguments first
     static void addFuncRounds(AstFunc* const funcp, AstNodeStmt* const firstp, AstVar* const genp,
                               AstVar* const solveGenp, AstVar* const okVarp,
-                              const AstFunc* const basicFuncp,
                               const std::vector<ConstraintFuncCall>& calls,
                               AstNodeStmt* const roundSetupp = nullptr) {
         const ConstraintFuncRounds rounds{calls};
@@ -8521,35 +8532,6 @@ class SolverSmtLowering final : public V3SolverLowering {
         AstLoop* const loopp = new AstLoop{fl, roundSetupp};
         // Declarations are not statements, so stay outside of the loop
         if (firstp) loopp->addStmtsp(firstp->unlinkFrBackWithNext());
-        // Basic randomization, which also randomizes member objects and calls their
-        // pre/post_randomize, happens once, in the final round
-        std::vector<std::pair<AstNode*, AstFuncRef*>> basicCalls;  // Statement and call
-        for (AstNode* stmtp = loopp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-            stmtp->foreach([&](AstFuncRef* refp) {
-                if (refp->taskp() == basicFuncp) basicCalls.emplace_back(stmtp, refp);
-            });
-        }
-        AstVar* const basicOkVarp = basicCalls.empty()
-                                        ? nullptr
-                                        : new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_round_ok",
-                                                     funcp->findBasicDType(VBasicDTypeKwd::BIT)};
-        if (basicOkVarp) {
-            basicOkVarp->funcLocal(true);
-            funcp->addDeclsp(basicOkVarp);
-            funcp->addStmtsp(new AstAssign{fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE},
-                                           new AstConst{fl, AstConst::BitTrue{}}});
-        }
-        for (const auto& stmtCall : basicCalls) {
-            AstFuncRef* const refp = stmtCall.second;
-            refp->replaceWith(new AstVarRef{fl, basicOkVarp, VAccess::READ});
-            AstCMethodHard* const finalp
-                = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READ},
-                                     VCMethod::RANDOMIZER_FUNC_ROUND_FINAL};
-            finalp->dtypeSetBit();
-            stmtCall.first->addHereThisAsNext(new AstIf{
-                fl, finalp,
-                new AstAssign{fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, refp}});
-        }
         // Stop at a failing round: the later rounds have its constraints too
         AstCMethodHard* const nextRoundp = new AstCMethodHard{
             fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
@@ -8566,13 +8548,87 @@ class SolverSmtLowering final : public V3SolverLowering {
         startp->dtypeSetVoid();
         funcp->addStmtsp(startp->makeStmt());
         funcp->addStmtsp(loopp);
-        AstCMethodHard* const endp
-            = new AstCMethodHard{fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
-                                 VCMethod::RANDOMIZER_FUNC_ROUND_END};
+        AstCMethodHard* const endp = new AstCMethodHard{
+            fl, new AstVarRef{fl, genModp, genp, VAccess::READWRITE},
+            VCMethod::RANDOMIZER_FUNC_ROUND_END, new AstVarRef{fl, okVarp, VAccess::READ}};
+        endp->addPinsp(
+            new AstVarRef{fl, VN_CAST(solveGenp->user2p(), NodeModule), solveGenp, VAccess::READ});
         endp->dtypeSetVoid();
         funcp->addStmtsp(endp->makeStmt());
     }
 
+    // Statement calling method of randomizer genp
+    static AstNodeStmt* newGenCallp(AstVar* const genp, const VCMethod method,
+                                    AstNodeExpr* const argp = nullptr) {
+        FileLine* const fl = genp->fileline();
+        AstCMethodHard* const callp = new AstCMethodHard{
+            fl, new AstVarRef{fl, VN_CAST(genp->user2p(), NodeModule), genp, VAccess::READWRITE},
+            method, argp};
+        callp->dtypeSetVoid();
+        return callp->makeStmt();
+    }
+    // 'if (fvar) {basicp; afterp;} else {failp; undop;}', where a call commits: every phase
+    // must set fvar before it; undop restores only the arrays a size phase resized. genp keeps
+    // its solution over basicp; if prior, also its prior values when basicp fails.
+    static AstIf* newBasicAfterSolvep(AstVar* const fvarp, AstNodeStmt* stmtsp, AstVar* const genp,
+                                      const bool prior, AstNodeStmt* const afterp,
+                                      AstNodeStmt* const failp, AstNodeStmt* const undop) {
+        FileLine* const fl = fvarp->fileline();
+        if (genp) {
+            AstNodeStmt* const keepp = newGenCallp(genp, VCMethod::RANDOMIZER_KEEP_SOLUTION);
+            keepp->addNext(stmtsp);
+            keepp->addNext(newGenCallp(genp, VCMethod::RANDOMIZER_RESTORE_SOLUTION));
+            stmtsp = keepp;
+        }
+        AstNode::addNextNull(stmtsp, afterp);
+        AstNodeStmt* elsesp = AstNode::addNextNull(failp, undop);
+        if (prior) {
+            // Before the arrays are assigned back, which may hold the variables
+            const auto newEndPriorp = [&]() {
+                return newGenCallp(genp, VCMethod::RANDOMIZER_END_PRIOR,
+                                   new AstVarRef{fl, fvarp, VAccess::READ});
+            };
+            stmtsp->addNext(newEndPriorp());
+            elsesp = AstNode::addNext(newEndPriorp(), elsesp);
+        }
+        if (undop) {
+            stmtsp->addNext(new AstIf{fl,
+                                      new AstLogNot{fl, new AstVarRef{fl, fvarp, VAccess::READ}},
+                                      undop->cloneTree(true)});
+        }
+        return new AstIf{fl, new AstVarRef{fl, fvarp, VAccess::READ}, stmtsp, elsesp};
+    }
+    // Copy the arrays a size phase resizes into copiesp, and return the statements assigning
+    // them back, for a failed final solve
+    AstNodeStmt* newResizeUndop(AstFunc* const funcp, const VInsertionSet<AstVar*>& arrVars,
+                                const MemberArrays& memberArrays, AstNodeStmt*& copiesp) {
+        FileLine* const fl = funcp->fileline();
+        AstNodeStmt* undosp = nullptr;
+        const auto addArray = [&](AstVar* const arrVarp, const AstMemberRef* const mselp) {
+            AstVar* const prevVarp = new AstVar{
+                fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vresized"), arrVarp->dtypep()};
+            prevVarp->funcLocal(true);
+            prevVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            funcp->addDeclsp(prevVarp);
+            copiesp = AstNode::addNextNull(
+                copiesp,
+                newIfNonNullp(fl,
+                              new AstAssign{fl, new AstVarRef{fl, prevVarp, VAccess::WRITE},
+                                            newSiblingRefp(fl, arrVarp, mselp, VAccess::READ)},
+                              mselp));
+            undosp = AstNode::addNextNull(
+                undosp,
+                newIfNonNullp(fl,
+                              new AstAssign{fl, newSiblingRefp(fl, arrVarp, mselp, VAccess::WRITE),
+                                            new AstVarRef{fl, prevVarp, VAccess::READ}},
+                              mselp));
+        };
+        for (AstVar* const arrVarp : arrVars) addArray(arrVarp, nullptr);
+        for (const auto& pathMsel : memberArrays) {
+            addArray(pathMsel.second->varp(), pathMsel.second);
+        }
+        return undosp;
+    }
     // sizeSolve for the solve of array sizes before the final solve
     static AstCExpr* newSolverCallp(AstVar* const genp, const bool sizeSolve = false) {
         AstCExpr* const callp = new AstCExpr{genp->fileline()};
@@ -8585,7 +8641,7 @@ class SolverSmtLowering final : public V3SolverLowering {
     // Solve for the element values if the size solve succeeded
     static AstIf* newFinalSolvep(FileLine* fl, AstVar* sizeOkVarp, AstVar* finalOkVarp,
                                  AstVar* genp) {
-        // A failed size solve already reported why, and the call fails anyway
+        // A failed size solve, or an array element's randomize(), already reported why
         return new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
                          new AstAssign{fl, new AstVarRef{fl, finalOkVarp, VAccess::WRITE},
                                        newSolverCallp(genp)}};
@@ -8715,11 +8771,10 @@ public:
             VL_DO_DANGLING(nodep->deleteTree(), nodep);
         }
     }
-    AstNodeExpr* lowerClassRandomize(AstClass* nodep, AstFunc* randomizep,
-                                     AstVar* randModeVarp) override {
+    AstNodeExpr* lowerClassRandomize(AstClass* nodep, AstFunc* randomizep, AstVar* randModeVarp,
+                                     bool keepSolution) override {
         m_distNum = 0;
         FileLine* const fl = nodep->fileline();
-        AstVar* const fvarp = randomizep->fvarp();
         AstNodeExpr* beginValp = nullptr;
         bool sizePhase = false;  // Sizes are solved and arrays resized before the final solve
         // A constraint is lowered once, into the setup of its declaring class that each class
@@ -8728,6 +8783,7 @@ public:
         AstNodeStmt* roundsFirstp = nullptr;  // First statement of the solve
         StagedFieldGroup& staged = stagedFields(nodep);
         AstVar* priorPhasep = nullptr;
+        AstNodeStmt* undoResizep = nullptr;  // Assigns back the arrays the size phase resizes
         AstVar* genp = SmtUtil::getRandomGenerator(nodep);
         if (genp) {
             // Phase 1: Process all constraints (create tasks, run ConstraintExprVisitor)
@@ -8905,6 +8961,10 @@ public:
             // A member object array is randomized with the outer object, after its resize
             sizePhase = !sizeArrayVars.empty() || !memberArrays.empty();
             if (sizePhase) {
+                // Before the solve, so outside of any function-call solve rounds
+                AstNodeStmt* copiesp = nullptr;
+                undoResizep = newResizeUndop(randomizep, pinnedArrays, memberArrays, copiesp);
+                roundsFirstp->addHereThisAsNext(copiesp);
                 priorPhasep = beginStagedPhase(randomizep, staged, nullptr, roundsFirstp);
                 if (AstNodeStmt* const regp = newStagedClassCallp(staged, genp))
                     randomizep->addStmtsp(regp);
@@ -8916,12 +8976,6 @@ public:
                         new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
                                   (new AstTaskRef{fl, resizeAllTaskp})->makeStmt(), nullptr});
                 }
-                // Basic randomization fills the resized arrays. It runs before the final
-                // solve, so it cannot override a solved leaf of a member object.
-                AstFunc* const basicRandomizep
-                    = V3Randomize::newRandomizeFunc(m_memberMap, nodep, BASIC_RANDOMIZE_FUNC_NAME);
-                randomizep->addStmtsp(new AstAssign{fl, new AstVarRef{fl, fvarp, VAccess::WRITE},
-                                                    new AstFuncRef{fl, basicRandomizep}});
                 addConstraintRebuild(randomizep, genp, genp, sizeArrayVars, pinnedArrays,
                                      memberArrays, gatedOnlyMemberArrays(nodep, memberArrays),
                                      writtenVars, (new AstTaskRef{fl, setupAllTaskp})->makeStmt());
@@ -8930,11 +8984,12 @@ public:
                                                        nodep->findBasicDType(VBasicDTypeKwd::BIT)};
                 finalOkVarp->funcLocal(true);
                 randomizep->addDeclsp(finalOkVarp);
+                if (keepSolution)
+                    randomizep->addStmtsp(newGenCallp(genp, VCMethod::RANDOMIZER_KEEP_PRIOR));
                 randomizep->addStmtsp(newFinalSolvep(fl, sizeOkVarp, finalOkVarp, genp));
 
-                beginValp = new AstAnd{fl, new AstVarRef{fl, fvarp, VAccess::READ},
-                                       new AstAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
-                                                  new AstVarRef{fl, finalOkVarp, VAccess::READ}}};
+                beginValp = new AstAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                                       new AstVarRef{fl, finalOkVarp, VAccess::READ}};
             } else {
                 beginValp = newSolverCallp(genp);
             }
@@ -8957,33 +9012,46 @@ public:
 
         addUpdateRandVarsBody(nodep, randomizep);
         setStagedPhase(randomizep, staged, priorPhasep);
-        m_classSolves[nodep] = ClassSolve{sizePhase, roundsFirstp, genp};
+        // Before the solve, as the size phase has its own
+        if (genp && keepSolution && !sizePhase) {
+            randomizep->addStmtsp(newGenCallp(genp, VCMethod::RANDOMIZER_KEEP_PRIOR));
+        }
+        m_classSolves[nodep]
+            = ClassSolve{sizePhase, roundsFirstp, genp, undoResizep, keepSolution};
         return beginValp;
     }
-    bool basicInClassSolve(AstClass* nodep) override { return m_classSolves[nodep].sizePhase; }
-    void finishClassRandomize(AstClass* nodep, AstFunc* randomizep,
-                              const AstFunc* basicRandomizep) override {
+    void finishClassRandomize(AstClass* nodep, AstFunc* randomizep, AstFunc* basicRandomizep,
+                              AstNodeStmt* afterp, AstNodeStmt* failp) override {
         const ClassSolve& solve = m_classSolves[nodep];
-        if (!solve.roundsFirstp) return;
-        addFuncRounds(randomizep, solve.roundsFirstp, solve.genp, solve.genp, randomizep->fvarp(),
-                      basicRandomizep, classFuncCalls(nodep));
+        if (solve.roundsFirstp) {
+            addFuncRounds(randomizep, solve.roundsFirstp, solve.genp, solve.genp,
+                          randomizep->fvarp(), classFuncCalls(nodep));
+        }
+        FileLine* const fl = nodep->fileline();
+        randomizep->addStmtsp(newBasicAfterSolvep(
+            randomizep->fvarp(),
+            new AstAssign{fl, new AstVarRef{fl, randomizep->fvarp(), VAccess::WRITE},
+                          new AstFuncRef{fl, basicRandomizep}},
+            solve.keepSolution ? solve.genp : nullptr, solve.keepSolution, afterp, failp,
+            solve.undoResizep));
     }
     void addAfterClassSolve(AstClass* nodep, AstFunc* randomizep) override {
-        const auto sizeArraysIt = m_sizeConstrainedArrays.find(nodep);
-        const bool needsSizePhase
-            = sizeArraysIt != m_sizeConstrainedArrays.end() && !sizeArraysIt->second.empty();
         // Size-only resize fallback (no element constraint, so no two-pass phase).
         // Must run after the solver .next() that sets the size variable.
-        if (needsSizePhase) return;
+        if (m_classSolves[nodep].sizePhase) return;
         if (AstTask* const resizeAllTaskp
             = VN_AS(m_memberMap.findMember(nodep, "__Vresize_constrained_arrays"), Task)) {
-            AstTaskRef* const resizeTaskRefp = new AstTaskRef{nodep->fileline(), resizeAllTaskp};
-            randomizep->addStmtsp(resizeTaskRefp->makeStmt());
+            FileLine* const fl = nodep->fileline();
+            // Not if the solve failed (IEEE 1800-2023 18.6.3)
+            randomizep->addStmtsp(new AstIf{fl,
+                                            new AstVarRef{fl, randomizep->fvarp(), VAccess::READ},
+                                            (new AstTaskRef{fl, resizeAllTaskp})->makeStmt()});
         }
     }
     void lowerInlineRandomize(AstNodeFTaskRef* nodep, AstClass* classp, AstFunc* randomizeFuncp,
-                              AstNode* capturedTreep, const AstVar* thisVarp,
-                              AstNodeExpr* basicRandomizeFuncCallp) override {
+                              AstNode* capturedTreep, const AstVar* thisVarp, AstNodeStmt* basicp,
+                              AstNodeExpr* elemsp, AstNodeStmt* elemsFailp, AstNodeStmt* afterp,
+                              AstNodeStmt* failp) override {
         AstVar* const classGenp = SmtUtil::getRandomGenerator(classp);
         StagedFieldGroup& classStaged = stagedFields(classp);
         StagedFieldGroup inlineStaged;
@@ -8993,10 +9061,6 @@ public:
         AstVar* priorPhasep = nullptr;
         std::vector<ConstraintFuncCall> calls = std::move(m_inlineDerivedCalls[classp]);
         m_inlineDerivedCalls.erase(classp);
-        // The basic randomization (__VBasicRand, or __VBasicRandVars of a class whose basic
-        // randomization is split), for repeating it in rounds
-        AstFunc* const basicRandomizeFuncp
-            = VN_AS(VN_AS(basicRandomizeFuncCallp, FuncRef)->taskp(), Func);
         AstVar* const localGenp
             = new AstVar{nodep->fileline(), VVarType::BLOCKTEMP, "randomizer",
                          classp->findBasicDType(VBasicDTypeKwd::RANDOM_GENERATOR)};
@@ -9005,6 +9069,8 @@ public:
         // Last statement before the solve, which starts with registering the arrays' elements
         AstNode* const solveAfterp
             = randomizeFuncp->stmtsp() ? randomizeFuncp->stmtsp()->lastp() : nullptr;
+        // At least the call of the pre-randomize phase
+        UASSERT_OBJ(solveAfterp, nodep, "No statement before the solve");
         // Add constraints clearing code
         if (classGenp) {
             randomizeFuncp->addStmtsp(
@@ -9214,6 +9280,11 @@ public:
         addFrozenSizePins(sizedArrays, memberArrays, randomizeFuncp, localGenp, randModeVarp);
         if (retained.pinsp) randomizeFuncp->addStmtsp(retained.pinsp);
 
+        AstNodeStmt* resizeCopiesp = nullptr;  // Placed before the solve, see newResizeUndop
+        AstNodeStmt* const undoResizep
+            = needsSizePhase
+                  ? newResizeUndop(randomizeFuncp, sizedArrays, memberArrays, resizeCopiesp)
+                  : nullptr;
         if (needsSizePhase) {
             priorPhasep
                 = beginStagedPhase(randomizeFuncp, classStaged, &inlineStaged, solveAfterp);
@@ -9237,23 +9308,36 @@ public:
             // Resize constrained arrays before rebuilding constraints: both any
             // class-wide resize task (class-level size constraints) and this
             // with-block's own inline-size resize statements.
+            // Randomize the array elements, whose callbacks may change what the solve registers,
+            // before it registers again, once, in the final function-call round; if one fails,
+            // the final solve does not run. Else a failed call calls their pre_randomize.
+            if (elemsp) {
+                AstVar* const elemsDoneVarp
+                    = new AstVar{fl, VVarType::BLOCKTEMP, "__Velems_done", sizeOkVarp->dtypep()};
+                elemsDoneVarp->funcLocal(true);
+                randomizeFuncp->addDeclsp(elemsDoneVarp);
+                AstCMethodHard* const finalp
+                    = new AstCMethodHard{fl, new AstVarRef{fl, localGenp, VAccess::READ},
+                                         VCMethod::RANDOMIZER_FUNC_ROUND_FINAL};
+                finalp->dtypeSetBit();
+                AstNodeStmt* const elemsStmtsp = new AstAssign{
+                    fl, new AstVarRef{fl, sizeOkVarp, VAccess::WRITE},
+                    new AstNeq{fl, elemsp, new AstConst{fl, AstConst::WidthedValue{}, 32, 0}}};
+                elemsStmtsp->addNext(
+                    new AstAssign{fl, new AstVarRef{fl, elemsDoneVarp, VAccess::WRITE},
+                                  new AstConst{fl, AstConst::BitTrue{}}});
+                resizeStmtsp
+                    = AstNode::addNextNull(resizeStmtsp, new AstIf{fl, finalp, elemsStmtsp});
+                elemsp = nullptr;
+                elemsFailp = new AstIf{
+                    fl, new AstLogNot{fl, new AstVarRef{fl, elemsDoneVarp, VAccess::READ}},
+                    elemsFailp};
+            }
             if (resizeStmtsp) {
                 AstIf* const ifp
                     = new AstIf{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ}, resizeStmtsp};
                 randomizeFuncp->addStmtsp(ifp);
             }
-
-            // Call the basic randomization as its own statement after the resize, so it fills
-            // the new elements, and before the final solve, so the solver's answer sticks.
-            // The single-statement form below (basicRandomizeFuncCallp combined inline
-            // with the solver call) relies on statement hoisting for that order, which
-            // would place it after the final solve here.
-            AstVar* const basicOkVarp = new AstVar{fl, VVarType::BLOCKTEMP, "__Vbasic_ok",
-                                                   classp->findBasicDType(VBasicDTypeKwd::BIT)};
-            basicOkVarp->funcLocal(true);
-            randomizeFuncp->addDeclsp(basicOkVarp);
-            randomizeFuncp->addStmtsp(new AstAssign{
-                fl, new AstVarRef{fl, basicOkVarp, VAccess::WRITE}, basicRandomizeFuncCallp});
 
             // Clear this call's constraints, then rebuild them fresh against the
             // resized arrays: the class's own constraints (re-copied from a freshly
@@ -9408,12 +9492,10 @@ public:
             // Final solve: element values with sizes pinned
             randomizeFuncp->addStmtsp(newFinalSolvep(fl, sizeOkVarp, finalOkVarp, localGenp));
 
-            randomizeFuncp->addStmtsp(new AstAssign{
-                fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
-                new AstAnd{fl,
-                           new AstAnd{fl, new AstVarRef{fl, basicOkVarp, VAccess::READ},
-                                      new AstVarRef{fl, sizeOkVarp, VAccess::READ}},
-                           new AstVarRef{fl, finalOkVarp, VAccess::READ}}});
+            randomizeFuncp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
+                              new AstAnd{fl, new AstVarRef{fl, sizeOkVarp, VAccess::READ},
+                                         new AstVarRef{fl, finalOkVarp, VAccess::READ}}});
         } else {
             // Preambles held in user3p are off-tree, so are not freed with the copy
             deleteDistPreambles(capturedClonep);
@@ -9422,15 +9504,7 @@ public:
             // Call the solver and set return value
             AstCExpr* const solverCallp = newSolverCallp(localGenp);
             randomizeFuncp->addStmtsp(
-                new AstAssign{fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
-                              new AstAnd{fl, basicRandomizeFuncCallp, solverCallp}});
-
-            // Resize constrained arrays only when solver succeeds
-            if (resizeStmtsp) {
-                AstIf* const ifp
-                    = new AstIf{fl, new AstVarRef{fl, retVarp, VAccess::READ}, resizeStmtsp};
-                randomizeFuncp->addStmtsp(ifp);
-            }
+                new AstAssign{fl, new AstVarRef{fl, retVarp, VAccess::WRITE}, solverCallp});
         }
         {
             // The class's constraints were set up in the class's generator, which holds the
@@ -9439,11 +9513,26 @@ public:
             calls.insert(calls.end(), classCalls.begin(), classCalls.end());
             const std::vector<ConstraintFuncCall>& newCalls = exprVisitor.funcCalls();
             calls.insert(calls.end(), newCalls.begin(), newCalls.end());
-            addFuncRounds(
-                randomizeFuncp,
-                solveAfterp ? VN_AS(solveAfterp->nextp(), NodeStmt) : randomizeFuncp->stmtsp(),
-                classGenp ? classGenp : localGenp, localGenp, retVarp, basicRandomizeFuncp, calls,
-                classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
+            addFuncRounds(randomizeFuncp, VN_AS(solveAfterp->nextp(), NodeStmt),
+                          classGenp ? classGenp : localGenp, localGenp, retVarp, calls,
+                          classGenp ? nullptr : implementConstraintsClear(fl, localGenp));
+        }
+        // Outside of any function-call solve rounds
+        if (resizeCopiesp) solveAfterp->addNextHere(resizeCopiesp);
+        // Basic randomization only after a successful solve (IEEE 1800-2023 18.6.3). It does not
+        // skip the leaves only this call's constraints solve
+        if (elemsp) {
+            basicp->addNext(
+                new AstAssign{fl, new AstVarRef{fl, retVarp, VAccess::WRITE},
+                              new AstAnd{fl, new AstVarRef{fl, retVarp, VAccess::READ}, elemsp}});
+        }
+        failp = AstNode::addNextNull(failp, elemsFailp);
+        randomizeFuncp->addStmtsp(
+            newBasicAfterSolvep(retVarp, basicp, localGenp, false, afterp, failp, undoResizep));
+        // Resize constrained arrays only when the call succeeds
+        if (!needsSizePhase && resizeStmtsp) {
+            randomizeFuncp->addStmtsp(
+                new AstIf{fl, new AstVarRef{fl, retVarp, VAccess::READ}, resizeStmtsp});
         }
         // A failed call leaves the randc cycles alone
         if (randcHistoryp) {
@@ -9495,7 +9584,7 @@ public:
         const auto it = m_stdFuncRounds.find(randomizep);
         UASSERT_OBJ(it != m_stdFuncRounds.end(), randomizep, "Missing std::randomize lowering");
         addFuncRounds(randomizep, it->second.firstp, stdrandp, stdrandp, randomizep->fvarp(),
-                      nullptr, it->second.calls);
+                      it->second.calls);
         m_stdFuncRounds.erase(it);
     }
     void prepareInlineRandomize(AstClass* classp,

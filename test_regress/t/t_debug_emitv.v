@@ -979,5 +979,14 @@ module dump_value_driver(output wire p, input wire value);
 endmodule
 bind dump_value_input dump_value_driver dump_driver (.p(p), .value(value));
 
+class ClsSize;
+  rand int rdyn[];
+  constraint dyn_size {rdyn.size() == 2;}
+endclass
+
+function int rand_size(ClsSize obj);
+  return obj.randomize();
+endfunction
+
 `verilator_config
 threads_group -module "sub"
