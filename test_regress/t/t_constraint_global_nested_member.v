@@ -4,6 +4,62 @@
 // SPDX-FileCopyrightText: 2025 PlanV GmbH
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d\n", `__FILE__,`__LINE__, (gotv), (expv)); `stop; end while(0);
+// verilog_format: on
+
+// Test: constraints of a rand class member that a nested rand member inherits
+class inh_leaf;
+  rand bit [7:0] v;
+  constraint c_v {v == 5;}
+endclass
+
+class inh_base;
+  rand inh_leaf leaf = new;
+endclass
+
+class inh_member extends inh_base;
+endclass
+
+class inh_holder;
+  rand inh_member m = new;
+endclass
+
+// Test: a rand class member hiding an inherited one of its name, with a constraint of the same
+// name or another
+class hide_leaf;
+  rand bit [6:0] v;
+  constraint c {v == 5;}
+endclass
+
+class hide_same_leaf;
+  rand bit [6:0] v;
+  constraint c {v == 7;}
+endclass
+
+class hide_other_leaf;
+  rand bit [6:0] v;
+  constraint c_other {v == 7;}
+endclass
+
+class hide_base;
+  rand hide_leaf leaf = new;
+endclass
+
+class hide_same extends hide_base;
+  rand hide_same_leaf leaf = new;
+endclass
+
+class hide_other extends hide_base;
+  rand hide_other_leaf leaf = new;
+endclass
+
+class hide_holder;
+  rand hide_same same = new;
+  rand hide_other other = new;
+endclass
+
 
 // Test case 1
 class uvm_reg_field;
@@ -77,6 +133,20 @@ module t_constraint_global_nested_member;
 
     tb = new;
     tb.run_phase(0);
+    begin
+      automatic inh_holder h = new;
+      automatic hide_holder hh = new;
+      automatic int ok;
+      ok = h.randomize();
+      `checkd(ok, 1);
+      `checkd(h.m.leaf.v, 5);
+      repeat (10) begin
+        ok = hh.randomize();
+        `checkd(ok, 1);
+        `checkd(hh.same.leaf.v, 7);
+        `checkd(hh.other.leaf.v, 7);
+      end
+    end
 
     axi_t = new();
     axi_t.build_phase();

@@ -416,16 +416,20 @@ class RandomizeMarkVisitor final : public VNVisitor {
     void cloneNestedConstraintsRecurse(AstVarRef* rootVarRefp, AstClass* classp,
                                        const std::vector<AstVar*>& pathToClass,
                                        AstClass* targetClassp, ActiveSet& activeClasses) {
-        for (AstNode* const memberNodep : classp->memberspList()) {
-            AstVar* const memberVarp = VN_CAST(memberNodep, Var);
-            if (!memberVarp) continue;
-            if (!memberVarp->rand().isRandomizable()) continue;
+        // The members visible in the class: one hides an inherited member of its name
+        std::unordered_map<std::string, const AstVar*> visibleps;
+        classp->foreachMember([&](AstClass* const, AstVar* const memberVarp) {
+            visibleps[memberVarp->name()] = memberVarp;
+        });
+        classp->foreachMember([&](AstClass* const, AstVar* const memberVarp) {
+            if (visibleps[memberVarp->name()] != memberVarp) return;
+            if (!memberVarp->rand().isRandomizable()) return;
             const AstClassRefDType* const memberClassRefp
                 = VN_CAST(memberVarp->dtypep()->skipRefp(), ClassRefDType);
-            if (!memberClassRefp || !memberClassRefp->classp()) continue;
+            if (!memberClassRefp || !memberClassRefp->classp()) return;
 
             AstClass* nestedClassp = memberClassRefp->classp();
-            if (!activeClasses.insert(nestedClassp).second) continue;
+            if (!activeClasses.insert(nestedClassp).second) return;
 
             std::vector<AstVar*> newPath = pathToClass;
             newPath.push_back(memberVarp);
@@ -438,7 +442,7 @@ class RandomizeMarkVisitor final : public VNVisitor {
             cloneNestedConstraintsRecurse(rootVarRefp, nestedClassp, newPath, targetClassp,
                                           activeClasses);
             activeClasses.erase(nestedClassp);
-        }
+        });
     }
 
     // Get randomized variables from (std::)randomize() arguments
