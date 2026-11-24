@@ -58,6 +58,7 @@ public:
     SchedSenVertex(V3Graph* graphp, const AstSenItem* senItemp)
         : V3GraphVertex{graphp}
         , m_senItemp{senItemp} {}
+    const AstSenItem* senItemp() const { return m_senItemp; }
 
     // LCOV_EXCL_START // Debug code
     string name() const override {
@@ -262,17 +263,7 @@ public:
     }
 };
 
-void colorActiveRegion(V3Graph& graph) {
-    // Work queue for depth first traversal
-    std::vector<V3GraphVertex*> queue{};
-
-    // Trace from all SchedSenVertex
-    for (V3GraphVertex& vtx : graph.vertices()) {
-        if (const auto activeEventVtxp = vtx.cast<SchedSenVertex>()) {
-            queue.push_back(activeEventVtxp);
-        }
-    }
-
+void traceActiveRegion(std::vector<V3GraphVertex*>& queue, const bool markClocks) {
     // Depth first traversal
     while (!queue.empty()) {
         // Pop next work item
@@ -290,7 +281,7 @@ void colorActiveRegion(V3Graph& graph) {
         // Mark top level ports that drive a sensitivity list
         if (SchedVarVertex* const vvtxp = vtx.cast<SchedVarVertex>()) {
             AstVar* const varp = vvtxp->varp();
-            if (varp->isPrimaryIO()) varp->setPrimaryClock();
+            if (markClocks && varp->isPrimaryIO()) varp->setPrimaryClock();
         }
 
         // If this is a logic vertex, also enqueue all variable vertices that are driven from this
@@ -302,6 +293,22 @@ void colorActiveRegion(V3Graph& graph) {
                 queue.push_back(edge.top());
             }
         }
+    }
+}
+
+void colorActiveRegion(V3Graph& graph) {
+    // Work queue for depth first traversal
+    std::vector<V3GraphVertex*> queue{};
+
+    // Trace from all SchedSenVertex, first from those other than of the updates V3Force makes, so
+    // only the ports driving those others are clocks
+    for (const bool forceUpdate : {false, true}) {
+        for (V3GraphVertex& vtx : graph.vertices()) {
+            if (const SchedSenVertex* const senVtxp = vtx.cast<SchedSenVertex>()) {
+                if (senVtxp->senItemp()->forceUpdate() == forceUpdate) queue.push_back(&vtx);
+            }
+        }
+        traceActiveRegion(queue, !forceUpdate);
     }
 }
 
