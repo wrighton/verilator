@@ -66,7 +66,6 @@ endpackage
 
 // A failed randomize() calls no post_randomize, of the object or of its rand
 // members, and the constrained random variables keep their values (IEEE 1800-2023 18.6.3).
-// Rand members randomized before the solve, as by randomize() with, are not covered.
 class FailItem;
   rand bit [6:0] v;
   int m_post;
