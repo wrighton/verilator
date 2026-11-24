@@ -489,16 +489,18 @@ static AstVar* forceNetp(const AstPin* pinp, const AstNodeModule* modp) {
 //######################################################################
 // Forced input net ports that may be one net with all their connections
 
+// A port whose read state can be supplied by its parent without resolving local drivers.
+static bool isForceRhsReadInput(const AstVar* varp) {
+    return varp->isInput() && varp->declDirection() == VDirection::INPUT
+           && varp->dtypep()->skipRefp()->isIntegralOrPacked() && !varp->isFuncLocalSticky()
+           && !varp->isPrimaryIO() && !varp->resolveWrittenInput() && !varp->isForced()
+           && !varp->isForceable() && !varp->isSigPublic();
+}
+
 // Read-only module input used as a whole force value, a candidate for Eligible::rhsInputps
 static AstVar* forceInputRhsVarp(const AstNodeExpr* exprp) {
     const AstVarRef* const refp = VN_CAST(exprp, VarRef);
-    AstVar* const varp = refp ? refp->varp() : nullptr;
-    return varp && varp->isInput() && varp->declDirection() == VDirection::INPUT
-                   && !varp->isFuncLocalSticky() && !varp->isPrimaryIO()
-                   && !varp->resolveWrittenInput() && !varp->isForced() && !varp->isForceable()
-                   && !varp->isSigPublic()
-               ? varp
-               : nullptr;
+    return refp && isForceRhsReadInput(refp->varp()) ? refp->varp() : nullptr;
 }
 
 class TristateForcedInputVisitor final : public VNVisitorConst {
@@ -518,6 +520,9 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
     std::unordered_set<const AstVar*> m_pulledps;  // Nets with a pull
     // Input or inout ports reading each variable through a connection of theirs
     std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_readerps;
+    // Four-state input actuals whose read state a downstream port may need.
+    std::unordered_map<const AstVar*, std::vector<AstVar*>> m_readInputActualps;
+    std::unordered_set<const AstVar*> m_unsafeReadps;
     std::unordered_set<const AstVar*> m_aliasedps;  // Variables of an alias
 
     void visit(AstNodeModule* nodep) override {
@@ -589,8 +594,19 @@ class TristateForcedInputVisitor final : public VNVisitorConst {
             }
             addPullActuals(VN_AS(nodep->exprp(), NodeExpr), portp);
             if (portp->isNonOutput()) {
-                nodep->exprp()->foreach(
-                    [&](const AstNodeVarRef* refp) { m_readerps[refp->varp()].push_back(portp); });
+                nodep->exprp()->foreach([&](const AstNodeVarRef* refp) {
+                    AstVar* const actualp = refp->varp();
+                    m_readerps[actualp].push_back(portp);
+                    if (!isForceRhsReadInput(portp) || !actualp->isIO()
+                        || !actualp->dtypep()->skipRefp()->isFourstate()) {
+                        return;
+                    }
+                    if (VN_IS(refp, VarRef) && isForceRhsReadInput(actualp)) {
+                        m_readInputActualps[portp].push_back(actualp);
+                    } else {
+                        m_unsafeReadps.emplace(portp);
+                    }
+                });
             }
         }
         if (portp && portp->isInput() && portp->isNet() && !portp->isForceable()) {
@@ -615,6 +631,7 @@ public:
         std::unordered_set<const AstVar*> rhsInputps;
         std::unordered_set<const AstVar*>
             aliasps;  // Explicit alias membership for RHS preparation
+        std::unordered_map<const AstVar*, std::vector<AstVar*>> rhsInputActualps;
     };
     static Eligible eligible(AstNetlist* netlistp) {
         TristateForcedInputVisitor visitor;
@@ -626,8 +643,13 @@ public:
                 if (visitor.m_pulledps.emplace(actualp).second) pulledps.push_back(actualp);
             }
         }
-        // A port reading a pull or alias cannot use only its incoming drive enable.
+        // Pulls, aliases and locally driven inputs need resolution, not just an incoming mask.
         pulledps.insert(pulledps.end(), visitor.m_aliasedps.begin(), visitor.m_aliasedps.end());
+        pulledps.insert(pulledps.end(), visitor.m_unsafeReadps.begin(),
+                        visitor.m_unsafeReadps.end());
+        for (const AstVar* const varp : visitor.m_writtenps) {
+            if (isForceRhsReadInput(varp)) pulledps.push_back(varp);
+        }
         std::unordered_set<const AstVar*> unsafeReadps{pulledps.begin(), pulledps.end()};
         for (size_t index = 0; index < pulledps.size(); ++index) {
             for (const AstVar* const portp : visitor.m_readerps[pulledps[index]]) {
@@ -661,6 +683,7 @@ public:
             if (ok) result.inputps.emplace(pair.first);
         }
         result.aliasps = std::move(visitor.m_aliasedps);
+        result.rhsInputActualps = std::move(visitor.m_readInputActualps);
         return result;
     }
 };
@@ -1285,8 +1308,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                 continue;
             }
             // A prepared read-only input gets its resolved enable from its parent.
+            const AuxAstVar& aux = m_varAux(varp);
             if (varp->isInput() && varp->declDirection() == VDirection::INPUT
-                && m_varAux(varp).resolvedEnVarp) {
+                && (aux.resolvedEnVarp || aux.forceRhsReadEn)) {
                 continue;
             }
             // This variable is floating, set output enable to always be off on this assign.
@@ -2960,6 +2984,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     // enable to the enable of the value, and a release releases both. Returns the enable
     // of the value, or nullptr when the value may be z in a way not tracked here.
     AstNodeExpr* newForceValueEnp(AstNodeExpr* rhsp, AstNodeExpr* lhsp) {
+        if (!mayBeZ(rhsp)) return newAllZerosOrOnes(lhsp, true);
         AstNodeExpr* basep = rhsp;
         while (AstSel* const selp = VN_CAST(basep, Sel)) basep = selp->fromp();
         AstNodeVarRef* const refp = VN_CAST(basep, NodeVarRef);
@@ -2982,7 +3007,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             return !aux.pullp && isIfaceStrengthNet(varp) ? newEnSelp(rhsp, refp, VAccess::READ)
                                                           : nullptr;
         }
-        return mayBeZ(rhsp) ? nullptr : newAllZerosOrOnes(lhsp, true);
+        return nullptr;
     }
     void addForceEnable(AstNodeStmt* stmtp, AstNodeExpr* lhsp, AstNodeVarRef* refp,
                         AstNodeExpr* enValuep) {
@@ -3087,6 +3112,15 @@ class TristateVisitor final : public TristateBaseVisitor {
         }
     }
     void visit(AstAssignForce* nodep) override {
+        if (m_graphing) {
+            const AstVarRef* const rhsRefp = VN_CAST(nodep->rhsp(), VarRef);
+            const AstVarRef* const targetp = VN_CAST(forceTargetRefp(nodep->lhsp()), VarRef);
+            if (rhsRefp && rhsRefp->varp()->isInput() && m_varAux(rhsRefp->varp()).forceRhsReadEn
+                && targetp && !targetp->varp()->isIO() && isForceOverrideNet(targetp->varp())) {
+                // The force can introduce Z even if all normal drivers are always driven.
+                m_tgraph.setTristate(targetp->varp());
+            }
+        }
         iterateAndNextNull(nodep->rhsp());
         if (!m_graphing) queueForceEnable(nodep);
         visitForceLhs(nodep, nodep->lhsp());
@@ -3425,7 +3459,7 @@ class TristateVisitor final : public TristateBaseVisitor {
             // enable of its connection. At the top the enable is driven externally.
             const bool inOnly = inVarp && !outModVarp && !m_modp->isTop();
             AstVar* const enVarp = inOnly
-                                       ? getCreateEnVarp(inVarp, false)
+                                       ? getCreateEnVarp(inVarp, false, m_modp)
                                        : new AstVar{nodep->fileline(), VVarType::MODULETEMP,
                                                     nodep->name() + "__en" + cvtToStr(m_unique++),
                                                     VFlagBitPacked{}, enModVarp->width()};
@@ -3806,8 +3840,9 @@ class TristateVisitor final : public TristateBaseVisitor {
                 m_varAux(nodep).ifaceTristate = true;
                 m_tgraph.setTristate(nodep);
             }
-            if (nodep->isInout() || nodep->resolveWrittenInput()) {
-                // Resolve local drivers of an input without making its value actual writable.
+            if (nodep->isInout() || nodep->resolveWrittenInput()
+                || (nodep->isInput() && m_varAux(nodep).forceRhsReadEn)) {
+                // Resolve local port drivers or read the incoming drive state for a force.
                 UINFO(9, "  setTristate-port " << nodep);
                 m_tgraph.setTristate(nodep);
             }
@@ -4025,28 +4060,50 @@ public:
                 if (AstVar* const varp = VN_CAST(stmtp, Var)) createResolvedEnVarp(varp, inputps);
             }
         }
-        // Incoming enables must exist before parent pins are expanded.
+        // Seed read demand only for force targets that use the RHS drive state.
+        std::vector<AstVar*> inputReadps;
         const std::unordered_set<const AstVar*>& aliasps = eligible.aliasps;
         for (AstNode* const nodep : netlistp->modulespList()) {
             if (!haveForce || VN_IS(nodep, Iface)) continue;
             VL_RESTORER(m_modp);
             m_modp = VN_AS(nodep, NodeModule);
-            m_modp->foreach([this, &eligible, &aliasps](const AstAssignForce* forcep) {
-                AstNodeVarRef* const targetp = forceTargetRefp(forcep->lhsp());
-                if (!targetp || !isForceOverrideNet(targetp->varp())) return;
-                const AstVarRef* const rhsRefp = VN_CAST(forcep->rhsp(), VarRef);
-                if (!m_modp->isTop() && rhsRefp && eligible.rhsInputps.count(rhsRefp->varp())) {
-                    getCreateEnVarp(rhsRefp->varp(), false, m_modp);
-                    m_varAux(rhsRefp->varp()).forceRhsReadEn = true;
-                }
-                if (const AstNodeVarRef* const refp = forceRhsRefp(forcep->rhsp())) {
-                    AstVar* const varp = refp->varp();
-                    if (varp->isNet() && !varp->isIO() && !varp->isFuncLocalSticky()
-                        && !varp->isForced() && !varp->isForceable() && !aliasps.count(varp)) {
-                        m_varAux(varp).forceRhsReadEn = true;
+            m_modp->foreach(
+                [this, &eligible, &aliasps, &inputReadps](const AstAssignForce* forcep) {
+                    AstNodeVarRef* const targetp = forceTargetRefp(forcep->lhsp());
+                    if (!targetp || !isForceOverrideNet(targetp->varp())) return;
+                    const AstVarRef* const rhsRefp = VN_CAST(forcep->rhsp(), VarRef);
+                    if (rhsRefp && rhsRefp->dtypep()->skipRefp()->isFourstate()
+                        && eligible.rhsInputps.count(rhsRefp->varp())) {
+                        inputReadps.push_back(rhsRefp->varp());
                     }
+                    if (const AstNodeVarRef* const refp = forceRhsRefp(forcep->rhsp())) {
+                        AstVar* const varp = refp->varp();
+                        if (varp->isNet() && !varp->isIO() && !varp->isFuncLocalSticky()
+                            && !varp->isForced() && !varp->isForceable() && !aliasps.count(varp)) {
+                            m_varAux(varp).forceRhsReadEn = true;
+                        }
+                    }
+                });
+        }
+        // Walk upstream once per demanded input, then create enable ports in declaration order.
+        for (size_t index = 0; index < inputReadps.size(); ++index) {
+            AstVar* const varp = inputReadps[index];
+            if (m_varAux(varp).forceRhsReadEn) continue;
+            m_varAux(varp).forceRhsReadEn = true;
+            const auto it = eligible.rhsInputActualps.find(varp);
+            if (it != eligible.rhsInputActualps.end()) {
+                inputReadps.insert(inputReadps.end(), it->second.begin(), it->second.end());
+            }
+        }
+        for (AstNode* const nodep : netlistp->modulespList()) {
+            VL_RESTORER(m_modp);
+            m_modp = VN_AS(nodep, NodeModule);
+            for (AstNode* const stmtp : m_modp->stmtspList()) {
+                AstVar* const varp = VN_CAST(stmtp, Var);
+                if (varp && varp->isInput() && m_varAux(varp).forceRhsReadEn) {
+                    getCreateEnVarp(varp, false, m_modp);
                 }
-            });
+            }
         }
         // Process interfaces first, in reverse declaration order, before their external drivers.
         for (auto it = ifacesp.rbegin(); it != ifacesp.rend(); ++it) iterate(*it);
