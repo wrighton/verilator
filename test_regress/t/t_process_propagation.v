@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: 2023 Antmicro Ltd
 // SPDX-License-Identifier: CC0-1.0
 
+// verilog_format: off
+`define stop $stop
+// verilog_format: on
+
 event evt1, evt2;
 
 class Foo;
@@ -33,7 +37,30 @@ class Bar extends Foo;
   endtask
 endclass
 
+// A subroutine needing the current process, called by a task both directly and from a fork
+// branch, gets the caller's process on the direct call
+class Rec;
+  static process last;
+  static function void record();
+    last = process::self();
+  endfunction
+  static task recordTwice();
+    record();
+    fork
+      record();
+    join_none
+  endtask
+endclass
+
 module t;
+  initial begin
+    automatic process p = process::self();
+    Rec::recordTwice();
+    if (Rec::last != p) `stop;
+    #1;
+    if (Rec::last == p) `stop;
+  end
+
   initial begin
     process p;
     Foo foo;
@@ -56,8 +83,8 @@ module t;
     ->evt1;
 
     @evt2 begin
-      if (!foo.event_received) $stop;
-      if (bar.event_received) $stop;
+      if (!foo.event_received) `stop;
+      if (bar.event_received) `stop;
 
       $write("*-* All Finished *-*\n");
       $finish;

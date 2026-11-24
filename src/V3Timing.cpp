@@ -437,9 +437,6 @@ public:
     // CONSTRUCTORS
     explicit TimingSuspendableVisitor(AstNetlist* nodep) {
         iterate(nodep);
-        m_suspGraph.removeTransitiveEdges();
-        m_procGraph.removeTransitiveEdges();
-        // Opaque DPI calls may introduce cycles, so add them after transitive pruning.
         for (AstCFunc* const dpiExportp : m_dpiExports) {
             new V3GraphEdge{&m_suspGraph, getSuspendDepVtx(dpiExportp), getSuspendDepVtx(nodep),
                             P_CALL};
