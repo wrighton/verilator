@@ -7002,6 +7002,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
             }
         }
+        if (AstPin* const paramsp = nodep->paramsp()) {
+            // Only a class reference takes parameter values, and it was replaced above
+            nodep->v3error("Parameter values applied to "
+                           << nodep->prettyNameQ()
+                           << ", which is not a parameterized class (IEEE 1800-2023 A.2.2.1)");
+            pushDeletep(paramsp->unlinkFrBackWithNext());
+        }
         iterateChildren(nodep);
     }
     void visit(AstRequireDType* nodep) override {
