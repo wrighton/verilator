@@ -3357,41 +3357,91 @@ class SolverSmtLowering final : public V3SolverLowering {
         return andp;
     }
 
+    // Number of values of a range of 'distp' with constant bounds, folding the bounds, as a
+    // constant cast is not yet folded here. Two bits wider than the expression or 64 bits, for
+    // the size of a full range and for the sign of a reversed one, which is negative. Sets
+    // 'isConst' false, and returns zero, if a bound is not constant.
+    static V3Number constRangeSize(AstDist* distp, const AstInsideRange* irp, bool& isConst) {
+        const int width = std::max(distp->exprp()->width(), VL_QUADSIZE) + 2;
+        AstNode* const lop = V3Const::constifyEdit(irp->lhsp()->cloneTreePure(false));
+        AstNode* const hip = V3Const::constifyEdit(irp->rhsp()->cloneTreePure(false));
+        const AstConst* const lopCp = VN_CAST(lop, Const);
+        const AstConst* const hipCp = VN_CAST(hip, Const);
+        V3Number size{distp, width};
+        isConst = lopCp && hipCp;
+        if (isConst) {
+            V3Number lo{distp, width};
+            V3Number hi{distp, width};
+            if (irp->lhsp()->isSigned()) {
+                lo.opExtendS(lopCp->num(), lopCp->width());
+                hi.opExtendS(hipCp->num(), hipCp->width());
+            } else {
+                lo.opAssign(lopCp->num());
+                hi.opAssign(hipCp->num());
+            }
+            size.opSub(hi, lo);
+            size.opAdd(V3Number{size}, V3Number{distp, width, 1});
+        }
+        VL_DO_DANGLING(lop->deleteTree(), lop);
+        VL_DO_DANGLING(hip->deleteTree(), hip);
+        return size;
+    }
+
+    // The low 64 bits of a range bound, sign extended if narrower and signed
+    static AstNodeExpr* newBound64(FileLine* fl, AstNodeExpr* boundp) {
+        AstNodeExpr* const clonep = boundp->cloneTreePure(false);
+        if (clonep->width() > VL_QUADSIZE) return new AstSel{fl, clonep, 0, VL_QUADSIZE};
+        if (clonep->isSigned()) return new AstExtendS{fl, clonep, VL_QUADSIZE};
+        return new AstExtend{fl, clonep, VL_QUADSIZE};
+    }
+    // Number of values of a range with bounds that are not constant, in 64 bits
+    static AstNodeExpr* newVarRangeSize(FileLine* fl, const AstInsideRange* irp) {
+        return new AstAdd{
+            fl, new AstConst{fl, AstConst::Unsized64{}, 1},
+            new AstSub{fl, newBound64(fl, irp->rhsp()), newBound64(fl, irp->lhsp())}};
+    }
+
     struct DistBucket final {
         AstNodeExpr* rangep;  // A single value or an InsideRange
         AstNodeExpr* weightExprp;  // Effective 64-bit weight (range weight scaled by size)
+        bool isConst;  // InsideRange with constant bounds
+        V3Number size;  // If isConst, its number of values, from constRangeSize
     };
 
     // Non-zero-weight buckets with each weight extended to 64 bits.
-    std::vector<DistBucket> collectDistBuckets(AstDist* const distp) {
+    // Sets 'droppedEmptyr' if an item with a weight is dropped as an empty range.
+    std::vector<DistBucket> collectDistBuckets(AstDist* const distp, bool& droppedEmptyr) {
         FileLine* const fl = distp->fileline();
         std::vector<DistBucket> buckets;
         for (AstDistItem* const ditemp : distp->itemspList()) {
             if (const AstConst* const constp = VN_CAST(ditemp->weightp(), Const)) {
                 if (constp->toUQuad() == 0) continue;
             }
+            const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange);
+            bool isConst = false;
+            const V3Number size = irp ? constRangeSize(distp, irp, isConst) : V3Number{distp, 1};
+            // A reversed range is empty (IEEE 1800-2023 11.4.13), so like a zero weight
+            if (isConst && size.isNegative()) {
+                droppedEmptyr = true;
+                continue;
+            }
             AstNodeExpr* weightExprp
                 = new AstExtend{fl, ditemp->weightp()->cloneTreePure(false), 64};
             // := on a range weights every element, so scale by the range size.
-            if (!ditemp->isWhole()) {
-                if (const AstInsideRange* const irp = VN_CAST(ditemp->rangep(), InsideRange)) {
-                    const AstConst* const lop = VN_CAST(irp->lhsp(), Const);
-                    const AstConst* const hip = VN_CAST(irp->rhsp(), Const);
-                    AstNodeExpr* rangeSizep;
-                    if (lop && hip) {
-                        const uint64_t rangeSize = hip->toUQuad() - lop->toUQuad() + 1;
-                        rangeSizep = new AstConst{fl, AstConst::Unsized64{}, rangeSize};
-                    } else {
-                        rangeSizep = new AstAdd{
-                            fl, new AstConst{fl, AstConst::Unsized64{}, 1},
-                            new AstSub{fl,
-                                       new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64},
-                                       new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64}}};
-                    }
-                    weightExprp = new AstMul{fl, weightExprp, rangeSizep};
+            if (irp && !ditemp->isWhole()) {
+                AstNodeExpr* rangeSizep;
+                if (isConst) {
+                    // Saturate a size that does not fit 64 bits
+                    rangeSizep = new AstConst{fl, AstConst::Unsized64{},
+                                              size.mostSetBitP1() <= VL_QUADSIZE
+                                                  ? size.toUQuad()
+                                                  : std::numeric_limits<uint64_t>::max()};
+                } else {
+                    rangeSizep = newVarRangeSize(fl, irp);
                 }
+                weightExprp = new AstMul{fl, weightExprp, rangeSizep};
             }
-            buckets.push_back({ditemp->rangep(), weightExprp});
+            buckets.push_back({ditemp->rangep(), weightExprp, isConst, size});
         }
         return buckets;
     }
@@ -3609,36 +3659,60 @@ class SolverSmtLowering final : public V3SolverLowering {
         return new AstConstraintIf{fl, gatep, chainp, buildFrozenMembership(distp, buckets)};
     }
 
-    AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp) {
+    AstNodeExpr* newUniformRangePick(AstDist* distp, const AstInsideRange* irp,
+                                     const DistBucket& bucket) {
         FileLine* const fl = distp->fileline();
         AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
         distExprCopyp->user1(true);
         const int distWidth = distp->exprp()->width();
-        const AstConst* const lopCp = VN_CAST(irp->lhsp(), Const);
-        const AstConst* const hipCp = VN_CAST(irp->rhsp(), Const);
-        AstNodeExpr* rangeSzp;
-        if (lopCp && hipCp) {
-            const uint64_t rsz = hipCp->toUQuad() - lopCp->toUQuad() + 1;
-            rangeSzp = new AstConst{fl, AstConst::Unsized64{}, rsz};
+        AstNodeExpr* rangeSzp = nullptr;
+        AstNodeExpr* offsetp = nullptr;
+        // The size may not fit 64 bits, e.g. all values of a 64-bit range, so it is exact, and
+        // the offset is drawn wider than 64 bits if needed
+        const V3Number& size = bucket.size;
+        if (bucket.isConst) {
+            UASSERT_OBJ(!size.isNegative(), irp, "Reversed range should have no bucket");
+            if (size.mostSetBitP1() <= VL_QUADSIZE) {
+                rangeSzp = new AstConst{fl, AstConst::Unsized64{}, size.toUQuad()};
+            } else {
+                // Draw 64 bits more than the size, so the bias of the modulo is below 2^-64
+                const int randWidth = size.mostSetBitP1() + VL_QUADSIZE;
+                AstNodeExpr* const randp = new AstRand{fl, nullptr, false};
+                randp->dtypeSetBitSized(randWidth, VSigning::UNSIGNED);
+                V3Number randSize{distp, randWidth};
+                randSize.opAssign(size);
+                offsetp = new AstModDiv{fl, randp, new AstConst{fl, randSize}};
+            }
         } else {
-            const bool isSigned = irp->lhsp()->isSigned();
-            AstNodeExpr* const lo64p
-                = isSigned ? static_cast<AstNodeExpr*>(
-                                 new AstExtendS{fl, irp->lhsp()->cloneTreePure(false), 64})
-                           : static_cast<AstNodeExpr*>(
-                                 new AstExtend{fl, irp->lhsp()->cloneTreePure(false), 64});
-            AstNodeExpr* const hi64p
-                = isSigned ? static_cast<AstNodeExpr*>(
-                                 new AstExtendS{fl, irp->rhsp()->cloneTreePure(false), 64})
-                           : static_cast<AstNodeExpr*>(
-                                 new AstExtend{fl, irp->rhsp()->cloneTreePure(false), 64});
-            rangeSzp = new AstAdd{fl, new AstConst{fl, AstConst::Unsized64{}, 1ULL},
-                                  new AstSub{fl, hi64p, lo64p}};
+            rangeSzp = newVarRangeSize(fl, irp);
         }
-        AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
-        rand64p->dtypeSetUInt64();
-        AstNodeExpr* const offsetp
-            = new AstCCast{fl, new AstModDiv{fl, rand64p, rangeSzp}, distWidth};
+        if (rangeSzp) {
+            AstNodeExpr* const rand64p = new AstRand{fl, nullptr, false};
+            rand64p->dtypeSetUInt64();
+            offsetp = new AstModDiv{fl, rand64p, rangeSzp};
+        }
+        UASSERT_OBJ(offsetp, distp, "Range offset should be made");
+        if (distWidth > VL_QUADSIZE || offsetp->width() > VL_QUADSIZE) {
+            // Draw the offset once into a temporary, as a wide value is expanded per word
+            AstVar* const offsetVarp = new AstVar{
+                fl, VVarType::BLOCKTEMP, m_uniqueNames.get("__Vdist_offset"), offsetp->dtypep()};
+            offsetVarp->lifetime(VLifetime::AUTOMATIC_EXPLICIT);
+            AstBegin* const blockp
+                = new AstBegin{fl, m_uniqueNames.get("__Vdist_offset_block"), nullptr, true};
+            blockp->addDeclsp(offsetVarp);
+            blockp->addStmtsp(
+                new AstAssign{fl, new AstVarRef{fl, offsetVarp, VAccess::WRITE}, offsetp});
+            AstNodeExpr* valp = new AstVarRef{fl, offsetVarp, VAccess::READ};
+            // The offset is below the size, so fits; a C cast is to basic types only
+            if (offsetVarp->width() > distWidth) {
+                valp = new AstSel{fl, valp, 0, distWidth};
+            } else if (offsetVarp->width() < distWidth) {
+                valp = new AstExtend{fl, valp, distWidth};
+            }
+            offsetp = new AstExprStmt{fl, blockp, valp};
+        } else {
+            offsetp = new AstCCast{fl, offsetp, distWidth};
+        }
         AstNodeExpr* const valuep = new AstAdd{fl, irp->lhsp()->cloneTreePure(false), offsetp};
         AstNodeExpr* const eqp = new AstEq{fl, distExprCopyp, valuep};
         eqp->user1(true);
@@ -3658,7 +3732,7 @@ class SolverSmtLowering final : public V3SolverLowering {
             if (irp && (distBoundRefsRandVar(irp->lhsp()) || distBoundRefsRandVar(irp->rhsp()))) {
                 constraintExprp = newDistRangeMembership(distp, irp);
             } else if (irp) {
-                constraintExprp = newUniformRangePick(distp, irp);
+                constraintExprp = newUniformRangePick(distp, irp, buckets[i]);
             } else {
                 AstNodeExpr* const distExprCopyp = distp->exprp()->cloneTreePure(false);
                 distExprCopyp->user1(true);
@@ -3744,12 +3818,15 @@ class SolverSmtLowering final : public V3SolverLowering {
 
             FileLine* const fl = distp->fileline();
 
-            std::vector<DistBucket> buckets = collectDistBuckets(distp);
+            bool droppedEmpty = false;
+            std::vector<DistBucket> buckets = collectDistBuckets(distp, droppedEmpty);
 
             if (buckets.empty()) {
-                // All weights are zero: dist is vacuously true (unconstrained)
-                AstConstraintExpr* const truep
-                    = new AstConstraintExpr{fl, new AstConst{fl, AstConst::BitTrue{}}};
+                // All weights are zero: dist is vacuously true (unconstrained), unless an item
+                // with a weight has an empty range, so no value is in the set
+                AstConstraintExpr* const truep = new AstConstraintExpr{
+                    fl, droppedEmpty ? new AstConst{fl, AstConst::BitFalse{}}
+                                     : new AstConst{fl, AstConst::BitTrue{}}};
                 constrExprp->replaceWith(truep);
                 VL_DO_DANGLING(pushDeletep(constrExprp), constrExprp);
                 continue;
