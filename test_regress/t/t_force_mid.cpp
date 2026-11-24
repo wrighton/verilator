@@ -20,18 +20,18 @@ std::unique_ptr<VM_PREFIX> topp;
 template <typename T>
 void checkRhsStorage(T value, int width) {
     VlForceVec forces;
-    forces.addForce(0, width - 1, &value, 0);
+    forces.addForce(0, width - 1, &value, 0, 1);
     if (forces.read(T{0}) != value) vl_fatal(__FILE__, __LINE__, "", "RHS storage mismatch");
     const int kept = width / 2;
     const T lowMask = static_cast<T>(VL_MASK_Q(kept));
     forces.release(kept, width - 1);
     if (forces.read(T{0}) != static_cast<T>(value & lowMask))
         vl_fatal(__FILE__, __LINE__, "", "Tail trim lost RHS storage width");
-    forces.addForce(0, width - 1, &value, 0);
+    forces.addForce(0, width - 1, &value, 0, 1);
     forces.release(0, kept - 1);
     if (forces.read(T{0}) != static_cast<T>(value & ~lowMask))
         vl_fatal(__FILE__, __LINE__, "", "Head trim lost RHS storage width");
-    forces.addForce(0, width - 1, &value, 0);
+    forces.addForce(0, width - 1, &value, 0, 1);
     forces.release(1, width - 2);
     const T ends = static_cast<T>(T{1} | (T{1} << (width - 1)));
     if (forces.read(T{0}) != static_cast<T>(value & ends))
@@ -48,12 +48,12 @@ int main(int argc, char** argv) {
     alignas(QData) CData misaligned[9] = {};
     misaligned[1] = 5;
     VlForceVec narrow;
-    narrow.addForce(0, 2, misaligned + 1, 0);
+    narrow.addForce(0, 2, misaligned + 1, 0, 1);
     if (narrow.read(CData{0}) != 5)
         vl_fatal(__FILE__, __LINE__, "", "Misaligned narrow RHS mismatch");
     const CData bits = 5;
     VlForceVec element;
-    element.addForce(1, 1, &bits, 9, 9, 11, 63);
+    element.addForce(1, 1, &bits, 9, 9, 11, 63, 1);
     if (element.readIndex(QData{0}, 1) != QData{5 << 9})
         vl_fatal(__FILE__, __LINE__, "", "Narrow element RHS mismatch");
     element.release(1, 1, 10, 10);
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         vl_fatal(__FILE__, __LINE__, "", "Element split lost RHS storage width");
     const SData wideBits = 0x5a5;
     VlForceVec wideElement;
-    wideElement.addForce(2, 2, &wideBits, 60, 60, 70, 95);
+    wideElement.addForce(2, 2, &wideBits, 60, 60, 70, 95, 1);
     VlWide<3> zero = {};
     const VlWide<3> blended = wideElement.readIndex(zero, 2);
     if (blended[0] || blended[1] != 0x50000000U || blended[2] != 0x5aU)
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
     wideRhs[1] = 0x12345678U;
     wideRhs[2] = 0x13579bdfU;
     VlForceVec wide;
-    wide.addForce(0, 94, &wideRhs, 0);
+    wide.addForce(0, 94, &wideRhs, 0, 1);
     if (wide.read(zero) != wideRhs) vl_fatal(__FILE__, __LINE__, "", "Wide RHS mismatch");
     wide.release(32, 94);
     const VlWide<3> trimmed = wide.read(zero);

@@ -2837,55 +2837,100 @@ class TaskVisitor final : public VNVisitor {
             if (refp->access().isWriteOrRW()) written.insert(refp->varScopep());
         });
         AstNodeStmt* storep = nullptr;
+        AstNodeStmt* resetp = nullptr;
         AstNodeExpr* changedp = nullptr;
         AstSenItem* itemsp = nullptr;
+        AstVarScope* activeVscp = nullptr;
+        const auto activeRef = [&]() { return new AstVarRef{flp, activeVscp, VAccess::READ}; };
         const auto addInput = [&](AstNodeExpr* const inputp) {
+            if (!activeVscp) activeVscp = m_forceTmps.make(flp, m_scopep, 1, "active");
             AstVarScope* const prevp = m_forceTmps.make(flp, m_scopep, inputp->dtypep(), "prev");
-            itemsp = AstNode::addNext(
-                itemsp, new AstSenItem{flp, VEdgeType::ET_CHANGED, inputp->cloneTreePure(false)});
+            const AstNodeDType* elementp = inputp->dtypep()->skipRefp();
+            while (VN_IS(elementp, UnpackArrayDType)) elementp = elementp->subDTypep()->skipRefp();
+            const bool ownsClass = VN_IS(elementp, ClassRefDType);
+            const auto newEmpty = [&]() -> AstNodeExpr* {
+                if (VN_IS(inputp->dtypep()->skipRefp(), ClassRefDType)) {
+                    return new AstConst{flp, AstConst::Null{}};
+                }
+                AstCExpr* const emptyp = new AstCExpr{flp, AstCExpr::Pure{}};
+                emptyp->add("std::decay_t<decltype(");
+                emptyp->add(new AstVarRef{flp, prevp, VAccess::READ});
+                emptyp->add(")>{}");
+                emptyp->dtypeFrom(inputp);
+                return emptyp;
+            };
+            const auto clear = [&]() {
+                return new AstAssign{flp, new AstVarRef{flp, prevp, VAccess::WRITE}, newEmpty()};
+            };
+            AstNodeExpr* sensep = inputp->cloneTreePure(false);
             AstNodeExpr* termp = SenExprBuilder::newChangedp(
                 flp, inputp->cloneTreePure(false), new AstVarRef{flp, prevp, VAccess::READ});
             AstNodeStmt* assignp
                 = new AstAssign{flp, new AstVarRef{flp, prevp, VAccess::WRITE}, inputp};
-            if (AstNodeExpr* const validp = SenExprBuilder::newNullGuard(inputp)) {
+            AstNodeExpr* const validp = SenExprBuilder::newNullGuard(inputp);
+            if (validp) {
                 termp = new AstLogAnd{flp, validp->cloneTreePure(false), termp};
-                assignp = new AstIf{flp, validp, assignp};
+                assignp = new AstIf{flp, validp, assignp, ownsClass ? clear() : nullptr};
             }
+            if (ownsClass) {
+                // The trigger kit also saves its observed value. While this site owns no
+                // bits (or its receiver is invalid), that value must not own a class object.
+                AstNodeExpr* livep = activeRef();
+                if (validp) livep = new AstLogAnd{flp, livep, validp->cloneTreePure(false)};
+                sensep = new AstCond{flp, livep, sensep, newEmpty()};
+                resetp = AstNode::addNext(resetp, clear());
+            }
+            itemsp = AstNode::addNext(itemsp, new AstSenItem{flp, VEdgeType::ET_CHANGED, sensep});
             changedp = changedp ? new AstLogOr{flp, changedp, termp} : termp;
             storep = AstNode::addNext(storep, assignp);
         };
+        const auto isExternalRead = [&](AstNodeExpr* const exprp) {
+            return exprp->isRepeatable() && exprp->forall([&](AstNode* const childp) {
+                if (const AstVarRef* const refp = VN_CAST(childp, VarRef)) {
+                    return refp->access().isReadOnly() && !written.count(refp->varScopep());
+                }
+                return childp->isPure() && !VN_IS(childp, NodeFTaskRef)
+                       && !VN_IS(childp, CExprUser);
+            });
+        };
+        // Observe selected values rather than copying their entire backing array. The
+        // subscript and receiver remain independent dependencies when they are read.
+        std::unordered_set<const AstNodeExpr*> covered;
+        rhsp->foreach([&](AstArraySel* const selp) {
+            if (selp->isLValue() || !isExternalRead(selp)) return;
+            covered.insert(selp->fromp());
+            if (covered.count(selp) == 0) addInput(selp->cloneTreePure(false));
+        });
         rhsp->foreach([&](AstMemberRef* const refp) {
-            // Observe a readable member's value, not just the object handle. A receiver
-            // computed by the RHS itself must not be evaluated separately for this check.
-            if (!refp->access().isReadOnly() || !refp->forall([&](const AstNode* const childp) {
-                    if (const AstVarRef* const varp = VN_CAST(childp, VarRef)) {
-                        return !written.count(varp->varScopep());
-                    }
-                    return VN_IS(childp, MemberRef) || VN_IS(childp, Const) || VN_IS(childp, Sel)
-                           || VN_IS(childp, ArraySel);
-                })) {
+            if (!refp->access().isReadOnly()) return;
+            if (!isExternalRead(refp)) {
+                refp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS member with a receiver that "
+                                            "cannot be observed independently");
                 return;
             }
             addInput(refp->cloneTreePure(false));
         });
         rhsp->foreach([&](const AstVarRef* const refp) {
             AstVarScope* const inputp = refp->varScopep();
-            if (refp->access().isReadOrRW() && written.insert(inputp).second) {
+            if (!covered.count(refp) && refp->access().isReadOrRW()
+                && written.insert(inputp).second) {
                 addInput(new AstVarRef{flp, inputp, VAccess::READ});
             }
         });
 
-        if (changedp) {
-            AstVarScope* const activeVscp = m_forceTmps.make(flp, m_scopep, 1, "active");
+        if (activeVscp) {
             nodep->activep(new AstVarRef{flp, activeVscp, VAccess::WRITE});
+            if (resetp) {
+                itemsp->addNext(new AstSenItem{flp, VEdgeType::ET_NEGEDGE, activeRef()});
+            }
             // Ownership alone is not a dependency change. Record the current inputs before
             // both evaluations so activation cannot repeat a side effect or a random draw.
             AstNodeStmt* const updatep = storep->cloneTree(true);
             updatep->addNext(new AstAssign{flp, new AstVarRef{flp, vscp, VAccess::WRITE},
                                            rhsp->cloneTree(false)});
-            AstNodeExpr* const guardp
-                = new AstLogAnd{flp, new AstVarRef{flp, activeVscp, VAccess::READ}, changedp};
-            AstIf* const ifp = new AstIf{flp, guardp, updatep};
+            AstIf* const ifp
+                = resetp ? new AstIf{flp, activeRef(), new AstIf{flp, changedp, updatep}, resetp}
+                         : new AstIf{flp, new AstLogAnd{flp, activeRef(), changedp}, updatep};
             AstSenTree* const sentreep = new AstSenTree{flp, itemsp};
             AstActive* const activep = new AstActive{flp, "force-func-update", sentreep};
             activep->senTreeStorep(activep->sentreep());

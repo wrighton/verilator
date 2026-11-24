@@ -289,7 +289,7 @@ private:
 public:
     VlForceVec() = default;
 
-    // A procedural RHS stays live as long as any part of its force survives.
+    /// Whether any part of the procedural force with this ID still owns its target.
     bool hasForce(int forceId, int lsb, int msb) const {
         for (auto it = std::lower_bound(m_entries.begin(), m_entries.end(), lsb,
                                         [](const Entry& e, int bit) { return e.m_msb < bit; });
@@ -368,7 +368,7 @@ public:
         return result;
     }
 
-    void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int forceId = 0) {
+    void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int forceId) {
         assert(lsb <= msb);
         assert(rhsDatap);
         assert(rhsLsb <= lsb);
@@ -378,7 +378,7 @@ public:
     }
 
     void addForce(int lsb, int msb, const void* rhsDatap, int rhsLsb, int bitLsb, int bitMsb,
-                  int elemWidth, int forceId = 0) {
+                  int elemWidth, int forceId) {
         assert(lsb == msb);
         assert(rhsDatap);
         assert(elemWidth > 0);
