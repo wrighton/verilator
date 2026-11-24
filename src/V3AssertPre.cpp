@@ -946,7 +946,14 @@ private:
         return sizep;
     }
     void visit(AstSEventually* nodep) override {
-        UASSERT(v3Global.rootp()->stdPackagep(), "Should be imported");
+        // Tracking of active attempts uses std::process
+        if (!v3Global.rootp()->stdPackageProcessp()) {
+            nodep->v3warn(E_UNSUPPORTED,
+                          "Unsupported: s_eventually without the std package (--no-std)");
+            nodep->replaceWith(new AstConst{nodep->fileline(), AstConst::BitFalse{}});
+            VL_DO_DANGLING(pushDeletep(nodep), nodep);
+            return;
+        }
 
         AstSenTree* const sentreep = newSenTree(nodep);
         if (!sentreep->sensesp()) {
