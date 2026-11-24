@@ -10,8 +10,8 @@
 // verilog_format: on
 
 // Register-model style classes: Block's constraint selects through Reg's
-// fields, so the nested pre/post_randomize callbacks of Reg are also called
-// from Block, so are kept, and are not inlined into Reg's randomize()
+// fields, so the pre- and post-randomize phases of Reg are also called from
+// Block, so are kept, and are not inlined into Reg's randomize()
 
 class Field;
   rand int value;
