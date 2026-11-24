@@ -9173,12 +9173,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                          "parameter in assertion control scope index.");
                     return "";
                 }
-                if (!VN_IS(selp->bitp(), VarXRef)) {
+                // Constant function evaluation is not available while linking.
+                if (selp->bitp()->exists([](const AstFuncRef*) { return true; })) {
                     selp->bitp()->v3warn(E_UNSUPPORTED,
-                                         "Unsupported: Assertion control scope index "
-                                         "requires folding a relinked generate parameter.");
+                                         "Unsupported: Function call with a generate-qualified "
+                                         "parameter in assertion control scope index.");
                     return "";
                 }
+                // Relinked names are not widthed yet, so fold as V3Param folds other indices.
+                V3Const::constifyParamsNoWarnEdit(selp->bitp());
+            }
+            // Folding reads, and edits, the values of the parameters the index refers to, which
+            // are elaborated only by V3Param. Until then an element name resolves to its array,
+            // so the path without the index has the same first scope.
+            if (!m_statep->forParamed()
+                && selp->bitp()->exists([](const AstNodeVarRef*) { return true; })) {
+                return assertControlPath(selp->fromp(), nonconstantp);
             }
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             AstConst* const constp = VN_CAST(indexp, Const);
@@ -9244,10 +9254,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const bool runtimeIndex = itemp->exists([](const AstNodeVarRef* refp) {
                 return !refp->varp() || !refp->varp()->isParam();
             });
-            if (nonconstant && !runtimeIndex
-                && itemp->exists([](const AstFuncRef*) { return true; })) {
-                itemp->v3warn(E_UNSUPPORTED,
-                              "Unsupported: Function call in assertion control scope index.");
+            if (nonconstant && !runtimeIndex && itemp->exists([](const AstFuncRef* refp) {
+                    return V3LinkDot::assertCtlRuntimeIndexNode(refp);
+                })) {
+                itemp->v3error("Assertion control scope index calls a function that reaches a "
+                               "hierarchical name, so is not a constant function call "
+                               "(IEEE 1800-2023 13.4.3).");
             } else if (nonconstant) {
                 itemp->v3error("Nonconstant index in assertion control scope "
                                "(IEEE 1800-2023 20.11).");
@@ -9683,9 +9695,29 @@ bool V3LinkDot::pathSegments(AstNode* pathp, PathSegments& segs) {
     return true;
 }
 
+// Whether a call reaches a hierarchical name, itself or in a function it calls, which a constant
+// function may not (IEEE 1800-2023 13.4.3). Each function is scanned once.
+static bool assertCtlHierarchicalCall(const AstNodeFTaskRef* refp,
+                                      std::unordered_set<const AstNodeFTask*>& scanned) {
+    if (!refp->dotted().empty()) return true;
+    const AstNodeFTask* const taskp = refp->taskp();
+    if (!taskp || !scanned.emplace(taskp).second) return false;
+    return taskp->exists([&](const AstNode* nodep) {
+        if (const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef)) {
+            return assertCtlHierarchicalCall(callp, scanned);
+        }
+        return VN_IS(nodep, VarXRef) || VN_IS(nodep, Dot);
+    });
+}
+
 bool V3LinkDot::assertCtlRuntimeIndexNode(const AstNode* nodep) {
     if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
         return !refp->varp() || !refp->varp()->isParam();
+    }
+    // A call folds only as a constant function; arguments are checked separately
+    if (const AstFuncRef* const refp = VN_CAST(nodep, FuncRef)) {
+        std::unordered_set<const AstNodeFTask*> scanned;
+        return assertCtlHierarchicalCall(refp, scanned);
     }
     if (VN_IS(nodep, NodeFTaskRef) || !nodep->isPredictOptimizable()) return true;
     if (!nodep->isSystemFunc()) return false;

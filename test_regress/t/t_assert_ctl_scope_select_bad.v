@@ -33,7 +33,7 @@ module t(input bit clk);
     // (IEEE 1800-2023 A.9.3, 23.6)
     $assertoff(0, g[i]);
     $assertoff(0, scalar[0]);
-    $assertoff(0, g[selected_index()]);
+    $assertoff(0, g[runtime_index()]);
     $assertoff(0, g[selected_index() + i]);
     $assertoff(0, g[omitted_cfg.SELECTED]);
     $assertoff(0, g[cfg.SELECTED]);
@@ -64,5 +64,54 @@ module t(input bit clk);
     $assertoff(0, g[-95'sd4294967296]);
     $assertoff(0, g[129'd4294967297]);
     $assertoff(0, g[32'h80000000]);
+    // A folded index must still name an existing scope.
+    $assertoff(0, g[int'(choice.IDX)]);
+    $assertoff(0, g[fcfg.one()]);
+    // A constant function call reaches no hierarchical name, also through another function
+    // (IEEE 1800-2023 13.4.3)
+    $assertoff(0, g[s.f(0)]);
+    $assertoff(0, g[ip.fp()]);
+    $assertoff(0, g[local_f()]);
+    $assertoff(0, g[local_fp()]);
+    $assertoff(0, g[outer_f()]);
+    $assertoff(0, g[gen_f()]);
+  end
+  sub #(.P(2)) s ();
+  ifc #(.P(2)) ip ();
+  function automatic int local_f();
+    return s.f(0);
+  endfunction
+  function automatic int local_fp();
+    return ip.fp();
+  endfunction
+  function automatic int outer_f();
+    return local_f();
+  endfunction
+  function automatic int gen_f();
+    return fcfg.one();
+  endfunction
+  function automatic int runtime_index();
+    return i;
+  endfunction
+  if (1) begin : fcfg
+    function automatic int one();
+      return 1;
+    endfunction
   end
 endmodule
+
+module sub #(
+    parameter int P = 0
+);
+  function automatic int f(int a);
+    return a + P;
+  endfunction
+endmodule
+
+interface ifc #(
+    parameter int P = 0
+);
+  function automatic int fp();
+    return P;
+  endfunction
+endinterface

@@ -1,17 +1,18 @@
+%Error: t/t_assert_ctl_scope_select_bad.v:36:21: Expecting expression to be constant, but can't determine constant for FUNCREF 'runtime_index'
+                                               : ... note: In instance 't'
+        t/t_assert_ctl_scope_select_bad.v:94:12: ... Location of non-constant VARREF 'i': Language violation: reference to non-function-local variable
+        t/t_assert_ctl_scope_select_bad.v:36:21: ... Called from 'runtime_index()' with parameters:
+   36 |     $assertoff(0, g[runtime_index()]);
+      |                     ^~~~~~~~~~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_assert_ctl_scope_select_bad.v:34:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
    34 |     $assertoff(0, g[i]);
       |                    ^
-        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
 %Error: t/t_assert_ctl_scope_select_bad.v:35:25: Assertion control target is not a scope or assertion: 'scalar[0]' (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
    35 |     $assertoff(0, scalar[0]);
       |                         ^
-%Error-UNSUPPORTED: t/t_assert_ctl_scope_select_bad.v:36:20: Unsupported: Function call in assertion control scope index.
-                                                           : ... note: In instance 't'
-   36 |     $assertoff(0, g[selected_index()]);
-      |                    ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
 %Error: t/t_assert_ctl_scope_select_bad.v:37:20: Nonconstant index in assertion control scope (IEEE 1800-2023 20.11).
                                                : ... note: In instance 't'
    37 |     $assertoff(0, g[selected_index() + i]);
@@ -120,4 +121,36 @@
                                                : ... note: In instance 't'
    66 |     $assertoff(0, g[32'h80000000]);
       |                     ^~~~~~~~~~~~
+%Error: t/t_assert_ctl_scope_select_bad.v:68:20: Assertion control target is not a scope or assertion: 'g[-1]' (IEEE 1800-2023 20.11).
+                                               : ... note: In instance 't'
+   68 |     $assertoff(0, g[int'(choice.IDX)]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:69:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   69 |     $assertoff(0, g[fcfg.one()]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:72:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   72 |     $assertoff(0, g[s.f(0)]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:73:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   73 |     $assertoff(0, g[ip.fp()]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:74:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   74 |     $assertoff(0, g[local_f()]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:75:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   75 |     $assertoff(0, g[local_fp()]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:76:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   76 |     $assertoff(0, g[outer_f()]);
+      |                    ^
+%Error: t/t_assert_ctl_scope_select_bad.v:77:20: Assertion control scope index calls a function that reaches a hierarchical name, so is not a constant function call (IEEE 1800-2023 13.4.3).
+                                               : ... note: In instance 't'
+   77 |     $assertoff(0, g[gen_f()]);
+      |                    ^
 %Error: Exiting due to
