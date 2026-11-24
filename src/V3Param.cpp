@@ -2114,8 +2114,11 @@ class ParamProcessor final {
                                   + paramValueNumber(namingExprp));
                     any_overridesr = true;
                 } else {
+                    // A parameter declared without a type takes the signedness of its value
+                    // (IEEE 1800-2023 6.20.2), so an unsigned value is named apart
+                    const bool unsignedName = modvarp->untypedParam() && !namingExprp->isSigned();
                     longnamer += ("_" + paramSmallName(srcModp, modvarp)
-                                  + namingExprp->num().ascii(false));
+                                  + namingExprp->num().ascii(false) + (unsignedName ? "u" : ""));
                     any_overridesr = true;
                 }
                 if (normedNamep) VL_DO_DANGLING(normedNamep->deleteTree(), normedNamep);
