@@ -1,0 +1,10 @@
+%Error: t/t_class_param_dflt_kind_bad.v:23:7: Can't convert defparam value to constant: Param '__paramNumber1' of 'Cv'
+                                            : ... note: In instance 't'
+   23 |   Cv#(logic)::t a;
+      |       ^~~~~
+        ... See the manual at https://verilator.org/verilator_doc.html?v=latest for more assistance.
+%Error: t/t_class_param_dflt_kind_bad.v:25:7: Parameter type pin value isn't a type: Param 'T' of 'Ct'
+                                            : ... note: In instance 't'
+   25 |   Ct#(5)::t b;
+      |       ^
+%Error: Exiting due to
