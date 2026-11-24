@@ -1092,7 +1092,27 @@ void createEval(AstNetlist* netlistp,  //
                     flp, new AstVarRef{flp, delaySchedVscp, VAccess::READWRITE},
                     VCMethod::SCHED_RESUME_ZERO_DELAY};
                 callp->dtypeSetVoid();
-                return callp->makeStmt();
+                AstVarScope* const dirtyp = timingKit.m_zeroDelayDirtyp;
+                if (!dirtyp) return callp->makeStmt();
+                // If they wrote what logic reads, fire the delay scheduler's triggers for the
+                // next 'act' iteration, as resuming the delay scheduler there does
+                AstIf* const ifp = new AstIf{flp, new AstVarRef{flp, dirtyp, VAccess::READ}};
+                for (const uint32_t index : timingKit.m_delayTriggers) {
+                    const auto accp = [&](VAccess access) {
+                        return new AstArraySel{flp, new AstVarRef{flp, trigKit.vscAccp(), access},
+                                               new AstConst{flp, AstConst::Unsized64{},
+                                                            index / TriggerKit::WORD_SIZE}};
+                    };
+                    ifp->addThensp(new AstAssign{
+                        flp, accp(VAccess::WRITE),
+                        new AstOr{flp, accp(VAccess::READ),
+                                  new AstConst{flp, AstConst::Unsized64{},
+                                               1ULL << (index % TriggerKit::WORD_SIZE)}}});
+                }
+                AstNodeStmt* const stmtsp = util::setVar(dirtyp, 0);
+                stmtsp->addNext(callp->makeStmt());
+                stmtsp->addNext(ifp);
+                return stmtsp;
             } else {
                 // Assumption was that the design doesn't use #0 delays.
                 // Die at run-time if it does.
@@ -1107,6 +1127,9 @@ void createEval(AstNetlist* netlistp,  //
                 return stmtp;
             }
         }());
+
+    // The processes resumed after zero delays set the flag, unseen by V3Life
+    if (timingKit.m_zeroDelayDirtyp) netlistp->evalFuncp(VEval::INACT)->noLife(true);
 
     // Create the 'nba' region
     createEvalRegion(  //
