@@ -483,6 +483,103 @@ static AstVar* forceNetp(const AstPin* pinp) {
 }
 
 //######################################################################
+// Forced input net ports that may be one net with all their connections
+
+class TristateForcedInputVisitor final : public VNVisitorConst {
+    // Forced input net port, and whether each connection of it is a plain wire.
+    std::unordered_map<const AstVar*, bool> m_plainps;
+    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_netps;  // Its connections
+    // Pulls on a formal propagate to the nets connected to its instances.
+    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_pullActualps;
+    // Written other than by a force or release, or forced with a value of an enable not known
+    // before V3Tristate processes the module
+    std::unordered_set<const AstVar*> m_writtenps;
+    std::unordered_set<const AstVar*> m_pulledps;  // Nets with a pull
+
+    void visit(AstAssignForce* nodep) override {
+        AstNodeExpr* lhsp = nodep->lhsp();
+        while (const AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
+        // A constant, or a variable of the module of the force
+        const AstNodeExpr* rhsp = nodep->rhsp();
+        while (const AstSel* const selp = VN_CAST(rhsp, Sel)) rhsp = selp->fromp();
+        const AstVarRef* const rhsRefp = VN_CAST(rhsp, VarRef);
+        const bool known = VN_IS(rhsp, Const)
+                           || (VN_IS(lhsp, VarRef) && rhsRefp && !rhsRefp->varp()->isNet()
+                               && !rhsRefp->varp()->isIO() && !rhsRefp->varp()->isForced());
+        if (const AstNodeVarRef* const refp = VN_CAST(lhsp, NodeVarRef)) {
+            if (!known) m_writtenps.emplace(refp->varp());
+        }
+        iterateAndNextConstNull(nodep->rhsp());
+    }
+    void visit(AstRelease*) override {}
+    void visit(AstPull* nodep) override {
+        nodep->lhsp()->foreach(
+            [&](const AstNodeVarRef* refp) { m_pulledps.emplace(refp->varp()); });
+    }
+    void visit(AstVar* nodep) override {
+        if (nodep->isPullup() || nodep->isPulldown()) m_pulledps.emplace(nodep);
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNodeVarRef* nodep) override {
+        if (nodep->access().isWriteOrRW()) m_writtenps.emplace(nodep->varp());
+    }
+    void addPullActuals(const AstNodeExpr* exprp, const AstVar* portp) {
+        if (const AstNodeVarRef* const refp = VN_CAST(exprp, NodeVarRef)) {
+            if (refp->varp()->isNet()) m_pullActualps[portp].push_back(refp->varp());
+        } else if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            addPullActuals(selp->fromp(), portp);
+        } else if (const AstConcat* const concatp = VN_CAST(exprp, Concat)) {
+            addPullActuals(concatp->lhsp(), portp);
+            addPullActuals(concatp->rhsp(), portp);
+        } else if (const AstNodeBiop* const streamp = VN_CAST(exprp, NodeBiop)) {
+            if (VN_IS(streamp, StreamL) || VN_IS(streamp, StreamR)) {
+                addPullActuals(streamp->lhsp(), portp);
+            }
+        }
+    }
+    void visit(AstPin* nodep) override {
+        const AstVar* const portp = nodep->modVarp();
+        if (portp && nodep->exprp()) { addPullActuals(VN_AS(nodep->exprp(), NodeExpr), portp); }
+        if (portp && portp->isInput() && portp->isNet() && portp->isForced()
+            && !portp->isForceable()) {
+            const AstVar* const netp = forceNetp(nodep);
+            const auto pair = m_plainps.emplace(portp, true);
+            pair.first->second &= netp != nullptr;
+            if (netp) m_netps[portp].push_back(netp);
+        }
+        iterateChildrenConst(nodep);
+    }
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    // Forced input net ports nothing but a force writes, each connection of which is a plain
+    // wire with no pull, forced in their module with a constant or a variable of the module, and
+    // from another module with a constant. Collapsing them is optional coercion (IEEE 1800-2023
+    // 23.3.3.1, 23.3.3.7).
+    static std::unordered_set<const AstVar*> collapsibleps(AstNetlist* netlistp) {
+        TristateForcedInputVisitor visitor;
+        visitor.iterateConst(netlistp);
+        // Visit each pulled net once; repeated instances or port chains need no rescans.
+        std::vector<const AstVar*> pulledps{visitor.m_pulledps.begin(), visitor.m_pulledps.end()};
+        for (size_t index = 0; index < pulledps.size(); ++index) {
+            for (const AstVar* const actualp : visitor.m_pullActualps[pulledps[index]]) {
+                if (visitor.m_pulledps.emplace(actualp).second) pulledps.push_back(actualp);
+            }
+        }
+        std::unordered_set<const AstVar*> resultps;
+        for (const auto& pair : visitor.m_plainps) {
+            bool ok = pair.second && !visitor.m_writtenps.count(pair.first)
+                      && !visitor.m_pulledps.count(pair.first);
+            for (const AstVar* const netp : visitor.m_netps[pair.first]) {
+                if (visitor.m_pulledps.count(netp)) ok = false;
+            }
+            if (ok) resultps.emplace(pair.first);
+        }
+        return resultps;
+    }
+};
+
+//######################################################################
 
 class TristateVisitor final : public TristateBaseVisitor {
     // NODE STATE
@@ -1780,8 +1877,14 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         return VN_CAST(lhsp, NodeVarRef);
     }
-    // Give a forced inout port a new input for the enable of the net it connects to
-    void createResolvedEnVarp(AstVar* varp) {
+    // Give a forced inout port a new input for the enable of the net it connects to, and a
+    // forced input net port that may be one net with its connections its own enable, which they
+    // drive
+    void createResolvedEnVarp(AstVar* varp, const std::unordered_set<const AstVar*>& inputps) {
+        if (inputps.count(varp)) {
+            m_varAux(varp).resolvedEnVarp = getCreateEnVarp(varp, false);
+            return;
+        }
         if (!varp->isInout() || !varp->isForced() || varp->isForceable()
             || !varp->dtypep()->skipRefp()->isIntegralOrPacked()) {
             return;
@@ -3064,13 +3167,20 @@ class TristateVisitor final : public TristateBaseVisitor {
                                            // to have this.
                                            && !nodep->modVarp()->declDirection().isWritable());
             const bool resolveWritten = nodep->modVarp()->resolveWrittenInput();
-            // A forced inout port and a plain wire it connects to are one net, see
-            // connectForcedInout
+            // A forced port and a plain wire it connects to are one net, see connectForcedInout
             const AuxAstVar& portAux = m_varAux(nodep->modVarp());
             AstVar* const forceNetVarp = portAux.resolvedEnVarp ? forceNetp(nodep) : nullptr;
+            // Prevent constant folding before the force-domain aliases resolve.
+            if (inDeclProcessing && forceNetVarp) {
+                m_tgraph.setTristate(forceNetVarp);
+                forceNetVarp->setForcedByCode();
+                getCreateEnVarp(forceNetVarp, false)->setForcedByCode();
+            }
             const bool unconnected = !nodep->exprp();
-            const bool bufferInput = inDeclProcessing && !nodep->returnWrittenInput();
-            AstVar* inVarp = nullptr;  // Tristate variable connected to an input port
+            const bool bufferInput
+                = inDeclProcessing && !nodep->returnWrittenInput() && !forceNetVarp;
+            // Tristate variable connected to an input port
+            AstVar* inVarp = inDeclProcessing ? forceNetVarp : nullptr;
             if (unconnected) {  // No-connect; covert to empty connection
                 UINFO(5, "Unconnected pin terminate " << nodep);
                 AstVar* const ucVarp = getCreateUnconnVarp(nodep, nodep->modVarp()->dtypep());
@@ -3120,8 +3230,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             enpinp->modVarp(enModVarp);
             UINFO(9, "       newpin " << enpinp);
             enpinp->user2Or(U2_BOTH);  // don't iterate the pin later
+            if (inDeclProcessing && forceNetVarp) {
+                nodep->setForceNet();
+                enpinp->setForceNet();
+            }
             nodep->addNextHere(enpinp);
-            if (portAux.resolvedEnVarp) connectForcedInout(nodep, forceNetVarp, unconnected);
+            if (portAux.resolvedEnVarp && nodep->modVarp()->declDirection().isWritable()) {
+                connectForcedInout(nodep, forceNetVarp, unconnected);
+            }
             if (!inOnly) m_modp->addStmtsp(enVarp);
             UINFOTREE(9, enpinp, "", "pin-ena");
 
@@ -3580,12 +3696,14 @@ public:
         m_tgraph.clearAndCheck();
         // Before any module is processed, give each forced port the enable of its connection,
         // so every reader finds it
+        const std::unordered_set<const AstVar*> inputps
+            = TristateForcedInputVisitor::collapsibleps(netlistp);
         for (AstNode* const nodep : netlistp->modulespList()) {
             if (VN_IS(nodep, Iface)) continue;
             VL_RESTORER(m_modp);
             m_modp = VN_AS(nodep, NodeModule);
             for (AstNode* const stmtp : m_modp->stmtspList()) {
-                if (AstVar* const varp = VN_CAST(stmtp, Var)) createResolvedEnVarp(varp);
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) createResolvedEnVarp(varp, inputps);
             }
         }
         // Process interface modules first, so an interface tristate net is recorded

@@ -379,6 +379,12 @@ storage. Other connected shapes are unsupported. An unconnected forced
 inout port is supported only without local drivers; release leaves it
 floating.
 
+An input net port that is only forced or released can share that domain
+with its eligible wire connections (IEEE 1800-2023 23.3.3.7). This optional
+collapse applies only when all instances have compatible whole-net
+connections without pulls and each force has a supported drive state.
+Otherwise, the input remains a separate port.
+
 A continuously written net input that any instance connects to a value,
 such as a variable, a hierarchical reference to a variable, a select by a
 runtime position, or a value expression, can also return a drive through

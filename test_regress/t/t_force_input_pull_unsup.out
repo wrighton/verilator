@@ -1,0 +1,14 @@
+%Error-UNSUPPORTED: t/t_force_input_pull_unsup.v:12:14: Unsupported tristate construct (not in propagation graph): VARREF 'p'
+                                                      : ... note: In instance 't.u'
+   12 |     #1 force p = 1'bz;
+      |              ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_input_pull_unsup.v:12:8: Unsupported tristate construct: ASSIGNFORCE
+                                                     : ... note: In instance 't.u'
+   12 |     #1 force p = 1'bz;
+      |        ^~~~~
+%Error-UNSUPPORTED: t/t_force_input_pull_unsup.v:13:16: Unsupported tristate construct (not in propagation graph): VARREF 'p'
+                                                      : ... note: In instance 't.u'
+   13 |     #1 release p;
+      |                ^
+%Error: Exiting due to
