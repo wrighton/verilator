@@ -31,6 +31,7 @@
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <ostream>
 #include <set>
 #include <sstream>
@@ -332,8 +333,7 @@ class VlRandomizer VL_NOT_FINAL {
     struct FastRange final {
         QData lo;
         QData hi;
-        QData weight;
-        QData divisor;  // Original range size for :/, otherwise 1
+        QData mass = 1;  // Zero denotes an unrepresentable positive DIST mass
     };
     using FastRanges = std::vector<FastRange>;
     struct FastConstraint final {
@@ -530,15 +530,14 @@ public:
         m_fastConstraints.back().viewLsb = viewLsb;
         m_fastConstraints.back().viewWidth = viewWidth;
     }
-    /// Add an interval and its per-value rational weight to the current constraint.
-    void fast_range(QData lo, QData hi, QData weight, QData divisor) {
-        if (lo <= hi && weight) {
-            if (!divisor) {
-                m_fastDisabled = true;  // An original :/ cardinality of 2^64
-            } else {
-                m_fastConstraints.back().ranges.push_back({lo, hi, weight, divisor});
-            }
-        }
+    /// Add an interval, preserving the original weighted bucket size before view clipping.
+    void fast_range(QData lo, QData hi, QData weight, QData sourceCount) {
+        if (lo > hi || !weight) return;
+        // IEEE 1800-2023 18.5.3: := counts all original values; :/ supplies the total.
+        // A count of one retains a :/ mass; zero encodes an unrepresentable 2^64 count.
+        const QData mass
+            = sourceCount <= std::numeric_limits<QData>::max() / weight ? sourceCount * weight : 0;
+        m_fastConstraints.back().ranges.push_back({lo, hi, mass});
     }
     /// Record a single-range procedural pick at its original evaluation point.
     template <typename T>
@@ -566,7 +565,7 @@ public:
         ranges.reserve(queue.size());
         for (const T& value : queue) {
             const QData key = (static_cast<QData>(value) & mask) ^ sign;
-            ranges.push_back({key, key, 1, 1});
+            ranges.push_back({key, key});
         }
         ranges = fastUnion(std::move(ranges));
         if (!exclude) {
@@ -575,11 +574,11 @@ public:
         }
         QData next = 0;
         for (const FastRange& range : ranges) {
-            if (next < range.lo) constraint.ranges.push_back({next, range.lo - 1, 1, 1});
+            if (next < range.lo) constraint.ranges.push_back({next, range.lo - 1});
             if (range.hi == mask) return;
             next = range.hi + 1;
         }
-        constraint.ranges.push_back({next, mask, 1, 1});
+        constraint.ranges.push_back({next, mask});
     }
     /// Keep the solver path when any original constraint item is unsupported.
     void fast_disable() { m_fastDisabled = true; }

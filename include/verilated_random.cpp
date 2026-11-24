@@ -1402,22 +1402,20 @@ VlRandomizer::FastRanges VlRandomizer::fastUnion(FastRanges ranges) {
                 || range.lo <= result.back().hi + 1)) {
             result.back().hi = std::max(result.back().hi, range.hi);
         } else {
-            result.push_back({range.lo, range.hi, 1, 1});
+            result.push_back({range.lo, range.hi});
         }
     }
     return result;
 }
 
-// b is a sorted, disjoint membership domain. a may be the original overlapping
-// dist buckets: retain each contribution so overlaps add their weights.
+// Intersect two membership domains; b is sorted and disjoint.
 VlRandomizer::FastRanges VlRandomizer::fastIntersect(const FastRanges& a, const FastRanges& b) {
     FastRanges result;
     for (const FastRange& range : a) {
         auto it = std::lower_bound(b.begin(), b.end(), range.lo,
                                    [](const FastRange& r, QData lo) { return r.hi < lo; });
         for (; it != b.end() && it->lo <= range.hi; ++it) {
-            result.push_back({std::max(range.lo, it->lo), std::min(range.hi, it->hi), range.weight,
-                              range.divisor});
+            result.push_back({std::max(range.lo, it->lo), std::min(range.hi, it->hi)});
         }
     }
     return result;
@@ -1434,8 +1432,8 @@ static QData vl_fastBelow(VlRNG& rngr, QData bound) {
 
 bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastConstraint* distp,
                               QData& valuer) {
-    // A full, single power-of-two range has an unbiased procedural pick already.
-    // Reuse it without an extra draw, preserving width-independent global RNG use.
+    // Only whole, unextended variables record procedural picks.
+    // Reuse an unchanged power-of-two range without another draw.
     if (distp && distp->hasProposal && distp->ranges.size() == 1 && domain.size() == 1
         && domain[0].lo == distp->ranges[0].lo && domain[0].hi == distp->ranges[0].hi) {
         const QData count = domain[0].hi - domain[0].lo + 1;
@@ -1445,49 +1443,68 @@ bool VlRandomizer::fastSample(VlRNG& rngr, const FastRanges& domain, const FastC
             return true;
         }
     }
-    const FastRanges ranges = distp ? fastIntersect(distp->ranges, domain) : domain;
-    // Convert rational :/ per-value weights to exact integer masses. No floating
-    // point rounding and no rejection from the original (possibly huge) domain.
-    QData denominator = 1;
-    for (const FastRange& range : ranges) {
-        if (!range.divisor) return false;
-        QData a = denominator;
-        QData b = range.divisor;
-        while (b) {
-            const QData remainder = a % b;
-            a = b;
-            b = remainder;
+    // Prefix counts give each bucket a contiguous span of feasible ranks, even
+    // when many overlapping buckets cross the same holes in the domain.
+    constexpr QData MAX = std::numeric_limits<QData>::max();
+    std::vector<QData> prefix;
+    prefix.reserve(domain.size() + 1);
+    prefix.push_back(0);
+    for (const FastRange& range : domain) {
+        const QData extent = range.hi - range.lo;
+        if (extent >= MAX - prefix.back()) return false;
+        prefix.push_back(prefix.back() + extent + 1);
+    }
+
+    struct Bucket final {
+        const FastRange* rangep;
+        QData first;
+        QData count;
+        QData endMass;
+    };
+    std::vector<Bucket> buckets;
+    if (distp && distp->ranges.size() > 1) {
+        const auto rankAt = [&](QData key, bool inclusive) {
+            const auto it = std::lower_bound(domain.begin(), domain.end(), key,
+                                             [](const FastRange& r, QData k) { return r.hi < k; });
+            const QData before = prefix[it - domain.begin()];
+            return it != domain.end() && key >= it->lo ? before + (key - it->lo) + inclusive
+                                                       : before;
+        };
+        buckets.reserve(distp->ranges.size());
+        for (const FastRange& range : distp->ranges) {
+            const QData first = rankAt(range.lo, false);
+            const QData count = rankAt(range.hi, true) - first;
+            if (count) buckets.push_back({&range, first, count, 0});
         }
-        const QData factor = range.divisor / a;
-        if (factor > std::numeric_limits<QData>::max() / denominator) return false;
-        denominator *= factor;
+        assert(!buckets.empty());  // The domain is a subset of the retained dist's union.
     }
-    QData total = 0;
-    std::vector<QData> masses;
-    masses.reserve(ranges.size());
-    for (const FastRange& range : ranges) {
-        const QData scale = denominator / range.divisor;
-        if (range.weight > std::numeric_limits<QData>::max() / scale) return false;
-        const QData weight = range.weight * scale;
-        const QData count = range.hi - range.lo + 1;
-        if (!count) return false;  // The finite cardinality cannot be represented
-        if (count > std::numeric_limits<QData>::max() / weight) return false;
-        const QData mass = count * weight;
-        if (mass > std::numeric_limits<QData>::max() - total) return false;
-        total += mass;
-        masses.push_back(mass);
-    }
-    if (!total) return false;
-    QData pick = vl_fastBelow(rngr, total);
-    for (size_t i = 0; i < ranges.size(); ++i) {
-        if (pick < masses[i]) {
-            // Consecutive equal-weight units map uniformly onto the legal values.
-            valuer = ranges[i].lo + pick / (masses[i] / (ranges[i].hi - ranges[i].lo + 1));
-            return true;
+
+    QData rank;
+    if (buckets.size() < 2) {
+        // A sole feasible bucket covers the domain and needs no mass comparison.
+        rank = vl_fastBelow(rngr, prefix.back());
+    } else {
+        QData total = 0;
+        for (Bucket& bucket : buckets) {
+            const QData mass = bucket.rangep->mass;
+            if (!mass || mass > MAX - total) return false;
+            total += mass;
+            bucket.endMass = total;
         }
-        pick -= masses[i];
+        const QData pick = vl_fastBelow(rngr, total);
+        const auto it = std::upper_bound(buckets.begin(), buckets.end(), pick,
+                                         [](QData p, const Bucket& b) { return p < b.endMass; });
+        const QData start = it == buckets.begin() ? 0 : (it - 1)->endMass;
+        const Bucket& bucket = *it;
+        const QData mass = bucket.endMass - start;
+        // An independent draw is only needed when the mass cannot be divided evenly.
+        const QData offset = (mass % bucket.count) != 0 ? vl_fastBelow(rngr, bucket.count)
+                                                        : (pick - start) / (mass / bucket.count);
+        rank = bucket.first + offset;
     }
-    return false;  // Unreachable: the cumulative masses equal total
+    const size_t i = std::upper_bound(prefix.begin(), prefix.end(), rank) - prefix.begin() - 1;
+    valuer = domain[i].lo + (rank - prefix[i]);
+    return true;
 }
 
 // A hard singleton view fixes exactly those physical bits. It does not
@@ -1521,9 +1538,9 @@ bool VlRandomizer::fastView(FastDomain& domain) {
     if (inside) {
         QData value = (domain.pinBits >> domain.viewLsb) & mask;
         if (domain.isSigned) value ^= QData{1} << (domain.viewWidth - 1);
-        domain.ranges.push_back({value, value, 1, 1});
+        domain.ranges.push_back({value, value});
     } else {
-        domain.ranges.push_back({0, mask, 1, 1});
+        domain.ranges.push_back({0, mask});
     }
     return true;
 }

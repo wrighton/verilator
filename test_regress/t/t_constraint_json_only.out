@@ -404,7 +404,7 @@
             {"type":"CONST","name":"64'h80000000","addr":"(FI)","loc":"d,25:12,25:16","dtypep":"(OC)"},
             {"type":"CONST","name":"64'h80000001","addr":"(GI)","loc":"d,25:12,25:16","dtypep":"(OC)"},
             {"type":"CONST","name":"64'h1","addr":"(HI)","loc":"d,25:12,25:16","dtypep":"(OC)"},
-            {"type":"CONST","name":"64'h1","addr":"(II)","loc":"d,25:12,25:16","dtypep":"(OC)"}
+            {"type":"CONST","name":"64'h2","addr":"(II)","loc":"d,25:12,25:16","dtypep":"(OC)"}
           ]}
         ]},
         {"type":"STMTEXPR","addr":"(JI)","loc":"d,25:12,25:16",
@@ -417,7 +417,7 @@
             {"type":"CONST","name":"64'h80000002","addr":"(MI)","loc":"d,25:12,25:16","dtypep":"(OC)"},
             {"type":"CONST","name":"64'h80000005","addr":"(NI)","loc":"d,25:12,25:16","dtypep":"(OC)"},
             {"type":"CONST","name":"64'h2","addr":"(OI)","loc":"d,25:12,25:16","dtypep":"(OC)"},
-            {"type":"CONST","name":"64'h4","addr":"(PI)","loc":"d,25:12,25:16","dtypep":"(OC)"}
+            {"type":"CONST","name":"64'h1","addr":"(PI)","loc":"d,25:12,25:16","dtypep":"(OC)"}
           ]}
         ]},
         {"type":"STMTEXPR","addr":"(QI)","loc":"d,25:12,25:16",

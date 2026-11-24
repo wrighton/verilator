@@ -366,7 +366,7 @@ class FastConstraintBuilder final {
         uint64_t lo;
         uint64_t hi;
         uint64_t weight = 1;
-        uint64_t divisor = 1;
+        bool whole = false;  // :/ rather than :=
     };
     using Ranges = std::vector<Range>;
     AstVar* const m_genp;
@@ -603,11 +603,7 @@ class FastConstraintBuilder final {
             const uint64_t lo = key(lop->toUQuad());
             const uint64_t hi = key(hip->toUQuad());
             if (lo > hi || !weightp->toUQuad()) continue;
-            if (itemp->isWhole() && hi - lo == std::numeric_limits<uint64_t>::max()) {
-                m_supported = false;  // The original :/ cardinality is 2^64
-                return {};
-            }
-            ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole() ? hi - lo + 1 : 1});
+            ranges.push_back({lo, hi, weightp->toUQuad(), itemp->isWhole()});
         }
         if (ranges.empty()) m_supported = false;  // Preserve the existing all-zero dist policy
         return ranges;
@@ -637,7 +633,9 @@ class FastConstraintBuilder final {
         AstNodeStmt* const stmtp = beginp->makeStmt();
         for (const Range& range : ranges) {
             AstCMethodHard* const callp = newCallp(fl, VCMethod::RANDOMIZER_FAST_RANGE);
-            for (const uint64_t value : {range.lo, range.hi, range.weight, range.divisor}) {
+            for (const uint64_t value :
+                 {range.lo, range.hi, range.weight,
+                  dist && !range.whole ? range.hi - range.lo + 1 : uint64_t{1}}) {
                 callp->addPinsp(new AstConst{fl, AstConst::Unsized64{}, value});
             }
             stmtp->addNext(callp->makeStmt());
@@ -1017,13 +1015,14 @@ class FastConstraintBuilder final {
             AstNodeExpr* const hikeyp
                 = new AstCond{fl, newLimitComparep(hip, max, false, false, viewSigned),
                               new AstConst{fl, AstConst::Unsized64{}, mask()}, newBoundKeyp(hip)};
-            AstNodeExpr* const divisorp
-                = itemp->isWhole() ? static_cast<AstNodeExpr*>(new AstAdd{
-                                         fl,
-                                         new AstSub{fl, originalBoundKey(hip, viewSigned),
-                                                    originalBoundKey(lop, viewSigned)},
-                                         new AstConst{fl, AstConst::Unsized64{}, 1}})
-                                   : new AstConst{fl, AstConst::Unsized64{}, 1};
+            // Keep := cardinality before clipping; :/ uses one mass multiplier.
+            AstNodeExpr* const sourceCountp
+                = itemp->isWhole()
+                      ? static_cast<AstNodeExpr*>(new AstConst{fl, AstConst::Unsized64{}, 1})
+                      : new AstAdd{fl,
+                                   new AstSub{fl, originalBoundKey(hip, viewSigned),
+                                              originalBoundKey(lop, viewSigned)},
+                                   new AstConst{fl, AstConst::Unsized64{}, 1}};
             AstNodeExpr* const orderedp
                 = viewSigned
                       ? static_cast<AstNodeExpr*>(
@@ -1037,7 +1036,7 @@ class FastConstraintBuilder final {
             rangep->addPinsp(lokeyp);
             rangep->addPinsp(hikeyp);
             rangep->addPinsp(new AstExtend{fl, weightp->cloneTreePure(false), 64});
-            rangep->addPinsp(divisorp);
+            rangep->addPinsp(sourceCountp);
             blockp->addStmtsp(new AstIf{fl, validp, rangep->makeStmt()});
             VL_DO_DANGLING(lop->deleteTree(), lop);
             VL_DO_DANGLING(hip->deleteTree(), hip);

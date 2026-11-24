@@ -64,10 +64,8 @@ module t_range_queue;
         default: `stop;
       endcase
     end
-    // Original band sizes205/1638/205 give per-value weights1638:205:1638.
-    `check_range(counts[0], 1638 * N / 3481 - 200, 1638 * N / 3481 + 200);
-    `check_range(counts[1], 205 * N / 3481 - 200, 205 * N / 3481 + 200);
-    `check_range(counts[2], 1638 * N / 3481 - 200, 1638 * N / 3481 + 200);
+    // The three :/ buckets each retain their total mass after filtering.
+    foreach (counts[i]) `check_range(counts[i], N / 3 - 200, N / 3 + 200);
     busy.delete();
     `checkd(picker.pick(value, busy, 0), 1);
     `check_range(value, 0, 2047);
@@ -75,6 +73,29 @@ module t_range_queue;
     value = 77;
     `checkd(picker.pick(value, busy, 1), 0);
     `checkd(value, 77);
+    begin
+      localparam int INT_MIN = 32'sh8000_0000;
+      QueuePicker boundary_picker;
+      int pool[$];
+      bit [1:0] seen;
+      boundary_picker = new;
+      pool = '{INT_MIN, 1, 2};
+      boundary_picker.excluded = '{INT_MIN};
+      seen = '0;
+      repeat (64) begin
+        randomize_result = boundary_picker.pick(value, pool, 0, 3);
+        `checkd(randomize_result, 1);
+        `checkd(value inside {1, 2}, 1);
+        seen[value == 2] = 1'b1;
+      end
+      `checkd(seen, 2'b11);
+      // The signed minimum is legal again when it is no longer excluded.
+      pool = '{INT_MIN};
+      boundary_picker.excluded.delete();
+      randomize_result = boundary_picker.pick(value, pool, 0, 3);
+      `checkd(randomize_result, 1);
+      `checkd(value, INT_MIN);
+    end
     `checkd(pick_width(value, 0), 1);
     `checkd(value, 0);
     busy = '{0, 0};

@@ -11,13 +11,11 @@
 
 class OverflowDist;
   rand bit [31:0] x;
-  // Four coprime bucket cardinalities cannot share a 64-bit denominator.
+  // Both positive masses fit alone, but their sum does not fit in 64 bits.
   constraint c {
     x dist {
-      [32'd0 : 32'd1000002] :/ 1,
-      [32'd2000000 : 32'd3000032] :/ 1,
-      [32'd4000000 : 32'd5000036] :/ 1,
-      [32'd6000000 : 32'd7000080] :/ 1
+      32'd10 :/ 64'h8000_0000_0000_0000,
+      32'd20 :/ 64'h8000_0000_0000_0000
     };
   }
 endclass
@@ -30,12 +28,7 @@ module t;
     repeat (16) begin
       randomize_result = obj.randomize();
       `checkd(randomize_result, 1);
-      `checkd(
-          obj.x inside {
-        [32'd0:32'd1000002], [32'd2000000:32'd3000032],
-        [32'd4000000:32'd5000036], [32'd6000000:32'd7000080]
-      },
-          1);
+      `checkd(obj.x inside {32'd10, 32'd20}, 1);
     end
     $write("*-* All Finished *-*\n");
     $finish;

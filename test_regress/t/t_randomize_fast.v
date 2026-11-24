@@ -64,8 +64,8 @@ class SignedRange;
   constraint c {x inside {[-15'sd3 : 15'sd2]};}
 endclass
 
-// Overlapping := and :/ ranges, partially removed by a hard restriction.
-// The surviving per-value weights at 1..5 are 1,1,1,3,2 (total 8).
+// Overlapping buckets retain masses 5 and 6, over four and two legal values.
+// The resulting weights at 1..5 are 5,5,5,17,12 in units of 1/4.
 class RestrictedDist;
   rand bit [6:0] x;
   constraint c {
@@ -320,15 +320,15 @@ module t;
     end
     foreach (counts_single[i]) `check_range(counts_single[i], N/ 8 - 200, N/ 8 + 200);
     foreach (counts_signed[i]) `check_range(counts_signed[i], N/ 6 - 200, N/ 6 + 200);
-    for (int i = 1; i <= 3; i++) `check_range(counts_dist[i], N/ 8 - 200, N/ 8 + 200);
-    `check_range(counts_dist[4], 3 * N/ 8 - 200, 3 * N/ 8 + 200);
-    `check_range(counts_dist[5], 2 * N/ 8 - 200, 2 * N/ 8 + 200);
-    `check_range(counts_soft[2], N/ 8 - 200, N/ 8 + 200);
-    `check_range(counts_soft[3], N/ 8 - 200, N/ 8 + 200);
-    `check_range(counts_soft[7], 6 * N/ 8 - 200, 6 * N/ 8 + 200);
-    `check_range(counts_state[2], 2 * N/ 10 - 200, 2 * N/ 10 + 200);
-    `check_range(counts_state[3], 2 * N/ 10 - 200, 2 * N/ 10 + 200);
-    `check_range(counts_state[7], 6 * N/ 10 - 200, 6 * N/ 10 + 200);
+    for (int i = 1; i <= 3; i++) `check_range(counts_dist[i], 5 * N/ 44 - 200, 5 * N/ 44 + 200);
+    `check_range(counts_dist[4], 17 * N/ 44 - 200, 17 * N/ 44 + 200);
+    `check_range(counts_dist[5], 12 * N/ 44 - 200, 12 * N/ 44 + 200);
+    `check_range(counts_soft[2], N/ 6 - 200, N/ 6 + 200);
+    `check_range(counts_soft[3], N/ 6 - 200, N/ 6 + 200);
+    `check_range(counts_soft[7], 2 * N/ 3 - 200, 2 * N/ 3 + 200);
+    `check_range(counts_state[2], N/ 4 - 200, N/ 4 + 200);
+    `check_range(counts_state[3], N/ 4 - 200, N/ 4 + 200);
+    `check_range(counts_state[7], N/ 2 - 200, N/ 2 + 200);
     state_dist.w = 0;
     randomize_result = state_dist.randomize();
     `checkd(randomize_result, 1);
@@ -342,11 +342,8 @@ module t;
     `check_range(counts_priority[7], N/ 4 - 200, N/ 4 + 200);
     `check_range(counts_priority[8], 3 * N/ 4 - 200, 3 * N/ 4 + 200);
 
-    // Unequal original band sizes, intersected with runtime [2:34], give
-    // exact band masses 12:20:5, not equal surviving buckets.
-    `check_range(band_counts[0], 12 * N/ 37 - 200, 12 * N/ 37 + 200);
-    `check_range(band_counts[1], 20 * N/ 37 - 200, 20 * N/ 37 + 200);
-    `check_range(band_counts[2], 5 * N/ 37 - 200, 5 * N/ 37 + 200);
+    // Different original band sizes do not change the equal :/ masses.
+    foreach (band_counts[i]) `check_range(band_counts[i], N/ 3 - 200, N/ 3 + 200);
     for (int i = 0; i < 40; i++) begin
       lo = i;
       hi = i + 2;
@@ -448,10 +445,8 @@ module t;
         else if (value == 26) small_counts[1]++;
         else small_counts[2]++;
       end
-      // Original band sizes26/204/26 give weights102:13:102 after exclusion.
-      `check_range(small_counts[0], 102 * N/ 217 - 200, 102 * N/ 217 + 200);
-      `check_range(small_counts[1], 13 * N/ 217 - 200, 13 * N/ 217 + 200);
-      `check_range(small_counts[2], 102 * N/ 217 - 200, 102 * N/ 217 + 200);
+      // Every nonempty :/ band keeps the same mass.
+      foreach (small_counts[i]) `check_range(small_counts[i], N/ 3 - 200, N/ 3 + 200);
       picker.excluded = pool;
       value = 999;
       `checkd(picker.pick(value, pool, 0, 255), 0);
