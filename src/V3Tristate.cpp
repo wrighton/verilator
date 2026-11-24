@@ -744,6 +744,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         bool forceRhsReadEn = false;  // Direct force RHS whose resolved read enable is prepared
         // Forced port: the enable of the net it connects to, which its force also forces
         AstVar* resolvedEnVarp = nullptr;
+        // Ordinary INOUT relays read the parent resolver for a downstream prepared pin.
+        AstVar* inoutReadRelayp = nullptr;
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -812,7 +814,9 @@ class TristateVisitor final : public TristateBaseVisitor {
     VarMap m_lhsmap;  // Tristate left-hand-side driver map
     VarToAssignsMap m_assigns;  // Assigns in current module
     // Variables the assignments in current module forward each variable's value to
-    std::unordered_map<const AstVar*, std::vector<const AstVar*>> m_valueReaders;
+    std::unordered_map<const AstVar*, std::vector<AstVar*>> m_valueReaders;
+    // Ordinary INOUT read-enable leaves receive pull masks after pull propagation.
+    std::vector<std::pair<AstVar*, AstNodeExpr*>> m_inoutReadEnps;
     // Wired net, or element of an unpacked array of wired nets, by net and unpacked indices
     using WiredElem = std::pair<AstVar*, std::vector<int>>;
     std::map<WiredElem, Assigns> m_wiredAssigns;  // Continuous drivers of wired elements
@@ -2344,6 +2348,30 @@ class TristateVisitor final : public TristateBaseVisitor {
             valueReads(condp->elsep(), varps);
         }
     }
+    void propagateResolvedInoutReads(AstNodeModule* modp) {
+        // A prepared INOUT can carry Z from the parent even when no local driver supplies it.
+        // Mark value-transparent forwarding destinations so the read enable follows the data.
+        std::vector<AstVar*> pendingps;
+        std::unordered_set<const AstVar*> visitedps;
+        for (AstNode* const itemp : modp->stmtspList()) {
+            AstVar* const varp = VN_CAST(itemp, Var);
+            if (varp && varp->isInout() && m_varAux(varp).resolvedEnVarp) {
+                pendingps.push_back(varp);
+                visitedps.emplace(varp);
+            }
+        }
+        for (size_t index = 0; index < pendingps.size(); ++index) {
+            const auto it = m_valueReaders.find(pendingps[index]);
+            if (it == m_valueReaders.end()) continue;
+            for (AstVar* const destp : it->second) {
+                if (!destp->dtypep()->skipRefp()->isIntegralOrPacked()) continue;
+                if (!visitedps.emplace(destp).second) continue;
+                m_tgraph.setTristate(destp);
+                pendingps.push_back(destp);
+            }
+        }
+    }
+
     std::unordered_set<const AstVar*> mayBeZVars() {
         // Tristate variables, and variables an assignment in the module forwards one of them
         // to. The graph does not propagate a tristate variable to the logic reading it.
@@ -3427,9 +3455,6 @@ class TristateVisitor final : public TristateBaseVisitor {
                 enpinp->setForceNet();
             }
             nodep->addNextHere(enpinp);
-            if (portAux.resolvedEnVarp && nodep->modVarp()->declDirection() == VDirection::INOUT) {
-                connectForcedInout(nodep, forceNetVarp, enVarp, unconnected);
-            }
             if (!inOnly) m_modp->addStmtsp(enVarp);
             UINFOTREE(9, enpinp, "", "pin-ena");
 
@@ -3479,6 +3504,13 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (nodep->modVarp()->declDirection().isOutput()) {
                 TristateStreamReadVisitor::apply(VN_AS(nodep->exprp(), NodeExpr), m_modp,
                                                  m_unique);
+            }
+            if (nodep->modVarp()->declDirection() == VDirection::INOUT) {
+                if (portAux.resolvedEnVarp) {
+                    connectForcedInout(nodep, forceNetVarp, enVarp, unconnected);
+                } else if (portAux.inoutReadRelayp) {
+                    connectOrdinaryInoutRead(nodep, portAux.inoutReadRelayp, enVarp);
+                }
             }
             const AstNode* const inAssignp = V3Inst::pinReconnectSimple(
                 nodep, m_cellp, true);  // Note may change nodep->exprp()
@@ -3541,33 +3573,116 @@ class TristateVisitor final : public TristateBaseVisitor {
             iteratePinGuts(nodep);
         }
     }
+    // A downstream ordinary pin needs the resolved value of its upstream INOUT, not that
+    // port's outbound contribution. This relay is never a force-domain endpoint.
+    AstNodeExpr* getInoutReadRelayp(const AstVarRef* refp) {
+        AstVar* const varp = refp->varp();
+        AuxAstVar& aux = m_varAux(varp);
+        if (!varp->isInout() || aux.resolvedEnVarp) return nullptr;
+        // The top wrapper and wrapped design tops retain their primary-INOUT ABI.
+        static constexpr int DESIGN_TOP_LEVEL = 2;
+        if (m_modp->level() <= DESIGN_TOP_LEVEL) {
+            // No upstream enable at this boundary. At least preserve a nonzero data bit,
+            // which cannot represent Z in the lowered DATA/ENABLE encoding.
+            return new AstOr{refp->fileline(), newEnVarRefp(refp),
+                             new AstVarRef{refp->fileline(), varp, VAccess::READ}};
+        }
+        if (!aux.inoutReadRelayp) {
+            aux.inoutReadRelayp = new AstVar{varp->fileline(), VVarType::MODULETEMP,
+                                             varp->name() + "__VpinReadEn", varp};
+            aux.inoutReadRelayp->varType2In();
+            m_modp->addStmtsp(aux.inoutReadRelayp);
+        }
+        return new AstVarRef{refp->fileline(), aux.inoutReadRelayp, VAccess::READ};
+    }
+
+    // Read back the parent resolver's drive state with the same bit mapping as DATA.
+    // The child contribution is already included in that resolution.
+    AstNodeExpr* newInoutPinReadEnp(AstNodeExpr* exprp) {
+        FileLine* const flp = exprp->fileline();
+        if (VN_IS(exprp, NodeVarRef) && exprp->dtypep()->skipRefp()->isIntegralOrPacked()) {
+            if (const AstVarRef* const refp = VN_CAST(exprp, VarRef)) {
+                if (AstNodeExpr* const relayp = getInoutReadRelayp(refp)) return relayp;
+                AstNodeExpr* const enp = newEnVarRefp(refp);
+                AstVar* const varp = refp->varp();
+                // A force overrides a pull. The raw enable of a forced net must stay intact.
+                if (!varp->isIO() && !varp->isForced()) m_inoutReadEnps.emplace_back(varp, enp);
+                return enp;
+            }
+            return getEnExprBasedOnOriginalp(exprp);
+        }
+        if (const AstSel* const selp = VN_CAST(exprp, Sel)) {
+            AstNodeExpr* const enp = newInoutPinReadEnp(selp->fromp());
+            return enp ? new AstSel{flp, enp, selp->lsbp()->cloneTreePure(false),
+                                    selp->widthConst()}
+                       : nullptr;
+        }
+        if (const AstConcat* const concatp = VN_CAST(exprp, Concat)) {
+            AstNodeExpr* const lhsp = newInoutPinReadEnp(concatp->lhsp());
+            if (!lhsp) return nullptr;
+            if (AstNodeExpr* const rhsp = newInoutPinReadEnp(concatp->rhsp())) {
+                return new AstConcat{flp, lhsp, rhsp};
+            }
+            VL_DO_DANGLING(lhsp->deleteTree(), lhsp);
+        }
+        if (const AstNodeStream* const streamp = VN_CAST(exprp, NodeStream)) {
+            AstNodeExpr* const enp = newInoutPinReadEnp(streamp->lhsp());
+            if (enp && VN_IS(streamp, StreamL)) {
+                return new AstStreamL{flp, enp, streamp->rhsp()->cloneTreePure(false)};
+            }
+            return enp;
+        }
+        return nullptr;
+    }
+
     // An eligible port and its whole local connection share DATA and resolved ENABLE aliases
     // (IEEE 1800-2023 23.3.3.7). Otherwise lower the ordinary pin and defer any rejection until
     // the force or release target is bound to a concrete instance.
     void connectForcedInout(AstPin* pinp, AstVar* forceNetVarp, AstVar* enVarp, bool unconnected) {
+        const AuxAstVar& aux = m_varAux(pinp->modVarp());
+        AstVar* const readVarp = aux.resolvedEnVarp;
         if (forceNetVarp) {
             AstVarRef* const enRefp = new AstVarRef{
                 pinp->fileline(), getCreateEnVarp(forceNetVarp, false), VAccess::READ};
-            addResolvedEnPin(pinp, enRefp)->setForceNet();
+            addInoutReadEnPin(pinp, readVarp, enRefp)->setForceNet();
             pinp->setForceNet();
             return;
         }
 
-        const AuxAstVar& aux = m_varAux(pinp->modVarp());
         if (!unconnected) {
             pinp->forcePin(VForcePin::UNSUPPORTED_CONNECTION);
         } else if (aux.hasLocalInoutDriver || aux.pullp || !aux.bitPulls.empty()) {
             pinp->forcePin(VForcePin::UNSUPPORTED_OPEN_DRIVER);
         } else {
-            addResolvedEnPin(pinp, newAllZerosOrOnes(pinp->modVarp(), false));
+            addInoutReadEnPin(pinp, readVarp, newAllZerosOrOnes(pinp->modVarp(), false));
             return;
         }
-        // Ordinary instances still read their local drive state, not an absent force-domain
-        // enable.
-        addResolvedEnPin(pinp, new AstVarRef{pinp->fileline(), enVarp, VAccess::READ});
+        connectOrdinaryInoutRead(pinp, readVarp, enVarp);
     }
-    AstPin* addResolvedEnPin(AstPin* pinp, AstNodeExpr* enExprp) {
-        AstVar* const enVarp = m_varAux(pinp->modVarp()).resolvedEnVarp;
+    void connectOrdinaryInoutRead(AstPin* pinp, AstVar* readVarp, AstVar* enVarp) {
+        const size_t firstEnable = m_inoutReadEnps.size();
+        AstNodeExpr* enp = newInoutPinReadEnp(VN_AS(pinp->exprp(), NodeExpr));
+        if (!enp) {
+            // A partially built expression was discarded. Its leaves must not be revisited.
+            m_inoutReadEnps.resize(firstEnable);
+            enp = new AstVarRef{pinp->fileline(), enVarp, VAccess::READ};
+        }
+        addInoutReadEnPin(pinp, readVarp, enp);
+    }
+    void addInoutReadPullMasks() {
+        for (const auto& entry : m_inoutReadEnps) {
+            const AuxAstVar& aux = m_varAux(entry.first);
+            if (!aux.pullp && aux.bitPulls.empty()) continue;
+            AstNodeExpr* const enp = entry.second;
+            FileLine* const flp = enp->fileline();
+            AstConst* const maskp = newAllZerosOrOnes(enp, aux.pullp != nullptr);
+            for (const auto& pull : aux.bitPulls) maskp->num().setBit(pull.first, 1);
+            VNRelinker relinker;
+            enp->unlinkFrBack(&relinker);
+            relinker.relink(new AstOr{flp, enp, maskp});
+        }
+    }
+    AstPin* addInoutReadEnPin(AstPin* pinp, AstVar* enVarp, AstNodeExpr* enExprp) {
         AstPin* const enPinp
             = new AstPin{pinp->fileline(), pinp->pinNum(), enVarp->name(), enExprp};
         enPinp->modVarp(enVarp);
@@ -3725,6 +3840,7 @@ class TristateVisitor final : public TristateBaseVisitor {
         VL_RESTORER_CLEAR(m_lhsmap);
         VL_RESTORER_CLEAR(m_assigns);
         VL_RESTORER_CLEAR(m_valueReaders);
+        VL_RESTORER_CLEAR(m_inoutReadEnps);
         VL_RESTORER_CLEAR(m_wiredAssigns);
         VL_RESTORER_CLEAR(m_assignEnps);
         VL_RESTORER_CLEAR(m_proceduralEnables);
@@ -3748,7 +3864,8 @@ class TristateVisitor final : public TristateBaseVisitor {
         mergeWiredNetsAssignments();
         // Remove all assignments not stronger than the strongest uniform constant
         removeAssignmentsNotStrongerThanUniformConstant();
-        // Use graph to find tristate signals
+        // Use graph to find tristate signals, including forwards of a prepared INOUT read.
+        propagateResolvedInoutReads(nodep);
         m_tgraph.graphWalk(nodep);
 
         // Remove all assignments not stronger than the strongest non-tristate RHS
@@ -3756,6 +3873,7 @@ class TristateVisitor final : public TristateBaseVisitor {
 
         // Build the LHS drivers map for this module
         iterateChildren(nodep);
+        addInoutReadPullMasks();
         // Insert new logic for all tristates
         insertTristates(nodep);
         insertProceduralEnableAssignments(nodep);
