@@ -1,0 +1,5 @@
+%Error-UNSUPPORTED: t/t_force_rhs_container_unsup.v:15:11: Unsupported: force RHS change tracking for a whole dynamically-sized value
+   15 |   initial force dst = total(q);
+      |           ^~~~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

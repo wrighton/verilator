@@ -2843,6 +2843,13 @@ class TaskVisitor final : public VNVisitor {
         AstVarScope* activeVscp = nullptr;
         const auto activeRef = [&]() { return new AstVarRef{flp, activeVscp, VAccess::READ}; };
         const auto addInput = [&](AstNodeExpr* const inputp) {
+            AstNodeDType* const dtypep = inputp->dtypep()->skipRefp();
+            if (dtypep->isDynamicallySized() && !SenExprBuilder::isSupportedDType(dtypep)) {
+                inputp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS change tracking for a whole "
+                                              "dynamically-sized value");
+                inputp->deleteTree();
+                return;
+            }
             if (!activeVscp) activeVscp = m_forceTmps.make(flp, m_scopep, 1, "active");
             AstVarScope* const prevp = m_forceTmps.make(flp, m_scopep, inputp->dtypep(), "prev");
             const AstNodeDType* elementp = inputp->dtypep()->skipRefp();
@@ -2893,16 +2900,31 @@ class TaskVisitor final : public VNVisitor {
                        && !VN_IS(childp, CExprUser);
             });
         };
-        // Observe selected values rather than copying their entire backing array. The
-        // subscript and receiver remain independent dependencies when they are read.
+        // Observe a read projection's result rather than its backing container. The
+        // indices and other method arguments remain independent dependencies.
         std::unordered_set<const AstNodeExpr*> covered;
-        rhsp->foreach([&](AstArraySel* const selp) {
-            if (selp->isLValue() || !isExternalRead(selp)) return;
-            covered.insert(selp->fromp());
-            if (covered.count(selp) == 0) addInput(selp->cloneTreePure(false));
+        rhsp->foreach([&](AstNodeExpr* const exprp) {
+            AstNodeExpr* fromp;
+            if (AstArraySel* const selp = VN_CAST(exprp, ArraySel)) {
+                if (selp->isLValue()) return;
+                fromp = selp->fromp();
+            } else if (AstCMethodHard* const methodp = VN_CAST(exprp, CMethodHard)) {
+                fromp = methodp->fromp();
+                // Container reads, including element selection and size queries, are
+                // not dependencies on the entire dynamically-sized value.
+                if (!fromp->dtypep()->skipRefp()->isDynamicallySized()
+                    || !SenExprBuilder::isSupportedDType(methodp->dtypep())) {
+                    return;
+                }
+            } else {
+                return;
+            }
+            if (!isExternalRead(exprp)) return;
+            covered.insert(fromp);
+            if (covered.count(exprp) == 0) addInput(exprp->cloneTreePure(false));
         });
         rhsp->foreach([&](AstMemberRef* const refp) {
-            if (!refp->access().isReadOnly()) return;
+            if (covered.count(refp) || !refp->access().isReadOnly()) return;
             if (!isExternalRead(refp)) {
                 refp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS member with a receiver that "
                                             "cannot be observed independently");
