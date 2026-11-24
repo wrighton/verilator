@@ -415,10 +415,13 @@ bom             [\357\273\277]
 <ARGMODE><<EOF>>        { FL_FWDC; yyerrorf("EOF in define argument list\n");
                           yyleng = 0; return VP_EOF_ERROR; }
 <ARGMODE>{crnl}         { FL_FWDC; linenoInc(); yytext=(char*)"\n"; yyleng=1; return VP_WHITE; }
-<ARGMODE>{quote}        { yy_push_state(STRMODE); yymore(); }
-<ARGMODE>{quote}{quote}{quote}    { yy_push_state(QQQMODE); yymore(); }
+<ARGMODE>{quote}        { if (LEXP->m_parenLevel == 0) { yyless(0); yy_pop_state(); return VP_TEXT; }  /* Not an argument list */
+                          yy_push_state(STRMODE); yymore(); }
+<ARGMODE>{quote}{quote}{quote}    { if (LEXP->m_parenLevel == 0) { yyless(0); yy_pop_state(); return VP_TEXT; }  /* Not an argument list */
+                          yy_push_state(QQQMODE); yymore(); }
 <ARGMODE>"`\\`\""       { FL_FWDC; appendDefValue(yytext, yyleng); FL_BRK; }  /* Literal text */
-<ARGMODE>{tickquote}    { FL_FWDC; yy_push_state(STRIFY); return VP_STRIFY; }
+<ARGMODE>{tickquote}    { if (LEXP->m_parenLevel == 0) { yyless(0); yy_pop_state(); return VP_TEXT; }  /* Not an argument list */
+                          FL_FWDC; yy_push_state(STRIFY); return VP_STRIFY; }
 <ARGMODE>[{\[]          { FL_FWDC; LEXP->m_parenLevel++; appendDefValue(yytext, yyleng); FL_BRK; }
 <ARGMODE>[}\]]          { FL_FWDC; LEXP->m_parenLevel--; appendDefValue(yytext, yyleng); FL_BRK; }
 <ARGMODE>[(]            { FL_FWDC; LEXP->m_parenLevel++;
