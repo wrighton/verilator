@@ -1,0 +1,10 @@
+%Error-UNSUPPORTED: t/t_force_inout_top_unsup.v:17:14: Unsupported tristate construct (not in propagation graph): VARREF 'p'
+                                                     : ... note: In instance 't'
+   17 |     #1 force p = 7'h35;
+      |              ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_inout_top_unsup.v:18:16: Unsupported tristate construct (not in propagation graph): VARREF 'p'
+                                                     : ... note: In instance 't'
+   18 |     #1 release p;
+      |                ^
+%Error: Exiting due to

@@ -34,6 +34,7 @@ for output_v in output_vs:
 # Retained assertion-control nodes describe the resolved selection in both dump formats.
 seen = set()
 queries = set()
+force_pins = set()
 for filename in test.glob_some(test.obj_dir + "/*.tree.json"):
     with open(filename, encoding='utf-8') as fh:
         pending = [json.load(fh)]
@@ -60,8 +61,11 @@ for filename in test.glob_some(test.obj_dir + "/*.tree.json"):
                 seen.add(kind)
             elif kind == 'ASSERTCTLREAD':
                 queries.add(node.get('query'))
-            elif kind == 'PIN' and node.get('explicitModport'):
-                seen.add('modport')
+            elif kind == 'PIN':
+                if node.get('explicitModport'):
+                    seen.add('modport')
+                if node.get('forcePin'):
+                    force_pins.add(node['forcePin'])
             pending.extend(node.values())
 required = {
     'scoped', 'instance_dependent', 'ASSERTCTLTARGET', 'ordinal', 'module_relative',
@@ -73,7 +77,11 @@ required_queries = {
     'ASSERT_CTL_ON', 'ASSERT_CTL_KILL', 'ASSERT_CTL_PASS_ON_NONVACUOUS', 'ASSERT_CTL_FAIL_ON'
 }
 if not required_queries <= queries:
-    test.error('Missing assertion-control JSON queries: ' + str(sorted(required_queries - queries)))
+    test.error('Missing assertion-control JSON queries: ' +
+               str(sorted(required_queries - queries)))
+required_force_pins = {'ALIAS', 'UNSUPPORTED_CONNECTION', 'UNSUPPORTED_OPEN_DRIVER'}
+if force_pins != required_force_pins:
+    test.error('Unexpected force pin JSON statuses: ' + str(sorted(force_pins)))
 
 if test.verbose:
     # Print if that the output Verilog is clean

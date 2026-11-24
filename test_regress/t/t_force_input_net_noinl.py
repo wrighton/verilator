@@ -9,7 +9,7 @@
 
 import vltest_bootstrap
 
-test.scenarios('simulator')
+test.scenarios('vlt')
 
 test.top_filename = 't/t_force_input_net.v'
 

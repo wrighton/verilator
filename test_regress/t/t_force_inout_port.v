@@ -215,17 +215,21 @@ module t;
       .p(port_net),
       .en(hen)
   );
+  driving_harness open_driver (.p(), .en(hen));
   force_only fo (.p(port_net));
   initial begin
     #1;
     `checkh(port_net === 7'bz, 1'b1);
-    force fo.p = 7'h00;
+    `checkh(open_driver.p === 7'bz, 1'b1);
+    force dh.p = 7'h00;
     #1;
     `checkh(port_net, 7'h00);
     `checkh(dh.p, 7'h00);
     hen = 1;
     #1;
     `checkh(port_net, 7'h00);
+    `checkh(open_driver.p, 7'h2c);
+    `checkh(open_driver.p === 7'bz, 1'b0);
     release port_net;
     #1;
     `checkh(port_net, 7'h2c);

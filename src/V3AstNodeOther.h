@@ -1873,7 +1873,7 @@ class AstPin final : public AstNode {
     bool m_svImplicit = false;  // Pin is SystemVerilog .name'ed, allow implicit
     bool m_explicitModport = false;  // Actual expression explicitly selected a modport
     bool m_returnWrittenInput = false;  // Width-proved original net destination for Tristate
-    bool m_forceNet = false;  // [Tristate..Inst] Port and its connection are one forced net
+    VForcePin m_forcePin = VForcePin::NONE;  // [Tristate..LinkDotScope] Force-domain status
 public:
     AstPin(FileLine* fl, int pinNum, const string& name, AstNode* exprp)
         : ASTGEN_SUPER_Pin(fl)
@@ -1885,7 +1885,7 @@ public:
     void cloneRelink() override {}  // TODO V3Param shouldn't require avoiding cloneRelinkGen
     bool sameNode(const AstNode* samep) const override {
         const AstPin* const asamep = VN_DBG_AS(samep, Pin);
-        return explicitModport() == asamep->explicitModport() && forceNet() == asamep->forceNet();
+        return explicitModport() == asamep->explicitModport() && forcePin() == asamep->forcePin();
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
@@ -1920,8 +1920,14 @@ public:
     bool returnWrittenInput() const { return m_returnWrittenInput; }
     // V3Tristate proved the port, forced in its module, and the whole variable the pin connects
     // to one net, or the enable of that net and the input for it, so V3Inst aliases them
-    void setForceNet() { m_forceNet = true; }
-    bool forceNet() const { return m_forceNet; }
+    void setForceNet() { m_forcePin = VForcePin::ALIAS; }
+    bool forceNet() const { return m_forcePin == VForcePin::ALIAS; }
+    VForcePin forcePin() const { return m_forcePin; }
+    void forcePin(VForcePin value) { m_forcePin = value; }
+    bool unsupportedForceConnection() const {
+        return m_forcePin == VForcePin::UNSUPPORTED_CONNECTION
+               || m_forcePin == VForcePin::UNSUPPORTED_OPEN_DRIVER;
+    }
 };
 class AstPort final : public AstNode {
     // A port (in/out/inout) on a module

@@ -51,6 +51,9 @@ module t;
   // Connections other than as one plain net
   wire [13:0] wide;
   assign wide = {raw, raw};
+  wire [6:0] whole;
+  assign whole = raw;
+  force_boundary good_h (.p(whole));
   force_boundary select_h (.p(wide[6:0]));
   wire signed [6:0] signed_net;
   assign signed_net = raw;
@@ -86,9 +89,11 @@ module t;
   // A hierarchical force still requires a supported bidirectional connection.
   force_external selected_external (.p(wide[6:0]));
   force_external concat_external (.p({wide[13:11], wide[3:0]}));
+  force_external release_external (.p(wide[13:7]));
   initial begin
     force selected_external.p = 7'h7f;
     force concat_external.p = 7'h7f;
+    release release_external.p;
   end
   unconnected_driven undriven_boundary (.p());
 endmodule

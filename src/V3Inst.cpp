@@ -180,7 +180,8 @@ class InstVisitor final : public VNVisitor {
             V3Inst::pinReconnectSimple(nodep, m_cellp, false);
         }
         UINFOTREE(9, nodep, "", "Pin_oldb");
-        if (!nodep->exprp()) return;  // No-connect
+        // A no-connect may already be an expression-free diagnostic shell.
+        if (!nodep->exprp()) return;
         V3Inst::checkOutputShort(nodep);
         if (!nodep->exprp()) return;  // Connection removed by checkOutputShort
         // Use user1p on the PIN to indicate we created an assign for this pin
@@ -228,8 +229,13 @@ class InstVisitor final : public VNVisitor {
             }
         }
 
-        // We're done with the pin
-        VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+        if (nodep->unsupportedForceConnection()) {
+            // Scoped LinkDot needs this original DATA pin, but not its connection expression.
+            AstNode* const exprp = nodep->exprp();
+            VL_DO_DANGLING(pushDeletep(exprp->unlinkFrBack()), exprp);
+        } else {
+            VL_DO_DANGLING(nodep->unlinkFrBack()->deleteTree(), nodep);
+        }
     }
 
     // Save some time

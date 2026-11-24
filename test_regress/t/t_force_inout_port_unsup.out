@@ -1,76 +1,191 @@
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:20:26: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't.mid_h'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.select_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.select_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:57:29: ... Inout port connection.
+   57 |   force_boundary select_h (.p(wide[6:0]));
+      |                             ^
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.select_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.select_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:57:29: ... Inout port connection.
+   57 |   force_boundary select_h (.p(wide[6:0]));
+      |                             ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.signed_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.signed_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:60:29: ... Inout port connection.
+   60 |   force_boundary signed_h (.p(signed_net));
+      |                             ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.signed_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.signed_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:60:29: ... Inout port connection.
+   60 |   force_boundary signed_h (.p(signed_net));
+      |                             ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.folded_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.folded_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:63:29: ... Inout port connection.
+   63 |   force_boundary folded_h (.p(folded[6:0]));
+      |                             ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.folded_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.folded_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:63:29: ... Inout port connection.
+   63 |   force_boundary folded_h (.p(folded[6:0]));
+      |                             ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.mid_h.child.p' not connected as one plain net.
+                                                      : ... note: In instance 't.mid_h.child'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:20:26: ... Inout port connection.
    20 |   force_boundary child (.p(p));
       |                          ^
-                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:54:29: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   54 |   force_boundary select_h (.p(wide[6:0]));
-      |                             ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:57:29: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   57 |   force_boundary signed_h (.p(signed_net));
-      |                             ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:60:29: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   60 |   force_boundary folded_h (.p(folded[6:0]));
-      |                             ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:66:28: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   66 |   force_boundary delay_h (.p(delayed));
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.mid_h.child.p' not connected as one plain net.
+                                                      : ... note: In instance 't.mid_h.child'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:20:26: ... Inout port connection.
+   20 |   force_boundary child (.p(p));
+      |                          ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.delay_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.delay_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:69:28: ... Inout port connection.
+   69 |   force_boundary delay_h (.p(delayed));
       |                            ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:69:27: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   69 |   force_boundary pull_h (.p(pulled));
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.delay_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.delay_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:69:28: ... Inout port connection.
+   69 |   force_boundary delay_h (.p(delayed));
+      |                            ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.pull_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.pull_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:72:27: ... Inout port connection.
+   72 |   force_boundary pull_h (.p(pulled));
       |                           ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:72:31: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   72 |   force_boundary strength_h (.p(weak_drv));
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.pull_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.pull_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:72:27: ... Inout port connection.
+   72 |   force_boundary pull_h (.p(pulled));
+      |                           ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.strength_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.strength_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:75:31: ... Inout port connection.
+   75 |   force_boundary strength_h (.p(weak_drv));
       |                               ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:75:29: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   75 |   force_boundary public_h (.p(pub));
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.strength_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.strength_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:75:31: ... Inout port connection.
+   75 |   force_boundary strength_h (.p(weak_drv));
+      |                               ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.public_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.public_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:78:29: ... Inout port connection.
+   78 |   force_boundary public_h (.p(pub));
       |                             ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:78:32: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   78 |   force_boundary forceable_h (.p(frc));
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.public_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.public_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:78:29: ... Inout port connection.
+   78 |   force_boundary public_h (.p(pub));
+      |                             ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.forceable_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.forceable_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:81:32: ... Inout port connection.
+   81 |   force_boundary forceable_h (.p(frc));
       |                                ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:80:22: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   80 |   wand_port wand_h (.p(wand_net));
-      |                      ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:82:35: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   82 |   strength_port strength_port_h (.p(strength_net));
-      |                                   ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:84:27: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   84 |   force_boundary xref_h (.p(wide[13:7]));
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.forceable_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.forceable_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:81:32: ... Inout port connection.
+   81 |   force_boundary forceable_h (.p(frc));
+      |                                ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:11:11: Unsupported: Force/release of inout port 't.xref_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.xref_h'
+   11 |     force p = 7'h00;
+      |           ^
+                    t/t_force_inout_port_unsup.v:87:27: ... Inout port connection.
+   87 |   force_boundary xref_h (.p(wide[13:7]));
       |                           ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:87:38: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   87 |   force_external selected_external (.p(wide[6:0]));
-      |                                      ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:88:36: Unsupported: Force of inout port 'p' not connected as one plain net.
-                                                      : ... note: In instance 't'
-                                                      : ... The port and the wire must be packed wire or tri nets of the same type with no delay, drive strength, or public access, and the wire declared in the instantiating module, connected whole, and not forceable
-   88 |   force_external concat_external (.p({wide[13:11], wide[3:0]}));
-      |                                    ^
-%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:93:42: Unsupported: Force of unconnected inout port with local drivers: 'p'
-                                                      : ... note: In instance 't'
-   93 |   unconnected_driven undriven_boundary (.p());
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:13:13: Unsupported: Force/release of inout port 't.xref_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.xref_h'
+   13 |     release p;
+      |             ^
+                    t/t_force_inout_port_unsup.v:87:27: ... Inout port connection.
+   87 |   force_boundary xref_h (.p(wide[13:7]));
+      |                           ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:46:17: Unsupported: Force/release of inout port 't.undriven_boundary.p' left unconnected with local drivers.
+                                                      : ... note: In instance 't.undriven_boundary'
+   46 |   initial force p = 7'h00;
+      |                 ^
+                    t/t_force_inout_port_unsup.v:98:42: ... Inout port connection.
+   98 |   unconnected_driven undriven_boundary (.p());
       |                                          ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:34:17: Unsupported: Force/release of inout port 't.strength_port_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.strength_port_h'
+   34 |   initial force p = 7'h00;
+      |                 ^
+                    t/t_force_inout_port_unsup.v:85:35: ... Inout port connection.
+   85 |   strength_port strength_port_h (.p(strength_net));
+      |                                   ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:27:17: Unsupported: Force/release of inout port 't.wand_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't.wand_h'
+   27 |   initial force p = 7'h00;
+      |                 ^
+                    t/t_force_inout_port_unsup.v:83:22: ... Inout port connection.
+   83 |   wand_port wand_h (.p(wand_net));
+      |                      ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:88:24: Unsupported: Force/release of inout port 't.xref_h.p' not connected as one plain net.
+                                                      : ... note: In instance 't'
+   88 |   initial force xref_h.p = 7'h00;
+      |                        ^
+                    t/t_force_inout_port_unsup.v:87:27: ... Inout port connection.
+   87 |   force_boundary xref_h (.p(wide[13:7]));
+      |                           ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:94:29: Unsupported: Force/release of inout port 't.selected_external.p' not connected as one plain net.
+                                                      : ... note: In instance 't'
+   94 |     force selected_external.p = 7'h7f;
+      |                             ^
+                    t/t_force_inout_port_unsup.v:90:38: ... Inout port connection.
+   90 |   force_external selected_external (.p(wide[6:0]));
+      |                                      ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:95:27: Unsupported: Force/release of inout port 't.concat_external.p' not connected as one plain net.
+                                                      : ... note: In instance 't'
+   95 |     force concat_external.p = 7'h7f;
+      |                           ^
+                    t/t_force_inout_port_unsup.v:91:36: ... Inout port connection.
+   91 |   force_external concat_external (.p({wide[13:11], wide[3:0]}));
+      |                                    ^
+%Error-UNSUPPORTED: t/t_force_inout_port_unsup.v:96:30: Unsupported: Force/release of inout port 't.release_external.p' not connected as one plain net.
+                                                      : ... note: In instance 't'
+   96 |     release release_external.p;
+      |                              ^
+                    t/t_force_inout_port_unsup.v:92:37: ... Inout port connection.
+   92 |   force_external release_external (.p(wide[13:7]));
+      |                                     ^
 %Error: Exiting due to

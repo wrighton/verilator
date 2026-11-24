@@ -374,9 +374,10 @@ An inout net port and its whole local wire or tri connection share a force
 domain (IEEE 1800-2023 10.6.2, 23.3.3.7), so forcing or releasing either
 name affects the same resolved net. Both sides must be packed nets of the
 same type, without delay, drive strength, public access, or forceable
-storage. Other connected shapes are unsupported. An unconnected forced
-inout port is supported only without local drivers; release leaves it
-floating.
+storage. This applies below the design top; primary inout handling is
+unchanged. An ineligible connection is unsupported when a force or release
+targets that instance's port. An unconnected forced inout port is supported
+only without local drivers; release leaves it floating.
 
 An input net port that is only forced or released can share that domain
 with its eligible wire connections (IEEE 1800-2023 23.3.3.7). This optional

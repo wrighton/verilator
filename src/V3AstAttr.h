@@ -198,6 +198,9 @@ constexpr bool operator==(VAssertCtlType::en lhs, const VAssertCtlType& rhs) {
 // ######################################################################
 
 enum class VAssertCtlQuery : uint8_t { ON, KILL, PASS_VACUOUS, PASS_NONVACUOUS, FAIL_ON };
+
+// How a pin participates in a force domain; unsupported statuses apply to original DATA pins.
+enum class VForcePin : uint8_t { NONE, ALIAS, UNSUPPORTED_CONNECTION, UNSUPPORTED_OPEN_DRIVER };
 constexpr const char* assertCtlQueryName(VAssertCtlQuery query) {
     switch (query) {
     case VAssertCtlQuery::ON: return "ASSERT_CTL_ON";

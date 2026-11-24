@@ -1,0 +1,6 @@
+%Error-UNSUPPORTED: t/t_force_input_rhs_unsup.v:15:24: Unsupported: Force of tristate net with a value that may be high impedance: 'n'
+                                                     : ... note: In instance 't.h'
+   15 |   initial #1 force n = rhs;
+      |                        ^~~
+                    ... For error description see https://verilator.org/warn/UNSUPPORTED?v=latest
+%Error: Exiting due to

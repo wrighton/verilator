@@ -773,7 +773,11 @@ module t (/*AUTOARG*/
   dump_value_input dump_return (.p({dump_net}), .value(in));
   dump_value_input dump_value (.p({1{in}}), .value(in));
   wire dump_forced_net;
+  wire [1:0] dump_force_bus = {clk, in};
   dump_forced_inout dump_forced (.p(dump_forced_net));
+  dump_forced_inout dump_selected (.p(dump_force_bus[1]));
+  dump_forced_inout dump_open (.p());
+  initial force dump_forced.p = 1'b0;
 
 endmodule
 
@@ -975,7 +979,7 @@ endmodule
 bind dump_value_input dump_value_driver dump_driver (.p(p), .value(value));
 
 module dump_forced_inout(inout wire p);
-  initial force p = 1'b0;
+  assign p = 1'b1;
 endmodule
 
 `verilator_config

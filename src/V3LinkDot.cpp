@@ -612,11 +612,41 @@ private:
     // Defparam -> scope of each instance of it, until LinkDotParamVisitor checks its target
     std::unordered_map<const AstDefParam*, std::vector<VSymEnt*>> m_defParamScopes;
     std::vector<AstCell*> m_topIfaceCellps;  // Dummy cells of top level interfaces
+    struct ForceConnectionError final {
+        FileLine* m_pinFlp;  // Original DATA connection site
+        VForcePin m_status;  // Reason the connection cannot share a force domain
+    };
+    // Keyed by the original formal in a concrete scope, not the canonical alias.
+    std::unordered_map<const AstVarScope*, ForceConnectionError> m_forceConnectionErrors;
     const VLinkDotStep m_step;  // Operational step
     std::unique_ptr<LinkDotAssertCtlSites> m_assertCtlSitesp;  // Parameter-elaborated sites
 
 public:
     // METHODS
+
+    void addForceConnectionError(const AstVarScope* vscp, const AstPin* pinp) {
+        const bool inserted
+            = m_forceConnectionErrors
+                  .emplace(vscp, ForceConnectionError{pinp->fileline(), pinp->forcePin()})
+                  .second;
+        UASSERT_OBJ(inserted, pinp, "Duplicate force connection for scoped formal");
+    }
+    void checkForceConnection(const AstVarScope* vscp, const AstNodeVarRef* refp) const {
+        const auto it = m_forceConnectionErrors.find(vscp);
+        if (it == m_forceConnectionErrors.end()) return;
+        const ForceConnectionError& error = it->second;
+        refp->v3warn(E_UNSUPPORTED, "Unsupported: Force/release of inout port "
+                                        << AstNode::prettyNameQ(vscp->scopep()->name() + "."
+                                                                + vscp->varp()->name())
+                                        << (error.m_status == VForcePin::UNSUPPORTED_CONNECTION
+                                                ? " not connected as one plain net."
+                                                : " left unconnected with local drivers.")
+                                        << '\n'
+                                        << refp->warnContextPrimary() << '\n'
+                                        << error.m_pinFlp->warnOther()
+                                        << "... Inout port connection.\n"
+                                        << error.m_pinFlp->warnContextSecondary());
+    }
 
     void dumpSelf(const string& nameComment, bool force = false) {
         if (debug() >= 6 || dumpLevel() >= 6 || force) {
@@ -3787,6 +3817,7 @@ class LinkDotScopeVisitor final : public VNVisitor {
     std::vector<std::pair<AstAliasScope*, VSymEnt*>> m_deferredAliasScopes;
     std::vector<AstRtmdIfaceRef*> m_rtmdIfaceRefs;  // RtmdIfaceRefs to resolve at the end
     std::vector<AstScope*> m_scopesWithRtmdp;  // Scopes with a rtmdp() set
+    std::vector<AstPin*> m_forceConnectionPinps;  // Shells to delete after all scopes consume them
 
     // METHODS
 public:
@@ -3880,6 +3911,20 @@ private:
         m_scopep = nodep;
         if (nodep->rtmdp()) m_scopesWithRtmdp.push_back(nodep);
         iterateChildren(nodep);
+        if (AstCell* const cellp = nodep->aboveCellp()) {
+            for (const AstPin* const pinp : cellp->pinspList()) {
+                if (!pinp->unsupportedForceConnection()) continue;
+                const AstVar* const formalp = pinp->modVarp();
+                UASSERT_OBJ(!pinp->exprp() && formalp
+                                && formalp->declDirection() == VDirection::INOUT,
+                            pinp, "Expected an original INOUT pin shell");
+                const VSymEnt* const symp = m_modSymp->findIdFlat(formalp->name());
+                const AstVarScope* const vscp = symp ? VN_CAST(symp->nodep(), VarScope) : nullptr;
+                UASSERT_OBJ(vscp && vscp->varp() == formalp && vscp->scopep() == nodep, pinp,
+                            "INOUT pin shell not bound to its original scoped formal");
+                m_statep->addForceConnectionError(vscp, pinp);
+            }
+        }
     }
     void visit(AstVarScope* nodep) override {  // ScopeVisitor::
         if (!nodep->varp()->isFuncLocal() && !nodep->varp()->isClassMember()) {
@@ -4078,7 +4123,11 @@ private:
     }
     // For speed, don't recurse things that can't have scope
     // Note we allow AstNodeStmt's as generates may be under them
-    void visit(AstCell*) override {}  // ScopeVisitor::
+    void visit(AstCell* nodep) override {  // ScopeVisitor::
+        for (AstPin* const pinp : nodep->pinspList()) {
+            if (pinp->unsupportedForceConnection()) m_forceConnectionPinps.push_back(pinp);
+        }
+    }
     void visit(AstVar*) override {}  // ScopeVisitor::
     void visit(AstNode* nodep) override { iterateChildren(nodep); }  // ScopeVisitor::
 
@@ -4088,6 +4137,10 @@ public:
         : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
         iterate(rootp);
+        // A cell declaration can underlie more than one concrete scope.
+        for (AstPin* const pinp : m_forceConnectionPinps) {
+            VL_DO_DANGLING(pushDeletep(pinp->unlinkFrBack()), pinp);
+        }
         // Process deferred AliasScopes in outer-to-inner order
         processDeferredAliasScopes();
         // Then the descriptor interface references that depend on them
@@ -4460,6 +4513,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
     bool m_inPackedArray = false;  // Currently traversing a packed array tree
     bool m_replaceWithAlias
         = true;  // Replace VarScope with an alias. Used in the handling of AstAlias
+    bool m_inForceLhs = false;  // Resolving the target of a force or release
     bool m_isParam = false;  // Specifies whether currently visiting param variable
     bool m_resolvingTypedef = false;  // Currently traversing a Typedef tree
 
@@ -6915,6 +6969,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
         UINFO(8, indent() << m_ds.ascii());
         // No children defined
     }
+    // Inspect only writes under the force/release LHS, not RHS reads or select indices.
+    void resolveForceLhs(AstNodeExpr* lhsp) {
+        VL_RESTORER(m_inForceLhs);
+        m_inForceLhs = m_statep->forScopeCreation();
+        iterateAndNextNull(lhsp);
+    }
+    void visit(AstAssignForce* nodep) override {
+        LINKDOT_VISIT_START();
+        checkNoDot(nodep);
+        iterateAndNextNull(nodep->rhsp());
+        resolveForceLhs(nodep->lhsp());
+    }
+    void visit(AstRelease* nodep) override {
+        LINKDOT_VISIT_START();
+        checkNoDot(nodep);
+        resolveForceLhs(nodep->lhsp());
+    }
     void visit(AstVarRef* nodep) override {
         // VarRef: Resolve its reference
         // ParseRefs are used the first pass (forPrimary) so we shouldn't get can't find
@@ -6939,6 +7010,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
         }
         AstVarScope* vscp = nodep->varScopep();
+        if (vscp && m_inForceLhs && nodep->access().isWriteOrRW()) {
+            m_statep->checkForceConnection(vscp, nodep);
+        }
         if (vscp && vscp->user2p() != vscp && m_replaceWithAlias) {
             vscp = LinkDotScopeVisitor::getAlias(vscp);
             nodep->varp(vscp->varp());
@@ -7073,6 +7147,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                    << nodep->warnContextPrimary()
                                    << okSymp->cellErrorScopes(nodep));
                 } else {
+                    if (m_inForceLhs && nodep->access().isWriteOrRW()) {
+                        m_statep->checkForceConnection(vscp, nodep);
+                    }
                     if (vscp->user2p() && m_replaceWithAlias) {
                         vscp = LinkDotScopeVisitor::getAlias(vscp);
                     }
