@@ -4748,7 +4748,7 @@ class WidthVisitor final : public VNVisitor {
                     } else {
                         if (nodep->valuep()->width() > 32) {
                             nodep->valuep()->v3warn(
-                                WIDTH,
+                                WIDTHTRUNC,
                                 "Assigning >32 bit to unranged parameter (defaults to 32 bits)");
                         }
                         width = 32;

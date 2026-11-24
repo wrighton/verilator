@@ -4,9 +4,13 @@
       |                    ^~
                      ... For warning description see https://verilator.org/warn/WIDTHTRUNC?v=latest
                      ... Use "/* verilator lint_off WIDTHTRUNC */" and lint_on around source to disable this message.
-%Warning-WIDTHEXPAND: t/t_lint_width_bad.v:79:18: Operator ASSIGNW expects 5 bits on the Assign RHS, but Assign RHS's VARREF 'in' generates 4 bits.
+%Warning-WIDTHTRUNC: t/t_lint_width_bad.v:73:25: Assigning >32 bit to unranged parameter (defaults to 32 bits)
+                                               : ... note: In instance 't'
+   73 |   localparam UNRANGED = 'h1_0000_0005;
+      |                         ^~~~~~~~~~~~~
+%Warning-WIDTHEXPAND: t/t_lint_width_bad.v:88:18: Operator ASSIGNW expects 5 bits on the Assign RHS, but Assign RHS's VARREF 'in' generates 4 bits.
                                                 : ... note: In instance 't.p4'
-   79 |   wire [4:0] out = in;
+   88 |   wire [4:0] out = in;
       |                  ^
                       ... For warning description see https://verilator.org/warn/WIDTHEXPAND?v=latest
                       ... Use "/* verilator lint_off WIDTHEXPAND */" and lint_on around source to disable this message.
