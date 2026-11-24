@@ -1969,7 +1969,8 @@ public:
         const AstCFunc* const funcp = nodep->funcp();
         UASSERT_OBJ(funcp->isLoose() || funcp->dpiImportPrototype(), nodep,
                     "Cannot take address of non-loose method");
-        putns(nodep, "&");
+        // A DPI import is global, and an argument of the caller may have its name
+        putns(nodep, funcp->dpiImportPrototype() ? "&::" : "&");
         puts(funcNameProtect(funcp));
     }
     void visit(AstConst* nodep) override {  //
