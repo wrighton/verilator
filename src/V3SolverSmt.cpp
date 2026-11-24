@@ -165,6 +165,7 @@ class ConstraintExprVisitor final : public VNVisitor {
     std::set<std::string>& m_writtenVars;  // Track which variable paths have write_var generated
                                            // (shared across all constraints)
     std::set<std::string> m_inlineWrittenVars;  // Per-instance tracking for inline constraints
+    std::set<std::string> m_setupWrittenVars;  // Select paths registered by this setup
     VInsertionSet<AstVar*>* m_sizeConstrainedArraysp = nullptr;  // Arrays with size constraints
     AstNodeExpr* m_conditionp = nullptr;  // Condition under which current expression is defined
                                           // (nullptr == always defined)
@@ -1378,17 +1379,23 @@ class ConstraintExprVisitor final : public VNVisitor {
         // (so same-type sub-objects c1.x, c2.x stay distinct), and a foreign static
         // is registered in each class using it; a plain class-level variable keys
         // on user3(). Inline 'with' dedups per function (own solver).
+        // A member or struct select is registered in the setup of each constraint naming it,
+        // as a derived class overriding one of them does not run its setup
         const bool perClass = isGlobalConstrained || memberRefp || foreignStatic;
+        const bool inSetup = memberRefp || structSelOrCMeth;
         const bool alreadyWritten = m_inlineInitBlockp ? m_inlineWrittenVars.count(smtName) > 0
+                                    : inSetup          ? m_setupWrittenVars.count(smtName) > 0
                                     : perClass         ? m_writtenVars.count(smtName) > 0
                                                        : varp->user3();
         const bool shouldWriteVar = !alreadyWritten;
         if (shouldWriteVar) {
             // Track this variable path as written
-            if (m_inlineInitBlockp)
+            if (m_inlineInitBlockp) {
                 m_inlineWrittenVars.insert(smtName);
-            else if (perClass)
-                m_writtenVars.insert(smtName);
+            } else {
+                if (perClass) m_writtenVars.insert(smtName);
+                if (inSetup) m_setupWrittenVars.insert(smtName);
+            }
             // For global constraints, delete nodep after processing
             if (isGlobalConstrained && !nodep->backp()) VL_DO_DANGLING(pushDeletep(nodep), nodep);
 
