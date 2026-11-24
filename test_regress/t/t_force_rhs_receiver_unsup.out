@@ -1,4 +1,4 @@
-%Error-UNSUPPORTED: t/t_force_rhs_receiver_unsup.v:17:44: Unsupported: force RHS member with a receiver that cannot be observed independently
+%Error-UNSUPPORTED: t/t_force_rhs_receiver_unsup.v:17:44: Unsupported: force RHS member with a receiver that cannot be observed independently.
                                                         : ... note: In instance 't'
    17 |   initial force dst = objects[index_of(i)].field;
       |                                            ^~~~~

@@ -69,9 +69,10 @@ public:
         if (VN_IS(dtypep, PackArrayDType)) return true;
         if (VN_IS(dtypep, UnpackArrayDType)) return isSupportedDType(dtypep->subDTypep());
         if (VN_IS(dtypep, NodeUOrStructDType)) return true;  // All are packed at the moment
-        // Per IEEE, detects reference object pointer changes, not contents of the class changes
+        // Reference changes compare handle identity, not the referred-to contents.
         if (VN_IS(dtypep, ClassRefDType)) return true;
-        return false;
+        const AstIfaceRefDType* const ifacep = VN_CAST(dtypep, IfaceRefDType);
+        return ifacep && ifacep->isVirtual();
     }
 
 private:

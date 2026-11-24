@@ -2847,7 +2847,7 @@ class TaskVisitor final : public VNVisitor {
             if (!SenExprBuilder::isSupportedDType(dtypep)) {
                 inputp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS change tracking for a "
                                               "whole value of type "
-                                                  << dtypep->prettyDTypeNameQ());
+                                                  << dtypep->prettyDTypeNameQ() << ".");
                 inputp->deleteTree();
                 return;
             }
@@ -2928,7 +2928,7 @@ class TaskVisitor final : public VNVisitor {
             if (covered.count(refp) || !refp->access().isReadOnly()) return;
             if (!isExternalRead(refp)) {
                 refp->v3warn(E_UNSUPPORTED, "Unsupported: force RHS member with a receiver that "
-                                            "cannot be observed independently");
+                                            "cannot be observed independently.");
                 return;
             }
             addInput(refp->cloneTreePure(false));
