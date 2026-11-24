@@ -19,6 +19,7 @@
 #include "V3ProtectLib.h"
 
 #include "V3Control.h"
+#include "V3EmitCBase.h"
 #include "V3File.h"
 #include "V3Hasher.h"
 #include "V3InstrCount.h"
@@ -412,6 +413,15 @@ class ProtectVisitor final : public VNVisitor {
         txtp->add("#include \"verilated_dpi.h\"\n\n");
         txtp->add("#include <cstdio>\n");
         txtp->add("#include <cstdlib>\n\n");
+        const AstCFunc* const assertCtlBindp = v3Global.rootp()->assertCtlExportFuncp();
+        string assertCtlBindName;
+        if (assertCtlBindp) {
+            const string rootName = EmitCUtil::prefixNameProtect(assertCtlBindp->scopep()->modp());
+            assertCtlBindName = rootName + "__" + assertCtlBindp->nameProtect();
+            txtp->add("#include \"" + rootName + ".h\"\n\n");
+            txtp->add("void " + assertCtlBindName + "(" + EmitCUtil::symClassName()
+                      + "* vlSymsp, std::vector<VlAssertCtlTable::Target>& targets);\n\n");
+        }
 
         // Verilated module plus sequence number
         addComment(txtp, fl, "Container class to house verilated object and sequence number");
@@ -548,6 +558,26 @@ class ProtectVisitor final : public VNVisitor {
         castPtr(fl, txtp);
         txtp->add(/**/ "handlep__V->final();\n");
         txtp->add("}\n\n");
+
+        if (v3Global.opt.hierAssertCtl()) {
+            addComment(txtp, fl, "Called by a Verilator model using the library to add the");
+            addComment(txtp, fl, "assertions of this instance to a scoped assertion control");
+            txtp->add("void " + m_libName
+                      + "_protectlib_assert_ctl_targets(void* vhandlep__V, "
+                        "std::vector<VlAssertCtlTable::Target>& targets__V, uint32_t depth__V, "
+                        "uint32_t ordinal__V) {\n");
+            if (assertCtlBindp) {
+                castPtr(fl, txtp);
+                txtp->add(/**/ "std::vector<VlAssertCtlTable::Target> block__V;\n");
+                txtp->add(/**/ assertCtlBindName + "(handlep__V->rootp->vlSymsp, block__V);\n");
+                txtp->add(/**/ "for (VlAssertCtlTable::Target target__V : block__V) {\n");
+                txtp->add(/****/ "target__V.depth += depth__V;\n");
+                txtp->add(/****/ "target__V.ordinal = ordinal__V;\n");
+                txtp->add(/****/ "targets__V.push_back(target__V);\n");
+                txtp->add(/**/ "}\n");
+            }
+            txtp->add("}\n\n");
+        }
 
         txtp->add("}\n");
         m_cfilep->tblockp(txtp);

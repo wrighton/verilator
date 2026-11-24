@@ -219,12 +219,16 @@ class AssertCtlTableBindings final {
     V3SharedTmps m_tables{"__VassertCtlTable", VVarType::MODULETEMP};  // Cache variables
     AstCDType* m_tableDtp = nullptr;  // Created with the first nonempty selection
     size_t m_entries = 0;  // Number of concrete targets in the unique tables
+    size_t m_combined = 0;  // Calls binding a copy of the shared rows (see newCallp)
     // Concrete target sequence to its shared cache and binder.
     std::unordered_map<AssertCtlTableKey, AssertCtlBoundTable, AssertCtlTableKeyHash> m_bound;
     struct IndexedTable final {
         AssertCtlBoundTable binding;  // Model-owned shared cache and its binder
         std::unordered_map<const AstVarScope*, size_t> slots;  // Index by canonical state
         const AssertCtlTableKey* keyp = nullptr;  // Key retained by m_bound
+        // Unbound copy of rows that include a forwarded block, for a caller selecting such a
+        // block at a smaller depth than these rows do
+        AstAssertCtlTarget* sourcep = nullptr;
     };
     // Index base rows once, then build each overlay without scanning the base again.
     std::unordered_map<const AstAssertCtlTargetSet*, IndexedTable> m_absolute;
@@ -232,6 +236,7 @@ class AssertCtlTableBindings final {
     struct InputRow final {
         AssertCtlTableRow row;
         AstNodeVarRef* refp;
+        bool forward;  // Handle of a hierarchical block, whose library adds its rows
     };
 
     template <typename T_Rebind>
@@ -243,13 +248,14 @@ class AssertCtlTableBindings final {
         AssertCtlTableKey key{{}, {}, sharedp != nullptr};
         for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
             AstNodeVarRef* const refp = targetp->statep();
-            rebind(refp);
+            if (!targetp->forward()) rebind(refp);
             const AstVarScope* const statep = refp->varScopep();
             const auto result = seen.emplace(statep, inputs.size());
             if (result.second) {
                 inputs.push_back(
                     {{statep, targetp->depth(), outputp || sharedp ? targetp->ordinal() : 0},
-                     refp});
+                     refp,
+                     targetp->forward()});
             } else {
                 AssertCtlTableRow& row = inputs[result.first->second].row;
                 row.depth = std::min(row.depth, targetp->depth());
@@ -257,6 +263,13 @@ class AssertCtlTableBindings final {
             }
         }
         if (sharedp) {
+            // The shared table already adds the rows of a block it forwards to at no larger depth
+            inputs.erase(std::remove_if(inputs.begin(), inputs.end(),
+                                        [&](const InputRow& input) {
+                                            return input.forward
+                                                   && sharedp->slots.count(input.row.statep);
+                                        }),
+                         inputs.end());
             for (InputRow& input : inputs) {
                 const auto found = sharedp->slots.find(input.row.statep);
                 if (found == sharedp->slots.end()) continue;
@@ -271,6 +284,9 @@ class AssertCtlTableBindings final {
                 return a.row.ordinal < b.row.ordinal;
             });
         }
+        // Forwarded rows follow all others at runtime, keeping the slots of the others
+        std::stable_partition(inputs.begin(), inputs.end(),
+                              [](const InputRow& input) { return !input.forward; });
         key.rows.reserve(inputs.size());
         for (const InputRow& input : inputs) key.rows.push_back(input.row);
         const auto table = m_bound.try_emplace(std::move(key));
@@ -279,7 +295,9 @@ class AssertCtlTableBindings final {
         if (table.second) binding = newBinding(flp, stored, inputs);
         if (outputp) {
             outputp->keyp = &stored;  // Rehashing does not invalidate element references.
-            outputp->slots = std::move(seen);
+            for (size_t slot = 0; slot < inputs.size(); ++slot) {
+                outputp->slots.emplace(inputs[slot].row.statep, slot);
+            }
         }
         return binding;
     }
@@ -307,12 +325,22 @@ class AssertCtlTableBindings final {
         m_topScopep->addBlocksp(bindp);
         AstCStmt* const initp = new AstCStmt{flp, "targets = {\n"};
         for (const InputRow& input : rows) {
+            if (input.forward) continue;
             initp->add("{&");
             initp->add(input.refp->unlinkFrBack());
             initp->add(", " + std::to_string(input.row.depth) + ", "
                        + std::to_string(input.row.ordinal) + "},\n");
         }
         initp->add("};\n");
+        for (const InputRow& input : rows) {
+            if (!input.forward) continue;
+            // The library model of the block shares this context (see V3ProtectLib)
+            initp->add(input.row.statep->scopep()->modp()->origName()
+                       + "_protectlib_assert_ctl_targets(VL_CVT_Q_VP(");
+            initp->add(input.refp->unlinkFrBack());
+            initp->add("), targets, " + std::to_string(input.row.depth) + ", "
+                       + std::to_string(input.row.ordinal) + ");\n");
+        }
         if (key.overlay) {
             initp->add("skipped = {\n");
             for (uint32_t slot : key.skips) initp->add(std::to_string(slot) + ",\n");
@@ -337,13 +365,41 @@ class AssertCtlTableBindings final {
         callp->add("; }");
     }
 
+    static bool reachesForwardSooner(const IndexedTable& shared, AstAssertCtlTarget* targetsp) {
+        for (const AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
+            if (!targetp->forward()) continue;
+            const auto found = shared.slots.find(targetp->statep()->varScopep());
+            if (found != shared.slots.end()
+                && targetp->depth() < shared.keyp->rows[found->second].depth) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 public:
     AssertCtlTableBindings(AstNetlist* rootp, AstScope* topScopep)
         : m_rootp{rootp}
         , m_topScopep{topScopep} {}
+    ~AssertCtlTableBindings() {
+        for (const auto& entry : m_absolute) {
+            if (AstAssertCtlTarget* const sourcep = entry.second.sourcep) {
+                VL_DO_DANGLING(sourcep->deleteTree(), sourcep);
+            }
+        }
+    }
 
     size_t size() const { return m_bound.size(); }
     size_t entries() const { return m_entries; }
+    size_t combined() const { return m_combined; }
+
+    // Binder of the sites of this hierarchical block, called by its library (see V3ProtectLib)
+    template <typename T_Rebind>
+    AstCFunc* newExportp(AstAssertCtlTargetSet* setp, const T_Rebind& rebind) {
+        AstCFunc* const bindp = bindingFor(setp->fileline(), setp->targetsp(), rebind).bindp;
+        bindp->entryPoint(true);
+        return bindp;
+    }
 
     template <typename T_Rebind>
     AstCStmt* newCallp(AstAssertCtlApply* applyp, const T_Rebind& rebind) {
@@ -354,9 +410,22 @@ public:
             const auto shared = m_absolute.try_emplace(setp);
             IndexedTable& table = shared.first->second;
             if (shared.second && setp->targetsp()) {
+                for (const AstAssertCtlTarget* const targetp : setp->targetspList()) {
+                    if (!targetp->forward()) continue;
+                    table.sourcep = setp->targetsp()->cloneTree(true);
+                    break;
+                }
                 table.binding = bindingFor(flp, setp->targetsp(), rebind, &table);
             }
             if (table.binding.cachep) sharedp = &table;
+        }
+        // An overlay cannot replace the rows a forwarded block adds at runtime. A caller
+        // selecting the block at a smaller depth instead applies all its rows as one table,
+        // binding its own copy of the shared rows.
+        if (sharedp && reachesForwardSooner(*sharedp, applyp->targetsp())) {
+            applyp->addTargetsp(sharedp->sourcep->cloneTree(true));
+            sharedp = nullptr;
+            ++m_combined;
         }
         const bool mixed = sharedp && applyp->targetsp();
         const AssertCtlBoundTable local
@@ -404,7 +473,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
                 firstp->depth(std::min(firstp->depth(), targetp->depth()));
                 firstp->ordinal(std::min(firstp->ordinal(), targetp->ordinal()));
                 duplicates.push_back(targetp);
-            } else if (selected.emplace(statep).second) {
+            } else if (!targetp->forward() && selected.emplace(statep).second) {
                 selectedInOrder.push_back(statep);
             }
         }
@@ -424,6 +493,8 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
             addTargets(applyp->targetsp());
         });
     });
+    AstAssertCtlTargetSet* const exportp = rootp->assertCtlExportp();
+    if (exportp && seenSets.emplace(exportp).second) addTargets(exportp->targetsp());
     rootp->foreach([&](AstAssertCtlRead* readp) { reads.push_back(readp); });
     // Matching component histories imply matching unions. Keeping components distinct
     // can retain separate state when two different histories happen to have equal unions.
@@ -431,6 +502,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
     for (size_t i = 0; i < uniqueLists.size(); ++i) {
         const VNList<AstAssertCtlTarget> targets{uniqueLists[i]};
         for (const AstAssertCtlTarget* const targetp : targets) {
+            if (targetp->forward()) continue;
             histories[targetp->statep()->varScopep()].emplace_back(i, targetp->depth());
         }
     }
@@ -502,6 +574,10 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         applyp->replaceWith(tables.newCallp(applyp, rebind));
         VL_DO_DANGLING(deleter.pushDeletep(applyp), applyp);
     }
+    if (exportp) {
+        rootp->assertCtlExportFuncp(tables.newExportp(exportp, rebind));
+        rootp->assertCtlExportp(nullptr);
+    }
     std::vector<AstAssertCtlTargetSet*> sharedSets;
     rootp->foreach([&](AstAssertCtlTargetSet* setp) { sharedSets.push_back(setp); });
     const size_t sharedSetCount = sharedSets.size();
@@ -517,6 +593,7 @@ void V3AssertCommon::bindControlQueries(AstNetlist* rootp) {
         V3Stats::addStatSum("Assertions, Scoped state instances", representatives.size());
         V3Stats::addStatSum("Assertions, Scoped tables", tables.size());
         V3Stats::addStatSum("Assertions, Scoped table entries", tables.entries());
+        V3Stats::addStatSum("Assertions, Scoped combined forward tables", tables.combined());
         V3Stats::addStatSum("Assertions, Scoped target lists", uniqueLists.size());
         V3Stats::addStatSum("Assertions, Shared absolute target lists", sharedSetCount);
     }
@@ -3612,8 +3689,9 @@ class AssertVisitor final : public VNVisitor {
     void pruneTargets(AstAssertCtlTarget* targetsp, uint32_t limit, uint32_t mask) {
         for (AstAssertCtlTarget* const targetp : VNList<AstAssertCtlTarget>{targetsp}) {
             const AstVar* const statep = targetp->statep()->varp();
+            // A forwarded block may hold sites of any type
             if (static_cast<uint32_t>(targetp->depth()) >= limit
-                || (statep && !(statep->assertCtlMask() & mask))) {
+                || (statep && !targetp->forward() && !(statep->assertCtlMask() & mask))) {
                 VL_DO_DANGLING(pushDeletep(targetp->unlinkFrBack()), targetp);
             }
         }
@@ -3916,7 +3994,7 @@ public:
         for (const auto& item : m_sharedControlDepths) {
             for (AstAssertCtlTarget* const targetp : item.first->targetspList()) {
                 const AstVar* const statep = targetp->statep()->varp();
-                const uint32_t mask = statep->assertCtlMask();
+                const uint32_t mask = targetp->forward() ? ~0U : statep->assertCtlMask();
                 const auto depth = static_cast<uint32_t>(targetp->depth());
                 bool selected = false;
                 for (size_t bit = 0; bit < item.second.size(); ++bit) {

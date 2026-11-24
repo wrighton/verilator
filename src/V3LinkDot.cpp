@@ -158,6 +158,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     std::vector<std::pair<AstModule*, AstAssertCtlArgs*>> m_wholeModel;
     // Repeated references to the same top within one selector select it only once.
     std::unordered_map<const AstAssertCtlArgs*, const AstModule*> m_wholeModelTop;
+    // Shared targets of all sites below each top module (see wholeModelSet)
+    std::unordered_map<const AstNodeModule*, AstAssertCtlTargetSet*> m_wholeModelSets;
     // Identical absolute subtrees at the same depth limit share one early target list.
     std::unordered_map<string, std::unordered_map<uint32_t, AstAssertCtlTargetSet*>> m_absoluteScopes;
     std::vector<AstAssertCtlTargetSet*> m_pendingSets;
@@ -232,6 +234,8 @@ public:
     void rememberCompoundScope(const string& key, AstAssertCtlArgs* argsp);
     // Delay enumeration of proven whole-model scopes and insertion of state declarations.
     void attach();
+    // Targets of all sites below a top module, shared by every selector of the whole model
+    AstAssertCtlTargetSet* wholeModelSet(AstNodeModule* topp, FileLine* flp);
     AstVar* select(AstNodeStmt* nodep, AstNodeModule*& ownerpr) {
         const auto it = m_sites.find(nodep);
         if (it == m_sites.end()) return nullptr;
@@ -288,12 +292,42 @@ class AssertControlTargetVisitor final : public VNVisitor {
     const bool m_moduleRelative;  // Paths normalized relative to the caller module
     const AstNodeModule* m_classp = nullptr;  // Class whose code references the state
     const uint32_t m_limit;  // Exclusive depth bound for child traversal
+    void addTarget(AstNode* nodep, AstVar* varp, AstNodeModule* ownerp, bool forward) {
+        const string key
+            = (m_moduleRelative ? "\x01"s : ""s) + VString::dot(m_instancePath, ".", varp->name());
+        const auto pair = m_targets.emplace(key, nullptr);
+        if (!pair.second) {
+            pair.first->second->depth(std::min(pair.first->second->depth(), m_depth));
+            return;
+        }
+        // The control updates a state, but only reads the handle of a forwarded block
+        const VAccess access = forward ? VAccess::READ : VAccess::READWRITE;
+        AstNodeVarRef* const refp
+            = m_instancePath.empty()
+                  ? static_cast<AstNodeVarRef*>(new AstVarRef{m_argsp->fileline(), varp, access})
+                  : static_cast<AstNodeVarRef*>(
+                        new AstVarXRef{m_argsp->fileline(), varp, m_instancePath, access});
+        if (AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
+            if (VN_IS(ownerp, Package) || (VN_IS(ownerp, Class) && ownerp != m_classp)) {
+                varRefp->classOrPackagep(ownerp);
+            }
+        }
+        if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+            xrefp->assertCtlOptional(m_optional);
+            xrefp->assertCtlAbsolute(m_absolute);
+        }
+        AstAssertCtlTarget* const targetp
+            = new AstAssertCtlTarget{nodep->fileline(), refp, m_depth, m_moduleRelative, forward};
+        pair.first->second = targetp;
+        m_argsp->addTargetsp(targetp);
+    }
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
         if (static_cast<uint32_t>(m_depth + 1) >= m_limit) return;
-        if (v3Global.opt.hierarchical() && nodep->modp()->hierBlock()) {
-            warnAssertControlHierarchy(m_argsp, nodep,
-                                       VString::dot(m_childPath, ".", nodep->name()));
+        AstNodeModule* const modp = nodep->modp();
+        if (v3Global.opt.hierarchical() && modp->hierBlock()) {
+            // The plan Verilates this block to let controls above it select its assertions
+            modp->hierAssertCtl(true);
             return;
         }
         VL_RESTORER_COPY(m_instancePath);
@@ -302,7 +336,13 @@ class AssertControlTargetVisitor final : public VNVisitor {
         m_instancePath = VString::dot(m_childPath, ".", nodep->name());
         m_childPath = m_instancePath;
         ++m_depth;
-        iterateAndNextNull(nodep->modp()->stmtsp());
+        if (modp->verilatorLib() && v3Global.opt.hierBlocks().count(modp->origName())) {
+            // A Verilated hierarchical block: its library adds all of its sites at this depth
+            modp->hierAssertCtl(true);  // Model declares the library function (see V3EmitCSyms)
+            addTarget(nodep, modp->libWrapperVarp("handle__V"), modp, true);
+            return;
+        }
+        iterateAndNextNull(modp->stmtsp());
     }
     void visit(AstGenBlock* nodep) override {
         VL_RESTORER_COPY(m_childPath);
@@ -313,34 +353,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
         if (AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt)) {
             AstNodeModule* ownerp = nullptr;
             if (AstVar* const varp = m_sites.select(stmtp, ownerp)) {
-                const string key = (m_moduleRelative ? "\x01"s : ""s)
-                                   + VString::dot(m_instancePath, ".", varp->name());
-                const auto pair = m_targets.emplace(key, nullptr);
-                if (pair.second) {
-                    AstNodeVarRef* const refp
-                        = m_instancePath.empty()
-                              ? static_cast<AstNodeVarRef*>(
-                                    new AstVarRef{m_argsp->fileline(), varp, VAccess::READWRITE})
-                              : static_cast<AstNodeVarRef*>(new AstVarXRef{m_argsp->fileline(),
-                                                                           varp, m_instancePath,
-                                                                           VAccess::READWRITE});
-                    if (AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
-                        if (VN_IS(ownerp, Package)
-                            || (VN_IS(ownerp, Class) && ownerp != m_classp)) {
-                            varRefp->classOrPackagep(ownerp);
-                        }
-                    }
-                    if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
-                        xrefp->assertCtlOptional(m_optional);
-                        xrefp->assertCtlAbsolute(m_absolute);
-                    }
-                    AstAssertCtlTarget* const targetp = new AstAssertCtlTarget{
-                        nodep->fileline(), refp, m_depth, m_moduleRelative};
-                    pair.first->second = targetp;
-                    m_argsp->addTargetsp(targetp);
-                } else {
-                    pair.first->second->depth(std::min(pair.first->second->depth(), m_depth));
-                }
+                addTarget(nodep, varp, ownerp, false);
             }
         }
         iterateChildren(nodep);
@@ -418,30 +431,35 @@ void LinkDotAssertCtlSites::rememberCompoundScope(const string& key, AstAssertCt
     argsp->sharedp(setp);
 }
 
+AstAssertCtlTargetSet* LinkDotAssertCtlSites::wholeModelSet(AstNodeModule* topp, FileLine* flp) {
+    const auto entry = m_wholeModelSets.try_emplace(topp, nullptr);
+    if (entry.second) {
+        const string& top = topp->name();
+        std::unordered_map<string, AstAssertCtlTarget*> targets;
+        // The shared list is independent of any individual call's depth and type filters.
+        AstAssertCtlArgs* const prototypep = new AstAssertCtlArgs{flp, nullptr, nullptr};
+        AssertControlTargetVisitor{*this, topp, prototypep, top, top, targets, false, true};
+        if (prototypep->targetsp()) {
+            AstAssertCtlTargetSet* const setp
+                = new AstAssertCtlTargetSet{flp, prototypep->targetsp()->unlinkFrBackWithNext()};
+            m_rootp->addMiscsp(setp);
+            entry.first->second = setp;
+        }
+        VL_DO_DANGLING(prototypep->deleteTree(), prototypep);
+    }
+    return entry.first->second;
+}
+
 void LinkDotAssertCtlSites::attach() {
     for (AstAssertCtlTargetSet* const setp : m_pendingSets) m_rootp->addMiscsp(setp);
     // Explicit top selectors are model-local even if Verilator also emits a main.
-    std::unordered_map<const AstModule*, AstAssertCtlTargetSet*> shared;
     for (const auto& selector : m_wholeModel) {
-        AstModule* const topp = selector.first;
-        AstAssertCtlArgs* const argsp = selector.second;
-        const auto entry = shared.try_emplace(topp, nullptr);
-        if (entry.second) {
-            const string& top = topp->name();
-            std::unordered_map<string, AstAssertCtlTarget*> targets;
-            // The shared list is independent of any individual call's depth and type filters.
-            AstAssertCtlArgs* const prototypep
-                = new AstAssertCtlArgs{argsp->fileline(), nullptr, nullptr};
-            AssertControlTargetVisitor{*this, topp, prototypep, top, top, targets, false, true};
-            if (prototypep->targetsp()) {
-                AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
-                    argsp->fileline(), prototypep->targetsp()->unlinkFrBackWithNext()};
-                m_rootp->addMiscsp(setp);
-                entry.first->second = setp;
-            }
-            VL_DO_DANGLING(prototypep->deleteTree(), prototypep);
-        }
-        argsp->sharedp(entry.first->second);
+        selector.second->sharedp(wholeModelSet(selector.first, selector.second->fileline()));
+    }
+    // A control above this hierarchical block selects all of its sites, as from its top
+    if (v3Global.opt.hierAssertCtl()) {
+        AstNodeModule* const topp = m_rootp->topModulep();
+        m_rootp->assertCtlExportp(wholeModelSet(topp, topp->fileline()));
     }
     for (const auto& declaration : m_declarations) {
         declaration.first->addStmtsp(declaration.second);
@@ -695,7 +713,9 @@ public:
     bool forParamed() const { return m_step == LDS_PARAMED; }
     void indexAssertCtlSites(AstNetlist* rootp) {
         if (forParamed()
-            && rootp->exists([](const AstAssertCtl* ctlp) { return ctlp->argsp() != nullptr; })) {
+            && (v3Global.opt.hierAssertCtl() || rootp->exists([](const AstAssertCtl* ctlp) {
+                   return ctlp->argsp() != nullptr;
+               }))) {
             m_assertCtlSitesp = std::make_unique<LinkDotAssertCtlSites>(rootp);
         }
     }
