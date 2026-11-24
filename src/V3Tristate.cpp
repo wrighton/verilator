@@ -2031,7 +2031,7 @@ class TristateVisitor final : public TristateBaseVisitor {
     // drive
     void createResolvedEnVarp(AstVar* varp, const std::unordered_set<const AstVar*>& inputps) {
         if (inputps.count(varp)) {
-            m_varAux(varp).resolvedEnVarp = getCreateEnVarp(varp, false);
+            m_varAux(varp).resolvedEnVarp = getCreateEnVarp(varp, false, m_modp);
             return;
         }
         // V3LinkLevel puts the wrapper at level 1 and the wrapped design tops at level 2.
@@ -3045,14 +3045,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                     VL_DO_DANGLING(pushDeletep(constp), constp);
                 }
             }
-            // A net of another module that the value reads may be tristate there without an
-            // enable
-            const bool xrefNetValue
-                = forcep && !isIfaceStrengthNet(varp)
-                  && forcep->rhsp()->exists([](const AstVarXRef* xrefp) {
-                         return xrefp->varp()->isNet() && !xrefp->varp()->user1p();
-                     });
-            if (forcep && !enp && !xrefNetValue) enp = newForceValueEnp(forcep->rhsp(), lhsp);
+            if (forcep && !enp) enp = newForceValueEnp(forcep->rhsp(), lhsp);
             if (forcep && !enp) {
                 if (isIfaceStrengthNet(refp->varp())) {
                     forcep->rhsp()->v3warn(E_UNSUPPORTED,
@@ -3703,8 +3696,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                 m_varAux(nodep).ifaceTristate = true;
                 m_tgraph.setTristate(nodep);
             }
-            if (nodep->isInout() || nodep->resolveWrittenInput()
-                || (m_varAux(nodep).forceRhsReadEn && !nodep->isIO())) {
+            if (nodep->isInout() || nodep->resolveWrittenInput()) {
                 // Resolve local drivers of an input without making its value actual writable.
                 UINFO(9, "  setTristate-port " << nodep);
                 m_tgraph.setTristate(nodep);
@@ -3887,6 +3879,19 @@ public:
     // CONSTRUCTORS
     explicit TristateVisitor(AstNetlist* netlistp) {
         m_tgraph.clearAndCheck();
+        // Interface identity must be known while force RHS connections are classified.
+        std::vector<AstNodeModule*> ifacesp;
+        for (AstNode* const nodep : netlistp->modulespList()) {
+            AstIface* const ifacep = VN_CAST(nodep, Iface);
+            if (!ifacep) continue;
+            ifacesp.push_back(ifacep);
+            for (AstNode* const stmtp : ifacep->stmtspList()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    m_varAux(varp).inIface = true;
+                    if (isStrengthGroupNet(varp)) m_varAux(varp).ifaceTristate = true;
+                }
+            }
+        }
         // Before any module is processed, give each forced port the enable of its connection,
         // so every reader finds it
         const TristateForcedInputVisitor::Eligible eligible
@@ -3914,7 +3919,7 @@ public:
                 if (!targetp || !isForceOverrideNet(targetp->varp())) return;
                 const AstVarRef* const rhsRefp = VN_CAST(forcep->rhsp(), VarRef);
                 if (!m_modp->isTop() && rhsRefp && eligible.rhsInputps.count(rhsRefp->varp())) {
-                    getCreateEnVarp(rhsRefp->varp(), false);
+                    getCreateEnVarp(rhsRefp->varp(), false, m_modp);
                     m_varAux(rhsRefp->varp()).forceRhsReadEn = true;
                 }
                 if (const AstNodeVarRef* const refp = forceRhsRefp(forcep->rhsp())) {
@@ -3926,21 +3931,7 @@ public:
                 }
             });
         }
-        // Process interface modules first, so an interface tristate net is recorded
-        // (AuxAstVar::ifaceTristate) before any module that drives it across hierarchy is
-        // graphed. A module driving such a net with a plain (non-Z) assign has no Z in its
-        // own graph to mark the net tristate, so without this its driver would be dropped.
-        // Collect only the interfaces (reverse declaration order to match the pass below).
-        // Mark their variables first, as any module may force a net of an interface.
-        std::vector<AstNodeModule*> ifacesp;
-        for (AstNode* const modp : netlistp->modulespList()) {
-            AstIface* const ifacep = VN_CAST(modp, Iface);
-            if (!ifacep) continue;
-            ifacesp.push_back(ifacep);
-            for (AstNode* const stmtp : ifacep->stmtspList()) {
-                if (AstVar* const varp = VN_CAST(stmtp, Var)) m_varAux(varp).inIface = true;
-            }
-        }
+        // Process interfaces first, in reverse declaration order, before their external drivers.
         for (auto it = ifacesp.rbegin(); it != ifacesp.rend(); ++it) iterate(*it);
         m_processedIfaces = true;
         // Then the rest in the historical order; interfaces are skipped (already done).
