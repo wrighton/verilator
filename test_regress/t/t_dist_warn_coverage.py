@@ -45,7 +45,6 @@ for s in [
         '%s: Unsupported vltype (%d)',
         '%s: Unsupported vpiHandle \'%p\' for type \'%s\', nothing will be returned',
         '%s: VPI callback data pointer is null',
-        'Assigning >32 bit to unranged parameter (defaults to 32 bits)',
         'Assignment pattern with no members',
         'Ignoring vpi_get_time with nullptr value pointer',
         'Ignoring vpi_put_value_array with null index pointer',
