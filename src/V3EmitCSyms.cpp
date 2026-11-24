@@ -1622,11 +1622,18 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
         // A write through the VPI into the library model has this instance evaluated again
         const auto it = m_libExportImpls.find(scopep);
         if (it != m_libExportImpls.end()) {
+            const std::string implName
+                = EmitCUtil::prefixNameProtect(modp) + "__" + it->second->nameProtect();
+            const std::string symsArg = "static_cast<" + symClassName() + "*>(symsp)";
+            // An export taking a process gets that of the SV process writing through the VPI,
+            // if any, as when C calls an export
+            const std::string callStr
+                = it->second->needsVlProcess()
+                      ? "VerilatedDpi::callExportFunction(&" + implName + ", " + symsArg + ")"
+                      : implName + "(" + symsArg + ")";
             stmts.add(modp->origName() + "_protectlib_on_vpi_write(VL_CVT_Q_VP(vlSymsp->"
                       + instName(scopep) + "." + varName(handlep)
-                      + "), [](VerilatedSyms* symsp) { " + EmitCUtil::prefixNameProtect(modp)
-                      + "__" + it->second->nameProtect() + "(static_cast<" + symClassName()
-                      + "*>(symsp)); }, vlSymsp);");
+                      + "), [](VerilatedSyms* symsp) { " + callStr + "; }, vlSymsp);");
         }
     }
 
