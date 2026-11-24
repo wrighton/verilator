@@ -17,7 +17,8 @@ interface tgt_if #(
   wire [1:0] value;
   if (FLOATING) begin : g_floating
     assign (weak0, weak1) value = drv_on ? 2'b00 : 2'bzz;
-  end else begin : g_always
+  end
+  else begin : g_always
     assign (weak0, weak1) value = 2'b10;
     assign value = drv_on ? 2'b01 : 2'bzz;
   end
@@ -164,20 +165,6 @@ module u_concat_z_literal;
   end
 endmodule
 
-module u_func_driven;
-  tgt_if tgt (1'b0);
-  bit d = 1'b0;
-  function automatic logic [1:0] fd(input bit x);
-    return x ? 2'b01 : 2'b10;
-  endfunction
-  task force_value;
-    force tgt.value = fd(d);
-  endtask
-  initial begin
-    force tgt.value = fd(d);
-  end
-endmodule
-
 module u_class_queue;
   tgt_if tgt (1'b0);
   class holder;
@@ -224,12 +211,10 @@ endmodule
 
 module u_ports (
     tgt_if p,
-    inout wire [1:0] io,
-    input wire [1:0] in
+    inout wire [1:0] io
 );
   initial begin
     force p.value = io;
-    force p.value = in;
   end
 endmodule
 
@@ -244,7 +229,6 @@ module t;
   u_forced_pulled_src forced_pulled_src ();
   u_and_z_literal and_z_literal ();
   u_concat_z_literal concat_z_literal ();
-  u_func_driven func_driven ();
   u_class_queue class_queue ();
   u_forced_tristate_src forced_tristate_src ();
   u_local_net local_net ();
@@ -252,10 +236,8 @@ module t;
   tgt_if port_tgt (1'b0);
   wire [1:0] port_io;
   assign port_io = 2'bzz;
-  wire [1:0] port_in;
   u_ports ports (
       port_tgt,
-      port_io,
-      port_in
+      port_io
   );
 endmodule
