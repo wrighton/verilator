@@ -147,6 +147,12 @@ private:
         size_t m_end = 0;  // Index after its last group
         std::vector<EData> m_wideSlice;  // Wide slices are extracted here when dumped
     };
+    // A traced model, with what identifies its values once it is destroyed
+    struct TracedModel final {
+        VerilatedModel* m_modelp;  // The model, valid while it is in the context
+        uint32_t m_id;  // Its id in the context
+        const VlRtmd* m_rtmdp;  // Its descriptors, which the activity sets of its values refer to
+    };
     // Dumping a shard on a worker thread
     struct ParallelWorkerData final {
         VerilatedTrace& m_trace;  // The trace file being dumped
@@ -167,6 +173,9 @@ private:
             , m_full{full} {}
     };
 
+    // Stop dumping the models that are no longer in the context
+    void removeDeadModels() VL_MT_UNSAFE;
+
     // Passed a ParallelWorkerData*
     static void parallelWorkerTask(void*);
 
@@ -180,7 +189,8 @@ private:
     uint64_t m_timeLastDump = 0;  // Last time we did a dump
     bool m_didSomeDump = false;  // Did at least one dump (i.e.: m_timeLastDump is valid)
     VerilatedContext* m_contextp = nullptr;  // The context being traced
-    std::vector<VerilatedModel*> m_modelps;  // The traced models
+    std::vector<TracedModel> m_models;  // The traced models
+    uint32_t m_modelsRemoved = 0;  // Count of models removed from the context, when last checked
 
     // The values to dump, grouped by activity set and how to dump them, in that order
     std::vector<std::pair<VlRtmdActSet, Group>> m_groupVec;

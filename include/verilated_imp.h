@@ -217,6 +217,7 @@ protected:
     mutable VerilatedMutex m_modelsMutex;  // Protect m_models
     std::map<std::string, VerilatedModel*> m_models VL_GUARDED_BY(m_modelsMutex);
     uint32_t m_nextModelId VL_GUARDED_BY(m_modelsMutex) = 0;  // Id of the next model added
+    std::atomic<uint32_t> m_modelsRemoved{0};  // Count of models removed, checked by traces
 };
 
 //======================================================================

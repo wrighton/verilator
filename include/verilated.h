@@ -882,6 +882,8 @@ public:
     void removeModel(const VerilatedModel* modelp);
     // Internal: Retrieve all models in the context, indexed by their hierarchical path
     std::map<std::string, VerilatedModel*> models() const VL_MT_SAFE;
+    // Internal: Count of models removed so far
+    uint32_t modelsRemoved() const VL_MT_SAFE;
 
     // Get the thread pool, creating it if needed. 'modelThreads' is the parallelism of the model
     // being constructed, so that the context can grow to the number of threads it requires.
