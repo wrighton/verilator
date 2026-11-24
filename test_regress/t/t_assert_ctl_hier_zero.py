@@ -16,4 +16,7 @@ test.compile(verilator_make_gmake=False,
              make_main=False,
              verilator_flags2=['--hierarchical', '--assert'])
 
+# No scoped control reaches the block
+test.file_grep_not(test.obj_dir + "/Vleaf__hierMkArgs.f", r'--hierarchical-assert-control')
+
 test.passes()

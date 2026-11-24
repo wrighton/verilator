@@ -158,6 +158,8 @@ class LinkDotAssertCtlSites final : public VNVisitor {
     std::vector<std::pair<AstModule*, AstAssertCtlArgs*>> m_wholeModel;
     // Repeated references to the same top within one selector select it only once.
     std::unordered_map<const AstAssertCtlArgs*, const AstModule*> m_wholeModelTop;
+    // Shared targets of all sites below each top module (see wholeModelSet)
+    std::unordered_map<const AstNodeModule*, AstAssertCtlTargetSet*> m_wholeModelSets;
     // Identical absolute subtrees at the same depth limit share one early target list.
     std::unordered_map<string, std::unordered_map<uint32_t, AstAssertCtlTargetSet*>> m_absoluteScopes;
     std::vector<AstAssertCtlTargetSet*> m_pendingSets;
@@ -232,6 +234,8 @@ public:
     void rememberCompoundScope(const string& key, AstAssertCtlArgs* argsp);
     // Delay enumeration of proven whole-model scopes and insertion of state declarations.
     void attach();
+    // Targets of all sites below a top module, shared by every selector of the whole model
+    AstAssertCtlTargetSet* wholeModelSet(AstNodeModule* topp, FileLine* flp);
     AstVar* select(AstNodeStmt* nodep, AstNodeModule*& ownerpr) {
         const auto it = m_sites.find(nodep);
         if (it == m_sites.end()) return nullptr;
@@ -288,12 +292,42 @@ class AssertControlTargetVisitor final : public VNVisitor {
     const bool m_moduleRelative;  // Paths normalized relative to the caller module
     const AstNodeModule* m_classp = nullptr;  // Class whose code references the state
     const uint32_t m_limit;  // Exclusive depth bound for child traversal
+    void addTarget(AstNode* nodep, AstVar* varp, AstNodeModule* ownerp, bool forward) {
+        const string key
+            = (m_moduleRelative ? "\x01"s : ""s) + VString::dot(m_instancePath, ".", varp->name());
+        const auto pair = m_targets.emplace(key, nullptr);
+        if (!pair.second) {
+            pair.first->second->depth(std::min(pair.first->second->depth(), m_depth));
+            return;
+        }
+        // The control updates a state, but only reads the handle of a forwarded block
+        const VAccess access = forward ? VAccess::READ : VAccess::READWRITE;
+        AstNodeVarRef* const refp
+            = m_instancePath.empty()
+                  ? static_cast<AstNodeVarRef*>(new AstVarRef{m_argsp->fileline(), varp, access})
+                  : static_cast<AstNodeVarRef*>(
+                        new AstVarXRef{m_argsp->fileline(), varp, m_instancePath, access});
+        if (AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
+            if (VN_IS(ownerp, Package) || (VN_IS(ownerp, Class) && ownerp != m_classp)) {
+                varRefp->classOrPackagep(ownerp);
+            }
+        }
+        if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
+            xrefp->assertCtlOptional(m_optional);
+            xrefp->assertCtlAbsolute(m_absolute);
+        }
+        AstAssertCtlTarget* const targetp
+            = new AstAssertCtlTarget{nodep->fileline(), refp, m_depth, m_moduleRelative, forward};
+        pair.first->second = targetp;
+        m_argsp->addTargetsp(targetp);
+    }
     void visit(AstNodeModule*) override {}  // Not nested declarations or templates
     void visit(AstCell* nodep) override {
         if (static_cast<uint32_t>(m_depth + 1) >= m_limit) return;
-        if (v3Global.opt.hierarchical() && nodep->modp()->hierBlock()) {
-            warnAssertControlHierarchy(m_argsp, nodep,
-                                       VString::dot(m_childPath, ".", nodep->name()));
+        AstNodeModule* const modp = nodep->modp();
+        if (v3Global.opt.hierarchical() && modp->hierBlock()) {
+            // The plan Verilates this block to let controls above it select its assertions
+            modp->hierAssertCtl(true);
             return;
         }
         VL_RESTORER_COPY(m_instancePath);
@@ -302,7 +336,13 @@ class AssertControlTargetVisitor final : public VNVisitor {
         m_instancePath = VString::dot(m_childPath, ".", nodep->name());
         m_childPath = m_instancePath;
         ++m_depth;
-        iterateAndNextNull(nodep->modp()->stmtsp());
+        if (modp->verilatorLib() && v3Global.opt.hierBlocks().count(modp->origName())) {
+            // A Verilated hierarchical block: its library adds all of its sites at this depth
+            modp->hierAssertCtl(true);  // Model declares the library function (see V3EmitCSyms)
+            addTarget(nodep, modp->libWrapperVarp("handle__V"), modp, true);
+            return;
+        }
+        iterateAndNextNull(modp->stmtsp());
     }
     void visit(AstGenBlock* nodep) override {
         VL_RESTORER_COPY(m_childPath);
@@ -313,34 +353,7 @@ class AssertControlTargetVisitor final : public VNVisitor {
         if (AstNodeStmt* const stmtp = VN_CAST(nodep, NodeStmt)) {
             AstNodeModule* ownerp = nullptr;
             if (AstVar* const varp = m_sites.select(stmtp, ownerp)) {
-                const string key = (m_moduleRelative ? "\x01"s : ""s)
-                                   + VString::dot(m_instancePath, ".", varp->name());
-                const auto pair = m_targets.emplace(key, nullptr);
-                if (pair.second) {
-                    AstNodeVarRef* const refp
-                        = m_instancePath.empty()
-                              ? static_cast<AstNodeVarRef*>(
-                                    new AstVarRef{m_argsp->fileline(), varp, VAccess::READWRITE})
-                              : static_cast<AstNodeVarRef*>(new AstVarXRef{m_argsp->fileline(),
-                                                                           varp, m_instancePath,
-                                                                           VAccess::READWRITE});
-                    if (AstVarRef* const varRefp = VN_CAST(refp, VarRef)) {
-                        if (VN_IS(ownerp, Package)
-                            || (VN_IS(ownerp, Class) && ownerp != m_classp)) {
-                            varRefp->classOrPackagep(ownerp);
-                        }
-                    }
-                    if (AstVarXRef* const xrefp = VN_CAST(refp, VarXRef)) {
-                        xrefp->assertCtlOptional(m_optional);
-                        xrefp->assertCtlAbsolute(m_absolute);
-                    }
-                    AstAssertCtlTarget* const targetp = new AstAssertCtlTarget{
-                        nodep->fileline(), refp, m_depth, m_moduleRelative};
-                    pair.first->second = targetp;
-                    m_argsp->addTargetsp(targetp);
-                } else {
-                    pair.first->second->depth(std::min(pair.first->second->depth(), m_depth));
-                }
+                addTarget(nodep, varp, ownerp, false);
             }
         }
         iterateChildren(nodep);
@@ -418,30 +431,35 @@ void LinkDotAssertCtlSites::rememberCompoundScope(const string& key, AstAssertCt
     argsp->sharedp(setp);
 }
 
+AstAssertCtlTargetSet* LinkDotAssertCtlSites::wholeModelSet(AstNodeModule* topp, FileLine* flp) {
+    const auto entry = m_wholeModelSets.try_emplace(topp, nullptr);
+    if (entry.second) {
+        const string& top = topp->name();
+        std::unordered_map<string, AstAssertCtlTarget*> targets;
+        // The shared list is independent of any individual call's depth and type filters.
+        AstAssertCtlArgs* const prototypep = new AstAssertCtlArgs{flp, nullptr, nullptr};
+        AssertControlTargetVisitor{*this, topp, prototypep, top, top, targets, false, true};
+        if (prototypep->targetsp()) {
+            AstAssertCtlTargetSet* const setp
+                = new AstAssertCtlTargetSet{flp, prototypep->targetsp()->unlinkFrBackWithNext()};
+            m_rootp->addMiscsp(setp);
+            entry.first->second = setp;
+        }
+        VL_DO_DANGLING(prototypep->deleteTree(), prototypep);
+    }
+    return entry.first->second;
+}
+
 void LinkDotAssertCtlSites::attach() {
     for (AstAssertCtlTargetSet* const setp : m_pendingSets) m_rootp->addMiscsp(setp);
     // Explicit top selectors are model-local even if Verilator also emits a main.
-    std::unordered_map<const AstModule*, AstAssertCtlTargetSet*> shared;
     for (const auto& selector : m_wholeModel) {
-        AstModule* const topp = selector.first;
-        AstAssertCtlArgs* const argsp = selector.second;
-        const auto entry = shared.try_emplace(topp, nullptr);
-        if (entry.second) {
-            const string& top = topp->name();
-            std::unordered_map<string, AstAssertCtlTarget*> targets;
-            // The shared list is independent of any individual call's depth and type filters.
-            AstAssertCtlArgs* const prototypep
-                = new AstAssertCtlArgs{argsp->fileline(), nullptr, nullptr};
-            AssertControlTargetVisitor{*this, topp, prototypep, top, top, targets, false, true};
-            if (prototypep->targetsp()) {
-                AstAssertCtlTargetSet* const setp = new AstAssertCtlTargetSet{
-                    argsp->fileline(), prototypep->targetsp()->unlinkFrBackWithNext()};
-                m_rootp->addMiscsp(setp);
-                entry.first->second = setp;
-            }
-            VL_DO_DANGLING(prototypep->deleteTree(), prototypep);
-        }
-        argsp->sharedp(entry.first->second);
+        selector.second->sharedp(wholeModelSet(selector.first, selector.second->fileline()));
+    }
+    // A control above this hierarchical block selects all of its sites, as from its top
+    if (v3Global.opt.hierAssertCtl()) {
+        AstNodeModule* const topp = m_rootp->topModulep();
+        m_rootp->assertCtlExportp(wholeModelSet(topp, topp->fileline()));
     }
     for (const auto& declaration : m_declarations) {
         declaration.first->addStmtsp(declaration.second);
@@ -698,7 +716,9 @@ public:
     bool forParamed() const { return m_step == LDS_PARAMED; }
     void indexAssertCtlSites(AstNetlist* rootp) {
         if (forParamed()
-            && rootp->exists([](const AstAssertCtl* ctlp) { return ctlp->argsp() != nullptr; })) {
+            && (v3Global.opt.hierAssertCtl() || rootp->exists([](const AstAssertCtl* ctlp) {
+                   return ctlp->argsp() != nullptr;
+               }))) {
             m_assertCtlSitesp = std::make_unique<LinkDotAssertCtlSites>(rootp);
         }
     }
@@ -9216,6 +9236,39 @@ class LinkDotResolveVisitor final : public VNVisitor {
         addAssertCtlTargets(reaches, argsp, targets, absolute);
         return true;
     }
+    // Whether a reference reads a parameter whose value can differ between the instances sharing
+    // this module: one found upward, outside this module, or one read through another module
+    // instance, which names the declaration of the unelaborated module. A generate-qualified
+    // name below this module, and a direct name of an interface instance or port in module
+    // code, are relinked to the elaborated instance instead.
+    bool assertCtlInstanceParam(const AstVarXRef* refp) {
+        if (!refp->varp() || !refp->varp()->isParam()) return false;
+        string baddot;
+        VSymEnt* okSymp = nullptr;
+        const VSymEnt* symp = m_statep->findAssertCtlDotted(refp->fileline(), m_curSymp,
+                                                            refp->dotted(), baddot, okSymp, true);
+        // A class is elaborated with the module declaring it
+        const VSymEnt* ownp = m_curSymp;
+        bool inClass = false;
+        while (ownp && !VN_IS(ownp->nodep(), Cell)
+               && (!VN_IS(ownp->nodep(), NodeModule) || VN_IS(ownp->nodep(), Class))) {
+            inClass |= VN_IS(ownp->nodep(), Class);
+            ownp = ownp->parentp();
+        }
+        bool throughModule = false;
+        for (; symp && symp != ownp; symp = symp->parentp()) {
+            const AstCell* const cellp = VN_CAST(symp->nodep(), Cell);
+            if (cellp && !VN_IS(cellp->modp(), Iface)) throughModule = true;
+        }
+        if (!symp) return true;
+        if (refp->containsGenBlock()) return false;
+        // Only a direct name in module code is relinked to the elaborated interface instance
+        if (refp->varp()->isIfaceParam()
+            && (inClass || refp->dotted().find('.') != string::npos)) {
+            return true;
+        }
+        return throughModule;
+    }
     string assertControlPath(AstNodeExpr* nodep, bool* nonconstantp = nullptr) {
         if (const AstParseRef* const refp = VN_CAST(nodep, ParseRef)) return refp->name();
         if (const AstDot* const dotp = VN_CAST(nodep, Dot)) {
@@ -9227,6 +9280,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const int errors = V3Error::errorCount();
             symIterateNull(selp->bitp(), m_curSymp);
             if (V3Error::errorCount() != errors) return "";
+            if (m_statep->forPrimary()) {
+                selp->bitp()->foreach([&](const AstVarXRef* refp) {
+                    if (assertCtlInstanceParam(refp)) {
+                        refp->v3error("Assertion control scope index reads parameter "
+                                      << refp->prettyNameQ()
+                                      << " of another instance, which a constant expression "
+                                         "cannot (IEEE 1800-2023 A.8.4, 11.2.1).");
+                    }
+                });
+            }
             if (selp->bitp()->exists([](const AstEnumItemRef* refp) {
                     return refp->containsGenBlock() && !refp->dotted().empty();
                 })) {
@@ -9265,12 +9328,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                          "parameter in assertion control scope index.");
                     return "";
                 }
-                if (!VN_IS(selp->bitp(), VarXRef)) {
+                // Constant function evaluation is not available while linking.
+                if (selp->bitp()->exists([](const AstFuncRef*) { return true; })) {
                     selp->bitp()->v3warn(E_UNSUPPORTED,
-                                         "Unsupported: Assertion control scope index "
-                                         "requires folding a relinked generate parameter.");
+                                         "Unsupported: Function call with a generate-qualified "
+                                         "parameter in assertion control scope index.");
                     return "";
                 }
+                // Relinked names are not widthed yet, so fold as V3Param folds other indices.
+                V3Const::constifyParamsNoWarnEdit(selp->bitp());
+            }
+            // Folding reads, and edits, the values of the parameters the index refers to, which
+            // are elaborated only by V3Param. Until then an element name resolves to its array,
+            // so the path without the index has the same first scope.
+            if (!m_statep->forParamed()
+                && selp->bitp()->exists([](const AstNodeVarRef*) { return true; })) {
+                return assertControlPath(selp->fromp(), nonconstantp);
             }
             AstNodeExpr* const indexp = V3Const::constifyEdit(selp->bitp()->cloneTree(false));
             AstConst* const constp = VN_CAST(indexp, Const);
@@ -9336,10 +9409,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             const bool runtimeIndex = itemp->exists([](const AstNodeVarRef* refp) {
                 return !refp->varp() || !refp->varp()->isParam();
             });
-            if (nonconstant && !runtimeIndex
-                && itemp->exists([](const AstFuncRef*) { return true; })) {
-                itemp->v3warn(E_UNSUPPORTED,
-                              "Unsupported: Function call in assertion control scope index.");
+            if (nonconstant && !runtimeIndex && itemp->exists([](const AstFuncRef* refp) {
+                    return V3LinkDot::assertCtlRuntimeIndexNode(refp);
+                })) {
+                itemp->v3error("Assertion control scope index calls a function that reaches a "
+                               "hierarchical name, so is not a constant function call "
+                               "(IEEE 1800-2023 13.4.3).");
             } else if (nonconstant) {
                 itemp->v3error("Nonconstant index in assertion control scope "
                                "(IEEE 1800-2023 20.11).");
@@ -9775,9 +9850,29 @@ bool V3LinkDot::pathSegments(AstNode* pathp, PathSegments& segs) {
     return true;
 }
 
+// Whether a call reaches a hierarchical name, itself or in a function it calls, which a constant
+// function may not (IEEE 1800-2023 13.4.3). Each function is scanned once.
+static bool assertCtlHierarchicalCall(const AstNodeFTaskRef* refp,
+                                      std::unordered_set<const AstNodeFTask*>& scanned) {
+    if (!refp->dotted().empty()) return true;
+    const AstNodeFTask* const taskp = refp->taskp();
+    if (!taskp || !scanned.emplace(taskp).second) return false;
+    return taskp->exists([&](const AstNode* nodep) {
+        if (const AstNodeFTaskRef* const callp = VN_CAST(nodep, NodeFTaskRef)) {
+            return assertCtlHierarchicalCall(callp, scanned);
+        }
+        return VN_IS(nodep, VarXRef) || VN_IS(nodep, Dot);
+    });
+}
+
 bool V3LinkDot::assertCtlRuntimeIndexNode(const AstNode* nodep) {
     if (const AstNodeVarRef* const refp = VN_CAST(nodep, NodeVarRef)) {
         return !refp->varp() || !refp->varp()->isParam();
+    }
+    // A call folds only as a constant function; arguments are checked separately
+    if (const AstFuncRef* const refp = VN_CAST(nodep, FuncRef)) {
+        std::unordered_set<const AstNodeFTask*> scanned;
+        return assertCtlHierarchicalCall(refp, scanned);
     }
     if (VN_IS(nodep, NodeFTaskRef) || !nodep->isPredictOptimizable()) return true;
     if (!nodep->isSystemFunc()) return false;

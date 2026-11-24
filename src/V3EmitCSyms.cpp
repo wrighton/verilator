@@ -1054,17 +1054,6 @@ class EmitCSyms final : EmitCBaseVisitorConst {
         }
     }
 
-    // The variable of the wrapper of a library with the given name
-    static const AstVar* libWrapperVar(const AstNodeModule* modp, const std::string& name) {
-        const AstVar* resultp = nullptr;
-        for (const AstNode* const nodep : modp->stmtspList()) {
-            const AstVar* const varp = VN_CAST(nodep, Var);
-            if (varp && varp->prettyName() == name) resultp = varp;
-        }
-        UASSERT_OBJ(resultp, modp, "Verilator library wrapper without '" << name << "'");
-        return resultp;
-    }
-
     void visit(AstCFunc* nodep) override {
         nameCheck(nodep);
         if (nodep->dpiImportPrototype() || nodep->dpiExportDispatcher()) m_dpis.push_back(nodep);
@@ -1121,6 +1110,18 @@ void EmitCSyms::emitSymHdr() {
         if (VN_IS(nodep, Class)) continue;  // Class included earlier
         if (nodep->isConstPool()) continue;  // Special emit rules
         putns(nodep, "#include \"" + EmitCUtil::prefixNameProtect(nodep) + ".h\"\n");
+    }
+    // Scoped assertion controls add the assertions of hierarchical blocks (see V3ProtectLib)
+    std::set<std::string> hierLibNames;
+    for (const ScopeModPair& itpair : m_scopes) {
+        const AstNodeModule* const modp = itpair.second;
+        if (modp->hierAssertCtl()) hierLibNames.emplace(modp->origName());
+    }
+    for (const std::string& libName : hierLibNames) {
+        puts("extern \"C\" void " + libName
+             + "_protectlib_assert_ctl_targets(void* vhandlep__V, "
+               "std::vector<VlAssertCtlTable::Target>& targets__V, uint32_t depth__V, "
+               "uint32_t ordinal__V);\n");
     }
 
     if (v3Global.dpi()) {
@@ -1607,8 +1608,8 @@ EmitCSyms::TextStmts EmitCSyms::getSymCtorStmts() {
         const AstScope* const scopep = i.first;
         const AstNodeModule* const modp = i.second;
         if (!modp->verilatorLib()) continue;
-        const AstVar* const hashp = libWrapperVar(modp, "protectlib_hash__V");
-        const AstVar* const handlep = libWrapperVar(modp, "handle__V");
+        const AstVar* const hashp = modp->libWrapperVarp("protectlib_hash__V");
+        const AstVar* const handlep = modp->libWrapperVarp("handle__V");
         const uint32_t hash = VN_AS(hashp->valuep(), Const)->toUInt();
         stmts.add(modp->origName() + "_protectlib_check_hash(static_cast<int>("
                   + std::to_string(hash) + "U));");
@@ -1772,7 +1773,7 @@ EmitCSyms::TextStmts EmitCSyms::getSymDtorStmts() {
         if (!itpair.second->verilatorLib()) continue;
         stmts.add(itpair.second->origName() + "_protectlib_delete(VL_CVT_Q_VP(vlSymsp->"
                   + instName(itpair.first) + "."
-                  + varName(libWrapperVar(itpair.second, "handle__V")) + "));");
+                  + varName(itpair.second->libWrapperVarp("handle__V")) + "));");
     }
 
     emitScopeHier(stmts, true);

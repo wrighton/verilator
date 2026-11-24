@@ -1323,6 +1323,12 @@ Summary:
    :option:`/*verilator&32;hier_block*/` metacomment is ignored. See
    :ref:`Hierarchical Verilation`.
 
+.. option:: --hierarchical-assert-control
+
+   Internal use only, for :vlopt:`--hierarchical`. Specifies that a scoped
+   assertion control above the hierarchical block can select the assertions
+   of the block.
+
 .. option:: --hierarchical-block <block>
 
    Internal use only, for :vlopt:`--hierarchical`.

@@ -371,6 +371,9 @@ class AstNodeModule VL_NOT_FINAL : public AstNode {
     bool m_hasParameterList : 1;  // Has #() for parameter declaration
     bool m_hierBlock : 1;  // Hierarchical Block marked by HIER_BLOCK pragma
     bool m_hierParams : 1;  // Block containing params for parameterized hier blocks
+    // A scoped assertion control reaches this hierarchical block: in the plan, Verilate it to
+    // export its assertions; at its wrapper, the model calls the library to add them
+    bool m_hierAssertCtl : 1;
     bool m_recursive : 1;  // Recursive module
     bool m_recursiveClone : 1;  // If recursive, what module it clones, otherwise nullptr
     bool m_parameterizedTemplate : 1;  // True when at least one specialized clone exists;
@@ -394,6 +397,7 @@ protected:
         , m_hasParameterList{false}
         , m_hierBlock{false}
         , m_hierParams{false}
+        , m_hierAssertCtl{false}
         , m_recursive{false}
         , m_recursiveClone{false}
         , m_parameterizedTemplate{false}
@@ -446,6 +450,10 @@ public:
     void hierBlock(bool flag) { m_hierBlock = flag; }
     bool hierParams() const { return m_hierParams; }
     void hierParams(bool flag) { m_hierParams = flag; }
+    // The variable of the wrapper of a Verilator library with the given name
+    AstVar* libWrapperVarp(const string& name) const;
+    bool hierAssertCtl() const { return m_hierAssertCtl; }
+    void hierAssertCtl(bool flag) { m_hierAssertCtl = flag; }
     bool recursive() const { return m_recursive; }
     void recursive(bool flag) { m_recursive = flag; }
     void recursiveClone(bool flag) { m_recursiveClone = flag; }
@@ -1705,6 +1713,8 @@ class AstNetlist final : public AstNode {
     // @astgen ptr := m_reInactSchedp : Optional[AstVarScope]  // Re-Inactive waits (V3Timing)
     // @astgen ptr := m_topScopep : Optional[AstTopScope]  // Singleton AstTopScope
     // @astgen ptr := m_stlFirstIterationp: Optional[AstVarScope]  // Settle first iteration flag
+    // @astgen ptr := m_assertCtlExportp : Optional[AstAssertCtlTargetSet]  // Block-wide sites
+    // @astgen ptr := m_assertCtlExportFuncp : Optional[AstCFunc]  // Binds the block-wide sites
     VTimescale m_timeunit;  // Global time unit
     VTimescale m_timeprecision;  // Global time precision
     std::string m_resolvedTopModuleName;  // Selected design top before wrapping under $root
@@ -1793,6 +1803,11 @@ public:
     const std::vector<std::string>& l2Names() const { return m_l2Names; }
     void addL2Name(const std::string& name) { m_l2Names.push_back(name); }
     AstVarScope* stlFirstIterationp();
+    // Assertion sites of a hierarchical block that a scoped control above it selects
+    AstAssertCtlTargetSet* assertCtlExportp() const { return m_assertCtlExportp; }
+    void assertCtlExportp(AstAssertCtlTargetSet* setp) { m_assertCtlExportp = setp; }
+    AstCFunc* assertCtlExportFuncp() const { return m_assertCtlExportFuncp; }
+    void assertCtlExportFuncp(AstCFunc* funcp) { m_assertCtlExportFuncp = funcp; }
     void clearStlFirstIterationp() { m_stlFirstIterationp = nullptr; }
 
     // Record statistics for eval functions
