@@ -2093,14 +2093,15 @@ class TristateVisitor final : public TristateBaseVisitor {
         while (AstSel* const selp = VN_CAST(lhsp, Sel)) lhsp = selp->fromp();
         return VN_CAST(lhsp, NodeVarRef);
     }
+    static bool isRepeatableForceIndex(AstNodeExpr* const indexp) {
+        return indexp->isRepeatable()
+               && !indexp->exists([](const AstNodeFTaskRef*) { return true; });
+    }
     static AstNodeVarRef* forceRhsRefp(AstNodeExpr* rhsp) {
         while (const AstSel* const selp = VN_CAST(rhsp, Sel)) {
             // DATA and ENABLE each evaluate the index, so it must give the same value each
             // time. A call is not followed into its function body, so none is accepted.
-            if (!selp->lsbp()->isRepeatable()
-                || selp->lsbp()->exists([](const AstNodeFTaskRef*) { return true; })) {
-                return nullptr;
-            }
+            if (!isRepeatableForceIndex(selp->lsbp())) return nullptr;
             rhsp = selp->fromp();
         }
         return VN_CAST(rhsp, NodeVarRef);
