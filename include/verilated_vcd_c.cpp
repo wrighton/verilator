@@ -142,24 +142,25 @@ void VerilatedVcd::openNext(bool incFilename) VL_MT_SAFE_EXCLUDES(m_mutex) {
 void VerilatedVcd::openNextImp(bool incFilename) {
     closePrev();  // Close existing
     if (incFilename) {
-        // Find _0000.{ext} in filename
+        // Find _cat<digits>.{ext} in the file name, ignoring dots in directory names
         std::string name = m_filename;
-        const size_t pos = name.rfind('.');
-        if (pos > 8 && 0 == std::strncmp("_cat", name.c_str() + pos - 8, 4)
-            && std::isdigit(name.c_str()[pos - 4]) && std::isdigit(name.c_str()[pos - 3])
-            && std::isdigit(name.c_str()[pos - 2]) && std::isdigit(name.c_str()[pos - 1])) {
-            // Increment code.
-            if ((++(name[pos - 1])) > '9') {
-                name[pos - 1] = '0';
-                if ((++(name[pos - 2])) > '9') {
-                    name[pos - 2] = '0';
-                    if ((++(name[pos - 3])) > '9') {
-                        name[pos - 3] = '0';
-                        if ((++(name[pos - 4])) > '9') {  //
-                            name[pos - 4] = '0';
-                        }
-                    }
-                }
+        size_t pos = name.rfind('.');
+        const size_t dirEnd = name.find_last_of("/\\");
+        if (pos == std::string::npos || (dirEnd != std::string::npos && pos < dirEnd)) {
+            pos = name.size();
+        }
+        size_t digitsBegin = pos;
+        while (digitsBegin && std::isdigit(static_cast<unsigned char>(name[digitsBegin - 1])))
+            --digitsBegin;
+        if (pos - digitsBegin >= 4 && digitsBegin > 4
+            && 0 == name.compare(digitsBegin - 4, 4, "_cat")) {
+            // Increment code, adding a digit when all are 9 so that no file is overwritten
+            size_t i = pos;
+            while (i > digitsBegin && name[i - 1] == '9') name[--i] = '0';
+            if (i > digitsBegin) {
+                ++name[i - 1];
+            } else {
+                name.insert(digitsBegin, 1, '1');
             }
         } else {
             // Append _cat0000
