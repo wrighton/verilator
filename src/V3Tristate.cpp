@@ -467,6 +467,7 @@ class TristateVisitor final : public TristateBaseVisitor {
                                   // cell's module did not recognise as tristate
         bool elemZ = false;  // An element or member procedurally written with z, stored as x
         AstVar* renVarp = nullptr;  // Input __ren: enable of the net an input port connects to
+        bool caseEnBeforeGraph = false;  // A comparison requested an enable before graphing
     };
 
     VNUser3Allocator<AstVar, AuxAstVar> m_varAux;
@@ -875,7 +876,17 @@ class TristateVisitor final : public TristateBaseVisitor {
             }
             return newReadEnp(varrefp, newEnVarRefp(varrefp));
         } else if (AstVarXRef* const xrefp = VN_CAST(nodep, VarXRef)) {
-            AstVar* const enVarp = getCreateEnVarp(xrefp->varp(), false);
+            AstVar* const varp = xrefp->varp();
+            // Match the local two-state value for non-tristate variables. A read
+            // can reach a module whose graph has not yet established the variable's state.
+            if (!varp->isNet() && !varp->isIO()) {
+                if (!(varp->user2() & U2_GRAPHING)) {
+                    m_varAux(varp).caseEnBeforeGraph = true;
+                } else if (isNeverZVar(varp) && !m_tgraph.isTristate(varp)) {
+                    return newAllZerosOrOnes(xrefp, true);
+                }
+            }
+            AstVar* const enVarp = getCreateEnVarp(varp, false);
             return newReadEnp(xrefp, newVarXRef(xrefp->fileline(), enVarp, xrefp->dotted(),
                                                 VAccess::READ, xrefp->inlinedDots()));
         } else if (AstConst* const constp = VN_CAST(nodep, Const)) {
@@ -3484,6 +3495,14 @@ class TristateVisitor final : public TristateBaseVisitor {
             if (m_tgraph.isTristate(nodep)) {
                 // nodep->isPulldown() || nodep->isPullup() handled in TristateGraphVisitor
                 m_tgraph.didProcess(nodep);
+            } else if (m_varAux(nodep).caseEnBeforeGraph && !m_varAux(nodep).cellOutput) {
+                // A forward enable request for an always-driven variable has no graph driver.
+                FileLine* const flp = nodep->fileline();
+                AstVar* const enVarp = VN_AS(nodep->user1p(), Var);
+                AstAssign* const assignp
+                    = new AstAssign{flp, new AstVarRef{flp, enVarp, VAccess::WRITE},
+                                    newAllZerosOrOnes(nodep, true)};
+                m_modp->addStmtsp(new AstAlways{flp, VAlwaysKwd::CONT_ASSIGN, nullptr, assignp});
             }
         }
     }
