@@ -14056,6 +14056,11 @@ class WidthVisitor final : public VNVisitor {
                                             << pinDTypep->prettyDTypeNameQ()
                                             << ", with a dynamic array or queue other than as"
                                                " its first dimension");
+        } else if (portDims != pinDims) {
+            pinp->v3error("DPI open array argument "
+                          << portp->prettyNameQ() << " with " << portDims
+                          << " unpacked dimension(s) passed " << pinDTypep->prettyDTypeNameQ()
+                          << " with " << pinDims << " (IEEE 1800-2023 35.5.6.1)");
         } else if (!elemBasicp != !portBasicp
                    || (elemBasicp && elemBasicp->isDouble() != portBasicp->isDouble())) {
             // Element types DPI passes differently: of no basic type (e.g. class handles, or
