@@ -15,6 +15,24 @@ package pkg;
   logic pv;
 endpackage
 
+module sub (
+    input logic [6:0] value,
+    input logic enable,
+    output bit local_is_z,
+    output bit net_is_z,
+    output bit up_plain_is_z,
+    output bit up_tracked_is_z
+);
+  logic [6:0] driven;
+  always_comb driven = value;
+  assign local_is_z = driven === 7'bzzzzzzz;
+
+  wire [6:0] tri_net = enable ? 7'd0 : 7'bzzzzzzz;
+  assign net_is_z = tri_net === 7'bzzzzzzz;
+  assign up_plain_is_z = t.up_plain === 7'bzzzzzzz;
+  assign up_tracked_is_z = t.up_tracked === 7'bzzzzzzz;
+endmodule
+
 module t (
     input clk
 );
@@ -24,6 +42,22 @@ module t (
 
   logic [3:0] a;
   logic b;
+  wire local_is_z;
+  wire net_is_z;
+  wire up_plain_is_z;
+  wire up_tracked_is_z;
+  logic [6:0] up_plain;
+  logic [6:0] up_tracked;
+  always_comb up_plain = {5'b0, cyc[1:0]};
+  always_comb up_tracked = cyc[0] ? 7'd0 : 7'bzzzzzzz;
+  sub u (
+      .value({5'b0, cyc[1:0]}),
+      .enable(cyc[0]),
+      .local_is_z(local_is_z),
+      .net_is_z(net_is_z),
+      .up_plain_is_z(up_plain_is_z),
+      .up_tracked_is_z(up_tracked_is_z)
+  );
   wire [1:0] w = crc[9:8];
   wire tri_net;
   wire [1:0] w_half;
@@ -50,6 +84,15 @@ module t (
     `checkd(a[1] !== 1'bz, 1'b1);
     `checkd(a === 4'bzzzz, 1'b0);
     `checkd(b === 1'bz, 1'b0);
+    // Case equality distinguishes driven zero from high impedance (IEEE 1800-2023 11.4.5).
+    `checkd(u.driven, {5'b0, cyc[1:0]});
+    `checkd(local_is_z, 1'b0);
+    `checkd(u.driven === 7'bzzzzzzz, local_is_z);
+    `checkd(u.driven[0] !== 1'bz, 1'b1);
+    `checkd(net_is_z, !cyc[0]);
+    `checkd(up_plain_is_z, 1'b0);
+    `checkd(up_tracked === 7'bzzzzzzz, !cyc[0]);
+    `checkd(up_tracked_is_z, !cyc[0]);
     `checkd(w === 2'bz0, 1'b0);
     `checkd(w[0] === 1'bz, 1'b0);
     `checkd(pkg::pv === 1'bz, 1'b0);
