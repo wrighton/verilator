@@ -146,12 +146,24 @@ int dpii_size(const svOpenArrayHandle i) { return svSize(i, 1); }
 
 double dpii_sum_real(const svOpenArrayHandle i) {
     const double* const datap = static_cast<const double*>(svGetArrayPtr(i));
+    TEST_CHECK_EQ(svSizeOfArray(i), static_cast<int>(svSize(i, 1) * sizeof(double)));
     double sum = 0;
     for (int k = 0; k < svSize(i, 1); ++k) sum += datap[k];
     return sum;
 }
 
 void dpii_double(const svOpenArrayHandle io) {
-    double* const datap = static_cast<double*>(svGetArrayPtr(io));
-    for (int k = 0; k < svSize(io, 1); ++k) datap[k] *= 2;
+    for (int k = svLow(io, 1); k <= svHigh(io, 1); ++k) {
+        *static_cast<double*>(svGetArrElemPtr1(io, k)) *= 2;
+    }
+}
+
+void dpii_double2(const svOpenArrayHandle io) {
+    TEST_CHECK_EQ(svSizeOfArray(io),
+                  static_cast<int>(svSize(io, 1) * svSize(io, 2) * sizeof(double)));
+    for (int k = svLow(io, 1); k <= svHigh(io, 1); ++k) {
+        for (int m = svLow(io, 2); m <= svHigh(io, 2); ++m) {
+            *static_cast<double*>(svGetArrElemPtr2(io, k, m)) *= 2;
+        }
+    }
 }

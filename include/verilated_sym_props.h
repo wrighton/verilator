@@ -173,6 +173,7 @@ public:
         case VLVT_UINT32: return sizeof(IData);
         case VLVT_UINT64: return sizeof(QData);
         case VLVT_WDATA: return VL_WORDS_I(entBits()) * sizeof(IData);
+        case VLVT_REAL: return sizeof(double);
         default: return 0;  // LCOV_EXCL_LINE
         }
     }
