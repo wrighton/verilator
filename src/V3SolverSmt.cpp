@@ -1066,7 +1066,7 @@ class FastConstraintBuilder final {
         if (!m_supported) return newCallp(fl, VCMethod::RANDOMIZER_FAST_DISABLE)->makeStmt();
         if (!stmtp) stmtp = newDomainp(fl, ranges, exprp->isSoft(), distp != nullptr);
         if (const AstEnumDType* const enumDtp
-            = VN_CAST(m_varp->dtypep()->skipRefToEnump(), EnumDType)) {
+            = VN_CAST(m_varp->dtypep()->skipRefToEnump(true), EnumDType)) {
             Ranges enumRanges;
             for (const AstEnumItem* const itemp : enumDtp->itemspList()) {
                 const AstConst* const valuep = VN_AS(itemp->valuep(), Const);

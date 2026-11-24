@@ -2122,10 +2122,9 @@ class RandomizeVisitor final : public VNVisitor {
             // member is only randomized if its own declaration carries rand/randc. Members
             // the 'with' constraints refer to are randomized by the solver.
             AstNodeStmt* stmtsp = nullptr;
-            for (const AstMemberDType* const memberp : structp->memberspList()) {
+            for (AstMemberDType* const memberp : structp->memberspList()) {
                 if (!memberp->rand().isRandomizable()) continue;
-                AstStructSel* const selp
-                    = new AstStructSel{fl, exprp->cloneTree(false), memberp->name()};
+                AstStructSel* const selp = new AstStructSel{fl, exprp->cloneTree(false), memberp};
                 selp->dtypep(memberp->subDTypep());
                 stmtsp = AstNode::addNextNull(stmtsp,
                                               newBasicStdRandStmtsp(fl, stdrandp, fvarp, selp));

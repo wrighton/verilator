@@ -1607,8 +1607,6 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->dtypep()->isFourstate());
             userIterateAndNext(nodep->fromp(), WidthVP{SELF, FINAL}.p());
             userIterateAndNext(nodep->lsbp(), WidthVP{SELF, FINAL}.p());
-            if (VN_IS(nodep->fromp()->dtypep()->skipRefp(), PackArrayDType))
-                V3Const::constifyEdit(nodep->lsbp());  // Upstream #9301
             // V3WidthSel may have extended or cast a constant index, now known; fold it
             if (const AstNodeUniop* const uniopp = VN_CAST(nodep->lsbp(), NodeUniop)) {
                 if (VN_IS(uniopp->lhsp(), Const)) {
@@ -1654,11 +1652,8 @@ class WidthVisitor final : public VNVisitor {
                 } else if (!inParameterizedTemplate) {
                     // Element indices for a whole-element select of an array (upstream #9301)
                     const int indexDiv = nodep->widthConst() == elw ? elw : 1;
-                    const string msbStr = indexDiv == 1
-                                              ? nodep->lsbConstStr(nodep->widthConst() - 1)
-                                              : cvtToStr(msb / indexDiv);
-                    const string lsbStr
-                        = indexDiv == 1 ? nodep->lsbConstStr(0) : cvtToStr(lsb / indexDiv);
+                    const string msbStr = nodep->lsbConstStr(nodep->widthConst() - 1, indexDiv);
+                    const string lsbStr = nodep->lsbConstStr(0, indexDiv);
                     if (nodep->declRange().ranged()) {
                         nodep->v3warn(SELRANGE, "Selection index out of range: "
                                                     << msbStr << ":" << lsbStr << " outside "
@@ -3063,7 +3058,7 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH, currentStreamUse()}.p());
         // Type set in constructor
         // A string is a dynamic array of bytes in a bit-stream cast (IEEE 1800-2023 6.24.3)
-        if (isByteArrayDType(nodep->lhsp()->dtypep(), true)) {
+        if (isByteArrayDType(nodep->lhsp()->dtypep(), false)) {
             AstCvtArrayToString* const newp = new AstCvtArrayToString{
                 nodep->fileline(), nodep->lhsp()->unlinkFrBack(), nodep->dtypep()};
             newp->didWidth(true);
@@ -3932,7 +3927,7 @@ class WidthVisitor final : public VNVisitor {
                                     || (castable.isCompatible() && VN_IS(toDtp, UnpackArrayDType));
             // A string is a dynamic array of bytes in a bit-stream cast (IEEE 1800-2023 6.24.3)
             const bool stringBytes = (fromDtp->isString() && isByteArrayDType(toDtp, false))
-                                     || (toDtp->isString() && isByteArrayDType(fromDtp, true));
+                                     || (toDtp->isString() && isByteArrayDType(fromDtp, false));
             const bool bitstream
                 = !assignable && !stringBytes
                   && (isUnpackedArrayOrUOrStruct(toDtp) || isUnpackedArrayOrUOrStruct(fromDtp));
@@ -11431,10 +11426,10 @@ class WidthVisitor final : public VNVisitor {
         AstNodeExpr* newp = nullptr;
         if (const AstStructDType* const structp
             = VN_CAST(nodep->lhsp()->dtypep()->skipRefp(), StructDType)) {
-            for (const AstMemberDType* const memberp : structp->memberspList()) {
+            for (AstMemberDType* const memberp : structp->memberspList()) {
                 T_Node* const countp = nodep->cloneTreePure(false);
                 AstStructSel* const selp
-                    = new AstStructSel{flp, countp->lhsp()->unlinkFrBack(), memberp->name()};
+                    = new AstStructSel{flp, countp->lhsp()->unlinkFrBack(), memberp};
                 selp->dtypep(memberp->subDTypep()->skipRefToEnump());
                 selp->didWidth(true);
                 countp->lhsp(selp);

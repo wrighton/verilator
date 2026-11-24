@@ -941,7 +941,7 @@ class UndrivenVisitor final : public VNVisitorConst {
         // A select of the whole vector has the whole vector as its longest static
         // prefix (IEEE 1800-2023 11.5.3), so treat it as a whole-variable access.
         // Aggregate selects come from member accesses and stay per-bit.
-        const bool wholeSel = constSel && constp->toUInt() == 0
+        const bool wholeSel = constSel && constp->num().isEqZero()
                               && nodep->width() == varrefp->varp()->width()
                               && !VN_IS(nodep->fromp()->dtypep()->skipRefp(), NodeUOrStructDType);
         if (wholeSel) {
